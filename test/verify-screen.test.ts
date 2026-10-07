@@ -174,7 +174,7 @@ console.log("verify-screen — text:");
   const exp = buildExpectation([doc([
     textNode("2:1", "Back", "Back to Orders", { family: "Poppins", size: 14 }),
     textNode("2:2", "Header", "NO. of Employees", { family: "Poppins", size: 14 }),
-    textNode("2:3", "Empty", "No job roles added yet.", { family: "Poppins", size: 14 }),
+    textNode("2:3", "Empty", "No jet roles added yet.", { family: "Poppins", size: 14 }),
   ])]);
   const rep = compare(exp, measured([
     { nodeId: "2:1", styles: { text: "Back to List" } },
@@ -274,7 +274,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   // P3 round 3, finding 315: an explicit --out under a NICKNAME for a screen already indexed under
   // its default name still wrote a second complete artefact set with no warning. Refuse instead,
   // naming the existing file; --force overrides.
-  const nicknameOut = path.join(cwd, "design", "verify", "JobRoles");
+  const nicknameOut = path.join(cwd, "design", "verify", "JetRoles");
   const r2 = spawnSync(process.execPath, [scriptPath, "--expect", screenFile, "--out", nicknameOut], { encoding: "utf8", cwd });
   ok("[315] --expect --out <nickname> for a node that already has an expectation elsewhere is refused",
     r2.status === 1 && /already has an expectation/.test(r2.stderr) && /positions___7314_87192\.expected\.json/.test(r2.stderr) &&
@@ -318,18 +318,18 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 })();
 
 // ================================================================= livetest-3 regressions (P2a)
-// Every fixture below is the REAL export / probe output of the livetest-3 run, built by
-// test/fixtures/livetest3/verify/build.ts (which proves the pruned exports give byte-identical
-// expectations and audits to the full ones). The "before" numbers in the comments are what the
+// Every fixture below is the REAL export / probe output of the livetest-3 run, pruned from a
+// live-test export, names replaced (the pruned exports gave byte-identical expectations and
+// audits to the full ones). The "before" numbers in the comments are what the
 // pre-fix verify-screen.js printed on these exact files.
 (() => {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "verify");
   const load = <T,>(f: string, guard: DocGuard<T>): T => readFixture(path.join(FX, f), guard);
-  const JR_FILE = "positions___7314_87192.json", GP_FILE = "System_Configurations__1359_21337.json";
+  const JR_FILE = "positions___7314_87192.json", GP_FILE = "Studio_Configurations__1359_21337.json";
   const jrDoc = load(JR_FILE, isScreenExport), gpDoc = load(GP_FILE, isScreenExport);
   const jrExp = buildExpectation([{ doc: jrDoc, label: "positions___7314_87192" }]);
-  const gpExp = buildExpectation([{ doc: gpDoc, label: "System_Configurations__1359_21337" }]);
-  const jrMeasured = load("JobRoles.measured.json", isVerifyMeasured), gpMeasured = load("GlobalPolicies.measured.json", isVerifyMeasured);
+  const gpExp = buildExpectation([{ doc: gpDoc, label: "Studio_Configurations__1359_21337" }]);
+  const jrMeasured = load("JetRoles.measured.json", isVerifyMeasured), gpMeasured = load("GuidedPolicies.measured.json", isVerifyMeasured);
   const clone = <T,>(o: T): T => structuredClone(o);
   // An assertion that THROWS on an older report shape is a failure of that assertion, not of the suite.
   const ok = (name: string, cond: boolean | undefined | (() => unknown)) => { let v: unknown; try { v = typeof cond === "function" ? cond() : cond; } catch (e) { v = false; } return okOuter(name, !!v); };
@@ -342,15 +342,15 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
   console.log("verify-screen — livetest-3: hidden layers are never specified (97/126/157/181):");
   // before: specs 272 hidden 83 · instances 112 hidden 61 · interactions 28 hidden 22
-  ok("[lt3-hidden] Job Roles: 0 specs, 0 instances, 0 interactions on hidden layers (were 83/272, 61/112, 22/28)",
+  ok("[lt3-hidden] Jet Roles: 0 specs, 0 instances, 0 interactions on hidden layers (were 83/272, 61/112, 22/28)",
     () => hiddenIn(jrExp.nodes, jrHidden) === 0 && hiddenIn(jrExp.instances, jrHidden) === 0 && hiddenIn(jrExp.interactions, jrHidden) === 0);
   // before: 75 of 233, 45 of 87, 11 of 12
-  ok("[lt3-hidden] Global Policies: 0 / 0 / 0 on hidden layers (were 75/233, 45/87, 11/12)",
+  ok("[lt3-hidden] Guided Policies: 0 / 0 / 0 on hidden layers (were 75/233, 45/87, 11/12)",
     () => hiddenIn(gpExp.nodes, gpHidden) === 0 && hiddenIn(gpExp.instances, gpHidden) === 0 && hiddenIn(gpExp.interactions, gpHidden) === 0);
   ok("[lt3-hidden] what was skipped is counted: 61+45 instances and 22+11 interactions — the numbers the finding reported",
     () => jrExp.counts.hidden.instancesSkipped === 61 && jrExp.counts.hidden.interactionsSkipped === 22 &&
     gpExp.counts.hidden.instancesSkipped === 45 && gpExp.counts.hidden.interactionsSkipped === 11);
-  ok("[lt3-hidden] the visible instance list is exactly the frame's visible instances (51 on Job Roles, 42 on Global Policies)",
+  ok("[lt3-hidden] the visible instance list is exactly the frame's visible instances (51 on Jet Roles, 42 on Guided Policies)",
     () => jrExp.instances.length === 51 && gpExp.instances.length === 42);
   ok("[lt3-hidden] the expectation lists the hidden ids so --compare can refuse credit for them", () => jrExp.hidden.ids.length === jrHidden.size && gpExp.hidden.ids.length === gpHidden.size);
   ok("[lt3-determinism] --expect stays byte-deterministic on the real export (finding 154)",
@@ -368,7 +368,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   console.log("verify-screen — livetest-3: a field the probe names differently is LOUD (162/182/195):");
   const jrRep = compare(jrExp, jrMeasured);
   // before: the JR report had 0 border-radius deltas and nothing said radius was never checked.
-  ok("[lt3-radius] the real Job Roles probe wrote `radius`: the HEADLINE says borderRadius was present on 0 of the nodes that state it",
+  ok("[lt3-radius] the real Jet Roles probe wrote `radius`: the HEADLINE says borderRadius was present on 0 of the nodes that state it",
     /'borderRadius' present on 0 of \d+ nodes that state it \(probe sent 'radius'\)/.test(jrRep.headline) && jrRep.coverage.fieldsNeverMeasured.some((f) => f.field === "borderRadius" && f.measuredOn === 0));
   ok("[lt3-radius] …and the unknown key is named with its canonical spelling, not accepted", () => jrRep.probe.unknownKeys.some((k) => k.key === "radius" && k.canonical === "borderRadius"));
   ok("[lt3-radius] …and that alone keeps the verdict from passing", () => jrRep.why.some((w) => /field 'borderRadius' was present on 0 of the \d+ measured node/.test(w)));
@@ -377,12 +377,12 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   for (const n of renamed.nodes || []) { if ("radius" in n) { const br = asRadius(n.radius); if (br === undefined) delete n.borderRadius; else n.borderRadius = br; delete n.radius; } }
   const jrRad = compare(jrExp, renamed);
   const rd = (id: string, corner: string) => jrRad.deltas.find((d) => d.nodeId === id && d.field === `border-radius (${corner})`); // callers guard with rd(…) && first, then read via ?.
-  ok("[lt3-radius] with the canonical key, the four dropped Job Roles radii are deltas: 20173:142077 tl/tr and 20173:142137 bl/br, 12 → 0",
+  ok("[lt3-radius] with the canonical key, the four dropped Jet Roles radii are deltas: 20173:142077 tl/tr and 20173:142137 bl/br, 12 → 0",
     () => ["top-left", "top-right"].every((c) => rd("20173:142077", c) && rd("20173:142077", c)?.expected === 12 && rd("20173:142077", c)?.actual === 0) &&
     ["bottom-left", "bottom-right"].every((c) => rd("20173:142137", c) && rd("20173:142137", c)?.expected === 12 && rd("20173:142137", c)?.actual === 0));
   ok("[lt3-radius] a bottom-only radius ({bl,br}) is specified at all — the old code read radius.tl only",
     () => JSON.stringify(jrExp.nodes.find((n) => n.nodeId === "20173:142137")?.radiusCorners) === JSON.stringify({ tl: 0, tr: 0, br: 12, bl: 12 }));
-  ok("[lt3-radius] the Global Policies card that ships 16 where the design says 12 is caught (finding 183)",
+  ok("[lt3-radius] the Guided Policies card that ships 16 where the design says 12 is caught (finding 183)",
     () => gpRep.deltas.some((d) => d.nodeId === "18580:60755" && d.field === "border-radius" && d.expected === 12 && d.actual === 16));
 
   console.log("verify-screen — livetest-3: positions are compared, frame-relative (164/192):");
@@ -399,7 +399,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     Object.assign(must(pg, "pg node 20173:142142"), { y: posPg.y, height: posPg.height });
     const r = compare(jrExp, m);
     const place = r.deltas.find((d) => d.nodeId === "20173:142142" && d.field === "placement");
-    ok("[lt3-xy] Job Roles pre-fix: the pagination bar is reported OUTSIDE the frame, high severity (bottom edge 1366 > 1236)",
+    ok("[lt3-xy] Jet Roles pre-fix: the pagination bar is reported OUTSIDE the frame, high severity (bottom edge 1366 > 1236)",
       () => !!place && place.severity === "high" && /y=1366 in a 1236-high frame/.test(String(place.actual)));
     ok("[lt3-xy] …and its y is a delta against the design's own position (864)", () => r.deltas.some((d) => d.nodeId === "20173:142142" && d.field === "y (frame-relative)" && d.expected === 864 && d.actual === 1342));
   }
@@ -411,12 +411,12 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     const r = compare(gpExp, m);
     const d = r.deltas.find((x) => x.nodeId === "18580:60861" && x.field === "x (frame-relative)");
     // (F-80, group 11: a hug TEXT's x is its box's left edge — 1296, what a Range reports — not the ink start 1296.81)
-    ok("[lt3-xy] Global Policies pre-fix: the Status header is +19.75px right of the design (1296 → 1315.75)",
+    ok("[lt3-xy] Guided Policies pre-fix: the Status header is +19.75px right of the design (1296 → 1315.75)",
       () => !!d && d.expected === 1296 && d.actual === 1315.75 && d.delta === 19.75);
   }
 
   console.log("verify-screen — livetest-3: the coverage line closes (165/184):");
-  for (const [name, rep, m] of [["Job Roles", jrRep, jrMeasured], ["Global Policies", gpRep, gpMeasured]] as const) {
+  for (const [name, rep, m] of [["Jet Roles", jrRep, jrMeasured], ["Guided Policies", gpRep, gpMeasured]] as const) {
     const ids = new Set(m.nodes?.map((n) => String(n.nodeId)));
     ok(`[lt3-cover] ${name}: nodesExpected − nodesMeasured == notMeasured.length, one row per node`,
       () => rep.coverage.nodesExpected - rep.coverage.nodesMeasured === rep.notMeasured.length && new Set(rep.notMeasured.map((n) => n.nodeId)).size === rep.notMeasured.length);
@@ -445,7 +445,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[lt3-int] not-probed rows do not count toward 'designed interaction(s) failed'",
     () => jrRep.coverage.interactionsFailed === jrRep.interactions.filter((i) => i.result === "fail").length && !jrRep.interactions.some((i) => i.result === "fail" && /not probed|not measured/i.test(i.detail || "")));
   // finding 175: the two genuinely unimplemented interactions must STILL fail.
-  ok("[lt3-int] the two genuinely unimplemented interactions still FAIL (import overlay; row → Job Role Details)",
+  ok("[lt3-int] the two genuinely unimplemented interactions still FAIL (import overlay; row → Jet Role Details)",
     () => jrRep.interactions.some((i) => i.nodeId === "I20173:137670;2006:22479" && i.result === "fail") &&
     ["20173:142081", "20173:142086", "20173:142091"].every((id) => jrRep.interactions.some((i) => i.nodeId === id && i.result === "fail")) && jrRep.verdict === "fail");
   ok("[lt3-int] ok:true with no selector is not a pass (finding 187's evidence rule)",
@@ -457,13 +457,13 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
   console.log("verify-screen — livetest-3: none of the eight false-positive families is a high delta (128/161/194):");
   // Before: 4 of 4 highs on the real GP probe were wrong, and 2 of 2 on JR.
-  ok("[lt3-fp] the real Global Policies probe output now yields 0 high deltas (was 4)", () => gpRep.summary.high === 0);
-  ok("[lt3-fp] the real Job Roles probe output now yields 0 high deltas (was 2)", () => jrRep.summary.high === 0);
+  ok("[lt3-fp] the real Guided Policies probe output now yields 0 high deltas (was 4)", () => gpRep.summary.high === 0);
+  ok("[lt3-fp] the real Jet Roles probe output now yields 0 high deltas (was 2)", () => jrRep.summary.high === 0);
   // The same probe fed the REAL DOM evidence from the independent Playwright pass.
-  // GlobalPolicies.dom.json — the independent Playwright pass's evidence (only the fields read here).
+  // GuidedPolicies.dom.json — the independent Playwright pass's evidence (only the fields read here).
   interface DomBox { tag: string; width: number; height: number; x: number; y: number; backgroundColor: string; color: string; radius: number[]; padding: number[]; svgFill?: string }
   interface DomEvidence { checks: Array<{ designId: string; sel: string; measured: DomBox }>; hoverState: { row: DomBox; editButton: DomBox }; measuredRowGap: number }
-  const dom = load("GlobalPolicies.dom.json", (x: unknown): x is DomEvidence => isJsonObject(x) && Array.isArray(x.checks) && isJsonObject(x.hoverState) && typeof x.measuredRowGap === "number");
+  const dom = load("GuidedPolicies.dom.json", (x: unknown): x is DomEvidence => isJsonObject(x) && Array.isArray(x.checks) && isJsonObject(x.hoverState) && typeof x.measuredRowGap === "number");
   const chk = (id: string, selPart?: string) => must(dom.checks.find((c) => c.designId === id && (!selPart || c.sel.includes(selPart))), `a DOM check for ${id}`).measured;
   const S = (m: DomBox) => ({ tag: m.tag, width: m.width, height: m.height, x: m.x, y: m.y, backgroundColor: m.backgroundColor, color: m.color, borderRadius: m.radius, padding: m.padding });
   const gpDom = clone(gpMeasured);
@@ -500,7 +500,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[lt3-fp] 8 TEXT node id on its <th>: the th's box is not graded as the text's", () => on("18580:60861", /width|height/).length === 0 && gpRep.deltas.filter((d) => d.nodeId === "18580:60861").length === 0);
   ok("[lt3-fp] with the real DOM evidence, still no high delta anywhere", () => domRep.summary.high === 0);
   // True positives that must survive (171/183/193) — leniency is not the fix.
-  ok("[lt3-tp] 171: the Job Roles filter button's Rows Spacing gap 8 → 12 and width 110 → 115.83 are still reported",
+  ok("[lt3-tp] 171: the Jet Roles filter button's Rows Spacing gap 8 → 12 and width 110 → 115.83 are still reported",
     () => jrRep.deltas.some((d) => d.nodeId === "I20173:142047;885:2723" && d.field === "gap" && d.expected === 8 && d.actual === 12) &&
     jrRep.deltas.some((d) => d.nodeId === "I20173:142047;885:2723" && d.field === "width" && d.actual === 115.83));
   ok("[lt3-tp] 193: 111.83×38 against 110×36 is reported now (size tolerance 1, was an inclusive 2)",
@@ -521,15 +521,15 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     });
 
   console.log("verify-screen — livetest-3: 'components never built' is gone; tag coverage is named as such (129/159/169/185):");
-  for (const [name, rep] of [["Job Roles", jrRep], ["Global Policies", gpRep]] as const) {
-    ok(`[lt3-comp] ${name}: 0 components reported absent (was ${name === "Job Roles" ? 31 : 52} 'never built'), and no 'never built' reason`,
+  for (const [name, rep] of [["Jet Roles", jrRep], ["Guided Policies", gpRep]] as const) {
+    ok(`[lt3-comp] ${name}: 0 components reported absent (was ${name === "Jet Roles" ? 31 : 52} 'never built'), and no 'never built' reason`,
       rep.summary.componentsAbsent === 0 && rep.missingComponents === undefined && !rep.why.some((w) => /never built/.test(w)));
     ok(`[lt3-comp] ${name}: the metric is named tag coverage, not presence, and counts visible sets only`,
-      () => /tag coverage, not presence/.test(rep.headline) && rep.untaggedInstanceSets.every((s) => s.nodeIds.every((id) => !(name === "Job Roles" ? jrHidden : gpHidden).has(id))));
+      () => /tag coverage, not presence/.test(rep.headline) && rep.untaggedInstanceSets.every((s) => s.nodeIds.every((id) => !(name === "Jet Roles" ? jrHidden : gpHidden).has(id))));
   }
   {
-    // A shared AppShell tagged with the OTHER frame's instance ids (finding 185): the real Job Roles
-    // measurement of the sidebar item, fed to Global Policies.
+    // A shared AppShell tagged with the OTHER frame's instance ids (finding 185): the real Jet Roles
+    // measurement of the sidebar item, fed to Guided Policies.
     const jrItem = jrMeasured.nodes?.find((n) => n.nodeId === "I10970:111588;1910:23337");
     const m = clone(gpMeasured); m.nodes?.push(clone(must(jrItem, "jrItem (I10970:111588;1910:23337)")));
     const r = compare(gpExp, m);
@@ -553,9 +553,9 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   {
     const m = clone(jrMeasured);
     const th = must(m.nodes?.find((n) => n.nodeId === "20173:142078"), "m.nodes '20173:142078'");
-    th.text = "Job Role▲";
+    th.text = "Jet Role▲";
     const d = compare(jrExp, m).deltas.find((x) => x.nodeId === "20173:142078" && x.field === "text");
-    ok("[lt3-text] 'Job Role▲' (a th with a sort caret) is compared — low, naming the extra glyph, not a copy change", () => !!d && d.severity === "low" && /▲/.test(must(d.note, "d.note")));
+    ok("[lt3-text] 'Jet Role▲' (a th with a sort caret) is compared — low, naming the extra glyph, not a copy change", () => !!d && d.severity === "low" && /▲/.test(must(d.note, "d.note")));
     th.text = null;
     ok("[lt3-text] text: null from a probe that skips elements with children is a named gap", () => compare(jrExp, m).fieldsNotMeasured.some((f) => f.nodeId === "20173:142078" && /text: null/.test(f.why)));
   }
@@ -567,16 +567,16 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const script = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const run = (...a: string[]) => spawnSync(process.execPath, [script, ...a], { encoding: "utf8", cwd });
   const src = path.join(FX, GP_FILE);
-  const r1 = run("--expect", src, "--out", "design/verify/GlobalPolicies");
-  const expFile = path.join(cwd, "design/verify/GlobalPolicies.expected.json");
+  const r1 = run("--expect", src, "--out", "design/verify/GuidedPolicies");
+  const expFile = path.join(cwd, "design/verify/GuidedPolicies.expected.json");
   const bytes1 = fs.readFileSync(expFile);
-  const r2 = run("--expect", src, "--out", "design/verify/GlobalPolicies");
+  const r2 = run("--expect", src, "--out", "design/verify/GuidedPolicies");
   ok("[lt3-cli] --expect prints what it skipped as hidden (45 instances, 11 interactions)", () => /skipped 23 hidden layer\(s\) \(\d+ spec\(s\), 45 instance\(s\), 11 interaction\(s\)\)/.test(r1.stderr));
   ok("[lt3-cli] a second identical --expect is byte-identical and says 'unchanged'", () => r2.status === 0 && Buffer.compare(bytes1, fs.readFileSync(expFile)) === 0 && /already identical/.test(r2.stderr));
-  fs.writeFileSync(path.join(cwd, "design/verify/GlobalPolicies.measured.json"), JSON.stringify(Object.assign(clone(gpMeasured), { expectationSha256: "0".repeat(64) })));
-  const c1 = run("--compare", expFile, "design/verify/GlobalPolicies.measured.json");
+  fs.writeFileSync(path.join(cwd, "design/verify/GuidedPolicies.measured.json"), JSON.stringify(Object.assign(clone(gpMeasured), { expectationSha256: "0".repeat(64) })));
+  const c1 = run("--compare", expFile, "design/verify/GuidedPolicies.measured.json");
   // The CLI always runs the on-disk artifact check, so its report's artifacts are ArtifactCheck rows.
-  const rep1 = readFixture(path.join(cwd, "design/verify/GlobalPolicies.report.json"), isVerifyReport);
+  const rep1 = readFixture(path.join(cwd, "design/verify/GuidedPolicies.report.json"), isVerifyReport);
   ok("[lt3-cli] the report records the sha256 of the expectation it was computed on", () => rep1.inputs?.expectationSha256 === crypto.createHash("sha256").update(bytes1).digest("hex"));
   ok("[lt3-cli] a measurement taken against a different expectation is called stale", () => (rep1.why || []).some((w) => /DIFFERENT expectation/.test(w)));
   // The CLI always runs the on-disk artifact check, so every artifact row is an ArtifactCheck.
@@ -584,14 +584,14 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[lt3-cli] the stdout headline is the coverage line", () => c1.status === 1 && /^INCOMPLETE — .*nodes measured \d+\/\d+/m.test(c1.stderr));
   const edited = clone(gpDoc); must(edited.nodes[0], "edited.nodes[0]").children = (must(edited.nodes[0], "edited.nodes[0]").children || []).slice(0, 2);
   fs.writeFileSync(path.join(cwd, "edited.json"), JSON.stringify(edited));
-  const r3 = run("--expect", "edited.json", "--out", "design/verify/GlobalPolicies");
+  const r3 = run("--expect", "edited.json", "--out", "design/verify/GuidedPolicies");
   ok("[lt3-cli] re-running --expect over a different export says REPLACED and names the now-stale report/measurement",
-    () => /REPLACED an existing/.test(r3.stderr) && /GlobalPolicies\.report\.json/.test(r3.stderr) && /PREVIOUS expectation/.test(r3.stderr));
+    () => /REPLACED an existing/.test(r3.stderr) && /GuidedPolicies\.report\.json/.test(r3.stderr) && /PREVIOUS expectation/.test(r3.stderr));
   fs.writeFileSync(path.join(cwd, "ints.json"), JSON.stringify([{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, outcome: "dialog-opened", navEvents: 0 }]));
-  run("--expect", src, "--out", "design/verify/GlobalPolicies");
-  run("--compare", expFile, "design/verify/GlobalPolicies.measured.json", "--interactions", "ints.json");
+  run("--expect", src, "--out", "design/verify/GuidedPolicies");
+  run("--compare", expFile, "design/verify/GuidedPolicies.measured.json", "--interactions", "ints.json");
   ok("[lt3-cli] --interactions <file> is the input channel for interaction evidence (127)",
-    () => readFixture(path.join(cwd, "design/verify/GlobalPolicies.report.json"), isVerifyReport).coverage?.interactionsPassed === 1);
+    () => readFixture(path.join(cwd, "design/verify/GuidedPolicies.report.json"), isVerifyReport).coverage?.interactionsPassed === 1);
   ok("[lt3-cli] --help says there is no browser in --compare", () => /NO browser/.test(run("--help").stdout));
 })();
 

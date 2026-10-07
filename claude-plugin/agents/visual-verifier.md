@@ -396,8 +396,8 @@ Report anything the measurement cannot express as a `note` (name the region and 
 - Ignore differences the plan marks as deliberate approximations or decided defaults.
 - **Every defect you put in `notes` must quote the line it contradicts**: the expectation row
   (`nodeId`, field, value) AND the export node's own value (`"text": …`, `"radius": …`). Open the
-  export and check before you write it. A reported "leave specific vs Leave Specific" copy bug was
-  fabricated — the export itself says `"text": "leave specific"`; the build was right. If you cannot
+  export and check before you write it. A reported "lodge specific vs Lodge Specific" copy bug was
+  fabricated — the export itself says `"text": "lodge specific"`; the build was right. If you cannot
   quote a contradicting line, it is not a defect.
 
 ## 6. Return

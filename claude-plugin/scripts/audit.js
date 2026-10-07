@@ -2247,7 +2247,7 @@ function audit(input, opts = {}) {
     crossFile = crossCheck({
       // Each screen's OWN variables (d.vars — its <Screen>.vars.json) travel with it: the collision
       // check is about the variables THIS screen carries, not the merged union's (livetest-3 #311 —
-      // without them this gate raised another screen's `Space 4` blocker against Job Roles).
+      // without them this gate raised another screen's `Space 4` blocker against Jet Roles).
       screens: docs,
       variables: opts.variables || null,
       sliceSources: opts.sliceSources || null,

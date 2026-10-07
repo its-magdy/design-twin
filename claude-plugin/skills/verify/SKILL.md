@@ -316,8 +316,8 @@ delta), then what was **not** checked: `notMeasured`, `fieldsNotMeasured`, `not-
 the excluded-by-method values.
 
 **Every defect you repeat must quote the line it contradicts** — the expectation row (node id, field,
-value) and the export node it came from. The second-pair-of-eyes agent once reported "leave specific"
-vs "Leave Specific" as a copy bug when the export itself says `"text": "leave specific"`; a defect that
+value) and the export node it came from. The second-pair-of-eyes agent once reported "lodge specific"
+vs "Lodge Specific" as a copy bug when the export itself says `"text": "lodge specific"`; a defect that
 does not survive being checked against its own input file is not reported.
 
 If the plan already had a `verification` block, say whether this run confirms or contradicts it: same

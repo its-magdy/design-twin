@@ -91,6 +91,17 @@ try {
   check("[DT08-5] …and says the pull is not the library's catalog, with the --as-library route (no \"fewer of them\")", /never the library's catalog/.test(dsTool) && /--as-library/.test(dsTool) && !/fewer of them/.test(dsTool));
   check("[DT08-5] the pull help page says the same for --design-system", /CONSUMES a library/.test(HELP.pull ?? "") && /never the library's\s+catalog/.test(HELP.pull ?? ""));
   check("[DT05-2] the list page documents children's childCount and `title`; the screenshot page says \"at the default scale\"", /childCount/.test(pageList) && /`title`/.test(pageList) && /at the default scale it leaves no duplicate/.test(HELP.screenshot ?? ""));
+
+  // [H4-1] claude-plugin/build-scripts.ts takes the output dir as argv[2]; a flag used to be taken for it (`--help` wrote
+  // the bundles into ./--help). Run it with a temp cwd so a regression cannot litter the repo.
+  console.log("\ncli help — build-scripts --help (H-4):");
+  const BUILD = path.join(import.meta.dirname, "..", "claude-plugin", "build-scripts.ts");
+  const bs = (arg: string) => spawnSync(process.execPath, [BUILD, arg], { cwd, encoding: "utf8", timeout: 30000 });
+  const h = bs("--help");
+  const bad = bs("--nope");
+  check("[H4-1] `build-scripts.ts --help` exits 0, prints usage and creates no `--help` directory; another dash argument is a usage error (exit 2, stderr), also writing nothing",
+    h.status === 0 && /usage: node claude-plugin\/build-scripts\.ts/.test(h.stdout) && !fs.existsSync(path.join(cwd, "--help"))
+    && bad.status === 2 && /usage:/.test(bad.stderr) && !fs.existsSync(path.join(cwd, "--nope")));
 } finally {
   fs.rmSync(cwd, { recursive: true, force: true });
 }

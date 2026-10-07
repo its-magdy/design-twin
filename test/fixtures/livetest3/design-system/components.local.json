@@ -1,6 +1,6 @@
 {
  "exportedAt": "2026-09-22T19:12:16.945Z",
- "file": "Design System - NERA (Copy)",
+ "file": "Design System - NIMA (Copy)",
  "colorProfile": "srgb",
  "components": [
   {
@@ -1538,8 +1538,8 @@
    "pageId": "188:2470",
    "key": "34402a1c2b36381a9dd1e25f4bac043a726b452a",
    "props": {
-    "Team Calendar": {
-     "key": "Team Calendar",
+    "Task Calendar": {
+     "key": "Task Calendar",
      "type": "VARIANT",
      "options": [
       "default",
@@ -1604,15 +1604,15 @@
    "pageId": "188:2470",
    "key": "9856aed1b31f3ae11263074325a988b188b1fe97",
    "props": {
-    "Rostering": {
-     "key": "Rostering",
+    "Rehousing": {
+     "key": "Rehousing",
      "type": "VARIANT",
      "options": [
       "default",
-      "Position Roster",
-      "activity types",
-      "Activity Templates",
-      "Activity Assignment",
+      "Platform Roster",
+      "assembly types",
+      "Assembly Templates",
+      "Assembly Assignment",
       "task"
      ],
      "default": "default"
@@ -1634,7 +1634,7 @@
    }
   },
   {
-   "name": "shift Demand",
+   "name": "stage Demand",
    "id": "842:4093",
    "type": "COMPONENT_SET",
    "page": "📌 Shared components",
@@ -1676,8 +1676,8 @@
    "pageId": "188:2470",
    "key": "8986a7ea22044b7b71f5abd30deb5c0fcb2b04ba",
    "props": {
-    "Day Of Operation": {
-     "key": "Day Of Operation",
+    "Day Of Ownership": {
+     "key": "Day Of Ownership",
      "type": "VARIANT",
      "options": [
       "default",
@@ -1702,7 +1702,7 @@
    }
   },
   {
-   "name": "Org Management",
+   "name": "Ops Management",
    "id": "842:4188",
    "type": "COMPONENT_SET",
    "page": "📌 Shared components",
@@ -1715,12 +1715,12 @@
      "options": [
       "Default",
       "units",
-      "Global Policies",
+      "Guided Policies",
       "Positions",
-      "Leave Types",
-      "Public Holidays",
+      "Lodge Types",
+      "Picnic Holidays",
       "Leave Progress",
-      "Balance Management"
+      "Backlog Management"
      ],
      "default": "Default"
     }
@@ -1741,15 +1741,15 @@
    }
   },
   {
-   "name": "Staff Management",
+   "name": "Stock Management",
    "id": "842:4478",
    "type": "COMPONENT_SET",
    "page": "📌 Shared components",
    "pageId": "188:2470",
    "key": "2c13df3f2e42bfce00f2632207dee24d8ffd2845",
    "props": {
-    "Staff Management": {
-     "key": "Staff Management",
+    "Stock Management": {
+     "key": "Stock Management",
      "type": "VARIANT",
      "options": [
       "Default",
@@ -1778,15 +1778,15 @@
    }
   },
   {
-   "name": "License Health Check",
+   "name": "Leisure Health Check",
    "id": "842:4660",
    "type": "COMPONENT_SET",
    "page": "📌 Shared components",
    "pageId": "188:2470",
    "key": "164796dedf878de7b679fe368c2981b1165425a4",
    "props": {
-    "License Health Check": {
-     "key": "License Health Check",
+    "Leisure Health Check": {
+     "key": "Leisure Health Check",
      "type": "VARIANT",
      "options": [
       "selected",
@@ -1845,7 +1845,7 @@
    }
   },
   {
-   "name": "OJT Management",
+   "name": "OKR Management",
    "id": "842:4719",
    "type": "COMPONENT_SET",
    "page": "📌 Shared components",
@@ -1878,7 +1878,7 @@
    }
   },
   {
-   "name": "activity demand",
+   "name": "assembly demand",
    "id": "842:4728",
    "type": "COMPONENT_SET",
    "page": "📌 Shared components",
@@ -2129,7 +2129,7 @@
    "name": "Header",
    "id": "841:5074",
    "type": "COMPONENT_SET",
-   "page": "✈️ CRMS Components",
+   "page": "✈️ CDMS Components",
    "pageId": "841:4224",
    "key": "c879912de3fda9c97cf56f664dbbdbe12a33234a",
    "props": {
@@ -2162,7 +2162,7 @@
    "name": "Header",
    "id": "1261:3619",
    "type": "COMPONENT_SET",
-   "page": "📝 CLM Components",
+   "page": "📝 CPM Components",
    "pageId": "1261:2494",
    "key": "7cbd152309ab829248170006bb302ec9b8bda906",
    "props": {
@@ -2195,7 +2195,7 @@
    "name": "actions",
    "id": "1686:6095",
    "type": "COMPONENT",
-   "page": "📝 CLM Components",
+   "page": "📝 CPM Components",
    "pageId": "1261:2494",
    "key": "bfe5760aa0f9809ff244f0620ec71b21478866c3"
   },

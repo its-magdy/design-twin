@@ -8,6 +8,12 @@ it catches logic bugs cheaply — then B to confirm the real `figma.*` calls.
 
 ## Layer A — offline logic test (agent-runnable, no Figma)
 
+`npm test` runs every suite in order and ends with a summary; `node test/run-suites.ts <name>` runs a subset.
+Right after the two lints, `test/real-names.test.ts` fails if a real field-test file, company, layer or
+person name reaches the tree; it reports `file:line`, never the name. The list is stored as salted hashes, which
+keeps plain names out of the tree but is not secrecy: they are dictionary-reversible, and git history already holds
+the old names.
+
 The plugin's extraction transforms are TypeScript (`figma-plugin/src/*.ts`), bundled to
 `figma-plugin/code.js`. `test/harness.ts` loads the built `code.js` in a VM with a mock `figma` object
 and a representative node tree (mixed text, gradient, reaction, effects, bound token, scroll frame,
@@ -67,7 +73,7 @@ node test/identity.test.ts             # expect: 48/48 checks passed, exit 0 —
                                        # emitted, diffed and attributed by KEY; theme.css cannot shadow Tailwind's scale;
                                        # a re-keyed (duplicated) catalog yields name+prop-signature PROPOSALS, never auto-accepted
 node test/resolve-screen.test.ts       # expect: 27/27 checks passed, exit 0 — the shared node-id/layer-name/indexed-title
-                                       # resolver every skill uses to turn "the Job Roles screen" into one exact file
+                                       # resolver every skill uses to turn "the Jet Roles screen" into one exact file
 node test/mcp-share.test.ts            # expect: 4/4 checks passed, exit 0 — two MCP servers on one port share the bridge
 node test/mcp-smoke.test.ts            # expect: 12/12 checks passed, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin

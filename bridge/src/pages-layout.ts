@@ -68,11 +68,11 @@ export function safe(id: unknown): string {
 
 // --------------------------------------------------------- title / texts (findings 16, 17, 70, 90, 120)
 //
-// The Figma LAYER name is not the name a user reads on screen: `positions ` (trailing space) IS "Job
-// Roles"; `System Configurations` IS "Global Policies". A user who types the name they see gets
+// The Figma LAYER name is not the name a user reads on screen: `positions ` (trailing space) IS "Jet
+// Roles"; `Studio Configurations` IS "Guided Policies". A user who types the name they see gets
 // nothing from the index unless the index also carries that visible title. It must come from the
 // frame's OWN title slot, never from a sidebar/nav label drawn on every sibling screen (finding 120:
-// "Global Policies" also appears as a `Sub titles` nav item on all three Organization-management
+// "Guided Policies" also appears as a `Sub titles` nav item on all three Optimization-management
 // screens) — so the rule is: the first TEXT node inside a descendant literally named "Page Title",
 // and ONLY that; anywhere else and we would rather carry no title than a wrong one.
 // Every walker below skips a hidden CHILD (and so its subtree), never the node it was called on: `shown`.

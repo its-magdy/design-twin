@@ -475,11 +475,11 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 }
 
 // ---------- drift-lint SCREEN COVERAGE says how much of "the screen" is hidden (P2a, 107/139/185) ----------
-// The real Global Policies export: 87 instances, 45 of them on layers the designer switched off. The
+// The real Guided Policies export: 87 instances, 45 of them on layers the designer switched off. The
 // coverage line keeps its numbers (it is map/catalog coverage by key) but must say how many of those
 // instances — and which whole sets — will never be built, and that it is NOT a build-coverage number.
 {
-  const gp = readFixture(path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json"), isScreenExport);
+  const gp = readFixture(path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "Studio_Configurations__1359_21337.json"), isScreenExport);
   const cov = screenCoverage(codeMap({}), { components: [] }, [gp]);
   ok("[drift-lint wording] instances are still counted in full (87), with the 45 on hidden layers named", cov.instances === 87 && cov.hiddenInstances === 45);
   ok("[drift-lint wording] sets that appear ONLY on hidden layers are counted (never built)", cov.hiddenOnly > 0 && cov.hiddenOnly < cov.distinct);
@@ -487,13 +487,13 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   fs.writeFileSync(path.join(tmp, "map.json"), JSON.stringify({ version: 1, components: {} })); // a VALID empty map (drift-lint validates it)
   const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "drift-lint.ts"), path.join(tmp, "map.json"),
     path.join(import.meta.dirname, "fixtures", "livetest3", "design-system", "components.local.json"),
-    "--screen", path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json")], { encoding: "utf8" });
+    "--screen", path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "Studio_Configurations__1359_21337.json")], { encoding: "utf8" });
   ok("[drift-lint wording] the printed line names the hidden instances and says it measures reuse by key, not what the build contains",
     /SCREEN COVERAGE: \d+\/\d+ .* 87 instance\(s\) total, 45 of them on hidden layers/.test(r.stderr) && /not which ones the build contains/.test(r.stderr));
 }
 
 // ---------- cross-check never cites a hidden layer (P2a; hidden.js predicate in both walks) ----------
-// Real Job Roles export (test/fixtures/livetest3/verify/). Before: `walkWithBg` skipped
+// Real Jet Roles export (test/fixtures/livetest3/verify/). Before: `walkWithBg` skipped
 // `visible === false` (a flag the export never sets) and the token-usage walk skipped nothing, so
 // `token-name-collision` cited the hidden `I20173:137670;1929:15178` / `;1929:15308` buttons and the
 // derived-mode contrast check graded hidden text.
@@ -505,19 +505,19 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   const citesHidden = (f: unknown) => { let hit = false; JSON.stringify(f, (_k: string, v: unknown) => { if (typeof v === "string" && hidden.has(v)) hit = true; return v; }); return hit; };
   const rd = <T,>(p: string, guard: DocGuard<T>): T => readFixture(path.join(FXL, p), guard);
   const tokRes = crossCheck({ screens: [{ doc: jr, label: "positions___7314_87192" }],
-    variables: rd("pages/__Organization_management_/positions___7314_87192.vars.json", isTokensDoc), tokens: rd("design-system/tokens.json", isTokensDoc),
+    variables: rd("pages/__Optimization_management_/positions___7314_87192.vars.json", isTokensDoc), tokens: rd("design-system/tokens.json", isTokensDoc),
     components: rd("design-system/components.local.json", isComponentsCatalog), componentsLibrary: rd("design-system/components.library.json", isComponentsCatalog) });
-  ok("[hidden] token findings on the real Job Roles export cite no hidden node", tokRes.findings.length > 0 && !tokRes.findings.some(citesHidden));
-  // Derived-mode contrast. The export was rendered in 'Semantic Variables 01' = Dark (root.resolvedModes);
+  ok("[hidden] token findings on the real Jet Roles export cite no hidden node", tokRes.findings.length > 0 && !tokRes.findings.some(citesHidden));
+  // Derived-mode contrast. The export was rendered in 'Semantic Vectors 01' = Dark (root.resolvedModes);
   // a 'Dim' mode (rendered nowhere — note 'Light' IS rendered, by the 'Default' collection) is declared
   // and both pairs are given a 1:1 contrast there. Pair A
   // ('Text/Description' on 'Backgrounds/Page Color') is used ONLY by hidden text (7 nodes); pair B
   // ('Text/Main Titles' on 'Backgrounds/Table header') only by visible text (5 nodes) — the control.
   const vars = tokens({
-    collections: [{ name: "Semantic Variables 01", modes: ["Dark", "Dim"] }],
+    collections: [{ name: "Semantic Vectors 01", modes: ["Dark", "Dim"] }],
     variables: [
-      { name: "Text/Description", type: "COLOR", collection: "Semantic Variables 01", values: { Dim: "#1d1d1f" } }, { name: "Backgrounds/Page Color", type: "COLOR", collection: "Semantic Variables 01", values: { Dim: "#1d1d1f" } },
-      { name: "Text/Main Titles", type: "COLOR", collection: "Semantic Variables 01", values: { Dim: "#46464f" } }, { name: "Backgrounds/Table header", type: "COLOR", collection: "Semantic Variables 01", values: { Dim: "#46464f" } },
+      { name: "Text/Description", type: "COLOR", collection: "Semantic Vectors 01", values: { Dim: "#1d1d1f" } }, { name: "Backgrounds/Page Color", type: "COLOR", collection: "Semantic Vectors 01", values: { Dim: "#1d1d1f" } },
+      { name: "Text/Main Titles", type: "COLOR", collection: "Semantic Vectors 01", values: { Dim: "#46464f" } }, { name: "Backgrounds/Table header", type: "COLOR", collection: "Semantic Vectors 01", values: { Dim: "#46464f" } },
     ],
   });
   const c = crossCheck({ screens: [{ doc: jr, label: "positions___7314_87192" }], variables: vars });
@@ -534,7 +534,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 // checked". After the fix it is found automatically and the path used is printed on stderr.
 {
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
-  const screen = path.join(FXL, "pages", "__Organization_management_", "positions___7314_87192.json");
+  const screen = path.join(FXL, "pages", "__Optimization_management_", "positions___7314_87192.json");
   const dsDir = path.join(FXL, "design-system");
   const withoutFlag = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"),
     screen, "--design-system", dsDir, "--json"], { encoding: "utf8" });
@@ -572,7 +572,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
     for (const r of doc.nodes) w(r, false);
     return { visible: vis.size, hiddenOnly: [...all].filter((k) => !vis.has(k)).length };
   };
-  const labeledFixtures: [string, string][] = [["Job Roles", "pages/__Organization_management_/positions___7314_87192.json"], ["Global Policies", "pages/__Organization_management_/System_Configurations__1359_21337.json"]];
+  const labeledFixtures: [string, string][] = [["Jet Roles", "pages/__Optimization_management_/positions___7314_87192.json"], ["Guided Policies", "pages/__Optimization_management_/Studio_Configurations__1359_21337.json"]];
   for (const [label, rel] of labeledFixtures) {
     const res = run(rel), truth = sets(rel);
     const b: Partial<Record<CoverageBucket, number>> = res.coverage?.buckets || {};
@@ -585,7 +585,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
     ok(`[318] ${label}: no name is both a proposal and "new work" or an ambiguous leftover`,
       (res.componentProposals || []).every((p) => !(res.coverage?.entries || []).some((e) => e.setName === p.name && e.bucket !== "proposed")));
   }
-  const cat = run("pages/In_progress/Create_Activity_Type__18411_84111.json");
+  const cat = run("pages/In_progress/Create_Assembly_Type__18411_84111.json");
   const s4 = cat.findings.find((f) => f.code === "token-name-collision" && f.token === "Space 4");
   ok("[326] an identical-name collision names BOTH subjects: \"The screen's 'Space 4' (key …) and the design system's 'Space 4' share a name\"",
     !!s4 && /^The screen's 'Space 4' \(key 64928e3a…\) and the design system's 'Space 4' share a name but resolve DIFFERENTLY/.test(s4.message));

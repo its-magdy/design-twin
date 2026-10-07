@@ -199,6 +199,8 @@ console.log("group 8 — the shipped probe drops impossible gaps (chromium):");
   const pw = await import("playwright").catch(() => null); // not installed → skipped (locally)
   const browser = pw ? await pw.chromium.launch().catch(() => null) : null;
   if (!browser) {
+    // the runner's marker (test/run-suites.ts): a local run lists this suite as skipped, not as a plain pass
+    if (!CI) console.log("SKIPPED (no playwright: chromium unavailable — the F-93 probe checks did not run)");
     check(`[F-93 probe] chromium unavailable — ${CI ? "CI must run this" : "SKIPPED locally"}`, !CI);
   } else {
     try {

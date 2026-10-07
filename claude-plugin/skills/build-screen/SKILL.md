@@ -322,7 +322,7 @@ Copy this checklist into your notes and keep it updated:
      the next feature can follow it. **Inspect the repo first and follow what is already there**; only
      on a genuinely fresh scaffold propose a layout, get a yes, and record it. Where code goes is a
      real decision, and leaving it to taste produces a layout nobody can extend — the live build
-     emitted a flat `src/{screens,components/{ui,layout,jobroles},data,lib}` with screen-specific
+     emitted a flat `src/{screens,components/{ui,layout,jetroles},data,lib}` with screen-specific
      pieces beside generic ones and the generic set named by the builder rather than after the
      catalog, so a second feature would have had nothing to reuse by design-system name.
      `references/architecture.md` has the detection checklist, the default layout per stack, and how

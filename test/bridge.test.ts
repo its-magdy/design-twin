@@ -47,6 +47,17 @@ const core = await import("../bridge/src/server-core.ts");
 // A caught/rejected value as the Error every bridge path throws. A non-Error is wrapped rather than
 // cast, so a check reading `.message` still sees a string (and stays truthy, like the raw value).
 const asErr = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
+// Wait for a condition instead of sleeping a guessed time: polls every 10 ms, resolves true once it
+// holds, false at the cap — so a check that never comes true fails cleanly instead of hanging, and a
+// loaded machine only makes it slower, never wrong (group 16, H-1).
+const until = async (cond: () => boolean, capMs = 10_000): Promise<boolean> => {
+  const end = Date.now() + capMs;
+  while (!cond()) {
+    if (Date.now() >= end) return false;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return true;
+};
 // The one bridge -> plugin frame the fake plugins below read: `{ id, cmd, args }` (not exported by server-core).
 interface CommandFrame { id: string; cmd: Cmd; args?: Record<string, unknown> }
 // A fixture asset with the producer-owned identity fields filled in (doc-types.ts Asset).
@@ -406,12 +417,13 @@ void (async () => {
   // ------------------------------------------------- server-core: heartbeat (ws README ping/pong)
   // A peer that silently stopped answering (lid closed, cable pulled) used to sit in the registry as a
   // live client forever, so every command routed to it waited out its whole timeout. The bridge now
-  // pings on an interval and terminates a client that missed the previous pong. A short heartbeatMs
-  // stands in for the 30 s default; `autoPong: false` is a client whose network stack never answers.
+  // pings on an interval and terminates a client that missed the previous pong. `autoPong: false` is a
+  // client whose network stack never answers. The rounds are stepped by hand (`heartbeatMs: 0` +
+  // heartbeatTick(), D108): with a real short interval, one loop stall after a ping fired the next tick
+  // before the alive client's pong was read, and terminated it (group 16, H-1b).
   {
     const port = nextPort++;
-    const HB = 150;
-    const bridge = core.createBridge(port, { heartbeatMs: HB });
+    const bridge = core.createBridge(port, { heartbeatMs: 0 });
     const open = (autoPong: boolean) => new Promise<WebSocket>((res, rej) => {
       const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", autoPong });
       c.on("open", () => res(c));
@@ -419,22 +431,59 @@ void (async () => {
     });
     const alive = await open(true);
     const dead = await open(false);
-    let deadClosedAt = 0;
-    const openedAt = Date.now();
-    dead.on("close", () => { deadClosedAt = Date.now(); });
+    let alivePings = 0;
+    let deadPings = 0;
+    let deadPingsAtClose = -1;
+    alive.on("ping", () => { alivePings++; });
+    dead.on("ping", () => { deadPings++; });
+    dead.on("close", () => { deadPingsAtClose = deadPings; });
+    // The alive client answers every command. Its reply is written after its pong on the same socket,
+    // so a round trip that resolves proves the bridge has READ the pong — the fence before each tick.
+    alive.on("message", (d: RawData) => {
+      const f = JSON.parse(d.toString()) as CommandFrame;
+      if (f.cmd === "ping") alive.send(JSON.stringify({ id: f.id, ok: true, result: { pong: true, page: "P", file: "F" } }));
+    });
+    const fence = async (): Promise<boolean> => {
+      try { await bridge.request("ping", {}, 5000, "c1"); return true; } catch { return false; }
+    };
     ok("[heartbeat] both clients are registered at first", bridge.listClients().length === 2);
     // An in-flight request on the dead client must fail on termination, not wait out its budget.
     let hbErr: Error | undefined;
     const inflight = bridge.request("exportFull", {}, 20000, "c2").catch((e: unknown) => { hbErr = asErr(e); });
-    await new Promise((r) => setTimeout(r, HB * 5));
+    bridge.heartbeatTick();
+    const pinged = await until(() => alivePings === 1 && deadPings === 1);
+    const fenced = await fence();
+    bridge.heartbeatTick();
+    const terminated = await until(() => deadPingsAtClose >= 0);
+    // The same tick pinged the alive client a second time: its pong is fenced before the next tick.
+    const second = await until(() => alivePings === 2) && await fence();
     await inflight;
     console.log("\nserver-core — heartbeat:");
-    ok("[heartbeat] a client that never answers pings is terminated within two intervals (+ slack)",
-      deadClosedAt > 0 && deadClosedAt - openedAt <= HB * 3 + 200);
+    ok("[heartbeat] a client that never answers pings is terminated at the tick after ONE unanswered ping",
+      pinged && fenced && terminated && deadPingsAtClose === 1);
     ok("[heartbeat] and is removed from the client registry", bridge.listClients().map((c) => c.connId).join() === "c1");
     ok("[heartbeat] its in-flight request fails fast with the disconnect diagnosis", !!hbErr && /disconnected before replying/.test(hbErr.message));
-    ok("[heartbeat] a client that answers pings survives many intervals", alive.readyState === WebSocket.OPEN && bridge.isConnected());
+    let rounds = 0;
+    for (let want = 3; want <= 5; want++) {
+      bridge.heartbeatTick();
+      if ((await until(() => alivePings === want)) && (await fence())) rounds++;
+    }
+    ok("[heartbeat] a client that answers pings survives many rounds (pinged each one, still open and routed to)",
+      second && rounds === 3 && alivePings === 5 && alive.readyState === WebSocket.OPEN && bridge.isConnected());
     alive.close();
+    bridge.close();
+  }
+  // The real interval is armed: a silent client is terminated with no hand-stepping (no upper time
+  // bound — a loaded machine may run it late, which is not the bug this guards).
+  {
+    const port = nextPort++;
+    const bridge = core.createBridge(port, { heartbeatMs: 50 });
+    const dead = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", autoPong: false });
+    let deadClosed = false;
+    dead.on("close", () => { deadClosed = true; });
+    dead.on("error", () => {});
+    ok("[heartbeat] with a real heartbeatMs the interval runs and terminates a client that never answers pings",
+      await until(() => deadClosed) && bridge.listClients().length === 0);
     bridge.close();
   }
 
@@ -501,7 +550,7 @@ void (async () => {
 
     // The second file connects. Under the old rule this terminated the first.
     const lib = await open();
-    identify(lib, { instanceId: "fig-lib", file: "NERA Library", fileKey: "KEYLIB", page: "Tokens" });
+    identify(lib, { instanceId: "fig-lib", file: "NIMA Library", fileKey: "KEYLIB", page: "Tokens" });
     autoReply(lib, { pong: true, page: "Tokens", file: "lib" });
     await new Promise((r) => setTimeout(r, 80));
 
@@ -516,7 +565,7 @@ void (async () => {
     ok("[multi] routes by connId", (await bridge.request("ping", {}, 5000, "c2")).file === "lib");
     ok("[multi] routes by fileKey", (await bridge.request("ping", {}, 5000, "KEYBASE")).file === "base");
     ok("[multi] routes by file-name substring (case-insensitive)",
-      (await bridge.request("ping", {}, 5000, "nera")).file === "lib");
+      (await bridge.request("ping", {}, 5000, "nima")).file === "lib");
 
     // waitForClient: a NAMED target whose window has not redialled yet (two files open, the other
     // one landed first — seen live) is waited for, bounded; an unknown name times out quietly and
@@ -537,7 +586,9 @@ void (async () => {
     const tl = Date.now() - tl0;
     ok("[multi] waitForClient resolves as soon as the late window identifies under that name (not at the timeout)", tl >= 150 && tl < 2500);
     ok("[multi] …and the named request then routes to it", (await bridge.request("ping", {}, 5000, "Docs")).file === "docs");
-    ok("[multi] waitForClient resolves at once for a name already connected", await (async () => { const t0 = Date.now(); await bridge.waitForClient("nera", 3000); return Date.now() - t0 < 100; })());
+    // Raced against a timer shorter than its own 3 s window: a wait that only ended at the window loses.
+    ok("[multi] waitForClient resolves at once for a name already connected",
+      await Promise.race([bridge.waitForClient("nima", 3000).then(() => "resolved"), new Promise((r) => setTimeout(() => r("window"), 2000))]) === "resolved");
     lateWs?.close();
     await new Promise((r) => setTimeout(r, 80));
 
@@ -547,7 +598,7 @@ void (async () => {
     try { await bridge.request("ping", {}, 5000); } catch (e) { ambErr = asErr(e); }
     ok("[multi] an unaddressed request with two files connected is REFUSED", !!ambErr);
     ok("[multi] the refusal lists both files so the caller can choose",
-      !!ambErr && /App — Base/.test(ambErr.message) && /NERA Library/.test(ambErr.message));
+      !!ambErr && /App — Base/.test(ambErr.message) && /NIMA Library/.test(ambErr.message));
     ok("[multi] and names the flags that fix it", !!ambErr && /--client/.test(ambErr.message));
 
     let missErr: Error | undefined;
@@ -631,13 +682,13 @@ void (async () => {
   console.log("\nfigma-pull — argument parsing:");
   // --as-library is a SCOPE: it selects what is exported, so it collides with the other scopes and,
   // like --design-system, walks no page (making every read option inert and therefore refused).
-  ok("[as-library] parses and carries the library name", parse(["--as-library", "NERA"]).asLibrary === "NERA");
+  ok("[as-library] parses and carries the library name", parse(["--as-library", "NIMA"]).asLibrary === "NIMA");
   ok("[as-library] requires a name rather than defaulting silently", /library name/.test(usage(["--as-library"]) || ""));
-  ok("[as-library] is refused alongside --design-system", /select different scopes/.test(usage(["--as-library", "NERA", "--design-system"]) || ""));
-  ok("[as-library] is refused alongside --page", /select different scopes/.test(usage(["--as-library", "NERA", "--page", "1:2"]) || ""));
-  ok("[as-library] is refused alongside a list command", /cannot be combined/.test(usage(["--as-library", "NERA", "--list-libraries"]) || ""));
-  ok("[as-library] refuses read options, which would be silently ignored", /silently ignored/.test(usage(["--as-library", "NERA", "--css"]) || ""));
-  ok("[as-library] is refused alongside a daemon command", /cannot be combined/.test(usage(["--as-library", "NERA", "--serve"]) || ""));
+  ok("[as-library] is refused alongside --design-system", /select different scopes/.test(usage(["--as-library", "NIMA", "--design-system"]) || ""));
+  ok("[as-library] is refused alongside --page", /select different scopes/.test(usage(["--as-library", "NIMA", "--page", "1:2"]) || ""));
+  ok("[as-library] is refused alongside a list command", /cannot be combined/.test(usage(["--as-library", "NIMA", "--list-libraries"]) || ""));
+  ok("[as-library] refuses read options, which would be silently ignored", /silently ignored/.test(usage(["--as-library", "NIMA", "--css"]) || ""));
+  ok("[as-library] is refused alongside a daemon command", /cannot be combined/.test(usage(["--as-library", "NIMA", "--serve"]) || ""));
 
   // The regression: `--timeout` with no value fell into the validator's own `!== undefined` exemption,
   // so it was silently IGNORED and the default applied — invisible until the export died at a limit
@@ -893,7 +944,7 @@ void (async () => {
   ok("[args] --children accepts the DASH form (normalised to colons)",
     parse(["--children", "131-1879"]).childrenId === "131:1879");
   ok("[args] --children accepts a full figma.com design URL",
-    parse(["--children", "https://www.figma.com/design/abc123/NERA?node-id=131-1879&t=x"]).childrenId === "131:1879");
+    parse(["--children", "https://www.figma.com/design/abc123/NIMA?node-id=131-1879&t=x"]).childrenId === "131:1879");
   ok("[args] --children accepts a percent-encoded id",
     parse(["--children=131%3A1879"]).childrenId === "131:1879");
   ok("[args] --children accepts a nested-instance path",
@@ -916,7 +967,7 @@ void (async () => {
   ok("[args] --node accepts the DASH form (normalised to colons)",
     parse(["--node", "131-1879"]).nodeId === "131:1879");
   ok("[args] --node accepts a full figma.com design URL",
-    parse(["--node", "https://www.figma.com/design/abc123/NERA?node-id=131-1879&t=x"]).nodeId === "131:1879");
+    parse(["--node", "https://www.figma.com/design/abc123/NIMA?node-id=131-1879&t=x"]).nodeId === "131:1879");
   ok("[args] --node accepts a percent-encoded id",
     parse(["--node=131%3A1879"]).nodeId === "131:1879");
   ok("[args] --node accepts a nested-instance path",
@@ -1067,7 +1118,7 @@ void (async () => {
   // --client is an ADDRESS, not a scope: unlike every other flag here it must COMPOSE with all of
   // them, so the guards that refuse combinations must leave it alone.
   ok("[client] --client takes a value", parse(["design", "--client", "c2"]).client === "c2");
-  ok("[client] the = form works too", parse(["design", "--client=NERA"]).client === "NERA");
+  ok("[client] the = form works too", parse(["design", "--client=NIMA"]).client === "NIMA");
   ok("[client] a file name with spaces survives", parse(["design", "--client", "App — Base"]).client === "App — Base");
   ok("[client] it is null when absent", parse(["design"]).client === null);
   ok("[client] --client with no value is a usage error",
@@ -1104,7 +1155,7 @@ void (async () => {
   ok("[list-clients] and mentions that SEVERAL files can connect", /SEVERAL files at once/.test(noClients));
   const twoClients = pull.formatClients([
     { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", uptimeMs: 65000, identified: true },
-    { connId: "c2", file: "NERA Library", fileKey: null, page: "Tokens", uptimeMs: 3000, identified: true },
+    { connId: "c2", file: "NIMA Library", fileKey: null, page: "Tokens", uptimeMs: 3000, identified: true },
   ]);
   ok("[list-clients] the listing counts the files", /2 Figma files connected/.test(twoClients));
   ok("[list-clients] each row leads with the connId --client takes", /c1\s+"App — Base"/.test(twoClients));
@@ -1132,14 +1183,14 @@ void (async () => {
   const libOut = pull.formatLibraries({
     libraries: [
       { key: "k1", name: "This file", kind: "local", componentCount: 3, variableCollections: [{ key: "c1", name: "Primitives", variableCount: 40 }] },
-      { key: "k2", name: "NERA Design System", kind: "library", componentCount: 12,
+      { key: "k2", name: "NIMA Design System", kind: "library", componentCount: 12,
         variableCollections: [{ key: "c2", name: "Semantic", variableCount: 120 }, { key: "c3", name: "Brand", variableCount: 8 }],
         note: "variable collections unavailable on this plan" },
     ],
     warnings: [],
   });
   ok("[lib] it prints a table, not raw JSON", !/^\s*[{[]/.test(libOut) && /LIBRARIES \(2\)/.test(libOut));
-  ok("[lib] every library name appears", /This file/.test(libOut) && /NERA Design System/.test(libOut));
+  ok("[lib] every library name appears", /This file/.test(libOut) && /NIMA Design System/.test(libOut));
   ok("[lib] local vs library kind is shown", /\blocal\b/.test(libOut) && /\blibrary\b/.test(libOut));
   ok("[lib] variable counts are summed per library", /\b128\b/.test(libOut) && /\b40\b/.test(libOut));
   ok("[lib] each collection is listed with its own count", /Primitives \(40 variables\)/.test(libOut) && /Brand \(8 variables\)/.test(libOut));
@@ -1152,7 +1203,7 @@ void (async () => {
     // The header and both data rows must start their NAME column at the same offset — the one thing
     // that makes this a table rather than JSON with extra steps.
     const rows = libOut.split("\n").filter((l: string) => /^ {2}(KIND|local|library) /.test(l));
-    const nameAt = rows.map((l: string) => ["This file", "NERA Design System", "NAME"].reduce((n, s) => (l.includes(s) ? l.indexOf(s) : n), -1));
+    const nameAt = rows.map((l: string) => ["This file", "NIMA Design System", "NAME"].reduce((n, s) => (l.includes(s) ? l.indexOf(s) : n), -1));
     return rows.length === 3 && new Set(nameAt).size === 1 && (nameAt[0] ?? -1) > 0;
   })());
 
@@ -1503,26 +1554,26 @@ void (async () => {
 
   // ---------- writeScreen: title/texts land in the index (P3 #16 #17 #70 #90 #120) ----------
   // Real node tree from the livetest3 fixture (the `positions ` frame — layer name "positions ",
-  // visible title "Job Roles"), pruned to the fields deriveTitle/collectTexts read.
+  // visible title "Jet Roles"), pruned to the fields deriveTitle/collectTexts read.
   {
     const fixtureScreen = JSON.parse(fs.readFileSync(
-      path.join(import.meta.dirname, "fixtures", "livetest3", "pages-titled", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
+      path.join(import.meta.dirname, "fixtures", "livetest3", "pages-titled", "__Optimization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     const sdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-"));
     OUT.writeScreen(sdir, screenReply({
       screenName: "positions ",
       nodeId: "7314:87192",
-      page: "✅ Organization management ",
+      page: "✅ Optimization management ",
       pageId: "5282:58823",
       screen: { screen: "positions ", nodes: fixtureScreen.nodes, manifest: fixtureScreen.manifest, exportedAt: "2026-09-23T00:00:00.000Z" },
     }), undefined);
     const rootIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "index.json"), "utf8")) as PagesRootIndex;
-    const pageIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "__Organization_management_", "index.json"), "utf8")) as PageIndex;
+    const pageIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "__Optimization_management_", "index.json"), "utf8")) as PageIndex;
     const rootRow0 = must(rootIdx.layers?.[0], "rootIdx.layers[0]");
     ok("[write-screen] the ROOT index row carries the visible title, not just the Figma layer name",
       Array.isArray(rootIdx.layers) && rootIdx.layers.length === 1 &&
-      rootRow0.name === "positions " && rootRow0.title === "Job Roles");
+      rootRow0.name === "positions " && rootRow0.title === "Jet Roles");
     ok("[write-screen] the PAGE index row carries the same title",
-      pageIdx.layers.length === 1 && pageIdx.layers[0]?.title === "Job Roles");
+      pageIdx.layers.length === 1 && pageIdx.layers[0]?.title === "Jet Roles");
     ok("[write-screen] the row also carries a texts[] fingerprint, deduped and non-empty",
       Array.isArray(rootRow0.texts) && rootRow0.texts.length > 0 &&
       new Set(rootRow0.texts).size === rootRow0.texts.length);
@@ -1541,15 +1592,15 @@ void (async () => {
     OUT.writeScreen(sdir2, screenReply({
       screenName: "positions ",
       nodeId: "7314:87192",
-      page: "✅ Organization management ",
+      page: "✅ Optimization management ",
       pageId: "5282:58823",
-      sourceFile: "TeamSmart (Copy)",
+      sourceFile: "TideStack (Copy)",
       screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
     }), undefined);
-    const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
+    const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Optimization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     const rootIdx2 = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "index.json"), "utf8")) as PagesRootIndex;
-    ok("[write-screen sourceFile] lands on the screen doc's own top level", screenDoc.sourceFile === "TeamSmart (Copy)");
-    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers?.[0]?.sourceFile === "TeamSmart (Copy)");
+    ok("[write-screen sourceFile] lands on the screen doc's own top level", screenDoc.sourceFile === "TideStack (Copy)");
+    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers?.[0]?.sourceFile === "TideStack (Copy)");
     fs.rmSync(sdir2, { recursive: true, force: true });
 
     // No sourceFile given (an unresolved/ambiguous client, or a caller that never asked) — the field
@@ -1558,11 +1609,11 @@ void (async () => {
     OUT.writeScreen(sdir3, screenReply({
       screenName: "positions ",
       nodeId: "7314:87192",
-      page: "✅ Organization management ",
+      page: "✅ Optimization management ",
       pageId: "5282:58823",
       screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
     }), undefined);
-    const screenDoc2 = JSON.parse(fs.readFileSync(path.join(sdir3, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
+    const screenDoc2 = JSON.parse(fs.readFileSync(path.join(sdir3, "pages", "__Optimization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     ok("[write-screen sourceFile] absent when the pull result carried none — never defaulted", !("sourceFile" in screenDoc2));
     fs.rmSync(sdir3, { recursive: true, force: true });
   }
@@ -1572,10 +1623,10 @@ void (async () => {
   // describe different Figma files and answer different questions.
   {
     const libDoc: DesignSystemDoc = {
-      file: "NERA DS",
+      file: "NIMA DS",
       exportedAt: "2026-08-16T00:00:00.000Z",
       colorProfile: "srgb",
-      source: { role: "library", libraryName: "NERA", fileKey: "ABCDEFGH12345", collectionKeys: ["ck_core"] },
+      source: { role: "library", libraryName: "NIMA", fileKey: "ABCDEFGH12345", collectionKeys: ["ck_core"] },
       collections: [collection({ name: "Core", modes: ["Light"], default: "Light", key: "ck_core", publish: "current" })],
       variables: [variable({ name: "color/primary", type: "COLOR", collection: "Core", tier: "primitive", values: { Light: "#112233" }, key: "vk1", publish: "current" })],
       styles: { paint: [{ name: "Brand", key: "pk1", publish: "changed" }], text: [], effect: [], grid: [] },
@@ -1586,7 +1637,7 @@ void (async () => {
     const ldir = fs.mkdtempSync(path.join(os.tmpdir(), "write-lib-"));
     const res: WriteView = OUT.writeExport(path.join(ldir, "design"), { designSystem: libDoc }, () => {});
     const base = path.join(ldir, "design");
-    const dirName = "nera-ABCDEFGH".slice(0, 4) + "-ABCDEFGH"; // slug("NERA") + first 8 of fileKey
+    const dirName = "nima-ABCDEFGH".slice(0, 4) + "-ABCDEFGH"; // slug("NIMA") + first 8 of fileKey
     ok("[lib-layout] lands under libraries/<slug>-<fileKey8>/", res.wrote.library === "libraries/" + dirName);
     ok("[lib-layout] directory identity uses fileKey, which survives a rename", /-ABCDEFGH$/.test(res.wrote.library ?? ""));
     ok("[lib-layout] never writes into design-system/", !fs.existsSync(path.join(base, "design-system")));
@@ -1596,7 +1647,7 @@ void (async () => {
     // rejecting this as the slim manifest, and what lets design-to-code/tokens.ts run on it unchanged.
     ok("[lib-layout] tokens.json carries a top-level variables array", Array.isArray(tok.variables) && tok.variables.length === 1);
     ok("[lib-layout] tokens.json carries collections for the mode join", Array.isArray(tok.collections));
-    ok("[lib-layout] every split file repeats the freshness stamp", tok.exportedAt === libDoc.exportedAt && tok.file === "NERA DS");
+    ok("[lib-layout] every split file repeats the freshness stamp", tok.exportedAt === libDoc.exportedAt && tok.file === "NIMA DS");
     ok("[lib-layout] and carries source so a consumer knows it is a library", tok.source?.role === "library");
 
     const comps = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "components.json"), "utf8")) as ComponentsCatalog;
@@ -1611,7 +1662,7 @@ void (async () => {
     // LibrariesIndex types carried-through rows as unknown[]; every row here was written by this run, so read them as rows.
     type LibrariesIndexView = LibrariesIndex & { libraries: LibrariesIndexRow[] };
     const root = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8")) as LibrariesIndexView;
-    ok("[lib-layout] libraries/index.json lists the library", root.libraries.length === 1 && root.libraries[0]?.libraryName === "NERA");
+    ok("[lib-layout] libraries/index.json lists the library", root.libraries.length === 1 && root.libraries[0]?.libraryName === "NIMA");
     // A second library must not erase the first: each is a separate plugin run in a separate file.
     const second = JSON.parse(JSON.stringify(libDoc)) as DesignSystemDoc;
     second.file = "Icons";
@@ -1900,7 +1951,7 @@ void (async () => {
   const vdir = path.join(wdir, "vars");
   const V = (name: string, key: string, values: Record<string, string>, coll?: string) => variable({ name, key, collection: coll || "Sem", type: "COLOR", values });
   OUT.writeAny(vdir, screenReply({
-    screenName: "Job roles", page: "P", pageId: "0:1", nodeId: "1:1", screen: { nodes: [] }, assets: [],
+    screenName: "Jet roles", page: "P", pageId: "0:1", nodeId: "1:1", screen: { nodes: [] }, assets: [],
     variables: {
       collections: [collection({ name: "Sem", key: "ck1", modes: ["Dark"] })],
       variables: [V("Text/Main", "k1", { Dark: "#fff" }), V("Bg/Page", "k2", { Dark: "#111" })],
@@ -1928,10 +1979,10 @@ void (async () => {
   ok("[write-out/vars] hygiene lines from both slices are kept, deduped",
     merged.hygiene.includes("one") && merged.hygiene.includes("two"));
   ok("[write-out/vars] provenance records BOTH contributing screens",
-    merged._slices.length === 2 && merged._slices.map((s) => s.screen).join(",") === "Job_roles__1_1,Filter__2_2");
+    merged._slices.length === 2 && merged._slices.map((s) => s.screen).join(",") === "Jet_roles__1_1,Filter__2_2");
   ok("[write-out/vars] the note says the file accumulates", /UNION/.test(merged._note ?? ""));
   ok("[write-out/vars] each pull's raw slice is kept verbatim beside its screen",
-    fs.existsSync(path.join(vdir, "pages", "P", "Job_roles__1_1.vars.json")) && fs.existsSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json")));
+    fs.existsSync(path.join(vdir, "pages", "P", "Jet_roles__1_1.vars.json")) && fs.existsSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json")));
   ok("[write-out/vars] a slice file holds ONLY that screen's variables",
     (JSON.parse(fs.readFileSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json"), "utf8")) as TokensDoc).variables?.length === 2);
 
@@ -1959,7 +2010,7 @@ void (async () => {
   // ------------------------------------------------------------- reference PNGs land in ONE place
   // Three docs used to give three different answers and the printed path found nothing (20/31/34).
   const shot: WriteView = OUT.writeAny(path.join(wdir, "shot"), {
-    id: "7410:12299", name: "Job Role Details", type: "FRAME",
+    id: "7410:12299", name: "Jet Role Details", type: "FRAME",
     reference: "assets/7410_12299_ref.png", manifest: manifest(),
     assets: [asset({ id: "7410:12299", file: "7410_12299_ref.png", base64: Buffer.from("png").toString("base64"), kind: "reference" })],
   });
@@ -2016,7 +2067,7 @@ void (async () => {
     // too — two rows, so the routing assertions below have something to disambiguate between.
     listClients: () => [
       clientRow({ connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true }),
-      clientRow({ connId: "c2", file: "NERA Library", fileKey: "KEYLIB", page: "Tokens", instanceId: "fig-b", connectedAt: 2, uptimeMs: 2000, identified: true }),
+      clientRow({ connId: "c2", file: "NIMA Library", fileKey: "KEYLIB", page: "Tokens", instanceId: "fig-b", connectedAt: 2, uptimeMs: 2000, identified: true }),
     ],
     close: () => calls.push("close"),
     waitForConnection: async () => {},
@@ -2118,8 +2169,8 @@ void (async () => {
   // if `client` were dropped in the unix-socket frame the command would silently run against whichever
   // file the bridge picked — the exact wrong-file export the refusal in resolveClient exists to prevent.
   calls.length = 0;
-  const routed = await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000 }, 5000);
-  ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NERA Library"));
+  const routed = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000 }, 5000);
+  ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NIMA Library"));
   ok("[daemon] and the command itself still arrives", calls.includes("whoami"));
   ok("[daemon] a bridge that cannot name the client it used leaves `client` null — never a guess", routed.client === null);
   ok("[daemon] a named client with no connect window asks for no wait", !calls.some((c) => c.startsWith("wait:")));
@@ -2127,11 +2178,11 @@ void (async () => {
   // waitForClient before the request — min(window, 15 s) — so the second file's window has time to
   // redial; a bare connId never waits (it does not depend on identification).
   calls.length = 0;
-  await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
-  ok("[daemon] a named client WITH a connect window is waited for, capped at 15 s", calls[0] === "wait:NERA Library:15000" && calls.includes("client:NERA Library"));
+  await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
+  ok("[daemon] a named client WITH a connect window is waited for, capped at 15 s", calls[0] === "wait:NIMA Library:15000" && calls.includes("client:NIMA Library"));
   calls.length = 0;
-  await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000, waitForConnection: 4000 }, 5000);
-  ok("[daemon] …and a shorter window is used as-is", calls[0] === "wait:NERA Library:4000");
+  await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 4000 }, 5000);
+  ok("[daemon] …and a shorter window is used as-is", calls[0] === "wait:NIMA Library:4000");
   calls.length = 0;
   await dcli.requestWithClient({ cmd: "whoami", client: "c2", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
   ok("[daemon] a bare connId target never waits", !calls.some((c) => c.startsWith("wait:")) && calls.includes("client:c2"));
@@ -2143,11 +2194,11 @@ void (async () => {
   const wasConnected = fakeBridge.isConnected, wasWait = fakeBridge.waitForConnection;
   fakeBridge.isConnected = () => false;
   fakeBridge.waitForConnection = async () => { calls.push("waitConn"); throw new Error("timed out waiting for the plugin to connect"); };
-  const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
+  const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
   fakeBridge.isConnected = wasConnected;
   fakeBridge.waitForConnection = wasWait;
   ok("[daemon] a connect window that runs out falls through to the request (the bridge's own not-connected text), not the daemon's timeout text",
-    calls[0] === "waitConn" && calls[1] === "wait:NERA Library:50" && calls.includes("whoami") && afterWindow === "answered");
+    calls[0] === "waitConn" && calls[1] === "wait:NIMA Library:50" && calls.includes("whoami") && afterWindow === "answered");
   // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
   const cstat = await daemon.status(D_PORT);
   ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
@@ -2889,13 +2940,13 @@ void (async () => {
   // Live run #2: two files were connected, doctor reported a plain ✓, and the very next command
   // refused with "say which one to use". Healthy AND ambiguous is one state, not two.
   (() => {
-    const one = doctor.checkPlugin({ clients: [{ file: "TeamSmart", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
-    const two = doctor.checkPlugin({ clients: [{ file: "TeamSmart", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }, { file: "NERA", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
+    const one = doctor.checkPlugin({ clients: [{ file: "TideStack", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
+    const two = doctor.checkPlugin({ clients: [{ file: "TideStack", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }, { file: "NIMA", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
     ok("[doctor] plugin: one connected file is a plain ✓ with no flag to add", one.status === "ok" && one.next === undefined);
     ok("[doctor] plugin: several connected files stay ✓ but warn that commands must disambiguate",
       two.status === "ok" && /2 files, so commands must say which/.test(two.detail) && /--client/.test(two.next ?? ""));
     ok("[doctor] plugin: both file names are still named either way",
-      /TeamSmart/.test(one.detail) && /TeamSmart/.test(two.detail) && /NERA/.test(two.detail));
+      /TideStack/.test(one.detail) && /TideStack/.test(two.detail) && /NIMA/.test(two.detail));
   })();
 
   const projDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-"));
@@ -2947,13 +2998,13 @@ void (async () => {
   // P4 #33: doctor's export line, built from exportSourceCounts(), on a livetest3-shaped copy — 5
   // screens across two pages, none stamped (an older-bridge export), plus one design system. Before
   // the fix this reported a single line naming only the design system's file for the WHOLE export
-  // ("exported 12.7h ago from 'Design System - NERA (Copy)'"); after, it counts screens separately
+  // ("exported 12.7h ago from 'Design System - NIMA (Copy)'"); after, it counts screens separately
   // from the design system and says plainly when a screen's source was never recorded.
   {
     const dsDir3 = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-sourcecounts-"));
     const at = new Date().toISOString();
     fs.mkdirSync(path.join(dsDir3, "design", "export"), { recursive: true });
-    fs.writeFileSync(path.join(dsDir3, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: at, file: "Design System - NERA (Copy)" }));
+    fs.writeFileSync(path.join(dsDir3, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: at, file: "Design System - NIMA (Copy)" }));
     fs.mkdirSync(path.join(dsDir3, "design", "export", "pages", "PageA"), { recursive: true });
     fs.mkdirSync(path.join(dsDir3, "design", "export", "pages", "PageB"), { recursive: true });
     // Root index has NO layers[] at all (the older-bridge shape) — only pageDirs, forcing the
@@ -2975,7 +3026,7 @@ void (async () => {
     ok("[doctor] exportSourceCounts: 5 unstamped screens are counted and named as source-not-recorded",
       exp3.status === "ok" && /5 screen\(s\) \(source not recorded — pulled by an older bridge; re-pull to stamp it\)/.test(exp3.detail));
     ok("[doctor] exportSourceCounts: the design system is reported separately, by its own name",
-      /design system from 'Design System - NERA \(Copy\)'/.test(exp3.detail));
+      /design system from 'Design System - NIMA \(Copy\)'/.test(exp3.detail));
     ok("[doctor] exportSourceCounts: never attributes the screens to the design-system file",
       !new RegExp(`5 screen\\(s\\) from 'Design System`).test(exp3.detail));
   }
@@ -3212,7 +3263,7 @@ void (async () => {
       // Mirrors the daemon branch of doctor.run() directly (that branch requires server-core lazily
       // the same way connectedDetail does), using a client shaped exactly like an old daemon's own
       // describe() output — no pluginVersion/pluginStale keys at all.
-      const oldDaemonClients: Partial<ClientRow>[] = [{ connId: "c1", file: "TeamSmart (Copy)", identified: true }];
+      const oldDaemonClients: Partial<ClientRow>[] = [{ connId: "c1", file: "TideStack (Copy)", identified: true }];
       const stale = oldDaemonClients.some((cl) => cl.pluginStale || core.daemonRowStalenessNote(cl));
       return stale === true;
     })());
@@ -3396,10 +3447,13 @@ void (async () => {
       await sleep(60);
       ac.abort();
       await inflight;
-      await sleep(100);
+      // "At once" = well inside the 20 s budget: the abort path is synchronous, so only a request left
+      // waiting for its timeout could come near it (no tighter wall-clock bound: a loaded machine is late).
+      const abortedMs = Date.now() - start;
+      await until(() => cancelsFor(seen, cmdFrames(seen)[0]?.id).length >= 1);
       const sent = cmdFrames(seen)[0];
       ok("[cancel] signal aborted while pending → cancel frame sent, rejects \"request aborted by the caller\" at once",
-        err?.message === "request aborted by the caller" && Date.now() - start < 2000 && !!sent && cancelsFor(seen, sent.id).length === 1);
+        err?.message === "request aborted by the caller" && abortedMs < 20000 && !!sent && cancelsFor(seen, sent.id).length === 1);
       // An Error reason of the caller's own is passed through (the daemon names its departed client).
       const ac2 = new AbortController();
       let err2: Error | undefined;
@@ -3473,29 +3527,88 @@ void (async () => {
         c.on("connect", () => { c.write(JSON.stringify(frame) + "\n"); resolve(c); });
       });
       // In flight: sent, plugin silent, client destroys its socket → the plugin gets the cancel frame.
+      const beforeF = cmdFrames(seen).length;
       const c1 = await openRaw({ cmd: "exportFull", args: {}, timeoutMs: 20000 });
-      await sleep(150); // forwarded to the plugin
-      const sent = cmdFrames(seen)[0];
+      await until(() => cmdFrames(seen).length > beforeF); // forwarded to the plugin
+      const sent = cmdFrames(seen)[beforeF];
       c1.destroy();
-      await sleep(200);
+      await until(() => cancelsFor(seen, sent?.id).length >= 1);
       ok("[cancel-daemon] a client that disconnects while its request is in flight → the plugin gets the cancel frame",
         !!sent && sent.cmd === "exportFull" && cancelsFor(seen, sent.id).length === 1);
-      // Queued: A (short timeout) in flight on one client, B queued behind it on another that then
-      // disconnects. When A times out, B must NOT be forwarded. Pre-change B went to the plugin as soon
-      // as A's 500 ms timeout released the queue.
+      // Queued: A in flight on one client (the fake plugin holds it), B queued behind it on another
+      // that then disconnects. When A is answered, B must NOT be forwarded. Pre-change B went to the
+      // plugin as soon as A released the queue. No timer decides the order (group 16, H-1c): B's
+      // client ends its socket after writing the frame, so the daemon reads B, then its 'end' aborts B
+      // (allowHalfOpen:false: the daemon's own FIN goes out after that listener ran) — the client's
+      // 'close' therefore proves B is aborted before A is answered. A third request C is the fence:
+      // the queue is FIFO, so a forwarded B would sit between A and C.
+      const replyOn = (c: net.Socket) => new Promise<string>((resolve) => {
+        let buf = "";
+        c.setEncoding("utf8");
+        c.on("data", (d: string) => { buf += d; if (buf.includes("\n")) resolve(buf); });
+        c.on("close", () => resolve(buf));
+      });
       const beforeQ = cmdFrames(seen).length;
-      const cA = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 500 });
-      await sleep(60);
+      const cA = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 20000 });
+      const aReply = replyOn(cA);
+      await until(() => cmdFrames(seen).length > beforeQ);
+      const aSent = cmdFrames(seen)[beforeQ];
       const cB = await openRaw({ cmd: "exportDesignSystem", args: {}, timeoutMs: 20000 });
-      await sleep(60);
-      cB.destroy();
-      await sleep(1000); // A's timeout has passed; the queue has moved on
+      cB.end();
+      await new Promise((r) => cB.once("close", r));
+      const pagesReply = { pages: [], manifest: {} }; // the minimum listPages reply server-core accepts
+      if (aSent) ws1.send(JSON.stringify({ id: aSent.id, ok: true, result: pagesReply }));
+      const aGot = await aReply;
+      const cC = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 20000 });
+      await until(() => cmdFrames(seen).length > beforeQ + 1);
+      const cSent = cmdFrames(seen)[beforeQ + 1];
+      if (cSent) ws1.send(JSON.stringify({ id: cSent.id, ok: true, result: pagesReply }));
       const afterQ = cmdFrames(seen).slice(beforeQ).map((f) => f.cmd);
       ok("[cancel-daemon] a request still QUEUED when its client disconnects is never forwarded to the plugin",
-        afterQ.join(",") === "listPages");
+        /"ok":true/.test(aGot) && afterQ.join(",") === "listPages,listPages" && cancelsFor(seen, sent?.id).length === 1);
+      cC.destroy();
       cA.destroy();
       shutdown();
       ws1.close();
+    }
+
+    // (f) the daemon's OWN queued-abandon check, with no server-core behind it. In (e) server-core's pre-send
+    // `signal.aborted` check also stops B, so a daemon that forwarded an abandoned queued request still passed
+    // (group 16 review: daemon.ts `abandoned()` → false survived). This fake bridge ignores `signal` entirely:
+    // only the daemon can keep B from reaching it. A is held, B's client ends while B is queued, C is the FIFO fence.
+    {
+      const seenCmds: string[] = [];
+      let releaseA: (() => void) | undefined;
+      const row = clientRow({ connId: "c1" });
+      const blindBridge: DaemonBridge = {
+        port: 0, isConnected: () => true, waitForConnection: async () => {}, close: () => {},
+        request: async () => ({}),
+        requestWithClient: (cmd) => {
+          seenCmds.push(cmd);
+          if (cmd === "listPages") return new Promise((r) => { releaseA = () => r({ reply: {}, client: row }); });
+          return Promise.resolve({ reply: {}, client: row });
+        },
+      };
+      const F_PORT = 19793; // a socket name only
+      const { shutdown } = await daemon.serve(blindBridge, { port: F_PORT, signals: false, crashHandlers: false });
+      const openRaw = (frame: object) => new Promise<net.Socket>((resolve, reject) => {
+        const c = net.createConnection(daemon.sockPath(F_PORT));
+        c.on("error", reject);
+        c.on("connect", () => { c.write(JSON.stringify(frame) + "\n"); resolve(c); });
+      });
+      const fA = await openRaw({ cmd: "listPages", args: {}, timeoutMs: 20000 });
+      await until(() => seenCmds.length === 1);
+      const fB = await openRaw({ cmd: "exportDesignSystem", args: {}, timeoutMs: 20000 });
+      fB.end();
+      await new Promise((r) => fB.once("close", r));
+      releaseA?.();
+      const fC = await openRaw({ cmd: "whoami", args: {}, timeoutMs: 20000 });
+      await until(() => seenCmds.includes("whoami"));
+      ok(`[cancel-daemon] the daemon itself drops a queued request whose client left — a bridge that ignores the abort never sees it (${seenCmds.join(",")})`,
+        seenCmds.join(",") === "listPages,whoami");
+      fA.destroy();
+      fC.destroy();
+      shutdown();
     }
   }
 

@@ -1207,7 +1207,7 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
 // Reports are found by name first — `<Layer>__<id>` (verify-screen's default --out since P3), the plan's
 // own name, its `screen` — then by content: a report whose `nodeId` is the plan's, whose sibling
 // `<stem>.expected.json` is this frame's (`frame.nodeId`, verify-expectation@2), or whose `screen` is
-// the frame's layer name when that name is unique in the export (the pre-P3 `JobRoles.report.json`
+// the frame's layer name when that name is unique in the export (the pre-P3 `JetRoles.report.json`
 // naming carries only the layer name). Every match counts; ONE failing report is enough to fail.
 // Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|pass-with-deviations|fail|
 // incomplete, `headline`, `inputs.expectationSha256` — the expectation it was computed against,

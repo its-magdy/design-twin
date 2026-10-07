@@ -1,6 +1,6 @@
 {
- "job-roles": {
-  "file": "pages/__Organization_management_/positions___7314_87192.json",
+ "jet-roles": {
+  "file": "pages/__Optimization_management_/positions___7314_87192.json",
   "node": "7314:87192",
   "instances": 51,
   "names": {
@@ -29,7 +29,7 @@
     "firstReason": "no catalog entry named \"vuesax/linear/calendar-tick\"",
     "confidence": "n/a — external icon library"
    },
-   "License Health Check": {
+   "Leisure Health Check": {
     "match": "842:4660",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
@@ -39,7 +39,7 @@
     "firstReason": "no catalog entry named \"Linear / School / Diploma\"",
     "confidence": "n/a — external icon library"
    },
-   "Org Management": {
+   "Ops Management": {
     "match": "842:4188",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
@@ -49,12 +49,12 @@
     "firstReason": "no catalog entry named \"vuesax/bold/buliding\"",
     "confidence": "n/a — external icon library"
    },
-   "Staff Management": {
+   "Stock Management": {
     "match": "842:4478",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
    },
-   "shift Demand": {
+   "stage Demand": {
     "match": "842:4093",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
@@ -64,7 +64,7 @@
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
    },
-   "activity demand": {
+   "assembly demand": {
     "match": "842:4728",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
@@ -99,7 +99,7 @@
     "firstReason": "no catalog entry named \"vuesax/linear/calendar-edit\"",
     "confidence": "n/a — external icon library"
    },
-   "OJT Management": {
+   "OKR Management": {
     "match": "842:4719",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
@@ -211,8 +211,8 @@
    }
   }
  },
- "global-policies": {
-  "file": "pages/__Organization_management_/System_Configurations__1359_21337.json",
+ "guided-policies": {
+  "file": "pages/__Optimization_management_/Studio_Configurations__1359_21337.json",
   "node": "1359:21337",
   "instances": 42,
   "names": {
@@ -241,7 +241,7 @@
     "firstReason": "no catalog entry named \"vuesax/linear/calendar-tick\"",
     "confidence": "n/a — external icon library"
    },
-   "License Health Check": {
+   "Leisure Health Check": {
     "match": "842:4660",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
@@ -251,7 +251,7 @@
     "firstReason": "no catalog entry named \"Linear / School / Diploma\"",
     "confidence": "n/a — external icon library"
    },
-   "Org Management": {
+   "Ops Management": {
     "match": "842:4188",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
@@ -261,12 +261,12 @@
     "firstReason": "no catalog entry named \"vuesax/bold/buliding\"",
     "confidence": "n/a — external icon library"
    },
-   "Staff Management": {
+   "Stock Management": {
     "match": "842:4478",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
    },
-   "shift Demand": {
+   "stage Demand": {
     "match": "842:4093",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
@@ -276,7 +276,7 @@
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
    },
-   "activity demand": {
+   "assembly demand": {
     "match": "842:4728",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"
@@ -311,7 +311,7 @@
     "firstReason": "no catalog entry named \"vuesax/linear/calendar-edit\"",
     "confidence": "n/a — external icon library"
    },
-   "OJT Management": {
+   "OKR Management": {
     "match": "842:4719",
     "firstReason": "name matches catalog entry verbatim",
     "confidence": "high"

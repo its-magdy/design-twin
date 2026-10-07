@@ -2127,12 +2127,12 @@ const sandbox: Sandbox = context;
   // Run INSIDE the library file, everything is local, so the ordinary local reads return the COMPLETE
   // catalog — that is the whole reason this mode exists instead of importVariableByKeyAsync.
   {
-    const lib = await sandbox.collectLibraryFile({ asLibrary: "NERA" });
+    const lib = await sandbox.collectLibraryFile({ asLibrary: "NIMA" });
     const d = lib.designSystem;
 
     ok("[LIB-FILE] stamps source.role=library", !!(d.source && d.source.role === "library"));
     const src = must(d.source, "d.source");
-    ok("[LIB-FILE] carries the library name the user typed", src.libraryName === "NERA");
+    ok("[LIB-FILE] carries the library name the user typed", src.libraryName === "NIMA");
     ok("[LIB-FILE] records fileKey as the durable directory identity", src.fileKey === "FILEKEY1234567");
     ok("[LIB-FILE] collectionKeys are the join back to --list-libraries", Array.isArray(src.collectionKeys));
     // exportedAt/file must stay top-level and unchanged — snapshot-meta.js and drift-lint read them.
@@ -2144,7 +2144,7 @@ const sandbox: Sandbox = context;
     ok("[LIB-FILE] component carries publish status", !!(btn && btn.publish === "current"));
     const paint = must(d.styles.paint[0], "d.styles.paint[0]");
     ok("[LIB-FILE] style carries publish status", paint.publish === "changed");
-    ok("[LIB-FILE] hygiene states the catalog is complete", d.hygiene.some((h) => /COMPLETE local catalog of 'NERA'/.test(h)));
+    ok("[LIB-FILE] hygiene states the catalog is complete", d.hygiene.some((h) => /COMPLETE local catalog of 'NIMA'/.test(h)));
     ok("[LIB-FILE] hygiene admits the published snapshot is unlistable", d.hygiene.some((h) => /last PUBLISHED snapshot/.test(h)));
     ok("[LIB-FILE] does NOT claim the false design-system caveat", !d.hygiene.some((h) => /this file references — this is not the library's catalog/.test(h)));
 
