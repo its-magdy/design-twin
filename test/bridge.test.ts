@@ -3156,7 +3156,8 @@ void (async () => {
     // ever touching outDir — is the exact shape finding 13 reproduces (`dtwin nonexistent` with two
     // clients connected). We don't need a real daemon: --list-clients against no bridge at all also
     // exercises the same "no mkdir before any client contact" code path, and is deterministic offline.
-    spawnSync(process.execPath, [cli, "nonexistent-outdir"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    // --timeout 1: with no plugin to wait for the command fails in ~1 s instead of idling until the 5 s cap kills it
+    spawnSync(process.execPath, [cli, "nonexistent-outdir", "--timeout", "1"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[mkdir] a command that never reaches a plugin leaves no stray outDir behind",
       !fs.existsSync(path.join(dir, "nonexistent-outdir")));
   }
@@ -3168,12 +3169,12 @@ void (async () => {
     fs.mkdirSync(path.join(dir, "design", "export"), { recursive: true });
     // No daemon/plugin reachable on this port — the command still fails downstream (no client), but
     // the warning is printed BEFORE any network attempt, so it is present regardless of what happens next.
-    const r = spawnSync(process.execPath, [cli, "design", "--list"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    const r = spawnSync(process.execPath, [cli, "design", "--list", "--timeout", "1"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[outdir-trap] warns when the user-typed outDir already contains export/",
       /warn: design already contains design(\/|\\)export/.test(r.stderr));
     ok("[outdir-trap] never refuses — `design` is still a legitimate, deliberate outDir", r.status !== 2 || !/unknown/.test(r.stderr));
     const clean = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-outdir-clean-"));
-    const r2 = spawnSync(process.execPath, [cli, "somewhere-else", "--list"], { encoding: "utf8", cwd: clean, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    const r2 = spawnSync(process.execPath, [cli, "somewhere-else", "--list", "--timeout", "1"], { encoding: "utf8", cwd: clean, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[outdir-trap] no warning when the outDir does not already contain export/", !/already contains/.test(r2.stderr));
   }
 

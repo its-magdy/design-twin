@@ -291,7 +291,7 @@ node test/bridge.test.ts          # CLI + bridge
 node test/design-to-code.test.ts  # tokens, maps, drift-lint
 ```
 
-Every other `test/*.test.ts` suite runs the same way. `npm test` runs every suite in order (serially, output live) and ends with a summary — one row per suite, exit 1 if any failed, no suite is skipped after a failure; `node test/run-suites.ts <name>…` runs a subset. `TESTING.md`
+Every other `test/*.test.ts` suite runs the same way. `npm test` runs every suite in order (serially, output live) and ends with a summary — one row per suite, exit 1 if any failed, no suite is skipped after a failure; `node test/run-suites.ts <name>…` runs a subset. `npm run test:fast` skips the three slow browser (probe e2e) suites — about 3 minutes instead of ~20 — and says so loudly at the end; run `npm test` before committing, CI runs everything. `TESTING.md`
 lists each suite, its expected count, and the live-Figma checks. The plugin's `code.js` and
 `claude-plugin/scripts/` are committed build output (the bridge's `dist/` is gitignored, built on
 demand or on `prepack`). After editing their sources, rebuild them:
