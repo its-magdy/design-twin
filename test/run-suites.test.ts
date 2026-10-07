@@ -193,6 +193,22 @@ console.log("CMD " + JSON.stringify({
   const unknown = runner(["no-such-suite"], { DT_RUN_SUITES_LIST: list(["pass"]) });
   check("[H-1] an unknown name is a usage error (exit 2, names it)", unknown.status === 2 && /no suite matches "no-such-suite"/.test(unknown.err));
 
+  // ---- the compile cache the runner hands its suites (a user's own setting wins; NODE_DISABLE_COMPILE_CACHE is Node's to honour)
+  console.log("\nrun-suites — NODE_COMPILE_CACHE for the suites:");
+  {
+    const probeList = path.join(tmp, "list-envprobe.json");
+    fs.writeFileSync(probeList, JSON.stringify([{ name: "envprobe", file: fake("envprobe", `console.log("CC=" + (process.env.NODE_COMPILE_CACHE ?? "<unset>") + " DIS=" + (process.env.NODE_DISABLE_COMPILE_CACHE ?? "<unset>")); console.log("\\n1/1 checks passed");`) }]));
+    const probe = (set: Record<string, string>): string => {
+      const e: Record<string, string | undefined> = { ...process.env, DT_RUN_SUITES_LIST: probeList, ...set };
+      delete e.CI;
+      for (const k of ["NODE_COMPILE_CACHE", "NODE_DISABLE_COMPILE_CACHE"]) if (!(k in set)) delete e[k];
+      return spawnSync(process.execPath, [RUNNER], { encoding: "utf8", timeout: 60_000, env: e }).stdout;
+    };
+    check("[cache] by default a suite gets NODE_COMPILE_CACHE=<tmpdir>/designtwin-node-compile-cache", probe({}).includes(`CC=${path.join(os.tmpdir(), "designtwin-node-compile-cache")} `));
+    check("[cache] a NODE_COMPILE_CACHE the user set wins", probe({ NODE_COMPILE_CACHE: path.join(tmp, "mine") }).includes(`CC=${path.join(tmp, "mine")} `));
+    check("[cache] NODE_DISABLE_COMPILE_CACHE reaches the suite untouched (Node honours it)", /DIS=1$/m.test(probe({ NODE_DISABLE_COMPILE_CACHE: "1" })));
+  }
+
   // ---- the real list + the coverage guard
   console.log("\nrun-suites — coverage guard:");
   const testDir = import.meta.dirname;
@@ -205,6 +221,54 @@ console.log("CMD " + JSON.stringify({
     real.out.indexOf("verify-probe-e2e ") > real.out.indexOf("verify-probe ") && real.out.indexOf("verify-own-pixels") > real.out.indexOf("verify-probe-drive-e2e"));
   const pkg = JSON.parse(read(path.join(testDir, "..", "package.json")) || "{}") as { scripts?: Record<string, string> };
   check("[H-1] `npm test` is the runner (package.json scripts.test === \"node test/run-suites.ts\"); the lints stay scripts", pkg.scripts?.test === "node test/run-suites.ts" && typeof pkg.scripts.typecheck === "string" && typeof pkg.scripts["lint:any"] === "string" && typeof pkg.scripts["lint:types"] === "string");
+
+  // ---- --fast: skips exactly the three probe e2e suites, `not run` in the summary, exit unaffected, never looks like a full pass
+  console.log("\nrun-suites — --fast:");
+  const SLOW = ["verify-probe-e2e", "verify-probe-drive-e2e", "verify-probe-behaviour-e2e"];
+  // fakes named like the real slow suites (the skip applies by name); they would log `start <name>` if they ever ran
+  const named = (entries: { name: string; src: string }[], tag: string): string => {
+    const f = path.join(tmp, `list-fast-${tag}.json`);
+    fs.writeFileSync(f, JSON.stringify(entries.map((e) => ({ name: e.name, file: fake(e.name, e.src) }))));
+    return f;
+  };
+  const okSrc = (n: string): string => passSrc(n);
+  const fastList = named([{ name: "quick", src: okSrc("quick") }, ...SLOW.map((n) => ({ name: n, src: okSrc(n) })), { name: "quick2", src: okSrc("quick2") }], "ok");
+  fs.rmSync(LOG, { force: true });
+  const fastRun = runner(["--fast"], { DT_RUN_SUITES_LIST: fastList });
+  const fastSum = summaryOf(fastRun.out);
+  check("[fast] --fast skips the three slow suites (never started), runs the others, and exits 0 although they are `not run`",
+    fastRun.status === 0 && /^start quick$/m.test(read(LOG)) && /^start quick2$/m.test(read(LOG)) && SLOW.every((n) => !new RegExp(`start ${n}`).test(read(LOG))) && /2 passed, 0 FAILED, 0 skipped, 3 not run/.test(fastSum));
+  check("[fast] the SUMMARY lists each skipped suite as `not run` with the reason `--fast`", SLOW.every((n) => lines(fastSum).some((l) => l.startsWith(n + " ") && /\bnot run\b/.test(l) && /--fast\s*$/.test(l))));
+  check("[fast] the run ends with the loud line (not the full suite, names them, run `npm test`, CI runs everything)",
+    /^--fast: skipped the probe e2e suites \(verify-probe-e2e, verify-probe-drive-e2e, verify-probe-behaviour-e2e\) .*NOT the full suite.*`npm test`.*CI runs everything$/m.test(fastRun.out) && (lines(fastRun.out.trimEnd()).pop() ?? "").startsWith("--fast:"));
+  check("[fast] without --fast the same list runs all five suites", (() => { const r = runner([], { DT_RUN_SUITES_LIST: fastList }); return r.status === 0 && /5 suites: 5 passed/.test(r.out) && !/--fast/.test(r.out); })());
+  check("[fast] under CI=true --fast is allowed and still prints the warning", (() => { const r = runner(["--fast"], { DT_RUN_SUITES_LIST: fastList, CI: "true" }); return r.status === 0 && /^--fast: skipped/m.test(r.out); })());
+  const fastFail = runner(["--fast"], { DT_RUN_SUITES_LIST: named([{ name: "bad", src: traced("bad", `console.log("\\n0/1 checks passed"); process.exit(1);`) }, ...SLOW.map((n) => ({ name: n, src: okSrc(n) }))], "fail") });
+  check("[fast] a failing suite still exits 1 under --fast", fastFail.status === 1 && /^FAILED: bad$/m.test(fastFail.out));
+  const fastList2 = runner(["--fast", "--list"], { DT_RUN_SUITES_LIST: fastList });
+  check("[fast] --fast --list prints only what would run (quick, quick2), exit 0", fastList2.status === 0 && lines(fastList2.out).filter(Boolean).map((l) => l.split(/\s+/)[0]).join(",") === "quick,quick2");
+  fs.rmSync(LOG, { force: true });
+  const fastFilt = runner(["--fast", "quick", "quick2", "verify-probe-drive-e2e"], { DT_RUN_SUITES_LIST: fastList });
+  check("[fast] --fast with names: the names pick first, then the slow ones are dropped (quick, quick2 run; the drive e2e is `not run`)",
+    fastFilt.status === 0 && /^start quick$/m.test(read(LOG)) && /^start quick2$/m.test(read(LOG)) && !/start verify-probe-drive-e2e/.test(read(LOG)) && /^verify-probe-drive-e2e\s+not run\s.*--fast/m.test(fastFilt.out) && !/verify-probe-e2e\s+not run/.test(fastFilt.out));
+  const onlySlow = runner(["--fast", "verify-probe-drive-e2e"], { DT_RUN_SUITES_LIST: fastList });
+  check("[fast] --fast with only a slow suite named: nothing runs, exit 0, the warning is printed", onlySlow.status === 0 && /^--fast: skipped/m.test(onlySlow.out) && !/^=== /m.test(onlySlow.out));
+  const staleList = runner(["--fast"], { DT_RUN_SUITES_LIST: named([{ name: "quick", src: okSrc("quick") }, { name: "verify-probe-e2e", src: okSrc("a") }, { name: "verify-probe-drive-e2e", src: okSrc("b") }], "stale") });
+  check("[fast] a FAST_SKIP name that is not in the suite list exits 1 and names it (a rename cannot silently drop a suite)",
+    staleList.status === 1 && /verify-probe-behaviour-e2e/.test(staleList.err) && !/^=== /m.test(staleList.out));
+  check("[fast] without --fast a custom list is not subject to that guard", runner([], { DT_RUN_SUITES_LIST: list(["pass"]) }).status === 0);
+  check("[fast] an unknown option is still a usage error, and the usage line names --fast", (() => { const r = runner(["--bogus"], { DT_RUN_SUITES_LIST: list(["pass"]) }); return r.status === 2 && /--fast/.test(r.err); })());
+  const realFast = runner(["--fast", "--list"], {});
+  check("[fast] the real `--fast --list` omits exactly verify-probe-e2e, verify-probe-drive-e2e, verify-probe-behaviour-e2e (nothing else) and keeps the rest",
+    realFast.status === 0 && (() => {
+      const all = new Set(lines(real.out).filter(Boolean).map((l) => l.split(/\s+/)[0]));
+      const got = new Set(lines(realFast.out).filter(Boolean).map((l) => l.split(/\s+/)[0]));
+      const missing = [...all].filter((n) => !got.has(n));
+      return missing.sort().join(",") === [...SLOW].sort().join(",") && [...got].every((n) => all.has(n)) && got.size === all.size - 3;
+    })());
+
+
+  check("[fast] `npm run test:fast` is the runner with --fast (package.json scripts[\"test:fast\"] === \"node test/run-suites.ts --fast\")", pkg.scripts?.["test:fast"] === "node test/run-suites.ts --fast");
 
   const mirror = path.join(tmp, "mirror");
   fs.mkdirSync(mirror);

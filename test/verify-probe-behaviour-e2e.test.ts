@@ -28,6 +28,7 @@ import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { BehaviourCheck, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
+import { limit } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROBE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -162,14 +163,7 @@ for (const proj of [projAxe, projBare, projSlowAxe]) {
 const EXP = out("Crates") + ".expected.json", QUIET = out("Quiet") + ".expected.json";
 
 // ---- the independent probe runs, queued up front and run 3 at a time (each has its own --out); awaited where their checks are
-const limit = (n: number) => {
-  let active = 0;
-  const waiting: Array<() => void> = [];
-  return <T>(fn: () => Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
-    const go = (): void => { active++; fn().then(resolve, reject).finally(() => { active--; waiting.shift()?.(); }); };
-    if (active < n) go(); else waiting.push(go);
-  });
-};
+// (a fixed 3, not poolSize(): the budget-sensitive checks were validated at 3 on a 4-vCPU CI runner)
 const q = limit(3);
 // fix pass 1 shapes (review 1) and fix pass 2 shapes (review 2) — correct builds the probe must not misjudge or touch
 const E1 = "enter-submit,row-enter,headless-ui,closed-menu,anim-in,scroll-lock";

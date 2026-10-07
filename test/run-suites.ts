@@ -2,6 +2,14 @@
 //   node test/run-suites.ts                run both lints, then every suite, in order
 //   node test/run-suites.ts bridge verify-probe-e2e    only the named suites (exact name, else substring), in order
 //   node test/run-suites.ts --list         print the order and exit (the coverage guard still runs)
+//   node test/run-suites.ts --fast         everything except the three slow probe e2e suites (`npm run test:fast`, ~3 min vs ~20)
+//   node test/run-suites.ts --fast --list  what --fast would run
+//
+// --fast: the name filters (if any) pick the suites first, then FAST_SKIP is dropped from that pick. The dropped suites
+// stay in the SUMMARY as `not run` (why `--fast`) and do NOT make the exit code 1 — `not run` otherwise means an
+// interruption, which does — but the run ends with a loud line saying it was not the full suite (CI uses plain `npm test`;
+// under CI=true --fast is still allowed and still prints it). A FAST_SKIP name that is not in SUITES exits 1, so a rename
+// cannot silently drop a suite from the skip list.
 //
 // It replaced a 40-link `a && b && c` chain: the first non-zero exit skipped every later suite, there was no
 // summary and no timing, and a suite that exited 0 without printing its `N/N checks passed` line went unnoticed.
@@ -30,12 +38,13 @@
 // `command()` is exported for the self-test (the runner itself only runs when executed directly).
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 type Kind = "lint" | "node";
 interface Suite { name: string; kind: Kind; file: string }
 type Status = "pass" | "FAIL" | "skipped" | "not run";
-interface Result { name: string; kind: Kind; file: string; status: Status; pass: number | null; total: number | null; ms: number; why: string; skipReason: string }
+interface Result { name: string; kind: Kind; file: string; status: Status; pass: number | null; total: number | null; ms: number; why: string; skipReason: string; fast?: boolean }
 interface Outcome { code: number | null; signal: NodeJS.Signals | null; spawnError: NodeJS.ErrnoException | null; timedOut: boolean; pass: number | null; total: number | null; skipped: string | null; ms: number }
 
 const HERE = process.env.DT_RUN_SUITES_DIR ? path.resolve(process.env.DT_RUN_SUITES_DIR) : import.meta.dirname;
@@ -46,6 +55,10 @@ const RETRY_MS = num(process.env.DT_SPAWN_RETRY_MS, 5_000);
 const KILL_GRACE_MS = num(process.env.DT_KILL_GRACE_MS, 10_000);
 const DRAIN_MS = num(process.env.DT_DRAIN_MS, 2_000);
 const CI = process.env.CI === "true";
+// The suites spawn hundreds of short `node` children; Node's module compile cache (NODE_COMPILE_CACHE, stable in Node 24.15,
+// covers TypeScript modules; https://nodejs.org/docs/latest-v24.x/api/module.html#module-compile-cache) cuts a spawn-heavy
+// suite's time by about a third (cli-help 3.5 s -> 1.7 s). A user-set NODE_COMPILE_CACHE wins; NODE_DISABLE_COMPILE_CACHE=1 still disables it.
+const SUITE_ENV: NodeJS.ProcessEnv = process.env.NODE_COMPILE_CACHE === undefined ? { ...process.env, NODE_COMPILE_CACHE: path.join(os.tmpdir(), "designtwin-node-compile-cache") } : process.env;
 
 // The exact order the old `npm test` chain ran in (the lints first, then the plugin extractor, the bridge, the rest).
 const NODE_SUITES: readonly string[] = [
@@ -63,6 +76,9 @@ const NODE_SUITES: readonly string[] = [
   // group 16: this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];
+// The slow browser suites `--fast` leaves out (~17 of the ~19 min); everything else is quick.
+const FAST_SKIP: readonly string[] = ["verify-probe-e2e", "verify-probe-drive-e2e", "verify-probe-behaviour-e2e"];
+const USAGE = "usage: node test/run-suites.ts [--list] [--fast] [suite-name…]";
 const baseName = (f: string): string => f.replace(/\.test\.ts$/, "").replace(/\.ts$/, "");
 const SUITES: readonly Suite[] = [
   { name: "lint:any", kind: "lint", file: "lint:any" },
@@ -124,7 +140,7 @@ function runOnce(s: Suite): Promise<Outcome> {
     const out: Outcome = { code: null, signal: null, spawnError: null, timedOut: false, pass: null, total: null, skipped: null, ms: 0 };
     const { cmd, args, detached, windowsVerbatimArguments } = command(s);
     let child: ChildProcess;
-    try { child = spawn(cmd, args, { cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"], detached, ...(windowsVerbatimArguments ? { windowsVerbatimArguments } : {}) }); }
+    try { child = spawn(cmd, args, { cwd: ROOT, env: SUITE_ENV, stdio: ["ignore", "pipe", "pipe"], detached, ...(windowsVerbatimArguments ? { windowsVerbatimArguments } : {}) }); }
     catch (e) { out.spawnError = e as NodeJS.ErrnoException; out.ms = Date.now() - t0; resolve(out); return; }
     current = child;
     let done = false;
@@ -203,7 +219,7 @@ async function runSuite(s: Suite): Promise<Result> {
 }
 
 // ---- the summary
-function summary(results: readonly Result[], t0: number): number {
+function summary(results: readonly Result[], t0: number, fast: boolean): number {
   const w = Math.max(...results.map((r) => r.name.length));
   console.log("\n" + "=".repeat(78) + "\nSUMMARY\n" + "=".repeat(78));
   for (const r of results) {
@@ -214,6 +230,8 @@ function summary(results: readonly Result[], t0: number): number {
   const skipped = results.filter((r) => r.status === "skipped");
   const passed = results.filter((r) => r.status === "pass");
   const notRun = results.filter((r) => r.status === "not run");
+  const fastSkipped = notRun.filter((r) => r.fast);
+  const interruptedNotRun = notRun.filter((r) => !r.fast);
   console.log(`\n${results.length} suites: ${passed.length} passed, ${failed.length} FAILED, ${skipped.length} skipped${notRun.length ? `, ${notRun.length} not run` : ""} — total ${fmt(Date.now() - t0)}`);
   if (failed.length) {
     console.log(`FAILED: ${failed.map((r) => r.name).join(", ")}`);
@@ -223,7 +241,8 @@ function summary(results: readonly Result[], t0: number): number {
     console.log(`SKIPPED (no playwright): ${skipped.map((r) => r.name).join(", ")}`);
     console.log("  warning: CI runs these (D3) — install a browser to run them here: npx playwright install chromium");
   }
-  return failed.length || notRun.length ? 1 : 0;
+  if (fast) console.log(`\n--fast: skipped the probe e2e suites (${fastSkipped.map((r) => r.name).join(", ") || "none picked"}) — this is NOT the full suite: run \`npm test\` before committing; CI runs everything`);
+  return failed.length || interruptedNotRun.length ? 1 : 0;
 }
 
 // ---- main
@@ -231,14 +250,18 @@ async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const list = argv.includes("--list");
   const filters = argv.filter((a) => !a.startsWith("-"));
-  const bad = argv.filter((a) => a.startsWith("-") && a !== "--list");
-  if (bad.length) { console.error(`run-suites: unknown option ${bad.join(" ")}\nusage: node test/run-suites.ts [--list] [suite-name…]`); return 2; }
+  const fast = argv.includes("--fast");
+  const bad = argv.filter((a) => a.startsWith("-") && a !== "--list" && a !== "--fast");
+  if (bad.length) { console.error(`run-suites: unknown option ${bad.join(" ")}\n${USAGE}`); return 2; }
 
   const { suites, custom } = loadSuites();
   if (!custom) {
     const problems = coverageProblems(suites);
     if (problems.length) { for (const p of problems) console.error(`run-suites: ${p}`); return 1; }
   }
+  // checked for the real list always (a rename fails `npm test` too), for a test's fake list only under --fast
+  const stale = !fast && custom ? [] : FAST_SKIP.filter((n) => !suites.some((s) => s.name === n));
+  if (stale.length) { console.error(`run-suites: FAST_SKIP names ${stale.join(", ")} but no such suite is in SUITES — update FAST_SKIP (test/run-suites.ts)`); return 1; }
   let picked = suites;
   if (filters.length) {
     const want = new Set<string>();
@@ -249,8 +272,9 @@ async function main(): Promise<number> {
     }
     picked = suites.filter((s) => want.has(s.name));
   }
+  const dropped = (s: Suite): boolean => fast && FAST_SKIP.includes(s.name);
   if (list) {
-    for (const s of picked) console.log(s.kind === "lint" ? `${s.name}  (npm run ${s.file})` : `${s.name}  ${custom ? s.file : "test/" + path.basename(s.file)}`);
+    for (const s of picked.filter((x) => !dropped(x))) console.log(s.kind === "lint" ? `${s.name}  (npm run ${s.file})` : `${s.name}  ${custom ? s.file : "test/" + path.basename(s.file)}`);
     return 0;
   }
 
@@ -267,11 +291,12 @@ async function main(): Promise<number> {
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, stop);
   process.on("exit", () => { if (current) killGroup(current, "SIGKILL"); });
   for (const s of picked) {
+    if (dropped(s)) { results.push({ name: s.name, kind: s.kind, file: s.file, status: "not run", pass: null, total: null, ms: 0, why: "--fast", skipReason: "", fast: true }); continue; }
     if (interrupted) { results.push({ name: s.name, kind: s.kind, file: s.file, status: "not run", pass: null, total: null, ms: 0, why: "interrupted", skipReason: "" }); continue; }
     const r = await runSuite(s);
     results.push(interrupted && r.status !== "pass" ? { ...r, status: "FAIL", why: "interrupted" } : r);
   }
-  const code = summary(results, t0);
+  const code = summary(results, t0, fast);
   return interrupted ? 130 : code;
 }
 

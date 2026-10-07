@@ -9,6 +9,8 @@ it catches logic bugs cheaply — then B to confirm the real `figma.*` calls.
 ## Layer A — offline logic test (agent-runnable, no Figma)
 
 `npm test` runs every suite in order and ends with a summary; `node test/run-suites.ts <name>` runs a subset.
+`npm run test:fast` leaves out the three slow probe e2e suites (verify-probe-e2e, verify-probe-drive-e2e, verify-probe-behaviour-e2e; ~3 min instead of ~20) and
+ends with a line saying it was not the full run — use it while iterating, `npm test` before a commit; CI runs everything.
 Right after the two lints, `test/real-names.test.ts` fails if a real field-test file, company, layer or
 person name reaches the tree; it reports `file:line`, never the name. The list is stored as salted hashes, which
 keeps plain names out of the tree but is not secrecy: they are dictionary-reversible, and git history already holds

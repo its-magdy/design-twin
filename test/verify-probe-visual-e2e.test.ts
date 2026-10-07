@@ -22,6 +22,7 @@ import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { decodePng, encodePng, pngInfo, resampleBox } from "../design-to-code/png.ts";
 import type { MeasuredVisual, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
+import { limit } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROBE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -174,15 +175,7 @@ fs.writeFileSync(path.join(pMain, "bad-steps.json"), JSON.stringify([{ click: "[
 // e8: a stale diff image from an earlier run at the --out path
 fs.writeFileSync(path.join(pMain, out("Short") + ".diff.png"), thumbPng);
 
-// ---- the probe runs, 2 at a time (each has its own --out)
-const limit = (n: number) => {
-  let active = 0;
-  const waiting: Array<() => void> = [];
-  return <T>(fn: () => Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
-    const go = (): void => { active++; fn().then(resolve, reject).finally(() => { active--; waiting.shift()?.(); }); };
-    if (active < n) go(); else waiting.push(go);
-  });
-};
+// ---- the probe runs, 2 at a time (each has its own --out; a fixed 2, not poolSize(): the checks were validated at 2)
 const q = limit(2);
 const OFF = ["--behaviour", "off"];
 const P = {
