@@ -62,7 +62,8 @@ console.log("verify-probe visual e2e — the built bundles in a real chromium, f
 let refPng: Buffer, ledgerPng: Buffer;
 try {
   const pw = await import("playwright");
-  const browser = await pw.chromium.launch();
+  // grayscale text as Figma renders it — and as the probe launches chromium (verify-probe.ts launch(): --disable-lcd-text)
+  const browser = await pw.chromium.launch({ args: ["--disable-lcd-text"] });
   try {
     const shoot = async (vw: number, vh: number, dsf: number, mode: string): Promise<Buffer> => {
       const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, deviceScaleFactor: dsf });
