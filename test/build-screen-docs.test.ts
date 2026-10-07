@@ -344,7 +344,7 @@ console.log("build-screen docs (group 12b):");
     /\*\*Behaviour and accessibility\b/.test(verifySkill) && /never change the verdict/.test(verifySkill) && /Stop hook/.test(verifySkill)
     && /a measurable accessibility failure is never waived/.test(verifySkill) && /raise a designer question/.test(verifySkill));
   check("[12b] verify skill: copy report.behaviour.summary into plan.verification.a11y (tool, violations = fail, warnings = warn)",
-    /copy `report\.behaviour\.summary` into `plan\.verification\.a11y`/.test(verifySkill) && /tool: "verify-probe\[\+axe-core x\.y\]"/.test(verifySkill)
+    /copies `report\.behaviour\.summary` into `plan\.verification\.a11y`/.test(verifySkill) && /tool: "verify-probe\[\+axe-core x\.y\]"/.test(verifySkill)
     && /violations: summary\.fail/.test(verifySkill) && /warnings: summary\.warn/.test(verifySkill));
   check("[12b fix1] verify skill: a11y.report names the report copied from; summary.fail counts a +N more row's elements; keys only on a button-like opener, outside clicks only on a backdrop, the safe close never a link, closed-menu openers not-run",
     /report: "<the report\.json you copied it from>"/.test(verifySkill) && /`summary\.fail` counts the elements behind a "\+N more" row/.test(verifySkill)
@@ -674,6 +674,52 @@ console.log("build-screen docs (group 19):");
     /theme: \{ text: \['figma-body-1', …\] \}/.test(tw) && /without the `--text-` prefix/.test(tw) && /`text: \['huge'\]`/.test(tw));
   check("[M-3] SKILL: a list is a container whose children are MOSTLY one shape; its other children (a search bar) are listed on their own",
     /children are mostly rows of one shape — three or more/.test(skill) && /a search bar above the rows, are listed on their own/.test(skill));
+}
+
+// Group 17: scratch location (DT-36), hover/press evidence (DT-40), the report's own delta text (DT-51), states placement
+// (F-67), whose hover (F-74), inferred rows (F-121), --record-plan (F-100, F-64), illustrative reference (DT-55),
+// line-height vs the text box (F-119), the replaced expectation's .prev (DT-45), --browser-path (DT-30)
+console.log("build-screen docs (group 17):");
+{
+  const helpSkill = flat(read("claude-plugin/skills/help/SKILL.md"));
+  check("[DT36-1] visual-verifier: scratch scripts go in the run cache's scratch dir (project-local), never under src/ or design/",
+    /`node_modules\/\.cache\/designtwin-verify\/scratch\/` \(project-local/.test(verifier) && /never under `src\/` or `design\/`/.test(verifier));
+  check("[DT40-1] visual-verifier: hover/press feedback is read as background, colour, filter, opacity, box-shadow, transform and outline (readable by getComputedStyle, not part of the effective-paint check) before 'no change'",
+    /read\s+background, colour, `filter`, `opacity`, `box-shadow`, `transform` and `outline`/.test(verifier) && /readable with `getComputedStyle`/.test(verifier)
+    && /effective-paint check \(`paintedBy`\) covers `backgroundColor` only/.test(verifier));
+  check("[F74-1] visual-verifier and verify skill: drawnStateFrom = hover the OWNER, not the control; paintedBy = the painting ancestor's colour for a transparent element",
+    [verifier, verifySkill].every((d) => /`drawnStateFrom`/.test(d) && /hover(s)? (that )?owner|hover the owner/i.test(d) && /`paintedBy`/.test(d)));
+  check("[F67-1] visual-verifier and verify skill: states sit beside styles (nodes[].states), never inside; a state on a spec with no drawnState is listed as inferred, not compared",
+    [verifier, verifySkill].every((d) => /beside(\*\*)? `styles`/.test(d) && /never inside it/.test(d) && /unknown key/.test(d)) && /only for a spec with `drawnState`/.test(verifier) && /Inferred, not designed/.test(verifier));
+  check("[F121-1] visual-verifier and verify skill: inferred[] rows {nodeId?, state, built, why?} in the evidence file; listed under 'Inferred, not designed', never graded, never the verdict",
+    [verifier, verifySkill].every((d) => /`inferred\[\]`/.test(d) && /\{"?nodeId"?\??, "?state"?, "?built"?, "?why"?\??\}/.test(d) && /Inferred, not designed/.test(d)) && /never part of the verdict/.test(verifier) && /never graded and never in the verdict/.test(verifySkill));
+  check("[DT51-1] visual-verifier and verify skill: quote the report's own delta text (it names the axis/dimension), never restate a bound",
+    [verifier, verifySkill].every((d) => /Quote the report's own delta text — it names the axis or dimension — and never restate a bound/.test(d)));
+  check("[F100-1] verify skill, build-screen and references/verify.md: --record-plan writes mode/renderer/artifacts/deltas/a11y/recorded; coverage stays hand-written; no 'Record the result by hand'",
+    /--record-plan/.test(verifySkill) && /--compare … --record-plan/.test(skill) && /--record-plan/.test(verifyRef) && !/Record the result by hand/.test(verifySkill)
+    && /`mode`, `renderer`, `artifacts`, the open high\/medium `deltas`/.test(verifySkill) && /you still write `coverage`/.test(skill) && /\(yours to write\)/.test(verifyRef)
+    && /none, or several and no `--plan`, is exit 2 before anything is compared/.test(verifySkill));
+  check("[F64-1] build-screen and references/verify.md: record the deviations you already know about at build time, with a reason",
+    /record a deviation you already know about when you build it, with its reason/.test(skill) && /Record the differences you already know about as `deviations\[\]` \(with a reason\) when you build them/.test(verifyRef));
+  check("[DT55-1] verify skill and build-screen: a deviations[] row with field \"reference\" marks the reference illustrative; it never waives a delta",
+    /field: "reference"/.test(verifySkill) && /never waives or changes a delta/.test(verifySkill) && /field: "reference"/.test(skill) && /without\s+waiving a delta/.test(skill));
+  check("[F119-1] build-screen: a line-height taller than its fixed text box is a deliberate choice (the expectation's 'text box height' row)",
+    /line-height taller than its fixed text box.{0,160}choose deliberately/.test(skill) && /line-height taller than its fixed text box is a choice to make deliberately/.test(verifyRef));
+  check("[DT45-1] verify skill: a replaced expectation keeps <Screen>.expected.prev.json (one generation) and says generator vs export; byte-identical says nothing about the build",
+    /<Screen>\.expected\.prev\.json/.test(verifySkill) && /one generation/.test(verifySkill) && /expectation generator changed/.test(verifySkill) && /Byte-identical to the expectation on disk" says nothing about the build/.test(verifySkill));
+  check("[DT30-1] help, verify skill and visual-verifier: --browser-path <executable> (macOS inner binary, only guaranteed with the bundled Chromium; recorded as custom, never the path)",
+    [helpSkill, verifySkill, verifier].every((d) => /--browser-path <executable>/.test(d) && /Contents\/MacOS/.test(d) && /only guaranteed with the bundled Chromium/.test(d)) && /`custom`, never the path/.test(verifySkill));
+  // fix pass 1 (D119)
+  const trouble = flat(read("claude-plugin/skills/help/references/troubleshooting.md"));
+  check("[DT30-2] troubleshooting: the probe's exit 3 (no usable browser) → --browser-path <executable> (also on --check; macOS inner binary; only guaranteed with the bundled Chromium; recorded as custom)",
+    /`verify-probe` exits 3/.test(trouble) && /--browser-path <executable>/.test(trouble) && /also on `--check`/.test(trouble) && /Contents\/MacOS/.test(trouble)
+    && /Only guaranteed with the bundled Chromium/.test(trouble) && /records `custom`, never the path/.test(trouble));
+  check("[M1] verify skill: recording never reopens a plan — a hook record from before the hash change is re-stamped in the same write",
+    /recording never reopens a plan \(the hook's hash does not cover `verification`; a hook record from before that change is re-stamped in the same write\)/.test(verifySkill));
+  check("[L12] build-screen: the hook hashes files[] and every mapped module (extensionless resolves like an import; an alias or package is not hashed — --status and the report name it once)",
+    /and of every module the plan's anchors\/components map/.test(skill) && /resolves like an import, `\.tsx`\/`\.ts`\/`\.jsx`\/`\.js` then `\/index\.\*`/.test(skill) && /`--status` and the verify report name it once/.test(skill));
+  check("[L4] verify skill: paintedBy's known miss — a sibling/overlay painting over the element may pass; children painting all of it → no painter",
+    /A sibling or overlay painting over the element is not seen \(it may pass\)/.test(verifySkill) && /its own children paint all over gets no painter/.test(verifySkill));
 }
 
 report();

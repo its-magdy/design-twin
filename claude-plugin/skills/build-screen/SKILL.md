@@ -313,8 +313,10 @@ Copy this checklist into your notes and keep it updated:
    decisions:** `codeToken`/`verdict`/`decision` per token, `mapModule`/`verdict` per component,
    `mapModule` on anchors (step 3: the `anchorsSuggested` ids first, the rest is covered by its nearest mapped ancestor), `route` (advisory free text — it never reaches a screen), `navigate` and
    `interactions` when the screen needs them (below), `target`, `architecture`, `files[]` (step 3),
-   `deviations[]` as `{nodeId, field, designed, built, reason}`, `allowedLiterals[]` when needed, and
-   `verification` (step 5). Re-running it merges; filled fields survive. `--seed-from <plan>` (repeatable) pre-fills still-empty rows from
+   `deviations[]` as `{nodeId, field, designed, built, reason}` (record a deviation you already know about when you
+   build it, with its reason — the verifier never writes one; a `field: "reference"` row says the reference PNG is
+   only a stand-in there, e.g. an illustration you do not reproduce, and `--compare` shows that on the visual line without
+   waiving a delta), `allowedLiterals[]` when needed, and `verification` (step 5). Re-running it merges; filled fields survive. `--seed-from <plan>` (repeatable) pre-fills still-empty rows from
    a sibling screen's plan when the token (same key and value) or component (same set key) is the same
    thing; seeded rows carry `seededFrom` — review them, they are never overwritten once filled. The `Stop` hook checks the
    built code against this file, so it must exist before step 3. **On a large export, filling in
@@ -456,7 +458,9 @@ Copy this checklist into your notes and keep it updated:
      N entries of `children[]`) → the profile's scroll & sticky section.
    - **Text** — map to the type scale by style name; convert `lineHeight`/`letterSpacing` **with their
      units** per the profile (percent ≠ px). Every data-driven text gets an overflow rule (`truncate`/
-     `maxLines`/wrap). Never lock text containers to a fixed height. Use start/end alignment.
+     `maxLines`/wrap). Never lock text containers to a fixed height. Use start/end alignment. A line-height taller than
+     its fixed text box (the expectation lists it as "text box height", about Npx): choose deliberately — keep the designed
+     line-height and let the text overflow its box as Figma does, or fit the box — and note which in `deviations`.
    - **Styling** — tokens over literals; paint `opacity` vs node `opacity` are different; strokes honor
      `align` (inside/outside/center) and per-side `weights`; shadows keep `spread` where the stack can.
    - **Assets** — import `asset` files per the profile. **Never hand-write an `<svg>`/`<path>`, draw
@@ -614,10 +618,15 @@ Copy this checklist into your notes and keep it updated:
    - Only if the project genuinely has no dev server/rendering tooling available (checked, not
      assumed) fall back to a structural + visual self-review against the `.png` — and report it as
      "not rendered — reviewed statically", never as a verified match.
-   - **Record the evidence in the plan** under `verification`. After a render: `{mode:"rendered",
-     renderer, artifacts:[<paths on disk>], deltas:[<residual differences, [] if none>],
-     coverage:{rendered:[…], notChecked:[{what, why}]}, a11y:{tool, violations, warnings, report}?}` (copied from `report.behaviour.summary`) — never an `a11y`
-     result beside an a11y entry in `notChecked` (the hook flags a block that contradicts itself).
+   - **Record the evidence in the plan** under `verification`. On web, `--compare … --record-plan` writes the tool-owned
+     keys from the report — `mode`, `renderer`, `artifacts`, the open high/medium `deltas`, `a11y` (from
+     `report.behaviour.summary`, when the behaviour checks ran) and a `recorded` block with the report's sha256 — and
+     leaves your hand keys alone; **you still write `coverage`:{rendered:[…], notChecked:[{what, why}]}** (and any notes).
+     Elsewhere (or by hand) the shape is `{mode:"rendered", renderer, artifacts:[<paths on disk>], deltas:[<residual
+     differences, [] if none>], coverage:{…}, a11y:{tool, violations, warnings, report}?}` (copied from
+     `report.behaviour.summary`) — never an `a11y`
+     result beside an a11y entry in `notChecked` (the hook flags a block that contradicts itself). A recorded block
+     older than its report draws a warning: re-run `--compare --record-plan` after the last change.
      Nothing can render: `{mode:"static-only", reason:<what you checked for and didn't find>}`.
    - **The `Stop` hook** (`verify-build.js`, as your turn ends) checks the plans your session wrote
      (Write/Edit, a redirect, `--out`, `cp`/`mv`, `sed -i`) and the plan whose `files[]` alone lists
@@ -643,7 +652,9 @@ Copy this checklist into your notes and keep it updated:
      capped at 60 s naming what it was still waiting on. A manual run from a terminal never blocks on
      stdin at all.
    - **Status is computed, never stored.** The hook records its result and a hash of every file in
-     `files[]` under `verification.hook`; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status
+     `files[]` — and of every module the plan's anchors/components map (`mapModule`: a project-relative
+     file; one with no extension resolves like an import, `.tsx`/`.ts`/`.jsx`/`.js` then `/index.*`; an
+     `@/`/`~/` alias or a package is not hashed — `--status` and the verify report name it once) — under `verification.hook`; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status
      design/plan/<screen>.json` derives the status: `verified` only when the hook passed, no listed
      file changed since, **and** the screen's `design/verify/<…>.report.json` (schema @2, `--compare`
      run from the project root) says `pass` and measured this design and these files — compared by

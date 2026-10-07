@@ -17,6 +17,7 @@ import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-screen.ts";
 import { liveStatusFile, stageDirOf } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
+import { freeHoverPoint } from "../design-to-code/probe-page.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 
@@ -399,6 +400,131 @@ check("[D34/M4] `ring-1` + `shadow-md` together → the ring is read (1, its col
   styleOf(ringed, "borderWidth") === 1 && styleOf(ringed, "borderColor") === "rgb(10, 132, 255)" && styleOf(ringed, "strokeFrom") === "box-shadow" && styleOf(ringed, "strokeAlign") === "outside");
 check("[D34] a real border beside a ring → the border (strokeFrom border, no strokeAlign)",
   styleOf(bord34, "borderWidth") === 1 && styleOf(bord34, "borderColor") === "rgb(5, 5, 5)" && styleOf(bord34, "strokeFrom") === "border" && styleOf(bord34, "strokeAlign") === undefined);
+
+// ---- group 17: whose drawn state is hovered and who paints (F-74, DT-48 — D111), text-transform (F-69 — D114), --browser-path
+// (DT-30 — D112). The expectation is written here (drawnStateFrom: the node whose state a spec inherits, as --expect writes it).
+const g17Nodes: VerifySpec[] = [
+  { nodeId: "70:1", name: "Loom Queue", type: "FRAME", backgroundColor: "#121319ff" },
+  { nodeId: "70:3", name: "Spool Row", type: "FRAME", backgroundColor: "#46464fff", drawnState: "hover", ancestorIds: ["70:2"] },
+  // own state: a transparent <td>, the row paints it under tr:hover
+  { nodeId: "70:4", name: "Spool Cell", type: "FRAME", backgroundColor: "#46464fff", drawnState: "hover", ancestorIds: ["70:3", "70:2"] },
+  { nodeId: "70:5", name: "Action Cell", type: "FRAME", backgroundColor: "#46464fff", drawnState: "hover", drawnStateFrom: "70:3", ancestorIds: ["70:3", "70:2"] },
+  { nodeId: "70:6", name: "Remove", type: "INSTANCE", backgroundColor: "#292931ff", drawnState: "hover", drawnStateFrom: "70:3", ancestorIds: ["70:5", "70:3", "70:2"] },
+  // an expectation written before drawnStateFrom: the control is hovered itself, as before
+  { nodeId: "70:21", name: "Remove", type: "INSTANCE", backgroundColor: "#292931ff", drawnState: "hover", ancestorIds: ["70:20", "70:2"] },
+  { nodeId: "70:8", name: "Swatch", type: "FRAME", backgroundColor: "#2c2c34ff" },
+  { nodeId: "70:11", name: "Queue Button", type: "INSTANCE", backgroundColor: "#292931ff", drawnState: "hover", drawnStateFrom: "70:10", ancestorIds: ["70:10"] },
+  // the owner (70:99) is not built/tagged: the tagged ancestor below it (the card) is hovered
+  { nodeId: "70:13", name: "Open Link", type: "TEXT", text: "Open", color: "#c8c8c8ff", drawnState: "hover", drawnStateFrom: "70:99", ancestorIds: ["70:12", "70:99"] },
+  { nodeId: "70:30", name: "Order Label", type: "TEXT", text: "spool order", textCase: "title" },
+  { nodeId: "70:31", name: "Count Label", type: "TEXT", text: "bobbin count", drawnState: "hover", drawnStateFrom: "70:98", ancestorIds: ["70:98"] },
+  // fix pass 1 (D119). L1: the owner (70:40) is untagged; the nearest tagged ancestor is a same-box <span> (no free point),
+  // the next (the strip) has room
+  { nodeId: "70:44", name: "Run", type: "INSTANCE", backgroundColor: "#292931ff", drawnState: "hover", drawnStateFrom: "70:40", ancestorIds: ["70:43", "70:42", "70:40"] },
+  // L2: an ARIA-grid row whose cells carry tabindex="-1"
+  { nodeId: "70:51", name: "Remove", type: "INSTANCE", backgroundColor: "#292931ff", drawnState: "hover", drawnStateFrom: "70:50", ancestorIds: ["70:50"] },
+  // L5: a transparent box its own two children paint all over
+  { nodeId: "70:80", name: "Split Swatch", type: "FRAME", backgroundColor: "#3c3c3cff" },
+];
+const g17Exp = path.join(tmp, "Loom.expected.json");
+fs.writeFileSync(g17Exp, JSON.stringify({ frame: { nodeId: "70:1", name: "Loom Queue", w: 800, h: 600 }, nodes: g17Nodes }));
+// DT-30: an executable to name — Playwright's own chromium when it is installed, else the headless shell of the same revision
+// in the same cache (a machine may hold only that). Never downloaded; none found → the --browser-path checks are skipped (printed).
+const pwChromium = await import("playwright").then((m) => m.chromium, () => null);
+function cachedBrowser(): string | null {
+  if (!pwChromium) return null;
+  const full = pwChromium.executablePath();
+  if (fs.existsSync(full)) return full;
+  let d = full;
+  while (d !== path.dirname(d) && !/^chromium-\d+$/.test(path.basename(d))) d = path.dirname(d);
+  const shell = path.join(path.dirname(d), path.basename(d).replace(/^chromium-/, "chromium_headless_shell-"));
+  if (!/^chromium-\d+$/.test(path.basename(d)) || !fs.existsSync(shell)) return null;
+  for (const plat of fs.readdirSync(shell)) {
+    for (const bin of ["chrome-headless-shell", "headless_shell", "chrome-headless-shell.exe"]) {
+      const p = path.join(shell, plat, bin);
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+    }
+  }
+  return null;
+}
+const exe = cachedBrowser();
+if (exe === null) console.log("SKIPPED the --browser-path checks (DT-30): no installed chromium or headless shell found in Playwright's cache");
+const b17 = path.join(tmp, "run17", "Loom");
+const r17 = await probe(["--expected", g17Exp, "--url", `http://127.0.0.1:${port}/loom-queue-owner-hover.html`, "--out", b17, "--project", ROOT, ...(exe !== null ? ["--browser-path", exe] : [])]);
+const m17 = read(b17);
+if (r17.status !== 0) console.log(r17.stderr);
+const stateStyles = (n: MeasuredNode | undefined, s: string): Record<string, unknown> | null => { const v = n?.states?.[s]; return v && isJsonObject(v) && isJsonObject(v.styles) ? v.styles : null; };
+const hoverVia = (n: MeasuredNode | undefined): string => (n && typeof n.hoverVia === "string" ? n.hoverVia : "");
+const ROW1 = /> tr:nth-child\(1\)$/;
+const cell4 = node(m17, "70:4"), cell5 = node(m17, "70:5"), remove = node(m17, "70:6"), oldRemove = node(m17, "70:21");
+check("[F-74] own hover on a transparent <td>: its own background stays transparent, states.hover.styles.paintedBy = the hovered row (tr, depth 1, its tag)",
+  r17.status === 0 && stateStyles(cell4, "hover")?.backgroundColor === "rgba(0, 0, 0, 0)"
+  && JSON.stringify(stateStyles(cell4, "hover")?.paintedBy) === JSON.stringify({ backgroundColor: "rgb(70, 70, 79)", via: "ancestor", tag: "tr", depth: 1, dt: "70:3" }));
+check("[F-74] …at rest the same cell is painted by the frame root (its nearest painting ancestor)",
+  JSON.stringify(styleOf(cell4, "paintedBy")) === JSON.stringify({ backgroundColor: "rgb(18, 19, 25)", via: "ancestor", tag: "div", depth: 4, dt: "70:1" }));
+check("[F-74] a control inside the row drawn hovered (drawnStateFrom = the row) → the ROW is hovered at a free point (hoverVia = the row), the control's own :hover stays off (not red)",
+  ROW1.test(hoverVia(remove)) && stateStyles(remove, "hover")?.backgroundColor === "rgb(41, 41, 49)" && remove?.note === undefined);
+check("[F-74] …a cell inherited from the row: hovered through the row (hoverVia), painted by it in the state",
+  ROW1.test(hoverVia(cell5)) && isJsonObject(stateStyles(cell5, "hover")?.paintedBy) && JSON.stringify(stateStyles(cell5, "hover")?.paintedBy) === JSON.stringify({ backgroundColor: "rgb(70, 70, 79)", via: "ancestor", tag: "tr", depth: 1, dt: "70:3" }));
+check("[F-74] an old expectation (no drawnStateFrom) hovers the control itself, as before (its own :hover, red; no hoverVia)",
+  stateStyles(oldRemove, "hover")?.backgroundColor === "rgb(255, 0, 0)" && oldRemove?.hoverVia === undefined);
+const queue = node(m17, "70:11");
+check("[F-74] a control covering its whole drawn-hovered container → no free point: the element itself is hovered, with the note",
+  stateStyles(queue, "hover")?.backgroundColor === "rgb(255, 0, 0)" && queue?.hoverVia === undefined && /hovered the element itself: no free point on its drawn-hovered container 70:10/.test(queue?.note ?? ""));
+const link = node(m17, "70:13");
+check("[F-74] an untagged owner → the nearest visible tagged ancestor below it is hovered (the card), the link's own :hover stays off",
+  /> div:nth-child\(4\)$/.test(hoverVia(link)) && stateStyles(link, "hover")?.color === "rgb(200, 200, 200)");
+check("[F-74] no tagged owner nor ancestor below it → the element itself, with a note naming the owner",
+  /hovered the element itself: its drawn-hovered container 70:98 has no visible tagged element/.test(node(m17, "70:31")?.note ?? "") && node(m17, "70:31")?.hoverVia === undefined);
+const run44 = node(m17, "70:44"), grid51 = node(m17, "70:51");
+check(`[L1] the nearest tagged candidate is a same-box <span> (no free point) → the next one (the strip) is hovered; the control's own :hover stays off (got hoverVia ${JSON.stringify(hoverVia(run44))}, note ${JSON.stringify(run44?.note)})`,
+  /> div:nth-child\(7\)$/.test(hoverVia(run44)) && stateStyles(run44, "hover")?.backgroundColor === "rgb(41, 41, 49)" && run44?.note === undefined);
+check(`[L2] an ARIA-grid row whose cells carry tabindex="-1" has free points (a roving-focus cell is not a control): the row is hovered, the button's own :hover stays off (got ${JSON.stringify(grid51?.note)})`,
+  /> div:nth-child\(8\) > div:nth-child\(1\)$/.test(hoverVia(grid51)) && stateStyles(grid51, "hover")?.backgroundColor === "rgb(41, 41, 49)" && grid51?.note === undefined);
+check(`[L5] a transparent box its own children paint all over → no painter (no ancestor answer), compared as transparent (got ${JSON.stringify(styleOf(node(m17, "70:80"), "paintedBy"))})`,
+  styleOf(node(m17, "70:80"), "backgroundColor") === "rgba(0, 0, 0, 0)" && styleOf(node(m17, "70:80"), "paintedBy") === undefined);
+check("[DT-48] a transparent wrapper whose only same-box child paints → paintedBy via child (depth 1, no tag of its own)",
+  styleOf(node(m17, "70:8"), "backgroundColor") === "rgba(0, 0, 0, 0)" && JSON.stringify(styleOf(node(m17, "70:8"), "paintedBy")) === JSON.stringify({ backgroundColor: "rgb(44, 44, 52)", via: "child", tag: "div", depth: 1 }));
+check("[F-74] paintedBy only where it says something: absent on an element that paints itself and on a spec stating no background",
+  styleOf(remove, "paintedBy") === undefined && styleOf(node(m17, "70:30"), "paintedBy") === undefined);
+check("[F-69] TEXT nodes carry the computed text-transform of the text's owner (capitalize inherited by the <span>; none), `text` stays the DOM string",
+  styleOf(node(m17, "70:30"), "textTransform") === "capitalize" && styleOf(node(m17, "70:30"), "text") === "spool order" && styleOf(node(m17, "70:31"), "textTransform") === "none"
+  && styleOf(cell5, "textTransform") === undefined);
+if (exe !== null) {
+  const raw17 = fs.existsSync(b17 + ".measured.json") ? fs.readFileSync(b17 + ".measured.json", "utf8") : "";
+  check("[DT-30] --browser-path <a cached chromium> → exit 0, measured.probe.browser.executable \"custom\" with its version, the path in no written file (stderr only)",
+    r17.status === 0 && m17?.probe?.browser.executable === "custom" && (m17.probe.browser.version || "").length > 0 && raw17 !== "" && !raw17.includes(exe) && !raw17.includes("ms-playwright")
+    && r17.stderr.includes(`(--browser-path ${exe})`));
+  const chk = await probe(["--check", "--project", ROOT, "--browser-path", exe]);
+  check("[DT-30] --check honours --browser-path (exit 0, the ok line names it)", chk.status === 0 && chk.stdout.includes(`(--browser-path ${exe})`));
+}
+// freeHoverPoint's two guards, in the page itself (fix pass 1): a point over an interactive descendant (the checkbox in the
+// row's first corner) and a point inside the measured element's box that elementFromPoint attributes to an overlay
+const fhpBrowser = pwChromium ? await pwChromium.launch(exe !== null ? { executablePath: exe } : {}).catch(() => null) : null;
+if (fhpBrowser === null) console.log("SKIPPED the in-page freeHoverPoint checks: no launchable chromium");
+else {
+  const pg = await fhpBrowser.newPage({ viewport: { width: 800, height: 600 } });
+  await pg.goto(`http://127.0.0.1:${port}/loom-queue-owner-hover.html`);
+  const at = async (owner: string, avoid: string): Promise<{ hit: string; inAvoid: boolean } | null> => {
+    const pt = await pg.evaluate(freeHoverPoint, { owner, avoid });
+    if (pt === null) return null;
+    const ob = await pg.locator(owner).boundingBox(), ab = await pg.locator(avoid).boundingBox();
+    if (!ob || !ab) return null;
+    const px = ob.x + pt.x, py = ob.y + pt.y; // (no borders on these owners: padding box = border box)
+    const tag: unknown = await pg.evaluate(`document.elementFromPoint(${px}, ${py})?.tagName.toLowerCase() ?? ""`);
+    return { hit: typeof tag === "string" ? tag : "", inAvoid: px >= ab.x && px <= ab.x + ab.width && py >= ab.y && py <= ab.y + ab.height };
+  };
+  const crow = await at('[data-dt-node="70:60"]', '[data-dt-node="70:61"]');
+  check(`[F-74 guard] a row whose first corner is a checkbox → the free point is not over it (another control's own :hover) (got ${JSON.stringify(crow)})`,
+    crow !== null && crow.hit !== "input" && !crow.inAvoid);
+  const tile = await at('[data-dt-node="70:70"]', '[data-dt-node="70:71"]');
+  check(`[F-74 guard] the measured element's box is skipped even where an overlay is what elementFromPoint returns (got ${JSON.stringify(tile)})`,
+    tile !== null && tile.hit === "i" && !tile.inAvoid);
+  await fhpBrowser.close();
+}
+const chkBad = await probe(["--check", "--project", ROOT, "--browser-path", path.join(tmp, "no-such-browser")]);
+check("[DT-30] --check --browser-path <missing> → exit 3, one line, no stack", chkBad.status === 3 && chkBad.stderr.trim().split("\n").length === 1 && /is not an executable file/.test(chkBad.stderr));
+check("[DT-30] without --browser-path the identity names no executable", m1?.probe?.browser.executable === undefined);
 
 finish();
 report();

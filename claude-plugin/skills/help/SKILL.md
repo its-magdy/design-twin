@@ -183,7 +183,9 @@ imports the Figma plugin does need one, since the npm package ships no `manifest
   own numbers, checks that every component on the frame was actually built and that every designed
   interaction works, and writes the measurements to `design/verify/`. It returns measurements rather
   than a verdict: `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` computes that, so "pass" is never something anyone
-  asserts. Never edits app code.
+  asserts. Never edits app code. If the probe exits 3 (no usable browser), the install line it prints is the
+  user's call; a Chromium they already have cached works too — `verify-probe.js --browser-path <executable>` (on macOS
+  the binary inside the `.app`, `…/Contents/MacOS/…`; only guaranteed with the bundled Chromium).
 
 ## Related
 

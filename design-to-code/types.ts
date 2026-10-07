@@ -540,6 +540,19 @@ export interface PlanHookRecord {
   /** web profiles: anchored visible nodes whose id appears in a listed file, of how many */
   tagCoverage?: { tagged: number; anchored: number };
 }
+/** F-100 (D115): the tool-owned record of one --compare run, written by plan-record.ts recordPlan(). */
+export interface PlanVerificationRecord {
+  by: "verify-screen --record-plan"; at: string; report: string; reportSha256: string; verdict: string; headline: string;
+  behaviourHeadline?: string;
+  counts: { high: number; medium: number; low: number; accepted: number; notMeasured: number; inferred: number };
+}
+/** F-121 (D113): one thing the build does that the design never drew — judged against best practice, never "matched",
+ *  never the verdict. kind: plan-declared interaction, an interaction whose destination was never exported, a state
+ *  measured on a node whose design draws none, or an agent-written row (measured.json / evidence `inferred[]`). */
+export interface InferredRow {
+  kind: "plan-interaction" | "undesigned-interaction" | "undrawn-state" | "agent";
+  nodeId?: string; name?: string; trigger?: string; state?: string; built?: string; why: string;
+}
 export interface PlanVerification {
   mode?: "rendered" | "static-only" | (string & {});
   reason?: string;
@@ -553,6 +566,8 @@ export interface PlanVerification {
   verifyScreenVerdict?: string | { verdict?: string };
   verdict?: string | { verdict?: string };
   hook?: PlanHookRecord;
+  /** F-100 (D115): what `verify-screen --compare --record-plan` recorded (tool-owned; the report is the verdict) */
+  recorded?: PlanVerificationRecord;
   // A model-written verification block often carries more (interactionScript, typecheck, dataDtNode,
   // interactions, …): nothing reads those, and the hook's rewrite carries them through untouched.
 }
@@ -627,6 +642,10 @@ export interface VerifySpec {
   placeholder?: true;
   placeholderText?: string;
   placeholderColor?: string | null;
+  /** F-69 (D114): Figma's text case on a TEXT node (font.case); `text` keeps the stored string — compare the rendered one */
+  textCase?: "upper" | "lower" | "title";
+  /** F-74 (D111): the node whose drawn state this spec inherits (the owner — hover the owner, not this node); absent = itself */
+  drawnStateFrom?: string;
   borderColor?: string | null;
   borderWidth?: number;
   /** [top, right, bottom, left] when weights are per-side */
@@ -720,6 +739,8 @@ export interface PlanInteractionsInput { plan: string; sha256: string; merged: n
 /** What a probe measures for one element. Keys beyond the canonical ones are reported as unknown, so the bag is open.
  *  `null` = the probe could not read the value (the shipped probe gives the reason in MeasuredNode.unmeasured[key]);
  *  --compare lists it as not measured, never as checked. */
+/** F-74 / DT-48 (D111): who paints an element whose own background-color is transparent. */
+export interface PaintedBy { backgroundColor: string; via: "ancestor" | "child"; tag: string; depth: number; dt?: string }
 export interface MeasuredStyles {
   fontFamily?: string | null;
   fontSize?: number | null;
@@ -743,6 +764,10 @@ export interface MeasuredStyles {
   text?: string | null;
   placeholderText?: string | null;
   placeholderColor?: string | null;
+  /** F-69 (D114): computed `text-transform` (inherited) of a TEXT item — optional, not a required style key */
+  textTransform?: string | null;
+  /** F-74 (D111): when the element's own background is transparent, the ancestor (or same-box child) that paints it */
+  paintedBy?: PaintedBy | null;
   tag?: string | null;
   textBox?: { x?: number | null; w?: number | null } | null;
   /** F-78: getComputedStyle(el).display */
@@ -931,6 +956,8 @@ export type MeasuredVisual =
 /** report.visual — always written by --compare (ran:false + why when the measured file has no visual block). */
 export interface ReportVisual {
   ran: boolean; why?: string; headline: string;
+  /** DT-55 (D116): plan deviations with field "reference" — the PNG is illustrative there; never waives a delta */
+  illustrative?: Array<{ nodeId: string; reason: string }>;
   differingPct?: number; shiftTolerantPct?: number; grid?: "reference" | "1x"; scale?: number;
   /** sha256: the reference PNG's (measured.visual.reference.sha256) — the next round's `against` needs the same one */
   reference?: { path: string; from: "index" | "export"; colorProfile?: string; sha256?: string };
@@ -957,7 +984,9 @@ export interface BuildIdentity {
   gitDirty: boolean | null;
 }
 /** The shipped probe's identity (measured.probe; copied to report.inputs.probe). */
-export interface ProbeIdentity { name: string; version: string | null; sha256: string; playwright: { package: string; version: string }; browser: { name: string; version: string } }
+export interface ProbeIdentity { name: string; version: string | null; sha256: string; playwright: { package: string; version: string };
+  /** DT-30 (D112): executable "custom" when --browser-path named it (the path itself is never written) */
+  browser: { name: string; version: string; executable?: "custom" } }
 /** The element the probe took as a frame root, and how it found it. */
 export interface ProbeFrame { nodeId: string; selector: string; via: "tag" | "size-and-fill" | "viewport"; rect: { x: number; y: number; w: number; h: number } }
 /** Main-frame navigations the probe saw, and how many full re-runs they cost. */
@@ -1078,6 +1107,8 @@ export interface VerifyReport {
   behaviour?: ReportBehaviour;
   /** 12c: the visual diff — a third headline, informational, never the verdict (D4, D40(3)) */
   visual?: ReportVisual;
+  /** F-121 (D113): "Inferred, not designed" — never the verdict (D4 style) */
+  inferred?: InferredRow[];
   why?: string[];
   /** L-1: the why[] entries that say the run itself is unverified (D26) — what --accept refuses on. Absent in reports
    *  written before it was recorded (--accept then matches why[] by wording). */
@@ -1101,6 +1132,8 @@ export interface VerifyReport {
   /** high/medium/low count OPEN deltas only; `accepted` = deltas a plan waiver matched */
   summary?: { high: number; medium: number; low: number; componentsAbsent?: number; interactionsFailed?: number; interactionsNotProbed?: number; missingComponents?: number;
     accepted?: number; descoped?: number; undesigned?: number;
+    /** F-121 (D113): rows of report.inferred — never the verdict */
+    inferred?: number;
     /** distinct causes among the open high deltas (F-76: a group counts once) */
     highCauses?: number;
     /** D39: open deltas whose severity a match cap lowered (cappedFrom) — any blocks a plain pass */

@@ -38,7 +38,7 @@
 // reports that said "fail"). It writes `plan.verification.hook`:
 //   { result: "pass"|"blocked", checkedAt, blocking:[…], warnings:N, planHash, files:{<path>: <sha256/16>|null} }
 // and `computeStatus()` derives the status at read time from THREE facts that must all hold:
-//   hook result "pass"  AND  every file in files[] still hashes the same  AND  the verify report
+//   hook result "pass"  AND  every file in files[] (and every mapped module, D117) still hashes the same  AND  the verify report
 //   (design/verify/<…>.report.json, schema @2) says "pass" (or "pass-with-deviations") and measured THIS
 //   design and THIS code — by content: its inputs.exportContentSha256 equals the export's (timestamps
 //   stripped), its inputs.code.files equal the files' hashes now, and its inputs.waivers.sha256 equals the
@@ -86,7 +86,7 @@ import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { isScreenDoc } from "./export-shape.ts";
 import type {
-  CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, Plan, PlanAnchor, PlanComputedStatus, PlanLifecycle,
+  CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
   PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyReport,
 } from "./types.ts";
 import { getOrInit } from "./map-util.ts";
@@ -197,35 +197,45 @@ const lifecycleOf = (plan: Plan | null | undefined): PlanLifecycle => {
 
 // ================================================================ hashing
 
-const sha = (buf: string | Buffer): string => crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
-
+// D117 (FU-shared-shell): files[] AND every anchors/components mapModule (contentHash.planCodeFiles) — a shared
+// shell the plan maps but another plan lists is code this screen renders. The same list verify-screen --compare hashes.
 function fileHashes(plan: Plan | null | undefined, cwd: string): Record<string, string | null> {
-  return contentHash.fileHashes(plan && plan.files, cwd); // the same hashes verify-screen --compare records
+  return contentHash.fileHashes(contentHash.planCodeFiles(plan || {}, cwd), cwd); // the same hashes verify-screen --compare records
 }
 
-// The plan's own content, minus what the hook writes and what is not the plan's substance. The owner's
-// waivers[]/descopes[] are left out too — accepting a delta must not send the hook back to pending; a
-// report records their hash instead (inputs.waivers.sha256), and reportVerdict() compares that.
-function planHash(plan: Plan | null | undefined): string {
-  const copy: Plan = structuredClone(plan || {});
-  delete copy.status;
-  delete copy.waivers;
-  delete copy.descopes;
-  if (copy.verification) {
-    delete copy.verification.hook;
-    if (!Object.keys(copy.verification).length) delete copy.verification;
-  }
-  return sha(JSON.stringify(copy));
-}
+// The plan's own content, minus what the hook writes and what is not the plan's substance: status, the owner's
+// waivers[]/descopes[] (accepting a delta must not send the hook back to pending; a report records their hash instead,
+// inputs.waivers.sha256, and reportVerdict() compares that) and — F-100 (D115) — all of `verification` (every
+// verification check is a warning, so the hook result never depends on it; --compare --record-plan writes it).
+const planHash = (plan: Plan | null | undefined): string => contentHash.planHash(plan);
+// D115: a hook record written before F-100 holds the old formula (verification minus hook) — still accepted, so no
+// plan reopens on upgrade. The hook's next write records the new one.
+const hookHashMatches = (hook: PlanHookRecord, plan: Plan): boolean => hook.planHash === planHash(plan) || hook.planHash === contentHash.legacyPlanHash(plan);
 
-function changedFiles(plan: Plan, cwd: string): string[] | null {
+// The hook record against the files now: `changed` reopens the plan (stale); `unhashed` does not. A key the record never
+// hashed is a change when it is a files[] entry ("added to files[]"); a MAPPED module the record never hashed (M2: a hook
+// record written before D117 hashed files[] only) is only noted — the upgrade must not reopen a plan the hook closed with
+// no file changed. The hook's next write records it, and from then on a change to it is a change.
+interface HookFileDiff { changed: string[]; unhashed: string[] }
+function hookFileDiff(plan: Plan, cwd: string): HookFileDiff | null {
   const hook = plan.verification && plan.verification.hook;
   if (!hook || !hook.files) return null;
   const now = fileHashes(plan, cwd);
-  const changed: string[] = [];
+  const listed = new Set(Array.isArray(plan.files) ? plan.files.map(String) : []);
+  const changed: string[] = [], unhashed: string[] = [];
   const all = new Set([...Object.keys(hook.files), ...Object.keys(now)]);
-  for (const f of all) if (hook.files[f] !== now[f]) changed.push(now[f] === undefined ? `${f} (no longer in files[])` : hook.files[f] === undefined ? `${f} (added to files[])` : now[f] === null ? `${f} (missing)` : f);
-  return changed;
+  for (const f of all) {
+    if (hook.files[f] === now[f]) continue;
+    // L9: gone from planCodeFiles — dropped from files[] or the anchors, or an extensionless mapModule no longer resolves
+    if (now[f] === undefined) changed.push(`${f} (no longer hashed: not in files[] nor a mapped module that resolves)`);
+    else if (hook.files[f] === undefined) { if (listed.has(f)) changed.push(`${f} (added to files[])`); else unhashed.push(`${f} (now hashed: mapped module)`); }
+    else changed.push(now[f] === null ? `${f} (missing)` : f);
+  }
+  return { changed, unhashed };
+}
+function changedFiles(plan: Plan, cwd: string): string[] | null {
+  const d = hookFileDiff(plan, cwd);
+  return d && d.changed;
 }
 
 // OPEN = the hook still has work on this plan.
@@ -234,7 +244,7 @@ function isOpen(p: PlanFile, cwd: string): boolean {
   if (isStale(p.file)) return false;
   const hook = p.plan.verification && p.plan.verification.hook;
   if (!hook || hook.result !== "pass") return true;
-  if (hook.planHash !== planHash(p.plan)) return true;
+  if (!hookHashMatches(hook, p.plan)) return true;
   const ch = changedFiles(p.plan, cwd);
   return !ch || ch.length > 0;
 }
@@ -587,8 +597,20 @@ function verificationWarnings(plan: Plan): string[] {
   const out: string[] = [];
   const c = v.coverage;
   if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push("verification.coverage is missing — record {rendered:[…], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, \"Beyond the ideal frame\")");
-  if (!v.a11y) out.push("verification.a11y is missing — copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}); when no behaviour checks ran, no accessibility check is recorded — say so in the report rather than implying one ran");
+  if (!v.a11y) out.push("verification.a11y is missing — copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) — `verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded — say so in the report rather than implying one ran");
   return out;
+}
+
+// F-100 (D115): plan.verification.recorded is what `--compare --record-plan` copied from ONE report. When that report
+// has since been rewritten (another --compare without --record-plan, a hand edit), the plan's copy is older than the
+// verdict it summarises. A warning — the report is the verdict either way; computeStatus never reads `recorded`.
+function recordedReportWarnings(plan: Plan, cwd: string): string[] {
+  const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
+  if (!rec || typeof rec !== "object" || typeof rec.report !== "string" || !rec.report) return [];
+  let bytes: Buffer;
+  try { bytes = fs.readFileSync(path.resolve(cwd, rec.report)); } catch { return []; }
+  const now = crypto.createHash("sha256").update(bytes).digest("hex");
+  return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} — re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
 }
 
 /** A verify report as locateReports() summarises it for the status computation. */
@@ -687,7 +709,9 @@ function verificationContradictions(plan: Plan, reports: ReportRef[] | null | un
   }
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
   for (const r of reports || []) {
-    if (Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — copy them (or the ones you judged real, with why) into the plan`);
+    // F-100: --record-plan writes only the OPEN high/medium deltas — [] beside a report of lows is that record, not a gap
+    const recordedHere = !!(v.recorded && typeof v.recorded === "object" && v.recorded.report === r.rel);
+    if (!recordedHere && Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — copy them (or the ones you judged real, with why) into the plan`);
     for (const k of ["verifyScreenVerdict", "verdict"] as const) {
       const claimed = v[k];
       const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
@@ -1164,6 +1188,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
 
   warnings.push(...checkVerification(plan, cwd));
   warnings.push(...verificationWarnings(plan));
+  warnings.push(...recordedReportWarnings(plan, cwd));
   const reports = o.reports || locateReports(plan, file, cwd, exp);
   warnings.push(...verificationContradictions(plan, reports));
   warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
@@ -1305,7 +1330,8 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
     if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
     const now = fileHashes(plan, cwd);
-    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]);
+    // D117: a mapped module an older report never hashed reads "(not recorded)" — one re-compare records it
+    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => (measured[f] === undefined ? `${f} (not recorded)` : f));
     if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — re-run --compare`] };
     if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
   }
@@ -1342,18 +1368,20 @@ function computeStatus(plan: Plan, opts?: StatusOptions): StatusResult {
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
   const rv = reportVerdict(plan, cwd, exp, reports);
   const hook = plan.verification && plan.verification.hook;
-  let hookState: PlanComputedStatus | null = null, hookWhy: string[] = [];
+  let hookState: PlanComputedStatus | null = null, hookWhy: string[] = [], unhashedWhy: string[] = [];
   if (!hook || !hook.result) { hookState = "pending"; hookWhy = ["the build-screen Stop hook has not checked this plan"]; }
-  else if (hook.planHash && hook.planHash !== planHash(plan)) { hookState = "pending"; hookWhy = ["the plan changed after the hook's last check"]; }
+  else if (hook.planHash && !hookHashMatches(hook, plan)) { hookState = "pending"; hookWhy = ["the plan changed after the hook's last check"]; }
   else if (hook.result !== "pass") { hookState = "blocked"; hookWhy = hook.blocking && hook.blocking.length ? hook.blocking : ["the hook's last check blocked"]; }
   else {
-    const ch = changedFiles(plan, cwd) || [];
+    const d = hookFileDiff(plan, cwd);
+    const ch = d ? d.changed : [];
     if (ch.length) { hookState = "stale"; hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`]; }
+    if (d && d.unhashed.length) unhashedWhy = [`hook: not hashed by the hook's last check (its record predates D117), so not a change: ${d.unhashed.slice(0, 6).join(", ")}${d.unhashed.length > 6 ? `, +${d.unhashed.length - 6} more` : ""} — the hook's next check of this plan records it; until then an edit to it does not reopen the plan (\`verify-build <plan>\` re-checks now)`];
   }
   const reportWhy = rv.reasons.map((r) => (hookState ? "report: " : "") + r);
-  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h)), reports };
-  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy), reports };
-  return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons), reports };
+  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h), unhashedWhy), reports };
+  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy, unhashedWhy), reports };
+  return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons, unhashedWhy), reports };
 }
 
 // ================================================================ fan-out scoping
@@ -1533,13 +1561,14 @@ const USAGE = [
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
   "  2. failed       a verify-report@2 for this screen says fail (never hidden behind the hook's state)",
   "  3. blocked      the Stop hook's last check blocked",
-  "  4. stale        a file in files[] changed (by content) since the hook passed",
+  "  4. stale        a file in files[] or a module anchors/components map changed (by content) since the hook passed",
   "  5. pending      the hook has not checked this version of the plan",
   "  6. unverified | static-only | verified | verified-with-deviations   what the report says: verified",
   "     only for an @2 'pass' that measured this design, these files and the plan's current waivers[]/",
   "     descopes[], by content hash (no report / a pre-@2 report / other design, code or waivers ->",
   "     unverified); verified-with-deviations when every report passes and >=1 says 'pass-with-deviations'.",
-  "     A stored \"verified\" is ignored. waivers[]/descopes[] are not part of the hook's planHash.",
+  "     A stored \"verified\" is ignored. waivers[]/descopes[] and verification{} are not part of the hook's",
+  "     planHash (a hook record with the older formula, which hashed verification, is still accepted).",
   "Every non-verified status carries a non-empty why: the hook's state AND what the report says (a",
   "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}.",
 ].join("\n");
@@ -1590,7 +1619,12 @@ async function main(argv: string[]): Promise<number> {
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p): p is BadPlan => !isPlanFile(p)) } : findPlans(process.cwd());
     for (const b of bad) console.error(`verify-build: cannot read plan ${b.file}: ${b.error}`);
     const show = (f: string): string => { const r = path.relative(process.cwd(), f); return r.startsWith("..") ? f : r; };
-    const rows = plans.map((p) => Object.assign({ plan: show(p.file) }, computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) })));
+    // L12 (D119 addendum): the mapModules the code hash cannot follow — one note per plan, here only (the Stop hook stays quiet)
+    const rows = plans.map((p) => {
+      const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });
+      const skipped = contentHash.planCodeSkippedNote(p.plan, rootOfPlan(p.file));
+      return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
+    });
     if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" · ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
     else for (const r of rows) console.log(`${r.plan}: ${r.status}${r.reasons.length ? "\n  - " + r.reasons.join("\n  - ") : ""}`);
     if (!plans.length) console.error("verify-build: no plans found (design/plan/*.json)");
@@ -1663,7 +1697,7 @@ async function main(argv: string[]): Promise<number> {
 
 export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
-  verificationWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
+  verificationWarnings, recordedReportWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
   colorLiterals, arbitraryPx, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
 };
 
