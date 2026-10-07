@@ -82,7 +82,7 @@ full turn; a clean summary can be reported from the JSON alone.
    Figma layer name and the on-screen title are often different strings ("Job Roles" is the frame
    named `positions `), and near-matches are a trap — a query of "Job Roles" string-matching only
    "Job Role Details" is a DIFFERENT screen, not a fuzzy hit. Resolve with
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>"` (node id wins alone;
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan` (node id wins alone;
    otherwise exact layer name, indexed `title` and plan `screenName`/`route` are checked TOGETHER, as
    one pool, never in sequence — the one procedure every skill uses, see
    `extract/SKILL.md`); on zero or more than one exact match anywhere in that pool it stops and prints the candidates
@@ -145,6 +145,14 @@ full turn; a clean summary can be reported from the JSON alone.
    `text-style-near-miss`, `font-not-in-design-system`, `sentinel-token-value`, `single-mode-export`,
    `derived-mode-contrast`) are merged into the findings list. Without it the report says, in the
    report, which checks it could not run — which is the honest outcome, not a clean one.
+
+   Every finding in `<Screen>.json` (and the `.cross.json`) carries an `id`: its `code`, or `code@nodeId`
+   when it names a node (a repeat of the same one gets `~2`). Quote those ids when you list blockers — a
+   plan's `auditGate.overridden` uses them (the old `code#i` is still accepted), and its `crossCheckFile`
+   points at the cross-check report beside the audit (`<Screen>.cross.json`), when there is one. Component-name matching follows the plan's
+   rule (name + prop signature; several same-name entries are *ambiguous*, not matched), and
+   `catalog-rekeyed` proposals are labelled `alreadyMapped` / `sharedWith` from the component map and the
+   other exported screens.
 
    **A library export changes which directory to pass.** `dtwin pull --as-library` writes the full
    catalog of a LIBRARY file to `design/export/libraries/<dir>/` (listed in

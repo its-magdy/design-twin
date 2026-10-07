@@ -26,6 +26,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { spawnSync } from "node:child_process";
 import { check as ok, report } from "./assert.ts";
 import { deriveTitle, collectTexts } from "../bridge/src/pages-layout.ts";
 import { resolveScreen } from "../design-to-code/resolve-screen.ts";
@@ -309,5 +310,57 @@ ok("[M-4] a hidden root still gets its title", deriveTitle(hiddenRoot) === "Visi
 ok("[M-4] the 'Page Title' slot inside a hidden root is found",
   deriveTitle({ type: "FRAME", name: "Popup", hidden: true, children: [txt("Close"), { type: "FRAME", name: "Page Title", children: [txt("Edit profile", { name: "Title" })] }] }) === "Edit profile");
 ok("[M-4] a hidden TEXT root is its own text", deriveTitle(txt("Lonely", { hidden: true })) === "Lonely" && JSON.stringify(collectTexts(txt("Lonely", { hidden: true }))) === JSON.stringify(["Lonely"]));
+
+// ---------- [DT-41] not an export root; the basename / path / dash id forms ----------
+console.log("\nresolve-screen — DT-41: a non-root dir says so; <Layer>__<a>_<b> basenames, .json paths and dash ids resolve:");
+{
+  const pageDir = path.join(FIXTURE, "pages", "__Organization_management_");
+  const nr = resolveScreen(pageDir, "Job Roles");
+  ok("[DT41-1] a page subdir is not-found with noIndex naming the export root (not a silent empty list)",
+    nr.status === "not-found" && !!nr.noIndex && nr.noIndex.dir === pageDir && nr.noIndex.hint === FIXTURE && nr.candidates.length === 0);
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "rs-noroot-"));
+  const nr2 = resolveScreen(empty, "x");
+  ok("[DT41-1] a dir with no root above or below: noIndex.hint is null", nr2.status === "not-found" && !!nr2.noIndex && nr2.noIndex.hint === null);
+  fs.mkdirSync(path.join(empty, "design", "export"), { recursive: true });
+  fs.cpSync(path.join(FIXTURE, "pages"), path.join(empty, "design", "export", "pages"), { recursive: true });
+  const nr3 = resolveScreen(empty, "x");
+  ok("[DT41-1] the root found BELOW the dir (design/export) is named", nr3.status === "not-found" && nr3.noIndex?.hint === path.join(empty, "design", "export"));
+  fs.rmSync(empty, { recursive: true, force: true });
+  ok("[DT41-1] a real root has no noIndex", (() => { const r = resolveScreen(FIXTURE, "no such screen"); return r.status === "not-found" && !r.noIndex && r.candidates.length > 0; })());
+
+  const idOf = (q: string): string | null => { const r = resolveScreen(FIXTURE, q); return r.status === "resolved" ? r.row.id : null; };
+  ok("[DT41-2] the basename `positions___7314_87192` resolves by node id", idOf("positions___7314_87192") === "7314:87192");
+  ok("[DT41-2] a path to the .json resolves by node id",
+    idOf("pages/__Organization_management_/positions___7314_87192.json") === "7314:87192");
+  ok("[DT41-2] a `.vars.json` / `.expected.json` tail is stripped too",
+    idOf("System_Configurations__1359_21337.vars.json") === "1359:21337" && idOf("design/verify/System_Configurations__1359_21337.expected.json") === "1359:21337");
+  ok("[DT41-2] the resolved stage is 'node id'", (() => { const r = resolveScreen(FIXTURE, "positions___7314_87192"); return r.status === "resolved" && r.stage === "node id"; })());
+  ok("[DT41-3] a dash id `7314-87192` resolves", idOf("7314-87192") === "7314:87192");
+  ok("[DT41-3] a URL-ish `?node-id=7314-87192` resolves", idOf("https://www.figma.com/design/KEY/Name?node-id=7314-87192") === "7314:87192");
+  const cli = (...a: string[]): { status: number | null; err: string } => {
+    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), ...a], { encoding: "utf8" });
+    return { status: r.status, err: r.stderr };
+  };
+  const c1 = cli(pageDir, "Job Roles");
+  ok("[DT41-1] the CLI says 'not an export root' and names the root — no empty 'Known layers:'",
+    c1.status === 1 && /not an export root/.test(c1.err) && c1.err.includes(`pass ${FIXTURE}`) && !/Known layers/.test(c1.err));
+  ok("[DT41-2] the CLI resolves a basename", cli(FIXTURE, "positions___7314_87192").status === 0);
+  ok("[DT41-2] a basename whose id is not in the export is still not-found (never a fuzzy pick)", idOf("Ghost__1_2") === null);
+}
+{
+  // Review 1 L-3: a layer actually NAMED `<x>__<a>_<b>` resolves by its exact name, not as the id a:b.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rs-l3-"));
+  fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [
+    { name: "Home", id: "1:2", type: "FRAME", page: "P", file: "pages/P/Home__1_2.json" },
+    { name: "Wizard__1_2", id: "7:8", type: "FRAME", page: "P", file: "pages/P/Wizard__1_2__7_8.json" },
+  ] }));
+  const r = resolveScreen(dir, "Wizard__1_2");
+  ok(`[L-3] a layer named "Wizard__1_2" resolves by exact layer name, not to id 1:2 (got ${r.status === "resolved" ? `${r.row.name} via ${r.stage}` : r.status})`,
+    r.status === "resolved" && r.row.id === "7:8" && r.stage === "exact layer name");
+  const b = resolveScreen(dir, "Home__1_2");
+  ok("[L-3] control: a basename no layer is named still resolves by its id", b.status === "resolved" && b.row.id === "1:2" && b.stage === "node id");
+  fs.rmSync(dir, { recursive: true, force: true });
+}
 
 report();

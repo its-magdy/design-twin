@@ -52,7 +52,7 @@ its export directly in `design/` — every path below works either way, just dro
   a name ending in a space sanitises to a trailing `_`). Read the index; never reconstruct a filename.
   **Resolving "build the Job Roles screen" when no layer is named that:** the Figma layer name and
   the visible on-screen title are often different strings. Resolve with
-  `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>"` (node id wins alone;
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan` (node id wins alone;
   otherwise exact layer name, indexed `title` and plan `screenName`/`route` are checked TOGETHER, as
   one pool, never in sequence — more than one match anywhere stops the run) rather than guessing.
   A text-search fallback over `name`/`title`/`texts[]` NEVER resolves by itself — even one
@@ -69,7 +69,10 @@ its export directly in `design/` — every path below works either way, just dro
   **`design/export/variables.json`** — the union of every screen pulled so far. It **accumulates**:
   a second pull merges into it rather than replacing it, so an earlier screen's tokens survive. Names
   are not unique in it (two keys can share a name and differ in value) — read its `_conflicts` and
-  `hygiene` before generating a theme from it.
+  `hygiene` before generating a theme from it. It holds only the variables bound by pulled nodes: look up
+  library colours with `node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <library tokens.json> --lookup <hex>`
+  on the library catalog (COLOR variables, per mode, through aliases; pass `ffbc1c` or a quoted `'#ffbc1c'` —
+  an unquoted `#` starts a shell comment).
 - **`…__<id>.assets.json`** beside the screen — which assets it uses, with content hashes,
   `duplicates` (the same artwork under different names), `monochrome` (safe to recolour) and `heavy` (too big to inline).
   Each row has `name`/`owner`/`context`/`usedBy`: search `owner`/`name`, not file names.
@@ -180,7 +183,10 @@ Copy this checklist into your notes and keep it updated:
      **`catalog-rekeyed` is the other answer to 0% by key, and it means the opposite.** A duplicated
      file re-mints every component key while names and prop signatures survive, and cross-check
      then lists name + prop-signature matches in its JSON under `componentProposals` (write it with
-     `--out design/audit/<screen>.cross`), each `"confirmed": false`. Show the user the list — instance
+     `--out design/audit/<screen>.cross`), each `"confirmed": false`. With `--map
+     design/codeconnect.local.json` (found by default) each proposal is labelled `alreadyMapped` (confirm only
+     the others) or `sharedWith: N` (N other exported screens use that component — confirm once); the list is
+     ordered shared, this screen only, already mapped, and nothing is confirmed for you. Show the user the list — instance
      name → catalog name and id, and the evidence (`name+signature`, or the weaker `name+no-props`)
      — and let them accept entries. Set `"confirmed": true` on exactly those, then
      `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json
@@ -241,7 +247,8 @@ Copy this checklist into your notes and keep it updated:
 
      **A name match is a lead, not a mapping.** When keys don't line up, cross-check offers
      `name-matched-components` entries carrying `verified: false` — a component whose exact name
-     exists in the catalog. Use them to decide what to *call* things and how to shape props, and mark
+     exists in the catalog and whose prop signature agrees (the name rule `plan-skeleton` shares; a name
+     found only in a library catalog is not a match). Use them to decide what to *call* things and how to shape props, and mark
      each such plan row `verdict:"new"` with `matchedByName: "<catalog name>"`. Do not mark it
      "reused". Names like `Component 1`, `Header`, `Tabs` are reported separately as *ambiguous* and
      are deliberately left unmatched: several catalog entries share them, and binding one by name is
@@ -266,8 +273,11 @@ Copy this checklist into your notes and keep it updated:
      the build** until the user decides. Open questions get the audit's stated default, recorded in the
      final report — never a silent invention. If `design/audit/<screen>.json` exists and is Blocked and
      the user has decided to build past it, record that decision in the plan's
-     `auditGate: {auditFile, verdict, overridden: [<blocker ids>], reason, decidedBy, decidedAt}` —
-     `plan-skeleton.js` pre-fills it from the audit; the Stop hook warns (never blocks) if a current
+     `auditGate: {auditFile, crossCheckFile, verdict, overridden: [<blocker ids>], reason, decidedBy, decidedAt}` —
+     a blocker id is the finding's `id`: its `code`, or `code@nodeId` when it carries a node (a repeat gets
+     `~2`); the old positional `code#i` is still accepted, and so, for a finding with no node, is its bare
+     code (which is its id). `crossCheckFile` is the cross-check report beside the audit
+     (`<audit>.cross.json`), when there is one. `plan-skeleton.js` pre-fills it from the audit; the Stop hook warns (never blocks) if a current
      blocker id is missing from `overridden` or `reason` is empty.
 
 2. **Map before coding.** **Generate** the plan — never hand-transcribe it (that is how hidden layers,
@@ -275,21 +285,24 @@ Copy this checklist into your notes and keep it updated:
 
    ```
    node "${CLAUDE_PLUGIN_ROOT}/scripts/plan-skeleton.js" <screen json> <screen .vars.json> \
-     design/export/design-system --out design/plan/<screen>.json [--route /<route>]
+     design/export/design-system --out design/plan/<screen>.json [--route /<route>] [--seed-from design/plan/<sibling>.json]
    ```
 
    It writes what the export already knows: the header (`screenName`, `nodeId`, `file`) every skill
    finds the plan by; `tokens[]` — every bound variable with its Figma `key`, its `value` in this
    frame's mode and its design-system match (rows bound only by hidden layers come pre-marked
    `hidden-only`); `components[]` — every **visible** instance with key/variant/props and its
-   `catalog` identity (by key, or cross-check's name+signature proposal — component identity comes
+   `catalog` identity (by key, or cross-check's name+signature proposal, or `{by:"ambiguous", candidates:[…]}`
+   when several catalog entries share the name and none verifies — a lead to pick from, never a match; component identity comes
    from there and from `design/codeconnect.local.json`, never from an attribute you place in markup);
    `anchors{}` — every visible node id; `hidden[]` — what is not built. **You fill only the
    decisions:** `codeToken`/`verdict`/`decision` per token, `mapModule`/`verdict` per component,
    `mapModule` on anchors (step 3), `route` (advisory free text — it never reaches a screen), `navigate` and
    `interactions` when the screen needs them (below), `target`, `architecture`, `files[]` (step 3),
    `deviations[]` as `{nodeId, field, designed, built, reason}`, `allowedLiterals[]` when needed, and
-   `verification` (step 5). Re-running it merges; filled fields survive. The `Stop` hook checks the
+   `verification` (step 5). Re-running it merges; filled fields survive. `--seed-from <plan>` (repeatable) pre-fills still-empty rows from
+   a sibling screen's plan when the token (same key and value) or component (same set key) is the same
+   thing; seeded rows carry `seededFrom` — review them, they are never overwritten once filled. The `Stop` hook checks the
    built code against this file, so it must exist before step 3. **On a large export, filling in
    these decisions genuinely takes several turns — that is normal and does not need a status.**
    `status` stays `"pending"` the whole time a decision is still being worked out; `"awaiting-user"`

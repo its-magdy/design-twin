@@ -217,7 +217,7 @@ export interface ProgressTick {
  *  announcement, an unsolicited `progress` tick, or the reply to one command (`{id, ok, result, error}`).
  *  Anything else — a non-object, a reply whose id is not a string — is dropped (null). */
 type PluginFrame =
-  | { type: "progress"; tick: ProgressTick }
+  | { type: "progress"; tick: ProgressTick; requestId: string | null }
   | { type: "hello"; instanceId: string | null; file: string | null; fileKey: string | null; page: string | null; pluginVersion: string | null }
   | { type: "reply"; id: string; ok: boolean; result: unknown; error: unknown };
 
@@ -242,11 +242,11 @@ function parsePluginFrame(parsed: unknown): PluginFrame | null {
   // malformed frame (e.g. the literal `null`) can't throw an uncaught TypeError and kill the process.
   if (!isRecord(parsed)) return null;
   const m = parsed;
-  if (m.type === "progress") return { type: "progress", tick: parseTick(m) };
+  if (m.type === "progress") return { type: "progress", tick: parseTick(m), requestId: str(m.requestId) };
   if (m.type === "hello") {
     return { type: "hello", instanceId: str(m.instanceId), file: str(m.file), fileKey: str(m.fileKey), page: str(m.page), pluginVersion: str(m.pluginVersion) };
   }
-  // Request ids are always strings ("r<N>"), so a frame whose id is anything else matches nothing.
+  // Request ids are always strings ("r<nonce>-<N>"), so a frame whose id is anything else matches nothing.
   if (typeof m.id !== "string") return null;
   return { type: "reply", id: m.id, ok: !!m.ok, result: m.result, error: m.error };
 }
@@ -447,6 +447,14 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // misroutes silently on a typo or a duplicate.
   const clients = new Map<string, ClientEntry>(); // connId -> { ws, connId, connectedAt, instanceId, file, fileKey, page }
   const pending = new Map<string, PendingRequest>(); // requestId -> { resolve, reject, connId }
+  // Request ids are `r<nonce>-<seq>`, the nonce minted once per bridge. A bare per-process counter
+  // restarted at r1 in every bridge, so a plugin still finishing a run for a bridge that has since
+  // gone (a one-shot CLI that stalled out and exited) posted ITS r1 to whatever socket was current —
+  // and the next bridge's own r1 (a daemon's first forwarded request) settled with that stale run's
+  // reply: "export cancelled: … abandoned" for a request nobody had abandoned (live, session 14), or
+  // another node's tree had the old run succeeded. With the nonce such a reply names an id nobody here
+  // knows, and is dropped. Opaque to the plugin, which only ever echoes it back.
+  const nonce = crypto.randomBytes(3).toString("hex");
   let seq = 0;
   let connSeq = 0;
   let takeovers = 0; // kept ONLY for the historical whoami field; nothing displaces anything now.
@@ -497,12 +505,17 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       entry.frames++;
       // An unsolicited progress frame relayed from the plugin's own UI (figma-plugin/src/progress.ts
       // posts these to the iframe DOM; ui.html forwards a bridge-triggered run's frames over this
-      // socket too). Carries no request id — same rule as `hello` — and needs no reply; it exists
+      // socket too). Is never a reply (a `requestId` on it only routes it, below) and needs no reply; it exists
       // to keep `frames` moving during a long walk — and to feed the progress listener of any
       // request in flight on THIS connection (the MCP server forwards them as notifications/progress).
+      // A frame that names its request (`requestId`: the plugin's `start` / `queued` for one run) goes to
+      // that request only — a request executing must not hear that another one is queued. An id-less frame
+      // (page ticks, an older plugin) keeps the fan-out; an id this connection has no pending request for
+      // feeds nothing (it already counted as life above).
       if (msg.type === "progress") {
-        for (const p of pending.values()) {
-          if (p.connId !== connId || !p.onProgress) continue;
+        const only = msg.requestId;
+        for (const [id, p] of pending) {
+          if (p.connId !== connId || !p.onProgress || (only !== null && id !== only)) continue;
           try { p.onProgress(msg.tick); } catch { /* a listener's failure is its own; the request goes on */ }
         }
         return;
@@ -529,6 +542,10 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       }
       const p = pending.get(msg.id);
       if (!p) return;
+      // Settled only by the connection it was SENT to. A reply carrying this id on another socket is
+      // not an answer to it (with per-bridge ids it can only be a coincidence or a confused peer), and
+      // letting it through would resolve one file's request with another file's work.
+      if (p.connId !== connId) return;
       pending.delete(msg.id);
       if (!msg.ok) return p.reject(new Error(String(msg.error || "plugin error")));
       // The ONE place a reply enters this process, so the ONE place its shape is checked against the
@@ -716,10 +733,12 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // this reports what the SOCKETS did. `takeovers` is retained and always 0 now that connections
   // coexist — kept rather than removed so an older reader of this field sees "no displacement is
   // happening" instead of the key vanishing.
-  function connectionInfo(): ConnectionInfo {
+  // `connId` (DT-03): describe THAT connection (the one a request was addressed to) instead of the
+  // first live one; see connectionFor. Omitted = the first live connection, as before.
+  function connectionInfo(connId?: string): ConnectionInfo {
     const live = liveClients();
     const first = live[0];
-    return {
+    const info: ConnectionInfo = {
       connId: first ? first.connId : null,
       connected: live.length > 0,
       connectedAt: first ? first.connectedAt : null,
@@ -730,6 +749,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       takeovers,
       lastTakeoverAt: lastTakeoverAt || null,
     };
+    return connectionFor(info, connId);
   }
 
   // `target` is optional and LAST so every existing three-argument call site keeps working unchanged:
@@ -747,6 +767,11 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // commands — a cheap `whoami`/`list` finishing in under a second never needs it, and the daemon path
   // deliberately does NOT pass it: a persistent connection is exactly the case finding 220 shows is
   // already fast, so there is nothing here worth protecting against on that path.
+  // The clock starts at SEND, after the caller's connect + identify waits, so a stall never measures
+  // the plugin's reconnect. A current plugin answers within moments of the send even when it cannot
+  // start yet: a `queued` frame when its run waits behind another, a `start` frame when the run begins
+  // (figma-plugin state.ts / ui.html). So silence here means a plugin too busy to dispatch the frame
+  // at all (a long synchronous stretch of an earlier run) — or an older plugin with neither frame.
   const STALL_POLL_MS = 500;
   // Typed per command from commands.ts: `args` is what the plugin reads for `cmd`, and the reply is
   // what it sends back — checked structurally on arrival (the message handler above), so the type
@@ -789,7 +814,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       } catch (e) {
         return reject(e);
       }
-      const id = "r" + ++seq;
+      const id = "r" + nonce + "-" + ++seq;
       // Removed on settle (every path below goes through `unlisten`), so a long-lived signal shared by
       // many requests never accumulates listeners.
       let onAbort: (() => void) | null = null;
@@ -836,11 +861,12 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
           cancelOnWire(client, id);
           const nodeId = "nodeId" in args && typeof args.nodeId === "string" ? args.nodeId : "";
           const node = nodeId ? ` (node ${nodeId})` : "";
+          // Only reachable after connect + identify (the clock starts at send), so the plugin IS
+          // connected: say that, and name what keeps a connected plugin silent.
           reject(new Error(
-            `no response from the Figma plugin${node} for '${cmd}' in ${Math.round(stallMs / 1000)}s, and no progress was reported either — ` +
-            `this is the shape a missing \`dtwin serve\` daemon produces (every command opens a fresh bridge and the plugin's reconnect is what actually takes ` +
-            `the time, not the export itself). Run \`dtwin serve\` in a background terminal and retry, or \`dtwin doctor\` to confirm. ` +
-            `Still stuck with a daemon running? check the plugin window in Figma for a red error — this stall check does not apply there.`
+            `the plugin is connected but sent nothing for '${cmd}'${node} in ${Math.round(stallMs / 1000)}s — it is busy (an earlier export ` +
+            `still running in that file, possibly one this command's predecessor abandoned, or a long cold first read of a large page). ` +
+            `Retry; a warm plugin (\`dtwin serve\` in another terminal) answers in seconds; if it keeps happening, check the plugin window.`
           ));
         }, STALL_POLL_MS);
       }
@@ -944,10 +970,24 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
 }
 
 // The object createBridge() returns — what both front-ends (and the daemon) drive.
+/**
+ * DT-03: `info` re-described for the connection `connId` — the `clients[]` row with that connId supplies
+ * `connId`, `connectedAt` and `connectionUptimeMs` (its `uptimeMs`); every other field (`connected`,
+ * `clientsConnected`, `clients`, `connectionsThisRun`, `takeovers`, `lastTakeoverAt`) is kept. A null/absent
+ * connId, or one not among `clients`, returns `info` unchanged. Pure — works on a daemon's relayed
+ * `status().connection` as well as on the own bridge's connectionInfo().
+ */
+function connectionFor(info: ConnectionInfo, connId: string | null | undefined): ConnectionInfo {
+  if (!connId) return info;
+  const row = (info.clients || []).find((c) => c && c.connId === connId);
+  if (!row) return info;
+  return { ...info, connId: row.connId, connectedAt: row.connectedAt, connectionUptimeMs: row.uptimeMs };
+}
+
 export type Bridge = ReturnType<typeof createBridge>;
 export type { BridgeOptions };
 
 // verifyClientWith/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-export { createBridge, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore, BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote };
+export { createBridge, connectionFor, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore, BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote };

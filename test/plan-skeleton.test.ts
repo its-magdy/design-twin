@@ -103,9 +103,9 @@ check("the design-system definition is attached, labelled with HOW it matched",
 
 console.log("components[] — identity from the catalog, never from a hand-placed attribute (finding 79):");
 const names = new Set(plan.components.map((c) => c.name));
-const matched = new Set(plan.components.filter((c) => c.catalog).map((c) => c.name));
+const matched = new Set(plan.components.filter((c) => c.catalog && c.catalog.by !== "ambiguous").map((c) => c.name)); // ambiguous (DT-27) is never a match
 check(`41 distinct components, 26 matched to the NERA catalog by name+prop signature (P1's matcher; mapping.json agrees 26/15) — got ${names.size}/${matched.size}`,
-  names.size === 41 && matched.size === 26 && plan.components.filter((c) => c.catalog).every((c) => c.catalog?.by !== "key" && c.catalog?.confirmed === false));
+  names.size === 41 && matched.size === 26 && plan.components.filter((c) => c.catalog).every((c) => !!c.catalog && c.catalog.by !== "key" && c.catalog.by !== "ambiguous" && c.catalog.confirmed === false));
 const first = must(plan.components[0], "plan.components[0]");
 check("each row carries key/setKey/name/variant/props and an empty mapModule/verdict to fill",
   first.nodeId === "10970:111588" && !!first.key && !!first.setKey && first.name === "Component 1" && !!first.variant && first.mapModule === "" && first.verdict === null);
@@ -222,6 +222,107 @@ console.log("finding 136 — auditGate is pre-filled from an existing Blocked au
   const after = read(planFile, isSkeletonPlan);
   check("[P6-136] a re-run (--out onto an existing plan) keeps the decided overridden/reason/decidedBy — never clears it",
     merged.status === 0 && after.auditGate?.overridden.length === 5 && after.auditGate.reason === "provenance issues, not build issues" && after.auditGate.decidedBy === "owner");
+
+  // F-44: the gate points at the cross-check report beside the audit, and a merge REFRESHES the skeleton-owned
+  // blockers (the audit's current ids) while keeping the person-owned decision. Before: `prev.auditGate ||
+  // fresh.auditGate` froze the first run's ids, and there was no crossCheckFile.
+  check("[F44-5] no <audit>.cross.json beside the audit: auditGate.crossCheckFile is null", p.auditGate?.crossCheckFile === null);
+  fs.writeFileSync(path.join(auditCwd, "design", "audit", "System_Configurations.cross.json"), JSON.stringify({ summary: {}, findings: [] }));
+  const stale = Object.assign({}, p, { auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked",
+    blockers: ["catalog-covers-nothing#0", "text-style-near-miss#1"], overridden: ["catalog-covers-nothing#0"], reason: "decided on the old ids", decidedBy: "owner", decidedAt: "2026-09-23" } });
+  fs.writeFileSync(planFile, JSON.stringify(stale, null, 2));
+  const re = run([screen(GP), vars(GP), DS, "--out", planFile], { cwd: auditCwd });
+  const g = read(planFile, isSkeletonPlan).auditGate;
+  check(`[F44-5] a merge over an old gate sets crossCheckFile (got ${JSON.stringify(g?.crossCheckFile)})`, re.status === 0 && g?.crossCheckFile === "design/audit/System_Configurations.cross.json");
+  check(`[F44-5] …refreshes blockers to the audit's current ids (got ${JSON.stringify(g?.blockers)})`,
+    JSON.stringify(g?.blockers) === JSON.stringify(p.auditGate?.blockers) && g?.blockers.includes("catalog-covers-nothing") === true);
+  check("[F44-5] …and keeps the person-owned overridden/reason/decidedBy/decidedAt/verdict as they were",
+    JSON.stringify(g?.overridden) === JSON.stringify(["catalog-covers-nothing#0"]) && g?.reason === "decided on the old ids" && g.decidedBy === "owner" && g.decidedAt === "2026-09-23" && g.verdict === "blocked");
+}
+
+// ---------------------------------------------------------------- DT-33: --seed-from a sibling plan
+console.log("DT-33 — --seed-from fills a sibling screen's answers (same key + same value), never overwriting:");
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt33-"));
+  const put = (name: string, doc: unknown): string => { const f = path.join(dir, name); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
+  const variable = (name: string, key: string, value: number) => ({ name, key, type: "FLOAT", collection: "Spacing", values: { Default: value } });
+  const varsDoc = (radius: number) => ({ collections: [{ name: "Spacing", modes: ["Default"], default: "Default" }], variables: [variable("Space 2", "k-space-2", 8), variable("Radius", "k-radius", radius)] });
+  const screenDoc = (id: string, name: string) => ({ screen: name, nodes: [{ id, type: "FRAME", name, tokens: { itemSpacing: "Space 2", topLeftRadius: "Radius" }, children: [
+    { id: id + "1", type: "INSTANCE", name: "Button", mainComponent: { name: "State=Default", key: "k-button-default", setKey: "k-button", setName: "Button" } },
+    { id: id + "2", type: "INSTANCE", name: "Avatar", mainComponent: { name: "Avatar", key: "k-avatar" } },
+  ] }] });
+  const sA = put("A_screen.json", screenDoc("5:6", "Sample A")), vA = put("A_screen.vars.json", varsDoc(4));
+  const sB = put("B_screen.json", screenDoc("7:8", "Sample B")), vB = put("B_screen.vars.json", varsDoc(12)); // Radius differs: 4 vs 12
+  const planA = path.join(dir, "A.json"), planB = path.join(dir, "B.json");
+  const ds = path.join(dir, "no-design-system");
+  run([sA, vA, ds, "--out", planA], { cwd: dir });
+  const a = read(planA, isSkeletonPlan);
+  const fill = <T extends object>(row: T | undefined, what: string, v: Partial<T>): void => { Object.assign(must(row, what), v); };
+  fill(a.tokens.find((t) => t.figmaName === "Space 2"), "A 'Space 2'", { codeToken: "--spacing-2", verdict: "exact", decision: "the spacing scale" });
+  fill(a.tokens.find((t) => t.figmaName === "Radius"), "A 'Radius'", { codeToken: "--radius-sm", verdict: "exact" });
+  fill(a.components.find((c) => c.name === "Button"), "A Button", { mapModule: "src/ui/Button.tsx", verdict: "mapped" });
+  fill(a.components.find((c) => c.name === "Avatar"), "A Avatar", { mapModule: "src/ui/Avatar.tsx" });
+  fs.writeFileSync(planA, JSON.stringify(a, null, 2));
+  const rb = run([sB, vB, ds, "--out", planB, "--seed-from", planA], { cwd: dir });
+  const readB = (): SkeletonPlan | null => fs.existsSync(planB) ? read(planB, isSkeletonPlan) : null; // never crash when an older script wrote nothing
+  const b = readB();
+  const bt = (n: string) => b?.tokens.find((t) => t.figmaName === n);
+  const bc = (n: string) => b?.components.find((c) => c.name === n);
+  check(`[DT33-1] a token with the same key AND value is seeded, marked seededFrom (exit ${rb.status}: ${rb.stderr.trim().split("\n")[0]})`,
+    rb.status === 0 && bt("Space 2")?.codeToken === "--spacing-2" && bt("Space 2")?.verdict === "exact" && bt("Space 2")?.decision === "the spacing scale" && bt("Space 2")?.seededFrom === "A.json");
+  check("[DT33-1] a token with the same key but a DIFFERENT value is left empty (no seededFrom)",
+    !!bt("Radius") && bt("Radius")?.codeToken === null && bt("Radius")?.verdict === null && bt("Radius")?.seededFrom === undefined);
+  check("[DT33-1] components are seeded by setKey (Button) and, with no setKey, by key (Avatar)",
+    bc("Button")?.mapModule === "src/ui/Button.tsx" && bc("Button")?.verdict === "mapped" && bc("Button")?.seededFrom === "A.json" && bc("Avatar")?.mapModule === "src/ui/Avatar.tsx" && bc("Avatar")?.seededFrom === "A.json");
+  check("[DT33-1] stderr counts what was seeded and asks for a review", /seeded 1 token row\(s\), 2 component row\(s\) from .*A\.json — review them \(seededFrom\)/.test(rb.stderr));
+  // never overwrites: B's own answer stays, and a re-run without --seed-from keeps the seeded rows (they count as filled)
+  if (b) {
+    const own = <T extends { seededFrom?: string }>(row: T | undefined, what: string, v: Partial<T>): void => { const r = must(row, what); Object.assign(r, v); delete r.seededFrom; };
+    own(b.components.find((c) => c.name === "Button"), "B Button", { mapModule: "src/ui/OwnButton.tsx" });
+    own(b.tokens.find((t) => t.figmaName === "Space 2"), "B 'Space 2'", { codeToken: "--own-space", verdict: "exact", decision: "own" });
+    fs.writeFileSync(planB, JSON.stringify(b, null, 2));
+  }
+  const again = run([sB, vB, ds, "--out", planB, "--seed-from", planA], { cwd: dir });
+  const b2 = readB();
+  check("[DT33-1] a filled field is never overwritten by a seed (own Button module, own Space 2 token)",
+    again.status === 0 && !!b2 && b2.components.find((c) => c.name === "Button")?.mapModule === "src/ui/OwnButton.tsx" && b2.tokens.find((t) => t.figmaName === "Space 2")?.codeToken === "--own-space"
+      && b2.tokens.find((t) => t.figmaName === "Space 2")?.seededFrom === undefined);
+  const avatar = () => readB()?.components.find((c) => c.name === "Avatar");
+  const plain = run([sB, vB, ds, "--out", planB], { cwd: dir });
+  check("[DT33-1] seeded rows count as filled: a re-run without --seed-from keeps them and their seededFrom",
+    plain.status === 0 && avatar()?.mapModule === "src/ui/Avatar.tsx" && avatar()?.seededFrom === "A.json");
+  const bad = run([sB, vB, ds, "--seed-from", put("notplan.json", { tokens: "none" })], { cwd: dir });
+  check("[DT33-1] a --seed-from that is not a plan is refused, one line, exit 1", bad.status === 1 && /cannot read the --seed-from plan .*notplan\.json/.test(bad.stderr) && bad.stdout === "");
+  check("[DT33-1] --seed-from is in --help", /--seed-from <plan>/.test(run(["--help"]).stdout));
+}
+
+// ---------------------------------------------------------------- DT-27: one name rule (shared fixture with cross-check)
+// test/fixtures/g14/dt27/ (cross-check.test.ts asserts the same verdicts on its coverage entries): the plan's
+// components[].catalog must say what component-match's nameVerdict says — `by:"ambiguous"` (never a match,
+// with the candidates) for a different-signatures tie. Before: Badge was written as a name match.
+console.log("DT-27 — plan-skeleton's catalog follows the one name rule (nameVerdict):");
+{
+  const DT27 = path.join(import.meta.dirname, "fixtures", "g14", "dt27");
+  type Expected = { verdicts: Record<string, "matched" | "ambiguous" | "unmatched"> };
+  const isExpected = (x: unknown): x is Expected => isJsonObject(x) && isJsonObject(x.verdicts) && Object.values(x.verdicts).every((v) => v === "matched" || v === "ambiguous" || v === "unmatched");
+  const have = fs.existsSync(path.join(DT27, "expected.json"));
+  check("[DT27-1] the shared fixture test/fixtures/g14/dt27/ is there", have);
+  if (have) {
+    const expected = read(path.join(DT27, "expected.json"), isExpected);
+    const r27 = run([path.join(DT27, "Screen__5_6.json"), path.join(DT27, "Screen__5_6.vars.json"), path.join(DT27, "design-system")], { cwd: DT27 });
+    const p27 = r27.status === 0 ? planOf(r27.stdout) : null;
+    const verdictOf = (name: string): string => {
+      const c = p27?.components.find((x) => x.name === name);
+      if (!c) return "missing";
+      return !c.catalog ? "unmatched" : c.catalog.by === "ambiguous" ? "ambiguous" : "matched";
+    };
+    const got = Object.fromEntries(Object.keys(expected.verdicts).map((n) => [n, verdictOf(n)]));
+    check(`[DT27-1] one verdict per name, the same as cross-check's (want ${JSON.stringify(expected.verdicts)}, got ${JSON.stringify(got)})`,
+      Object.keys(expected.verdicts).length === 3 && JSON.stringify(got) === JSON.stringify(expected.verdicts));
+    const badge = p27?.components.find((x) => x.name === "Badge")?.catalog;
+    check("[DT27-1] the ambiguous row lists its candidates (id/key/name, catalog order) and has no name of its own",
+      !!badge && badge.by === "ambiguous" && JSON.stringify(badge.candidates) === JSON.stringify([{ id: "12:1", key: "acme-badge-a", name: "Badge" }, { id: "12:2", key: "acme-badge-b", name: "Badge" }]) && !("name" in badge));
+  }
 }
 
 report();

@@ -41,8 +41,8 @@ const isFlag = (a: unknown): boolean => typeof a === "string" && a.startsWith("-
 
 // Per-verb help. `dtwin screenshot --help` used to hit translate's "needs a node id" refusal, because
 // the verb's own argument check ran before the global --help handler (live finding 5) — a help probe
-// is the one thing that must never be answered with an error. Every verb with real sub-structure gets
-// a real answer here; the rest fall through to the full `dtwin --help`.
+// is the one thing that must never be answered with an error. Every verb has its own page here (or
+// answers through its own entry point, OWN_HELP_ROUTED); only `help` prints the full `dtwin --help`.
 // `dtwin seed` answers its own --help (it is routed before verbHelp runs), and so does
 // `node bridge/src/seed-components.ts --help` — both print this one string.
 export const SEED_HELP =
@@ -59,8 +59,52 @@ export const SEED_HELP =
   "  there (export it first); without it, such a mapping is skipped. Fill in each entry's \"import\"\n" +
   "  and \"props\" by hand afterwards.";
 
+// The verbs that answer `--help` through their own entry point (routed in figma-pull.ts before verbHelp
+// runs), so they have no HELP row. `help` is the one other verb without a row: its page IS the full usage.
+// test/cli-help.test.ts walks VERBS and requires every verb to be in HELP or in one of these two.
+export const OWN_HELP_ROUTED: readonly string[] = ["doctor", "init", "mcp"];
+
+// F-52: the only port override is FIGMA_BRIDGE_PORT; DTWIN_PORT was never read and was silently ignored.
+// One sentence for the CLI and doctor, or null when DTWIN_PORT is not set.
+export function dtwinPortWarning(env: Record<string, string | undefined>): string | null {
+  return env.DTWIN_PORT === undefined ? null : "DTWIN_PORT is not read — use FIGMA_BRIDGE_PORT (8787/8788/8789)";
+}
+
 export const HELP: Record<string, string> = {
   seed: SEED_HELP,
+  whoami:
+    "dtwin whoami [--client <file>]\n\n" +
+    "  Who is connected, with evidence rather than inference. Prints JSON to stdout:\n" +
+    "    plugin       what the plugin says it is: instance id, file name, fileKey (and whether Figma\n" +
+    "                 exposes it), plugin version, how long its runtime has been up\n" +
+    "    connection   what the SOCKET did, for the ADDRESSED file's connection (the one --client picked,\n" +
+    "                 or the only one): its connId, how long it has been up, connections this run, and\n" +
+    "                 takeovers — how many times a new connection displaced an earlier one\n" +
+    "  Costs nothing: no page load, no node walk, no assets, and no file is written. Read from the\n" +
+    "  daemon when one holds the port, so the numbers are real either way.\n\n" +
+    "  Run it from each open file and compare instanceId: two different ids mean two instances coexist;\n" +
+    "  a changed id on a repeat call means Figma restarted the plugin runtime.\n\n" +
+    "  --client <file>   WHICH connected Figma file, when more than one is open (see `dtwin list clients`)",
+  serve:
+    "dtwin serve\n\n" +
+    "  Hold the bridge open until stopped (Ctrl-C here, or `dtwin stop` elsewhere). Every other dtwin\n" +
+    "  command then routes through it and skips the plugin's reconnect — the difference between a\n" +
+    "  pull that takes seconds and one that waits out a cold connection. Only ONE process can hold the\n" +
+    "  port, so while it (or the MCP server) is up a second bridge refuses to start.\n\n" +
+    "  It shuts itself down after FIGMA_DAEMON_IDLE_MIN minutes without a command (default 120;\n" +
+    "  0 disables), so an abandoned daemon cannot hold the port forever.\n" +
+    "  Port: 8787 by default; FIGMA_BRIDGE_PORT=8788|8789 picks another (the plugin tries all three).",
+  stop:
+    "dtwin stop\n\n" +
+    "  Stop the daemon `dtwin serve` started, and free its port. Says so when none is running.",
+  status:
+    "dtwin status\n\n" +
+    "  Is a `dtwin serve` daemon running, and is the plugin connected to it? Prints JSON to stdout\n" +
+    "  ({ \"daemon\": false } when none is running) and a one-line summary — pid, port, plugin connected\n" +
+    "  or not, and the idle time left before auto-shutdown — to stderr. Needs no plugin and starts nothing.",
+  version:
+    "dtwin version\n\n" +
+    "  Print the installed version (also `dtwin --version`). Needs no bridge, no plugin and no token.",
   screenshot:
     "dtwin screenshot <id|figma-url> [outDir] [--scale N] [--client <file>]\n\n" +
     "  Render ONE node to a reference PNG and write it to <outDir>/assets/<id>_ref.png.\n" +

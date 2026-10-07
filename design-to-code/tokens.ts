@@ -50,11 +50,12 @@
 // Defensive by construction: a collision or missing value is skipped + reported, never silently
 // producing an illegal DTCG node or `--x: undefined;`. See docs/design-to-code-spec.md.
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import type { TokensDoc, Variable, VariableAlias, VariableCollection, VariableType, VariableValue } from "./types.ts";
 import { readSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
 import { isTokensDoc } from "./doc-guards.ts";
-import { cliParse, scriptCmd } from "./cli-args.ts";
+import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { sourcesOf, type SliceSources } from "./slice-sources.ts";
 import { normHex, clampOpacityPct } from "./color.ts";
@@ -1409,6 +1410,105 @@ export { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToCol
 const { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity });
 export { toNative, platformOf, PLATFORMS };
 
+// --- provenance (DT-71): which catalog a generated file came from, and whether it is still current ---
+// main() puts ONE comment line at the top of every CSS / native file it writes:
+//   designtwin-source: <input's parent dir>/<input basename> · <n> variables · sha256 <first 12>
+// (the parent dir tells a design-system tokens.json from a library's; an earlier run's basename-only line is still read)
+// The hash is over a CANONICAL form of the catalog's payload (collections + variables, every object's keys
+// sorted, collections and variables sorted by collection + name + key) — so a re-pull that changes nothing,
+// or a pull that merely reorders variables, keeps it. exportedAt / hygiene / _slices / _conflicts / _note are
+// not part of the payload and are left out. The emitters stay pure; only main() adds the line, and
+// `--check <generated file>` compares it to the catalog as it is NOW.
+const canonJson = (x: unknown): string => {
+  if (Array.isArray(x)) return "[" + x.map(canonJson).join(",") + "]";
+  if (x && typeof x === "object") {
+    return "{" + Object.entries(x).filter(([, v]) => v !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]) => JSON.stringify(k) + ":" + canonJson(v)).join(",") + "}";
+  }
+  return JSON.stringify(x) ?? "null";
+};
+const cmpStr = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+function catalogProvenance(ds: TokensDoc): { count: number; sha: string } {
+  const collections = (ds.collections || []).map((c) => canonJson(c)).sort(cmpStr);
+  const variables = (ds.variables || [])
+    .map((v) => ({ sort: [v.collection ?? "", v.name, v.key ?? ""].join("\u0000"), json: canonJson(v) }))
+    .sort((a, b) => cmpStr(a.sort, b.sort) || cmpStr(a.json, b.json)).map((v) => v.json);
+  const sha = createHash("sha256").update(`{"collections":[${collections.join(",")}],"variables":[${variables.join(",")}]}`).digest("hex").slice(0, 12);
+  return { count: (ds.variables || []).length, sha };
+}
+const PROVENANCE_RE = /designtwin-source: (.+?) · (\d+) variables · sha256 ([0-9a-f]{12})/;
+// The recorded source name: `<parent dir>/<basename>` of the input as resolved from cwd (basename alone at a filesystem root).
+function sourceName(input: string): string {
+  const abs = path.resolve(input);
+  const parent = path.basename(path.dirname(abs));
+  return parent ? `${parent}/${path.basename(abs)}` : path.basename(abs);
+}
+function provenanceLine(input: string, ds: TokensDoc, comment: "css" | "line"): string {
+  const { count, sha } = catalogProvenance(ds);
+  const body = `designtwin-source: ${sourceName(input)} · ${count} variables · sha256 ${sha}`;
+  return comment === "css" ? `/* ${body} */\n` : `// ${body}\n`;
+}
+
+// --- --lookup (DT-73): which COLOR variables resolve to a hex, in which mode, directly or through an alias ---
+export interface ColorHit { name: string; collection: string; mode: string; hex: string; via: string[] }
+function lookupColor(ds: TokensDoc, query: string): ColorHit[] | null {
+  const q = normHex(query);
+  if (q === null) return null;
+  const withAlpha = q.length === 9; // alpha is part of the query only when it was typed
+  const same = (hex: string): boolean => (withAlpha ? (hex.length === 7 ? hex + "ff" : hex) === q : hex.slice(0, 7) === q.slice(0, 7));
+  const collections = ds.collections;
+  const byName = new Map<string, Variable[]>();
+  for (const v of ds.variables || []) getOrInit(byName, v.name, () => []).push(v);
+  // Same preference as aliasTargetId: the referrer's own collection, then the lowest key.
+  const target = (name: string, referrer: Variable): Variable | undefined =>
+    (byName.get(name) || []).slice().sort((a, b) => Number(b.collection === referrer.collection) - Number(a.collection === referrer.collection) || cmpStr(a.key ?? "", b.key ?? ""))[0];
+  const resolve = (v: Variable, mode: string, via: string[]): { hex: string; via: string[] } | null => {
+    if (via.length > 20) return null; // alias cycle
+    const raw = v.values[mode] !== undefined ? v.values[mode] : baseValue(v, collections);
+    if (isAlias(raw)) {
+      const t = target(raw.aliasOf, v);
+      return t && t.type === "COLOR" ? resolve(t, mode, [...via, raw.aliasOf]) : null;
+    }
+    const hex = isHexish(raw) ? normHex(raw) : null;
+    return hex === null ? null : { hex, via };
+  };
+  const hits: ColorHit[] = [];
+  for (const v of ds.variables || []) {
+    if (v.type !== "COLOR") continue;
+    for (const mode of Object.keys(v.values || {})) {
+      const r = resolve(v, mode, []);
+      if (r && same(r.hex)) hits.push({ name: v.name, collection: v.collection ?? "(no collection)", mode, hex: r.hex, via: r.via });
+    }
+  }
+  return hits;
+}
+
+// `--check`: 0 current, 1 stale, 2 no source line (or unreadable). Writes nothing.
+function checkGenerated(ds: TokensDoc, input: string, generated: string, cmd: string): number {
+  let head: string;
+  try { head = fs.readFileSync(generated, "utf8").slice(0, 4096); } catch (e) {
+    console.error(`error  --check: '${generated}' could not be read (${e instanceof Error ? e.message : String(e)}).`);
+    return 2;
+  }
+  const m = PROVENANCE_RE.exec(head);
+  if (!m) {
+    console.error(`no designtwin-source line in '${generated}' — it was generated before the line existed, or by hand: regenerate once with ${cmd} <outDir> [the same flags], then --check works.`);
+    return 2;
+  }
+  const now = catalogProvenance(ds);
+  if (m[3] === now.sha) { console.log(`current  ${generated} was generated from ${m[1]} (${m[2]} variables, sha ${m[3]}) — same content as ${input}`); return 0; }
+  // A different source is not "stale": regenerating from THIS input would narrow (or swap) the theme's catalog —
+  // e.g. a theme made from the library tokens.json checked against the per-screen variables.json.
+  // The recorded name is `<parent dir>/<basename>`; a basename-only line (an earlier run) is compared by basename.
+  const here = sourceName(input);
+  if (m[1] !== (m[1]?.includes("/") ? here : path.basename(input))) {
+    console.error(`other source  ${generated} was generated from ${m[1]}, not ${here} — pass that file: ${scriptCmd("tokens")} <path to ${m[1]}> --check ${shellArg(generated)}`);
+    return 2;
+  }
+  console.error(`stale  ${generated} was generated from ${m[2]} variables (sha ${m[3]}); ${input} now has ${now.count} (sha ${now.sha}) — re-run ${cmd} <outDir> [the same flags]`);
+  return 1;
+}
+
 // CLI: node design-to-code/tokens.ts <design-system/tokens.json> [outDir] [--native <platform>] [--package <kotlin.package>]
 // --native swiftui | compose | flutter | react-native (a build-screen profile name works too) also
 // writes ONE native token file next to the others — move it into the app's source tree and import it
@@ -1420,23 +1520,47 @@ function main(args: string[]): number {
     "       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n" +
     "       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to\n" +
     "       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).\n" +
-    "       Without a target flag, only the generic set is written (unchanged).";
-  const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
-  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, 1, (a) => parseArgs({ args: a, options: OPTIONS, allowPositionals: true }));
+    "       Without a target flag, only the generic set is written (unchanged).\n" +
+    "       Every CSS / native file it writes starts with a `designtwin-source:` line (input as <parent dir>/<name>, variable count, hash of its content).\n" +
+    `       ${scriptCmd("tokens")} <catalog> --check <generated file>   writes nothing: exit 0 when the file is current, 1 when the catalog has changed since, 2 when it has no source line or was generated from a different file or the command line is wrong\n` +
+    `       ${scriptCmd("tokens")} <catalog> --lookup <hex> [--lookup <hex> …]   writes nothing (ffbc1c, or quote '#ffbc1c': an unquoted # is a shell comment): every COLOR variable that resolves to that hex, per mode, directly or through an alias (exit 1 when none, 2 on a usage error)`;
+  const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, check: { type: "string" }, lookup: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
+  // --check / --lookup exit 1 means "stale" / "no match": a usage error there is 2, never 1.
+  const readOnlyRun = args.some((x) => /^--(check|lookup)(=|$)/.test(x));
+  const usageExit = readOnlyRun ? 2 : 1;
+  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, usageExit, (a) => parseArgs({ args: a, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); return 0; }
   const { native, web, package: kotlinPackage } = flags;
   const alsoGeneric = !!flags["also-generic"];
   const input = positionals[0];
   const outDir = positionals[1] || ".";
-  if (!input) { console.error(USAGE); return 1; }
-  if (native !== undefined && !platformOf(native)) { console.error(`--native: unknown platform "${native}"\n${USAGE}`); return 1; }
+  if (!input) { console.error(USAGE); return usageExit; }
+  if (native !== undefined && !platformOf(native)) { console.error(`--native: unknown platform "${native}"\n${USAGE}`); return usageExit; }
   const WEB_TARGETS: Record<string, string> = { tailwind: "theme.css", "web-tailwind": "theme.css" }; // build-screen's profile name works too
   const webFile = web === undefined ? undefined : WEB_TARGETS[web];
-  if (web !== undefined && !webFile) { console.error(`--web: unknown target "${web}" (known: tailwind)\n${USAGE}`); return 1; }
+  if (web !== undefined && !webFile) { console.error(`--web: unknown target "${web}" (known: tailwind)\n${USAGE}`); return usageExit; }
   // The SPLIT token file (or a merged variables.json): the manifest is refused with its own message, and
   // anything else that is not a token catalog is a one-line error — never an empty token set.
   const ds = readSplitFile(input, "token catalog", isTokensDoc, "variables", "design-system/tokens.json",
     NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json — pass that instead.");
+  // --check / --lookup read the catalog and write nothing.
+  const lookups = flags.lookup || [];
+  if (flags.check !== undefined || lookups.length) {
+    if (flags.check !== undefined && lookups.length) { console.error(`--check and --lookup are separate runs\n${USAGE}`); return usageExit; }
+    const cmd = `${scriptCmd("tokens")} ${shellArg(input)}`;
+    if (flags.check !== undefined) return checkGenerated(ds, input, flags.check, cmd);
+    let status = 0;
+    for (const q of lookups) {
+      const hits = lookupColor(ds, q);
+      if (hits === null) { console.error(`error  --lookup '${q}' is not a hex colour (#rgb, #rrggbb or #rrggbbaa)`); return 2; }
+      for (const h of hits) console.log(`${h.name}  [${h.collection} / ${h.mode}]  ${h.hex}  (${h.via.length ? "via " + h.via.join(" -> ") : "direct"})`);
+      if (!hits.length) {
+        console.error(`no variable in ${input} resolves to ${normHex(q)} in any mode — a catalog holds only the variables its pulled nodes bind${/[\\/]libraries[\\/]/.test(path.resolve(input)) ? "" : "; try the library catalog: design/export/libraries/<dir>/tokens.json"}`);
+        status = 1;
+      }
+    }
+    return status;
+  }
   fs.mkdirSync(outDir, { recursive: true }); // documented usage is `… ./out`; don't die on a raw ENOENT
   // finding 225: a --web/--native target used to get the generic set (dtcg/css/resolver/tokens/)
   // written on top of it unconditionally, with no indication of which file the app actually
@@ -1452,7 +1576,7 @@ function main(args: string[]): number {
   const genericCount = Object.keys(resolverFiles).length;
   if (writeGeneric) {
     fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
-    fs.writeFileSync(path.join(outDir, "tokens.css"), css);
+    fs.writeFileSync(path.join(outDir, "tokens.css"), provenanceLine(input, ds, "css") + css);
     // Resolver document + the set files it $refs. The refs are relative to the resolver document, and
     // the keys of resolverFiles ARE those refs — so join each key onto outDir and the links hold.
     // Every key is a fileSlug()ed, collision-checked "tokens/<name>.json"; split on "/" rather than
@@ -1470,14 +1594,14 @@ function main(args: string[]): number {
   const tw = tailwind;
   if (web !== undefined && webFile !== undefined && tw !== undefined) {
     const file = webFile;
-    fs.writeFileSync(path.join(outDir, file), tw.text);
+    fs.writeFileSync(path.join(outDir, file), provenanceLine(input, ds, "css") + tw.text);
     canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities — every token is a plain custom property you must reference with var()`);
     else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, booleans, strings a font family aliases) — emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== undefined) {
     const n = toNative(ds, native, { ...ifDefined("package", kotlinPackage || undefined) });
-    fs.writeFileSync(path.join(outDir, n.file), n.text);
+    fs.writeFileSync(path.join(outDir, n.file), provenanceLine(input, ds, "line") + n.text);
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }

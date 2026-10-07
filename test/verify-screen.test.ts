@@ -284,6 +284,39 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     r3.status === 0 && fs.existsSync(nicknameOut + ".expected.json"));
 })();
 
+// ---------- DT-34: the guard names the canonical <Layer>__<id>, the old files and the .retired way out ----------
+(() => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-dt34-"));
+  const screenFile = path.join(cwd, "Screen__5_6.json");
+  fs.writeFileSync(screenFile, JSON.stringify({
+    exportedAt: "2026-09-22T00:00:00.000Z", screen: "Screen",
+    nodes: [{ type: "FRAME", id: "5:6", name: "Screen", children: [] }],
+  }));
+  const vdir = path.join(cwd, "design", "verify");
+  fs.mkdirSync(vdir, { recursive: true });
+  // an older run that used a nickname: expectation + a state screenshot beside it
+  fs.writeFileSync(path.join(vdir, "Nick.expected.json"), JSON.stringify({ frame: { nodeId: "5:6" } }));
+  fs.writeFileSync(path.join(vdir, "Nick-dialog.png"), "x");
+  fs.writeFileSync(path.join(vdir, "NickOther.png"), "x"); // another screen's file: not part of the Nick set
+  const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+  const r = spawnSync(process.execPath, [scriptPath, "--expect", screenFile], { encoding: "utf8", cwd });
+  ok("[DT34-1] the guard refuses (exit 1) and writes nothing", r.status === 1 && !fs.existsSync(path.join(vdir, "Screen__5_6.expected.json")));
+  ok("[DT34-1] the message names the canonical <Layer>__<id> basename", /canonical name[^\n]*'Screen__5_6'/.test(r.stderr));
+  ok("[DT34-1] the message lists the old set (expectation + state PNG), not another screen's file",
+    /Nick\.expected\.json/.test(r.stderr) && /Nick-dialog\.png/.test(r.stderr) && !/NickOther/.test(r.stderr));
+  ok("[DT34-1] the message gives the .retired step with the real path and the old-name way out",
+    /mv [^\n]*Nick\.expected\.json[^\n]* [^\n]*Nick\.expected\.json\.retired/.test(r.stderr) && /--out [^\n]*Nick/.test(r.stderr));
+  // an explicit nickname for the new run: the canonical hint carries --out <canonical>
+  const rNick = spawnSync(process.execPath, [scriptPath, "--expect", screenFile, "--out", path.join(vdir, "Other")], { encoding: "utf8", cwd });
+  ok("[DT34-1] a third name is told to re-run with --out <canonical>", rNick.status === 1 && /with --out [^\n]*Screen__5_6/.test(rNick.stderr));
+  // the migration step: retire the old expectation -> the canonical name is written
+  fs.renameSync(path.join(vdir, "Nick.expected.json"), path.join(vdir, "Nick.expected.json.retired"));
+  const r2 = spawnSync(process.execPath, [scriptPath, "--expect", screenFile], { encoding: "utf8", cwd });
+  ok("[DT34-1] after the .retired step the canonical name is written (exit 0)",
+    r2.status === 0 && fs.existsSync(path.join(vdir, "Screen__5_6.expected.json")) && fs.existsSync(path.join(vdir, "Nick-dialog.png")));
+  fs.rmSync(cwd, { recursive: true, force: true });
+})();
+
 // ================================================================= livetest-3 regressions (P2a)
 // Every fixture below is the REAL export / probe output of the livetest-3 run, built by
 // test/fixtures/livetest3/verify/build.ts (which proves the pruned exports give byte-identical

@@ -33,7 +33,7 @@
 //   annotations       [{ nodeId, nodeName, label }] — what the designer wrote in the file
 //   questions         [string] — plain prose, one decision the export cannot answer per entry
 //   overridesUnmatched [override] — only when an <out>.overrides.json entry matched no finding
-//   findings          [{ severity, code, message, nodeId?, nodeName?, screen?, path?, overridden?, ...extra }]
+//   findings          [{ severity, code, id, message, nodeId?, nodeName?, screen?, path?, overridden?, ...extra }]
 //                     where `extra` is per-code (e.g. { component, missing } on
 //                     missing-component-states, { category } on low-token-binding)
 // There is no `exportedAt`/`manifest`/`screen` at this level; those stay on the export document.
@@ -44,12 +44,15 @@ import { isHidden, hiddenSelf } from "./hidden.ts";
 import { parseHex, contrastRatio, compositeOver } from "./color.ts";
 import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
 import type { Rgba } from "./color.ts";
-import { crossCheck } from "./cross-check.ts";
+import { crossCheck, exportSiblings } from "./cross-check.ts";
+import type { CrossCheckScreen } from "./cross-check.ts";
+import { isCodeConnectMap } from "./map-validate.ts";
 import { readDocFile, readOptionalDoc, readSplitFile } from "./catalog-input.ts";
 import { findExportNeighbours, findLibraryExports, readDesignSystemDir } from "./design-system-dir.ts";
 import type { ExportNeighbours, LibraryExport } from "./design-system-dir.ts";
 import { isAuditOverridesDoc, isComponentsCatalog, isScreenAssetsDoc } from "./doc-guards.ts";
-import { readJsonOrNull } from "./read-json.ts";
+import { readJson, readJsonOrNull } from "./read-json.ts";
+import { findingIds } from "./finding-id.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { variablesContext } from "./slice-sources.ts";
@@ -57,8 +60,8 @@ import type { SliceSources } from "./slice-sources.ts";
 import { isJsonObject } from "./types.ts";
 import type {
   AuditAnnotation, AuditCategory, AuditComponentRow, AuditFinding, AuditFindingCode, AuditPlatform, AuditReport, Box, CatalogComponent, ComponentsCatalog,
-  AuditCrossFile, AuditOverride, AuditScreenStates, BlockerCode, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenAssetsDoc, ScreenDoc,
-  ScreenStateKey, ScreenStateValue, Severity, TextStylesDoc, TokenMap, TokensDoc, Variable,
+  AuditCrossFile, AuditOverride, AuditScreenStates, BlockerCode, CodeConnectMap, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenAssetsDoc, ScreenDoc,
+  ScreenStateKey, ScreenStateValue, Severity, TextStylesDoc, TokenMap, TokensDoc, Variable, JsonValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
@@ -221,6 +224,10 @@ export interface AuditOptions {
   neighbours?: ExportNeighbours | null;
   /** DT-21: the user's recorded severity decisions (<out>.overrides.json) */
   overrides?: AuditOverride[];
+  /** F-47, passed through to the embedded cross-check: the component map (labels proposals alreadyMapped) and
+   *  the other exported screens (sharedWith) — labels and ordering only */
+  map?: CodeConnectMap | null;
+  siblings?: (() => CrossCheckScreen[]) | null;
 }
 
 // What the walk carries about an ancestor: only what descendants read off it.
@@ -858,7 +865,13 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       stylesText: (opts.designSystem && opts.designSystem.stylesText) || null,
       ...ifDefined("componentsFile", opts.designSystem && opts.designSystem.componentsFile),
       ...ifDefined("designSystemIsLibrary", opts.designSystem && opts.designSystem.isLibrary),
+      map: opts.map || null,
+      siblings: opts.siblings || null,
     });
+    // F-44: every cross-check finding carries its id (cross-check.ts writes it; an older crossCheck result is
+    // filled here over the SAME list), and the merged copy keeps it — so one finding has one id in both files.
+    const crossIds = findingIds(crossFile.findings);
+    crossFile.findings.forEach((f, i) => { const id = crossIds[i]; if (!f.id && id) f.id = id; });
     for (const f of crossFile.findings) {
       if (f.severity === "info") continue; // the coverage table below carries the informational half
       if (f.nodeId && hiddenIds.has(f.nodeId)) { hiddenFindingsOmitted++; continue; } // same rule as the walk (finding 74)
@@ -929,6 +942,16 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   // D1: a cross-file warning with a default is a question to CONFIRM — unless the user already decided it.
   for (const f of findings) if (f.crossFile && f.confirm && !f.overridden) questions.push(`Confirm (${f.code}): ${f.confirm}`);
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
+  // F-44: an id on every finding, in report order (finding-id.ts) — `code` / `code@nodeId` (+`~n`), so a plan's
+  // auditGate.overridden survives a re-run that adds an unrelated blocker. A merged cross-file finding already
+  // has cross-check's id (audit's own codes and cross-check's never overlap, so the two id spaces cannot clash).
+  const ownIds = findingIds(findings.filter((f) => !f.crossFile));
+  let own = 0;
+  findings.forEach((f, i) => {
+    const { severity, code, id, ...rest } = f; // key order: severity, code, id, the rest
+    findings[i] = { severity, code, id: f.crossFile && id ? id : ownIds[own] ?? code, ...rest };
+    if (!f.crossFile) own++;
+  });
   const count = (s: Severity): number => findings.filter((f) => f.severity === s).length;
   return {
     platform,
@@ -1052,14 +1075,22 @@ function toMarkdown(res: AuditReport): string {
   return L.join("\n") + "\n";
 }
 
-// finding 136: a stable id per blocker finding, so a plan's `auditGate.overridden` can name exactly
-// which blocker(s) the user decided to build past. Findings carry no id of their own; `<code>#<i>`
-// (i = position among this doc's blockers, in report order) is stable for a given audit run and is
-// what plan-skeleton.ts pre-fills and verify-build.ts checks against.
+// finding 136 / F-44: the id of each blocker finding, so a plan's `auditGate.overridden` can name exactly
+// which blocker(s) the user decided to build past. It is the finding's own `id` (written since F-44); a
+// report written before that has none, and gets the same rule (finding-id.ts findingIds) computed over ALL
+// its findings in report order. What plan-skeleton.ts pre-fills and verify-build.ts checks against (which
+// also still accepts the pre-F-44 positional `<code>#<i>`, finding-id.ts legacyBlockerIds).
 // Takes anything (an audit report, or whatever a caller read off disk): only `findings[]` is looked at.
 function blockerIds(auditDoc: unknown): string[] {
+  const findings = reportFindings(auditDoc);
+  const ids = findingIds(findings.map((f) => ({ code: f.code || "blocker", nodeId: f.nodeId })));
+  return findings.flatMap((f, i) => f.severity === "blocker" ? [f.id || ids[i] || f.code || "blocker"] : []);
+}
+/** A report's `findings[]` as far as ids go (anything else in an entry is ignored; a non-object entry is dropped). */
+function reportFindings(auditDoc: unknown): Array<{ code?: string; nodeId?: string; severity?: string; id?: string }> {
   const findings: unknown[] = (auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings)) ? auditDoc.findings : [];
-  return findings.filter((f): f is Partial<AuditFinding> => !!f && typeof f === "object" && "severity" in f && f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
+  const str = (v: JsonValue | undefined): string | undefined => typeof v === "string" && v ? v : undefined;
+  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
 
 // P3 round 3, finding 315's sibling in audit.ts: an explicit `--out <nickname>` still wrote a second
@@ -1093,7 +1124,7 @@ const BLOCKER_CODES: readonly BlockerCode[] = ["export-truncated", "assets-faile
 const _allBlockerCodes: Record<BlockerCode, true> = { "export-truncated": true, "assets-failed": true, "missing-font": true, "token-name-collision": true };
 void _allBlockerCodes;
 
-export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, findExistingAuditFor, BLOCKER_CODES };
+export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, reportFindings, findExistingAuditFor, BLOCKER_CODES };
 
 // CLI: node design-to-code/audit.ts <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
 //        [--catalog design/design-system/components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]
@@ -1165,7 +1196,14 @@ function main(argv: string[]): number {
   const parentOverrides = dot > 0 ? path.join(path.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
   const overridesFile = flags.overrides || (!fs.existsSync(ownOverrides) && parentOverrides && fs.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
   const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
+  // F-47: cross-check's default map discovery (design/codeconnect.local.json, else ./codeconnect.local.json) and
+  // the export's other screens, so the embedded crossFile's proposals carry the same alreadyMapped/sharedWith
+  // labels as a cross-check run. Labels only — a broken default map is a warning, never a failed audit.
+  const mapFound = ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs.existsSync(f));
+  const mapRead = mapFound ? readJson(mapFound, isCodeConnectMap) : null;
+  if (mapFound && mapRead && "error" in mapRead) console.error(`warn  ${mapFound} ${mapRead.error} — cross-file proposals are not labelled alreadyMapped`);
   const res = audit(inputs, {
+    ...(mapRead && "doc" in mapRead ? { map: mapRead.doc } : {}), siblings: exportSiblings(files),
     ...(overridesDoc ? { overrides: overridesDoc.overrides } : {}),
     ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), ...ifDefined("designSystemDir", dsDir),
     libraries, neighbours, variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid),

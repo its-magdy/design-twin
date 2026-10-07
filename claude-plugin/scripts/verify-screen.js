@@ -3845,8 +3845,22 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     const target = outBase + ".expected.json";
     const dup = findExistingExpectedFor(path4.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
+      const oldBase = dup.slice(0, -".expected.json".length);
+      const dir = path4.dirname(dup), stemOld = path4.basename(oldBase);
+      const oldFiles = fs5.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path4.join(dir, f));
+      const canonical3 = path4.join(path4.dirname(target), path4.basename(firstFile, ".json"));
+      if (stemOld === path4.basename(canonical3)) {
+        console.error(
+          `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). That is the canonical name: drop --out (the default is ${shellArg(canonical3)}), or pass --force to write a second set anyway.`
+        );
+        return 1;
+      }
       console.error(
-        `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). Use that existing name, or pass --force to write this one anyway.`
+        `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set).
+       existing set under '${stemOld}' (${oldFiles.length} file(s)): ${oldFiles.join(", ")}
+       the canonical name for this screen is '${path4.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
+       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path4.resolve(target) === path4.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
+       Or keep the old name: --out ${shellArg(oldBase)}. (--force writes a second, parallel set \u2014 not recommended.)`
       );
       return 1;
     }

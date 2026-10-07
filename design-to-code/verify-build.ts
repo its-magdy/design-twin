@@ -1193,7 +1193,10 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
     return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` — either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
   }
   const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
-  const uncovered = g.blockers.filter((id) => !overridden.has(id));
+  // F-44: a blocker is covered by its id (`code` / `code@nodeId`, + `~n`) — which is also the bare code a
+  // person writes for a node-less finding — or by its pre-F-44 positional id (`code#i`), so an older plan's
+  // decision still stands. The warning lists the new ids.
+  const uncovered = g.blockers.filter((id, i) => !overridden.has(id) && !overridden.has(g.legacyBlockers[i] ?? id));
   if (uncovered.length) return [`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} — either resolve them or add them with a reason`];
   if (!gate.reason) return [`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` — say why it is safe to build past ${g.auditFile}`];
   return [];
@@ -1234,6 +1237,8 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     const stem = f.replace(/\.report\.json$/, "");
     let by: ReportMatch | null = null;
     const expFile = path.join(dir, stem + ".expected.json");
+    // DT-34: a set retired by the guard's printed migration (`<old>.expected.json.retired`) is history, not this screen's report
+    if (!fs.existsSync(expFile) && fs.existsSync(expFile + ".retired")) continue;
     // Only the expectation's frame.nodeId is read here, so only that is required of the file.
     const expFrame = (): string | null => { const x = readJsonOrNull(expFile, isJsonObject); return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null; };
     if (stems.has(stem)) by = "name";

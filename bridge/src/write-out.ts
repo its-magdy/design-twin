@@ -524,19 +524,24 @@ const REF_DIR = "assets";
 // reference is written to (F-08: a 360 px thumbnail held the slot, the 2048 px export was suffixed, and
 // the index pointed at the thumbnail). The default scale renders exactly what a pull would, so it keeps
 // the shared name and a later pull reuses the same file.
-function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, log?: Log, opts?: { scale?: number | undefined }): { outDir: string; reference: string; wrote: { screenshot: true; assets: number; reference: string } } {
+//
+// `png` (DT-06): the reference PNG's own pixel size, read from its bytes — absent when no reference asset
+// carried PNG bytes.
+function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, log?: Log, opts?: { scale?: number | undefined }): { outDir: string; reference: string; png?: { w: number; h: number }; wrote: { screenshot: true; assets: number; reference: string } } {
   const dir = resolveOutDir(outDir);
   fs.mkdirSync(dir, { recursive: true });
   const scale = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : undefined;
   if (scale !== undefined) for (const a of r.assets) {
     if (a && a.kind === "reference" && a.file) a.file = path.dirname(a.file) + "/" + path.basename(a.file).replace(/_ref\.png$/i, "").replace(/\.png$/i, "") + `_shot@${Number(scale.toPrecision(4))}x.png`;
   }
+  const refAsset = r.assets.find((a) => a && a.kind === "reference" && a.base64 != null);
+  const png = refAsset && refAsset.base64 != null ? pngSize(Buffer.from(refAsset.base64, "base64")) : null;
   const assets = writeAssets(dir, r.assets, log, REF_DIR);
   // The path the caller should PRINT. `r.reference` is the plugin's own relative name; recomputing it
   // here from the file actually written is what keeps the message and the file in agreement.
   const first = r.assets.find((a) => a && a.file);
   const reference = first ? REF_DIR + "/" + path.basename(first.file) : r.reference;
-  return { outDir: dir, reference, wrote: { screenshot: true as const, assets, reference } };
+  return { outDir: dir, reference, ...(png ? { png } : {}), wrote: { screenshot: true as const, assets, reference } };
 }
 
 // The whole-export write, shared by the CLI's default path and the MCP export tools' writeToDisk
@@ -648,7 +653,12 @@ function otherScreenTrees(dir: string, ownAssets: string, keys: ReadonlySet<stri
 // already on disk rather than being recomputed in one pass like buildPageLayout's.
 //
 // Asset filenames are still NOT sanitised here: the plugin owns them (see writeAssets).
-function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>, log?: Log) {
+//
+// `opts.keepPrev` (F-06): when set and the screen JSON already exists with a DIFFERENT design (the top-level
+// `exportedAt` stamp aside), the old file is
+// kept as `<screen>.json.prev` (one level, replaced by the next one) and `wrote.prev` names it. The MCP server
+// sets it only on an implicit spill — an explicit pull overwriting its own file is the point of the pull.
+function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>, log?: Log, opts?: { keepPrev?: boolean | undefined }) {
   const dir = resolveOutDir(outDir);
   const paths = screenPaths(r, "/");
   fs.mkdirSync(path.join(dir, "pages", paths.dir), { recursive: true });
@@ -676,6 +686,8 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   const screenDoc = r.sourceFile
     ? Object.assign({}, r.screen, { sourceFile: r.sourceFile }, r.sourceFileKey ? { sourceFileKey: r.sourceFileKey } : {})
     : r.screen;
+  const prev = opts && opts.keepPrev ? keepPrevCopy(path.join(dir, paths.screen), JSON.stringify(screenDoc, null, 2)) : undefined;
+  if (log && prev) log(`kept the previous ${paths.screen} as ${path.basename(prev)} (it differed from this export)`);
   writeJson(dir, paths.screen, screenDoc, false, log);
   if (log) { const d = danglingPointers(dir, r.screen.nodes); if (d.length) log(`warn  ${d.length} asset pointer(s) name a file that is not on disk: ${d.slice(0, 3).join(", ")}${d.length > 3 ? ", …" : ""}`); }
   // `variables` is always on a real screen reply; a hand-built one (the tests) may omit it.
@@ -746,6 +758,7 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
     outDir: dir,
     wrote: {
       screen: path.join(dir, paths.screen),
+      ...ifDefined<"prev", string>("prev", prev),
       page: paths.page,
       index: path.join(dir, paths.rootIndex),
       variables: !!r.variables,
@@ -755,6 +768,37 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
       assetsSkipped: Array.isArray(r.assets) ? r.assets.length - assets : 0,
     },
   };
+}
+
+// F-06: copy `file` to `<file>.prev` before it is replaced, when it exists and differs from `next` (the
+// bytes about to be written). The `.prev` suffix is not `*.json`, so no screen glob, index or snapshot reader
+// picks it up. A copy, not a rename: the target stays intact until writeJson's own atomic rename replaces it.
+// Returns the .prev path, or undefined when nothing was kept (no file, identical, or unreadable).
+function keepPrevCopy(file: string, next: string): string | undefined {
+  let old: string;
+  try { old = fs.readFileSync(file, "utf8"); } catch { return undefined; }
+  if (old === next) return undefined;
+  // The plugin stamps a fresh exportedAt on every reply, so compare the documents without it: an unchanged
+  // design re-spilled must not replace the .prev that holds what the FIRST spill displaced.
+  const a = unstampedJson(old);
+  if (a !== null && a === unstampedJson(next)) return undefined;
+  const prev = file + ".prev";
+  fs.copyFileSync(file, prev);
+  return prev;
+}
+
+function isRecord(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// A JSON document re-serialised without its top-level exportedAt, or null when it is not a JSON object.
+function unstampedJson(s: string): string | null {
+  let o: unknown;
+  try { o = JSON.parse(s) as unknown; } catch { return null; }
+  if (!isRecord(o)) return null;
+  const { exportedAt: _drop, ...rest } = o;
+  void _drop;
+  return JSON.stringify(rest);
 }
 
 // Which colours an exported SVG hard-codes.
@@ -979,6 +1023,11 @@ function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesD
       );
     }
     log(`wrote ${path.join(dir, paths.variables)} — this screen's slice on its own`);
+    // DT-71: a token/theme file generated from variables.json before this pull no longer covers it. Bridge
+    // text only (no design-to-code import); the tokens script's --check is what compares the two.
+    if (!stats.first && stats.added > 0) {
+      log(`info  ${stats.added} new variable(s) merged into variables.json — a token/theme file generated from it is now behind (the tokens script's --check says)`);
+    }
   }
   return { total: doc.variables.length, fromThisScreen: Array.isArray(slice.variables) ? slice.variables.length : 0, added: stats.added, conflicts: stats.conflicts.length, screens: doc._slices.length };
 }
@@ -987,18 +1036,22 @@ function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesD
 // having to know which writer its own command implies. Each member of ExportReply carries a field
 // the others do not — `screen` (a screen pull), `reference` (a screenshot), otherwise a catalog with
 // or without a page walk — so `in` narrows the union to the writer's own reply type.
-function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: { scale?: number | undefined }) {
-  if ("screen" in r) return writeScreen(outDir, r, log);
+function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: { scale?: number | undefined; keepPrev?: boolean | undefined }) {
+  if ("screen" in r) return writeScreen(outDir, r, log, opts && opts.keepPrev !== undefined ? { keepPrev: opts.keepPrev } : undefined);
   if ("reference" in r) return writeScreenshot(outDir, r, log, opts);
   return writeExport(outDir, r, log);
 }
 
 // How many characters an INLINE tool result may be before the MCP client truncates it. Claude Code caps
 // tool output at MAX_MCP_OUTPUT_TOKENS (default 25,000); ~4 characters per token, and 20% headroom
-// because that ratio is an estimate and indented JSON tokenizes worse than prose.
+// because that ratio is an estimate and indented JSON tokenizes worse than prose. Capped at 48,000 (O-1):
+// Claude Code also saves any text result longer than 50,000 characters to a file instead of showing it,
+// whatever MAX_MCP_OUTPUT_TOKENS says — so past that the inline result is not inline anyway, and our own
+// spill (files + a compact index) is the better answer. MAX_MCP_OUTPUT_TOKENS can still LOWER the limit.
+const INLINE_CHAR_CAP = 48000;
 function inlineLimitChars(env: NodeJS.ProcessEnv = process.env): number {
   const tokens = Number(env.MAX_MCP_OUTPUT_TOKENS);
-  return Math.floor((tokens > 0 ? tokens : 25000) * 4 * 0.8);
+  return Math.min(Math.floor((tokens > 0 ? tokens : 25000) * 4 * 0.8), INLINE_CHAR_CAP);
 }
 
 export { DEFAULT_OUT_DIR, inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, assetsHiddenLine, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny };

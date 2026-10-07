@@ -366,13 +366,17 @@
     cancelRequested = null;
     page = void 0;
     lastPost = 0;
-    post({ type: "run-begin", source: info.source, label: info.label });
+    post({ type: "run-begin", source: info.source, label: info.label, ...ifDefined("requestId", info.requestId) });
   }
   function endRun(abandoned) {
     running = null;
     cancelRequested = null;
     page = void 0;
     post(abandoned ? { type: "run-end", abandoned: true } : { type: "run-end" });
+  }
+  function postQueued(run) {
+    if (run.source !== "bridge") return;
+    post({ type: "progress", phase: "queued", source: "bridge", label: run.label, ...ifDefined("requestId", run.requestId) });
   }
   function requestCancel() {
     if (!running) return null;
@@ -594,10 +598,16 @@
     }
     return void 0;
   }
+  function referenceScale(node, opts) {
+    if (opts && typeof opts.scale === "number" && opts.scale > 0) return opts.scale;
+    const w = "width" in node ? node.width || 0 : 0;
+    const h = "height" in node ? node.height || 0 : 0;
+    return Math.min(2, 2048 / (Math.max(w, h) || 1));
+  }
   async function collectReference(node, opts) {
     if (!node || !("exportAsync" in node) || !("width" in node)) return void 0;
     try {
-      const value = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : Math.min(2, 2048 / (Math.max(node.width || 0, node.height || 0) || 1));
+      const value = referenceScale(node, opts);
       const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
       if (!bytes || !bytes.length) {
         warn("reference screenshot empty: " + node.name);
@@ -757,13 +767,21 @@
   var getCollection = collectionLookup.obj;
   var queuedRuns = /* @__PURE__ */ new Set();
   var runChain = Promise.resolve();
+  var inChain = 0;
   function serializeRun(fn, run) {
     const ticket = { run, abandoned: false };
     queuedRuns.add(ticket);
+    if (inChain > 0) postQueued(run);
+    inChain++;
     const go = () => {
       queuedRuns.delete(ticket);
-      if (ticket.abandoned) return Promise.reject(abandonedError());
-      return bracket(fn, run);
+      if (ticket.abandoned) {
+        inChain--;
+        return Promise.reject(abandonedError());
+      }
+      return bracket(fn, run).finally(() => {
+        inChain--;
+      });
     };
     const next = runChain.then(go, go);
     runChain = next.then(() => {
@@ -2743,6 +2761,7 @@
     putNonEmpty(out, "sourceTransform", st);
   }
   async function serialize(node, depth, parentControlsLayout, underHidden) {
+    checkCancelled();
     if (depth > MAX_DEPTH) {
       stats.truncated++;
       if (stats.truncated === 1) warn("depth limit " + MAX_DEPTH + " reached \u2014 deep subtrees truncated (first: " + node.name + ")");
@@ -3287,7 +3306,8 @@
     if (!reference) {
       throw new Error("Node " + nodeId + " could not be rendered (hidden, zero-size, or the export failed \u2014 see warnings).");
     }
-    return { id: node.id, name: node.name, type: node.type, reference, manifest: manifest(), assets: assets.slice() };
+    const size = "width" in node && "height" in node ? { w: round(node.width), h: round(node.height) } : {};
+    return { id: node.id, name: node.name, type: node.type, ...size, scale: referenceScale(node, opts), reference, manifest: manifest(), assets: assets.slice() };
   }
   var TOP_LEVEL_TYPES = /* @__PURE__ */ new Set([
     "FRAME",
@@ -3392,6 +3412,7 @@
     resetRun();
     applyOpts(opts);
     const designSystem = await buildDesignSystem(void 0, serialize);
+    checkCancelled();
     designSystem.hygiene = [
       "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced \u2014 pull a page for the full set.",
       ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
@@ -3403,6 +3424,7 @@
     applyOpts(opts);
     const asLibrary = opts && opts.asLibrary || figma.root && figma.root.name || "library";
     const designSystem = await buildDesignSystem({ asLibrary }, serialize);
+    checkCancelled();
     designSystem.hygiene = [
       "library pull: this is the COMPLETE local catalog of '" + asLibrary + "' \u2014 variables, styles and components, with full per-mode values. It is a snapshot of the library file's CURRENT state, which is not necessarily what consumers see: `publish` reports each object's own status (current | changed | unpublished).",
       ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
@@ -3474,6 +3496,7 @@
     checkCancelled();
     progress("design-system", { nodes: stats.nodes, assets: assets.length }, true);
     const designSystem = await buildDesignSystem(void 0, serialize);
+    checkCancelled();
     const measurements = collectMeasurements(pages);
     const layersDoc = {
       exportedAt: exportedAt(),

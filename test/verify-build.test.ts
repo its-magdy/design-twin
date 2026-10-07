@@ -1418,7 +1418,7 @@ void build(tmp).then(async () => {
   {
     const auditDoc = readFixture(path.join(import.meta.dirname, "fixtures", "livetest3", "plan", "audit", "System_Configurations.json"), isAuditReport);
     const ids = blockerIds(auditDoc);
-    check("[P6-136] the real System_Configurations audit has 5 blocker ids", ids.length === 5 && ids[0] === "catalog-covers-nothing#0");
+    check("[P6-136] the real System_Configurations audit has 5 blocker ids", ids.length === 5 && ids[0] === "catalog-covers-nothing");
     const mkCwd = () => {
       const d = fs.mkdtempSync(path.join(os.tmpdir(), "p6-136-"));
       fs.mkdirSync(path.join(d, "design", "audit"), { recursive: true });
@@ -1467,6 +1467,58 @@ void build(tmp).then(async () => {
       check("[P6-136] an audit file that cannot be read WARNS that the gate was not checked (was: silently no blockers)",
         w.length === 1 && /System_Configurations\.json is not valid JSON .*the audit gate was NOT checked/.test(must(w[0], "w[0]")));
     }
+  }
+  // ---------------------------------------------------------------- F-44: stable ids, legacy + bare codes accepted
+  // An audit written before F-44 (no `id` on its findings): a missing-font blocker on node 1:1, a node-less
+  // token-name-collision. Ids now: `missing-font@1:1`, `token-name-collision`; legacy: `missing-font#0`,
+  // `token-name-collision#1`.
+  {
+    const auditDoc = { summary: { blockers: 2, warnings: 1, info: 0 }, findings: [
+      { severity: "blocker", code: "missing-font", message: "font", nodeId: "1:1" },
+      { severity: "blocker", code: "token-name-collision", message: "collision" },
+      { severity: "warning", code: "fixed-size-text", message: "fixed", nodeId: "1:2" },
+    ] };
+    const mk = () => {
+      const d = fs.mkdtempSync(path.join(os.tmpdir(), "f44-"));
+      fs.mkdirSync(path.join(d, "design", "audit"), { recursive: true });
+      fs.writeFileSync(path.join(d, "design", "audit", "Sample_Screen__1_1.json"), JSON.stringify(auditDoc));
+      return d;
+    };
+    const gateWith = (overridden: string[]): string[] => auditGateWarnings({ screenName: "Sample Screen", auditGate: { auditFile: "design/audit/Sample_Screen__1_1.json", verdict: "blocked", overridden, reason: "acknowledged", decidedBy: "owner", decidedAt: "2026-10-07" } }, mk(), null);
+    const legacy = gateWith(["missing-font#0", "token-name-collision#1"]);
+    check(`[F44-2] a plan overriding the legacy positional ids (missing-font#0, token-name-collision#1) still covers its blockers (got ${JSON.stringify(legacy)})`, legacy.length === 0);
+    const bare = gateWith(["missing-font@1:1", "token-name-collision"]);
+    check(`[F44-3] a plan overriding the bare code of a node-less blocker (token-name-collision) covers it (got ${JSON.stringify(bare)})`, bare.length === 0);
+    const none = gateWith([]);
+    const msg = none[0] ?? "";
+    check(`[F44-4] a plan overriding nothing: the warning lists the NEW ids, not #i (got ${JSON.stringify(none)})`,
+      none.length === 1 && msg.includes("missing-font@1:1") && msg.includes("token-name-collision") && !/#\d/.test(msg));
+    const mixed = gateWith(["missing-font#0"]);
+    check("[F44-4] a legacy id covers only its own blocker — the other is still listed by its new id",
+      mixed.length === 1 && (mixed[0] ?? "").includes("token-name-collision") && !(mixed[0] ?? "").includes("missing-font"));
+  }
+
+  {
+    // Review 1 M-3: DT-34's printed migration retires the old set (`<old>.expected.json.retired`) and keeps its
+    // report as history. locateReports must not read that report: an old fail would keep the plan failed forever.
+    const root = project({}, { screenName: "Sample Screen", nodeId: "1:2", file: "design/export/pages/P/Sample_Screen__1_2.json" });
+    const v = path.join(root, "design", "verify");
+    fs.mkdirSync(v, { recursive: true });
+    const rep = (verdict: string) => JSON.stringify({ schema: "designtwin/verify-report@2", verdict, screen: "Sample Screen", nodeId: "1:2", why: [], deltas: [], inputs: {} });
+    fs.writeFileSync(path.join(v, "Nick.expected.json.retired"), JSON.stringify({ frame: { nodeId: "1:2" } }));
+    fs.writeFileSync(path.join(v, "Nick.report.json"), rep("fail"));
+    fs.writeFileSync(path.join(v, "Sample_Screen__1_2.expected.json"), JSON.stringify({ frame: { nodeId: "1:2" } }));
+    fs.writeFileSync(path.join(v, "Sample_Screen__1_2.report.json"), rep("pass"));
+    const pf = path.join(root, "design", "plan", "login.json");
+    const rels = (): string[] => verifyBuild.locateReports(planOf(root), pf, root, null).map((r) => r.rel);
+    const got = rels();
+    check(`[M-3] a report whose expectation was retired (.retired) is not located; the canonical one is (got ${JSON.stringify(got)})`,
+      !got.includes("design/verify/Nick.report.json") && got.includes("design/verify/Sample_Screen__1_2.report.json"));
+    const st = computeStatus(planOf(root), { cwd: root, planFile: pf });
+    check(`[M-3] …so the retired fail does not keep the plan failed (got ${st.status})`, st.status !== "failed" && !st.reasons.some((x) => x.includes("Nick")));
+    // control: the same report beside a LIVE expectation is still read
+    fs.renameSync(path.join(v, "Nick.expected.json.retired"), path.join(v, "Nick.expected.json"));
+    check("[M-3] control: with its expectation in place the same report is located", rels().includes("design/verify/Nick.report.json"));
   }
 
   report();

@@ -255,6 +255,37 @@ function readJsonOrNull(file, guard) {
   return "doc" in r ? r.doc : null;
 }
 
+// bridge/src/node-id.ts
+var ID = "[A-Za-z0-9%:;_-]+";
+var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
+function decode(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch (e) {
+    return s;
+  }
+}
+function normalizeNodeId(raw) {
+  if (!raw) return void 0;
+  const s = decode(String(raw).trim()).replace(/-/g, ":");
+  return /^I?\d+:\d+(?:[;:]\d+:\d+)*$/.test(s) || /^\d+$/.test(s) ? s : void 0;
+}
+function parseNodeId(input) {
+  if (!input) return void 0;
+  const s = String(input).trim();
+  try {
+    const nid = new URL(s).searchParams.get("node-id");
+    if (nid) return normalizeNodeId(nid);
+  } catch (e) {
+  }
+  const m = s.match(NODE_ID_RE);
+  if (m) return normalizeNodeId(m[1]);
+  return normalizeNodeId(s);
+}
+function toNodeId(raw) {
+  return parseNodeId(raw) || (raw == null ? "" : String(raw));
+}
+
 // design-to-code/map-util.ts
 function getOrInit(m, k, init) {
   const have = m.get(k);
@@ -285,7 +316,29 @@ function isMainFallback(metaUrl) {
 }
 
 // design-to-code/resolve-screen.ts
-var NODE_ID_RE = /^\d+:\d+$/;
+var NODE_ID_RE2 = /^\d+:\d+$/;
+var BASENAME_ID_RE = /__(\d+)_(\d+)(?:\.[A-Za-z0-9-]+)*$/;
+function queryIds(q) {
+  const out = [];
+  const base = q.split(/[\\/]/).pop() ?? q;
+  const m = BASENAME_ID_RE.exec(base);
+  if (m) out.push(`${m[1]}:${m[2]}`);
+  const t = toNodeId(q);
+  if (t !== q && NODE_ID_RE2.test(t)) out.push(t);
+  return out;
+}
+function findExportRoot(dir) {
+  const has = (d) => fs3.existsSync(path2.join(d, "pages", "index.json"));
+  const abs = path2.resolve(dir);
+  for (let d = path2.dirname(abs); ; d = path2.dirname(d)) {
+    if (has(d)) return d;
+    if (path2.dirname(d) === d) break;
+  }
+  for (const sub of ["export", path2.join("design", "export")]) {
+    if (has(path2.join(abs, sub))) return path2.join(abs, sub);
+  }
+  return null;
+}
 function allRows(exportDir) {
   const rootFile = path2.join(exportDir, "pages", "index.json");
   const root = readJsonOrNull(rootFile, isPagesRootIndex);
@@ -329,11 +382,15 @@ function resolveScreen(exportDir, query, opts) {
   const q = String(query || "").trim();
   const qFold = fold(q);
   const noTitles = rows.length > 0 && !rows.some((r) => r.title);
-  if (NODE_ID_RE.test(q)) {
-    const idMatches = rows.filter((r) => r.id === q);
-    const only2 = idMatches.length === 1 ? idMatches[0] : void 0;
-    if (only2) return { status: "resolved", row: only2, stage: "node id" };
+  if (!fs3.existsSync(path2.join(exportDir, "pages", "index.json"))) {
+    return { status: "not-found", candidates: [], noIndex: { dir: exportDir, hint: findExportRoot(exportDir) } };
   }
+  const byId = (id) => {
+    const idMatches = rows.filter((r) => r.id === id);
+    return idMatches.length === 1 ? idMatches[0] : void 0;
+  };
+  const typed = NODE_ID_RE2.test(q) ? byId(q) : void 0;
+  if (typed) return { status: "resolved", row: typed, stage: "node id" };
   const plans = planRows(options.planDir);
   const planHit = plans.filter((p) => p.screenName === q || p.route === q);
   const planIds = new Set(planHit.map((p) => p.nodeId).filter((id) => !!id));
@@ -358,6 +415,10 @@ function resolveScreen(exportDir, query, opts) {
       stage: "exact match (layer name / title / plan header)",
       candidates: unionRows.map((u) => describe(u.row, [...u.via]))
     };
+  }
+  for (const id of NODE_ID_RE2.test(q) ? [] : queryIds(q)) {
+    const hit = byId(id);
+    if (hit) return { status: "resolved", row: hit, stage: "node id" };
   }
   const textMatches = rows.filter(
     (r) => r.name && fold(r.name).includes(qFold) || r.title && fold(r.title).includes(qFold) || Array.isArray(r.texts) && r.texts.some((t) => fold(t).includes(qFold))
@@ -397,6 +458,10 @@ function main(argv) {
     if (res.noTitles) console.error(NOTITLES_NOTE);
     return 1;
   }
+  if (res.noIndex) {
+    console.error(`error  '${exportDir}' is not an export root (no pages/index.json) \u2014 ${res.noIndex.hint ? `pass ${res.noIndex.hint}` : "pass the dir that holds pages/ (design/export)"}`);
+    return 1;
+  }
   console.error(`error  '${query}' matches no screen. Known layers:`);
   listCandidates(res.candidates);
   if (res.noTitles) console.error(NOTITLES_NOTE);
@@ -404,7 +469,7 @@ function main(argv) {
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
-  NODE_ID_RE,
+  NODE_ID_RE2 as NODE_ID_RE,
   allRows,
   describe,
   planRows,

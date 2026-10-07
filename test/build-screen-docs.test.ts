@@ -481,4 +481,51 @@ console.log("build-screen docs (group 13, assets):");
   check("[13 DT-04] list children: childCount + title on colliding rows + per-group warning (README and MCP tool)", /`childCount`/.test(readme) && /`title`/.test(readme) && /once per such group/.test(readme) && /childCount\/hasChildren/.test(mcp) && /share name \+ size also carry a `title`/.test(mcp));
   check("[13] README: the pull summary lines (geometry warn, hidden info) are documented", /fell back to raw geometry/.test(readme) && /hidden graphic\(s\) not exported/.test(readme));
 }
+
+console.log("build-screen docs (group 14):");
+{
+  const rd = (rel: string): string => flat(read(rel));
+  const docs = [rd("bridge/README.md"), skill, rd("claude-plugin/skills/extract/SKILL.md"), rd("claude-plugin/skills/help/SKILL.md")].join(" ");
+  const src = (rel: string): string => read(rel);
+  // Each new flag a doc mentions is registered in the script's own OPTIONS.
+  const flags: ReadonlyArray<readonly [string, string, string]> = [
+    ["--seed-from", "design-to-code/plan-skeleton.ts", '"seed-from"'],
+    ["--lookup", "design-to-code/tokens.ts", "lookup:"],
+    ["--check", "design-to-code/tokens.ts", "check:"],
+    ["--map", "design-to-code/cross-check.ts", "map:"],
+  ];
+  for (const [flag, file, reg] of flags) check(`[G14] ${flag} is documented and registered in ${file}`, docs.includes(flag + " ") && src(file).includes(reg));
+  check("[G14] FIGMA_BRIDGE_PORT + positional outDir + per-verb --help are stated (README, help skill, extract)",
+    ["bridge/README.md", "claude-plugin/skills/help/SKILL.md", "claude-plugin/skills/extract/SKILL.md"].every((f) => /FIGMA_BRIDGE_PORT/.test(rd(f)) && /positional/.test(rd(f))));
+  check("[G14] the `done in` timing line and `dtwin serve` keeping the plugin connected are stated", /done in Xs|done in 12\.4s/.test(docs) && /`dtwin serve`.{0,200}(skip|connected)/.test(docs));
+  check("[G14] troubleshooting explains `connected but sent nothing` and the fixed abandoned-reply bug", /connected but sent nothing/.test(rd("claude-plugin/skills/help/references/troubleshooting.md")) && /unique per bridge/.test(rd("claude-plugin/skills/help/references/troubleshooting.md")));
+  check("[G14] variables.json scope sentence + tokens --lookup, in build-screen and extract", [skill, rd("claude-plugin/skills/extract/SKILL.md")].every((d) => /only (the )?variables bound by pulled nodes/.test(d) && /--lookup/.test(d)));
+  check("[G14] build-screen: catalog by:\"ambiguous\", finding ids code@nodeId (legacy code#i), crossCheckFile", /by:"ambiguous"/.test(skill) && /`code@nodeId`/.test(skill) && /code#i/.test(skill) && /crossCheckFile/.test(skill));
+  check("[G14] cross-check labels alreadyMapped / sharedWith documented", [skill, rd("claude-plugin/skills/extract/SKILL.md")].every((d) => /alreadyMapped/.test(d) && /sharedWith/.test(d)));
+  check("[G14] every resolve-screen snippet passes design/plan", ["audit-design", "sync-design", "verify", "build-screen", "extract"].every((n) => {
+    const t = rd(`claude-plugin/skills/${n}/SKILL.md`);
+    const m = t.match(/resolve-screen\.js" <exportDir> "<[a-z-]+>"[^`]*/g) ?? [];
+    return m.length > 0 && m.every((x) => /design\/plan/.test(x));
+  }));
+  check("[G14] MCP surface: 48,000-char inline cap, sourceFile, .prev, lastScreenExport/lastWrite, design_drift_lint `screens`", /48,000/.test(docs) && /sourceFile/.test(docs) && /\.json\.prev/.test(docs) && /lastScreenExport/.test(docs) && /lastWrite/.test(docs) && /design_drift_lint. takes `screens/.test(docs));
+  check("[G14] visual-verifier: <Screen> is the <Layer>__<id> basename", /`<Screen>` below is always the `<Layer>__<id>` basename/.test(verifier));
+  // Review 1 L-4: a bare code is the id of a NODE-LESS finding only (it does not cover `missing-font@1:5`).
+  check("[14 fix1 L-4] build-screen: a bare code is accepted only for a finding with no node (its id), not as a catch-all",
+    /for a finding with no node, is its bare\s+code \(which is its id\)/.test(skill) && !/a bare code are still accepted/.test(skill));
+  // Review 1 L-7: crossCheckFile is the cross-check report beside the audit (audit runs its own cross-check),
+  // and `--lookup #ffbc1c` unquoted is a shell comment — the docs show the bare / quoted form.
+  const audit = rd("claude-plugin/skills/audit-design/SKILL.md");
+  check("[14 fix1 L-7] crossCheckFile = the cross-check report beside the audit, when there is one (build-screen + audit-design)",
+    [skill, audit].every((d) => /cross-check report beside the audit/.test(d) && /when there is one/.test(d)) &&
+    !/the findings were merged from/.test(skill) && !/the cross-file half came from/.test(audit));
+  const lookupDocs = [rd("bridge/README.md"), skill, rd("claude-plugin/skills/extract/SKILL.md"), src("design-to-code/tokens.ts")];
+  check("[14 fix1 L-7] no doc shows an unquoted `--lookup <#hex>` / `--lookup #…`, and each says the bare or quoted form",
+    lookupDocs.every((d) => !/--lookup <#hex>|--lookup #/.test(d) && /ffbc1c/.test(d) && /'#ffbc1c'/.test(d)));
+  // Review 2 L-3: the .prev is kept only when the design differs — the export stamp alone does not count.
+  check("[14 fix2 L-3] README + extract + write-out say `.prev` ignores the exportedAt stamp; no 'bytes differ' wording",
+    [rd("bridge/README.md"), rd("claude-plugin/skills/extract/SKILL.md"), src("bridge/src/write-out.ts")].every((d) => /(content differs|DIFFERENT design)[^.]{0,80}exportedAt/.test(d)) &&
+    !/whose bytes\s+differ/.test(rd("bridge/README.md")) && !/with DIFFERENT bytes/.test(src("bridge/src/write-out.ts")));
+  check("[14 fix2 L-1/L-2] README + extract say usage errors in --check/--lookup are 2 and the parent directory tells two tokens.json apart",
+    [rd("bridge/README.md"), rd("claude-plugin/skills/extract/SKILL.md")].every((d) => /usage errors?[^.]{0,40}\b2\b/.test(d) && /parent directory/.test(d)));
+}
 report();

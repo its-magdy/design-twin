@@ -4,7 +4,7 @@ import type {
   IrNode, ScreenExport, Manifest, Measurement as IrMeasurement, DevResource as IrDevResource, Paint as IrPaint,
   PageSettings, PrototypeFlow, LayersDoc, LayersDocLayer, LayersDocIndexRow,
 } from "../../bridge/src/doc-types.ts";
-import { safe, errMsg, exportedAt, nonEmpty, isList } from "./util";
+import { safe, errMsg, exportedAt, nonEmpty, isList, round } from "./util";
 // Figma URLs carry `123-456`, the API wants `123:456`. bridge/node-id.js is "the ONE place that knows
 // what a node id looks like and how it hides in a Figma URL" — esbuild inlines that dependency-free CJS
 // module into the plugin bundle exactly as it does pages-layout.js, so the plugin uses the SAME parser
@@ -20,7 +20,7 @@ import { type Asset, assets, stats, resetRun, manifest, runOpts, warn, loadAllPa
 import { checkCancelled, enterPage, progress } from "./progress";
 import type { ReadOptName } from "../../bridge/src/read-opts.ts";
 import { serialize } from "./serialize";
-import { collectReference, devResources } from "./assets";
+import { collectReference, devResources, referenceScale } from "./assets";
 import { simplifyFills } from "./paint";
 import { type BuiltDesignSystem, buildDesignSystem } from "./components";
 import { type VariablesDump, dumpVariables, resolvedModes } from "./variables";
@@ -45,8 +45,9 @@ export interface ScreenResult {
 export interface FullResult { designSystem: BuiltDesignSystem; layersDoc: LayersDoc; assets: Asset[] }
 /** collectDesignSystemOnly / collectLibraryFile. */
 export interface DesignSystemResult { designSystem: BuiltDesignSystem }
-/** collectScreenshot: one node's reference PNG (its path; the bytes ride in `assets`). */
-export interface ScreenshotResult { id: string; name: string; type: string; reference: string; manifest: Manifest; assets: Asset[] }
+/** collectScreenshot: one node's reference PNG (its path; the bytes ride in `assets`), plus the node's
+ *  size and the scale the PNG was rendered at (DT-06; `w`/`h` absent only for a node with no size). */
+export interface ScreenshotResult { id: string; name: string; type: string; w?: number; h?: number; scale: number; reference: string; manifest: Manifest; assets: Asset[] }
 /** summarize(): the ONLY shape the cheap index reads emit — structure, never an export. */
 export interface NodeSummary {
   name: string; id: string; type: string; w?: number; h?: number; hidden?: true; hasChildren?: boolean;
@@ -481,7 +482,10 @@ export async function collectScreenshot(rawId: string, opts?: { scale?: number }
   if (!reference) {
     throw new Error("Node " + nodeId + " could not be rendered (hidden, zero-size, or the export failed — see warnings).");
   }
-  return { id: node.id, name: node.name, type: node.type, reference, manifest: manifest(), assets: assets.slice() };
+  // DT-06: what was rendered — the node's own size and the scale used (the same referenceScale the
+  // render just used), so a caller can tell a 2x render of a small node from a capped big one.
+  const size = "width" in node && "height" in node ? { w: round(node.width), h: round(node.height) } : {};
+  return { id: node.id, name: node.name, type: node.type, ...size, scale: referenceScale(node as SceneNode, opts), reference, manifest: manifest(), assets: assets.slice() };
 }
 
 // Containers first, then loose top-level canvas content — a standalone TEXT note, a logo VECTOR, an
@@ -646,6 +650,10 @@ export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Desig
   resetRun();
   applyOpts(opts);
   const designSystem = await buildDesignSystem(undefined, serialize);
+  // A cancel armed during the catalog's opt-in variant walk is caught there per variant (each one
+  // warned "unreadable" and skipped, components.ts), so it must not end here as a delivered doc with
+  // every variant missing: the flag is still armed, and this throws it.
+  checkCancelled();
   designSystem.hygiene = [
     "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced — pull a page for the full set.",
     ...(Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []),
@@ -669,6 +677,7 @@ export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: stri
   applyOpts(opts);
   const asLibrary = (opts && opts.asLibrary) || (figma.root && figma.root.name) || "library";
   const designSystem = await buildDesignSystem({ asLibrary }, serialize);
+  checkCancelled(); // the variant-walk backstop — see collectDesignSystemOnly
   // Replaces collectDesignSystemOnly's caveat, which is FALSE here: nothing is limited to what a walk
   // referenced, because nothing in this file is remote.
   designSystem.hygiene = [
@@ -787,6 +796,7 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
   // that walk to also emit the LIBRARY variables the layers reference (see variables.ts). Building it
   // first — as this used to — meant the dump ran against an empty reference set.
   const designSystem = await buildDesignSystem(undefined, serialize);
+  checkCancelled(); // the variant-walk backstop — see collectDesignSystemOnly
   // Measurements are a PER-PAGE read. Scoping them to figma.currentPage while exporting a DIFFERENT
   // page attached another page's redlines to this doc — silently, and mislabelled. Read them from
   // the page(s) actually walked.
