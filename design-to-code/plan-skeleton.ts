@@ -18,7 +18,9 @@
 //                 key/setKey/name/variant/props and its identity: the design-system catalog entry it
 //                 matches — by key, or by P1's name+prop-signature matcher (component-match.ts) when a
 //                 duplicated file re-keyed everything — and the codeconnect.local.json mapping when one
-//                 exists. Component identity comes from here, never from a hand-placed attribute.
+//                 exists. Component identity comes from here, never from a hand-placed attribute. A name
+//                 that component-match calls ambiguous (nameVerdict — the rule cross-check uses too, DT-27)
+//                 gets `catalog: {by:"ambiguous", candidates}`: never a match, the entries to choose from.
 //   anchors{}     every VISIBLE node id → {name, type, parent, mapModule:""}. Fill `mapModule` on
 //                 sections and instances; a node whose own mapModule is empty is covered by its nearest
 //                 mapped ancestor, so a 12-row `.map()` or a reused shell needs one entry, not twelve.
@@ -33,10 +35,12 @@
 // existing plan it MERGES: every model-filled field (codeToken, mapModule, verdict, decision, …) and
 // every top-level field the skeleton does not own (files, architecture, verification, deviations,
 // status, …) is kept; rows that no longer exist in the export are dropped and counted on stderr.
+// --seed-from <sibling plan> (DT-33) then fills what is still empty from another screen's plan — only a
+// row with the same identity (and, for a token, the same value), marked `seededFrom` for review.
 
 import fs from "node:fs";
 import path from "node:path";
-import { matchByNameAndSignature, parseVariant } from "./component-match.ts";
+import { matchByNameAndSignature, nameVerdict, parseVariant } from "./component-match.ts";
 import { walkWithHidden } from "./hidden.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
@@ -58,7 +62,7 @@ import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const USAGE = [
-  `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>]`,
+  `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
   "",
   "  Emits the build-screen plan skeleton for one screen, derived from the export:",
   "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
@@ -78,6 +82,11 @@ const USAGE = [
   "  --map <file>         codeconnect.local.json (default: design/codeconnect.local.json or",
   "                       codeconnect.local.json in the current directory, when present).",
   "  --route <route>      the app route this screen will live at (else left null for you to fill).",
+  "  --seed-from <plan>   a sibling screen's plan (repeatable; the first that has an answer wins). A row still",
+  "                       empty here takes that plan's answer when it is the SAME thing: a token with the same",
+  "                       key (or, both keyless, the same Figma name) AND the same value → codeToken/verdict/",
+  "                       decision; a component with the same setKey (else key) → mapModule/verdict/decision.",
+  "                       Nothing filled is ever overwritten. Seeded rows carry `seededFrom` — review them.",
 ].join("\n");
 
 /** What walkNodes hands its visitor beside the node. */
@@ -365,10 +374,14 @@ function buildComponents(doc: ScreenDoc | null | undefined, catalog: ComponentsC
     // the first of key / setKey the catalog has (catalog entries are objects, so `??` = first hit)
     const c = (i.key ? catKeys.get(i.key) : undefined) ?? (i.setKey ? catKeys.get(i.setKey) : undefined);
     const r = byName.get(i.name);
+    // DT-27: a name match is component-match's nameVerdict — the one rule cross-check uses too. A tie
+    // between different signatures, or several same-named entries none of which agrees, is `ambiguous`:
+    // never a match, but the candidates are listed so the builder sees why and what to choose from.
+    const verdict = !c && r ? nameVerdict(r).status : null;
     if (c) match = { by: "key", ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name };
-    else if (r && r.match) {
+    else if (r && r.match && verdict === "matched") {
       match = { by: r.evidence || "name+signature", ...ifDefined("id", r.match.id), ...ifDefined("key", r.match.key), name: r.match.name, confirmed: false };
-    }
+    } else if (r && verdict === "ambiguous") match = { by: "ambiguous", candidates: r.candidates || [] };
     const mapped = [i.key, i.setKey].map((x) => x && mapKeys.get(x)).find(Boolean) || null;
     const row: PlanComponentRow = {
       nodeId: i.nodeId,
@@ -421,11 +434,16 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   // (or a person) has somewhere to record "acknowledged and overridden, here is why" instead of the
   // build silently proceeding past a Blocked verdict. overridden/reason/decidedBy/decidedAt are left
   // for a person to fill; a re-run of this script never clears what was already decided (see merge()).
+  // F-44: blockers are the audit's finding ids (`code` / `code@nodeId`), and crossCheckFile points at the
+  // cross-check report beside it (`<audit stem>.cross.json`, where cross-file findings carry the same ids).
   let auditGate: Required<PlanAuditGate> | null = null;
   try {
-    const g = auditGateStatus(cwd || process.cwd(), screenFile, screenName);
+    const base = cwd || process.cwd();
+    const g = auditGateStatus(base, screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
-      auditGate = { auditFile: g.auditFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
+      const cross = g.auditFile.replace(/\.json$/, ".cross.json");
+      const crossCheckFile = cross !== g.auditFile && fs.existsSync(path.join(base, cross)) ? cross : null;
+      auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
   } catch { /* the auditGate pre-fill is best-effort: plan-skeleton must never fail on reading an audit */ }
   // (audit-gate.ts is a static import now; the CJS version's lazy require — and its "could not load →
@@ -462,8 +480,18 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
 export interface MergeResult { plan: Plan; dropped: { tokens: number; components: number; anchors: number } }
 
 // Merge a fresh skeleton into an existing plan without losing anything a person or the model wrote.
-const FILLED_TOKEN = ["codeToken", "verdict", "decision", "acknowledged"] as const;
-const FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName"] as const;
+const FILLED_TOKEN = ["codeToken", "verdict", "decision", "acknowledged", "seededFrom"] as const;
+const FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName", "seededFrom"] as const;
+
+// F-44: the skeleton owns what it READ — auditFile, crossCheckFile, blockers (the audit's current ids) — and a
+// person owns the decision: overridden / reason / decidedBy / decidedAt / verdict are never touched. (It used
+// to keep the whole old gate, so its blockers froze at the ids of the first run.) With no fresh gate (no audit
+// file now, or no blockers left in it) the old one stays as it was: a decision is never cleared.
+function mergeAuditGate(prev: PlanAuditGate | null | undefined, fresh: Required<PlanAuditGate> | null): PlanAuditGate | null {
+  if (!prev || typeof prev !== "object") return fresh;
+  if (!fresh) return prev;
+  return { ...prev, auditFile: fresh.auditFile, crossCheckFile: fresh.crossCheckFile, blockers: fresh.blockers };
+}
 function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult {
   if (!prev || typeof prev !== "object") return { plan: fresh, dropped: { tokens: 0, components: 0, anchors: 0 } };
   const out: Plan = Object.assign({}, prev, {
@@ -474,8 +502,7 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
     file: fresh.file,
     exportedAt: fresh.exportedAt,
     hidden: fresh.hidden,
-    // Never clear a decided auditGate; only fill one in if the plan never had one.
-    auditGate: prev.auditGate || fresh.auditGate,
+    auditGate: mergeAuditGate(prev.auditGate, fresh.auditGate),
     counts: fresh.counts,
   });
   const dropped = { tokens: 0, components: 0, anchors: 0 };
@@ -508,6 +535,50 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
   return { plan: out, dropped };
 }
 
+// ---------------------------------------------------------------- --seed-from (DT-33)
+
+/** What seed() copied from one sibling plan. */
+export interface SeedCount { tokens: number; components: number }
+
+const isEmpty = (v: unknown): boolean => v === undefined || v === null || v === "";
+const SEED_TOKEN = ["codeToken", "verdict", "decision"] as const;
+const SEED_COMPONENT = ["mapModule", "verdict", "decision"] as const;
+
+// Fill what is still EMPTY in `plan` from a sibling screen's plan, in place. Only the same thing is seeded:
+//   * a token row with the same key — or, when both rows are keyless, the same Figma name — AND the same
+//     value (JSON-equal): a same-named token with a different value is exactly the trap a mapping must not
+//     carry over. A row the skeleton marked hidden-only needs no code token and is left alone, and so is a
+//     sibling row that is hidden-only there;
+//   * a component row with the same setKey, else the same key.
+// A field already filled (by the skeleton, the merge, or an earlier --seed-from) is never overwritten. A
+// row that took anything is marked `seededFrom: <seed basename>` (the decision was made on another screen —
+// review it); seeded rows then count as filled like any other answer, so a re-run keeps them.
+function seed(plan: Plan, from: Plan, label: string): SeedCount {
+  const n: SeedCount = { tokens: 0, components: 0 };
+  const sameValue = (a: PlanTokenRow, b: PlanTokenRow): boolean => JSON.stringify(a.value ?? null) === JSON.stringify(b.value ?? null);
+  const sameToken = (a: PlanTokenRow, b: PlanTokenRow): boolean =>
+    (a.key ? a.key === b.key : !b.key && !!a.figmaName && a.figmaName === b.figmaName) && sameValue(a, b);
+  const answered = <R extends object, K extends keyof R>(r: R, fields: readonly K[]): boolean => fields.some((f) => !isEmpty(r[f]));
+  for (const row of plan.tokens || []) {
+    if (row.seededFrom || row.verdict === "hidden-only" || !SEED_TOKEN.some((f) => isEmpty(row[f]))) continue;
+    const src = (from.tokens || []).find((t) => t.verdict !== "hidden-only" && sameToken(row, t) && answered(t, SEED_TOKEN));
+    if (!src) continue;
+    let took = false;
+    for (const f of SEED_TOKEN) if (isEmpty(row[f]) && !isEmpty(src[f])) { Object.assign(row, { [f]: src[f] }); took = true; }
+    if (took) { row.seededFrom = label; n.tokens++; }
+  }
+  const sameComponent = (a: PlanComponentRow, b: PlanComponentRow): boolean => a.setKey ? a.setKey === b.setKey : !!a.key && a.key === b.key;
+  for (const row of plan.components || []) {
+    if (row.seededFrom || !SEED_COMPONENT.some((f) => isEmpty(row[f]))) continue;
+    const src = (from.components || []).find((c) => sameComponent(row, c) && answered(c, SEED_COMPONENT));
+    if (!src) continue;
+    let took = false;
+    for (const f of SEED_COMPONENT) if (isEmpty(row[f]) && !isEmpty(src[f])) { Object.assign(row, { [f]: src[f] }); took = true; }
+    if (took) { row.seededFrom = label; n.components++; }
+  }
+  return n;
+}
+
 const isIndexDoc = (x: unknown): x is PagesRootIndex | PageIndex => isPagesRootIndex(x) || isPageIndex(x);
 function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow | null {
   // pages/<Page>/<Screen>__id.json → ../../pages/index.json or ../index.json (best effort: the title only)
@@ -524,13 +595,14 @@ function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow 
 const cannotRead = (what: string, file: string, error: string): number => { console.error(`plan-skeleton: cannot read ${what} ${file}: ${error}`); return 1; };
 
 function main(argv: string[]): number {
-  const OPTIONS = { out: { type: "string" }, map: { type: "string" }, route: { type: "string" }, help: { type: "boolean", short: "h" } } as const;
+  const OPTIONS = { out: { type: "string" }, map: { type: "string" }, route: { type: "string" }, "seed-from": { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
   const { values: flags, positionals } = cliParse("plan-skeleton", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); return 0; }
   const { out, map: mapFlag, route } = flags;
+  const seedFiles = flags["seed-from"] || [];
   const [screenFile, varsFile, dsDir] = positionals;
   // (three positionals means all three are set; the undefined tests only let the type see it)
-  if (positionals.length !== 3 || screenFile === undefined || varsFile === undefined || dsDir === undefined || [out, mapFlag, route].some((v) => v === "")) { console.error(USAGE); return 2; }
+  if (positionals.length !== 3 || screenFile === undefined || varsFile === undefined || dsDir === undefined || [out, mapFlag, route, ...seedFiles].some((v) => v === "")) { console.error(USAGE); return 2; }
   const screen = readJson(screenFile, isScreenDoc);
   if (!("doc" in screen)) return cannotRead("the screen JSON", screenFile, screen.error);
   const varsRead = readJson(varsFile, isTokensDoc);
@@ -555,10 +627,25 @@ function main(argv: string[]): number {
     if (!("doc" in m)) return cannotRead("the component map", mapFile, m.error);
     mapKeys = mapKeysOf(m.doc);
   }
+  // Every seed is read up front: one that cannot be read (or is not a plan) refuses the run before anything is written.
+  const seeds: Array<{ file: string; plan: Plan }> = [];
+  for (const f of seedFiles) {
+    const r = readJson(f, anyJson);
+    const parsed = "doc" in r ? parsePlan(r.doc) : null;
+    if (!parsed || "error" in parsed) return cannotRead("the --seed-from plan", f, !("doc" in r) ? r.error : parsed && "error" in parsed ? parsed.error : "is not a plan");
+    seeds.push({ file: f, plan: parsed.plan });
+  }
+  const seedAll = (plan: Plan): void => {
+    for (const sd of seeds) {
+      const n = seed(plan, sd.plan, path.basename(sd.file));
+      console.error(`plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " — review them (seededFrom)" : ""));
+    }
+  };
   const nodeId = screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id;
   const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow: findIndexRow(screenFile, nodeId) });
   const c = fresh.counts;
   if (!out) {
+    seedAll(fresh);
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");
   } else {
     // An existing plan is MERGED into — so one that cannot be read (or is not a plan) is refused, untouched.
@@ -568,6 +655,7 @@ function main(argv: string[]): number {
     if (why) { console.error(`plan-skeleton: ${out} exists but ${why} — refusing to overwrite it`); return 1; }
     const prev = parsed && "plan" in parsed ? parsed.plan : null;
     const { plan, dropped } = merge(fresh, prev);
+    seedAll(plan); // after the own-plan merge: this plan's own answers always win
     fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
     fs.writeFileSync(out, JSON.stringify(plan, null, 2) + "\n");
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
@@ -576,7 +664,7 @@ function main(argv: string[]): number {
   return 0;
 }
 
-export { skeleton, merge, visibility, walkNodes, bindingsOf, buildTokens, buildComponents, USAGE };
+export { skeleton, merge, seed, visibility, walkNodes, bindingsOf, buildTokens, buildComponents, USAGE };
 
 // exitCode, not exit(): exit() would cut a large plan off mid-write when stdout is a pipe.
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

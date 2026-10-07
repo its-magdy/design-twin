@@ -16,7 +16,9 @@ import { ifDefined } from "../../bridge/src/json-util.ts";
 export interface ProgressPage { index: number; of: number; name: string; pageId?: string }
 /** The running counters a progress frame carries (each phase reports the ones it has). */
 export interface ProgressCounters { nodes?: number; assets?: number; components?: number }
-export interface RunBeginMsg { type: "run-begin"; source: RunInfo["source"]; label: string }
+/** `requestId` (a bridge run whose frame carried one) lets the bridge hand the `start` frame ui.html relays
+ *  to THAT request only, not to every request pending on the connection. */
+export interface RunBeginMsg { type: "run-begin"; source: RunInfo["source"]; label: string; requestId?: string }
 /** `abandoned` is present (and `true`) only when the run THREW because the bridge request that asked
  *  for it was abandoned — the one case where the window has no other way to learn why a run ended (a
  *  bridge run's error goes to the socket, never to the window). Absent otherwise, so the designer's
@@ -29,7 +31,11 @@ export interface ProgressMsg extends ProgressCounters {
   label: string;
   page?: ProgressPage;
 }
-export type ProgressPost = RunBeginMsg | RunEndMsg | ProgressMsg;
+/** A BRIDGE run accepted while another run is executing: it waits its turn (serializeRun, state.ts).
+ *  ui.html relays it over the socket — the caller's first sign of life when the file is busy with an
+ *  earlier export — and never opens the run chrome for it (the run has not begun). */
+export interface QueuedMsg { type: "progress"; phase: "queued"; source: "bridge"; label: string; requestId?: string }
+export type ProgressPost = RunBeginMsg | RunEndMsg | ProgressMsg | QueuedMsg;
 
 // ---------------------------------------------------------------- the cancellation error
 /** The message a cancelled run fails with. The BRIDGE sees this string VERBATIM: main.ts turns a
@@ -139,7 +145,7 @@ export function beginRun(info: RunInfo): void {
   cancelRequested = null;
   page = undefined;
   lastPost = 0;
-  post({ type: "run-begin", source: info.source, label: info.label });
+  post({ type: "run-begin", source: info.source, label: info.label, ...ifDefined("requestId", info.requestId) });
 }
 
 /** Bracket the end of a run — success, failure or cancellation alike. `abandoned` is true only when the
@@ -150,6 +156,13 @@ export function endRun(abandoned?: boolean): void {
   cancelRequested = null;
   page = undefined;
   post(abandoned ? { type: "run-end", abandoned: true } : { type: "run-end" });
+}
+
+/** Tell the window (and through it the bridge) that a bridge run is waiting behind another run.
+ *  UI runs post nothing: the designer clicked, and the window already shows the run ahead. */
+export function postQueued(run: RunInfo): void {
+  if (run.source !== "bridge") return;
+  post({ type: "progress", phase: "queued", source: "bridge", label: run.label, ...ifDefined("requestId", run.requestId) });
 }
 
 /** The UI's Cancel click. Returns the run it applies to, or null when nothing is running — the caller
@@ -171,11 +184,13 @@ export function requestAbandon(matches: (run: RunInfo) => boolean): RunInfo | nu
 }
 
 /** Throw if the designer pressed Cancel (CANCELLED_MESSAGE) or the bridge abandoned the request that
- *  asked for this run (ABANDONED_MESSAGE). Call this ONLY where the walk already awaits (between pages,
- *  between top-level frames, at the per-node asset export) — those are the points where the extractor
- *  holds no half-built structure. There is no way to interrupt an in-flight exportAsync, and a partial
- *  export must NEVER be delivered as a complete one, so aborting by throwing is the whole mechanism:
- *  every caller's error path already refuses to emit a doc. */
+ *  asked for this run (ABANDONED_MESSAGE). Call this ONLY where a throw cannot strand anything: between
+ *  pages, between top-level frames, at the per-node asset export, and at the start of each node's
+ *  serialize (serialize.ts — a throw there unwinds through partial trees nobody keeps). There is no way
+ *  to interrupt an in-flight exportAsync, and a partial export must NEVER be delivered as a complete
+ *  one, so aborting by throwing is the whole mechanism: every caller's error path already refuses to
+ *  emit a doc, and the per-run toggles are restored in `finally` blocks. A catch that swallows errors
+ *  around one of these points must be followed by another check (see collect.ts's catalog backstop). */
 export function checkCancelled(): void {
   if (cancelRequested === "designer") throw cancelledError();
   if (cancelRequested === "abandoned") throw abandonedError();

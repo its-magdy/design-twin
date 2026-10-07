@@ -30,7 +30,11 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./component-match.ts";
+import { visibleInstances, matchByNameAndSignature, nameVerdict, isRekeyed } from "./component-match.ts";
+import { findingIds } from "./finding-id.ts";
+import { isCodeConnectMap } from "./map-validate.ts";
+import { readJson, readJsonOrNull } from "./read-json.ts";
+import { isPageIndex, isPagesRootIndex } from "./doc-guards.ts";
 // hidden.ts's one predicate: `hidden: true` on the node or an ancestor. Both walks below return at a
 // hidden node, so its whole subtree is skipped — ancestry is carried by not descending.
 import { hiddenSelf } from "./hidden.ts";
@@ -44,8 +48,8 @@ import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import type {
-  CatalogComponent, ComponentsCatalog, ContrastFailure, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
-  BlockerCode, IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
+  CatalogComponent, CodeConnectMap, ComponentProposal, ComponentsCatalog, ContrastFailure, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
+  BlockerCode, IndexRow, IrNode, MatchResult, MatchRow, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
@@ -78,6 +82,12 @@ export interface CrossCheckInput {
   componentsFile?: string;
   /** the design-system dir given IS a --as-library export — changes the "export the library" advice */
   designSystemIsLibrary?: boolean;
+  /** F-47: the project's component map (codeconnect.local.json) — a proposal it already covers is labelled
+   *  `alreadyMapped` and listed last; nothing else changes */
+  map?: CodeConnectMap | null;
+  /** F-47: the OTHER exported screens (exportSiblings), called only when there are proposals — each
+   *  proposal's `sharedWith` counts the ones using the same component; null/absent = unknown (no field) */
+  siblings?: (() => CrossCheckScreen[]) | null;
 }
 
 // D1: "blocker" only with a BlockerCode — any other blocker is a compile error.
@@ -437,6 +447,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
 
   // ---------------------------------------------------------------- (b) catalog coverage
   let rekey: MatchResult | null = null;
+  let proposals: ComponentProposal[] = [];
   const coverage: CrossCheckCoverage = { instances: instances.length, distinct: 0, matchedByKey: 0, matchedByLocalKey: 0, matchedByName: 0, ambiguousName: 0, unmatched: 0, pct: null, localPct: null, entries: [] };
   // The LOCAL catalog is the one that matters: components.local.json is what map-bootstrap keys
   // codeconnect.local.json on and what build-screen resolves an instance against. components.library.json
@@ -453,12 +464,16 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     notChecked.push("component coverage — the screen export contains no INSTANCE nodes to compare.");
   } else {
     const byKey = new Map<string, CatalogComponent>();
-    const byName = new Map<string, CatalogComponent[]>();
-    for (const c of catalog) {
-      if (c.key) byKey.set(c.key, c);
-      const k = norm(c.name);
-      getOrInit(byName, k, () => []).push(c);
-    }
+    for (const c of catalog) if (c.key) byKey.set(c.key, c);
+    // DT-27: the name stage is component-match's — the SAME rows plan-skeleton reads, judged by the same
+    // nameVerdict — so the coverage table and the plan's catalog column cannot disagree on a component.
+    // Its catalog is the LOCAL one (components.library.json only explains residuals there), so a name
+    // that exists only in the library is no longer a name match here (K-5; a key hit there still counts).
+    // Duplicating a Figma file re-mints every component key, so 0% by key is ALSO what a duplicated design
+    // system looks like — and there the names AND prop signatures still agree. Its matches are only ever
+    // proposals for a person to confirm.
+    rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
+    const rowByName = new Map<string, MatchRow>((rekey ? rekey.rows : []).map((r): [string, MatchRow] => [r.name, r]));
     // Distinct on the SET key where there is one: a screen using six Button variants is one component
     // to map, not six, and counting variants would flatter the coverage number.
     const distinct = new Map<string, ScreenInstance & { count: number }>();
@@ -476,52 +491,48 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
         coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
         continue;
       }
-      // Name+structure fallback. Never authoritative: a name match is a CANDIDATE, carried with
-      // `verified: false` so build-screen can say "mapped by name, unverified" instead of either
-      // pretending it is a real mapping or throwing away the only lead there is. Structure — how many
-      // of the instance's prop names the candidate actually declares — is what separates a real
-      // rename from two unrelated components both called `Header`.
-      const cands = byName.get(norm(i.setName)) || [];
-      let best: { c: CatalogComponent; score: number; hit: number; of: number } | null = null;
-      for (const c of cands) {
-        const props = Object.keys(c.props || {}).map((p) => norm(String(p).split("#")[0]));
-        const want = i.propNames.map((p) => norm(String(p).split("#")[0]));
-        const hit = want.filter((p) => props.includes(p)).length;
-        const score = want.length ? hit / want.length : props.length ? 0 : 0.5;
-        if (!best || score > best.score) best = { c, score, hit, of: want.length };
-      }
-      // An AMBIGUOUS name is not a lead, it is a coin flip. The live file's own hygiene output flags
-      // `Component 1`, `Header`, `Tabs` as duplicated/unnamed, and several catalog entries share each —
-      // binding on that is the failure a name fallback exists to avoid, so it counts as unmatched and
-      // is carried only as a suggestion.
-      if (best && cands.length > 1) {
-        coverage.ambiguousName++;
-        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
-      } else if (best && (best.score >= 0.5 || cands.length === 1)) {
+      // Name fallback. Never authoritative: a name match is a CANDIDATE, carried with `verified: false`
+      // so build-screen can say "mapped by name, unverified" instead of either pretending it is a real
+      // mapping or throwing away the only lead there is. A match needs the prop SIGNATURE to agree too —
+      // that is what separates a real rename from two unrelated components both called `Header` — and a
+      // name several entries share is AMBIGUOUS (a coin flip, left unmatched) unless the signature picks
+      // one or they are duplicates of one definition (nameVerdict).
+      const row = rowByName.get(i.setName);
+      const verdict = row ? nameVerdict(row) : null;
+      const matched = row && verdict && verdict.status === "matched" ? row.match : null;
+      if (row && matched) {
         coverage.matchedByName++;
+        // how many of the instance's prop names the matched entry declares (informational)
+        const cat = localComps.find((c) => (matched.key ? c.key === matched.key : matched.id !== undefined && c.id === matched.id));
+        const props = Object.keys((cat && cat.props) || {}).map((p) => norm(String(p).split("#")[0]));
+        const hit = i.propNames.filter((p) => props.includes(norm(String(p).split("#")[0]))).length;
         coverage.entries.push({
           setName: i.setName,
           ...ifDefined("key", i.setKey || i.key),
           matchedBy: "name",
           verified: false,
-          catalogName: best.c.name,
-          ...ifDefined("catalogKey", best.c.key),
-          propOverlap: `${best.hit}/${best.of}`,
+          catalogName: matched.name,
+          ...ifDefined("catalogKey", matched.key),
+          ...ifDefined("evidence", row.evidence),
+          propOverlap: `${hit}/${i.propNames.length}`,
           instances: i.count,
         });
+      } else if (row && verdict && verdict.status === "ambiguous") {
+        coverage.ambiguousName++;
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: (row.candidates || []).length, reason: verdict.reason, instances: i.count });
       } else {
         coverage.unmatched++;
-        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, verified: false, instances: i.count });
+        coverage.entries.push({
+          setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, verified: false,
+          reason: verdict ? verdict.reason : `no ${catFile} to match names against (a components.library.json name alone is not a match)`,
+          instances: i.count,
+        });
       }
     }
     coverage.pct = Math.round((coverage.matchedByKey / coverage.distinct) * 100);
     coverage.localPct = Math.round((coverage.matchedByLocalKey / coverage.distinct) * 100);
 
-    // Before concluding "wrong catalog": the copy/re-key case (livetest-3 #226). Duplicating a Figma
-    // file re-mints every component key, so 0% by key is ALSO what a duplicated design system looks
-    // like — and there the names AND prop signatures still agree. component-match.ts decides, and its
-    // matches are only ever proposals for a person to confirm.
-    rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
+    // Before concluding "wrong catalog": the copy/re-key case (livetest-3 #226) — `rekey` above.
     // the re-key result, only when it says the catalog was re-keyed (null otherwise)
     const rekeyedBy = rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey) ? rekey : null;
     const rekeyed = !!rekeyedBy;
@@ -559,7 +570,11 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     for (const s of screens) for (const root of screenRoots(s.doc)) everyInstance(root);
     coverage.hiddenOnly = hiddenOnly.size;
     if (rekeyedBy) {
-      const s = rekeyedBy.summary, props = rekeyedBy.proposals;
+      const s = rekeyedBy.summary;
+      proposals = labelProposals(rekeyedBy, visible, input.map || null, input.siblings || null);
+      const props = proposals;
+      const mapped = props.filter((p) => p.alreadyMapped).length, toConfirm = props.length - mapped;
+      const shared = props.filter((p) => !p.alreadyMapped && (p.sharedWith || 0) > 0).length;
       const residual = rekeyedBy.rows.filter((r) => !r.match);
       push(
         "warning",
@@ -568,16 +583,19 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           `also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. ` +
           `That is not a foreign library — it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every ` +
           `component key), or the library was re-published. Proposed matches (confirm each before reuse — nothing is auto-accepted): ` +
-          props.slice(0, 12).map((r) => `'${r.name}' → ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare — weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") +
+          props.slice(0, 12).map((r) => `'${r.name}' → ${r.catalog ? r.catalog.id : "?"}${r.evidence === "name+no-props" ? " (no props to compare — weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}${r.alreadyMapped ? " (already mapped)" : ""}`).join(", ") +
           (props.length > 12 ? `, … (${props.length} in all — see componentProposals)` : "") + `. ` +
+          // F-47: labels only — what is already in the map, and what other exported screens share
+          (mapped ? (toConfirm ? `${props.length} proposals, ${mapped} already mapped in the component map — confirm only the other ${toConfirm}. ` : `All ${props.length} proposals are already mapped in the component map — nothing is left to confirm. `) : "") +
+          (shared ? `${shared} of the proposals to confirm are on other exported screens too (shared chrome) — confirm those once. ` : "") +
           `${residual.length} name(s) are not in ${catFile}` +
-          (buckets.libraryKey + buckets.nameOnly
-            ? ` — of the table's rows, ${buckets.libraryKey + buckets.nameOnly} are third-party components.library.json matches and ${buckets.newWork} new work`
+          (buckets.libraryKey
+            ? ` — of the table's rows, ${buckets.libraryKey} are third-party components.library.json key matches and ${buckets.newWork} new work`
             : ` and stay new work`) +
           (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", …" : ""})` : "") + `. ` +
           `To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run ` +
           `the map-bootstrap script (\`<${catFile}> --out design/codeconnect.local.json --from-proposals <this report>.json\`) — it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
-        { rekey: s, proposals: props.length, confirm: `${s.proposed} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file) — confirm the proposed matches before reusing them as mappings.` }
+        { rekey: s, proposals: props.length, confirm: `${toConfirm} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file)${mapped ? ` — ${mapped} more are already mapped` : ""} — confirm the proposed matches before reusing them as mappings.` }
       );
     } else if (coverage.localPct <= WRONG_CATALOG_PCT) {
       push(
@@ -619,8 +637,8 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       push(
         "info",
         "name-matched-components",
-        `${named.length} component(s) have no key in the catalog but DO have an exact name twin there: ` +
-          named.slice(0, 10).map((e) => `'${e.setName}' (props ${e.propOverlap})`).join(", ") + (named.length > 10 ? `, …` : "") +
+        `${named.length} component(s) have no key in the catalog but DO have an exact name twin there whose prop signature agrees: ` +
+          named.slice(0, 10).map((e) => `'${e.setName}' (${e.evidence === "name+no-props" ? "no props to compare" : `props ${e.propOverlap}`})`).join(", ") + (named.length > 10 ? `, …` : "") +
           `. Mapped BY NAME, UNVERIFIED — confirm one with "Go to main component" before reusing any of their code; ` +
           `if that one instance points at the catalog's file, the rest almost certainly do too.`,
         { components: named.map((e) => ({ setName: e.setName, ...ifDefined("catalogName", e.catalogName), ...ifDefined("catalogKey", e.catalogKey), ...ifDefined("propOverlap", e.propOverlap), verified: false })) }
@@ -632,7 +650,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       push(
         "warning",
         "ambiguous-component-name",
-        `${amb.length} component(s) share their name with SEVERAL catalog entries and were left unmatched on purpose: ` +
+        `${amb.length} component(s) share their name with SEVERAL catalog entries, and no prop signature picks one of them, so they were left unmatched on purpose: ` +
           amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", …" : "") +
           `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed — ` +
           `binding code to one of them by name would be a guess with a 1-in-${firstAmb.candidates} chance.`,
@@ -781,18 +799,18 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   contrastPerMode(screens, variables, tokens, push, resolvedModes);
 
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
+  // F-44: every finding carries the id a plan's auditGate.overridden names (finding-id.ts) — the same
+  // function audit.ts uses, over the report in its final order.
+  const ids = findingIds(findings);
+  findings.forEach((f, i) => { const id = ids[i]; if (id !== undefined) f.id = id; });
   const count = (s: Severity): number => findings.filter((f) => f.severity === s).length;
   return {
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
     coverage,
     // The confirmation list (catalog-rekeyed). Every entry starts unconfirmed; map-bootstrap.ts
     // --from-proposals stubs only the ones a person set "confirmed": true on.
-    componentProposals: rekey && coverage.rekey && coverage.rekey.rekeyed
-      ? rekey.proposals.map((r) => ({
-          name: r.name, instances: r.instances, screens: r.screens, instanceKeys: r.instanceKeys, remote: r.remote,
-          catalog: r.match, ...ifDefined("evidence", r.evidence), tie: r.tie || null, alternatives: r.alternatives, reasons: r.reasons, confirmed: false,
-        }))
-      : [],
+    // F-47: unconfirmed first (shared chrome before screen-only), already-mapped last.
+    componentProposals: proposals,
     componentResidual: rekey && coverage.rekey && coverage.rekey.rekeyed ? rekey.rows.filter((r) => !r.match).map((r) => ({ name: r.name, instances: r.instances, reasons: r.reasons })) : [],
     findings,
     notChecked,
@@ -806,6 +824,87 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   };
 }
 
+
+// ---------------------------------------------------------------- F-47: proposals, labelled
+// On a re-keyed file most proposals are the shell every screen shares (header, sidebar, page title),
+// re-proposed on every screen, and several are already in the map. Two LABELS say so — nothing is
+// auto-confirmed, no severity changes:
+//   * alreadyMapped — the map has an entry under, or whose figma.key is, one of the name's instance keys /
+//     set keys (the screen's own keys: an entry under the catalog key alone resolves no re-keyed instance);
+//   * sharedWith    — how many OTHER exported screens use the same component (by instance or set key);
+//                     absent when the export's other screens are unknown (K-12: unexported ones never count).
+// Order: to confirm first — shared before screen-only, most-shared first — then the already-mapped ones.
+function labelProposals(rekey: MatchResult, visible: ReturnType<typeof visibleInstances>, map: CodeConnectMap | null, siblings: (() => CrossCheckScreen[]) | null): ComponentProposal[] {
+  const mapKeys = new Set<string>();
+  for (const [k, e] of Object.entries((map && map.components) || {})) {
+    mapKeys.add(k);
+    if (e && e.figma && e.figma.key) mapKeys.add(e.figma.key);
+  }
+  // every key and set key the screen's instances of a name carry (proposal.instanceKeys has one per instance)
+  const keysOf = new Map<string, Set<string>>();
+  for (const i of visible) {
+    const ks = getOrInit(keysOf, i.name, () => new Set<string>());
+    if (i.key) ks.add(i.key);
+    if (i.setKey) ks.add(i.setKey);
+  }
+  const others = rekey.proposals.length && siblings ? siblings().map((s) => {
+    const ks = new Set<string>();
+    for (const i of visibleInstances(s.doc, s.label)) { if (i.key) ks.add(i.key); if (i.setKey) ks.add(i.setKey); }
+    return ks;
+  }) : null;
+  const out = rekey.proposals.map((r): ComponentProposal => {
+    const keys = keysOf.get(r.name) || new Set<string>(r.instanceKeys);
+    // the screen's OWN keys only: a map entry under the catalog key (a map-bootstrap stub) resolves no re-keyed instance
+    const mapped = [...keys].some((k) => mapKeys.has(k));
+    return {
+      name: r.name, instances: r.instances, screens: r.screens, instanceKeys: r.instanceKeys, remote: r.remote,
+      catalog: r.match, ...ifDefined("evidence", r.evidence), tie: r.tie || null, alternatives: r.alternatives, reasons: r.reasons, confirmed: false,
+      ...(mapped ? { alreadyMapped: true as const } : {}),
+      ...ifDefined("sharedWith", others ? others.filter((o) => [...keys].some((k) => o.has(k))).length : undefined),
+    };
+  });
+  const rank = (p: ComponentProposal): number => (p.alreadyMapped ? 2 : (p.sharedWith || 0) > 0 ? 0 : 1);
+  return out.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || (b.p.sharedWith || 0) - (a.p.sharedWith || 0) || a.i - b.i).map((x) => x.p);
+}
+
+// The OTHER screens of the export a screen file sits in (<root>/pages/<Page>/<Screen>.json, rows from
+// <root>/pages/index.json — or each page's own index.json for an older export), minus the files being
+// checked. A thunk: nothing is read until a report has proposals to label. null when a file is not inside
+// such an export (a legacy design/<Screen>.json) — sharedWith is then unknown, not 0.
+function exportSiblings(files: readonly string[]): (() => CrossCheckScreen[]) | null {
+  const checked = new Set(files.map((f) => path.resolve(f)));
+  const roots = new Set<string>();
+  for (const f of checked) {
+    const pages = path.dirname(path.dirname(f));
+    if (path.basename(pages) === "pages" && fs.existsSync(path.join(pages, "index.json"))) roots.add(path.dirname(pages));
+  }
+  if (!roots.size) return null;
+  return () => {
+    const out: CrossCheckScreen[] = [];
+    const seen = new Set<string>(checked);
+    for (const root of roots) {
+      const index = readJsonOrNull(path.join(root, "pages", "index.json"), isPagesRootIndex);
+      if (!index) continue;
+      let rows: IndexRow[] = index.layers || [];
+      if (!index.layers) {
+        for (const pd of index.pageDirs) {
+          const idx = pd.dir ? readJsonOrNull(path.join(root, "pages", pd.dir, "index.json"), isPageIndex) : null;
+          if (idx) rows = rows.concat(idx.layers);
+        }
+      }
+      for (const row of rows) {
+        const rel = row.file;
+        if (!rel || path.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) continue; // a path inside the export only
+        const file = path.resolve(root, rel);
+        if (seen.has(file)) continue;
+        seen.add(file);
+        const doc = readJsonOrNull(file, isScreenDoc);
+        if (doc) out.push({ doc, label: path.basename(file, ".json") });
+      }
+    }
+    return out;
+  };
+}
 
 // ---------------------------------------------------------------- contrast (WCAG 2.2: color.ts)
 // WCAG AA for body text. Large text is 3:1, but the export does not reliably say which is which and
@@ -984,19 +1083,31 @@ function toMarkdown(res: CrossCheckReport): string {
     L.push("## Proposed component matches — confirm before reuse", "");
     L.push("*Matched by name + prop signature because the keys were re-minted (a duplicated file or a re-published library).",
       "Nothing here is accepted until a person sets `\"confirmed\": true` on the entry in the JSON report.*", "");
-    L.push("| instance name | × | → catalog | id | page | evidence | why |", "|---|--:|---|---|---|---|---|");
-    for (const p of res.componentProposals) {
-      // crossCheck builds every proposal from a ProposedMatchRow (match typed non-null), so no row is skipped
-      const cat = p.catalog;
-      if (!cat) continue;
-      L.push(`| \`${p.name}\` | ${p.instances} | \`${cat.name}\` | ${cat.id} | ${cat.page || ""} | ${p.evidence}${p.tie ? ` (${p.tie})` : ""} | ${p.reasons.join("; ")} |`);
+    // F-47: grouped by what a person has to do — confirm a shared one once, confirm a screen-only one, or
+    // nothing (already mapped). Labels only; every row is still unconfirmed in the JSON.
+    const all = res.componentProposals;
+    const groups: Array<[string, ComponentProposal[]]> = [
+      ["Shared with other exported screens — confirm once", all.filter((p) => !p.alreadyMapped && (p.sharedWith || 0) > 0)],
+      [all.some((p) => p.sharedWith !== undefined) ? "This screen only" : "To confirm", all.filter((p) => !p.alreadyMapped && !((p.sharedWith || 0) > 0))],
+      ["Already in the component map — nothing to confirm", all.filter((p) => p.alreadyMapped)],
+    ];
+    for (const [title, list] of groups) {
+      if (!list.length) continue;
+      L.push(`### ${title} (${list.length})`, "");
+      L.push("| instance name | × | → catalog | id | page | evidence | shared with | why |", "|---|--:|---|---|---|---|--:|---|");
+      for (const p of list) {
+        // crossCheck builds every proposal from a ProposedMatchRow (match typed non-null), so no row is skipped
+        const cat = p.catalog;
+        if (!cat) continue;
+        L.push(`| \`${p.name}\` | ${p.instances} | \`${cat.name}\` | ${cat.id} | ${cat.page || ""} | ${p.evidence}${p.tie ? ` (${p.tie})` : ""} | ${p.sharedWith === undefined ? "?" : `${p.sharedWith} other screen(s)`} | ${p.reasons.join("; ")} |`);
+      }
+      L.push("");
     }
-    L.push("");
     if (res.componentResidual && res.componentResidual.length) {
-      const twin = new Set((c && c.entries ? c.entries : []).filter((e) => e.bucket === "nameOnly" || e.bucket === "libraryKey").map((e) => e.setName));
+      const twin = new Set((c && c.entries ? c.entries : []).filter((e) => e.bucket === "libraryKey").map((e) => e.setName));
       const fresh = res.componentResidual.filter((r) => !twin.has(r.name)), known = res.componentResidual.filter((r) => twin.has(r.name));
       L.push(`**Not in the component catalog (${res.componentResidual.length}):** ` +
-        (known.length ? `${known.length} are in (or named like an entry of) components.library.json — third-party, see the table: ${known.map((r) => `\`${r.name}\``).join(", ")}. ` : "") +
+        (known.length ? `${known.length} are in components.library.json by key — third-party, see the table: ${known.map((r) => `\`${r.name}\``).join(", ")}. ` : "") +
         `${fresh.length} are new work${fresh.length ? ": " + fresh.map((r) => `\`${r.name}\``).join(", ") : ""}.`, "");
     }
   }
@@ -1015,23 +1126,23 @@ function toMarkdown(res: CrossCheckReport): string {
   return L.join("\n") + "\n";
 }
 
-export { crossCheck, toMarkdown, composedRgba, ABSURD_NUMBER, WRONG_CATALOG_PCT };
+export { crossCheck, toMarkdown, composedRgba, exportSiblings, ABSURD_NUMBER, WRONG_CATALOG_PCT };
 
 // CLI: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system]
-//        [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]
+//        [--variables design/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]
 // Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
 // document it should be is a one-line error and exit 2.
 function main(argv: string[]): number {
   const USAGE =
     `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/export/design-system | design/export/libraries/<dir>] ` +
-    "[--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
+    "[--variables design/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
   const OPTIONS = {
-    "design-system": { type: "string" }, variables: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    "design-system": { type: "string" }, variables: { type: "string" }, map: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals: files } = cliParse("cross-check", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); return 0; }
   if (!files.length) { console.error(USAGE); return 2; }
-  const { "design-system": dsDir, variables: varsFile, out } = flags;
+  const { "design-system": dsDir, variables: varsFile, map: mapFlag, out } = flags;
   const jsonOnly = !!flags.json, gate = !!flags.gate;
 
   // Optional inputs are read only when present: the whole point is that this runs on a project that
@@ -1056,6 +1167,17 @@ function main(argv: string[]): number {
   }
   // design-system/ or a library export's libraries/<dir>/ (components.json) — design-system-dir.ts, shared with audit.ts
   const ds = readDesignSystemDir(dsBase);
+  // F-47: the component map only LABELS proposals (alreadyMapped). --map is checked like any named input;
+  // the default (design/codeconnect.local.json, else ./codeconnect.local.json — plan-skeleton's discovery)
+  // is optional, so a broken one is a warning, never a failed check.
+  let map: CodeConnectMap | null = null;
+  if (mapFlag) map = readDocFile(mapFlag, "component map", isCodeConnectMap);
+  else {
+    const found = ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs.existsSync(f));
+    const r = found ? readJson(found, isCodeConnectMap) : null;
+    if (found && r && "doc" in r) { map = r.doc; console.error(`map: ${found}`); }
+    else if (found && r && "error" in r) console.error(`warn  ${found} ${r.error} — proposals are not labelled alreadyMapped (pass --map to fail on it)`);
+  }
   const res = crossCheck({
     screens,
     sliceSources: ctx.sliceSources,
@@ -1067,6 +1189,8 @@ function main(argv: string[]): number {
     stylesText: ds.stylesText,
     componentsFile: ds.componentsFile,
     designSystemIsLibrary: ds.isLibrary,
+    map,
+    siblings: exportSiblings(files),
   });
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");

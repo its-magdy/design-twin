@@ -11,7 +11,8 @@
 // against the screen's own name.
 import fs from "node:fs";
 import path from "node:path";
-import { blockerIds } from "./audit.ts";
+import { blockerIds, reportFindings } from "./audit.ts";
+import { legacyBlockerIds } from "./finding-id.ts";
 import { isAuditReport } from "./doc-guards.ts";
 import { readJson } from "./read-json.ts";
 
@@ -50,7 +51,11 @@ function locateAuditFile(cwd: string, screenFile: string | null | undefined, scr
 /** What auditGateStatus knows about a screen's audit file. */
 export interface AuditGateStatus {
   auditFile: string | null;
+  /** F-44 ids (finding-id.ts) of the report's blockers, in report order */
   blockers: string[];
+  /** the same blockers' pre-F-44 positional ids (`<code>#<i>`), index for index — a plan written against
+   *  them still covers its blockers */
+  legacyBlockers: string[];
   unreadable?: true;
   /** why it is unreadable (read-json.ts wording: "is not valid JSON — …", "is not an audit report …") */
   error?: string;
@@ -58,12 +63,12 @@ export interface AuditGateStatus {
 
 function auditGateStatus(cwd: string, screenFile: string | null | undefined, screenName: string | null | undefined): AuditGateStatus {
   const rel = locateAuditFile(cwd, screenFile, screenName);
-  if (!rel) return { auditFile: null, blockers: [] };
+  if (!rel) return { auditFile: null, blockers: [], legacyBlockers: [] };
   // An audit report (audit.ts --out). A file there that cannot be read, or is not an audit report, is
   // `unreadable` — never "no blockers".
   const r = readJson(path.join(cwd, rel), isAuditReport);
-  if (!("doc" in r)) return { auditFile: rel, blockers: [], unreadable: true, error: r.error };
-  return { auditFile: rel, blockers: blockerIds(r.doc) };
+  if (!("doc" in r)) return { auditFile: rel, blockers: [], legacyBlockers: [], unreadable: true, error: r.error };
+  return { auditFile: rel, blockers: blockerIds(r.doc), legacyBlockers: legacyBlockerIds(reportFindings(r.doc)) };
 }
 
 export { locateAuditFile, auditGateStatus, blockerIds, slug };

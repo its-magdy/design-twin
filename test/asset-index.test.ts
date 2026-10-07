@@ -12,8 +12,9 @@ import { screenReply } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import * as writeOut from "../bridge/src/write-out.ts";
 import * as owners from "../bridge/src/asset-owners.ts";
+import * as snapshotMeta from "../bridge/src/snapshot-meta.ts";
 import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
-import type { Asset, IrNode, Manifest, ScreenExport } from "../bridge/src/doc-types.ts";
+import type { Asset, IrNode, Manifest, ScreenExport, Variable } from "../bridge/src/doc-types.ts";
 
 const FIX = path.join(import.meta.dirname, "fixtures", "g13", "svg");
 const read = (f: string): string => fs.readFileSync(path.join(FIX, f), "utf8");
@@ -497,6 +498,105 @@ console.log("\nD63 — any geometry fallback warns, naming the nodes:");
   t("[DT-10 warn] no assetsHidden counter, no hidden line", () => !p.log.some((l) => /hidden graphic/.test(l)));
   const many = writeOut.assetsGeometryWarning({ nodes: 50, assetsGeometry: 7 }, [{ id: "1", type: "FRAME", name: "F", children: [1, 2, 3, 4, 5, 6, 7].map((i) => ({ id: "g" + i, type: "VECTOR", name: "V" + i, geometry: {} })) }]) ?? "";
   t("[DT-10 warn] at most 5 are named, then …", () => many.endsWith(": V1 (g1), V2 (g2), V3 (g3), V4 (g4), V5 (g5), …"));
+}
+
+
+// ------------------------------------------------------------------ group 14: F-06 keepPrev, DT-71, O-1, F-07
+// Guarded: a write-out / snapshot-meta from before group 14 lacks these behaviours (or the export), and each
+// check must then FAIL with ✗, never crash the suite.
+console.log("\nF-06 — keepPrev keeps <screen>.json.prev when the existing file differs:");
+{
+  const dir = tmp("prev");
+  const one = (opts: { keepPrev?: boolean } | undefined, title: string, exportedAt = "2026-10-07T00:00:00.000Z"): { prev: string | undefined; log: string[] } => {
+    const log: string[] = [];
+    let prev: string | undefined;
+    try {
+      const r = writeOut.writeScreen(dir, screenReply({
+        screenName: "Prev", nodeId: "9:1", page: "Page", pageId: "0:1",
+        screen: { screen: "Prev", exportedAt, nodes: [{ id: "9:1", type: "FRAME", name: "Prev", children: [{ id: "9:2", type: "TEXT", name: "T", text: title }] }], manifest: { nodes: 2 } },
+      }), (m) => log.push(m), opts);
+      const w: Record<string, unknown> = r.wrote;
+      prev = typeof w.prev === "string" ? w.prev : undefined;
+    } catch (e) { log.push("THREW " + String(e instanceof Error ? e.message : e)); }
+    return { prev, log };
+  };
+  const file = path.join(dir, "pages", "Page", "Prev__9_1.json");
+  const first = one({ keepPrev: true }, "Hello");
+  t("[F06 unit] a first write keeps nothing (no file to keep)", () => first.prev === undefined && !fs.existsSync(file + ".prev"));
+  const same = one({ keepPrev: true }, "Hello");
+  t("[F06 unit] an identical re-write keeps nothing", () => same.prev === undefined && !fs.existsSync(file + ".prev"));
+  const changed = one({ keepPrev: true }, "Changed");
+  t("[F06 unit] a differing re-write keeps the old bytes as <screen>.json.prev and wrote.prev names it",
+    () => changed.prev === file + ".prev" && fs.readFileSync(file + ".prev", "utf8").includes("Hello") && fs.readFileSync(file, "utf8").includes("Changed"));
+  t("[F06 unit] …and logs it", () => changed.log.some((l) => /kept the previous .*Prev__9_1\.json as Prev__9_1\.json\.prev/.test(l)));
+  fs.rmSync(file + ".prev", { force: true });
+  const plain = one(undefined, "Again");
+  t("[F06 unit] without keepPrev (an explicit pull) nothing is kept", () => plain.prev === undefined && !fs.existsSync(file + ".prev"));
+  // Review 1 M-1: every plugin reply carries a fresh exportedAt, so two spills of an unchanged design differ only
+  // in the stamp. The second must not replace the .prev that holds what the FIRST spill displaced.
+  fs.rmSync(file + ".prev", { force: true });
+  one(undefined, "Original", "2026-10-07T01:00:00.000Z");
+  const spill1 = one({ keepPrev: true }, "Spilled", "2026-10-07T02:00:00.000Z");
+  const spill2 = one({ keepPrev: true }, "Spilled", "2026-10-07T03:00:00.000Z");
+  const prevText = ((): string => { try { return fs.readFileSync(file + ".prev", "utf8"); } catch { return ""; } })();
+  t("[F06 M-1] a first spill over the user's own export keeps it as .prev", () => spill1.prev === file + ".prev");
+  t("[F06 M-1] a re-spill of the same design with a different exportedAt keeps nothing new", () => spill2.prev === undefined);
+  t("[F06 M-1] …and .prev still holds the user's original", () => prevText.includes("Original") && !prevText.includes("Spilled"));
+  t("[F06 M-1] …and the target got the new stamp", () => fs.readFileSync(file, "utf8").includes("2026-10-07T03:00:00.000Z"));
+}
+
+console.log("\nDT-71 — a pull that grows variables.json says a generated theme is now behind:");
+{
+  const dir = tmp("dt71");
+  const v = (key: string, name: string): Variable => ({ name, collection: "Color", key, type: "COLOR", tier: "primitive", values: { Light: "#ffffff" } });
+  const pullVars = (vars: Variable[]): string[] => {
+    const log: string[] = [];
+    try {
+      writeOut.writeScreen(dir, screenReply({
+        screenName: "Vars", nodeId: "9:1", page: "Page", pageId: "0:1",
+        screen: { screen: "Vars", nodes: [{ id: "9:1", type: "FRAME", name: "Vars" }] },
+        variables: { collections: [], variables: vars, hygiene: [] },
+      }), (m) => log.push(m));
+    } catch (e) { log.push("THREW " + String(e instanceof Error ? e.message : e)); }
+    return log;
+  };
+  const first = pullVars([v("k1", "surface")]);
+  t("[DT71-4] the first pull (variables.json created) says nothing is behind", () => first.length > 0 && !first.some((l) => /now behind/.test(l)));
+  const grown = pullVars([v("k1", "surface"), v("k2", "accent")]);
+  t("[DT71-4] a pull adding 1 variable logs \"1 new variable(s) merged … now behind\"",
+    () => grown.some((l) => /^info {2}1 new variable\(s\) merged into variables\.json — a token\/theme file generated from it is now behind/.test(l)));
+  const same = pullVars([v("k1", "surface"), v("k2", "accent")]);
+  t("[DT71-4] a pull adding nothing does not", () => same.length > 0 && !same.some((l) => /now behind/.test(l)));
+}
+
+console.log("\nO-1 — the inline limit stays under Claude Code's 50,000-char persist threshold:");
+t("[O-1] default (no MAX_MCP_OUTPUT_TOKENS) is capped at 48000", () => writeOut.inlineLimitChars({}) === 48000);
+t("[O-1] a larger MAX_MCP_OUTPUT_TOKENS does not raise it past 48000", () => writeOut.inlineLimitChars({ MAX_MCP_OUTPUT_TOKENS: "100000" }) === 48000);
+t("[O-1] a smaller MAX_MCP_OUTPUT_TOKENS still lowers it (5000 tokens → 16000 chars)", () => writeOut.inlineLimitChars({ MAX_MCP_OUTPUT_TOKENS: "5000" }) === 16000);
+
+console.log("\nF-07 — lastScreenExport reads the newest row of pages/index.json:");
+{
+  const fn: unknown = (snapshotMeta as Record<string, unknown>)["lastScreenExport"];
+  const last = (dir: string, now?: number): unknown => (typeof fn === "function" ? (fn as (d: string, n?: number) => unknown)(dir, now) : "missing");
+  const dir = tmp("last");
+  fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
+  const idx = (doc: unknown) => fs.writeFileSync(path.join(dir, "pages", "index.json"), typeof doc === "string" ? doc : JSON.stringify(doc));
+  idx({ pageDirs: [], layers: [
+    { name: "Old", id: "1:1", file: "pages/P/Old__1_1.json", exportedAt: "2026-10-01T00:00:00.000Z" },
+    { name: "New", id: "2:2", file: "pages/P/New__2_2.json", exportedAt: "2026-10-05T00:00:00.000Z", sourceFile: "Sample App" },
+    { name: "Mid", id: "3:3", file: "pages/P/Mid__3_3.json", exportedAt: "2026-10-03T00:00:00.000Z" },
+  ] });
+  const now = Date.parse("2026-10-05T00:00:10.000Z");
+  const got = last(dir, now);
+  const rec = (x: unknown): Record<string, unknown> => (x && typeof x === "object" ? { ...x } : {});
+  t("[F07 unit] the newest row by exportedAt wins (not the last one)", () => rec(got).id === "2:2" && rec(got).name === "New" && rec(got).file === "pages/P/New__2_2.json");
+  t("[F07 unit] …with its age and sourceFile", () => rec(got).ageMs === 10000 && rec(got).sourceFile === "Sample App");
+  idx({ exportedAt: "2026-10-06T00:00:00.000Z", pageDirs: [], layers: [{ name: "Walked", id: "4:4", file: "pages/P/Walked__4_4.json" }] });
+  t("[F07 unit] a page-walk row without its own stamp uses the index's exportedAt", () => rec(last(dir)).id === "4:4" && rec(last(dir)).exportedAt === "2026-10-06T00:00:00.000Z");
+  idx("{ not json");
+  t("[F07 unit] a garbled index → null", () => last(dir) === null);
+  fs.rmSync(path.join(dir, "pages", "index.json"));
+  t("[F07 unit] no index → null", () => last(dir) === null);
 }
 
 report();

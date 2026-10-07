@@ -3,7 +3,7 @@
 
 import type { Asset, Manifest } from "../../bridge/src/doc-types.ts";
 import { errMsg } from "./util";
-import { abandonedError, beginRun, endRun, isAbandonment, requestAbandon, type RunInfo } from "./progress";
+import { abandonedError, beginRun, endRun, isAbandonment, postQueued, requestAbandon, type RunInfo } from "./progress";
 import { resetAssetNames } from "./assets";
 import { readOptDefaults, type ReadOptName } from "../../bridge/src/read-opts.ts";
 
@@ -197,16 +197,24 @@ export const getCollection = collectionLookup.obj;
 interface QueuedRun { run: RunInfo; abandoned: boolean }
 const queuedRuns = new Set<QueuedRun>();
 let runChain: Promise<unknown> = Promise.resolve();
+// Runs accepted and not yet finished (queued or executing). Above 0 when a new run arrives = it will
+// wait, which a BRIDGE caller is told at once (postQueued): its stall check reads any frame as life,
+// and a run queued behind a long export is busy, not stalled. Counted down when the run itself settles
+// (not on a later tick of the chain), so a run that arrives just after the last one ended is not
+// reported as queued.
+let inChain = 0;
 export function serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
   const ticket: QueuedRun = { run, abandoned: false };
   queuedRuns.add(ticket);
+  if (inChain > 0) postQueued(run);
+  inChain++;
   const go = (): Promise<T> => {
     queuedRuns.delete(ticket);
     // Abandoned while it waited: fail at once, WITHOUT calling fn and without bracketing — it never
     // executed, so the window must never see a run-begin/run-end for it. The chain proceeds as it
     // does after any failed run.
-    if (ticket.abandoned) return Promise.reject(abandonedError());
-    return bracket(fn, run);
+    if (ticket.abandoned) { inChain--; return Promise.reject(abandonedError()); }
+    return bracket(fn, run).finally(() => { inChain--; });
   };
   const next = runChain.then(go, go);
   runChain = next.then(() => {}, () => {});

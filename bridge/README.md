@@ -151,6 +151,12 @@ README documents the flags, and either spelling is fine everywhere:
 | `dtwin help` | `--help` |
 | `dtwin doctor` · `dtwin init` · `dtwin mcp` · `dtwin seed` | their own entry points (no flag form) |
 
+Every verb has its own page: `dtwin <verb> --help` (e.g. `dtwin whoami --help`, `dtwin serve --help`) prints
+that verb's flags and exits without starting a bridge. `outDir` is **positional** (`dtwin pull my-dir`):
+`--out` / `-o` / `--output` / `--out-dir` / `--dir` are refused with a hint saying so. The port is chosen
+only by the `FIGMA_BRIDGE_PORT` environment variable (8787, 8788 or 8789; there is no `--port` flag, and
+`DTWIN_PORT` is not read — `dtwin` and `doctor` warn when it is set).
+
 A command is only recognised as the **first** argument, so `dtwin design` still means "pull into
 `./design`". For an output directory spelled like a command, write `dtwin pull list` or `dtwin ./list`.
 
@@ -211,6 +217,13 @@ request (a bridge answers `426`) rather than a WebSocket — a WebSocket client 
 plugin and disturb whoever owns that bridge.
 
 ## Read: figma-pull (CLI) — recommended for bulk extraction
+
+Every direct run ends with `done in 12.4s — waited 9.8s for the plugin to connect · export 2.4s · write 0.2s`
+(or `via the running daemon · export (incl. any wait for the plugin) 2.6s` when a daemon answered: the
+daemon waits for a not-yet-connected plugin inside the request, so that wait is in the export figure). A long "waited" figure is the plugin
+re-dialling a fresh one-shot bridge (it retries every 3 s, slower in a background window), not the export
+itself; the line says so past 5 s. `dtwin serve` in another terminal keeps one bridge open and the plugin
+connected, so every later command skips that wait.
 
 `dtwin help` (or `--help` / `-h`) prints the quick start, the command table and every flag below, and
 exits — no bridge is started, no token minted.
@@ -327,6 +340,9 @@ Three consequences worth knowing:
   theme unresolvable while the build still rendered from the raw hex beside every binding. The raw
   per-pull slice is kept verbatim as the screen's `.vars.json`. When two screens resolve one variable
   differently the newest wins and the disagreement is recorded under `_conflicts` and in `hygiene`.
+  It holds only the variables bound by the pulled nodes — to find the variable behind a library colour,
+  look it up on the library catalog: `node <scripts>/tokens.js <library>/tokens.json --lookup <hex>` (`ffbc1c`, or a quoted `'#ffbc1c'`:
+  an unquoted `#` starts a shell comment).
 - **Assets are named after their Figma layer and deduped by content.** `icons/linear/arrow-down` lands
   as `arrow-down.svg`; the same artwork reached through several instance paths is one file carrying
   every node id that resolved to it; two different icons whose leaf names collide are separated by a
@@ -361,6 +377,9 @@ bulk pre-render pass over every node, which would pay the same per-node cost `--
 avoid, for a much bigger payload (PNG > structural JSON). If you want a component's reference image
 without picking through instances one at a time, dedupe by the component's own id (or its
 `mainComponent`) rather than pulling every instance of it.
+
+It prints `{id, name, type, w, h, scale, png:{w,h}, reference}` on stdout: `w`/`h` are the node's size, `scale`
+the factor the plugin rendered at, `png` the written file's pixel size (keys that do not apply are omitted).
 
 MCP twin: `figma_screenshot`.
 
@@ -427,7 +446,8 @@ roster instead of failing when several are connected.
 ```
 dtwin --whoami
 ```
-Prints both halves of the connection: what the **plugin** says it is (`instanceId` minted per plugin
+Prints both halves of the connection (`connection` is the **addressed** file's socket — the one `--client`
+picked — not whichever connected first): what the **plugin** says it is (`instanceId` minted per plugin
 run, `file`, `page`, and whether `figma.fileKey` is available) and what the **socket** did
 (`connId`, uptime, `connectionsThisRun`, `takeovers`).
 
@@ -552,6 +572,10 @@ Because the layout matches `design-system/`, existing tooling runs on it unchang
 ```
 node design-to-code/tokens.ts design/export/libraries/nera-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
 ```
+The generated `tokens.css` / `theme.css` start with a provenance line (`designtwin-source: <dir>/<input> · <n>
+variables · sha256 <12>`); `tokens.js <input> --check <file>` exits 0 when the file is current, 1 when the
+input has changed since (stale), 2 when the file has no such line (regenerate once) or names a different source file (pass that one; a design-system `tokens.json` and a library's are told apart by their parent directory) or the command line is wrong (usage errors are 2 there, never 1). `--lookup <hex>`
+(repeatable; `ffbc1c` or a quoted `'#ffbc1c'`) lists the COLOR variables with that exact value, per mode, following aliases.
 
 Scope note: the **design system** (variables, styles, component catalog) always spans the whole
 file. **Frame trees** default to the current page; `--all-pages` walks every page (each screen is
@@ -624,10 +648,19 @@ Behaviour worth knowing:
 - Requests are **serialized**. The plugin is single-threaded and its heavy commands mutate shared
   per-run state (`serializeRun` in `bridge.ts`), so the daemon runs one at a time, in arrival order —
   exactly like a sequence of one-shot runs.
+- Every request id is unique per bridge (`r<nonce>-<seq>`) and a reply only settles the request on the
+  connection it was sent to, so a late reply from an abandoned earlier request can no longer answer the
+  next one. When the plugin is connected but sends nothing the stall message says so ("the plugin is
+  connected but sent nothing for '<cmd>' … it is busy"): an earlier export is still running in that file,
+  or a long cold first read of a large page. Retry, or use a warm plugin (`dtwin serve`).
+  The plugin sends a `start` frame when a bridge run begins and a `queued` frame when it arrives behind
+  another run, so "connected but silent" is distinguishable from "waiting its turn".
 - An **abandoned request is cancelled in the plugin**: when a command times out, when the one-shot
   stall check gives up, when the bridge shuts down, or when the client that asked (a Ctrl-C'd CLI, an
   ended MCP session) disconnects from the daemon before its reply, the bridge tells the plugin to stop
-  that work rather than leaving it to finish for nobody — and a request still queued for a departed
+  that work rather than leaving it to finish for nobody (the plugin checks for the cancel at every node, so it
+  stops within a node, not at the end of the page; one long single `exportAsync` still runs to its end) —
+  and a request still queued for a departed
   client is dropped without ever reaching the plugin.
 - `--serve` / `--stop` / `--daemon-status` each own the whole invocation; combining one with a pull or
   a read option is refused rather than silently dropping the export you typed.
@@ -674,11 +707,23 @@ granularity it needs.
 Use it for anything past a quick look. Two things make it not optional:
 - **Asset bytes are never returned inline** (they'd dump megabytes of base64 into context), so
   `writeToDisk` is the *only* way to get `assets/` out of the MCP path.
-- **Inline MCP results are capped** (25k tokens by default, `MAX_MCP_OUTPUT_TOKENS`). The server
+- **Inline MCP results are capped** (25k tokens by default, `MAX_MCP_OUTPUT_TOKENS`, and never above
+  48,000 characters — under Claude Code's own 50,000-character persist threshold). The server
   measures the result before returning it: one that would not fit is **written to disk on its own**
   and the index's `note` says so (a real design-system export is ~590 KB ≈ 147k tokens). Passing
   `writeToDisk: false` opts out of that — an oversized result is then an error naming the size,
   never a payload cut off mid-JSON.
+
+Every export result (written or inline) carries `sourceFile` (the Figma file it came from) and
+`durationMs {total, request, write}`. When an implicit spill replaces an existing screen file whose content
+differs (the export stamp `exportedAt` aside), the previous one is kept as `<screen>.json.prev` and the note names it. `figma_status` reports
+`lastScreenExport` (the newest screen on disk: name, id, file, exportedAt, ageMs) and `lastWrite` (this server process's
+last export: tool, time, whether implicit, file, `prev`). `figma_whoami`'s `connection` is the addressed
+client's. `page` and `screens` arguments accept an array, a JSON-encoded array string or a bare string.
+`design_drift_lint` takes `screens: string[]` (screen files under the working directory) and returns
+`screenCoverage` with warnings, like the CLI's `--screen`. An interrupted tool call (Claude Code's cancel,
+or the session ending) cancels the in-flight read in the plugin; `figma_write` is never cancelled, since a
+write cannot be un-applied.
 
 `outDir` resolves against **the directory the MCP server was started in** — i.e. the project you're
 building, not this repo. Default `FIGMA_EXPORT_DIR` or `design/`, the same var `figma_status` reads.

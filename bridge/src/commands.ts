@@ -209,6 +209,10 @@ export interface ScreenshotReply {
   reference: string;
   manifest: Manifest;
   assets: Asset[];
+  /** DT-06: the node's width/height and the render scale the plugin used — absent from an older plugin. */
+  w?: number;
+  h?: number;
+  scale?: number;
 }
 /** Every reply write-out.ts knows how to land on disk. The members are told apart by the fields only
  *  they carry (`screen` / `reference` / `layersDoc`), which is what writeAny narrows on. */

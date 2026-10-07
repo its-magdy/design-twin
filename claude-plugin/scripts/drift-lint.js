@@ -555,6 +555,7 @@ function matchByNameAndSignature(instances, catalog, library) {
       rows.push(row);
       continue;
     }
+    if (cands.length > 1) row.candidates = cands.map((c) => ({ ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name }));
     const [firstInst, ...otherInsts] = list;
     const scored = cands.map((c) => {
       const first = signature(firstInst, c);
@@ -831,8 +832,8 @@ var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + source
 
 // design-to-code/drift-lint.ts
 var stripSuffix = (k) => String(k).split("#")[0] ?? "";
-function discoverExtraCatalogs(namedFile) {
-  return discoverCatalogs(namedFile).flatMap((d) => d.catalog ? [{ file: d.file, catalog: d.catalog }] : []);
+function discoverExtraCatalogs(namedFile, screenFile) {
+  return discoverCatalogs(namedFile, screenFile).flatMap((d) => d.catalog ? [{ file: d.file, catalog: d.catalog }] : []);
 }
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 function checkFreshness(catalog, push, warnings, opts = {}) {
@@ -1025,6 +1026,44 @@ function screenCoverage(map, catalog, screenDocs) {
     unmapped: rows.filter((r) => !r.inMap).map((r) => ({ setName: r.setName, key: r.key, instances: r.instances }))
   };
 }
+function screenCoverageReport(input) {
+  const { map, catalogFile, catalog, screens, extraCatalogs } = input;
+  const named = catalog || { components: [] };
+  const union = input.union || unionCatalog([{ file: catalogFile, catalog: named, role: "named" }, ...extraCatalogs.map((x) => ({ file: x.file, catalog: x.catalog, role: "extra" }))]);
+  const cov = screenCoverage(map, union, screens.map((r) => r.doc));
+  const warnings = [];
+  const catalogsRead = [catalogFile, ...extraCatalogs.map((x) => x.file)];
+  if (!cov.distinct) return { coverage: cov, warnings, catalogsRead };
+  const none = [];
+  const others = { components: extraCatalogs.flatMap((x) => x.catalog.components) };
+  const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...screens.map((r) => visibleInstances(r.doc, r.file))), named, others) : null;
+  if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
+    warnings.push({
+      code: "catalog-rekeyed",
+      message: `NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key \u2014 but ${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.
+       That is the SAME library under new keys (one of the Figma files is a duplicate, or the library was re-published), not a foreign one.
+       Get the confirmation list with \`${scriptCmd("cross-check")} <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user
+       confirm it (set "confirmed": true per entry), then \`${scriptCmd("map-bootstrap")} <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.
+       Confirm: ${rekey.summary.proposed} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file) \u2014 are they the same components? Until confirmed, build every instance as new.`
+    });
+  } else if (cov.mapPct === 0) {
+    warnings.push({
+      code: "screen-coverage",
+      message: `NONE of the ${cov.distinct} components on this screen resolve to your map by key` + (cov.inCatalog ? ` (${cov.inCatalog} of them are in the catalog(s) read \u2014 \`${scriptCmd("map-bootstrap")} ${catalogFile} --screen <screen.json> --out <map>\` stubs those).
+` : `, nor to any catalog read.
+`) + `       The catalog you exported is not the library this screen is built from \u2014 a green "mapped" count above measures
+       the catalog against itself. Open an instance in Figma and use "Go to main component" to find the owning file,
+       then export it with \`dtwin pull --as-library "<name>"\` (CLI only \u2014 the MCP server has no library export).
+       Confirm: is ${catalogFile}${extraCatalogs.length ? ` (or any of the ${extraCatalogs.length} other catalog(s) read)` : ""} the component library this screen is built from? Until confirmed, build every instance as new.`
+    });
+  } else if (cov.unmapped.length) {
+    warnings.push({
+      code: "screen-coverage",
+      message: `${cov.unmapped.length} component(s) on this screen have no map entry: ` + cov.unmapped.slice(0, 6).map((u) => `'${u.setName}' (${u.instances}x)`).join(", ") + (cov.unmapped.length > 6 ? ", \u2026" : "")
+    });
+  }
+  return { coverage: cov, warnings, catalogsRead };
+}
 async function main(argv) {
   const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--catalog <components.json>]... [--max-age <hours>]`;
   const OPTIONS = { "max-age": { type: "string" }, screen: { type: "string", multiple: true }, catalog: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } };
@@ -1090,9 +1129,8 @@ ${mapFile} is not a valid component map (${valid.errors.length} error(s)) \u2014
 ${s.mapped}/${s.catalogComponents} components mapped${s.mappedElsewhere ? ` (+${s.mappedElsewhere} map entr${s.mappedElsewhere === 1 ? "y" : "ies"} resolved in the other catalog(s))` : ""} \xB7 ${s.errorCount} error(s), ${s.warningCount} warning(s)`);
   console.error(`      (that number is the CATALOG measured against the map \u2014 it says nothing about any particular screen.)`);
   if (screenFiles.length) {
-    const read = screenFiles.map((f) => ({ file: f, doc: readDocFile(f, "screen export", isScreenDoc) }));
-    const docs = read.map((r) => r.doc);
-    const cov = screenCoverage(map, union, docs);
+    const screens = screenFiles.map((f) => ({ file: f, doc: readDocFile(f, "screen export", isScreenDoc) }));
+    const { coverage: cov, warnings } = screenCoverageReport({ map, catalogFile, catalog, screens, extraCatalogs, union });
     if (!cov.distinct) {
       console.error(`
 SCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes \u2014 nothing to reuse either way.`);
@@ -1102,31 +1140,7 @@ SCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes \u2014 not
 SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component sets placed on this screen are in your map (by component key) \xB7 ${cov.inCatalog}/${cov.distinct} (${cov.catalogPct}%) are even in the catalog \xB7 ${cov.instances} instance(s) total, ${cov.hiddenInstances} of them on hidden layers` + (cov.hiddenOnly ? ` (${cov.hiddenOnly} set(s) appear ONLY on hidden layers and will not be built)` : "")
       );
       console.error(`       (this says which components you can REUSE by key \u2014 not which ones the build contains; that is verify's job.)`);
-      const none = [];
-      const others = { components: extraCatalogs.flatMap((x) => x.catalog.components) };
-      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...read.map((r) => visibleInstances(r.doc, r.file))), catalog, others) : null;
-      if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
-        console.error(
-          `warn   [catalog-rekeyed] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key \u2014 but ${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.
-       That is the SAME library under new keys (one of the Figma files is a duplicate, or the library was re-published), not a foreign one.
-       Get the confirmation list with \`${scriptCmd("cross-check")} <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user
-       confirm it (set "confirmed": true per entry), then \`${scriptCmd("map-bootstrap")} <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.
-       Confirm: ${rekey.summary.proposed} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file) \u2014 are they the same components? Until confirmed, build every instance as new.`
-        );
-      } else if (cov.mapPct === 0) {
-        console.error(
-          `warn   [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map by key` + (cov.inCatalog ? ` (${cov.inCatalog} of them are in the catalog(s) read \u2014 \`${scriptCmd("map-bootstrap")} ${catalogFile} --screen <screen.json> --out <map>\` stubs those).
-` : `, nor to any catalog read.
-`) + `       The catalog you exported is not the library this screen is built from \u2014 a green "mapped" count above measures
-       the catalog against itself. Open an instance in Figma and use "Go to main component" to find the owning file,
-       then export it with \`dtwin pull --as-library "<name>"\` (CLI only \u2014 the MCP server has no library export).
-       Confirm: is ${catalogFile}${extraCatalogs.length ? ` (or any of the ${extraCatalogs.length} other catalog(s) read)` : ""} the component library this screen is built from? Until confirmed, build every instance as new.`
-        );
-      } else if (cov.unmapped.length) {
-        console.error(
-          `warn   [screen-coverage] ${cov.unmapped.length} component(s) on this screen have no map entry: ` + cov.unmapped.slice(0, 6).map((u) => `'${u.setName}' (${u.instances}x)`).join(", ") + (cov.unmapped.length > 6 ? ", \u2026" : "")
-        );
-      }
+      for (const w of warnings) console.error(`warn   [${w.code}] ${w.message}`);
     }
   } else {
     console.error(`note   pass --screen <screen.json> to get the number that matters: how much of THAT screen your map covers.`);
@@ -1152,6 +1166,8 @@ export {
   checkLiveFreshness,
   discoverExtraCatalogs,
   driftLint,
+  isScreenDoc,
   screenCoverage,
+  screenCoverageReport,
   validateMap
 };

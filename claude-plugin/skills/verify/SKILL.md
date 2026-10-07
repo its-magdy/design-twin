@@ -57,7 +57,7 @@ Three things that trip up a literal reading of the old recipe:
   the PNG alone. A project from before the `export/` split has the same tree directly under `design/`.
 - **The user's name for the screen (e.g. "Job Roles") may not be the Figma layer name (e.g.
   `positions `, trailing space, a different string entirely).** Resolve it with
-  `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>"` — node id wins alone;
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan` — node id wins alone;
   otherwise exact layer name, the index's `title` and a plan's `screenName`/`route` are checked
   TOGETHER as one pool, never in sequence (more than one match anywhere in the pool stops the run —
   the same procedure every other skill uses, see `extract/SKILL.md`). A looser text-search fallback runs last but never resolves by
@@ -102,7 +102,10 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect \
 Always use the `<Layer>__<id>` name (the screen file's own basename), never a nickname — the script
 refuses (exit 1, naming the existing file) if this node already has an expectation under a different
 name in `design/verify/`, precisely so "positions" and "Job Roles" don't end up as two artefact sets
-for the same screen. `--force` overrides, but there is normally no reason to.
+for the same screen. The refusal lists the old name's files, names the canonical `<Layer>__<id>` and prints the
+step to retire the old expectation (`mv <old>.expected.json <old>.expected.json.retired`, which unblocks it —
+the old PNG and measured files stay); re-run with `--out <canonical>`. `--force` overrides, but there is
+normally no reason to.
 
 This writes `design/verify/<Screen>.expected.json`: one row per **visible** node that carries a
 checkable value, plus every visible component instance and every designed `reactions` edge on a

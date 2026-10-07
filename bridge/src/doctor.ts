@@ -42,6 +42,7 @@ import { daemonRowStalenessNote } from "./staleness.ts";
 // dependency-free module, so reading it never loads server-core (which exits the process on a bad
 // FIGMA_BRIDGE_PORT — the very case this list exists to diagnose).
 import { ALLOWED_PORTS } from "./ports.ts";
+import { dtwinPortWarning } from "./verbs.ts";
 import type { ClientRow, Bridge } from "./server-core.ts";
 
 // Same threshold drift-lint uses for its STALE SNAPSHOT warning.
@@ -197,9 +198,14 @@ function resolvePort(raw: string | undefined): { port: number; problem?: undefin
   return { problem: fail("port", "Port", `FIGMA_BRIDGE_PORT=${raw} is not one of ${ALLOWED_PORTS.join(", ")} — the Figma plugin may only open sockets to ports named in its manifest, so nothing could ever connect`, `unset FIGMA_BRIDGE_PORT, or set it to one of ${ALLOWED_PORTS.join(", ")}`) };
 }
 
-// `probe` is probePort()'s result; `st` the daemon status for the same port.
-function checkPort(port: number, probe: PortProbe, st: DaemonStatusView | null | undefined): Check {
-  if (probe.free) return ok("port", "Port", `${port} is free`);
+// `probe` is probePort()'s result; `st` the daemon status for the same port; `envPort` the value of
+// FIGMA_BRIDGE_PORT (a seam, so the wording is testable without touching process.env). F-52: the free line
+// says how the port was chosen, because the override is otherwise undiscoverable.
+function checkPort(port: number, probe: PortProbe, st: DaemonStatusView | null | undefined, envPort?: string | undefined): Check {
+  if (probe.free) {
+    const via = envPort ? `FIGMA_BRIDGE_PORT=${envPort}` : `default; FIGMA_BRIDGE_PORT selects ${ALLOWED_PORTS.filter((p) => p !== port).join("/")}`;
+    return ok("port", "Port", `${port} is free (${via})`);
+  }
   if (st) return ok("port", "Port", `${port} is held by the dtwin daemon (pid ${st.pid ?? "?"}) — pulls route through it`);
   const others = ALLOWED_PORTS.filter((p) => p !== port).join(" or ");
   if (probe.holder === "websocket") {
@@ -351,8 +357,8 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
       const ageMs = now - Date.parse(String(snap.exportedAt));
       // P4 #33: build the headline from the per-source counts (screens grouped by their OWN stamped
       // source file, plus the design system's), rather than the single file snapshot-meta happened to
-      // pick — the exact bug that reported "exported 12h ago from 'Design System - NERA (Copy)'" on a
-      // project with 5 TeamSmart screens and 1 NERA design system, attributing every screen to the
+      // pick — the exact bug that reported "exported 12h ago from 'Acme Kit (Copy)'" on a project
+      // with 5 Sample App screens and 1 Acme Kit design system, attributing every screen to the
       // wrong file. Falls back to the old single-file line when nothing has per-source data yet (an
       // export entirely from before this field existed, or a bare design-system-only pull).
       const counts = exportSourceCounts(ex.dir, now);
@@ -481,6 +487,9 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
   // checked. Every other case is unaffected and keeps its original position, right after Node.js.
   if (!tok.shadowed) add(checkToken(tok));
 
+  // F-52: DTWIN_PORT is not read anywhere; a person who set it believes the bridge moved.
+  const portWarning = dtwinPortWarning(process.env);
+  if (portWarning) add(warn("port", "Port", portWarning));
   const { port, problem } = resolvePort(process.env.FIGMA_BRIDGE_PORT);
   let pluginCheck: Check;
   let viaDaemon = false;
@@ -492,7 +501,7 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
     const st = await daemon.status(port).catch(() => null);
     add(checkDaemon(st, port));
     const probe = await probePort(port);
-    add(checkPort(port, probe, st));
+    add(checkPort(port, probe, st, process.env.FIGMA_BRIDGE_PORT));
 
     if (st) {
       viaDaemon = true;

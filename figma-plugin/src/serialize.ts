@@ -16,6 +16,7 @@ import { simplifyReactions } from "./prototype";
 import { collectAsset } from "./assets";
 import { instanceComponentRef, componentPropRefs, instanceOverrides } from "./components";
 import { collectMotion } from "./motion";
+import { checkCancelled } from "./progress";
 
 const MAX_DEPTH = 60;
 
@@ -129,6 +130,13 @@ function bakeTransform(out: IrNode): void {
 // `underHidden`: some ANCESTOR is `visible:false`. A root's own ancestor chain is computed once by its
 // collector (collect.ts hiddenAncestor); below that it is threaded down here, never re-walked.
 export async function serialize(node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean): Promise<IrNode | null> {
+  // The per-node abort point (b2): a cancel or an abandonment stops the walk within one node, not at
+  // the next asset/frame/page — a cold first read of a dense screen can otherwise walk for a minute for
+  // a caller that has already gone. Safe to throw here: children are serialized one at a time (never
+  // inside a Promise.all), every partial `out` above this frame is dropped as the throw unwinds, every
+  // collector's error path refuses to emit a doc, and the per-run toggles (skipAssets,
+  // skipInvisibleInstanceChildren) are restored by their own `finally` blocks.
+  checkCancelled();
   if (depth > MAX_DEPTH) {
     stats.truncated++;
     if (stats.truncated === 1) warn("depth limit " + MAX_DEPTH + " reached — deep subtrees truncated (first: " + node.name + ")");

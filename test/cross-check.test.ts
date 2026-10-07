@@ -20,6 +20,8 @@ import { isScreenExport } from "../design-to-code/export-shape.ts";
 import { isComponentsCatalog, isTokensDoc } from "../design-to-code/doc-guards.ts";
 import type { DocGuard } from "../design-to-code/doc-guards.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
+import { findingIds } from "../design-to-code/finding-id.ts";
+import { matchByNameAndSignature, nameVerdict, visibleInstances } from "../design-to-code/component-match.ts";
 // cross-check --json: the report; only summary/findings/coverage/componentProposals are read here.
 const isCrossCheckReport = (x: unknown): x is CrossCheckReport => isJsonObject(x) && Array.isArray(x.findings) && isJsonObject(x.summary);
 import type { CrossCheckScreen } from "../design-to-code/cross-check.ts";
@@ -61,7 +63,9 @@ const DS_TOKENS = tokens({
   ],
 });
 const DS_COMPONENTS = catalog([
-  { name: "Button", key: "ds-btn", type: "COMPONENT_SET", props: { "Btn Text": { type: "TEXT" } } },
+  // DT-27: a plain COMPONENT, so an instance with no variant and a `Btn Text` prop agrees on signature (a
+  // COMPONENT_SET would need the instance to set a variant — component-match's rule, now cross-check's too)
+  { name: "Button", key: "ds-btn", type: "COMPONENT", props: { "Btn Text": { type: "TEXT" } } },
   { name: "Header", key: "ds-hdr", type: "COMPONENT_SET", props: {} },
   { name: "Header", key: "ds-hdr2", type: "COMPONENT_SET", props: {} },
 ]);
@@ -548,6 +552,128 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   ok("[shape] a --design-system styles.text.json whose styles is not an array -> exit 2", oneLine(run([good, "--design-system", path.join(tmp, "ds2")]), /text styles: '.*styles\.text\.json' is not a text-style sheet/));
   ok("[shape] a --variables file that is not JSON -> exit 2 with the parser's reason", (() => { fs.writeFileSync(path.join(tmp, "v.json"), "{"); return oneLine(run([good, "--variables", path.join(tmp, "v.json")]), /variables: '.*v\.json' is not valid JSON/); })());
   ok("[args] `--out --json` is '--out needs a value' (was: wrote <cwd>/--json.json)", (() => { const r = spawnSync(process.execPath, [CLI, good, "--out", "--json"], { encoding: "utf8", cwd: tmp }); return r.status === 2 && /cross-check: --out needs a value/.test(r.stderr) && !fs.existsSync(path.join(tmp, "--json.json")); })());
+}
+
+// ---------- group 14: one name rule (DT-27), finding ids (F-44), labelled proposals (F-47) ----------
+// A fixture read that fails is a ✗ on the check that needed it, never a crash of the whole file.
+const tryRead = <T,>(file: string, guard: DocGuard<T>): T | null => { try { return readFixture(file, guard); } catch { return null; } };
+const tryParse = <T,>(text: string, guard: DocGuard<T>): T | null => { try { return parseAs(text, guard, "cross-check --json"); } catch { return null; } };
+console.log("cross-check — group 14 (DT-27 name rule, F-44 ids, F-47 proposal labels):");
+{
+  // [DT27-1] The fixture plan-skeleton.test.ts reads too (test/fixtures/g14/dt27/, expected.json): no
+  // instance key is in the catalog, so every component is decided by NAME, and cross-check's coverage
+  // must say what component-match's nameVerdict says — the rule plan-skeleton's catalog column uses.
+  const FX = path.join(import.meta.dirname, "fixtures", "g14", "dt27");
+  const isExpected = (x: unknown): x is { verdicts: Record<string, string> } => isJsonObject(x) && isJsonObject(x.verdicts) && Object.values(x.verdicts).every((v) => typeof v === "string");
+  const doc = tryRead(path.join(FX, "Screen__5_6.json"), isScreenExport);
+  const cat = tryRead(path.join(FX, "design-system", "components.local.json"), isComponentsCatalog);
+  const want = tryRead(path.join(FX, "expected.json"), isExpected);
+  ok("[DT27-1] the shared fixture reads (screen, catalog, expected verdicts)", !!doc && !!cat && !!want && Object.keys(want.verdicts).length === 3);
+  if (doc && cat && want) {
+    const res = crossCheck({ screens: [{ doc, label: "Screen__5_6" }], components: cat });
+    const entries = res.coverage?.entries || [];
+    const verdictOf = (setName: string): string | null => {
+      const e = entries.find((x) => x.setName === setName);
+      return !e ? null : e.matchedBy === "name" ? "matched" : e.ambiguous ? "ambiguous" : e.matchedBy === null ? "unmatched" : `by ${e.matchedBy}`;
+    };
+    const rows = new Map(matchByNameAndSignature(visibleInstances(doc, "Screen__5_6"), cat).rows.map((r) => [r.name, nameVerdict(r).status]));
+    for (const [name, v] of Object.entries(want.verdicts)) {
+      ok(`[DT27-1] '${name}': cross-check's coverage says ${v} (got ${verdictOf(name)}), the same as nameVerdict (${rows.get(name)})`, verdictOf(name) === v && rows.get(name) === v);
+    }
+    const bucket = (n: string) => entries.find((e) => e.setName === n)?.bucket;
+    ok("[DT27-1] the buckets follow the verdicts: duplicate-definitions → nameOnly, signature mismatch → newWork, different-signatures tie → ambiguous",
+      bucket("icon/check-circle") === "nameOnly" && bucket("Header") === "newWork" && bucket("Badge") === "ambiguous");
+    const b: Partial<Record<CoverageBucket, number>> = res.coverage?.buckets || {};
+    ok("[DT27-1] the buckets still sum to distinct", res.coverage?.distinct === 3 && Object.values(b).reduce((n: number, x: number) => n + x, 0) === 3);
+    const e = (n: string) => entries.find((x) => x.setName === n);
+    ok("[DT27-1] a name match carries component-match's evidence; unmatched/ambiguous entries say why",
+      e("icon/check-circle")?.evidence === "name+no-props" && /no prop signature agrees/.test(e("Header")?.reason ?? "") && /DIFFERENT signatures/.test(e("Badge")?.reason ?? "") && e("Badge")?.candidates === 2);
+    ok("[DT27-1] the ambiguous finding lists Badge, the name-matched one lists the check icon (not the mismatched Header)",
+      (res.findings.find((f) => f.code === "ambiguous-component-name")?.components || []).map((c) => c.setName).join() === "Badge" &&
+      (res.findings.find((f) => f.code === "name-matched-components")?.components || []).map((c) => c.setName).join() === "icon/check-circle");
+  }
+  // K-5: a name that exists only in components.library.json is no longer a name match (a key hit still is).
+  const libOnly = crossCheck({ screens: [screen("S", [instance("2:1", "x", "icons/linear/book")])], components: DS_COMPONENTS, componentsLibrary: { components: [{ name: "icons/linear/book", key: "lib-icon", type: "COMPONENT" }] } });
+  ok("[DT27-1/K-5] a library-only NAME is new work, not a name match", libOnly.coverage?.matchedByName === 0 && libOnly.coverage?.entries[0]?.bucket === "newWork");
+}
+{
+  // [F44-c] every cross-check finding carries the id audit.ts gives it (finding-id.ts): `code` with no
+  // node, `~2` for the second finding with the same base in one report.
+  const vars = tokens({
+    collections: [{ name: "Spacing", key: "screen-space", modes: ["Desktop"], default: "Desktop" }],
+    variables: [
+      { name: "Space 3", collection: "Spacing", key: "s-1", type: "FLOAT", values: { Desktop: 12 } },
+      { name: "Full", collection: "Spacing", key: "s-2", type: "FLOAT", values: { Desktop: 4 } },
+    ],
+  });
+  const res = crossCheck({ screens: [screen("S", [instance("2:1", "other-a", "Widget")])], variables: vars, tokens: DS_TOKENS, components: DS_COMPONENTS });
+  const ids = res.findings.map((f) => f.id);
+  ok("[F44-c] every finding has an id, and it is findingIds() over the report in its final order",
+    res.findings.length > 3 && ids.every((x) => typeof x === "string") && JSON.stringify(ids) === JSON.stringify(findingIds(res.findings)));
+  ok("[F44-c] ids are unique; a repeated code is `code` then `code~2`",
+    new Set(ids).size === ids.length && ids.includes("token-name-collision") && ids.includes("token-name-collision~2"));
+}
+{
+  // [F47-1] An export with two screens: both use Sidebar and Card, only A uses Grid; the project's map
+  // already has Sidebar. Proposals are LABELLED — alreadyMapped (listed last), sharedWith — and the
+  // confirm count drops the mapped one. Nothing is auto-confirmed and the severity does not change.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "g14-f47-"));
+  const put = (rel: string, doc: unknown): string => { const f = path.join(tmp, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(doc, null, 2)); return f; };
+  const sidebar = (id: string): NodeInput => ({ type: "INSTANCE", id, name: "Sidebar", component: "State=Open", props: { State: "Open" }, mainComponent: { name: "State=Open", key: "s-sidebar-open", setKey: "s-sidebar", setName: "Sidebar" } });
+  const plain = (id: string, name: string, key: string, props: ComponentPropValues): NodeInput => ({ type: "INSTANCE", id, name, props, mainComponent: { name, key } });
+  const A = screenExport([{ type: "FRAME", id: "1:1", name: "A", children: [sidebar("1:2"), plain("1:3", "Grid", "s-grid", { "Rows#1:0": "3" }), plain("1:4", "Card", "s-card", { "Title#2:0": "x" })] }], { screen: "A", nodeId: "1:1" });
+  const B = screenExport([{ type: "FRAME", id: "2:1", name: "B", children: [sidebar("2:2"), plain("2:3", "Card", "s-card", { "Title#2:0": "y" })] }], { screen: "B", nodeId: "2:1" });
+  const fileA = put("design/export/pages/P/A__1_1.json", A);
+  put("design/export/pages/P/B__2_1.json", B);
+  put("design/export/pages/index.json", { pageDirs: [{ page: "P", dir: "P", index: "pages/P/index.json", layers: 2 }], layers: [
+    { name: "A", id: "1:1", file: "pages/P/A__1_1.json" }, { name: "B", id: "2:1", file: "pages/P/B__2_1.json" }] });
+  const CAT = catalog([
+    { name: "Sidebar", id: "9:1", key: "cat-sidebar", type: "COMPONENT_SET", props: { State: { type: "VARIANT", options: ["Open", "Closed"] } } },
+    { name: "Grid", id: "9:2", key: "cat-grid", type: "COMPONENT", props: { Rows: { type: "TEXT" } } },
+    { name: "Card", id: "9:3", key: "cat-card", type: "COMPONENT", props: { Title: { type: "TEXT" } } },
+  ]);
+  put("design/export/design-system/components.local.json", CAT);
+  const MAP = codeMap({ "s-sidebar": { figma: { name: "Sidebar", key: "cat-sidebar", id: "9:1" } } });
+  put("design/codeconnect.local.json", MAP);
+  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts");
+  const r = spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--json"], { encoding: "utf8", cwd: tmp });
+  const res = tryParse(r.stdout, isCrossCheckReport);
+  const props = (res && res.componentProposals) || [];
+  const p = (n: string) => props.find((x) => x.name === n);
+  ok("[F47-1] the re-keyed screen proposes Sidebar, Grid and Card", props.length === 3 && !!p("Sidebar") && !!p("Grid") && !!p("Card"));
+  ok("[F47-1] Sidebar is alreadyMapped (the default design/codeconnect.local.json has its instance key) and on 1 other screen",
+    p("Sidebar")?.alreadyMapped === true && p("Sidebar")?.sharedWith === 1);
+  ok("[F47-1] Grid is this screen only (sharedWith 0, not mapped); Card is shared with 1", p("Grid")?.sharedWith === 0 && p("Grid")?.alreadyMapped === undefined && p("Card")?.sharedWith === 1);
+  ok("[F47-1] order: shared to confirm, then screen-only, then already mapped", props.map((x) => x.name).join() === "Card,Grid,Sidebar");
+  const rk = res && res.findings.find((f) => f.code === "catalog-rekeyed");
+  ok("[F47-1] the catalog-rekeyed confirm count excludes the mapped one (2, not 3), and the severity is unchanged",
+    !!rk && rk.severity === "warning" && /^2 component\(s\) match/.test(rk.confirm ?? "") && /3 proposals, 1 already mapped .* confirm only the other 2/.test(rk.message));
+  ok("[F47-1] nothing is auto-confirmed", props.every((x) => x.confirmed === false));
+  const md = spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system")], { encoding: "utf8", cwd: tmp }).stdout;
+  ok("[F47-1] the markdown splits 'shared — confirm once' / 'this screen only' / 'already mapped'",
+    /### Shared with other exported screens — confirm once \(1\)[\s\S]*`Card`[\s\S]*### This screen only \(1\)[\s\S]*`Grid`[\s\S]*### Already in the component map — nothing to confirm \(1\)[\s\S]*`Sidebar`/.test(md));
+  // --map names the map explicitly; with no map anywhere there is no alreadyMapped label at all.
+  const noMap = tryParse(spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--json"], { encoding: "utf8", cwd: path.join(tmp, "design/export") }).stdout, isCrossCheckReport);
+  ok("[F47-1] no map found → no alreadyMapped label, confirm count 3", !!noMap && (noMap.componentProposals || []).every((x) => x.alreadyMapped === undefined) && /^3 component/.test(noMap.findings.find((f) => f.code === "catalog-rekeyed")?.confirm ?? ""));
+  const explicit = tryParse(spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--map", path.join(tmp, "design/codeconnect.local.json"), "--json"], { encoding: "utf8", cwd: path.join(tmp, "design/export") }).stdout, isCrossCheckReport);
+  ok("[F47-1] --map <file> labels the same way from any cwd", !!explicit && (explicit.componentProposals || []).find((x) => x.name === "Sidebar")?.alreadyMapped === true);
+  // Review 1 M-2: the map-bootstrap scaffold writes a stub for every CATALOG component, keyed by the catalog key.
+  // None of the re-keyed screen's instance keys are in it, so nothing resolves through it: no proposal is
+  // "already mapped" and the confirm count stays 3.
+  const stub = put("stub/codeconnect.local.json", codeMap({
+    "cat-sidebar": { figma: { name: "Sidebar", key: "cat-sidebar", id: "9:1" } },
+    "cat-grid": { figma: { name: "Grid", key: "cat-grid", id: "9:2" } },
+    "cat-card": { figma: { name: "Card", key: "cat-card", id: "9:3" } },
+  }));
+  const stubbed = tryParse(spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--map", stub, "--json"], { encoding: "utf8", cwd: tmp }).stdout, isCrossCheckReport);
+  const stubProps = (stubbed && stubbed.componentProposals) || [];
+  ok("[F47-1 M-2] a catalog-keyed stub map labels nothing alreadyMapped", stubProps.length === 3 && stubProps.every((x) => x.alreadyMapped === undefined));
+  ok("[F47-1 M-2] …and the confirm count stays 3", /^3 component/.test(stubbed?.findings.find((f) => f.code === "catalog-rekeyed")?.confirm ?? ""));
+  // In-process: siblings are a thunk, read only when there are proposals.
+  let called = 0;
+  crossCheck({ screens: [{ doc: A, label: "A" }], components: catalog([{ name: "Other", key: "k", type: "COMPONENT" }]), siblings: () => { called++; return [{ doc: B, label: "B" }]; } });
+  ok("[F47-1] the other screens are not read when there is nothing to label", called === 0);
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 report();

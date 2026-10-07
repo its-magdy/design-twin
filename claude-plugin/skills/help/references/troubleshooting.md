@@ -27,6 +27,21 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   - `waiting` — it WAS connected and the bridge went away. Normal after a one-shot `dtwin` pull ends.
   - `token rejected` (red, and the section opens itself) — a bridge is running but refused the token;
     see the next entry.
+- **"The plugin is connected but sent nothing for '<cmd>'"** (stall message) → the plugin socket is up but
+  the file's plugin is busy: an earlier export is still running in that file (the plugin runs one at a
+  time), or it is a long cold first read of a large page. It is not a dead connection. Retry; with a warm
+  plugin (`dtwin serve` in another terminal) the same read answers in seconds. The plugin reports `start`
+  when it begins a run and `queued` when it arrives behind another, so a progress line shows which. If it
+  keeps happening, look at the plugin window.
+- **A pull took ~80 s but the export itself was ~3 s** → read the closing `done in …` line: `waited Ys for
+  the plugin to connect` is the plugin re-dialling a fresh one-shot bridge (3 s retry, slower in a
+  background window). `dtwin serve` keeps one bridge open and the plugin connected.
+- **A late or "abandoned" reply answered the wrong command** → fixed: request ids are unique per bridge
+  and a reply only settles the connection it was sent to. A cancelled request now stops in the plugin
+  within one node (a single long `exportAsync` still runs to its end), so an abandoned export no longer
+  keeps the plugin busy for the next command.
+- **`dtwin pull --out <dir>` → "outDir is positional"** → write `dtwin pull <dir>`. There is also no
+  `--port`: set `FIGMA_BRIDGE_PORT` (`DTWIN_PORT` is not read; `dtwin doctor` warns about it).
 - **Token rejected / 401** → token mismatch: the plugin's **Bridge token** field doesn't equal
   the bridge's. Run `dtwin --token-status` (says which source is winning — a saved token *shadowed* by
   a `FIGMA_BRIDGE_TOKEN` export is the usual surprise), then `dtwin --show-token` and re-paste + Save.

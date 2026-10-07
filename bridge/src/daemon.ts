@@ -177,15 +177,18 @@ export interface ServeOptions {
 }
 
 /** connect()'s answer when a daemon is live: its socket, and request functions bound to it.
- *  `onProgress` (optional, LAST, so every existing call site is unchanged) opts the request into
+ *  `onProgress` (optional, so every existing call site is unchanged) opts the request into
  *  progress frames and receives each tick, in order, before the promise settles. A daemon older than
  *  progress frames sends none; the request still answers. While ticks arrive, `timeoutMs` is a SILENCE
- *  budget — each tick re-arms it (request() below says why). */
+ *  budget — each tick re-arms it (request() below says why).
+ *  `signal` (optional, LAST): the caller giving up. Aborting it closes this request's socket, which the
+ *  daemon reads as its client leaving — a queued request is never forwarded, an in-flight one gets the
+ *  plugin a cancel frame (serve()'s `abandon`). Any daemon, old or new, treats a closed socket that way. */
 export interface DaemonConnection {
   sock: string;
-  request<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<Commands[C]["reply"]>;
+  request<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<Commands[C]["reply"]>;
   /** As request(), plus the connected file the daemon's bridge used (null from an older daemon). */
-  requestWithClient<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }>;
+  requestWithClient<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }>;
 }
 
 // Keyed by PORT so two bridges on different ports get two daemons rather than fighting over one
@@ -512,12 +515,22 @@ export function probe(sock: string, timeoutMs = 1500): Promise<boolean> {
 // the CLI's own bridge path treats activity (figma-pull.ts STALL_MS over server-core's
 // `lastActivity`). So with progress flowing the guard is a silence budget; without progress it is the
 // same total budget it always was.
-function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | DaemonControlRequest, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<{ result: unknown; client: ClientRow | null }> {
+//
+// `signal` (optional): aborted → the socket is DESTROYED and the promise rejects at once, with the
+// signal's reason when it is an Error of the caller's own, else "request aborted by the caller" — the
+// same rule as server-core's requestWithClient. Destroying (not ending) the socket is the cancel: the
+// daemon sees its client go and abandons the request on the wire. Aborted before the call → nothing
+// is connected or sent.
+function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | DaemonControlRequest, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<{ result: unknown; client: ClientRow | null }> {
   return new Promise<{ result: unknown; client: ClientRow | null }>((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error("request aborted before it was sent"));
     const c = net.createConnection(sock);
     c.setEncoding("utf8");
     let settled = false;
-    const done = <V>(fn: (v: V) => void, v: V) => { if (!settled) { settled = true; try { c.end(); } catch { /* already gone */ } fn(v); } };
+    // Removed on settle, so a long-lived signal shared by many requests never accumulates listeners.
+    let onAbort: (() => void) | null = null;
+    const unlisten = () => { if (signal && onAbort) signal.removeEventListener("abort", onAbort); onAbort = null; };
+    const done = <V>(fn: (v: V) => void, v: V) => { if (!settled) { settled = true; unlisten(); try { c.end(); } catch { /* already gone */ } fn(v); } };
     // The daemon's own per-command budget still applies; this is the outer guard for a daemon that
     // stopped answering entirely. Generous by design — an --all-pages export legitimately runs long.
     let t: ReturnType<typeof setTimeout> | null = null;
@@ -550,6 +563,19 @@ function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | Dae
     // what it always was, so no daemon ever has a reason to send it a progress frame.
     const frame = onProgress && !CONTROL.has(msg.cmd) ? { ...msg, progress: true } : msg;
     c.on("connect", () => c.write(JSON.stringify(frame) + "\n"));
+    if (signal) {
+      const sig = signal;
+      onAbort = () => {
+        if (settled) return;
+        disarm();
+        const r: unknown = sig.reason;
+        // A bare abort() carries a DOMException "AbortError" (itself an Error in Node) — that names
+        // nothing, so it gets the fixed text; an Error the caller built is passed through as-is.
+        done(reject, r instanceof Error && !(r instanceof DOMException) ? r : new Error("request aborted by the caller"));
+        try { c.destroy(); } catch { /* already gone */ }
+      };
+      sig.addEventListener("abort", onAbort, { once: true });
+    }
   });
 }
 
@@ -562,8 +588,8 @@ export async function connect(port?: number): Promise<DaemonConnection | null> {
   // checked it against commands.ts on arrival, but that was another process (and possibly an older
   // build), so it is checked again here — which is what makes the typed reply below honest rather
   // than a guess about what came over the socket.
-  const requestWithClient = async <C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void) => {
-    const r = await request(sock, msg, timeoutMs, onProgress);
+  const requestWithClient = async <C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal) => {
+    const r = await request(sock, msg, timeoutMs, onProgress, signal);
     const bad = replyShapeError(msg.cmd, r.result);
     if (bad) throw new Error(`the daemon relayed an unexpected shape for ${msg.cmd}: ${bad}`);
     return { reply: r.result as Commands[C]["reply"], client: r.client };
@@ -571,7 +597,7 @@ export async function connect(port?: number): Promise<DaemonConnection | null> {
   return {
     sock,
     requestWithClient,
-    request: async (msg, timeoutMs, onProgress) => (await requestWithClient(msg, timeoutMs, onProgress)).reply,
+    request: async (msg, timeoutMs, onProgress, signal) => (await requestWithClient(msg, timeoutMs, onProgress, signal)).reply,
   };
 }
 

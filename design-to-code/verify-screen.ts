@@ -41,7 +41,7 @@ import { actionForExpect, isPlanExpect, parseSteps, stepsSha256 } from "./probe-
 import { MEASURED_PHASES, STATUS_PHASES, readStatusAt, statusFile, statusMain, waitMain, writeFileAtomic } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
-import { cliParse, scriptCmd } from "./cli-args.ts";
+import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
@@ -3230,9 +3230,28 @@ function main(argv: string[]): number | Promise<number> {
     // covers node 7314:87192) is refused rather than silently creating a second artefact set.
     const dup = findExistingExpectedFor(path.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
+      // DT-34: the existing set is under another name (a nickname). Say what it is, which name is canonical
+      // (the screen file's basename, `<Layer>__<id>`), and the way out: retire the old expectation, re-run.
+      const oldBase = dup.slice(0, -".expected.json".length);
+      const dir = path.dirname(dup), stemOld = path.basename(oldBase);
+      const oldFiles = fs.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path.join(dir, f));
+      const canonical = path.join(path.dirname(target), path.basename(firstFile, ".json"));
+      if (stemOld === path.basename(canonical)) {
+        console.error(
+          `error  node ${exp.frame.nodeId} already has an expectation at ${dup} — refusing to also write ${target} ` +
+            `(one screen, one artefact set). That is the canonical name: drop --out (the default is ${shellArg(canonical)}), or pass --force to write a second set anyway.`
+        );
+        return 1;
+      }
       console.error(
         `error  node ${exp.frame.nodeId} already has an expectation at ${dup} — refusing to also write ${target} ` +
-          "(one screen, one artefact set). Use that existing name, or pass --force to write this one anyway."
+          "(one screen, one artefact set).\n" +
+          `       existing set under '${stemOld}' (${oldFiles.length} file(s)): ${oldFiles.join(", ")}\n` +
+          `       the canonical name for this screen is '${path.basename(canonical)}' (<Layer>__<id> — the screen file's own basename), not '${stemOld}'.\n` +
+          `       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` +
+          (path.resolve(target) === path.resolve(canonical + ".expected.json") ? "" : ` with --out ${shellArg(canonical)}`) +
+          ", then probe + --compare as usual — the old measured/report/PNGs stay as history under the old name.\n" +
+          `       Or keep the old name: --out ${shellArg(oldBase)}. (--force writes a second, parallel set — not recommended.)`
       );
       return 1;
     }

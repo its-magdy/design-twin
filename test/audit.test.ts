@@ -6,12 +6,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync, execFileSync } from "node:child_process";
-import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, BLOCKER_CODES } from "../design-to-code/audit.ts";
+import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, BLOCKER_CODES, blockerIds } from "../design-to-code/audit.ts";
 import type { AuditInput, AuditOptions } from "../design-to-code/audit.ts";
 import type { AuditFinding, CatalogComponent, ComponentsCatalog, CrossCheckFinding, IrNode, ScreenAssetsDoc, TokensDoc } from "../design-to-code/types.ts";
 import { locateAuditFile, auditGateStatus } from "../design-to-code/audit-gate.ts";
 import { check, report } from "./assert.ts";
-import { catalog as catalog1, malformed, must, node, parseAs, readFixture, screenExport } from "./fixtures.ts";
+import { catalog as catalog1, codeMap, malformed, must, node, parseAs, readFixture, screenExport } from "./fixtures.ts";
+import type { NodeInput } from "./fixtures.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
 import { isAuditReport, isComponentsCatalog, isScreenAssetsDoc } from "../design-to-code/doc-guards.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
@@ -731,7 +732,7 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   const json = parseAs(fs.readFileSync(path.join(cwd, "design", "audit", "Login__1_1.json"), "utf8"), isAuditReport, "audit report");
   const md = fs.readFileSync(path.join(cwd, "design", "audit", "Login__1_1.md"), "utf8");
   const font = json.findings.find((f) => f.code === "missing-font");
-  check("[DT-21] before: missing-font is a blocker the gate sees", before.status === 0 && beforeGate.blockers.includes("missing-font#0"));
+  check("[DT-21] before: missing-font is a blocker the gate sees", before.status === 0 && beforeGate.blockers.includes("missing-font@1:11"));
   check("[DT-21] an override downgrades it in the .json (summary + finding, with from/reason/decidedBy)",
     after.status === 0 && json.summary.blockers === 0 && font?.severity === "warning" && font.overridden?.from === "blocker" && font.overridden.decidedBy === "user");
   check("[DT-21] …and in the .md, marked with the old severity and the reason", /`missing-font` .*\*\(was blocker: the font files are licensed and in the repo\)\*/.test(md) && /\*\*0 blocker\(s\)\*\*/.test(md));
@@ -899,6 +900,52 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   const lib = spawnSync(process.execPath, [cli, screenRel, "--platform", "ios", "--out", "design/audit/Login__1_1.library"], { encoding: "utf8", cwd: root });
   const libRep = parseAs(fs.readFileSync(path.join(root, "design/audit/Login__1_1.library.json"), "utf8"), isAuditReport, "library report");
   check("[re-review LOW] a `<report>.library` run applies the report's own overrides file", lib.status === 0 && libRep.summary.blockers === 0 && /overrides: design\/audit\/Login__1_1\.overrides\.json/.test(lib.stderr));
+}
+
+{
+  // F-44: finding ids are `code` / `code@nodeId` (+ `~n`), on every finding — so a blocker added EARLIER in
+  // the report leaves the others' ids alone. Before: `<code>#<i>` by position among blockers (#0/#1 → #1/#2).
+  const text = (id: string, name: string): NodeInput => ({ id, type: "TEXT", name, text: name, missingFont: true, font: { family: "Acme Sans", size: 14 } });
+  const run = (nodes: NodeInput[]) => audit({ doc: screenExport([{ id: "1:0", type: "FRAME", name: "Sample App", children: nodes }], { screen: "Sample App" }), label: "Sample App" }, { platform: "web" });
+  const two = run([text("1:1", "A"), text("1:2", "B")]);
+  const three = run([text("1:5", "First"), text("1:1", "A"), text("1:2", "B")]);
+  const ids2 = blockerIds(two), ids3 = blockerIds(three);
+  check(`[F44-1] two missing-font blockers get node ids (got ${JSON.stringify(ids2)})`, JSON.stringify(ids2) === JSON.stringify(["missing-font@1:1", "missing-font@1:2"]));
+  check(`[F44-1] a blocker inserted before them leaves both ids unchanged (got ${JSON.stringify(ids3)})`, ids3.includes("missing-font@1:1") && ids3.includes("missing-font@1:2") && ids3.length === 3);
+  check("[F44-1] every finding of the report carries its id (the JSON a plan copies from)",
+    three.findings.length > 3 && three.findings.every((f) => typeof f.id === "string" && f.id.startsWith(f.code)) && new Set(three.findings.map((f) => f.id)).size === three.findings.length);
+  const old = { findings: two.findings.map(({ id: _id, ...f }) => f) }; // a report written before F-44 has no ids
+  check("[F44-1] a pre-F-44 report (no ids) gets the same ids, computed from code + node", JSON.stringify(blockerIds(old)) === JSON.stringify(ids2));
+  const doc = screenExport([{ id: "1:1", type: "FRAME", name: "Items", children: [{ id: "1:2", type: "INSTANCE", name: "Widget", mainComponent: { name: "Widget", key: "k-w-v", setKey: "k-w", setName: "Widget" } }] }], { screen: "Items" });
+  const res = audit({ doc, label: "Items" }, { platform: "web", designSystem: { components: { components: [{ name: "Other", type: "COMPONENT_SET", key: "k-o" }] } } });
+  const merged = res.findings.find((x) => x.code === "catalog-covers-nothing");
+  const own = res.crossFile?.findings.find((x) => x.code === "catalog-covers-nothing");
+  check("[F44-1] a cross-file finding has the same id in the audit's findings and in its crossFile section", !!merged?.id && merged.id === own?.id);
+}
+
+{
+  // F-47 through audit: the embedded cross-check gets the same default map + export siblings as a cross-check
+  // run, so crossFile.componentProposals carry alreadyMapped / sharedWith. Before: no labels in the audit.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "audit-f47-"));
+  const put = (rel: string, doc: unknown): string => { const f = path.join(tmp, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
+  const sidebar = (id: string): NodeInput => ({ type: "INSTANCE", id, name: "Sidebar", component: "State=Open", props: { State: "Open" }, mainComponent: { name: "State=Open", key: "s-sidebar-open", setKey: "s-sidebar", setName: "Sidebar" } });
+  const plain = (id: string, name: string, key: string): NodeInput => ({ type: "INSTANCE", id, name, props: { "Title#2:0": "x" }, mainComponent: { name, key } });
+  const fileA = put("design/export/pages/P/A__1_1.json", screenExport([{ type: "FRAME", id: "1:1", name: "A", children: [sidebar("1:2"), plain("1:3", "Card", "s-card"), plain("1:4", "Tile", "s-tile")] }], { screen: "A", nodeId: "1:1" }));
+  put("design/export/pages/P/B__2_1.json", screenExport([{ type: "FRAME", id: "2:1", name: "B", children: [sidebar("2:2"), plain("2:3", "Card", "s-card")] }], { screen: "B", nodeId: "2:1" }));
+  put("design/export/pages/index.json", { pageDirs: [{ page: "P", dir: "P", index: "pages/P/index.json", layers: 2 }], layers: [
+    { name: "A", id: "1:1", file: "pages/P/A__1_1.json" }, { name: "B", id: "2:1", file: "pages/P/B__2_1.json" }] });
+  put("design/export/design-system/components.local.json", catalog1([
+    { name: "Sidebar", id: "9:1", key: "cat-sidebar", type: "COMPONENT_SET", props: { State: { type: "VARIANT", options: ["Open", "Closed"] } } },
+    { name: "Card", id: "9:3", key: "cat-card", type: "COMPONENT", props: { Title: { type: "TEXT" } } },
+    { name: "Tile", id: "9:4", key: "cat-tile", type: "COMPONENT", props: { Title: { type: "TEXT" } } },
+  ]));
+  put("design/codeconnect.local.json", codeMap({ "s-sidebar": { figma: { name: "Sidebar", key: "cat-sidebar", id: "9:1" } } }));
+  const r = spawnSync(process.execPath, [cli, path.relative(tmp, fileA), "--platform", "web", "--design-system", "design/export/design-system", "--json"], { encoding: "utf8", cwd: tmp });
+  let props: Array<{ name: string; alreadyMapped?: true; sharedWith?: number }> = [];
+  try { props = parseAs(r.stdout, isAuditReport, "audit --json").crossFile?.componentProposals || []; } catch { props = []; }
+  const p = (n: string) => props.find((x) => x.name === n);
+  check(`[F47 audit] the audit's cross-file proposals are labelled: Sidebar alreadyMapped + shared with 1, Card shared with 1, Tile screen-only (got ${JSON.stringify(props.map((x) => [x.name, x.alreadyMapped, x.sharedWith]))})`,
+    r.status === 0 && p("Sidebar")?.alreadyMapped === true && p("Sidebar")?.sharedWith === 1 && p("Card")?.sharedWith === 1 && p("Tile")?.sharedWith === 0 && p("Tile")?.alreadyMapped === undefined);
 }
 
 report();

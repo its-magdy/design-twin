@@ -44,7 +44,7 @@ writes the real path here, not there).
 ```
 
 1. **Find what was built.** First resolve which screen the user means:
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>"` (node id wins alone;
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan` (node id wins alone;
    otherwise exact layer name, indexed `title` and plan `screenName`/`route` are checked TOGETHER, as
    one pool, never in sequence — more than one match anywhere in that pool stops the run instead of
    resolving on whichever field was checked first; see `extract/SKILL.md`). A text-search fallback

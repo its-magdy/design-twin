@@ -360,6 +360,16 @@ export async function collectAsset(node: SceneNode, hidden?: boolean): Promise<A
   return undefined;
 }
 
+// The scale a reference render uses: the caller's own (a positive number), else 2x capped so the
+// longer side is at most 2048 px. ONE rule for the render and for what collectScreenshot reports
+// (DT-06), so the reported scale is the one the PNG was actually made at.
+export function referenceScale(node: SceneNode, opts?: { scale?: number }): number {
+  if (opts && typeof opts.scale === "number" && opts.scale > 0) return opts.scale;
+  const w = "width" in node ? node.width || 0 : 0;
+  const h = "height" in node ? node.height || 0 : 0;
+  return Math.min(2, 2048 / (Math.max(w, h) || 1));
+}
+
 // Render a whole top-level frame to a PNG the codegen agent can self-correct against. Also the
 // on-demand single-node screenshot op (collectScreenshot in collect.ts) reuses this unchanged — same
 // render, just called on a component/instance instead of a root. `opts.scale` lets that caller override
@@ -368,9 +378,7 @@ export async function collectAsset(node: SceneNode, hidden?: boolean): Promise<A
 export async function collectReference(node: SceneNode, opts?: { scale?: number }): Promise<string | undefined> {
   if (!node || !("exportAsync" in node) || !("width" in node)) return undefined;
   try {
-    const value = opts && typeof opts.scale === "number" && opts.scale > 0
-      ? opts.scale
-      : Math.min(2, 2048 / (Math.max(node.width || 0, node.height || 0) || 1));
+    const value = referenceScale(node, opts);
     const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
     if (!bytes || !bytes.length) {
       warn("reference screenshot empty: " + node.name);

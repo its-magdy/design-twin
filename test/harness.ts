@@ -44,6 +44,8 @@ interface PostedMessage {
   type: string; source?: string; label?: string; phase?: string;
   page?: { index: number; of: number; name: string; pageId?: string };
   nodes?: number; assets?: number;
+  /** progress.ts run-begin / queued: the bridge request a run serves */
+  requestId?: string;
   /** main.ts `bridge-result` */
   id?: string; ok?: boolean; result?: unknown; error?: string;
 }
@@ -130,7 +132,9 @@ type LibrariesOut = ListLibrariesReply;
 interface WriteResult { ok: boolean; applied: Array<{ id?: string }>; failedAt?: number; failedOp?: string; error?: string }
 interface WriteOp { op: string; [field: string]: unknown }
 /** progress.ts RunInfo */
-interface RunInfo { source: "ui" | "bridge"; label: string }
+interface RunInfo { source: "ui" | "bridge"; label: string; requestId?: string }
+/** collect.ts ScreenshotResult (DT-06: w/h/scale). */
+interface ScreenshotOut { id: string; name: string; type: string; w?: number; h?: number; scale?: number; reference: string; assets: Asset[] }
 /** collect.ts CollectOpts */
 interface CollectOpts extends Partial<Record<ReadOptName, boolean>> { allPages?: boolean; page?: string | string[] }
 interface DesignExportApi {
@@ -148,6 +152,7 @@ interface DesignExportApi {
   applyWrites(ops?: WriteOp[]): Promise<WriteResult>;
   serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T>;
   requestCancel(): RunInfo | null;
+  collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotOut>;
 }
 /** The VM global object after the lift below: the export API plus the fake `figma` it reads. */
 type Sandbox = DesignExportApi & { figma: FakeFigma };
@@ -376,7 +381,7 @@ Object.assign(context, context.__designExport || {});
 const API_MEMBERS: Record<keyof DesignExportApi, true> = {
   serialize: true, collectSelection: true, collectNode: true, collectFull: true, collectDesignSystemOnly: true, collectLibraryFile: true,
   buildDesignSystem: true, listPages: true, listChildren: true, listLibraries: true, collectLibraryComponents: true,
-  applyWrites: true, serializeRun: true, requestCancel: true,
+  applyWrites: true, serializeRun: true, requestCancel: true, collectScreenshot: true,
 };
 const missingApi = (c: Record<string, unknown>): string[] => Object.keys(API_MEMBERS).filter((k) => typeof c[k] !== "function");
 function isSandbox(c: Record<string, unknown>): c is Record<string, unknown> & Sandbox {
@@ -2586,6 +2591,150 @@ const sandbox: Sandbox = context;
 
     sandbox.figma.root.children = prevKids;
     sandbox.figma.ui.postMessage = prevPost;
+  }
+
+  // ---------- [LIVE] liveness frames + the per-node abandon check (group 14, F-51 / the live stall) ----------
+  // A cold direct pull was aborted by the CLI's 20 s stall check while the plugin was working: the
+  // plugin's first frame for an exportNode was its first per-asset tick, and a run queued behind an
+  // earlier one said nothing at all. Now a bridge run queued behind another posts a `queued` progress
+  // frame (ui.html relays it over the socket), and an abandoned walk stops within one node.
+  {
+    const ABANDONED = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
+    const posted: PostedMessage[] = [];
+    const prevPost = sandbox.figma.ui.postMessage;
+    sandbox.figma.ui.postMessage = (m: PostedMessage) => { posted.push(m); };
+    const handler = must(sandbox.figma.ui.onmessage, "figma.ui.onmessage");
+    const gate = (): { p: Promise<void>; open: () => void } => {
+      let open = (): void => {};
+      const p = new Promise<void>((r) => { open = r; });
+      return { p, open };
+    };
+    const settle = <T>(p: Promise<T>): Promise<{ v: T | null; err: Thrown | null }> => p.then((v) => ({ v, err: null }), (e: unknown) => ({ v: null, err: thrown(e) }));
+    const queuedFrames = (): PostedMessage[] => posted.filter((m) => m.type === "progress" && m.phase === "queued");
+
+    // [LIVE-1] a bridge run that arrives while a UI run executes posts `queued` at once, before its run-begin.
+    posted.length = 0;
+    const gU = gate(), startU = gate();
+    const pU = settle(sandbox.serializeRun(async () => { startU.open(); await gU.p; return "U"; }, { source: "ui", label: "live-ui" }));
+    await startU.p;
+    const pB = settle(sandbox.serializeRun(async () => "B", { source: "bridge", label: "exportNode", requestId: "live-b" }));
+    const queuedEarly = queuedFrames().map((m) => JSON.stringify(m)).join("|");
+    gU.open();
+    await pU; const rB = await pB;
+    const qAt = posted.findIndex((m) => m.type === "progress" && m.phase === "queued");
+    const bBeganAt = posted.findIndex((m) => m.type === "run-begin" && m.label === "exportNode");
+    // pre-change: fails — nothing was posted for a bridge run until its run-begin.
+    ok("[LIVE-1] a bridge run queued behind an executing UI run posts {type:\"progress\",phase:\"queued\",source:\"bridge\",label} at once, before its run-begin",
+      queuedEarly === '{"type":"progress","phase":"queued","source":"bridge","label":"exportNode","requestId":"live-b"}' && qAt >= 0 && bBeganAt > qAt && rB.v === "B");
+    // Review 1 L-8: the queued frame (above) and the run-begin name the bridge request, so the bridge can hand
+    // the relayed `start` / `queued` to that request only.
+    const bBegin = posted[bBeganAt];
+    ok("[L-8] a bridge run's run-begin carries its requestId (the queued frame above carries it too)",
+      !!bBegin && bBegin.type === "run-begin" && bBegin.requestId === "live-b");
+    // A bridge run with nothing ahead of it, and a UI run queued behind another, post no `queued` frame.
+    posted.length = 0;
+    await sandbox.serializeRun(async () => "alone", { source: "bridge", label: "exportNode", requestId: "live-alone" });
+    const gU2 = gate(), startU2 = gate();
+    const pU2 = settle(sandbox.serializeRun(async () => { startU2.open(); await gU2.p; return "U2"; }, { source: "ui", label: "live-ui-2" }));
+    await startU2.p;
+    const pU3 = settle(sandbox.serializeRun(async () => "U3", { source: "ui", label: "live-ui-3" }));
+    gU2.open();
+    await pU2; await pU3;
+    ok("[LIVE-1] …a bridge run with nothing ahead of it and a UI run queued behind another post no `queued` frame",
+      queuedFrames().length === 0);
+    // [LIVE-2] (control) the run-begin of a bridge run carries source "bridge" — what ui.html relays as `start`.
+    ok("[LIVE-2] the run-begin of a bridge run is posted with source \"bridge\" and its label",
+      posted.some((m) => m.type === "run-begin" && m.source === "bridge" && m.label === "exportNode"));
+
+    // [LIVE-5] (b2) an abandon armed MID-SERIALIZE stops the walk before the next node. collectNode has
+    // no page/frame safe point and these nodes paint nothing, so before the per-node check the walk
+    // read every sibling and delivered the doc to a caller that had gone.
+    posted.length = 0;
+    let readAfter = 0;
+    const counted = (id: string): FakeNode => ({ type: "FRAME", id, visible: true, width: 10, height: 10, layoutMode: "NONE", children: [],
+      get name() { readAfter++; return "After " + id; } });
+    const trap: FakeNode = { type: "FRAME", name: "Trap", id: "lv:2", visible: true, width: 10, height: 10, layoutMode: "NONE",
+      get children() { void handler({ type: "cancel", id: "lv-req" }); return []; } };
+    const liveRoot: FakeNode = { type: "FRAME", name: "Live", id: "lv:1", visible: true, width: 100, height: 100, layoutMode: "NONE",
+      exportAsync: async () => new Uint8Array([137, 80, 78, 71]), children: [trap, counted("lv:3"), counted("lv:4")] };
+    const prevGetNodeL = sandbox.figma.getNodeByIdAsync;
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "lv:1" ? liveRoot : null);
+    const prevSkip = sandbox.figma.skipInvisibleInstanceChildren;
+    sandbox.figma.skipInvisibleInstanceChildren = false;
+    await handler({ type: "bridge", id: "lv-req", cmd: "exportNode", args: { nodeId: "lv:1", css: false } });
+    const resL = posted.find((m) => m.type === "bridge-result");
+    // pre-change: fails — ok:true, both siblings read (readAfter 2).
+    ok("[LIVE-5] an abandon armed mid-serialize aborts before the next node: bridge-result ok:false with ABANDONED_MESSAGE, no sibling read after the trap",
+      !!resL && resL.ok === false && resL.id === "lv-req" && resL.error === ABANDONED && resL.result === undefined && readAfter === 0);
+    ok("[LIVE-5] …the run is closed out as abandoned, and skipInvisibleInstanceChildren is untouched",
+      JSON.stringify(posted.filter((m) => m.type === "run-end")) === '[{"type":"run-end","abandoned":true}]' && sandbox.figma.skipInvisibleInstanceChildren === false);
+    // The same node with no abandon exports normally — the check costs a clean run nothing.
+    posted.length = 0;
+    readAfter = 0;
+    Object.defineProperty(trap, "children", { value: [], configurable: true }); // the getter becomes a plain value: no cancel this time
+    await handler({ type: "bridge", id: "lv-req-2", cmd: "exportNode", args: { nodeId: "lv:1", css: false } });
+    const resL2 = posted.find((m) => m.type === "bridge-result");
+    ok("[LIVE-5] …and without an abandon the same node exports in full",
+      !!resL2 && resL2.ok === true && readAfter >= 2);
+
+    // [LIVE-5] inside the catalog's variant walk: each variant's serialize is wrapped in a catch that
+    // WARNS and moves on (components.ts), so the per-node throw is swallowed there — the collector's
+    // backstop must still refuse to deliver, and the walk's toggles must be restored by their finally.
+    posted.length = 0;
+    let variantKidsRead = 0;
+    const vTrap: FakeNode = { type: "FRAME", name: "VTrap", id: "lvv:3", visible: true, width: 4, height: 4, layoutMode: "NONE",
+      get children() { void handler({ type: "cancel", id: "lv-ds" }); return []; } };
+    const vAfter: FakeNode = { type: "FRAME", id: "lvv:4", visible: true, width: 4, height: 4, layoutMode: "NONE", children: [],
+      get name() { variantKidsRead++; return "VAfter"; } };
+    const lvSet: FakeNode = { type: "COMPONENT_SET", id: "lvset:1", name: "Chip", key: "lvsetkey",
+      componentPropertyDefinitions: { State: { type: "VARIANT", variantOptions: ["A", "B"] } } };
+    const lvA: FakeNode = { type: "COMPONENT", id: "lvv:1", name: "State=A", key: "lvkey_a", parent: lvSet, visible: true, children: [vTrap, vAfter] };
+    const lvB: FakeNode = { type: "COMPONENT", id: "lvv:2", name: "State=B", key: "lvkey_b", parent: lvSet, visible: true,
+      get children() { variantKidsRead++; return []; } };
+    const lvPage = { name: "Chips", id: "p:lv", loadAsync: async () => {},
+      findAllWithCriteria: ({ types }: { types: string[] }) => (types.indexOf("COMPONENT_SET") !== -1 ? [lvSet, lvA, lvB] : []) };
+    const prevKidsL = sandbox.figma.root.children;
+    sandbox.figma.root.children = [lvPage];
+    sandbox.figma.skipInvisibleInstanceChildren = false;
+    const rDs = await settle(sandbox.serializeRun(() => sandbox.collectDesignSystemOnly({ variantVisuals: true }), { source: "bridge", label: "exportDesignSystem", requestId: "lv-ds" }));
+    // pre-change: fails — the variant walk ran to the end and the design-system doc was delivered.
+    ok("[LIVE-5] an abandon inside the variant walk (whose per-variant catch swallows it) still rejects with ABANDONED_MESSAGE — no doc",
+      rDs.v === null && rDs.err?.message === ABANDONED && variantKidsRead === 0);
+    ok("[LIVE-5] …and skipInvisibleInstanceChildren is back to its value before the run (the catalog's finally)",
+      sandbox.figma.skipInvisibleInstanceChildren === false);
+    // runOpts.skipAssets was set by the variant walk and must be restored by its finally: the next
+    // export of a vector really exports it.
+    let liveSvg = 0;
+    const vecFrame: FakeNode = { type: "FRAME", name: "VecHost", id: "lvx:1", visible: true, width: 20, height: 20, layoutMode: "NONE",
+      exportAsync: async () => new Uint8Array([137, 80, 78, 71]),
+      children: [{ type: "VECTOR", name: "Dot", id: "lvx:2", visible: true, width: 8, height: 8,
+        fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], fillGeometry: [{ data: "M0 0L8 0L8 8Z", windingRule: "NONZERO" }],
+        exportAsync: async () => { liveSvg++; return "<svg width=\"8\" height=\"8\"><path d=\"M0 0h8\"/></svg>"; } }] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "lvx:1" ? vecFrame : null);
+    const afterVar = await sandbox.collectNode("lvx:1", { css: false });
+    ok("[LIVE-5] …and the variant walk's skipAssets toggle was restored (the next export renders its vector)",
+      liveSvg === 1 && typeof afterVar.screen.nodes[0]?.children?.[0]?.asset === "string");
+
+    sandbox.figma.root.children = prevKidsL;
+    sandbox.figma.getNodeByIdAsync = prevGetNodeL;
+    if (prevSkip === undefined) delete sandbox.figma.skipInvisibleInstanceChildren;
+    else sandbox.figma.skipInvisibleInstanceChildren = prevSkip;
+    sandbox.figma.ui.postMessage = prevPost;
+  }
+
+  // ---------- [SHOT] screenshot reply carries the node size and the render scale (DT-06) ----------
+  {
+    const prevGetNodeS = sandbox.figma.getNodeByIdAsync;
+    const shot: FakeNode = { type: "FRAME", name: "Shot", id: "sh:1", visible: true, width: 1440, height: 1236,
+      exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "sh:1" ? shot : null);
+    const s1 = await sandbox.collectScreenshot("sh:1");
+    // pre-change: fails — the reply had id/name/type/reference only.
+    ok("[SHOT-1] collectScreenshot on a 1440×1236 frame → w 1440, h 1236, scale 2048/1440 (the auto cap it rendered at)",
+      s1.w === 1440 && s1.h === 1236 && typeof s1.scale === "number" && Math.abs(s1.scale - 2048 / 1440) < 1e-9 && typeof s1.reference === "string");
+    const s2 = await sandbox.collectScreenshot("sh:1", { scale: 3 });
+    ok("[SHOT-1] …an explicit scale is the one reported", s2.scale === 3 && s2.w === 1440);
+    sandbox.figma.getNodeByIdAsync = prevGetNodeS;
   }
 
   // ---------- [G13] hidden graphics, icon containers, asset-leaf layout/transform, same-name children ----------

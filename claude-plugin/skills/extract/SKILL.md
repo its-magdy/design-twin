@@ -66,8 +66,15 @@ dtwin pull --page <id>         # or a whole page
 dtwin list libraries          # which design libraries this file draws on — SLOW, see below
 ```
 
-Every command answers `--help` with its own page (`dtwin screenshot --help`, `dtwin list --help`),
-and none of them does anything else while doing so. If a command hangs or times out, run
+Every command answers `--help` with its own page (`dtwin screenshot --help`, `dtwin whoami --help`,
+`dtwin list --help`), and none of them does anything else while doing so. The output directory is
+positional (`dtwin pull design`, never `--out`); the port is chosen only by `FIGMA_BRIDGE_PORT`
+(8787/8788/8789). A direct run ends with `done in Xs — waited Ys for the plugin to connect · export Zs ·
+write Ws`: a long "waited" is the plugin re-dialling a fresh bridge, not a slow export, and
+`dtwin serve` (another terminal) keeps the plugin connected so later commands skip it. `dtwin screenshot`
+prints `{id, name, type, w, h, scale, png:{w,h}, reference}` — size, render scale and PNG pixel size.
+If a command stalls with "the plugin is connected but sent nothing", the plugin is busy with an earlier
+export in that file: retry, or use `dtwin serve`. If a command hangs or times out, run
 **`dtwin doctor`** first: it says whether the cause is the token, the port, the daemon or the plugin.
 
 **`dtwin list` reports LAYERS, not screens.** Its top-level array carries SECTION, GROUP, INSTANCE,
@@ -129,7 +136,11 @@ The server is registered as `designtwin`, so a tool's full name is `mcp__designt
 **Pass `writeToDisk: true` on any export past a quick look.** Inline results are capped (25k tokens by
 default). An export too large to return is written to disk on its own and the result's `note` says
 so, but asking for it up front is cheaper than discovering it — and asset bytes are never returned
-inline at all, so it's the only way to get `assets/`.
+inline at all, so it's the only way to get `assets/`. The inline cap is also never above 48,000
+characters. Every export result (written or inline) carries `sourceFile` — the Figma file it came from —
+and `durationMs`; when the implicit spill replaces a screen file whose content differs (the `exportedAt` stamp aside), the old one is kept as
+`<screen>.json.prev` and the `note` names it. `figma_status` shows `lastScreenExport` and `lastWrite`.
+A cancelled tool call cancels the read in the plugin.
 
 ## Check what landed before declaring success
 
@@ -172,8 +183,11 @@ three sibling files.
 **Resolving a screen by the name a user types (not the layer name Figma gave it):** the visible title
 is very often NOT the Figma layer name — a layer named `positions ` (trailing space) can be the frame
 whose on-screen `<h1>` reads "Job Roles". Use the one shared procedure,
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name-or-id>" [planDir]`, rather
-than re-deriving name matching here. First, a node id (e.g. `7314:87192`) is tried alone and, if it
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name-or-id>" design/plan`, rather
+than re-deriving name matching here. The query may also be a `<Layer>__<id>` basename or a path to the
+screen's `.json` (or `.vars.json`) — the id it carries resolves like a node id. Pointing it at a folder
+that is not an export root (no `pages/index.json`) prints `not an export root` and the root to pass
+instead. First, a node id (e.g. `7314:87192`) is tried alone and, if it
 matches, wins outright — an id is unique and never ambiguous with a name/title. Otherwise, THREE exact
 checks — layer name, indexed `title`, a plan's `screenName`/`route` (each trimmed, case-insensitive)
 — are evaluated TOGETHER as one pool, not as a sequence tried one after another: any row matching
@@ -208,6 +222,8 @@ in the collections that screen references — more than the ones its nodes actua
 not unique across the union: two different variables (two keys) can both be called `Space 4` with
 different values. Such a pair, and a variable two pulls resolve differently, is recorded under
 `_conflicts` and as a `CONFLICT` line in `hygiene` — read those before generating a theme.
+`variables.json` holds only variables bound by pulled nodes — look up library colours with `--lookup` on
+the library catalog (see below).
 
 **Check the reference screenshot landed.** Every export renders one PNG per top-level frame and
 points at it from a `reference` field holding a path relative to the export dir
@@ -253,7 +269,10 @@ key, so a copied design system matches its screens 0% by key while names and pro
 agree. When that is what cross-check finds, it lists name + prop-signature matches under
 `componentProposals` in its JSON (`--out design/audit/<screen>.cross` writes it), every one
 `"confirmed": false`. Show the user that list — name, catalog id, evidence — and let them accept
-entries; set `"confirmed": true` on the accepted ones, then
+entries. Pass `--map design/codeconnect.local.json` (found by default) and each proposal is labelled:
+`alreadyMapped` (a key of it is already in the map — confirm only the others) and `sharedWith: N` (N other
+exported screens use the same component; confirm once, it covers them all). The report lists them in
+that order — shared, this screen only, already mapped — and nothing is confirmed for you; set `"confirmed": true` on the accepted ones, then
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json --from-proposals design/audit/<screen>.cross.json`
 stubs exactly those, filed under the screen's own instance keys. Never confirm on the user's behalf:
 the confirmation is the only thing that separates a real match from two components that share a name.
@@ -292,6 +311,15 @@ it at a directory you are happy to have filled. With a `--web`/`--native` target
 only that target's file to the given directory by default — pass `--also-generic` if you also want the
 generic handoff set (`tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json`, `tokens/`) written
 there, and keep that set under `design/`, not the app's source tree.
+
+Each CSS / native file starts with a `designtwin-source: <dir>/<input> · <n> variables · sha256 <12>` line.
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> --check <generated file>` writes nothing and
+says whether the file is still current (exit 0), stale after a re-pull (1) or has no such line (2,
+regenerate once) — also 2 when it was generated from a different file (it names that file: check against it,
+never regenerate from a narrower one; a design-system and a library `tokens.json` are told apart by their parent directory) or the command line is wrong (usage errors in `--check`/`--lookup` are 2, never 1); a later pull that merges new variables says the generated file is now behind. To find
+the variable behind a colour: `tokens.js <library tokens.json> --lookup <hex>` (repeatable; COLOR
+variables, per mode, through aliases; exit 1 when none, 2 on a usage error; pass `ffbc1c` or a quoted `'#ffbc1c'` — an unquoted
+`#` starts a shell comment).
 
 Pick the output by stack; the build-screen profile for the stack says which flag and what the
 generated names look like. `tokens.css` (no flag) is plain `:root` custom properties for CSS

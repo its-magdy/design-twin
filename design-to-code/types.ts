@@ -137,7 +137,14 @@ export interface MatchRow {
   reasons: string[];
   evidence?: MatchEvidence;
   tie?: MatchTie;
+  /** every catalog entry sharing this name, in catalog order — set only when there are 2 or more (DT-27:
+   *  nameVerdict's "ambiguous" when none verified; plan-skeleton's `catalog.by:"ambiguous"` lists them) */
+  candidates?: MatchCandidate[];
 }
+/** component-match.ts nameVerdict(): the one name rule (DT-27) cross-check and plan-skeleton share. */
+export interface NameVerdict { status: "matched" | "ambiguous" | "unmatched"; reason: string }
+/** A same-named catalog entry (MatchRow.candidates, PlanComponentMatch `by:"ambiguous"`). */
+export interface MatchCandidate { id?: string; key?: string; name: string }
 export interface MatchSummary {
   instances: number; names: number; byKey: number; proposed: number; proposedWithSignature: number; withCandidates: number; unmatched: number; remote: number;
 }
@@ -149,6 +156,10 @@ export interface ComponentProposal {
   name: string; instances: number; screens: string[]; instanceKeys: string[]; remote: boolean;
   catalog: MatchTarget | null; evidence?: MatchEvidence; tie: MatchTie | null; alternatives: MatchAlternative[]; reasons: string[];
   confirmed: boolean;
+  /** F-47: a label only — this name is already mapped in the project's code-connect map */
+  alreadyMapped?: true;
+  /** F-47: how many OTHER exported screens use the same instance or set key (shared chrome); ordering only */
+  sharedWith?: number;
 }
 
 // ================================================================ findings (audit.js / cross-check.js / drift-lint.js)
@@ -244,6 +255,9 @@ export interface Finding<Code extends string = string> extends FindingExtras {
   severity: Severity;
   code: Code;
   message: string;
+  /** F-44: `code`, or `code@nodeId`, plus `~n` for the n-th repeat of that pair in one report
+   *  (finding-id.ts findingIds) — the same id in audit and cross-check reports */
+  id?: string;
   nodeId?: string;
   nodeName?: string;
   screen?: string;
@@ -277,6 +291,10 @@ export interface CoverageEntry {
   ambiguous?: true;
   candidates?: number;
   bucket?: CoverageBucket;
+  /** DT-27: why a name-stage entry is unmatched/ambiguous (component-match nameVerdict's reason) */
+  reason?: string;
+  /** DT-27: how much a name match proved (component-match's evidence) */
+  evidence?: MatchEvidence;
 }
 export interface CrossCheckCoverage {
   instances: number; distinct: number; matchedByKey: number; matchedByLocalKey: number; matchedByName: number;
@@ -402,8 +420,14 @@ export interface PlanTokenRow {
   /** a person's reason for deliberately sharing this row's codeToken with another Figma name (silences
    *  verify-build's merged-token warning for this row) */
   acknowledged?: string;
+  /** DT-33: the sibling plan (`--seed-from`) this row's person-owned answer was copied from */
+  seededFrom?: string;
 }
-export interface PlanComponentMatch { by: "key" | MatchEvidence; id?: string; key?: string; name: string; confirmed?: false }
+/** A component row's catalog entry. `by:"ambiguous"` (DT-27) names the same-named candidates a person must
+ *  choose between — it is NEVER a match (no id/key/name of its own); narrow on `by` before reading `name`. */
+export type PlanComponentMatch =
+  | { by: "key" | MatchEvidence; id?: string; key?: string; name: string; confirmed?: false }
+  | { by: "ambiguous"; candidates: MatchCandidate[] };
 export interface PlanComponentRow {
   nodeId?: string;
   name: string;
@@ -424,6 +448,8 @@ export interface PlanComponentRow {
   figmaName?: string;
   note?: string;
   repoPath?: string;
+  /** DT-33: the sibling plan (`--seed-from`) this row's person-owned answer was copied from */
+  seededFrom?: string;
 }
 /** anchors{}[nodeId]. A node is ANCHORED when one of mapModule/file/symbol/omitted is a non-blank string. */
 export interface PlanAnchor { name?: string; type?: IrNodeType; parent?: string | null; mapModule?: string; file?: string; symbol?: string; omitted?: string;
@@ -469,6 +495,8 @@ export interface AllowedLiteral { value?: string; file?: string; reason?: string
 /** Pre-filled from an audit with blockers (finding 136); overridden/reason/decidedBy/decidedAt are a person's. */
 export interface PlanAuditGate {
   auditFile: string | null;
+  /** F-44: `design/audit/<base>.cross.json` when plan-skeleton found it, else null (absent on older plans) */
+  crossCheckFile?: string | null;
   verdict: "blocked" | (string & {});
   /** plan-skeleton writes every field below; a person edits them, so any may be missing (verify-build reads them defensively) */
   blockers?: string[];
@@ -1199,7 +1227,7 @@ export type ResolveScreenResult =
   | { status: "resolved"; row: IndexRow; stage: string }
   | { status: "ambiguous"; stage: string; candidates: ScreenCandidate[] }
   | { status: "needs-confirmation"; stage: "text search"; candidates: ScreenCandidate[]; noTitles?: true }
-  | { status: "not-found"; candidates: ScreenCandidate[]; noTitles?: true };
+  | { status: "not-found"; candidates: ScreenCandidate[]; noTitles?: true; noIndex?: { dir: string; hint: string | null } };
 
 // ================================================================ tiny guards for the raw-JSON boundary
 

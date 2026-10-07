@@ -3,6 +3,7 @@
 
 // design-to-code/tokens.ts
 import fs3 from "node:fs";
+import { createHash } from "node:crypto";
 import path4 from "node:path";
 
 // design-to-code/types.ts
@@ -299,6 +300,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
@@ -1698,14 +1700,101 @@ function emitTokens(designSystem, opts) {
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
 var { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity });
+var canonJson = (x) => {
+  if (Array.isArray(x)) return "[" + x.map(canonJson).join(",") + "]";
+  if (x && typeof x === "object") {
+    return "{" + Object.entries(x).filter(([, v]) => v !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => JSON.stringify(k) + ":" + canonJson(v)).join(",") + "}";
+  }
+  return JSON.stringify(x) ?? "null";
+};
+var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+function catalogProvenance(ds) {
+  const collections = (ds.collections || []).map((c) => canonJson(c)).sort(cmpStr);
+  const variables = (ds.variables || []).map((v) => ({ sort: [v.collection ?? "", v.name, v.key ?? ""].join("\0"), json: canonJson(v) })).sort((a, b) => cmpStr(a.sort, b.sort) || cmpStr(a.json, b.json)).map((v) => v.json);
+  const sha = createHash("sha256").update(`{"collections":[${collections.join(",")}],"variables":[${variables.join(",")}]}`).digest("hex").slice(0, 12);
+  return { count: (ds.variables || []).length, sha };
+}
+var PROVENANCE_RE = /designtwin-source: (.+?) · (\d+) variables · sha256 ([0-9a-f]{12})/;
+function sourceName(input) {
+  const abs = path4.resolve(input);
+  const parent = path4.basename(path4.dirname(abs));
+  return parent ? `${parent}/${path4.basename(abs)}` : path4.basename(abs);
+}
+function provenanceLine(input, ds, comment) {
+  const { count, sha } = catalogProvenance(ds);
+  const body = `designtwin-source: ${sourceName(input)} \xB7 ${count} variables \xB7 sha256 ${sha}`;
+  return comment === "css" ? `/* ${body} */
+` : `// ${body}
+`;
+}
+function lookupColor(ds, query) {
+  const q = normHex(query);
+  if (q === null) return null;
+  const withAlpha = q.length === 9;
+  const same = (hex) => withAlpha ? (hex.length === 7 ? hex + "ff" : hex) === q : hex.slice(0, 7) === q.slice(0, 7);
+  const collections = ds.collections;
+  const byName = /* @__PURE__ */ new Map();
+  for (const v of ds.variables || []) getOrInit(byName, v.name, () => []).push(v);
+  const target = (name, referrer) => (byName.get(name) || []).slice().sort((a, b) => Number(b.collection === referrer.collection) - Number(a.collection === referrer.collection) || cmpStr(a.key ?? "", b.key ?? ""))[0];
+  const resolve = (v, mode, via) => {
+    if (via.length > 20) return null;
+    const raw = v.values[mode] !== void 0 ? v.values[mode] : baseValue(v, collections);
+    if (isAlias(raw)) {
+      const t = target(raw.aliasOf, v);
+      return t && t.type === "COLOR" ? resolve(t, mode, [...via, raw.aliasOf]) : null;
+    }
+    const hex = isHexish(raw) ? normHex(raw) : null;
+    return hex === null ? null : { hex, via };
+  };
+  const hits = [];
+  for (const v of ds.variables || []) {
+    if (v.type !== "COLOR") continue;
+    for (const mode of Object.keys(v.values || {})) {
+      const r = resolve(v, mode, []);
+      if (r && same(r.hex)) hits.push({ name: v.name, collection: v.collection ?? "(no collection)", mode, hex: r.hex, via: r.via });
+    }
+  }
+  return hits;
+}
+function checkGenerated(ds, input, generated, cmd) {
+  let head;
+  try {
+    head = fs3.readFileSync(generated, "utf8").slice(0, 4096);
+  } catch (e) {
+    console.error(`error  --check: '${generated}' could not be read (${e instanceof Error ? e.message : String(e)}).`);
+    return 2;
+  }
+  const m = PROVENANCE_RE.exec(head);
+  if (!m) {
+    console.error(`no designtwin-source line in '${generated}' \u2014 it was generated before the line existed, or by hand: regenerate once with ${cmd} <outDir> [the same flags], then --check works.`);
+    return 2;
+  }
+  const now = catalogProvenance(ds);
+  if (m[3] === now.sha) {
+    console.log(`current  ${generated} was generated from ${m[1]} (${m[2]} variables, sha ${m[3]}) \u2014 same content as ${input}`);
+    return 0;
+  }
+  const here = sourceName(input);
+  if (m[1] !== (m[1]?.includes("/") ? here : path4.basename(input))) {
+    console.error(`other source  ${generated} was generated from ${m[1]}, not ${here} \u2014 pass that file: ${scriptCmd("tokens")} <path to ${m[1]}> --check ${shellArg(generated)}`);
+    return 2;
+  }
+  console.error(`stale  ${generated} was generated from ${m[2]} variables (sha ${m[3]}); ${input} now has ${now.count} (sha ${now.sha}) \u2014 re-run ${cmd} <outDir> [the same flags]`);
+  return 1;
+}
 function main(args) {
   const USAGE = `usage: ${scriptCmd("tokens")} <design-system/tokens.json | design/variables.json> [outDir]
        [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]
        With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to
        additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).
-       Without a target flag, only the generic set is written (unchanged).`;
-  const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, help: { type: "boolean", short: "h" } };
-  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, 1, (a) => parseArgs2({ args: a, options: OPTIONS, allowPositionals: true }));
+       Without a target flag, only the generic set is written (unchanged).
+       Every CSS / native file it writes starts with a \`designtwin-source:\` line (input as <parent dir>/<name>, variable count, hash of its content).
+       ${scriptCmd("tokens")} <catalog> --check <generated file>   writes nothing: exit 0 when the file is current, 1 when the catalog has changed since, 2 when it has no source line or was generated from a different file or the command line is wrong
+       ${scriptCmd("tokens")} <catalog> --lookup <hex> [--lookup <hex> \u2026]   writes nothing (ffbc1c, or quote '#ffbc1c': an unquoted # is a shell comment): every COLOR variable that resolves to that hex, per mode, directly or through an alias (exit 1 when none, 2 on a usage error)`;
+  const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, check: { type: "string" }, lookup: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } };
+  const readOnlyRun = args.some((x) => /^--(check|lookup)(=|$)/.test(x));
+  const usageExit = readOnlyRun ? 2 : 1;
+  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, usageExit, (a) => parseArgs2({ args: a, options: OPTIONS, allowPositionals: true }));
   if (flags.help) {
     console.log(USAGE);
     return 0;
@@ -1716,19 +1805,19 @@ function main(args) {
   const outDir = positionals[1] || ".";
   if (!input) {
     console.error(USAGE);
-    return 1;
+    return usageExit;
   }
   if (native !== void 0 && !platformOf(native)) {
     console.error(`--native: unknown platform "${native}"
 ${USAGE}`);
-    return 1;
+    return usageExit;
   }
   const WEB_TARGETS = { tailwind: "theme.css", "web-tailwind": "theme.css" };
   const webFile = web === void 0 ? void 0 : WEB_TARGETS[web];
   if (web !== void 0 && !webFile) {
     console.error(`--web: unknown target "${web}" (known: tailwind)
 ${USAGE}`);
-    return 1;
+    return usageExit;
   }
   const ds = readSplitFile(
     input,
@@ -1738,6 +1827,30 @@ ${USAGE}`);
     "design-system/tokens.json",
     NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json \u2014 pass that instead."
   );
+  const lookups = flags.lookup || [];
+  if (flags.check !== void 0 || lookups.length) {
+    if (flags.check !== void 0 && lookups.length) {
+      console.error(`--check and --lookup are separate runs
+${USAGE}`);
+      return usageExit;
+    }
+    const cmd = `${scriptCmd("tokens")} ${shellArg(input)}`;
+    if (flags.check !== void 0) return checkGenerated(ds, input, flags.check, cmd);
+    let status = 0;
+    for (const q of lookups) {
+      const hits = lookupColor(ds, q);
+      if (hits === null) {
+        console.error(`error  --lookup '${q}' is not a hex colour (#rgb, #rrggbb or #rrggbbaa)`);
+        return 2;
+      }
+      for (const h of hits) console.log(`${h.name}  [${h.collection} / ${h.mode}]  ${h.hex}  (${h.via.length ? "via " + h.via.join(" -> ") : "direct"})`);
+      if (!hits.length) {
+        console.error(`no variable in ${input} resolves to ${normHex(q)} in any mode \u2014 a catalog holds only the variables its pulled nodes bind${/[\\/]libraries[\\/]/.test(path4.resolve(input)) ? "" : "; try the library catalog: design/export/libraries/<dir>/tokens.json"}`);
+        status = 1;
+      }
+    }
+    return status;
+  }
   fs3.mkdirSync(outDir, { recursive: true });
   const hasTarget = web !== void 0 || native !== void 0;
   const writeGeneric = !hasTarget || alsoGeneric;
@@ -1746,7 +1859,7 @@ ${USAGE}`);
   const genericCount = Object.keys(resolverFiles).length;
   if (writeGeneric) {
     fs3.writeFileSync(path4.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
-    fs3.writeFileSync(path4.join(outDir, "tokens.css"), css);
+    fs3.writeFileSync(path4.join(outDir, "tokens.css"), provenanceLine(input, ds, "css") + css);
     fs3.writeFileSync(path4.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
     for (const rel of Object.keys(resolverFiles)) {
       const dest = path4.join(outDir, ...rel.split("/"));
@@ -1758,14 +1871,14 @@ ${USAGE}`);
   const tw = tailwind;
   if (web !== void 0 && webFile !== void 0 && tw !== void 0) {
     const file = webFile;
-    fs3.writeFileSync(path4.join(outDir, file), tw.text);
+    fs3.writeFileSync(path4.join(outDir, file), provenanceLine(input, ds, "css") + tw.text);
     canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities \u2014 every token is a plain custom property you must reference with var()`);
     else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, booleans, strings a font family aliases) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== void 0) {
     const n = toNative(ds, native, { ...ifDefined("package", kotlinPackage || void 0) });
-    fs3.writeFileSync(path4.join(outDir, n.file), n.text);
+    fs3.writeFileSync(path4.join(outDir, n.file), provenanceLine(input, ds, "line") + n.text);
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }

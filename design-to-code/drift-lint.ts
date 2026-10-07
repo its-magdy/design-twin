@@ -43,10 +43,11 @@ export interface DriftLintOptions { maxAgeMs?: number; now?: number; extraCatalo
 
 /** The catalogs a map may also point into, found beside `namedFile` WITHOUT ever exiting: the MCP server
  *  (figma-mcp.ts design_drift_lint) runs driftLint in-process, where any process.exit would take the
- *  whole server down. Same discovery (discoverCatalogs) as readCatalogSet with no --catalog; an absent or
- *  unreadable file is skipped (and so is not in the tool's catalogsRead). */
-function discoverExtraCatalogs(namedFile: string): ExtraCatalog[] {
-  return discoverCatalogs(namedFile).flatMap((d) => (d.catalog ? [{ file: d.file, catalog: d.catalog }] : []));
+ *  whole server down. Same discovery (discoverCatalogs) as readCatalogSet with no --catalog — `screenFile`
+ *  is the CLI's first --screen (the libraries/ beside that export count too); an absent or unreadable file
+ *  is skipped (and so is not in the tool's catalogsRead). */
+function discoverExtraCatalogs(namedFile: string, screenFile?: string): ExtraCatalog[] {
+  return discoverCatalogs(namedFile, screenFile).flatMap((d) => (d.catalog ? [{ file: d.file, catalog: d.catalog }] : []));
 }
 
 type Push = (arr: DriftFinding[], code: DriftCode, message: string, extra?: Partial<DriftFinding>) => void;
@@ -319,9 +320,80 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
   };
 }
 
+/** One screen-coverage warning: the CLI prints `warn   [code] message`, the MCP tool returns it as is. */
+export interface CoverageWarning { code: "catalog-rekeyed" | "screen-coverage"; message: string }
+/** What screenCoverageReport is handed: the validated map, the NAMED catalog (null = a non-catalog, linted
+ *  as "no catalog" like driftLint does), the screen docs already read and guarded, and the other catalogs. */
+export interface ScreenCoverageInput {
+  map: CodeConnectMap;
+  catalogFile: string;
+  catalog: ComponentsCatalog | null;
+  screens: ReadonlyArray<{ file: string; doc: ScreenDoc }>;
+  extraCatalogs: readonly ExtraCatalog[];
+  /** The union to look instances up in; built from catalog + extraCatalogs when omitted. */
+  union?: ComponentsCatalog;
+}
+/** The coverage of the given screens plus the D13 warnings, with the catalogs read. */
+export interface ScreenCoverageReport { coverage: ScreenCoverage; warnings: CoverageWarning[]; catalogsRead: string[] }
+
+// F-30: the CLI's --screen coverage block as a value — never prints, never exits — so the MCP tool
+// (design_drift_lint `screens`) returns the same numbers and the same two warnings the CLI prints.
+function screenCoverageReport(input: ScreenCoverageInput): ScreenCoverageReport {
+  const { map, catalogFile, catalog, screens, extraCatalogs } = input;
+  const named: ComponentsCatalog = catalog || { components: [] };
+  const union = input.union || unionCatalog([{ file: catalogFile, catalog: named, role: "named" }, ...extraCatalogs.map((x) => ({ file: x.file, catalog: x.catalog, role: "extra" as const }))]);
+  const cov = screenCoverage(map, union, screens.map((r) => r.doc)); // "in the catalog" = in ANY catalog read
+  const warnings: CoverageWarning[] = [];
+  const catalogsRead = [catalogFile, ...extraCatalogs.map((x) => x.file)];
+  if (!cov.distinct) return { coverage: cov, warnings, catalogsRead };
+  // 0% by key is also exactly what a DUPLICATED design-system file looks like — every key re-minted,
+  // every name and prop signature intact (livetest-3 #226). Tell the two cases apart before
+  // pointing the user at "the wrong library".
+  const none: VisibleInstance[] = [];
+  // D13: both 0% cases are a WARNING with a question to confirm (as cross-check's catalog-rekeyed /
+  // catalog-covers-nothing are) — "you exported the wrong library" has a default (build every
+  // instance as new) and is the user's call, not a failed lint. Exit stays 0 for them.
+  // Re-key is a question about the NAMED catalog (cross-check asks it the same way): the other catalogs
+  // are passed as its `library` side — a sampled third-party row matching by key is not the design
+  // system's own component, and must not hide that the named catalog was re-keyed.
+  const others: ComponentsCatalog = { components: extraCatalogs.flatMap((x) => x.catalog.components) };
+  const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...screens.map((r) => visibleInstances(r.doc, r.file))), named, others) : null;
+  if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
+    warnings.push({
+      code: "catalog-rekeyed",
+      message:
+        `NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key — but ` +
+        `${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.\n` +
+        `       That is the SAME library under new keys (one of the Figma files is a duplicate, or the library was re-published), not a foreign one.\n` +
+        `       Get the confirmation list with \`${scriptCmd("cross-check")} <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user\n` +
+        `       confirm it (set "confirmed": true per entry), then \`${scriptCmd("map-bootstrap")} <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.\n` +
+        `       Confirm: ${rekey.summary.proposed} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file) — are they the same components? Until confirmed, build every instance as new.`,
+    });
+  } else if (cov.mapPct === 0) {
+    warnings.push({
+      code: "screen-coverage",
+      message:
+        `NONE of the ${cov.distinct} components on this screen resolve to your map by key` +
+        (cov.inCatalog ? ` (${cov.inCatalog} of them are in the catalog(s) read — \`${scriptCmd("map-bootstrap")} ${catalogFile} --screen <screen.json> --out <map>\` stubs those).\n` : `, nor to any catalog read.\n`) +
+        `       The catalog you exported is not the library this screen is built from — a green "mapped" count above measures\n` +
+        `       the catalog against itself. Open an instance in Figma and use "Go to main component" to find the owning file,\n` +
+        `       then export it with \`dtwin pull --as-library "<name>"\` (CLI only — the MCP server has no library export).\n` +
+        `       Confirm: is ${catalogFile}${extraCatalogs.length ? ` (or any of the ${extraCatalogs.length} other catalog(s) read)` : ""} the component library this screen is built from? Until confirmed, build every instance as new.`,
+    });
+  } else if (cov.unmapped.length) {
+    warnings.push({
+      code: "screen-coverage",
+      message:
+        `${cov.unmapped.length} component(s) on this screen have no map entry: ` +
+        cov.unmapped.slice(0, 6).map((u) => `'${u.setName}' (${u.instances}x)`).join(", ") + (cov.unmapped.length > 6 ? ", …" : ""),
+    });
+  }
+  return { coverage: cov, warnings, catalogsRead };
+}
+
 // validateMap is re-exported so the MCP server's lazily-loaded drift-lint layer (bridge/src/figma-mcp.ts
 // DriftLintModule) can apply the same map gate as the CLI below from this one module.
-export { driftLint, discoverExtraCatalogs, validateMap, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
+export { driftLint, discoverExtraCatalogs, validateMap, isScreenDoc, screenCoverage, screenCoverageReport, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
 
 // The CLI's inputs are files the user named. The MAP goes through map-validate.ts's full validator
 // (below): the old "is it an object" guard let {"components":{"X":null}} through to driftLint, which
@@ -383,9 +455,8 @@ async function main(argv: string[]): Promise<number> {
 
   // The number a builder is actually asking for. Printed last, because it is the headline.
   if (screenFiles.length) {
-    const read = screenFiles.map((f) => ({ file: f, doc: readDocFile(f, "screen export", isScreenDoc) }));
-    const docs = read.map((r) => r.doc);
-    const cov = screenCoverage(map, union, docs); // "in the catalog" = in ANY catalog read
+    const screens = screenFiles.map((f) => ({ file: f, doc: readDocFile(f, "screen export", isScreenDoc) }));
+    const { coverage: cov, warnings } = screenCoverageReport({ map, catalogFile, catalog, screens, extraCatalogs, union });
     if (!cov.distinct) {
       console.error(`\nSCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes — nothing to reuse either way.`);
     } else {
@@ -396,42 +467,7 @@ async function main(argv: string[]): Promise<number> {
           (cov.hiddenOnly ? ` (${cov.hiddenOnly} set(s) appear ONLY on hidden layers and will not be built)` : "")
       );
       console.error(`       (this says which components you can REUSE by key — not which ones the build contains; that is verify's job.)`);
-      // 0% by key is also exactly what a DUPLICATED design-system file looks like — every key re-minted,
-      // every name and prop signature intact (livetest-3 #226). Tell the two cases apart before
-      // pointing the user at "the wrong library".
-      const none: VisibleInstance[] = [];
-      // D13: both 0% cases are a WARNING with a question to confirm (as cross-check's catalog-rekeyed /
-      // catalog-covers-nothing are) — "you exported the wrong library" has a default (build every
-      // instance as new) and is the user's call, not a failed lint. Exit stays 0 for them.
-      // Re-key is a question about the NAMED catalog (cross-check asks it the same way): the other catalogs
-      // are passed as its `library` side — a sampled third-party row matching by key is not the design
-      // system's own component, and must not hide that the named catalog was re-keyed.
-      const others: ComponentsCatalog = { components: extraCatalogs.flatMap((x) => x.catalog.components) };
-      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...read.map((r) => visibleInstances(r.doc, r.file))), catalog, others) : null;
-      if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
-        console.error(
-          `warn   [catalog-rekeyed] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key — but ` +
-            `${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.\n` +
-            `       That is the SAME library under new keys (one of the Figma files is a duplicate, or the library was re-published), not a foreign one.\n` +
-            `       Get the confirmation list with \`${scriptCmd("cross-check")} <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user\n` +
-            `       confirm it (set "confirmed": true per entry), then \`${scriptCmd("map-bootstrap")} <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.\n` +
-            `       Confirm: ${rekey.summary.proposed} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file) — are they the same components? Until confirmed, build every instance as new.`
-        );
-      } else if (cov.mapPct === 0) {
-        console.error(
-          `warn   [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map by key` +
-            (cov.inCatalog ? ` (${cov.inCatalog} of them are in the catalog(s) read — \`${scriptCmd("map-bootstrap")} ${catalogFile} --screen <screen.json> --out <map>\` stubs those).\n` : `, nor to any catalog read.\n`) +
-            `       The catalog you exported is not the library this screen is built from — a green "mapped" count above measures\n` +
-            `       the catalog against itself. Open an instance in Figma and use "Go to main component" to find the owning file,\n` +
-            `       then export it with \`dtwin pull --as-library "<name>"\` (CLI only — the MCP server has no library export).\n` +
-            `       Confirm: is ${catalogFile}${extraCatalogs.length ? ` (or any of the ${extraCatalogs.length} other catalog(s) read)` : ""} the component library this screen is built from? Until confirmed, build every instance as new.`
-        );
-      } else if (cov.unmapped.length) {
-        console.error(
-          `warn   [screen-coverage] ${cov.unmapped.length} component(s) on this screen have no map entry: ` +
-            cov.unmapped.slice(0, 6).map((u) => `'${u.setName}' (${u.instances}x)`).join(", ") + (cov.unmapped.length > 6 ? ", …" : "")
-        );
-      }
+      for (const w of warnings) console.error(`warn   [${w.code}] ${w.message}`);
     }
   } else {
     console.error(`note   pass --screen <screen.json> to get the number that matters: how much of THAT screen your map covers.`);

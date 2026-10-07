@@ -54,8 +54,9 @@ Reach for the CLI or MCP once someone's pulling repeatedly or wants Claude to qu
 global binary, and only if it is missing are you inside a clone of the Design Twin repo, where every
 `dtwin` is `node bridge/src/figma-pull.ts`. `dtwin help` prints a quick start, the commands and every
 flag, and each command answers `--help` with its own page (`dtwin screenshot --help`,
-`dtwin list --help`, `dtwin pull --help`, `dtwin mcp --help`) without doing anything else while doing
-so. A mistyped flag is refused, not ignored. Each command is shorthand for a flag (`dtwin list pages`
+`dtwin list --help`, `dtwin pull --help`, `dtwin whoami --help`, `dtwin mcp --help` — every verb has one)
+without doing anything else while doing so. The output directory is positional (`dtwin pull design`; there
+is no `--out`) and the port comes only from `FIGMA_BRIDGE_PORT` (8787/8788/8789; no `--port`). A mistyped flag is refused, not ignored. Each command is shorthand for a flag (`dtwin list pages`
 = `dtwin --list-pages`) and the flag spellings keep working — use either.
 - **Anything not working → `dtwin doctor` first.** It checks the token, the port, the daemon, whether
   the plugin can connect (and whether it has the *right* token) and the project, changes nothing, and
@@ -71,7 +72,9 @@ so. A mistyped flag is refused, not ignored. Each command is shorthand for a fla
 - Visually check ONE component after generating code for it: `dtwin screenshot <id>` — an on-demand PNG,
   cheaper than re-exporting and tighter than the one whole-frame reference PNG every export carries.
 - Keep the connection warm across several pulls with `dtwin serve` (`dtwin stop` / `dtwin status`)
-  instead of reconnecting every time.
+  instead of reconnecting every time: a direct pull ends with `done in Xs — waited Ys for the plugin to
+  connect · export Zs · write Ws`, and a long "waited" is the plugin re-dialling a fresh bridge, not a
+  slow export — `dtwin serve` keeps the plugin connected so later commands skip it.
 
 **Through the MCP server**, once registered in the target project (as `designtwin`, so each tool's full
 name is `mcp__designtwin__<tool>`), Claude gets live tools instead of shelling out: `figma_status`, `figma_whoami`, `figma_list_clients`, `figma_get_selection`,

@@ -3248,7 +3248,7 @@ void (async () => {
     const ticker = setInterval(() => { try { ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); } catch {} }, 100);
     const req = b.request("exportFull", {}, 5000, undefined, 300);
     let rejectedWithStall = false;
-    req.catch((e: unknown) => { if (e instanceof Error && /no response from the Figma plugin/.test(e.message)) rejectedWithStall = true; });
+    req.catch((e: unknown) => { if (e instanceof Error && /connected but sent nothing/.test(e.message)) rejectedWithStall = true; });
     await new Promise((r) => setTimeout(r, 900)); // 3x the stall window, with progress the whole time
     clearInterval(ticker);
     ok("[stall] periodic progress frames keep resetting the stall clock (no premature abort)", !rejectedWithStall);
@@ -3262,7 +3262,7 @@ void (async () => {
     ok("[stall] once the plugin has shown life, silence is NOT a stall: the request stays pending past the stall window", outcome === undefined && !rejectedWithStall);
     await new Promise((r) => setTimeout(r, 3000)); // now the real timeout (5000 ms from send) has passed
     ok("[stall] …and the real per-command timeout still bounds it, with the timeout text (not the stall text)",
-      typeof outcome === "string" && /did not answer 'exportFull' within 5s/.test(outcome) && !/no response from the Figma plugin/.test(outcome));
+      typeof outcome === "string" && /did not answer 'exportFull' within 5s/.test(outcome) && !/connected but sent nothing/.test(outcome));
     ws1.close();
     b.close();
   }
@@ -3281,7 +3281,7 @@ void (async () => {
     try { await b.request("exportFull", {}, 60000, undefined, 300); }
     catch (e) { err = asErr(e); }
     ok("[stall] activity from BEFORE the command was sent does not disarm the check: a request with no life since send still stalls",
-      !!err && Date.now() - start < 5000 && /no response from the Figma plugin/.test(err.message));
+      !!err && Date.now() - start < 5000 && /connected but sent nothing/.test(err.message));
     ws1.close();
     b.close();
   }
@@ -3298,7 +3298,7 @@ void (async () => {
     try { await b.request("exportFull", {}, 60000, undefined, 300); }
     catch (e) { err = asErr(e); }
     ok("[stall] a client that connected in the same instant as the send and sent nothing since still stalls (frame count, not clock)",
-      !!err && Date.now() - start < 5000 && /no response from the Figma plugin/.test(err.message));
+      !!err && Date.now() - start < 5000 && /connected but sent nothing/.test(err.message));
     ws1.close();
     b.close();
   }
@@ -3341,7 +3341,7 @@ void (async () => {
       await sleep(100); // the frame was sent BEFORE the rejection; give it its trip over loopback
       const sent = cmdFrames(seen)[0];
       ok("[cancel] stall check fires → the plugin gets { type: \"cancel\", id } for the request it was sent",
-        !!err && /no response from the Figma plugin/.test(err.message) && !!sent && cancelsFor(seen, sent.id).length === 1);
+        !!err && /connected but sent nothing/.test(err.message) && !!sent && cancelsFor(seen, sent.id).length === 1);
       ws1.close();
       b.close();
     }
@@ -3496,6 +3496,213 @@ void (async () => {
       cA.destroy();
       shutdown();
       ws1.close();
+    }
+  }
+
+  // ---------------------------------------------------------------- group 14: request ids, reply routing, stall wording, whoami connection
+  // Live (session 14): a direct pull stalled out; the next request through a fresh daemon failed with
+  // "export cancelled: … abandoned" — the plugin's late failure for the dead bridge's `r1` settled the
+  // daemon's own `r1`. Ids are now unique per bridge, and a reply settles only from the socket the
+  // request went to. Each check drives the REAL socket path with a fake plugin.
+  console.log("\nserver-core — per-bridge request ids, reply routing, stall wording, whoami connection (group 14):");
+  {
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const ABANDONED = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
+    /** Every command frame a fake plugin socket receives. */
+    const commandsOf = (ws: WebSocket): CommandFrame[] => {
+      const into: CommandFrame[] = [];
+      ws.on("message", (d: RawData) => {
+        const v = JSON.parse(d.toString()) as unknown;
+        if (v !== null && typeof v === "object" && "cmd" in v && "id" in v && typeof v.id === "string") into.push(v as CommandFrame);
+      });
+      return into;
+    };
+    const pingReply = (file: string) => ({ pong: true, page: "P", file });
+    const settle = <T>(p: Promise<T>): Promise<{ v: T | null; err: Error | null }> => p.then((v) => ({ v, err: null }), (e: unknown) => ({ v: null, err: asErr(e) }));
+
+    // [ID-1] two bridges' first wire ids differ. Pre-change both were "r1".
+    const A = await connectedBridge();
+    const seenA = commandsOf(A.client);
+    const aReq = settle(A.bridge.request("ping", {}, 3000));
+    await sleep(80);
+    const idA = seenA[0]?.id;
+    A.bridge.close(); // the stalled one-shot CLI goes away with its request unanswered
+    await aReq;
+    A.client.close();
+    const B = await connectedBridge();
+    const seenB = commandsOf(B.client);
+    const bReq = settle(B.bridge.request("ping", {}, 3000));
+    await sleep(80);
+    const idB = seenB[0]?.id;
+    ok("[ID-1] two bridges' first request ids differ (per-bridge nonce), and stay opaque strings starting \"r\"",
+      typeof idA === "string" && typeof idB === "string" && idA !== idB && /^r/.test(idA) && /^r/.test(idB));
+    // [ID-2] the plugin first posts the OLD bridge's failure (its run for idA finally threw), then answers
+    // the new request. Pre-change idA === idB, so the stale failure rejected the new request.
+    B.client.send(JSON.stringify({ id: idA, ok: false, error: ABANDONED }));
+    await sleep(50);
+    B.client.send(JSON.stringify({ id: idB, ok: true, result: pingReply("for-B") }));
+    const rB = await bReq;
+    ok("[ID-2] a reply carrying the previous bridge's id does not settle the new request — B resolves with its own reply",
+      rB.err === null && rB.v?.file === "for-B");
+    B.client.close();
+    B.bridge.close();
+
+    // [ID-3] two clients; a reply for c1's request arriving on c2 is ignored, c1's own reply resolves it.
+    // Pre-change it settled from c2.
+    {
+      const { bridge: b, client: c1 } = await connectedBridge();
+      const c2 = new WebSocket(`ws://127.0.0.1:${b.port}/?token=${TOKEN}`, { origin: "null" });
+      await new Promise((res, rej) => { c2.on("open", res); c2.on("error", rej); });
+      const seen1 = commandsOf(c1);
+      await sleep(30);
+      const req = settle(b.request("ping", {}, 3000, "c1"));
+      await sleep(80);
+      const sent = seen1[0];
+      c2.send(JSON.stringify({ id: sent?.id, ok: true, result: pingReply("from-c2") }));
+      await sleep(80);
+      c1.send(JSON.stringify({ id: sent?.id, ok: true, result: pingReply("from-c1") }));
+      const r = await req;
+      ok("[ID-3] a reply for c1's request that arrives on c2 is ignored; c1's own reply resolves it",
+        !!sent && r.err === null && r.v?.file === "from-c1");
+      // [WHO-1] the connection named by connId, not the first live one. Pre-change connectionInfo()
+      // took no target and connectionFor did not exist.
+      const rows = b.listClients();
+      const row2 = rows.find((c) => c.connId === "c2");
+      const viaArg = b.connectionInfo("c2");
+      const pure = typeof core.connectionFor === "function" ? core.connectionFor(b.connectionInfo(), "c2") : null;
+      ok("[WHO-1] connectionFor(connectionInfo(), \"c2\") / connectionInfo(\"c2\") describe c2 (connId + its connectedAt), keeping the clients list",
+        !!row2 && !!pure && pure.connId === "c2" && pure.connectedAt === row2.connectedAt && viaArg.connId === "c2" &&
+        viaArg.connectedAt === row2.connectedAt && pure.clientsConnected === 2 && pure.clients.length === 2);
+      ok("[WHO-1] …no connId, or an unknown one, still describes the first connection",
+        b.connectionInfo().connId === "c1" && b.connectionInfo("c9").connId === "c1");
+      c1.close();
+      c2.close();
+      b.close();
+    }
+
+    // [STALL-1] the stall fires only after connect + identify, so it says the plugin IS connected and
+    // busy — not that a reconnect is what takes the time. Pre-change: the "missing daemon" text.
+    {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      ws1.send(JSON.stringify({ type: "hello", instanceId: "stall-g14", file: "Sample App" }));
+      await b.waitForIdentified(1000);
+      await sleep(20);
+      let err: Error | undefined;
+      try { await b.request("exportNode", { nodeId: "5:6" }, 10000, undefined, 300); } catch (e) { err = asErr(e); }
+      ok("[STALL-1] the stall text says the plugin is connected but sent nothing, names the node and `dtwin serve`, and does not blame a reconnect",
+        !!err && /the plugin is connected but sent nothing for 'exportNode' \(node 5:6\) in 0s/.test(err.message) &&
+        /dtwin serve/.test(err.message) && !/reconnect/i.test(err.message));
+      ws1.close();
+      b.close();
+    }
+    // [STALL-2] (control) a `start` frame — what the plugin relays at the run's run-begin — is life:
+    // the stall disarms and the reply at 600 ms resolves. Same for a `queued` frame.
+    for (const phase of ["start", "queued"]) {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      const seen = commandsOf(ws1);
+      ws1.send(JSON.stringify({ type: "hello", instanceId: "stall2-" + phase, file: "Sample App" }));
+      await b.waitForIdentified(1000);
+      await sleep(20);
+      const ticks: ProgressTick[] = [];
+      const req = settle(b.request("ping", {}, 10000, undefined, 300, (t) => ticks.push(t)));
+      setTimeout(() => ws1.send(JSON.stringify({ type: "progress", phase })), 100);
+      setTimeout(() => ws1.send(JSON.stringify({ id: seen[0]?.id, ok: true, result: pingReply("late") })), 600);
+      const r = await req;
+      ok(`[STALL-2] a \`${phase}\` progress frame at 100 ms disarms the 300 ms stall; the reply at 600 ms resolves, and the tick reaches the listener`,
+        r.err === null && r.v?.file === "late" && ticks.length === 1 && ticks[0]?.phase === phase);
+      ws1.close();
+      b.close();
+    }
+
+    // [L-8] (review 1) two requests in flight on ONE connection: the plugin executes A and queues B. A `start`
+    // / `queued` frame carrying a requestId reaches only that request (the executing A never hears it is
+    // "queued"); an id-less frame (page ticks, an older plugin) still reaches both.
+    {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      const seen = commandsOf(ws1);
+      ws1.send(JSON.stringify({ type: "hello", instanceId: "l8", file: "Sample App" }));
+      await b.waitForIdentified(1000);
+      await sleep(20);
+      const ticksA: string[] = [], ticksB: string[] = [];
+      const pA = settle(b.request("ping", {}, 5000, undefined, undefined, (t) => ticksA.push(String(t.phase))));
+      await sleep(30);
+      const pB = settle(b.request("ping", {}, 5000, undefined, undefined, (t) => ticksB.push(String(t.phase))));
+      await sleep(30);
+      const idA = seen[0]?.id, idB = seen[1]?.id;
+      ws1.send(JSON.stringify({ type: "progress", phase: "start", requestId: idA }));
+      ws1.send(JSON.stringify({ type: "progress", phase: "queued", requestId: idB }));
+      ws1.send(JSON.stringify({ type: "progress", phase: "pages" }));
+      await sleep(30);
+      ws1.send(JSON.stringify({ id: idA, ok: true, result: pingReply("A") }));
+      ws1.send(JSON.stringify({ type: "progress", phase: "start", requestId: idB }));
+      await sleep(30);
+      ws1.send(JSON.stringify({ id: idB, ok: true, result: pingReply("B") }));
+      const [rA, rB] = [await pA, await pB];
+      ok(`[L-8] an id-carrying start/queued frame reaches only its own request; an id-less tick reaches both (A saw ${ticksA.join(",")} | B saw ${ticksB.join(",")})`,
+        typeof idA === "string" && typeof idB === "string" && rA.v?.file === "A" && rB.v?.file === "B" &&
+        ticksA.join(",") === "start,pages" && ticksB.join(",") === "queued,pages,start");
+      ws1.close();
+      b.close();
+    }
+
+    // [DSIG-1] the daemon client's optional trailing `signal` (slice C's MCP cancel via a daemon): an
+    // abort closes the request's socket, so the daemon abandons it on the wire. Pre-change the client
+    // had no signal: the call ran to its reply and the bridge's signal was never aborted.
+    {
+      const S_PORT = 19792; // a socket name only: the fake bridge binds no TCP port
+      const row: ClientRow = { connId: "c1", file: "Sample App", fileKey: null, page: "Home", instanceId: "fig-s", connectedAt: 1, uptimeMs: 1, identified: true, pluginVersion: null, pluginStale: null };
+      const bridgeSaw: string[] = [];
+      const sigBridge: DaemonBridge = {
+        port: S_PORT,
+        isConnected: () => true,
+        waitForConnection: async () => {},
+        close: () => {},
+        request: async () => { throw new Error("never asked through request()"); },
+        requestWithClient: (cmd, _args, _timeoutMs, _target, _stallMs, _onProgress, signal) => new Promise((resolve) => {
+          bridgeSaw.push("got:" + cmd);
+          const t = setTimeout(() => resolve({ reply: pingReply("answered"), client: row }), 1500);
+          signal?.addEventListener("abort", () => {
+            clearTimeout(t);
+            bridgeSaw.push("aborted:" + (signal.reason instanceof Error ? signal.reason.message : String(signal.reason)));
+            resolve({ reply: pingReply("aborted"), client: row });
+          }, { once: true });
+        }),
+      };
+      const { shutdown } = await daemon.serve(sigBridge, { port: S_PORT, signals: false, crashHandlers: false });
+      const scli = await daemon.connect(S_PORT);
+      if (!scli) throw new Error("daemon.connect() returned null right after serve() (signal daemon)");
+      const ac = new AbortController();
+      const t0 = Date.now();
+      const pending = settle(scli.requestWithClient({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, ac.signal));
+      setTimeout(() => ac.abort(), 100);
+      const r = await pending;
+      const elapsed = Date.now() - t0;
+      await sleep(150); // the daemon sees the socket close and aborts the bridge request
+      ok("[DSIG-1] daemon client: aborting the signal rejects at once with \"request aborted by the caller\"",
+        r.v === null && r.err?.message === "request aborted by the caller" && elapsed < 1000);
+      ok("[DSIG-1] …and the daemon abandons the in-flight bridge request (its signal is aborted: the plugin gets a cancel frame)",
+        bridgeSaw.join("|") === "got:ping|aborted:the daemon's client disconnected before the reply");
+      // An Error reason of the caller's own is the rejection; an already-aborted signal sends nothing.
+      const ac2 = new AbortController();
+      const p2 = settle(scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, ac2.signal));
+      setTimeout(() => ac2.abort(new Error("caller went away")), 50);
+      const r2 = await p2;
+      await sleep(150);
+      const pre = new AbortController();
+      pre.abort();
+      const before = bridgeSaw.length;
+      const r3 = await settle(scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, pre.signal));
+      await sleep(100);
+      ok("[DSIG-1] …an Error reason passes through; an already-aborted signal rejects \"request aborted before it was sent\" and forwards nothing",
+        r2.err?.message === "caller went away" && r3.err?.message === "request aborted before it was sent" && bridgeSaw.length === before);
+      // A request that settles normally leaves no abort listener behind on a long-lived signal.
+      const ac4 = new AbortController();
+      const p4 = scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, ac4.signal);
+      const listening = getEventListeners(ac4.signal, "abort").length;
+      const r4 = await p4;
+      ok("[DSIG-1] …a request that settles normally answers and removes its abort listener",
+        r4.file === "answered" && listening === 1 && getEventListeners(ac4.signal, "abort").length === 0);
+      shutdown();
     }
   }
 

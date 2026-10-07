@@ -13,7 +13,8 @@ because comparing screenshots and structure lets anything wrong-but-plausible th
 to produce **numbers**; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` turns them into a verdict, and it cannot be
 talked round.
 
-Inputs you need (ask the caller once if missing): the screen name; the **expectation file**
+Inputs you need (ask the caller once if missing): the screen name (`<Screen>` below is always the
+`<Layer>__<id>` basename of the screen file, never a nickname); the **expectation file**
 `design/verify/<Screen>.expected.json` (generated from the export — it carries every VISIBLE node
 spec, instance and designed interaction, the `coordinates` convention, the canonical `measuredKeys`,
 and under `hidden` the ids of every layer the designer switched off); the reference PNG

@@ -18,7 +18,9 @@
 //                            candidate pool; if that pool holds more than one row, the run stops and
 //                            lists them (naming which field each one matched) — it does NOT resolve
 //                            on whichever field happened to be checked first.
-//   5. text search         — query is a case-insensitive substring of row.name, row.title, or any of
+//   4b. a carried id      — only when the union is empty: the id a `<Layer>__<a>_<b>` basename (or a
+//                            path to its .json) or a dash/URL form carries (stage "node id").
+//   5. text search        — query is a case-insensitive substring of row.name, row.title, or any of
 //                            row.texts (the first N deduped text strings on the frame).
 //
 // Round 3 (finding 310): evaluating exact layer name -> title -> plan header as a SEQUENCE, each
@@ -40,6 +42,7 @@ import type { IndexRow, ResolveScreenResult, ScreenCandidate } from "./types.ts"
 import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { toNodeId } from "../bridge/src/node-id.ts";
 import { getOrInit } from "./map-util.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
@@ -51,6 +54,37 @@ import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main i
 // "I20173:137670;72:3148" — but a USER never types one of those; they type either a plain id or a
 // name). Treat only the plain "<digits>:<digits>" shape as an id query.
 const NODE_ID_RE = /^\d+:\d+$/;
+
+// The basename the skills pass, `<Layer>__<a>_<b>` (a screen file's name without its directory), with an
+// optional `.json` / `.vars.json` / `.expected.json` / `.png` tail -> the id "a:b"; undefined for anything else.
+const BASENAME_ID_RE = /__(\d+)_(\d+)(?:\.[A-Za-z0-9-]+)*$/;
+
+// The node ids a query could mean, most specific first: the basename form, then a dash/URL/percent form
+// ("10093-75273", "…?node-id=10093-75273"). A query that is already "a:b" needs no help (stage 1 takes it).
+function queryIds(q: string): string[] {
+  const out: string[] = [];
+  const base = q.split(/[\\/]/).pop() ?? q;
+  const m = BASENAME_ID_RE.exec(base);
+  if (m) out.push(`${m[1]}:${m[2]}`);
+  const t = toNodeId(q);
+  if (t !== q && NODE_ID_RE.test(t)) out.push(t);
+  return out;
+}
+
+// The export root a mistaken dir points at: the first ancestor holding pages/index.json, else one that sits
+// just below (`<dir>/export`, `<dir>/design/export`). null when there is none.
+function findExportRoot(dir: string): string | null {
+  const has = (d: string): boolean => fs.existsSync(path.join(d, "pages", "index.json"));
+  const abs = path.resolve(dir);
+  for (let d = path.dirname(abs); ; d = path.dirname(d)) {
+    if (has(d)) return d;
+    if (path.dirname(d) === d) break;
+  }
+  for (const sub of ["export", path.join("design", "export")]) {
+    if (has(path.join(abs, sub))) return path.join(abs, sub);
+  }
+  return null;
+}
 
 // Every screen row this export knows about, wherever it is indexed. Prefers the root index's
 // flattened `layers` (P3 #16 — the file every skill is told to read); falls back to walking each
@@ -127,14 +161,21 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   const qFold = fold(q);
   const noTitles = rows.length > 0 && !rows.some((r) => r.title);
 
+  // Nothing to resolve against: <dir> is not an export root (no pages/index.json). Say so, and name the root
+  // when it is one level off — an empty "Known layers:" list reads as "this screen does not exist".
+  if (!fs.existsSync(path.join(exportDir, "pages", "index.json"))) {
+    return { status: "not-found", candidates: [], noIndex: { dir: exportDir, hint: findExportRoot(exportDir) } };
+  }
+
   // Stage 1: node id. Evaluated ALONE — an id is unique and never joins the name/title union below.
-  if (NODE_ID_RE.test(q)) {
-    const idMatches = rows.filter((r) => r.id === q);
-    const only = idMatches.length === 1 ? idMatches[0] : undefined;
-    if (only) return { status: "resolved", row: only, stage: "node id" };
+  const byId = (id: string): IndexRow | undefined => {
+    const idMatches = rows.filter((r) => r.id === id);
     // idMatches.length > 1 cannot legitimately happen (ids are unique in one export) and 0 falls
     // through to the union below on the off chance the query is BOTH id-shaped and a real name.
-  }
+    return idMatches.length === 1 ? idMatches[0] : undefined;
+  };
+  const typed = NODE_ID_RE.test(q) ? byId(q) : undefined;
+  if (typed) return { status: "resolved", row: typed, stage: "node id" };
 
   // Stages 2–4, evaluated TOGETHER as one union (finding 310): a row joins the pool if it matches on
   // ANY of exact layer name / indexed title / plan screenName-route, and every field it matched on
@@ -164,6 +205,14 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
       stage: "exact match (layer name / title / plan header)",
       candidates: unionRows.map((u) => describe(u.row, [...u.via])),
     };
+  }
+
+  // Stage 4b: an id the query CARRIES — `<Layer>__<a>_<b>` (basename or a path to the .json) or a dash/URL
+  // form. Only after the exact stages found nothing: a layer actually NAMED `Wizard__1_2` is that layer,
+  // not whichever row has id 1:2.
+  for (const id of NODE_ID_RE.test(q) ? [] : queryIds(q)) {
+    const hit = byId(id);
+    if (hit) return { status: "resolved", row: hit, stage: "node id" };
   }
 
   // Stage 5: text search. A hit here is a CANDIDATE, never a result — see the file header. This is
@@ -215,6 +264,10 @@ function main(argv: string[]): number {
     console.error(`error  '${query}' matched only by text search — confirm with the node id (never resolved automatically from a substring hit):`);
     listCandidates(res.candidates);
     if (res.noTitles) console.error(NOTITLES_NOTE);
+    return 1;
+  }
+  if (res.noIndex) {
+    console.error(`error  '${exportDir}' is not an export root (no pages/index.json) — ${res.noIndex.hint ? `pass ${res.noIndex.hint}` : "pass the dir that holds pages/ (design/export)"}`);
     return 1;
   }
   console.error(`error  '${query}' matches no screen. Known layers:`);
