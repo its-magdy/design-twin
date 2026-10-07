@@ -46,6 +46,9 @@ or MCP once someone's pulling repeatedly or wants Claude to query Figma live.
   second Claude Code session's MCP server work normally — they detect the owner and route through
   it. Nothing changes in how you invoke them. Inside an MCP session, `writeToDisk: true` on the
   export tools is still the simplest way to get files, and the **only** MCP way to get asset bytes.
+- An MCP server that holds the bridge **exits when its client goes away**, unless another process has used
+  its shared socket; then it keeps serving and idles out after `FIGMA_DAEMON_IDLE_MIN` (default 120 min,
+  `0` = never). SIGINT/SIGTERM cancel in-flight reads, free the socket and exit 0.
 - The exception is a plain one-shot `dtwin pull` with no daemon: it does not share, so an MCP server
   or second pull started while it runs exits with `EADDRINUSE`. Wait for it, or use `dtwin serve`.
 - To run two bridges deliberately, set `FIGMA_BRIDGE_PORT` on one (`8788` or `8789` — the only other

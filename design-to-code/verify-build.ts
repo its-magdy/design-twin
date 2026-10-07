@@ -1221,10 +1221,26 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
   // F-44: a blocker is covered by its id (`code` / `code@nodeId`, + `~n`) — which is also the bare code a
   // person writes for a node-less finding — or by its pre-F-44 positional id (`code#i`), so an older plan's
   // decision still stands. The warning lists the new ids.
+  const out: string[] = [];
   const uncovered = g.blockers.filter((id, i) => !overridden.has(id) && !overridden.has(g.legacyBlockers[i] ?? id));
-  if (uncovered.length) return [`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} — either resolve them or add them with a reason`];
-  if (!gate.reason) return [`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` — say why it is safe to build past ${g.auditFile}`];
-  return [];
+  if (uncovered.length) out.push(`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} — either resolve them or add them with a reason`);
+  else if (!gate.reason) out.push(`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` — say why it is safe to build past ${g.auditFile}`);
+  // D134 (FU-legacy-id): the positional id is still accepted, but it is not stable — it is the blocker's
+  // position among ALL blockers, so fixing an earlier one shifts it onto a different blocker and the old
+  // entry silently covers that one. ONE non-blocking warning maps every entry that covers a blocker only
+  // through its positional id to the stable id, and names a positional entry that matches no current blocker.
+  const legacySet = new Set(g.legacyBlockers);
+  const viaLegacy: string[] = [];
+  g.blockers.forEach((id, i) => {
+    const old = g.legacyBlockers[i];
+    if (old !== undefined && !overridden.has(id) && overridden.has(old)) viaLegacy.push(`${old} → ${id}`);
+  });
+  const staleLegacy = [...overridden].filter((e): e is string => typeof e === "string" && /^[^@#~]+#\d+$/.test(e) && !legacySet.has(e));
+  if (viaLegacy.length || staleLegacy.length) {
+    const parts = [...viaLegacy, ...(staleLegacy.length ? [`no current blocker: ${staleLegacy.map((e) => `${e} (drop it)`).join(", ")}`] : [])];
+    out.push(`${g.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id — a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker — if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
+  }
+  return out;
 }
 
 // ================================================================ the verify report behind a plan

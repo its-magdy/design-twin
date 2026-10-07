@@ -65,6 +65,18 @@ const server = http.createServer((req, res) => {
     res.write("<!doctype html><p>loading</p><script>setTimeout(() => location.replace(\"/staff-directory.html?mode=held-doc-done\"), 300)</script>");
     return;
   }
+  // D135 (ABORT-1/2): a page that renders, then sends itself to a server that never answers and cancels that with
+  // window.stop() (an image that never loads keeps its load from firing); a 204; a download
+  if (pathname === "/hang.png" || pathname === "/hangdoc") return; // never answered (closed by finish())
+  if (pathname === "/abort-self.html") {
+    const html = fs.readFileSync(path.join(FIX, "staff-directory.html"), "utf8");
+    const extra = "<img src=\"/hang.png\" alt=\"\"><script>setTimeout(() => { location.href = \"/hangdoc\"; setTimeout(() => window.stop(), 300); }, 300)</script>";
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(html.replace("</body>", extra + "</body>"));
+    return;
+  }
+  if (pathname === "/no-content") { res.writeHead(204); res.end(); return; }
+  if (pathname === "/download") { res.writeHead(200, { "content-type": "application/octet-stream", "content-disposition": "attachment; filename=x.bin" }); res.end("x"); return; }
   const name = path.basename(pathname);
   if (onPage !== null) { const f = onPage; onPage = null; f(); }
   if (statusWatch !== null) pageSeen.push({ status: fs.existsSync(statusWatch.live) ? fs.readFileSync(statusWatch.live, "utf8") : null, tree: treeState(statusWatch.project) });
@@ -525,6 +537,32 @@ else {
 const chkBad = await probe(["--check", "--project", ROOT, "--browser-path", path.join(tmp, "no-such-browser")]);
 check("[DT-30] --check --browser-path <missing> → exit 3, one line, no stack", chkBad.status === 3 && chkBad.stderr.trim().split("\n").length === 1 && /is not an executable file/.test(chkBad.stderr));
 check("[DT-30] without --browser-path the identity names no executable", m1?.probe?.browser.executable === undefined);
+
+// ---- D135: an aborted navigation
+// ABORT-1: the page renders, then its own next navigation is cancelled (window.stop()) before any response — the page is
+// still there: measured (was: "could not load … Timeout"). The goto gives up on its load (the note is set), but window.stop()
+// also ends the document's own load (readyState "complete"), so the settle drops the note again: measured fully loaded
+const origin = `http://127.0.0.1:${port}`;
+const bAb = path.join(tmp, "abort", "Self");
+const rAb = await probe(["--expected", expected, "--url", `${origin}/abort-self.html`, "--out", bAb, "--timeout", "3000", "--project", ROOT]);
+const mAb = read(bAb);
+if (rAb.status !== 0) console.log(rAb.stderr);
+check(`[D135 ABORT-1] a page that renders, then cancels its own next navigation (window.stop) → exit 0, the root measured, not 'could not load' (exit ${String(rAb.status)})`,
+  rAb.status === 0 && node(mAb, "50:1")?.matchedBy === "frame" && !/could not load/.test(rAb.stderr));
+fs.writeFileSync(path.join(tmp, "steps-abort.json"), JSON.stringify([{ goto: "/abort-self.html" }]));
+const bAbS = path.join(tmp, "abort", "Step");
+const rAbS = await probe(["--expected", expected, "--url", url(), "--steps", path.join(tmp, "steps-abort.json"), "--out", bAbS, "--timeout", "3000", "--project", ROOT]);
+const mAbS = read(bAbS);
+if (rAbS.status !== 0) console.log(rAbS.stderr);
+check(`[D135 ABORT-1] the same page as a goto step's target → measured (exit ${String(rAbS.status)})`,
+  rAbS.status === 0 && node(mAbS, "50:1")?.matchedBy === "frame" && !/could not load/.test(rAbS.stderr));
+// ABORT-2: a URL with no document → exit 4 "could not load" in plain words, not Playwright's raw text
+const r204 = await probe(["--expected", expected, "--url", `${origin}/no-content`, "--out", path.join(tmp, "abort", "NoContent"), "--timeout", "3000", "--project", ROOT]);
+check(`[D135 ABORT-2] a 204 → exit 4, 'could not load … no document (e.g. 204 No Content)' (got ${String(r204.status)}: ${r204.stderr.split("\n")[0] ?? ""})`,
+  r204.status === 4 && /could not load .*no document \(e\.g\. 204/.test(r204.stderr));
+const rDl = await probe(["--expected", expected, "--url", `${origin}/download`, "--out", path.join(tmp, "abort", "Download"), "--timeout", "3000", "--project", ROOT]);
+check(`[D135 ABORT-2] a download → exit 4, 'could not load … started a file download, not a page' (got ${String(rDl.status)}: ${rDl.stderr.split("\n")[0] ?? ""})`,
+  rDl.status === 4 && /could not load .*started a file download, not a page/.test(rDl.stderr));
 
 finish();
 report();

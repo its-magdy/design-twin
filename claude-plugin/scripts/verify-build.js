@@ -1778,10 +1778,22 @@ function auditGateWarnings(plan, cwd, exp) {
     return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` \u2014 either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
   }
   const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
+  const out = [];
   const uncovered = g.blockers.filter((id, i) => !overridden.has(id) && !overridden.has(g.legacyBlockers[i] ?? id));
-  if (uncovered.length) return [`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} \u2014 either resolve them or add them with a reason`];
-  if (!gate.reason) return [`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` \u2014 say why it is safe to build past ${g.auditFile}`];
-  return [];
+  if (uncovered.length) out.push(`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} \u2014 either resolve them or add them with a reason`);
+  else if (!gate.reason) out.push(`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` \u2014 say why it is safe to build past ${g.auditFile}`);
+  const legacySet = new Set(g.legacyBlockers);
+  const viaLegacy = [];
+  g.blockers.forEach((id, i) => {
+    const old = g.legacyBlockers[i];
+    if (old !== void 0 && !overridden.has(id) && overridden.has(old)) viaLegacy.push(`${old} \u2192 ${id}`);
+  });
+  const staleLegacy = [...overridden].filter((e) => typeof e === "string" && /^[^@#~]+#\d+$/.test(e) && !legacySet.has(e));
+  if (viaLegacy.length || staleLegacy.length) {
+    const parts = [...viaLegacy, ...staleLegacy.length ? [`no current blocker: ${staleLegacy.map((e) => `${e} (drop it)`).join(", ")}`] : []];
+    out.push(`${g.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id \u2014 a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker \u2014 if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
+  }
+  return out;
 }
 function behaviourRef(x) {
   if (!isReportBehaviour(x)) return null;

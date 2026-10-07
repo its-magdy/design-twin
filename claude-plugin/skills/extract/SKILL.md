@@ -155,8 +155,10 @@ default). An export too large to return is written to disk on its own and the re
 so, but asking for it up front is cheaper than discovering it — and asset bytes are never returned
 inline at all, so it's the only way to get `assets/`. The inline cap is also never above 48,000
 characters. Every export result (written or inline) carries `sourceFile` — the Figma file it came from —
-and `durationMs`; when the implicit spill replaces a screen file whose content differs (the `exportedAt` stamp aside), the old one is kept as
-`<screen>.json.prev` and the `note` names it. `figma_status` shows `lastScreenExport` and `lastWrite`.
+and `durationMs`; when an implicit spill replaces a file whose content differs (the `exportedAt`/`generatedAt` stamps aside), the old one is
+kept one level and the `note` names it — a screen spill as `<screen>.json.prev` (`wrote.prev`), a
+page/full/design-system/library spill as `<file>.json.prev` per changed JSON file (`wrote.prevKept`). `figma_status` shows `lastScreenExport` and `lastWrite`.
+With `writeToDisk`/`outDir`, a bad `outDir` is refused before the export runs.
 A cancelled tool call cancels the read in the plugin.
 
 ## Check what landed before declaring success

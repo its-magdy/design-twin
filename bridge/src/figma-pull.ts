@@ -859,9 +859,9 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     console.error("[dtwin] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
     console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects).');
     console.error("[dtwin] The connection stays open until you run --stop (or Ctrl-C here).");
-    const idleMin = Number(process.env.FIGMA_DAEMON_IDLE_MIN ?? 120);
-    console.error("[dtwin] " + (idleMin > 0
-      ? `It also shuts down after ${idleMin} min idle, so an abandoned daemon can't hold port 8787 forever (FIGMA_DAEMON_IDLE_MIN=0 disables).`
+    const idleMs = daemon.idleMsFromEnv(); // the ONE rule serve() uses (an unparsable value disables it)
+    console.error("[dtwin] " + (idleMs > 0
+      ? `It also shuts down after ${daemon.humanMs(idleMs)} idle, so an abandoned daemon can't hold port 8787 forever (FIGMA_DAEMON_IDLE_MIN=0 disables).`
       : "Idle shutdown is DISABLED — remember to --stop it, or it holds port 8787 until you do."));
     return; // the socket + WS server keep the event loop alive; no close() here, by design
   }

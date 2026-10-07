@@ -680,6 +680,11 @@ Behaviour worth knowing:
   process you've forgotten. It is deliberately generous, the clock resets on every request, and a
   request in flight holds it off entirely — a 15-minute `--all-pages` export is never cut short by
   its own daemon. `--daemon-status` shows how much of the window is used.
+- **An MCP server that owns the bridge exits when its client goes away** (stdin closes, or stdout breaks),
+  at once, unless another process has used its shared socket; then it keeps serving and idles out on the
+  same `FIGMA_DAEMON_IDLE_MIN` window (default 120 min, `0` = never), since other sessions route through
+  it. This deliberately departs from the MCP stdio binding's "exit promptly when stdin closes". SIGINT,
+  SIGTERM and SIGHUP cancel in-flight reads, remove the socket and exit 0, even while serving others.
 
 ## Write / interactive: figma-mcp (MCP over stdio)
 **Not registered in this repo** — there is no `.mcp.json` here on purpose, so the MCP never starts
@@ -723,10 +728,12 @@ Use it for anything past a quick look. Two things make it not optional:
   never a payload cut off mid-JSON.
 
 Every export result (written or inline) carries `sourceFile` (the Figma file it came from) and
-`durationMs {total, request, write}`. When an implicit spill replaces an existing screen file whose content
-differs (the export stamp `exportedAt` aside), the previous one is kept as `<screen>.json.prev` and the note names it. `figma_status` reports
+`durationMs {total, request, write}`. When an implicit spill replaces a file whose content differs (the stamps
+`exportedAt`/`generatedAt` aside), the previous one is kept one level as `<file>.json.prev` and the note names it: a screen
+spill keeps `<screen>.json.prev` (`wrote.prev`); a page/full/design-system/library spill keeps one per changed JSON file,
+listed in `wrote.prevKept`, with the count. `figma_status` reports
 `lastScreenExport` (the newest screen on disk: name, id, file, exportedAt, ageMs) and `lastWrite` (this server process's
-last export: tool, time, whether implicit, file, `prev`). `figma_whoami`'s `connection` is the addressed
+last export: tool, time, whether implicit, file, `prev`, `prevKept` count). `figma_whoami`'s `connection` is the addressed
 client's. `page` and `screens` arguments accept an array, a JSON-encoded array string or a bare string.
 `design_drift_lint` takes `screens: string[]` (screen files under the working directory) and returns
 `screenCoverage` with warnings, like the CLI's `--screen`. An interrupted tool call (Claude Code's cancel,
@@ -735,6 +742,8 @@ write cannot be un-applied.
 
 `outDir` resolves against **the directory the MCP server was started in** — i.e. the project you're
 building, not this repo. Default `FIGMA_EXPORT_DIR` or `design/`, the same var `figma_status` reads.
+With `writeToDisk: true` or an explicit `outDir` it is checked before the export (inside the project
+lexically or by real path), so a refused path never costs a read; a server started at the filesystem root accepts none.
 
 > **One bridge, shared.** Port 8787 has one owner at a time. The MCP server and `dtwin serve` both
 > publish the bridge they own on a local socket, and everything that starts later — a `dtwin` command,
