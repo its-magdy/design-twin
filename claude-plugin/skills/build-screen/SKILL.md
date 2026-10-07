@@ -75,7 +75,9 @@ its export directly in `design/` — every path below works either way, just dro
   an unquoted `#` starts a shell comment).
 - **`…__<id>.assets.json`** beside the screen — which assets it uses, with content hashes,
   `duplicates` (the same artwork under different names), `monochrome` (safe to recolour) and `heavy` (too big to inline).
-  Each row has `name`/`owner`/`context`/`usedBy`: search `owner`/`name`, not file names.
+  Each row has `name`/`owner`/`context`/`usedBy`: search `owner`/`name`, not file names. **Use only files
+  THIS screen's `.assets.json` lists** (`files[].file`): a file another screen lists is that screen's art, so
+  never substitute it. A node with no file (`assetSkipped`, no row) is an extract/designer question, not a reuse.
 - **`design/export/design-system/`** — tokens, styles and component catalogs. Written only by a
   `--design-system` (or full) pull, so legitimately **absent** after a single-screen pull; step 1 says
   what to do then. **`design/export/assets/`** — real icon/image files, named after their Figma layer
@@ -304,9 +306,12 @@ Copy this checklist into your notes and keep it updated:
    `catalog` identity (by key, or cross-check's name+signature proposal, or `{by:"ambiguous", candidates:[…]}`
    when several catalog entries share the name and none verifies — a lead to pick from, never a match; component identity comes
    from there and from `design/codeconnect.local.json`, never from an attribute you place in markup);
-   `anchors{}` — every visible node id; `hidden[]` — what is not built. **You fill only the
+   `anchors{}` — every visible node id; `anchorsSuggested[]` — where to start filling them (the root's sections,
+   each outermost instance, and each container whose children are mostly rows of one shape — three or more, i.e.
+   a `.map()`; its other children, such as a search bar above the rows, are listed on their own; `covers` says how
+   many nodes it stands for; refreshed on every re-run, not part of `counts`); `hidden[]` — what is not built. **You fill only the
    decisions:** `codeToken`/`verdict`/`decision` per token, `mapModule`/`verdict` per component,
-   `mapModule` on anchors (step 3), `route` (advisory free text — it never reaches a screen), `navigate` and
+   `mapModule` on anchors (step 3: the `anchorsSuggested` ids first, the rest is covered by its nearest mapped ancestor), `route` (advisory free text — it never reaches a screen), `navigate` and
    `interactions` when the screen needs them (below), `target`, `architecture`, `files[]` (step 3),
    `deviations[]` as `{nodeId, field, designed, built, reason}`, `allowedLiterals[]` when needed, and
    `verification` (step 5). Re-running it merges; filled fields survive. `--seed-from <plan>` (repeatable) pre-fills still-empty rows from
@@ -377,6 +382,9 @@ Copy this checklist into your notes and keep it updated:
    - **Assets** — each `asset` file and how it's imported for this stack.
    Then **self-review the plan**: every visible node accounted for? any literal where a token exists?
    any hand-built native control? any fixed size that should hug/fill? Fix the plan, then build.
+   **Native control substitution:** when a drawn field becomes a native control (date/time picker, select),
+   the native element draws its own text, so carry the drawn placeholder/value colour onto it, record the
+   substitution in the plan, and verify it on the element's own text (the profile says how for its stack).
    *Multi-screen:* scaffold navigation/routing and shared sample data first.
 
    **Names come from Figma, not from you.** A token's `value` is what it resolves to in the one mode
@@ -458,6 +466,7 @@ Copy this checklist into your notes and keep it updated:
      `assetFrom` names a visible twin whose file it reuses). Never rotate/flip an asset that has
      `sourceTransform` — it is already in the file. Reuse a project icon only if the glyph clearly matches. Size every
      icon explicitly (square container, both dimensions set).
+     Of the exported files, import only those listed in THIS screen's `.assets.json`; another screen's file is that screen's art, never a substitute.
 
      Three things the screen's `.assets.json` tells you that the files themselves do not:
      - **`heavy`** — faithfully exported and still unusable inline. A flattened noise texture arrives
@@ -516,7 +525,10 @@ Copy this checklist into your notes and keep it updated:
      across every plan's `files[]`: it **blocks** when no file carries `data-dt-node` at all, warns
      below 50% coverage, and records `tagCoverage` in `verification.hook`. A project that genuinely
      cannot tag says so in the plan: `"tagging": {"off": true, "reason": "<why>"}` (no reason, no
-     opt-out). Tags are a measurement aid, never component
+     opt-out). Tags are dev evidence: to keep them out of a production bundle, strip `data-dt-node` at build
+     time (Babel `babel-plugin-react-remove-properties` with `properties: ['data-dt-node']` — an exact name; Next.js
+     `compiler: { reactRemoveProperties: { properties: ['^data-dt-node$'] } }` — plain `true` strips only
+     `^data-test`), never in the source: the Stop hook counts them in source. Tags are a measurement aid, never component
      identity — that is the plan's `components[]` (catalog match, `design/codeconnect.local.json`).
 
 4. **States, scaling, theme, direction.** Before calling a component done:

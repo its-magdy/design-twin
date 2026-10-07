@@ -647,4 +647,33 @@ console.log("build-screen docs (group 15, quick keys + export docs):");
     /\| every pull that writes to disk \| `SCHEMA\.md`/.test(help) && /Every pull that writes to disk also leaves \*\*`design\/export\/SCHEMA\.md`\*\*/.test(ext) && /SCHEMA\.md\s+scripting quick keys/.test(readme) && [help, ext, readme].every((d) => /[Rr]ewritten only when its text changes/.test(d)) && exists("bridge/src/quick-keys.ts"));
 }
 
+// Group 19: native-control substitution (DT-52), tailwind-merge (DT-62), this screen's assets only (DT-56),
+// body cells set the columns (F-56), dev-only tags (DT-69), the anchors worth filling first (F-34)
+console.log("build-screen docs (group 19):");
+{
+  const date = (d: string): boolean => /`::placeholder` never applies to `<input type="date">`/.test(d) && /`::-webkit-datetime-edit`/.test(d)
+    && /Chromium\/WebKit, non-standard — check in the browser/.test(d) && /Firefox:.{0,120}check it in the browser/.test(d)
+    && /`color-scheme`.{0,80}usually matches/.test(d) && /`select:invalid`/.test(d);
+  check("[DT52-1] both web profiles: ::placeholder does not apply to a date input; ::-webkit-datetime-edit is labelled Chromium/WebKit non-standard, Firefox hedged, color-scheme `usually`", date(tw) && date(cssm));
+  check("[DT52-2] SKILL: a drawn field that becomes a native control carries the drawn colour onto it, is recorded in the plan and verified on the element's own text",
+    /Native control substitution/.test(skill) && /carry the drawn placeholder\/value colour onto it/.test(skill) && /record the\s+substitution in the plan/.test(skill) && /verify it on the element's own text/.test(skill));
+  check("[DT62-1] web-tailwind: tailwind-merge for a caller's className, the sizes registered with extendTailwindMerge, colour+size drops one of the two, size-vs-size not merged unregistered",
+    /`tailwind-merge`/.test(tw) && /extendTailwindMerge\(\{ extend: \{ theme: \{ text: \[/.test(tw) && /colour plus a size drops one of the two/.test(tw) && /not merged/.test(tw));
+  check("[DT56-1] SKILL: use only files THIS screen's .assets.json lists; another screen's file is never a substitute; a node with no file is a question",
+    /Use only files THIS screen's `\.assets\.json` lists/.test(skill) && /never substitute it/.test(skill) && /extract\/designer question, not a reuse/.test(skill));
+  check("[F56-1] both web profiles: column x/widths come from the BODY cells; a header/body x disagreement is a designer question",
+    [tw, cssm].every((d) => /column x\/widths from the BODY cells/.test(d) && /designer question/.test(d)));
+  check("[DT69-1] SKILL: tags are dev evidence, stripped at build time; Next.js needs properties: ['^data-dt-node$'] (plain `true` strips only ^data-test), never in the source",
+    /reactRemoveProperties: \{ properties: \['\^data-dt-node\$'\] \}/.test(skill) && /plain `true` strips only\s+`\^data-test`/.test(skill) && /never in the source/.test(skill));
+  check("[F34-1] SKILL: anchorsSuggested is named in the plan-skeleton paragraph and step 3 says to fill those ids first, the rest covered by the nearest mapped ancestor",
+    /`anchorsSuggested\[\]`/.test(skill) && /the `anchorsSuggested` ids first, the rest is covered by its nearest mapped ancestor/.test(skill));
+  // review 1 of groups 18+19 (L-6, M-3)
+  check("[L-6] SKILL: the this-screen-only asset rule is about the EXPORTED files, so reusing a matching project icon still reads as allowed",
+    /Reuse a project icon only if the glyph clearly matches/.test(skill) && /Of the exported files, import only those listed in THIS screen's `\.assets\.json`/.test(skill) && !/ Import only files listed in THIS screen's/.test(skill));
+  check("[L-6] web-tailwind: the registered sizes drop the --text- prefix (text: ['figma-body-1', …], like tailwind-merge's text: ['huge'])",
+    /theme: \{ text: \['figma-body-1', …\] \}/.test(tw) && /without the `--text-` prefix/.test(tw) && /`text: \['huge'\]`/.test(tw));
+  check("[M-3] SKILL: a list is a container whose children are MOSTLY one shape; its other children (a search bar) are listed on their own",
+    /children are mostly rows of one shape — three or more/.test(skill) && /a search bar above the rows, are listed on their own/.test(skill));
+}
+
 report();
