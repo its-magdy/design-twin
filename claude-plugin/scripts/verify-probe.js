@@ -5674,7 +5674,7 @@ function rendererUnavailable(reason, hint) {
 }
 async function launch(r, dir) {
   try {
-    return { browser: await r.mod.chromium.launch({ headless: true }) };
+    return { browser: await r.mod.chromium.launch({ headless: true, args: ["--disable-lcd-text"] }) };
   } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
     return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch: ${first}`, hint: browserHint(dir) };

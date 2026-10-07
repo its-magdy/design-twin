@@ -162,7 +162,10 @@ function rendererUnavailable(reason: string, hint: string): number {
 }
 
 async function launch(r: Extract<Resolution, { ok: true }>, dir: string): Promise<{ browser: Browser } | { error: string; hint: string }> {
-  try { return { browser: await r.mod.chromium.launch({ headless: true }) }; } catch (e) {
+  // --disable-lcd-text: grayscale text antialiasing, as Figma's renderer and macOS draw it. Linux chromium's default LCD
+  // (subpixel RGB) text has colour fringes that depend on each glyph's sub-pixel phase, so unchanged text at the reference's
+  // 4-decimal scale came out as hot regions in the visual diff (the e2e's correct twin, on CI). It changes no layout.
+  try { return { browser: await r.mod.chromium.launch({ headless: true, args: ["--disable-lcd-text"] }) }; } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
     return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch: ${first}`, hint: browserHint(dir) };
   }
