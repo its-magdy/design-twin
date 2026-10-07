@@ -72,6 +72,16 @@ arrow-key handling), combobox/autocomplete. **The project's own component or an 
 library (Radix, React Aria, Headless UI…) beats all of the above** — check `design/codeconnect.local.json` and
 `package.json` before writing either.
 
+**Date and select fields keep the drawn text colours** — a native control draws its own text, so the design's
+placeholder/value colours do not arrive by themselves. `::placeholder` never applies to `<input type="date">`
+(it has no placeholder). Chromium/WebKit, non-standard — check in the browser: colour `::-webkit-datetime-edit`
+(and its `-fields-wrapper` / `-text` parts) with the placeholder token while the field is empty (`:invalid` on a
+`required` field, else a `data-empty` attribute you toggle) and the value token once set. Firefox: no such
+pseudo-elements that we know of — set `color` on the input itself and check it in the browser. Set `color-scheme`
+(dark) so the native picker usually matches the theme. A `<select>` placeholder is a disabled, hidden first
+`<option value="">` plus a `select:invalid` colour (the field `required`). Record the substitution in the plan and
+verify the colour on the element's own text.
+
 **Idiomatic web (patterns by structure)** — decide from the node's STRUCTURE; its name is only a hint.
 - Full-width bar pinned to the top of the root frame (`fixedChildren`, or first child with logo/title/
   actions) → `<header>`, `position: sticky`/`fixed` per the scroll section; a row of destinations inside it →
@@ -81,7 +91,9 @@ library (Radix, React Aria, Headless UI…) beats all of the above** — check `
 - A bottom bar of 3–5 icon+label destinations (mobile web) → `<nav>` with `<a aria-current="page">`,
   fixed to the bottom with `padding-bottom: env(safe-area-inset-bottom)`.
 - N siblings with the same structure → `<ul><li>` rendered by ONE `.map()` over sample data with a
-  stable `key`, never N pasted blocks. Rows of aligned cells under column labels → a real `<table>`.
+  stable `key`, never N pasted blocks. Rows of aligned cells under column labels → a real `<table>`; derive
+  column x/widths from the BODY cells (header cells often carry different padding in the design — if header and
+  body x disagree, that is a designer question).
   A wrapping set of equal cards → CSS grid (`repeat(auto-fill, minmax(…))`), not fixed columns copied
   from one frame width.
 - A row that navigates → the whole row is one `<a>`; a card with one primary action → a single link/

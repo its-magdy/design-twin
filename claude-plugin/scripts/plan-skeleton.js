@@ -802,6 +802,7 @@ var USAGE = [
   "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
   "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping)",
   "    anchors{}     every VISIBLE node id, mapModule empty \u2014 fill it on sections and instances",
+  "    anchorsSuggested[]  the few anchors worth filling first (root sections, outermost instances, repeated lists)",
   "    hidden[]      roots of hidden subtrees (hidden: true or a hidden ancestor) \u2014 never built, never anchored",
   "    screenName / nodeId / file / route   the header every skill resolves a plan by",
   "",
@@ -1078,6 +1079,54 @@ function buildComponents(doc, catalog, library, mapKeys) {
     return row;
   });
 }
+var REPEAT_MIN = 3;
+function suggestAnchors(doc, vis) {
+  const out = [];
+  const kids = (n) => (n.children || []).filter((c) => !!c.id && vis.visible.has(c.id));
+  const size = (n) => 1 + kids(n).reduce((a, c) => a + size(c), 0);
+  const sig = (n) => {
+    if (n.type === "INSTANCE") {
+      const mc = n.mainComponent;
+      return "I:" + (mc && (mc.setKey || mc.key || mc.setName || mc.name) || n.name);
+    }
+    const k = kids(n);
+    return k.length ? n.type + ":" + k.map((c) => c.type).join(",") : null;
+  };
+  const listRows = (n) => {
+    const all = kids(n);
+    const seen = /* @__PURE__ */ new Map();
+    for (const c of all) {
+      const g = sig(c);
+      if (g !== null) {
+        const l = seen.get(g);
+        if (l) l.push(c);
+        else seen.set(g, [c]);
+      }
+    }
+    let best = null, bestSig = null;
+    for (const [g, l] of seen) if (l.length >= REPEAT_MIN && (!best || l.length > best.length)) {
+      best = l;
+      bestSig = g;
+    }
+    if (!best) return null;
+    const names = new Set(best.map((c) => c.type + ":" + c.name));
+    const rows = all.filter((c) => {
+      const g = sig(c);
+      return g !== null && (g === bestSig || names.has(c.type + ":" + c.name));
+    });
+    return rows.length * 2 > all.length ? new Set(rows) : null;
+  };
+  const visit = (n, section) => {
+    const instance = n.type === "INSTANCE";
+    const rows = instance ? null : listRows(n);
+    const why = section ? "section" : instance ? "instance" : rows ? "repeat" : null;
+    if (why) out.push({ id: n.id, name: n.name, why, covers: size(n) });
+    if (instance) return;
+    for (const c of kids(n)) if (!rows || !rows.has(c)) visit(c, false);
+  };
+  for (const r of screenRoots(doc)) for (const c of kids(r)) visit(c, true);
+  return out;
+}
 function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, route, indexRow }) {
   const vis = visibility(doc);
   const roots = screenRoots(doc);
@@ -1118,6 +1167,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     tokens,
     components,
     anchors,
+    anchorsSuggested: suggestAnchors(doc, vis),
     hidden: vis.hiddenRoots,
     deviations: [],
     auditGate,
@@ -1140,6 +1190,8 @@ function mergeAuditGate(prev, fresh) {
 function merge(fresh, prev) {
   if (!prev || typeof prev !== "object") return { plan: fresh, dropped: { tokens: 0, components: 0, anchors: 0 } };
   const out = Object.assign({}, prev, {
+    anchorsSuggested: fresh.anchorsSuggested,
+    // skeleton-owned: refreshed, like hidden[] (Plan does not declare it; the extra key rides through)
     schema: fresh.schema,
     screenName: prev.screenName || fresh.screenName,
     nodeId: fresh.nodeId,
@@ -1305,7 +1357,7 @@ function main(argv) {
     fs4.writeFileSync(out, JSON.stringify(plan, null, 2) + "\n");
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }
-  console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded`);
+  console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded, ${fresh.anchorsSuggested.length} suggested anchor root(s) (anchorsSuggested)`);
   return 0;
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

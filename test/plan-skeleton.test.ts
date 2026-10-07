@@ -296,6 +296,77 @@ console.log("DT-33 — --seed-from fills a sibling screen's answers (same key + 
   check("[DT33-1] --seed-from is in --help", /--seed-from <plan>/.test(run(["--help"]).stdout));
 }
 
+// ---------------------------------------------------------------- F-34: anchorsSuggested
+// A screen has 12-291 anchor slots; the skeleton names the few boundaries worth filling first: the root's
+// sections, each outermost instance, and a container of >= 3 same-shaped children (a `.map()`), covering its subtree.
+console.log("F-34 — anchorsSuggested names the anchors worth filling first:");
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "f34-"));
+  const put = (name: string, doc: unknown): string => { const f = path.join(dir, name); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
+  const inst = (id: string, key: string, kids: NodeInput[] = [], extra: Partial<NodeInput> = {}): NodeInput =>
+    ({ id, type: "INSTANCE", name: "Row " + id, mainComponent: { name: "Row", key, setKey: "set-" + key }, children: kids, ...extra });
+  const text = (id: string, extra: Partial<NodeInput> = {}): NodeInput => ({ id, type: "TEXT", name: "T " + id, text: "x", ...extra });
+  const rows = [1, 2, 3, 4].map((i) => inst("3:" + i, "k-row", [text("3:" + i + "0")]));
+  const screenDoc = screenExport([{ id: "1:1", type: "FRAME", name: "Page", children: [
+    inst("2:1", "k-header", [text("2:11"), text("2:12")]),
+    { id: "2:2", type: "FRAME", name: "Body", children: [
+      text("2:20"),
+      { id: "2:3", type: "FRAME", name: "List", children: rows },
+      // two visible rows + one hidden twin: not a list, so the instances are suggested one by one
+      { id: "2:4", type: "FRAME", name: "Short list", children: [inst("4:1", "k-row"), inst("4:2", "k-row"), inst("4:3", "k-row", [], { hidden: true })] },
+      inst("2:5", "k-footer", [text("2:50")]),
+    ] },
+  ] }], { screen: "Sample" });
+  const sf = put("Sample.json", screenDoc), vf = put("Sample.vars.json", { collections: [], variables: [] });
+  const ds = path.join(dir, "no-design-system");
+  const sug = (p: SkeletonPlan) => (p.anchorsSuggested ?? []).map((a) => `${a.id}:${a.why}:${a.covers}`);
+  const r34 = run([sf, vf, ds], { cwd: dir });
+  const p34 = planOf(r34.stdout);
+  // covers = the node + its visible descendants (Body: itself, a text, List 9, Short list 3, Footer 2)
+  const want = ["2:1:section:3", "2:2:section:16", "2:3:repeat:9", "4:1:instance:1", "4:2:instance:1", "2:5:instance:2"];
+  const got = sug(p34);
+  check(`[F34-1] sections, the repeated list (rows not listed one by one), and the outermost instances, in tree order (got ${JSON.stringify(got)})`,
+    r34.status === 0 && JSON.stringify(got) === JSON.stringify(want));
+  check("[F34-1] a list's rows are covered by it: none of 3:1..3:4 nor their texts is suggested; a hidden twin does not make a list",
+    (p34.anchorsSuggested ?? []).every((a) => !a.id.startsWith("3:")) && (p34.anchorsSuggested ?? []).some((a) => a.id === "4:1") && !(p34.anchorsSuggested ?? []).some((a) => a.id === "4:3" || a.id === "2:4"));
+  check("[F34-1] every suggestion is a real visible anchor, with its name; counts.anchors is unchanged by the field",
+    (p34.anchorsSuggested ?? []).every((a) => a.id in p34.anchors && p34.anchors[a.id]?.name === a.name) && p34.counts.anchors === Object.keys(p34.anchors).length && !("anchorsSuggested" in p34.counts));
+  check("[F34-2] stderr counts the suggested anchor roots", new RegExp(`${(p34.anchorsSuggested ?? []).length} suggested anchor root\\(s\\) \\(anchorsSuggested\\)`).test(r34.stderr));
+  check("[F34-2] --help names anchorsSuggested", /anchorsSuggested\[\]/.test(run(["--help"]).stdout + run(["--help"]).stderr));
+
+  // M-3 (review 1): childless leaves have no shape to repeat, a list's shape must be the majority of its children,
+  // and the children of a list that are not its rows are still suggested.
+  const leaf = (id: string, name: string): NodeInput => ({ id, type: "TEXT", name, text: name });
+  const row = (id: string): NodeInput => ({ id, type: "FRAME", name: "row", children: [{ id: id + "0", type: "FRAME", name: "cell" }, { id: id + "1", type: "FRAME", name: "cell" }] });
+  const m3 = screenExport([{ id: "1:1", type: "FRAME", name: "Page", children: [{ id: "5:1", type: "FRAME", name: "Body", children: [
+    { id: "5:2", type: "FRAME", name: "Intro", children: [leaf("5:3", "Title"), leaf("5:4", "Description"), leaf("5:5", "Note"), inst("5:6", "k-form", [text("5:7")])] },
+    { id: "6:1", type: "FRAME", name: "Table", children: [inst("6:2", "k-search", [text("6:3")]), row("6:4"), row("6:5"), row("6:6")] },
+    { id: "7:1", type: "FRAME", name: "Mixed", children: [row("7:2"), row("7:3"), row("7:4"), inst("7:5", "k-a"), inst("7:6", "k-b"), inst("7:7", "k-c"), inst("7:8", "k-d")] },
+    // a table: a header, three rows with a badge, two "Table row" variants without one (a different shape, same layer name)
+    { id: "8:1", type: "FRAME", name: "Table", children: [{ id: "8:2", type: "FRAME", name: "header", children: [leaf("8:3", "Name"), leaf("8:4", "Status")] },
+      ...["8:5", "8:6", "8:7"].map((id): NodeInput => ({ id, type: "FRAME", name: "Table row", children: [leaf(id + "1", "Ann"), inst(id + "2", "k-badge")] })),
+      ...["8:8", "8:9"].map((id): NodeInput => ({ id, type: "FRAME", name: "Table row", children: [leaf(id + "1", "Bob"), { id: id + "2", type: "FRAME", name: "Frame 9", children: [inst(id + "3", "k-avatar")] }] }))] },
+  ] }] }], { screen: "Sample" });
+  const pm3 = planOf(run([put("M3.json", m3), put("M3.vars.json", { collections: [], variables: [] }), ds], { cwd: dir }).stdout);
+  const why = (id: string): string | undefined => (pm3.anchorsSuggested ?? []).find((a) => a.id === id)?.why;
+  check("[F34-1 / M-3] three TEXT siblings are no list: 'Intro' is not a repeat and its Form instance is suggested", why("5:2") === undefined && why("5:6") === "instance");
+  check("[F34-1 / M-3] a list with a search bar above its rows: the list is a repeat, the search bar instance is still suggested, the rows are not",
+    why("6:1") === "repeat" && why("6:2") === "instance" && !["6:4", "6:5", "6:6"].some((id) => why(id) !== undefined));
+  check("[F34-1 / M-3] three same rows among seven children are no majority → no repeat; its instances are suggested one by one",
+    why("7:1") === undefined && ["7:5", "7:6", "7:7", "7:8"].every((id) => why(id) === "instance"));
+  check("[F34-1 / M-3] a row variant that keeps the rows' layer name is a row: the table is a repeat and nothing inside its five rows is suggested",
+    why("8:1") === "repeat" && !(pm3.anchorsSuggested ?? []).some((a) => /^8:[5-9]/.test(a.id)) && why("8:2") === undefined);
+
+  // merge: skeleton-owned, so it is REFRESHED (a stale list is replaced), while a filled mapModule survives
+  const planFile = path.join(dir, "plan.json");
+  const stale = { ...p34, anchorsSuggested: [{ id: "9:9", name: "Gone", why: "section", covers: 1 }], anchors: { ...p34.anchors, "2:1": { ...must(p34.anchors["2:1"], "anchor 2:1"), mapModule: "src/Header.tsx" } } };
+  fs.writeFileSync(planFile, JSON.stringify(stale, null, 2));
+  const m34 = run([sf, vf, ds, "--out", planFile], { cwd: dir });
+  const after = read(planFile, isSkeletonPlan);
+  check("[F34-3] a merge refreshes anchorsSuggested (the stale 9:9 is gone, the current list is back) and keeps the filled mapModule",
+    m34.status === 0 && JSON.stringify(sug(after)) === JSON.stringify(got) && after.anchors["2:1"]?.mapModule === "src/Header.tsx");
+}
+
 // ---------------------------------------------------------------- DT-27: one name rule (shared fixture with cross-check)
 // test/fixtures/g14/dt27/ (cross-check.test.ts asserts the same verdicts on its coverage entries): the plan's
 // components[].catalog must say what component-match's nameVerdict says — `by:"ambiguous"` (never a match,

@@ -593,6 +593,7 @@ var USAGE = [
   "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
   "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping)",
   "    anchors{}     every VISIBLE node id, mapModule empty \u2014 fill it on sections and instances",
+  "    anchorsSuggested[]  the few anchors worth filling first (root sections, outermost instances, repeated lists)",
   "    hidden[]      roots of hidden subtrees (hidden: true or a hidden ancestor) \u2014 never built, never anchored",
   "    screenName / nodeId / file / route   the header every skill resolves a plan by",
   "",
