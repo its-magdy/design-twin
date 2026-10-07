@@ -760,6 +760,8 @@ export interface Variable {
   type: VariableType;
   /** Absent when the plugin could not resolve the variable's collection (variables.ts writes `collOf(id)?.name`). */
   collection?: string;
+  /** FU-namemap (D146): the collection's Figma key — collection NAMES repeat ("Spacing" ×2); absent on old exports */
+  collectionKey?: string;
   tier: "primitive" | "semantic";
   /** keyed by MODE NAME */
   values: Record<string, VariableValue>;

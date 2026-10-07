@@ -29,6 +29,13 @@
 //     node whose own size is fixed; a hug/fill node's size is a consequence of something else in the list.
 //   - `exportedAt`, `manifest`, `snapshot`: facts about the export run, not the design.
 //   - descendants of an added/removed node: the top-most node stands for its subtree.
+//   - the exporter's FORMAT noise (`formatNoise` below): an export from an older plugin carried
+//     `gridColumnStart/RowStart: -1` on every node (and `gridAlignSelf/gridJustifySelf` off a grid),
+//     `layout: {mode:"absolute"}` on every text/shape/other leaf and a `layout` on asset leaves. A newer
+//     plugin writes none of them, so re-pulling an unchanged screen would otherwise list EVERY node as
+//     changed. Both sides are normalised before comparing; a node whose only differences were that noise,
+//     present on ONE side only, is counted as `formatOnly`, not listed. Permanent: old snapshots live in
+//     git for months.
 //   - sublayers of an instance whose main component was swapped: their ids (`I<instance>;<child>`)
 //     are derived from the main component, so every one of them "disappears" and "appears". The swap
 //     is the change; the sublayers are counted on it, not listed.
@@ -102,15 +109,16 @@ function fieldDiffs(key: string, before: unknown, after: unknown, category: Diff
 }
 
 // id -> { node, parentId, path, childIds }
-interface IndexEntry { node: IrNode; parentId: string | null; path: string; childIds: string[] }
+// `parent`: the parent NODE (null on a root) — the format normaliser decides grid-child noise by it.
+interface IndexEntry { node: IrNode; parent: IrNode | null; parentId: string | null; path: string; childIds: string[] }
 function index(doc: ScreenDoc): Map<string, IndexEntry> {
   const out = new Map<string, IndexEntry>();
-  const walk = (node: IrNode, parentId: string | null, trail: string[]): void => {
+  const walk = (node: IrNode, parent: IrNode | null, trail: string[]): void => {
     if (!node || typeof node !== "object" || node.id === undefined) return;
     const here = [...trail, node.name || node.type || node.id];
     const kids = Array.isArray(node.children) ? node.children : [];
-    out.set(String(node.id), { node, parentId, path: here.join(" > "), childIds: kids.map((k) => String(k && k.id)) });
-    for (const k of kids) walk(k, String(node.id), here);
+    out.set(String(node.id), { node, parent, parentId: parent ? String(parent.id) : null, path: here.join(" > "), childIds: kids.map((k) => String(k && k.id)) });
+    for (const k of kids) walk(k, node, here);
   };
   for (const r of screenRoots(doc)) walk(r, null, []);
   return out;
@@ -120,7 +128,37 @@ const ROOT_IGNORED = new Set(["tree", "nodes", "exportedAt", "manifest", "snapsh
 const nameOf = (idx: Map<string, IndexEntry>, id: string): string => { const e = idx.get(id); return e ? e.node.name || e.node.type || id : id; };
 const describe = (e: IndexEntry): DiffNodeRef => ({ id: String(e.node.id), name: e.node.name, type: e.node.type, path: e.path, parentId: e.parentId });
 
-function nodeFields(before: IrNode, after: IrNode): FieldDiff[] {
+// The node types that hold children (Figma's ChildrenMixin) — `layout` describes how a node lays out ITS
+// OWN children, so a newer plugin writes it only on these. An ALLOW-list: every other type (text, shapes,
+// vectors, SLICE, STICKY, any type added later) counts as a leaf, so its `{mode:"absolute"}` is noise.
+const CONTAINERS = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "GROUP", "BOOLEAN_OPERATION", "SECTION", "TRANSFORM_GROUP",
+  "SLOT", "SLIDE", "SLIDE_ROW", "SLIDE_GRID", "PAGE"]);
+const GRID_CHILD_KEYS = ["gridColumnStart", "gridRowStart", "gridColumnSpan", "gridRowSpan", "gridJustifySelf", "gridAlignSelf"] as const;
+const ABSOLUTE_ONLY = new Set(["mode", "width", "height"]);
+// What an older plugin wrote and a newer one does not (D141), decided exactly as the plugin now decides it:
+//   - the six grid-child keys on a node that is NOT an in-flow child of a grid: a root (its parent is not
+//     exported), an `absolute` child, or a child of a parent whose layout is not `display:"grid"` (the old
+//     plugin wrote anchors -1 on every node and `gridAlignSelf/gridJustifySelf:"start"` off a grid). On an
+//     in-flow grid child only an anchor of -1 (not a track index) is noise; a real anchor/span/self-align compares.
+//   - `layout` that is the bare `{mode:"absolute",width,height}` record on a type that is not a container,
+//     and any `layout` on an asset/geometry/assetSkipped leaf (the inset is baked into the picture). A node
+//     that HAS children keeps its layout whatever its type. Everything else compares.
+// Returns `n` itself when there is nothing to strip, else a shallow copy.
+function formatNoise(n: IrNode, parent: IrNode | null): IrNode {
+  const lay = n.layout, isAssetLeaf = n.asset !== undefined || n.geometry !== undefined || n.assetSkipped !== undefined;
+  const gridItem = !!parent && !n.absolute && parent.layout?.display === "grid";
+  const dropGrid = GRID_CHILD_KEYS.filter((k) => n[k] !== undefined && (!gridItem || ((k === "gridColumnStart" || k === "gridRowStart") && n[k] === -1)));
+  const dropLayout = !!lay && !n.children && (isAssetLeaf || (!CONTAINERS.has(n.type) && lay.mode === "absolute" && Object.keys(lay).every((k) => ABSOLUTE_ONLY.has(k))));
+  if (!dropGrid.length && !dropLayout) return n;
+  const out: IrNode = { ...n };
+  for (const k of dropGrid) delete out[k];
+  if (dropLayout) delete out.layout;
+  return out;
+}
+const hasNoise = (e: IndexEntry): boolean => formatNoise(e.node, e.parent) !== e.node;
+
+function nodeFields(old: IndexEntry, neu: IndexEntry, raw = false): FieldDiff[] {
+  const before = raw ? old.node : formatNoise(old.node, old.parent), after = raw ? neu.node : formatNoise(neu.node, neu.parent);
   const fields: FieldDiff[] = [];
   for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
     if (IGNORED.has(key) || same(bag(before)[key], bag(after)[key])) continue;
@@ -142,7 +180,7 @@ function diffScreens(oldDoc: ScreenDoc, newDoc: ScreenDoc, opts: { redrawn?: Set
   const redrawn = opts.redrawn || new Set<string>();
   const A = index(oldDoc), B = index(newDoc);
   const added: DiffNodeRef[] = [], removed: DiffNodeRef[] = [], changed: ScreenDiff["changed"] = [], reordered: ScreenDiff["reordered"] = [];
-  let positionOnly = 0;
+  let positionOnly = 0, formatOnly = 0;
   // Instances whose main component was swapped: their sublayer ids are regenerated (see the header).
   const swapped = new Map<string, SwapCount>(); // instance id -> { gone, came }
   for (const [id, b] of B) { const a = A.get(id); if (a && !same(a.node.mainComponent, b.node.mainComponent)) swapped.set(id, { gone: 0, came: 0 }); }
@@ -156,12 +194,15 @@ function diffScreens(oldDoc: ScreenDoc, newDoc: ScreenDoc, opts: { redrawn?: Set
   for (const [id, b] of B) {
     const a = A.get(id);
     if (!a) continue;
-    const fields = nodeFields(a.node, b.node);
+    const fields = nodeFields(a, b);
     if (a.parentId !== b.parentId) fields.push({ field: "parent", category: "layout", before: a.path, after: b.path });
     if (typeof b.node.asset === "string" && b.node.asset === a.node.asset && redrawn.has(b.node.asset)) fields.push({ field: "asset bytes", category: "asset", before: "the previous render", after: `re-drawn — ${b.node.asset} has different contents under the same node id` });
     const sw = swapped.get(id);
     if (sw && (sw.gone || sw.came)) fields.push({ field: "sublayers", category: "component", before: `${sw.gone} from the old main component`, after: `${sw.came} from the new one (regenerated by the swap — not listed)` });
     if (fields.length) changed.push({ ...describe(b), categories: [...new Set(fields.map((f) => f.category))], fields });
+    // Only the old plugin's format noise differed, and it sits on ONE side (a re-pull with a newer plugin):
+    // neither a change nor a move. Two exports from one plugin (noise on both or neither) never count here.
+    else if (hasNoise(a) !== hasNoise(b) && nodeFields(a, b, true).length) formatOnly++;
     else if (!same(a.node.box, b.node.box)) positionOnly++;
     const keptBefore = a.childIds.filter((c) => b.childIds.includes(c)), keptAfter = b.childIds.filter((c) => a.childIds.includes(c));
     if (!same(keptBefore, keptAfter)) reordered.push({ ...describe(b), before: keptBefore.map((c) => nameOf(A, c)), after: keptAfter.map((c) => nameOf(B, c)) });
@@ -175,7 +216,8 @@ function diffScreens(oldDoc: ScreenDoc, newDoc: ScreenDoc, opts: { redrawn?: Set
   const warnings: string[] = [];
   const trunc = truncatedOf(manifestOf(newDoc));
   if (trunc) warnings.push(`the NEW export is truncated (${trunc === true ? "some" : trunc} subtree(s) past the depth limit) — anything under "Removed" may simply not have been exported. Re-pull a narrower scope before acting on removals.`);
-  return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly }, warnings, added, removed, reordered, changed, document };
+  if (formatOnly) warnings.push(`${formatOnly} node(s) differ only by the exporter's format (an export from an older plugin: grid-child fields off a grid, layout on text/shapes/leaves or asset leaves) — not listed. The export's content hash changed, so verification reopens once: re-run verify-screen --expect and --compare.`);
+  return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly, formatOnly }, warnings, added, removed, reordered, changed, document };
 }
 
 // Tokens are keyed by their Figma KEY — the one thing that identifies a variable. Names are not
@@ -349,7 +391,10 @@ function markdown(d: DiffReport, label: string): string {
   const s = d.summary, L = [`# What changed — ${label}`, ""];
   for (const w of d.warnings || []) L.push(`> **Warning:** ${w}`, "");
   const total = s.added + s.removed + s.changed + (s.reordered || 0);
-  if (!total) return L.concat(d.kind === "screen" && s.positionOnly ? `Nothing changed (${s.positionOnly} node(s) only moved with their surroundings).` : "Nothing changed.").join("\n") + "\n";
+  if (!total) {
+    const why = d.kind === "screen" ? [s.positionOnly ? `${s.positionOnly} node(s) only moved with their surroundings` : "", s.formatOnly ? `${s.formatOnly} node(s) differ only by the exporter's format` : ""].filter(Boolean) : [];
+    return L.concat(why.length ? `Nothing changed (${why.join("; ")}).` : "Nothing changed.").join("\n") + "\n";
+  }
   const line = (f: FieldDiff): string => `  - \`${f.field}\`: ${f.before === undefined ? "—" : f.before} → ${f.after === undefined ? "—" : f.after}`;
   if (d.kind === "tokens") {
     if (d.changed.length) L.push("## Token values changed", ...d.changed.map((c) => `- \`${c.name}\` — ${c.modes.map((m) => `${m.mode}: ${m.before} → ${m.after}`).join("; ")}`), "");
@@ -388,6 +433,7 @@ function markdown(d: DiffReport, label: string): string {
   if (d.removed.length) L.push("## Removed (each stands for its whole subtree)", ...d.removed.map((n) => `- **${n.path}** (\`${n.id}\`, ${n.type})`), "");
   if (d.reordered.length) L.push("## Reordered children", ...d.reordered.map((r) => `- **${r.path}**: ${r.before.join(", ")} → ${r.after.join(", ")}`), "");
   if (s.positionOnly) L.push(`_${s.positionOnly} other node(s) only moved with their surroundings — not listed._`, "");
+  if (s.formatOnly) L.push(`_${s.formatOnly} other node(s) differ only by the exporter's format — not listed._`, "");
   return L.join("\n") + "\n";
 }
 

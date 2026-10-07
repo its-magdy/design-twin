@@ -782,7 +782,7 @@ server.registerTool(
   {
     description:
       "CHEAP listing of ONE node's DIRECT children (id/name/type/size/childCount/hasChildren) — no recursion, no " +
-      "assets. Rows that share name + size also carry a `title` (first visible text), with one warning per group. Use it to drill into a frame that figma_list_pages surfaced before committing to a full " +
+      "assets. Rows that share name + size also carry a `title` (first visible text), with one warning per group; when their titles match too, `distinctTexts` (up to 3 texts that row shows and its twins do not; a very large listing skips it with a warning). Use it to drill into a frame that figma_list_pages surfaced before committing to a full " +
       "export of it. Accepts a bare node id or a figma.com URL containing ?node-id=.",
     inputSchema: {
       ...clientShape,

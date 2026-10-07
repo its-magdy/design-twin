@@ -153,6 +153,9 @@ writes the real path here, not there).
    **Read any `Warning:` at the top of a report first** — it says when the baseline was not what you
    assumed (snapshot taken after the re-pull, only one export to compare, a truncated re-pull), and
    a change list built on the wrong baseline is worse than none.
+   A warning (or report line) that nodes "differ only by the exporter's format" after a plugin update is
+   not a design change: the older plugin wrote grid-child fields off a grid and `layout` on leaf nodes; those
+   nodes are counted, not listed. Re-run `verify-screen --expect` / `--compare` once and carry on.
    Nodes are matched by id, so a rename reads as a rename. Nested values are reported by leaf
    (`fills[0].stops[2].color`), a variant swap is one change on the instance (its regenerated
    sublayers are counted, not listed), and "asset bytes" means the icon was re-drawn in place. Nodes that only moved because something

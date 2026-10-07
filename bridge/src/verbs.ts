@@ -129,7 +129,9 @@ export const HELP: Record<string, string> = {
     "                         libraries are enabled). It prints progress while it works.\n" +
     "  dtwin list clients     which Figma files are on the bridge right now, with their connIds\n" +
     "  dtwin list children    one row per direct child: id, name, type, size, childCount; rows that share\n" +
-    "                         name + size also get a `title` (first visible text) and one warning per group\n\n" +
+    "                         name + size also get a `title` (first visible text) and one warning per group;\n" +
+    "                         when titles match too, `distinctTexts` (up to 3 texts the row shows and its\n" +
+    "                         twins do not — skipped, with a warning, past the listing's read budget)\n\n" +
     "  --json                 machine output for the two that print a table (libraries, clients)\n" +
     "  --client <file>        WHICH connected Figma file, when more than one is open\n\n" +
     "  These take no read options (--css/--measurements/…): they emit structural fields only, so\n" +

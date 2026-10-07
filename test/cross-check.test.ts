@@ -162,6 +162,46 @@ console.log("cross-check — DT-07: the foreign-library finding classifies the s
     JSON.stringify(fn.nameMap) === JSON.stringify({ agree: 0, differ: 0, undecidable: 1, absent: 0 }) && /of the 1 variables in those collections/.test(fn.message));
 }
 
+// ---------------------------------------------------------------- FU-namemap: collections told apart by key
+console.log("cross-check — FU-namemap: two collections of one name are told apart by their key:");
+{
+  // The screen binds TWO collections called "Spacing": the design system's own (ds-space) and another library's.
+  // Only the second is foreign. Its rows are told apart by `collectionKey`; an export from before that field
+  // can only go by the collection name.
+  const COLLS = [
+    { name: "Spacing", key: "ds-space", modes: ["Mode 1"], default: "Mode 1" },
+    { name: "Spacing", key: "other-space", modes: ["Mode 1"], default: "Mode 1" },
+  ];
+  const rows = (withKeys: boolean) => tokens({
+    collections: COLLS,
+    variables: [
+      { name: "Space 3", collection: "Spacing", ...(withKeys ? { collectionKey: "other-space" } : {}), key: "o-1", type: "FLOAT", values: { "Mode 1": 16 } },
+      { name: "Space 9", collection: "Spacing", ...(withKeys ? { collectionKey: "ds-space" } : {}), key: "d-1", type: "FLOAT", values: { "Mode 1": 36 } },
+    ],
+  });
+  const run = (withKeys: boolean) => get(crossCheck({ screens: [screen("S", [])], variables: rows(withKeys), tokens: DS_TOKENS }), "foreign-token-library");
+  const keyed = run(true);
+  ok("[G21-NM] with collectionKey only the foreign collection's row is counted (n=1, agrees, no ambiguity)",
+    JSON.stringify(keyed.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 0 }) && /of the 1 variables in those collections/.test(keyed.message) && !/predates collection keys/.test(keyed.message));
+  const old = run(false);
+  ok("[G21-NM] without collectionKey both rows go by the name: n=2, and ambiguous counts them",
+    JSON.stringify(old.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 1, ambiguous: 2 }) && /of the 2 variables in those collections/.test(old.message));
+  ok("[G21-NM] the message says 2 of them come from a collection whose name a design-system collection also has, and to re-pull",
+    /\(2 of them come from a collection whose name a design-system collection also has — this export predates collection keys on variables; re-pull to tell them apart\.\)/.test(old.message));
+  // A key the screen's collection list does not know selects nothing: the row falls back to its name (and is ambiguous).
+  const stray = get(crossCheck({ screens: [screen("S", [])], variables: tokens({ collections: COLLS, variables: [{ name: "Space 3", collection: "Spacing", collectionKey: "nobody", key: "o-1", type: "FLOAT", values: { "Mode 1": 16 } }] }), tokens: DS_TOKENS }), "foreign-token-library");
+  ok("[G21-NM] a collectionKey no screen collection carries falls back to the name", JSON.stringify(stray.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 0, ambiguous: 1 }));
+  // Both twins foreign (the real-data shape): every row is counted by key or by name alike, nothing ambiguous.
+  const bothForeign = get(crossCheck({ screens: [screen("S", [])], variables: tokens({
+    collections: [{ name: "Spacing", key: "x-1", modes: ["Mode 1"], default: "Mode 1" }, { name: "Spacing", key: "x-2", modes: ["Mode 1"], default: "Mode 1" }],
+    variables: [
+      { name: "Space 3", collection: "Spacing", collectionKey: "x-1", key: "a", type: "FLOAT", values: { "Mode 1": 16 } },
+      { name: "Space 9", collection: "Spacing", collectionKey: "x-2", key: "b", type: "FLOAT", values: { "Mode 1": 36 } },
+    ] }), tokens: DS_TOKENS }), "foreign-token-library");
+  ok("[G21-NM] two foreign twins: both rows counted, no ambiguity",
+    JSON.stringify(bothForeign.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 1 }));
+}
+
 // ---------------------------------------------------------------- name collides, value differs
 console.log("cross-check — two libraries, one name, two values:");
 {

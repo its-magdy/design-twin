@@ -573,6 +573,33 @@ console.log("build-screen docs (group 15, quick keys + export docs):");
   const x01Bad = x01Files.filter((f) => { const t = rd(f); return new RegExp(`fixedChildren[\\s\\S]{0,200}?${firstN}|${firstN}[\\s\\S]{0,200}?fixedChildren`).test(t); });
   check("[X01-1] no first-N / leading-children wording within 200 chars of fixedChildren in ir-fields, the 7 profiles, serialize.ts" + (x01Bad.length ? " (" + x01Bad.join(", ") + ")" : ""), x01Bad.length === 0);
   check("[X01-1] ir-fields and every profile say the LAST N of children[] and place each by y", /fixedChildren:N[^.]{0,40}LAST N entries of `children\[\]`/.test(flat(irRaw)) && x01Files.slice(1, 8).every((f) => /LAST N/.test(rd(f)) && /by its `y`/.test(rd(f))));
+  // group 21 (slice T): `layout` only on nodes that hold children, the "Older exports" sentence, fixedChildren x/y, collectionKey, distinctTexts.
+  check("[G21-1] no doc says every TEXT carries `layout` (ir-fields, quick keys, build-screen SKILL) — only a node that can hold children has it",
+    ![irBody, qk, skill].some((d) => /every TEXT carries it/.test(d)) && /only a node that can hold children has it/.test(qk) && /Only a node that can hold children has a `layout`/.test(irBody) && /only on nodes that hold children/.test(skill));
+  const olderRe = /\*\*Older exports\.\*\*.*?\(design-diff does\)\./;
+  check("[G21-1] the \"Older exports\" sentence (quick keys + ir-fields): gridColumnStart/RowStart:-1 on every node, gridAlignSelf/gridJustifySelf on a node whose parent is not a grid, layout on SLICE/STICKY and other leaf types",
+    [qk, flat(block)].every((d) => {
+      const s = olderRe.exec(d)?.[0] ?? "";
+      return /`gridColumnStart:-1`/.test(s) && /`gridRowStart:-1`/.test(s) && /`gridAlignSelf`/.test(s) && /`gridJustifySelf`/.test(s) && /whose parent is not a grid/.test(s) && /SLICE, STICKY and other leaf type/.test(s);
+    }) && !/Noise to ignore/.test(qk));
+  check("[G21-1] fixedChildren = the LAST N, fixed only (\"sticky\" is not exposed), each pinned child carries x/y (quick keys + ir-fields)",
+    [qk, irBody].every((d) => /`fixedChildren:N`(?:\*\* —| =) the LAST N entries of `children\[\]`/.test(d) && /"sticky" is not exposed/.test(d) && /[Ee]ach pinned child carries `x`\/`y`/.test(d) && /only an `absolute:true` child be fixed/.test(d)));
+  check("[G21-1] ir-fields: the token catalog row has `collectionKey` (the collection's key; names repeat)",
+    /`variables\[\] \{name, type, collection, collectionKey,/.test(irBody) && /`collectionKey` is the collection's own key \(collection NAMES repeat/.test(irBody));
+  const syncSkill = flat(read("claude-plugin/skills/sync-design/SKILL.md"));
+  check("[G21-1] sync-design: a \"differ only by the exporter's format\" warning after a plugin update is not a design change; re-run --expect/--compare once",
+    /differ only by the exporter's format" after a plugin update is not a design change/.test(syncSkill) && /Re-run `verify-screen --expect` \/ `--compare` once/.test(syncSkill));
+  const readme21 = flat(read("bridge/README.md"));
+  const extract21 = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const verbs21 = read("bridge/src/verbs.ts");
+  const mcp21 = read("bridge/src/figma-mcp.ts");
+  const mcpAt = mcp21.indexOf('"figma_list_children",');
+  const mcpDesc = mcpAt < 0 ? "" : mcp21.slice(mcpAt, mcp21.indexOf("inputSchema", mcpAt));
+  check("[G21-2] list children docs (README, extract, verbs help, the MCP description) name `distinctTexts` — up to 3 texts a row shows and its twins do not",
+    [readme21, extract21].every((d) => /`distinctTexts` \(up to 3 texts that row shows and its twins do not\)/.test(d)) &&
+    /`distinctTexts` \(up to 3 texts the row shows and its/.test(verbs21) && /`distinctTexts` \(up to 3 texts that row shows and its twins do not;/.test(mcpDesc));
+  check("[G21-2] …and the listing's read budget: a very large listing skips it with a warning (README, extract, verbs help, MCP description)",
+    /budget of 20000 node reads for the whole listing/.test(readme21) && /node-read budget runs out/.test(extract21) && /skipped, with a warning, past the listing's read budget/.test(verbs21) && /a very large listing skips it with a warning/.test(mcpDesc));
   // X-02: `scroll` is a node field, never `layout.scroll`.
   const x02Bad = pluginDocs.filter((f) => /layout\.scroll/.test(read(f)));
   check("[X02-1] no plugin skill/agent doc says `layout.scroll`" + (x02Bad.length ? " (" + x02Bad.join(", ") + ")" : ""), pluginDocs.length > 20 && x02Bad.length === 0);
