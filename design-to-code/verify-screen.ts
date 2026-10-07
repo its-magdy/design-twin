@@ -164,7 +164,7 @@ function lineHeightPx(lh: LineHeightInput, fontSize: number | string | undefined
 //
 // Only layers that RENDER get a row. The rule is hidden.ts's one predicate (`hidden: true` on the
 // node or any ancestor — never `visible === false`, which the export does not use). Before it,
-// 83 of 272 Job Roles specs, 61 of 112 instances and 22 of 28 designed interactions were for layers
+// 83 of 272 Jet Roles specs, 61 of 112 instances and 22 of 28 designed interactions were for layers
 // the designer switched off (findings 97/126/181), and a build that correctly omitted them was graded
 // on them (157/159/185/188).
 const EXPECTATION_SCHEMA = "designtwin/verify-expectation@2";
@@ -1569,7 +1569,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     for (const k of Object.keys(s)) { keysSeen.add(k); if (!KNOWN_MEASURED_KEYS.has(k)) unknownKeys.set(k, (unknownKeys.get(k) || 0) + 1); }
   }
   // A shared implementation (one AppShell rendered on two routes) carries the node ids of the frame it
-  // was built from: `I10970:111588;1910:23337` on Job Roles is `I10970:109860;1910:23337` here — the
+  // was built from: `I10970:111588;1910:23337` on Jet Roles is `I10970:109860;1910:23337` here — the
   // same component-internal node under a different outer instance (findings 129/139/185). Match on
   // that internal path when it is unambiguous, and say so.
   const expectedIds = new Set([...specs.map((s) => String(s.nodeId)), ...(expectation.instances || []).map((i) => String(i.nodeId))]);
@@ -1876,7 +1876,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
         const g = String(got.text).replace(/ /g, " ").trim();
         if (w !== g) {
           const caseOnly = w.toLowerCase() === g.toLowerCase();
-          // "Job Role▲": the designed string plus glyphs that are not letters or digits (a sort caret,
+          // "Jet Role▲": the designed string plus glyphs that are not letters or digits (a sort caret,
           // an icon font) — the copy is intact; name the extra glyphs rather than calling it a copy bug.
           const extraGlyphs = !caseOnly && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
           // F-104: the design repeats this string in >=3 sibling rows (placeholder copy). Low ONLY when the build's
@@ -3215,7 +3215,7 @@ function main(argv: string[]): number | Promise<number> {
       for (const d of pi.dropped) console.error(`warn  plan interaction ${d.nodeId} dropped: ${d.why}`);
     }
     // P3 #152: `--expect` run once by base name and once by a nickname for the SAME screen wrote
-    // two byte-identical files (`positions___7314_87192.expected.json` and `JobRoles.expected.json`)
+    // two byte-identical files (`positions___7314_87192.expected.json` and `JetRoles.expected.json`)
     // because nothing tied the output name to the screen's own identity. Defaulting to the FIRST
     // input file's own basename — already `<LayerName>__<node-id>` by construction (write-out.js) —
     // means two runs against the same export file always land on the same name, whatever string the
@@ -3226,7 +3226,7 @@ function main(argv: string[]): number | Promise<number> {
     // (finding 154) — the notice goes to stderr, and every report records the sha it was computed on.
     const target = outBase + ".expected.json";
     // Finding 315 / P3 c6: an explicit --out under a DIFFERENT name than the one already indexing
-    // this node (e.g. --out design/verify/JobRoles when design/verify/positions___7314_87192 already
+    // this node (e.g. --out design/verify/JetRoles when design/verify/positions___7314_87192 already
     // covers node 7314:87192) is refused rather than silently creating a second artefact set.
     const dup = findExistingExpectedFor(path.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {

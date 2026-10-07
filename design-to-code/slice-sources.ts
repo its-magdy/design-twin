@@ -64,7 +64,7 @@ function sourcesOf(doc: TokensDoc | null | undefined, docPath: string | null | u
 
 // The variables context of a set of screen files — ONE implementation for cross-check.ts and audit.ts
 // (livetest-3 #311: the audit embedded cross-check but fed it only the merged union, so its build gate
-// raised Create Activity Type's `Space 4` blocker against Job Roles, while cross-check on the same
+// raised Create Assembly Type's `Space 4` blocker against Jet Roles, while cross-check on the same
 // screen did not).
 //   own[i]        the screen's own slice, <Screen>.vars.json beside it (null if absent)
 //   variablesPath the file used as `variables`: --variables if given, else the export root's merged

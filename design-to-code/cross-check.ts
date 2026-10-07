@@ -10,7 +10,7 @@
 //     drift-lint still printed "318/318 components mapped · 0 error(s)" because its coverage metric
 //     measures the catalog against itself and never against the screen.
 //   * every collection key differed between the screen's variables and the design system's
-//     (Semantic Variables 02 was ebac83f1… in one and 64113d4c… in the other) — the design file had
+//     (Semantic Vectors 02 was ebac83f1… in one and 64113d4c… in the other) — the design file had
 //     been DUPLICATED, which re-keys everything while leaving names and values identical.
 //   * two names collided across the two libraries with DIFFERENT values: `(Space 3)` = 12 on the
 //     screen vs `Space 3` = 16 in the design system; `light blue` = #1289db vs #94e2ff. A builder who

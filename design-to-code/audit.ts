@@ -354,7 +354,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
 
     // A layer the designer switched off renders nothing, so nothing about it is a finding: the audit
     // used to hand a builder "use paddingTop=2 EXACTLY" for a hidden selected-state icon (finding 74 —
-    // 44 of Job Roles' 119 findings cited hidden nodes). It is still WALKED, only for the two
+    // 44 of Jet Roles' 119 findings cited hidden nodes). It is still WALKED, only for the two
     // collections above: a hidden "Error toast" is evidence the error state was designed, and an
     // annotation is designer intent wherever it sits. Token-binding tallies, component usage and every
     // emitter below see visible layers only.
@@ -855,7 +855,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     crossFile = crossCheck({
       // Each screen's OWN variables (d.vars — its <Screen>.vars.json) travel with it: the collision
       // check is about the variables THIS screen carries, not the merged union's (livetest-3 #311 —
-      // without them this gate raised another screen's `Space 4` blocker against Job Roles).
+      // without them this gate raised another screen's `Space 4` blocker against Jet Roles).
       screens: docs,
       variables: opts.variables || null,
       sliceSources: opts.sliceSources || null,
@@ -1210,7 +1210,7 @@ function main(argv: string[]): number {
   });
   const md = jsonOnly ? "" : toMarkdown(res);
   // P3 #72/#73: one screen ended up under FIVE different report basenames across runs because the
-  // skill invented one each time (`positions`/`job-roles`/`global-policies`/`System_Configurations`
+  // skill invented one each time (`positions`/`jet-roles`/`guided-policies`/`Studio_Configurations`
   // for the SAME node). `--out`'s default is derived from the input FILE, which is itself already
   // named `<LayerName>__<node-id>` by write-out.js/pages-layout.js — the one artefact-naming rule —
   // so two runs on the same screen land on the same report pair without either caller having to

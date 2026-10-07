@@ -2,8 +2,8 @@
 // re-inventing (or half-implementing) it. P3 #16/#17/#19/#70/#71/#72/#73/#90/#120/#150/#151/#152/#200.
 //
 // The defect this closes: the export indexes only the Figma LAYER name, which in a real file is
-// wrong ("positions " really shows "Job Roles"), duplicated (four "System Configurations" frames) or
-// a near-match to a DIFFERENT screen ("Job Role Details" for a query of "Job Roles"). Different
+// wrong ("positions " really shows "Jet Roles"), duplicated (four "Studio Configurations" frames) or
+// a near-match to a DIFFERENT screen ("Jet Role Details" for a query of "Jet Roles"). Different
 // skills used to pick different fallbacks for the same situation — silently auditing the wrong frame
 // in one, finding nothing in another, listing candidates in a third. This module is the one place
 // that decision gets made, so it is made the same way everywhere.
@@ -25,10 +25,10 @@
 //
 // Round 3 (finding 310): evaluating exact layer name -> title -> plan header as a SEQUENCE, each
 // tried only if the previous stage matched nothing, is itself a fuzziness bug — pull the empty-state
-// sibling of "Job Roles" (layer `Job roles`, node 7314:83742) next to the real one (layer
+// sibling of "Jet Roles" (layer `Jet roles`, node 7314:83742) next to the real one (layer
 // `positions `, node 7314:87192) and the case-insensitive layer-name stage matches exactly the ONE
-// row named `Job roles`, resolves, and never even LOOKS at the title stage — where the OTHER row
-// (`positions `, title "Job Roles") would also have matched. Two rows visibly titled "Job Roles" is
+// row named `Jet roles`, resolves, and never even LOOKS at the title stage — where the OTHER row
+// (`positions `, title "Jet Roles") would also have matched. Two rows visibly titled "Jet Roles" is
 // exactly the ambiguity Prompt 3 exists to catch, and a sequence of independent exact stages hid it.
 // Collecting the union first is what makes "evaluated together" true in code, not just in comment.
 //
@@ -122,7 +122,7 @@ function planRows(planDir: string | null | undefined): PlanRow[] {
 
 // One candidate line for the "stop and list" report: enough to tell same-named frames apart without
 // opening any file (finding 19 — node count / id / reference PNG are the only discriminators between
-// two `Create Activity Type` frames of identical name/type/w/h). `matchedVia`, when passed, is which
+// two `Create Assembly Type` frames of identical name/type/w/h). `matchedVia`, when passed, is which
 // field(s) in the exact union this particular row matched on (finding 310 — the report must say
 // WHICH field, not just that it matched, since two rows can carry the same title under different
 // layer names).

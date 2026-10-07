@@ -182,7 +182,7 @@ block("measured.notMeasured[].why replaces the generic reason", () => {
 // ---- identity + census
 block("identity + census", () => {
   const e = exp();
-  const handFile = path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "JobRoles.measured.json");
+  const handFile = path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "JetRoles.measured.json");
   const hand = readJsonOrNull(handFile, isVerifyMeasured);
   const rh = hand ? compare(e, hand) : null;
   t("[identity] a hand-written measured.json (livetest3 fixture) → inputs.probe 'unknown'", () => rh !== null && rh.inputs?.probe === "unknown");

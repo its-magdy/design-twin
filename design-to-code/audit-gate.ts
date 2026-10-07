@@ -7,7 +7,7 @@
 // audit.ts's own CLI names its default output `design/audit/<input file's own basename>.json` — the
 // same `<LayerName>__<node-id>` name write-out.js gave the screen file — so that is tried first. Older
 // runs (this repo's own livetest fixtures included) wrote a plain slug (`positions.json`,
-// `System_Configurations.json`) instead; those are found by a case/punctuation-insensitive match
+// `Studio_Configurations.json`) instead; those are found by a case/punctuation-insensitive match
 // against the screen's own name.
 import fs from "node:fs";
 import path from "node:path";
@@ -31,11 +31,11 @@ function locateAuditFile(cwd: string, screenFile: string | null | undefined, scr
   for (const c of candidates) if (fs.existsSync(c)) return path.relative(cwd, c).split(path.sep).join("/");
   const wantSlug = slug(screenName);
   if (wantSlug) {
-    // EXACT slug only. A prefix match either way handed "Job Roles" the audit of "Job Roles Detail"
-    // (and "Job Roles Detail" the audit of "Job Roles") — a wrong screen's blockers gating this build.
+    // EXACT slug only. A prefix match either way handed "Jet Roles" the audit of "Jet Roles Detail"
+    // (and "Jet Roles Detail" the audit of "Jet Roles") — a wrong screen's blockers gating this build.
     // Audit files are named `<LayerName>__<node-id>.json` (audit.ts --out), so the name is also
-    // compared with that `__<id>` suffix stripped: "Job Roles" finds Job_Roles__9_9.json, never
-    // Job_Roles_Detail__9_9.json. The split is at the LAST `__`: safe() turns every non-alphanumeric
+    // compared with that `__<id>` suffix stripped: "Jet Roles" finds Jet_Roles__9_9.json, never
+    // Jet_Roles_Detail__9_9.json. The split is at the LAST `__`: safe() turns every non-alphanumeric
     // run in a layer name into underscores, so "Detail - Overview" is Detail___Overview__9_9 and a
     // first-`__` split would hand the unrelated screen "Detail" its audit. The id part itself
     // (safe("9:9") = 9_9) never contains a double underscore.

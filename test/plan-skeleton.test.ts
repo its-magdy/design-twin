@@ -20,9 +20,9 @@ import type { IrNode, ScreenExport } from "../design-to-code/types.ts";
 const SKEL = path.join(import.meta.dirname, "..", "design-to-code", "plan-skeleton.ts");
 const BUNDLE = path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "plan-skeleton.js");
 const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "plan");
-const PAGE = path.join(FX, "export", "pages", "__Organization_management_");
+const PAGE = path.join(FX, "export", "pages", "__Optimization_management_");
 const DS = path.join(FX, "export", "design-system");
-const JR = "positions___7314_87192", GP = "System_Configurations__1359_21337";
+const JR = "positions___7314_87192", GP = "Studio_Configurations__1359_21337";
 // Files this repo wrote (the fixture export, or a plan the skeleton just wrote) — checked as what they are.
 const read = <T,>(f: string, guard: DocGuard<T>): T => readFixture(f, guard);
 // A plan as plan-skeleton writes it: every skeleton-owned field present.
@@ -42,7 +42,7 @@ function hiddenIds(doc: ScreenExport) {
   return out;
 }
 
-console.log("acceptance (§2.9 f) — the skeleton for 7314:87192 (Job Roles):");
+console.log("acceptance (§2.9 f) — the skeleton for 7314:87192 (Jet Roles):");
 const jrDoc = read(screen(JR), isScreenExport);
 const r = run([screen(JR), vars(JR), DS]);
 const plan = planOf(r.stdout);
@@ -83,8 +83,8 @@ console.log("tokens[] — a composed colour (colour + separate 0–100 opacity) 
 
 console.log("the P3 header — so every other skill can find the plan:");
 check("screenName / nodeId / file are written; route is left for the builder",
-  plan.nodeId === "7314:87192" && plan.screenName === "positions" && plan.file === "export/pages/__Organization_management_/positions___7314_87192.json" && plan.route === null && plan.status === "pending");
-check("--route fills it", planOf(run([screen(JR), vars(JR), DS, "--route", "/job-roles"]).stdout).route === "/job-roles");
+  plan.nodeId === "7314:87192" && plan.screenName === "positions" && plan.file === "export/pages/__Optimization_management_/positions___7314_87192.json" && plan.route === null && plan.status === "pending");
+check("--route fills it", planOf(run([screen(JR), vars(JR), DS, "--route", "/jet-roles"]).stdout).route === "/jet-roles");
 
 console.log("tokens[] — keyed by Figma key, valued in the frame's own mode:");
 const tok = (n: string) => must(plan.tokens.find((t) => t.figmaName === n), `plan.tokens with figmaName '${n}'`);
@@ -104,7 +104,7 @@ check("the design-system definition is attached, labelled with HOW it matched",
 console.log("components[] — identity from the catalog, never from a hand-placed attribute (finding 79):");
 const names = new Set(plan.components.map((c) => c.name));
 const matched = new Set(plan.components.filter((c) => c.catalog && c.catalog.by !== "ambiguous").map((c) => c.name)); // ambiguous (DT-27) is never a match
-check(`41 distinct components, 26 matched to the NERA catalog by name+prop signature (P1's matcher; mapping.json agrees 26/15) — got ${names.size}/${matched.size}`,
+check(`41 distinct components, 26 matched to the NIMA catalog by name+prop signature (P1's matcher; mapping.json agrees 26/15) — got ${names.size}/${matched.size}`,
   names.size === 41 && matched.size === 26 && plan.components.filter((c) => c.catalog).every((c) => !!c.catalog && c.catalog.by !== "key" && c.catalog.by !== "ambiguous" && c.catalog.confirmed === false));
 const first = must(plan.components[0], "plan.components[0]");
 check("each row carries key/setKey/name/variant/props and an empty mapModule/verdict to fill",
@@ -130,9 +130,9 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
   filledSpace4.codeToken = "spacing-figma-space-4";
   filledSpace4.verdict = "exact";
   must(filled.components[0], "filled.components[0]").mapModule = "app/src/layout/Sidebar.tsx";
-  must(filled.anchors["7314:87192"], "filled.anchors['7314:87192']").mapModule = "app/src/features/job-roles/screens/JobRolesScreen.tsx";
-  filled.files = ["app/src/features/job-roles/screens/JobRolesScreen.tsx"];
-  filled.route = "/job-roles";
+  must(filled.anchors["7314:87192"], "filled.anchors['7314:87192']").mapModule = "app/src/features/jet-roles/screens/JetRolesScreen.tsx";
+  filled.files = ["app/src/features/jet-roles/screens/JetRolesScreen.tsx"];
+  filled.route = "/jet-roles";
   filled.verification = { mode: "static-only", reason: "x" };
   fs.writeFileSync(out, JSON.stringify(filled));
   const again = run([screen(JR), vars(JR), DS, "--out", out]);
@@ -140,15 +140,15 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
   const mAnchor = m.anchors["7314:87192"];
   check("re-running --out MERGES: every filled field and every top-level field it does not own survives",
     again.status === 0 && /merged into/.test(again.stderr) && m.tokens.find((t) => t.figmaName === "Space 4")?.codeToken === "spacing-figma-space-4"
-    && m.components[0]?.mapModule === "app/src/layout/Sidebar.tsx" && mAnchor?.mapModule?.endsWith("JobRolesScreen.tsx") === true
-    && m.files?.length === 1 && m.route === "/job-roles" && m.verification?.mode === "static-only" && m.tokens.length === 45);
+    && m.components[0]?.mapModule === "app/src/layout/Sidebar.tsx" && mAnchor?.mapModule?.endsWith("JetRolesScreen.tsx") === true
+    && m.files?.length === 1 && m.route === "/jet-roles" && m.verification?.mode === "static-only" && m.tokens.length === 45);
   fs.writeFileSync(out, "{ not json");
   check("an existing plan that is not JSON is never overwritten", run([screen(JR), vars(JR), DS, "--out", out]).status === 1 && fs.readFileSync(out, "utf8") === "{ not json");
 }
 {
   const gp = planOf(run([screen(GP), vars(GP), DS]).stdout);
   const gh = hiddenIds(read(screen(GP), isScreenExport));
-  check(`Global Policies (1359:21337): 50 tokens (PHASE2-TOKENS.md: 50), 42 visible instances, 207 anchors, 0 hidden — got ${gp.tokens.length}/${gp.components.length}/${Object.keys(gp.anchors).length}`,
+  check(`Guided Policies (1359:21337): 50 tokens (PHASE2-TOKENS.md: 50), 42 visible instances, 207 anchors, 0 hidden — got ${gp.tokens.length}/${gp.components.length}/${Object.keys(gp.anchors).length}`,
     gp.tokens.length === 50 && gp.components.length === 42 && Object.keys(gp.anchors).length === 207 && Object.keys(gp.anchors).every((id) => !gh.has(id)));
 }
 check("visibility() never reads `visible` — a component PROPERTY called \"visible\" does not hide a node (finding 34)", (() => {
@@ -198,19 +198,19 @@ check("the shipped bundle runs from outside the repo", (() => {
 })());
 
 // ---------------------------------------------------------------- P6-136: auditGate pre-fill
-// Real audit: FX/design/audit/System_Configurations.json (5 blockers, copied verbatim from the
-// livetest-3 run). Global Policies (System_Configurations__1359_21337) is the screen it belongs to.
+// Real audit: FX/design/audit/Studio_Configurations.json (5 blockers, copied verbatim from the
+// livetest-3 run). Guided Policies (Studio_Configurations__1359_21337) is the screen it belongs to.
 console.log("finding 136 — auditGate is pre-filled from an existing Blocked audit:");
 {
   const auditCwd = fs.mkdtempSync(path.join(os.tmpdir(), "p6-136-cwd-"));
   fs.mkdirSync(path.join(auditCwd, "design", "audit"), { recursive: true });
-  fs.copyFileSync(path.join(FX, "audit", "System_Configurations.json"), path.join(auditCwd, "design", "audit", "System_Configurations.json"));
+  fs.copyFileSync(path.join(FX, "audit", "Studio_Configurations.json"), path.join(auditCwd, "design", "audit", "Studio_Configurations.json"));
   const gp = run([screen(GP), vars(GP), DS], { cwd: auditCwd });
   const p = planOf(gp.stdout);
   check("[P6-136] a screen with a Blocked audit on disk gets auditGate pre-filled: auditFile, verdict, every blocker id, overridden empty",
-    gp.status === 0 && p.auditGate !== null && p.auditGate.auditFile === "design/audit/System_Configurations.json" && p.auditGate.verdict === "blocked"
+    gp.status === 0 && p.auditGate !== null && p.auditGate.auditFile === "design/audit/Studio_Configurations.json" && p.auditGate.verdict === "blocked"
       && p.auditGate.blockers.length === 5 && Array.isArray(p.auditGate.overridden) && p.auditGate.overridden.length === 0 && p.auditGate.reason === null);
-  check("[P6-136] a screen with no matching audit (Job Roles: no design/audit/positions*.json in this fixture) gets auditGate: null", planOf(r.stdout).auditGate === null);
+  check("[P6-136] a screen with no matching audit (Jet Roles: no design/audit/positions*.json in this fixture) gets auditGate: null", planOf(r.stdout).auditGate === null);
 
   // merge(): a person's decision (overridden/reason/decidedBy/decidedAt) survives a re-run — the
   // skeleton must never clear what was already decided.
@@ -227,13 +227,13 @@ console.log("finding 136 — auditGate is pre-filled from an existing Blocked au
   // blockers (the audit's current ids) while keeping the person-owned decision. Before: `prev.auditGate ||
   // fresh.auditGate` froze the first run's ids, and there was no crossCheckFile.
   check("[F44-5] no <audit>.cross.json beside the audit: auditGate.crossCheckFile is null", p.auditGate?.crossCheckFile === null);
-  fs.writeFileSync(path.join(auditCwd, "design", "audit", "System_Configurations.cross.json"), JSON.stringify({ summary: {}, findings: [] }));
-  const stale = Object.assign({}, p, { auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked",
+  fs.writeFileSync(path.join(auditCwd, "design", "audit", "Studio_Configurations.cross.json"), JSON.stringify({ summary: {}, findings: [] }));
+  const stale = Object.assign({}, p, { auditGate: { auditFile: "design/audit/Studio_Configurations.json", verdict: "blocked",
     blockers: ["catalog-covers-nothing#0", "text-style-near-miss#1"], overridden: ["catalog-covers-nothing#0"], reason: "decided on the old ids", decidedBy: "owner", decidedAt: "2026-09-23" } });
   fs.writeFileSync(planFile, JSON.stringify(stale, null, 2));
   const re = run([screen(GP), vars(GP), DS, "--out", planFile], { cwd: auditCwd });
   const g = read(planFile, isSkeletonPlan).auditGate;
-  check(`[F44-5] a merge over an old gate sets crossCheckFile (got ${JSON.stringify(g?.crossCheckFile)})`, re.status === 0 && g?.crossCheckFile === "design/audit/System_Configurations.cross.json");
+  check(`[F44-5] a merge over an old gate sets crossCheckFile (got ${JSON.stringify(g?.crossCheckFile)})`, re.status === 0 && g?.crossCheckFile === "design/audit/Studio_Configurations.cross.json");
   check(`[F44-5] …refreshes blockers to the audit's current ids (got ${JSON.stringify(g?.blockers)})`,
     JSON.stringify(g?.blockers) === JSON.stringify(p.auditGate?.blockers) && g?.blockers.includes("catalog-covers-nothing") === true);
   check("[F44-5] …and keeps the person-owned overridden/reason/decidedBy/decidedAt/verdict as they were",

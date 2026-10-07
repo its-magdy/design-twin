@@ -198,7 +198,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 
 // ---------- CLI: --out defaults to the INPUT file's own basename (P3 #72 #73) ------------------
 // Live-run findings 72/73: the SAME node audited twice under two names the skill invented on the
-// spot (`positions.md` vs `job-roles.md`, `global-policies.md` vs `System_Configurations.md`) wrote
+// spot (`positions.md` vs `jet-roles.md`, `guided-policies.md` vs `Studio_Configurations.md`) wrote
 // byte-identical reports under two filenames in design/audit/. The export file is already named
 // `<LayerName>__<node-id>.json` (write-out.js/pages-layout.js) — the one artefact-naming rule — so
 // defaulting `--out` to that same basename means two runs against the SAME export file always land
@@ -235,12 +235,12 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 
 // ---------- livetest-3 finding 74: no finding may cite a layer the designer switched off ----------
 // Real exports (test/fixtures/livetest3/verify/, built from the livetest-3 run and proven to audit
-// byte-identically to the full files). Before: 44 of Job Roles' 119 findings (and 40 of Global
+// byte-identically to the full files). Before: 44 of Jet Roles' 119 findings (and 40 of Guided
 // Policies' 105) cited hidden nodes, including I7314:87216;6:87 "_selected icon" with the instruction
 // "the build uses these values EXACTLY".
 (() => {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "verify");
-  for (const [file, label] of [["positions___7314_87192.json", "Job Roles"], ["System_Configurations__1359_21337.json", "Global Policies"]] satisfies [string, string][]) {
+  for (const [file, label] of [["positions___7314_87192.json", "Jet Roles"], ["Studio_Configurations__1359_21337.json", "Guided Policies"]] satisfies [string, string][]) {
     const doc = readFixture(path.join(FX, file), isScreenExport);
     // independent walk — the prompt's own snippet, not hidden.js
     const hidden = new Set<string | undefined>();
@@ -250,7 +250,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     check(`[74] ${label}: no finding cites a hidden node (${cited.length} do)`, cited.length === 0);
     check(`[74] ${label}: the skipped layers are counted in the result (${res.hiddenLayers && res.hiddenLayers.nodesSkipped} of ${hidden.size})`, !!res.hiddenLayers && res.hiddenLayers.nodesSkipped === hidden.size);
     check(`[74] ${label}: the markdown says hidden layers were skipped`, /hidden layers \(switched off in Figma\) were skipped/.test(toMarkdown(res)));
-    if (label === "Job Roles") {
+    if (label === "Jet Roles") {
       check("[74] I7314:87216;6:87 ('_selected icon', hidden) is not cited at all", !res.findings.some((f) => f.nodeId === "I7314:87216;6:87"));
       check("[74] …while visible off-grid spacing is still reported (the audit did not go quiet)", res.findings.some((f) => f.code === "off-grid-spacing" && !hidden.has(f.nodeId)));
     }
@@ -258,7 +258,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 })();
 
 // ---------- finding 172: self-inconsistent-geometry (round 2: FIXED-overflow / HUG-mismatch only) ----------
-// Real Job Roles table: header 20173:142077 (heightMode absent="fixed", padding [16,32,16,32], tallest
+// Real Jet Roles table: header 20173:142077 (heightMode absent="fixed", padding [16,32,16,32], tallest
 // child box.h=24, declared box.h=44 — content computes 56, OVERFLOWING a fixed box) and every table row
 // 20173:142081/086/091/.../137 (heightMode:"hug", padding [16,24,16,24], declared box.h=48, content
 // computes 56 — a hug box's declared size must equal its content, in EITHER direction).
@@ -282,7 +282,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   check("[172/DT-13] no table row fires — their 24px child is hidden, the visible content is the declared 48", rowIds.every((id) => !hits.some((f) => f.nodeId === id)));
   check("[172] the message names the stated box.h, heightMode and the resulting mismatch", hits.some((f) => f.nodeId === "20173:142077" && /box\.h=44/.test(f.message) && /heightMode:"fixed"/.test(f.message) && /= 56/.test(f.message)));
   check("[172] round-2: the sidebar's FIXED 40-high row (I10970:111588;1910:23337, 24-high icon centred, content fits) does NOT fire", !hits.some((f) => f.nodeId === "I10970:111588;1910:23337"));
-  check("[172] round-2: its siblings Component 5 / License Health Check (same shape) do NOT fire either", !hits.some((f) => /Component 5|License Health Check/.test(f.nodeName || "")));
+  check("[172] round-2: its siblings Component 5 / Leisure Health Check (same shape) do NOT fire either", !hits.some((f) => /Component 5|Leisure Health Check/.test(f.nodeName || "")));
 
   // A consistent FIXED node (padding + tallest child fits inside the declared box) must NOT fire.
   const consistentFixed = node({
@@ -339,13 +339,13 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 
 // ---------- livetest-3 #311: the audit's gate judges token collisions on the screen's OWN slice ----------
 // audit.js embeds cross-check but used to feed it only the merged variables.json, so its --gate raised
-// Create Activity Type's `Space 4` (key 64928e3a…, 16) against Job Roles, whose own .vars.json carries
+// Create Assembly Type's `Space 4` (key 64928e3a…, 16) against Jet Roles, whose own .vars.json carries
 // only the design system's 24 — 5 blockers where cross-check said 3. Real export: test/fixtures/livetest3/.
 {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3");
   const D2C = path.join(import.meta.dirname, "..", "design-to-code");
-  const POS = path.join(FX, "pages/__Organization_management_/positions___7314_87192.json");
-  const CAT = path.join(FX, "pages/In_progress/Create_Activity_Type__18411_84111.json");
+  const POS = path.join(FX, "pages/__Optimization_management_/positions___7314_87192.json");
+  const CAT = path.join(FX, "pages/In_progress/Create_Assembly_Type__18411_84111.json");
   const out = fs.mkdtempSync(path.join(os.tmpdir(), "audit-311-"));
   interface AuditOut { findings: AuditFinding[]; crossFile: { findings?: CrossCheckFinding[] } }
   const runAudit = (f: string, tag: string) => {
@@ -361,35 +361,35 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   const blockerSet = (findings: AuditFinding[]) => findings.filter((f) => f.severity === "blocker" && (f.crossFile === undefined || f.crossFile)).map((f) => `${f.code}|${String(f.token || "")}|${String(f.key || "")}`).sort();
   const pos = runAudit(POS, "pos"), posCross = runCross(POS);
   const collision = (res: { findings: AuditFinding[] }, token: string) => res.findings.filter((f) => f.severity === "blocker" && f.code === "token-name-collision" && f.token === token);
-  check("[311] Job Roles: the audit gate raises NO Space 4 collision blocker (its own slice has only the 24-valued key)",
+  check("[311] Jet Roles: the audit gate raises NO Space 4 collision blocker (its own slice has only the 24-valued key)",
     pos.json.findings.length > 0 && collision(pos.json, "Space 4").length === 0);
-  check("[311] Job Roles: the audit's cross-file blockers are exactly cross-check's, same code/token/key",
+  check("[311] Jet Roles: the audit's cross-file blockers are exactly cross-check's, same code/token/key",
     blockerSet(pos.json.findings.filter((f) => f.crossFile)).join() === blockerSet(posCross.findings).join() && blockerSet(posCross.findings).length > 0);
   check("[311] and it no longer claims the screen's .vars.json 'was not available' while it sits beside the screen",
     !pos.json.findings.some((f) => /was not available/.test(f.message)));
   check("[311] the union's Space 4 ambiguity stays visible as the -elsewhere NOTE, naming the screen it belongs to",
-    /token-name-collision-elsewhere/.test(pos.md) && (pos.json.crossFile.findings || []).some((f) => f.code === "token-name-collision-elsewhere" && f.severity === "info" && /Create_Activity_Type__18411_84111/.test(f.message)));
+    /token-name-collision-elsewhere/.test(pos.md) && (pos.json.crossFile.findings || []).some((f) => f.code === "token-name-collision-elsewhere" && f.severity === "info" && /Create_Assembly_Type__18411_84111/.test(f.message)));
   const cat = runAudit(CAT, "cat");
-  check("[311] Create Activity Type still gets its REAL Space 4 blocker — on key 64928e3a…, the 16-valued one its own slice carries",
+  check("[311] Create Assembly Type still gets its REAL Space 4 blocker — on key 64928e3a…, the 16-valued one its own slice carries",
     collision(cat.json, "Space 4").some((f) => f.key === "64928e3a5f094c0d9a2c916f50b98ff37c789882") && cat.r.status === 1);
 }
 
 // ---------- audit-gate: which audit file belongs to a screen -----------------------------------
-// The name fallback matched a slug PREFIX either way, so "Job Roles" picked up the audit of
-// "Job Roles Detail" — another screen's blockers gating (or pre-filling the plan of) this one.
+// The name fallback matched a slug PREFIX either way, so "Jet Roles" picked up the audit of
+// "Jet Roles Detail" — another screen's blockers gating (or pre-filling the plan of) this one.
 (() => {
   console.log("audit-gate — locating a screen's audit by name:");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "audit-gate-"));
   fs.mkdirSync(path.join(cwd, "design", "audit"), { recursive: true });
-  fs.writeFileSync(path.join(cwd, "design", "audit", "Job_Roles_Detail__9_9.json"), JSON.stringify({ findings: [] }));
-  check("[gate] screen \"Job Roles\" does NOT take Job_Roles_Detail__9_9.json (longer name, prefix match)",
-    locateAuditFile(cwd, null, "Job Roles") === null && auditGateStatus(cwd, null, "Job Roles").auditFile === null);
+  fs.writeFileSync(path.join(cwd, "design", "audit", "Jet_Roles_Detail__9_9.json"), JSON.stringify({ findings: [] }));
+  check("[gate] screen \"Jet Roles\" does NOT take Jet_Roles_Detail__9_9.json (longer name, prefix match)",
+    locateAuditFile(cwd, null, "Jet Roles") === null && auditGateStatus(cwd, null, "Jet Roles").auditFile === null);
   fs.writeFileSync(path.join(cwd, "design", "audit", "Job.json"), JSON.stringify({ findings: [] }));
-  check("[gate] …nor Job.json (shorter name, reverse prefix match)", locateAuditFile(cwd, null, "Job Roles") === null);
-  fs.writeFileSync(path.join(cwd, "design", "audit", "Job_Roles__9_9.json"), JSON.stringify({ findings: [] }));
+  check("[gate] …nor Job.json (shorter name, reverse prefix match)", locateAuditFile(cwd, null, "Jet Roles") === null);
+  fs.writeFileSync(path.join(cwd, "design", "audit", "Jet_Roles__9_9.json"), JSON.stringify({ findings: [] }));
   check("[gate] the screen's OWN <Name>__<id>.json audit (audit.ts --out naming) is found by name alone",
-    locateAuditFile(cwd, null, "Job Roles") === "design/audit/Job_Roles__9_9.json");
-  fs.unlinkSync(path.join(cwd, "design", "audit", "Job_Roles__9_9.json"));
+    locateAuditFile(cwd, null, "Jet Roles") === "design/audit/Jet_Roles__9_9.json");
+  fs.unlinkSync(path.join(cwd, "design", "audit", "Jet_Roles__9_9.json"));
   // safe() turns " - " into "___": the name part itself contains "__", so the id split must be at the LAST one.
   fs.writeFileSync(path.join(cwd, "design", "audit", "Detail___Overview__9_9.json"), JSON.stringify({ findings: [] }));
   check("[gate] a doubled separator in the layer name (Detail - Overview) does NOT match the screen \"Detail\"",
@@ -397,10 +397,10 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   check("[gate] …but does match its own screen \"Detail - Overview\"",
     locateAuditFile(cwd, null, "Detail - Overview") === "design/audit/Detail___Overview__9_9.json");
   fs.unlinkSync(path.join(cwd, "design", "audit", "Detail___Overview__9_9.json"));
-  fs.writeFileSync(path.join(cwd, "design", "audit", "job-roles.json"), JSON.stringify({ findings: [] }));
-  check("[gate] the exact case/punctuation-insensitive name still matches", locateAuditFile(cwd, null, "Job Roles") === "design/audit/job-roles.json");
+  fs.writeFileSync(path.join(cwd, "design", "audit", "jet-roles.json"), JSON.stringify({ findings: [] }));
+  check("[gate] the exact case/punctuation-insensitive name still matches", locateAuditFile(cwd, null, "Jet Roles") === "design/audit/jet-roles.json");
   check("[gate] and the screen file's own basename still wins first",
-    locateAuditFile(cwd, path.join(cwd, "design", "export", "pages", "P", "Job_Roles_Detail__9_9.json"), "Job Roles") === "design/audit/Job_Roles_Detail__9_9.json");
+    locateAuditFile(cwd, path.join(cwd, "design", "export", "pages", "P", "Jet_Roles_Detail__9_9.json"), "Jet Roles") === "design/audit/Jet_Roles_Detail__9_9.json");
 })();
 
 // A file in design/audit/ that is not an audit report is `unreadable` — never "this screen has no blockers".

@@ -365,7 +365,7 @@ check("[T-sn] string-number FLOAT gets px", toCSS(tokens({ variables: [{ name: "
 check("[T-lh] LINE_HEIGHT-scoped FLOAT stays px (not unitless)", toCSS(tokens({ variables: [{ name: "text/lh", type: "FLOAT", scopes: ["LINE_HEIGHT"], values: { v: 24 } }] })).includes("--text-lh: 24px;"));
 // [T-ls] letter-spacing bare number is invalid CSS -> px, not unitless.
 check("[T-ls] LETTER_SPACING-scoped FLOAT stays px (bare number is invalid CSS)", toCSS(tokens({ variables: [{ name: "text/ls", type: "FLOAT", scopes: ["LETTER_SPACING"], values: { v: 0.5 } }] })).includes("--text-ls: 0.5px;"));
-// ---------- [RD-*] real-data regressions: names/scopes taken from a live "Design System - NERA"
+// ---------- [RD-*] real-data regressions: names/scopes taken from a live "Design System - NIMA"
 // file (Figma starter plan). The mock fixtures above all set NARROW scopes, which hid these: real
 // files leave Figma's default ALL_SCOPES in place, so the scopes-only unit rule emitted invalid CSS.
 check("[RD-fw] ALL_SCOPES font-weight is unitless by NAME (was `500px`, invalid CSS)",
@@ -1336,7 +1336,7 @@ console.log("map — SLOT props:");
   const catalogFile = path.join(FXL, "design-system", "components.local.json");
   const screens = [
     path.join(FXL, "verify", "positions___7314_87192.json"),
-    path.join(FXL, "verify", "System_Configurations__1359_21337.json"),
+    path.join(FXL, "verify", "Studio_Configurations__1359_21337.json"),
   ];
   for (const screen of screens) {
     const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "drift-lint.ts"), emptyMapFile, catalogFile, "--screen", screen], { encoding: "utf8" });
@@ -1485,7 +1485,7 @@ console.log("map — SLOT props:");
   const D2C = path.join(import.meta.dirname, "..", "design-to-code");
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const catalog = path.join(FXL, "design-system", "components.local.json");
-  const screen = path.join(FXL, "pages", "__Organization_management_", "positions___7314_87192.json");
+  const screen = path.join(FXL, "pages", "__Optimization_management_", "positions___7314_87192.json");
   const asMap = (stdout: string): CodeConnectMap => { const m: unknown = JSON.parse(stdout); return must(isCodeConnectMap(m) ? m : null, "map-bootstrap to print a valid map"); };
   const full = asMap(spawnSync(process.execPath, [path.join(D2C, "map-bootstrap.ts"), catalog], { encoding: "utf8" }).stdout);
   const scopedRun = spawnSync(process.execPath, [path.join(D2C, "map-bootstrap.ts"), catalog, "--screen", screen], { encoding: "utf8" });

@@ -1,11 +1,11 @@
 import { Icon } from '../components/Icon';
-import neraLogo from '../assets/logo_4x_1.png';
+import nimaLogo from '../assets/logo_4x_1.png';
 
 /**
- * NERA design-system component: **`Header`** — COMPONENT_SET `842:3470`,
+ * NIMA design-system component: **`Header`** — COMPONENT_SET `842:3470`,
  * page "📌 Shared components", `Property 1` VARIANT = **light | dark**.
- * (Two other catalog entries are called `Header`: `841:5074` on "✈️ CRMS Components" and
- * `1261:3619` on "📝 CLM Components". Both spell the prop `Mode` = Light | Dark, so the
+ * (Two other catalog entries are called `Header`: `841:5074` on "✈️ CDMS Components" and
+ * `1261:3619` on "📝 CPM Components". Both spell the prop `Mode` = Light | Dark, so the
  * instance's `Property 1=…` string picks `842:3470` unambiguously.)
  *
  * Both variants were pulled from Figma and are **byte-identical in the export**: the fill of both
@@ -18,7 +18,7 @@ import neraLogo from '../assets/logo_4x_1.png';
  * Backgrounds/Tags with a 28×28 Primary/Primary half, then `User Avatar` 36 + `arrow-down` 16).
  *
  * Figma: `Header` (20173:137669) — 60 high, padding 12/24, fill Neutrals/Neutral 0.
- * Left: hamburger (Property_34) + "By" + the nera wordmark (logo@4x 1).
+ * Left: hamburger (Property_34) + "By" + the nima wordmark (logo@4x 1).
  * Right: notification-bing, the light/dark pill (Backgrounds/Tags, active half Primary/Primary),
  * the AK avatar (Warning/Warning Dark on profilePicture) and a chevron.
  */
@@ -42,7 +42,7 @@ export function Header({ theme, onThemeChange, onToggleSidebar }: HeaderProps) {
         </button>
         <span className="flex items-center gap-1" data-dt-node="I20173:137669;45:1728">
           <span className="font-roboto text-body-4 leading-5 tracking-[0.25px] text-neutrals-neutral-800" data-dt-node="I20173:137669;45:1729">By</span>
-          <img src={neraLogo} alt="nera" width={60} height={16} className="h-4 w-[60px] object-contain" data-dt-node="I20173:137669;45:1730" />
+          <img src={nimaLogo} alt="nima" width={60} height={16} className="h-4 w-[60px] object-contain" data-dt-node="I20173:137669;45:1730" />
         </span>
       </div>
 
@@ -73,7 +73,7 @@ export function Header({ theme, onThemeChange, onToggleSidebar }: HeaderProps) {
         </div>
 
         <div className="flex items-center gap-space-3-paren" data-dt-node="I20173:137669;45:1744">
-          {/* NERA `User Avatar` 1:1189, `Size=small, Type=Text` — the instance overrides the box
+          {/* NIMA `User Avatar` 1:1189, `Size=small, Type=Text` — the instance overrides the box
               from the set's 40 to 36, so it is rendered inline here rather than through
               components/UserAvatar.tsx (which carries the set's own four sizes). */}
           <span className="relative flex h-9 w-9 items-center justify-center" data-dt-node="I20173:137669;842:3338" data-dt-component="User Avatar" data-dt-variant="Size=small, Type=Text">

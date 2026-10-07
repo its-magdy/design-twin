@@ -349,7 +349,8 @@ function refuseUpgrade(socket: Duplex, code: number, message?: string): void {
 /** createBridge options. `onListenError` is for a caller that must SURVIVE a failed bind (the MCP
  * server: a held port is a tool error there, not a reason to kill the stdio session). Without it, a
  * held port prints the fix and exits 1 — the CLI behaviour, unchanged. `heartbeatMs` overrides the
- * ping interval (timeouts.ts HEARTBEAT_MS); the test suite shortens it. */
+ * ping interval (timeouts.ts HEARTBEAT_MS); the test suite shortens it, or passes 0 = no interval at
+ * all, and steps the returned `heartbeatTick()` itself. */
 interface BridgeOptions {
   onListenError?: (e: Error) => void;
   heartbeatMs?: number;
@@ -602,7 +603,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // at the next tick missed the last pong: it leaves the registry at once (so no command is routed to
   // it) and is terminated, whose close event fails its in-flight requests like every other disconnect.
   // unref'd: the heartbeat must never be what keeps a one-shot CLI process alive.
-  const heartbeat = setInterval(() => {
+  const heartbeatTick = (): void => {
     for (const [id, e] of clients) {
       if (!e.isAlive) {
         clients.delete(id);
@@ -613,8 +614,10 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       e.isAlive = false;
       try { e.ws.ping(); } catch { /* not open any more; its close handler removes it */ }
     }
-  }, opts.heartbeatMs ?? HEARTBEAT_MS);
-  heartbeat.unref();
+  };
+  const heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS;
+  const heartbeat = heartbeatMs > 0 ? setInterval(heartbeatTick, heartbeatMs) : undefined;
+  heartbeat?.unref();
 
   // Resolves once the port is bound. Never rejects: a bind failure goes to onListenError (or exits),
   // so a caller that only wants "is it up yet" cannot leak an unhandled rejection.
@@ -966,7 +969,11 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     try { server.close(); } catch { /* not listening */ }
   }
 
-  return { request, requestWithClient, isConnected, waitForConnection, waitForIdentified, waitForClient, connectionInfo, listClients, resolveClient, close, port, listening };
+  return {
+    request, requestWithClient, isConnected, waitForConnection, waitForIdentified, waitForClient, connectionInfo, listClients, resolveClient, close, port, listening,
+    /** test seam (D108): one heartbeat round, run by hand — with `heartbeatMs: 0` it is the only one. */
+    heartbeatTick,
+  };
 }
 
 // The object createBridge() returns — what both front-ends (and the daemon) drive.

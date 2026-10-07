@@ -190,7 +190,7 @@ console.log("F — the match's size and how it was found cap severity (F-65, F-1
 {
   const e = expect1([
     { type: "FRAME", id: "8:1", name: "Search Field", box: { w: 380, h: 36 }, radius: 8, fills: [{ type: "solid", color: "#ffffff" }] },
-    { type: "TEXT", id: "8:2", name: "Nav Label", text: "Day Of Operation", font: { ...TXT, size: 14 }, autoResize: "width_and_height", box: { w: 110, h: 20 } },
+    { type: "TEXT", id: "8:2", name: "Nav Label", text: "Day Of Ownership", font: { ...TXT, size: 14 }, autoResize: "width_and_height", box: { w: 110, h: 20 } },
     { type: "FRAME", id: "8:3", name: "Dot", box: { w: 6, h: 6 }, radius: 3, fills: [{ type: "solid", color: "#00aa00" }] },
     { type: "FRAME", id: "8:4", name: "Tag List", box: { w: 120, h: 28 }, widthMode: "hug", fills: [{ type: "solid", color: "#eeeeee" }] },
   ]);
@@ -212,7 +212,7 @@ console.log("F — the match's size and how it was found cap severity (F-65, F-1
   safe("[D31] …it counts once the other axis is off too (28 → 90)", () => !!deltaOn(grewBoth, "8:4", /match/));
 
   // D30: the cap by matchedBy
-  const nav = (matchedBy: string): MeasuredNode => node("8:2", { fontFamily: "Inter", fontSize: 14, color: "rgb(51, 51, 51)", text: "OJT Management", textBox: { x: 0, w: 110 }, opacity: 1 }, matchedBy);
+  const nav = (matchedBy: string): MeasuredNode => node("8:2", { fontFamily: "Inter", fontSize: 14, color: "rgb(51, 51, 51)", text: "OKR Management", textBox: { x: 0, w: 110 }, opacity: 1 }, matchedBy);
   const sevOf = (matchedBy: string): VerifyDelta | undefined => deltaOn(compare(e, measured([nav(matchedBy)])), "8:2", /^text$/);
   safe("[F-125] an off-by-one POSITION match: the text delta is low (cappedFrom high) — before: high", () => { const d = sevOf("position"); return d?.severity === "low" && d.cappedFrom === "high" && /capped at low: matched by position/.test(d.note ?? ""); });
   safe("[F-125] a hand-written 'position-partial-size' (not canonical): low", () => sevOf("position-partial-size")?.severity === "low");

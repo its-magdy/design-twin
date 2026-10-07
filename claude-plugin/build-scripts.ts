@@ -66,7 +66,14 @@ function build(outDir: string): Promise<BuildResult[]> {
 export { build, ENTRIES };
 
 if (import.meta.main) {
-  const outDir = path.resolve(process.argv[2] || path.join(import.meta.dirname, "scripts"));
+  // argv[2] is the output dir, so a flag must not be taken for one (`--help` used to write bundles into ./--help).
+  const arg = process.argv[2];
+  if (arg?.startsWith("-")) {
+    const help = arg === "--help" || arg === "-h";
+    (help ? console.log : console.error)("usage: node claude-plugin/build-scripts.ts [outDir]\n  bundles design-to-code/*.ts into outDir (default: claude-plugin/scripts)");
+    process.exit(help ? 0 : 2);
+  }
+  const outDir = path.resolve(arg || path.join(import.meta.dirname, "scripts"));
   build(outDir)
     .then(() => console.log(`[build-scripts] wrote ${ENTRIES.length} scripts to ${outDir}`))
     .catch((e: unknown) => { console.error(e); process.exit(1); });

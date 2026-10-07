@@ -282,7 +282,7 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
 
   // Counted over EVERY instance in the export, as before — but each set also records how many of its
   // instances sit on layers the designer switched off (hidden.ts's predicate), so the headline can say
-  // how many of "the components on this screen" will never be built at all (livetest-3: 45 of Global
+  // how many of "the components on this screen" will never be built at all (livetest-3: 45 of Guided
   // Policies' 87 instances are hidden).
   const used = new Map<string, UsedSet>(); // set key -> { setName, instances, hiddenInstances }
   for (const doc of screenDocs || []) {

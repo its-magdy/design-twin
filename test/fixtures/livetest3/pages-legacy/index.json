@@ -8,10 +8,10 @@
       "layers": 2
     },
     {
-      "page": "✅ Organization management ",
+      "page": "✅ Optimization management ",
       "pageId": "5282:58823",
-      "dir": "__Organization_management_",
-      "index": "pages/__Organization_management_/index.json",
+      "dir": "__Optimization_management_",
+      "index": "pages/__Optimization_management_/index.json",
       "layers": 3
     }
   ]

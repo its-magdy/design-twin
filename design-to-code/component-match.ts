@@ -1,8 +1,8 @@
 // component-match.ts — which design-system component is this instance, when the KEYS cannot say?
 //
 // A component's identity is its publish `key`, and every tool here resolves by key first. But
-// duplicating a Figma file re-mints every key in the copy (livetest-3 finding 226: `TeamSmart (Copy)`
-// and `Design System - NERA (Copy)`), so a screen's instances then match the pulled catalog by key
+// duplicating a Figma file re-mints every key in the copy (livetest-3 finding 226: `TideStack (Copy)`
+// and `Design System - NIMA (Copy)`), so a screen's instances then match the pulled catalog by key
 // 0 times out of 51 — while 26 of its 41 distinct components are plainly the catalog's own `Button`,
 // `Header`, `Pagination`… by name AND by prop signature. Three tools concluded "the catalog is not
 // this screen's library", the build made every component `verdict:"new"`, and none of the design
