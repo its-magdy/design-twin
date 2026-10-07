@@ -12,6 +12,7 @@ import type {
 } from "../bridge/src/doc-types.ts";
 import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, Cmd } from "../bridge/src/commands.ts";
 import { argsShapeError } from "../bridge/src/commands.ts";
+import { QUICK_KEYS } from "../bridge/src/quick-keys.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 import { must } from "./fixtures.ts";
 import { buildExpectation } from "../design-to-code/verify-screen.ts";
@@ -610,11 +611,12 @@ const sandbox: Sandbox = context;
   ok("collectDesignSystemOnly's designSystem carries the same variable/style/component data as buildDesignSystem",
     dsOnly.designSystem.variables.some((v) => v.name === "color/primary") &&
     Array.isArray(dsOnly.designSystem.styles.paint) && Array.isArray(dsOnly.designSystem.components));
-  // The one documented gap (see collect.ts): with no page walk, the note lands in `hygiene` — the ONE
-  // field buildDesignSystemLayout's split actually persists to disk (hygiene.json) and forwards
-  // through the MCP writeToDisk path, unlike a `manifest.warnings` field the split would drop.
-  ok("collectDesignSystemOnly notes the library-variable limitation in hygiene (the field that survives to disk)",
-    dsOnly.designSystem.hygiene.some((h) => /library \(remote\) variables/.test(h)));
+  // The one documented gap (see collect.ts) is a consuming file's: its library (remote) variables are only
+  // the ones it references. This mock DEFINES its tokens (no remote variable), so the line would be false
+  // here and must be absent; the consuming case (one remote variable) is pinned in [RD-alias] below.
+  ok("[DT08-3 rv] a file with no remote variable gets no 'consumes libraries' hygiene line (its catalog is its own)",
+    !dsOnly.designSystem.variables.some((v) => v.remote === true) &&
+    !dsOnly.designSystem.hygiene.some((h) => /library \(remote\) variables|consumes libraries|--as-library/.test(h)));
 
   // --- new READ additions (Tier 1: variable modes, prop-driven wiring, reference render, token bindings) ---
   ok("variable mode pin resolved to names", !!(tree.variableModes && tree.variableModes.Semantic === "Dark"));
@@ -1138,6 +1140,17 @@ const sandbox: Sandbox = context;
     }
     return true;
   })());
+  // The same mock now CONSUMES a library (a local token aliases library variables): a design-system pull
+  // carries the limitation in `hygiene` — the ONE field buildDesignSystemLayout's split persists to disk
+  // (hygiene.json) and forwards through the MCP writeToDisk path, unlike a `manifest.warnings` field.
+  const dsConsumer = await sandbox.collectDesignSystemOnly();
+  ok("collectDesignSystemOnly on a consuming file notes the library-variable limitation in hygiene (the field that survives to disk)",
+    dsConsumer.designSystem.variables.some((v) => v.remote === true) && dsConsumer.designSystem.hygiene.some((h) => /library \(remote\) variables/.test(h)));
+  // [DT08-3] the line names the real remedy (--as-library) and no longer promises a page pull completes it.
+  ok("[DT08-3] design-system hygiene names --as-library and says it is not the library's catalog",
+    dsConsumer.designSystem.hygiene.some((h) => /--as-library/.test(h) && /not the library's catalog/.test(h)));
+  ok("[DT08-3] and no longer says a page pull gives the full set",
+    !dsConsumer.designSystem.hygiene.some((h) => /pull a page for the full set|prior\/no page walk/.test(h)));
   // Drop only the local seed. The id resolver STAYS on the EXTRA-aware handler — it is a superset of
   // the v_lib override above, and later alias-hygiene tests still need v_lib to resolve.
   delete VARS.v_semlib;
@@ -1816,6 +1829,42 @@ const sandbox: Sandbox = context;
     width: 10, height: 10, layoutMode: "NONE", numberOfFixedChildren: 0, children: [] }, 0, false);
   ok("[AUDIT-5] and is omitted at the 0 default (it is on every frame)", plainFrame.fixedChildren === undefined);
 
+  // ---- [QK-3] the keys the quick-keys block (bridge/src/quick-keys.ts) names are the keys the plugin really emits ----
+  // Builders guessed Plugin API names (`characters`, `width`, `visible`, `layout.scroll`); the doc says
+  // `text`, `box.w`, `hidden`, a top-level `scroll`. Serialize one scroll screen and check both halves:
+  // every key the doc names is there (and named in QUICK_KEYS), and the guessed ones are nowhere.
+  {
+    const qkText = { type: "TEXT", name: "Title", visible: true, id: "qk:t", characters: "Hello", fontName: { family: "Inter", style: "Bold" },
+      fontSize: 20, width: 120, height: 24, absoluteBoundingBox: { x: 0, y: 0, width: 120, height: 24 }, getStyledTextSegments: () => [] };
+    const qkHiddenKid = { type: "FRAME", name: "Toast", visible: true, id: "qk:hk", width: 10, height: 10, layoutMode: "NONE", children: [] };
+    const qkHidden = { type: "FRAME", name: "Banner", visible: false, id: "qk:h", width: 50, height: 20, layoutMode: "NONE", children: [qkHiddenKid] };
+    const qkAbs = { type: "FRAME", name: "Badge", visible: true, id: "qk:a", x: 7, y: 9, width: 12, height: 12, layoutMode: "NONE",
+      layoutPositioning: "ABSOLUTE", children: [] };
+    const qkRow = { type: "FRAME", name: "Row", visible: true, id: "qk:r", width: 100, height: 40, layoutMode: "HORIZONTAL", itemSpacing: 0,
+      paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, children: [qkAbs] };
+    const qkScreen = { type: "FRAME", name: "Screen", visible: true, id: "qk:s", width: 375, height: 800, layoutMode: "NONE",
+      overflowDirection: "VERTICAL", numberOfFixedChildren: 1, clipsContent: true, children: [qkText, qkHidden, qkRow] };
+    const qk = await sandbox.serialize(qkScreen, 0, false);
+    const [qkT, qkH, qkR] = must(qk.children, "qk.children");
+    const qkHK = must(qkH?.children?.[0], "qk hidden child");
+    const qkA = must(qkR?.children?.[0], "qk absolute child");
+    const named = (key: string): boolean => QUICK_KEYS.includes("`" + key);
+    ok("[QK-3] a TEXT carries `text` (not `characters`)", qkT?.text === "Hello" && named("text"));
+    ok("[QK-3] size is `box.w` (not `width`)", qkT?.box?.w === 120 && named("box.w"));
+    ok("[QK-3] scroll is a top-level `scroll`", qk.scroll === "vertical" && named("scroll"));
+    ok("[QK-3] `fixedChildren` is the pinned count", qk.fixedChildren === 1 && named("fixedChildren"));
+    ok("[QK-3] `clip` rides along with it", qk.clip === true && named("clip"));
+    ok("[QK-3] `hidden` sits on the switched-off layer only, not on its child", qkH?.hidden === true && qkHK.hidden === undefined && named("hidden"));
+    ok("[QK-3] an absolute child carries `absolute` + its own `x`", qkA.absolute === true && qkA.x === 7 && named("absolute") && named("x"));
+    const qkWalk = (n: IrNode, f: (n: IrNode) => void): void => { f(n); (n.children || []).forEach((c) => qkWalk(c, f)); };
+    const qkGuessed: string[] = [];
+    qkWalk(qk, (n) => {
+      for (const k of ["characters", "width", "height", "visible"]) if (k in n) qkGuessed.push(n.name + "." + k);
+      if (n.layout && "scroll" in n.layout) qkGuessed.push(n.name + ".layout.scroll");
+    });
+    ok("[QK-3] no `characters` / `width` / `height` / `visible` / `layout.scroll` anywhere in the export (" + qkGuessed.join(",") + ")", qkGuessed.length === 0);
+  }
+
   // ---- [AUDIT-5] exportSettings: the designer's own asset intent ----
   const exportNode = await sandbox.serialize({ type: "FRAME", name: "Logo", visible: true, id: "ex:1",
     width: 40, height: 40, layoutMode: "NONE", children: [],
@@ -2010,7 +2059,7 @@ const sandbox: Sandbox = context;
   ok("[LIB] a corrupt registry degrades to no attribution, it does not throw", badReg.length === 2 && badReg.every((c) => c.source === "unknown-library"));
   delete sandbox.figma.root.getPluginData;
 
-  // --- listLibraries: the cheap discovery map ---
+  // --- listLibraries: the library discovery map ---
   // DEFAULT state first: no figma.teamLibrary at all (permission missing / older host).
   const noPerm = await sandbox.listLibraries();
   ok("[LIB] a missing teamlibrary permission is a WARNING, not a crash", Array.isArray(noPerm.libraries) && noPerm.warnings.some((w) => /teamlibrary/.test(w)));
@@ -2058,6 +2107,19 @@ const sandbox: Sandbox = context;
   ok("[LIB] the local catalog walk still works alongside them", dsLib.components.some((c) => c.key === "compkey123" && !c.remote));
   ok("[LIB] a library main already present locally is not double-listed", dsLib.components.filter((c) => c.key === "compkey123").length === 1);
   ok("[LIB] hygiene warns that inferred props are a sample", dsLib.hygiene.some((h) => /published LIBRARY/.test(h) && /sample/.test(h)));
+  // [F2 L1] the "not the library's catalog" line also fires when the file consumes a library only through
+  // COMPONENTS (no remote variable reaches the catalog); a local-only file (same page, no library instance) gets none.
+  const dsRemoteComp = (await sandbox.collectDesignSystemOnly()).designSystem;
+  ok("[F2 L1] consuming mock with only a remote component (no remote variable) gets the --as-library line",
+    !dsRemoteComp.variables.some((v) => v.remote === true) && dsRemoteComp.components.some((c) => c.remote === true) &&
+    dsRemoteComp.hygiene.some((h) => /--as-library/.test(h) && /not the library's catalog/.test(h)));
+  const localOnlyPage = { ...libPage, findAllWithCriteria: ({ types }: { types: string[] }) => (types.indexOf("INSTANCE") !== -1 ? [] : [buttonComponent]) };
+  sandbox.figma.root.children = [localOnlyPage];
+  const dsLocalOnly = (await sandbox.collectDesignSystemOnly()).designSystem;
+  ok("[F2 L1] a local-only mock (no remote variable, no remote component) gets no such line",
+    !dsLocalOnly.variables.some((v) => v.remote === true) && !dsLocalOnly.components.some((c) => c.remote === true) &&
+    !dsLocalOnly.hygiene.some((h) => /--as-library|consumes libraries/.test(h)));
+  sandbox.figma.root.children = [libPage];
   delete sandbox.figma.teamLibrary;
   sandbox.figma.root.children = prevKids3;
 
@@ -2084,7 +2146,7 @@ const sandbox: Sandbox = context;
     ok("[LIB-FILE] style carries publish status", paint.publish === "changed");
     ok("[LIB-FILE] hygiene states the catalog is complete", d.hygiene.some((h) => /COMPLETE local catalog of 'NERA'/.test(h)));
     ok("[LIB-FILE] hygiene admits the published snapshot is unlistable", d.hygiene.some((h) => /last PUBLISHED snapshot/.test(h)));
-    ok("[LIB-FILE] does NOT claim the false design-system caveat", !d.hygiene.some((h) => /prior\/no page walk referenced/.test(h)));
+    ok("[LIB-FILE] does NOT claim the false design-system caveat", !d.hygiene.some((h) => /this file references — this is not the library's catalog/.test(h)));
 
     // The style fixes, which apply on BOTH paths — `key` is what makes a library style joinable at all.
     ok("[LIB-FILE] paint style carries its cross-file key", paint.key === "paintkey123");

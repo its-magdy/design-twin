@@ -31,12 +31,12 @@ Output
 
 **Scroll, clip & sticky**
 - `clip:true` → `overflow: hidden` on that container.
-- `layout.scroll` (`horizontal`/`vertical`/`both`) → `overflow-x: auto`/`overflow-y: auto`/`overflow: auto`
+- `scroll` (`horizontal`/`vertical`/`both`) → `overflow-x: auto`/`overflow-y: auto`/`overflow: auto`
   (use `scroll` instead of `auto` only if the design clearly wants a persistent scrollbar).
-- `fixedChildren` **if present** on a scroll container (count of leading children pinned while the rest
-  scrolls) → `position: sticky; top: 0` (header) or `position: sticky; bottom: 0` (footer), plus a
-  `z-index`, on that many leading children in DOM order; everything after scrolls normally. Absent →
-  treat all children as normal flow.
+- `fixedChildren` **if present** on a scroll container (the LAST N entries of `children[]` are pinned
+  while the rest scrolls; place each by its `y`) → `position: sticky; top: 0` (a top bar — put it first
+  in the DOM) or `position: sticky; bottom: 0` (a bottom bar), plus a `z-index`, on those N children;
+  everything else scrolls normally. Absent → treat all children as normal flow.
 
 **Prototype `reactions`/`flows` → behavior, not markup**
 - `flows` (named entry points) are candidate top-level routes for your router; don't render them.

@@ -1882,6 +1882,11 @@ ${USAGE}`);
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }
+  const vars = ds.variables || [];
+  const slice = /\.vars\.json$/i.test(input) || path4.basename(input) === "variables.json";
+  if (!slice && vars.length && vars.every((v) => v.remote === true)) {
+    warnings.push(`all ${vars.length} variable(s) in ${input} are remote:true \u2014 this is a design-system pull of a file that CONSUMES a library (only the library variables it references), not the library's catalog; open the library file and run \`dtwin pull --as-library "<name>"\` for the catalog`);
+  }
   warnings.forEach((w) => console.error("warn  " + w));
   if (webFile !== void 0) console.error("note  " + TAILWIND_SOURCE_NOT_NOTE);
   if (hasTarget) {

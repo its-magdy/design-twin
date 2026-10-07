@@ -69,6 +69,28 @@ try {
   check("[F52-3] `dtwin token status` with DTWIN_PORT=8788 prints the warning", /DTWIN_PORT is not read — use FIGMA_BRIDGE_PORT \(8787\/8788\/8789\)/.test(warned.stderr));
   check("[F52-3] …and without DTWIN_PORT there is no such warning", !/DTWIN_PORT/.test(run(["token", "status"]).stderr));
   check("[F52-3] --help stays side-effect free: no warning there", !/DTWIN_PORT is not read —/.test(run(["--help"], { DTWIN_PORT: "8788" }).stderr));
+
+  // [F04-1] the cost of `list libraries` is told straight (group 15, F-04): one Figma call per enabled library
+  // collection plus a whole-document instance walk, ~2 s with no libraries — never a bare "5-15s", and the MCP
+  // tool no longer calls it CHEAP. The MCP descriptions are string literals in figma-mcp.ts (not exported).
+  console.log("\ncli help — time wording (F-04):");
+  const pageList = HELP.list ?? "";
+  const mcpSrc = (() => { try { return fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts"), "utf8"); } catch { return ""; } })();
+  const libTool = (/"figma_list_libraries",\s*\{\s*description:([\s\S]*?)inputSchema/.exec(mcpSrc)?.[1] ?? "").replace(/"\s*\+\s*"/g, "");
+  check("[F04-1] the list page gives a range with its cause and the no-libraries case, not a bare 5-15", /few seconds to ~15 s/.test(pageList) && /about 2 s when no\s+libraries are enabled/.test(pageList) && !/5-15/.test(pageList));
+  check("[F04-1] no help page says \"5-15\" without the no-libraries clause", Object.values(HELP).every((h) => !/5-15/.test(h) || /no\s+libraries|~2 s/.test(h)));
+  check("[F04-1] the MCP figma_list_libraries description was found in the source", libTool.length > 200);
+  check("[F04-1] …and is not \"CHEAP discovery\": it calls itself the slowest discovery read, ~2 s with no libraries", !/CHEAP discovery/.test(libTool) && /SLOWEST discovery read/.test(libTool) && /about 2 s when no libraries are enabled/.test(libTool));
+  check("[F04-1] figma-mcp.ts has no \"CHEAP discovery\" anywhere", mcpSrc.length > 0 && !/CHEAP discovery/.test(mcpSrc));
+  check("[F04-1 rv] the MCP description keeps figma_list_libraries out of the default order (never \"Call this BEFORE exporting\")",
+    !/Call this BEFORE exporting/.test(libTool) && /Not part of the default discovery order \(figma_status -> figma_list_pages -> figma_list_children -> figma_export_url\)/.test(libTool));
+  check("[F04-1 rv] the per-collection reads are one call each (fanned out), never \"one at a time\" — list page and MCP description",
+    !/one at a time/.test(libTool) && !/one at a time/.test(pageList) && /one Figma call per enabled library variable collection/.test(libTool) && /one Figma\s+call per enabled library variable collection/.test(pageList));
+  const dsTool = (/"figma_export_design_system",\s*\{\s*description:([\s\S]*?)inputSchema/.exec(mcpSrc)?.[1] ?? "").replace(/"\s*\+\s*"/g, "");
+  check("[F05-1] the MCP design-system description gives ~15–40 s and the progress-token caveat", /~15–40 s on a real file/.test(dsTool) && /progress only to clients that send a progress token/.test(dsTool));
+  check("[DT08-5] …and says the pull is not the library's catalog, with the --as-library route (no \"fewer of them\")", /never the library's catalog/.test(dsTool) && /--as-library/.test(dsTool) && !/fewer of them/.test(dsTool));
+  check("[DT08-5] the pull help page says the same for --design-system", /CONSUMES a library/.test(HELP.pull ?? "") && /never the library's\s+catalog/.test(HELP.pull ?? ""));
+  check("[DT05-2] the list page documents children's childCount and `title`; the screenshot page says \"at the default scale\"", /childCount/.test(pageList) && /`title`/.test(pageList) && /at the default scale it leaves no duplicate/.test(HELP.screenshot ?? ""));
 } finally {
   fs.rmSync(cwd, { recursive: true, force: true });
 }

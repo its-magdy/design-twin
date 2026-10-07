@@ -86,6 +86,12 @@ check("[DT-72] assetFrom (a hidden node reusing a visible twin's file) is an `as
   const f = diffScreens(a, b).changed.flatMap((c) => c.fields);
   return f.some((x) => x.field === "assetFrom" && x.category === "asset") && f.every((x) => x.category === "asset");
 })());
+check("[X02-2] a node-level `scroll` change is a `layout` change (not `other`)", (() => {
+  const b = screen(); must(b.tree.children[1], "b card").scroll = "vertical";
+  const d = diffScreens(screen(), b);
+  const f = d.changed.flatMap((c) => c.fields);
+  return f.length === 1 && f[0]?.field === "scroll" && f[0]?.category === "layout" && d.changed[0]?.categories.join() === "layout";
+})());
 check("a {nodes:[…]} multi-root document is walked too", diffScreens({ nodes: [screen().tree] }, { nodes: [Object.assign(screen().tree, { opacity: 0.5 })] }).changed[0]?.fields[0]?.field === "opacity");
 check("markdown: says so when nothing changed; lists fields when something did", /Nothing changed/.test(markdown(diffScreens(screen(), screen()), "x")) && (() => { const b = screen(); must(b.tree.children[0], "b.tree.children[0]").text = "Hi"; return /`text`: Welcome → Hi/.test(markdown(diffScreens(screen(), b), "x")); })());
 

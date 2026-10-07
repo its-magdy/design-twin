@@ -80,7 +80,7 @@ Field names are exact; units and shapes are in `../../build-screen/references/ir
   they pinned to, and do they move with RTL?
 - **Grid.** `layout.display:"grid"` tracks and spans vs `layoutGrids` (column guides) — the latter
   hints at breakpoints/margins, not a CSS grid.
-- **Scroll + sticky.** `clip`, `layout.scroll` (direction), `fixedChildren` (pinned header/footer).
+- **Scroll + sticky.** `clip`, `scroll` (direction), `fixedChildren` (the LAST N of `children[]` — pinned header/footer).
   Which region scrolls? Does the header collapse? Pull-to-refresh? Ask if a long list has no scroll
   container marked.
 - **Z-order.** `layout.reverseZ`, overlapping absolute children.

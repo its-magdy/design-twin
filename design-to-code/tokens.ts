@@ -1605,6 +1605,15 @@ function main(args: string[]): number {
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }
+  // DT-08: a catalog whose variables are ALL library (remote) ones is a consuming file's design-system pull — the
+  // library variables something in that file references, not the library's catalog. Mixed → nothing to say.
+  // A screen's own slice (<Screen>.vars.json) or the merged variables.json of a consuming file is ALL
+  // remote by nature and is the documented theme input there, so only a catalog file warns.
+  const vars = ds.variables || [];
+  const slice = /\.vars\.json$/i.test(input) || path.basename(input) === "variables.json";
+  if (!slice && vars.length && vars.every((v) => v.remote === true)) {
+    warnings.push(`all ${vars.length} variable(s) in ${input} are remote:true — this is a design-system pull of a file that CONSUMES a library (only the library variables it references), not the library's catalog; open the library file and run \`dtwin pull --as-library "<name>"\` for the catalog`);
+  }
   warnings.forEach((w) => console.error("warn  " + w));
   // DT-79 (D9): a suggestion only, printed — not written into theme.css, which the user moves into the app.
   if (webFile !== undefined) console.error("note  " + TAILWIND_SOURCE_NOT_NOTE);

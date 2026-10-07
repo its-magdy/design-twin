@@ -106,6 +106,61 @@ console.log("cross-check — the screen's token library vs the design system's:"
     has(res, "token-library-matches") && !has(res, "foreign-token-library"));
 }
 
+// ---------------------------------------------------------------- DT-07: offline name reconciliation
+console.log("cross-check — DT-07: the foreign-library finding classifies the screen's variables by name:");
+{
+  const FOREIGN_COLL = [{ name: "Sem", key: "screen-sem", modes: ["Dark", "Light"], default: "Dark" }];
+  const dup = tokens({
+    collections: FOREIGN_COLL,
+    variables: [{ name: "Text/Main", collection: "Sem", key: "screen-k1", type: "COLOR", values: { Dark: "#fff", Light: "#000" } }],
+  });
+  const res = crossCheck({ screens: [screen("S", [text("2:1", "Poppins", null, "Text/Main")])], variables: dup, tokens: DS_TOKENS });
+  const f = get(res, "foreign-token-library");
+  const offline = f.message.indexOf("Offline check"), live = f.message.indexOf("list libraries");
+  ok("[DT07-1] the message carries the offline counts BEFORE the live advice",
+    offline > 0 && live > offline && /Only to find the owning file: run/.test(f.message));
+  ok("[DT07-1] counts: 1 variable, 1 agrees, 0 differ / undecidable / absent, and says mapping by NAME is safe",
+    /of the 1 variables in those collections, 1 have a design-system variable of the same name resolving the same in every shared mode, 0 resolve differently \(listed as token-name-collision\), 0 cannot be compared \(no shared mode\), 0 have no same-name variable/.test(f.message) && /Mapping by NAME is safe for the 1/.test(f.message));
+  ok("[DT07-1] extras: nameMap {agree:1, differ:0, undecidable:0, absent:0}; severity and collections unchanged",
+    JSON.stringify(f.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 0 }) && f.severity === "warning" && (f.collections ?? []).length === 1);
+
+  // a re-keyed twin with a different value: differ 1 + a token-name-collision finding, no "safe" sentence
+  const diff = tokens({
+    collections: FOREIGN_COLL,
+    variables: [{ name: "Text/Main", collection: "Sem", key: "screen-k1", type: "COLOR", values: { Dark: "#fff", Light: "#111" } }],
+  });
+  const rd = crossCheck({ screens: [screen("S", [text("2:1", "Poppins", null, "Text/Main")])], variables: diff, tokens: DS_TOKENS });
+  const fd = get(rd, "foreign-token-library");
+  ok("[DT07-2] a re-keyed twin with a different value: differ 1 (and listed as token-name-collision), no 'safe' claim",
+    JSON.stringify(fd.nameMap) === JSON.stringify({ agree: 0, differ: 1, undecidable: 0, absent: 0 }) && has(rd, "token-name-collision") && !/Mapping by NAME is safe/.test(fd.message) && /1 resolve differently/.test(fd.message));
+
+  // an unrelated library: nothing exists here by name
+  const unrelated = tokens({
+    collections: [{ name: "Brand", key: "brand-1", modes: ["Mode 1"], default: "Mode 1" }],
+    variables: [
+      { name: "Brand/Red", collection: "Brand", key: "b1", type: "COLOR", values: { "Mode 1": "#f00" } },
+      { name: "Brand/Blue", collection: "Brand", key: "b2", type: "COLOR", values: { "Mode 1": "#00f" } },
+    ],
+  });
+  const ru = crossCheck({ screens: [screen("S", [])], variables: unrelated, tokens: DS_TOKENS });
+  const fu = get(ru, "foreign-token-library");
+  ok("[DT07-2] an unrelated library: agree 0, absent N, and 'not the screen's library'",
+    JSON.stringify(fu.nameMap) === JSON.stringify({ agree: 0, differ: 0, undecidable: 0, absent: 2 }) && /none of them exists here by name — this is not the screen's library; pull the one it uses/i.test(fu.message) && !/Mapping by NAME is safe/.test(fu.message));
+
+  // no shared mode, overlapping values -> undecidable; a variable outside the foreign collections is not counted
+  const und = tokens({
+    collections: [...FOREIGN_COLL, { name: "Spacing", key: "ds-space", modes: ["Mode 1"], default: "Mode 1" }],
+    variables: [
+      { name: "Text/Main", collection: "Sem", key: "screen-k1", type: "COLOR", values: { Night: "#fff", Day: "#222" } },
+      { name: "Space 3", collection: "Spacing", key: "ds-k2", type: "FLOAT", values: { "Mode 1": 16 } },
+    ],
+  });
+  const rn = crossCheck({ screens: [screen("S", [])], variables: und, tokens: DS_TOKENS });
+  const fn = get(rn, "foreign-token-library");
+  ok("[DT07-2] no shared mode + overlapping values is undecidable; variables in design-system collections are not counted",
+    JSON.stringify(fn.nameMap) === JSON.stringify({ agree: 0, differ: 0, undecidable: 1, absent: 0 }) && /of the 1 variables in those collections/.test(fn.message));
+}
+
 // ---------------------------------------------------------------- name collides, value differs
 console.log("cross-check — two libraries, one name, two values:");
 {

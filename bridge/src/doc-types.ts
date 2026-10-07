@@ -35,7 +35,7 @@ export interface XY { x: number; y: number }
 /** `box`: the absoluteBoundingBox, page-space. `x`/`y` only when the parent does not auto-position
  *  the node (serialize.ts) — inside an auto-layout parent they are absent on purpose. */
 export interface Box { w: number; h: number; x?: number; y?: number }
-/** `renderBox`: absoluteRenderBounds (stroke/shadow/blur extent), emitted only when it differs from `box`. */
+/** `renderBox`: absoluteRenderBounds: larger than `box` with effects, tighter on TEXT; emitted only when it differs from `box`. */
 export interface RenderBox { x: number; y: number; w: number; h: number }
 
 export interface RadiusCorners { tl?: number; tr?: number; br?: number; bl?: number }

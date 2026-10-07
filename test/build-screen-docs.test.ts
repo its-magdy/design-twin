@@ -7,6 +7,7 @@ import path from "node:path";
 import { check, report } from "./assert.ts";
 import { PASSING_VERDICTS } from "../design-to-code/plan-waivers.ts";
 import * as PM from "../design-to-code/probe-match.ts";
+import { QUICK_KEYS } from "../bridge/src/quick-keys.ts";
 
 const root = process.env.BUILD_SCREEN_DOCS_ROOT ?? path.join(import.meta.dirname, "..");
 const read = (rel: string): string => {
@@ -528,4 +529,122 @@ console.log("build-screen docs (group 14):");
   check("[14 fix2 L-1/L-2] README + extract say usage errors in --check/--lookup are 2 and the parent directory tells two tokens.json apart",
     [rd("bridge/README.md"), rd("claude-plugin/skills/extract/SKILL.md")].every((d) => /usage errors?[^.]{0,40}\b2\b/.test(d) && /parent directory/.test(d)));
 }
+console.log("build-screen docs (group 15, quick keys + export docs):");
+{
+  const rd = (rel: string): string => flat(read(rel));
+  const exists = (rel: string): boolean => fs.existsSync(path.join(root, rel));
+  const irRaw = read("claude-plugin/skills/build-screen/references/ir-fields.md");
+  const ext = rd("claude-plugin/skills/extract/SKILL.md");
+  const help = rd("claude-plugin/skills/help/SKILL.md");
+  const readme = rd("bridge/README.md");
+  const norm = (t: string): string => t.replace(/\r\n/g, "\n").trim();
+  // The mdFiles under claude-plugin/skills and agents, for the "no wrong key anywhere" guards.
+  const mdUnder = (rel: string): string[] => {
+    const dir = path.join(root, rel);
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? mdUnder(path.join(rel, e.name)) : e.name.endsWith(".md") ? [path.join(rel, e.name)] : []);
+  };
+  const pluginDocs = [...mdUnder("claude-plugin/skills"), ...mdUnder("claude-plugin/agents")];
+  // QK-1 / QK-2: the marked block in ir-fields is the ONE QUICK_KEYS text and sits before the Contents.
+  const m = /<!-- quick-keys:start[^>]*-->\r?\n([\s\S]*?)\r?\n<!-- quick-keys:end -->/.exec(irRaw);
+  const block = m?.[1] ?? "";
+  check("[QK-1] ir-fields.md carries QUICK_KEYS (bridge/src/quick-keys.ts) between the quick-keys markers", block !== "" && norm(block) === norm(QUICK_KEYS));
+  check("[QK-1] the block sits before `## Contents`", m !== null && irRaw.indexOf("<!-- quick-keys:start") < irRaw.indexOf("## Contents") && irRaw.indexOf("<!-- quick-keys:end -->") < irRaw.indexOf("## Contents"));
+  const qk = flat(block);
+  check("[QK-2] the block states `text` not `characters`, box.w/h, index w/h, PAGE coordinates + the nearest-frame x/y rule",
+    /`text`, not `characters`/.test(qk) && /`box\.w`\/`box\.h`/.test(qk) && /A single-screen index row repeats the size as `w`\/`h`/.test(qk) && /PAGE \(canvas\) coordinates/.test(qk) && /nearest frame \/ component \/ instance \/ section ancestor/.test(qk) && !/parent-relative/.test(qk));
+  check("[QK-2] the block states absolute:true vs layout.mode, bottom → top order, hidden + ANY ANCESTOR + no `visible`, runs FIRST run, three strokes, I<…> ids",
+    /`absolute:true`/.test(qk) && /layout\.mode:"absolute"/.test(qk) && /bottom → top/.test(qk) && /OR ANY ANCESTOR/.test(qk) && /no node-level `visible` key/.test(qk) && /FIRST\s+run's/.test(qk) && /Three `strokes`/.test(qk) && /`I<instance id>;<layer id>`/.test(qk));
+  // Review 1 (group 15): statements the real exports contradicted — renderBox is not an outset (a TEXT's is usually
+  // smaller), descendants of a hidden layer may carry their own flag, a SECTION is a position container, an inferred
+  // flex frame's children still carry x/y, tokens.strokes may be a list.
+  const irBody = flat(irRaw.slice(irRaw.indexOf("## Contents")));
+  check("[QK-6] quick keys + ir-fields: renderBox = Figma's render bounds, larger with effects, a TEXT's usually smaller — never 'adds' extent",
+    /`renderBox` \(only when it differs from `box`\) = Figma's render bounds: larger than `box` for shadow \/ stroke \/ blur; on a TEXT usually smaller than `box` \(observed\)/.test(qk) &&
+    /on a TEXT usually smaller than `box` \(observed\)/.test(irBody) && ![qk, irBody].some((d) => /adds shadow \/ stroke \/ blur extent|`renderBox`\*\* — includes/.test(d)));
+  check("[QK-6] hidden: descendants are not flagged on its account (they may carry their own); no node-level `visible` — quick keys and ir-fields",
+    [qk, irBody].every((d) => /not flagged on its account \(they may carry their own\)/.test(d) && /no node-level `visible` key/.test(d) && !/descendants (carry no flag|carry none)/.test(d)));
+  check("[QK-6] x/y: a section is a position container (quick keys + ir-fields); layout.inferred children still carry x/y; tokens.strokes may be a list",
+    /instance \/ section ancestor/.test(irBody) && /`layout\.inferred:true` is a guess on a frame without auto layout — its children still carry `x`\/`y`/.test(qk) &&
+    /`tokens\.strokes` is a variable name \(or a list\)/.test(qk));
+  // X-01: fixedChildren = the LAST N of children[]; nothing may say first / leading N next to it.
+  const x01Files = ["claude-plugin/skills/build-screen/references/ir-fields.md", ...["_template", "web-tailwind", "web-css-modules", "react-native", "swiftui", "flutter", "android-compose"].map((n) => `claude-plugin/skills/build-screen/profiles/${n}.md`), "figma-plugin/src/serialize.ts"];
+  const firstN = "(?:first N\\b|first \\d+ children|leading (?:child|children)\\b|leading[^.]{0,30}pinned)";
+  const x01Bad = x01Files.filter((f) => { const t = rd(f); return new RegExp(`fixedChildren[\\s\\S]{0,200}?${firstN}|${firstN}[\\s\\S]{0,200}?fixedChildren`).test(t); });
+  check("[X01-1] no first-N / leading-children wording within 200 chars of fixedChildren in ir-fields, the 7 profiles, serialize.ts" + (x01Bad.length ? " (" + x01Bad.join(", ") + ")" : ""), x01Bad.length === 0);
+  check("[X01-1] ir-fields and every profile say the LAST N of children[] and place each by y", /fixedChildren:N[^.]{0,40}LAST N entries of `children\[\]`/.test(flat(irRaw)) && x01Files.slice(1, 8).every((f) => /LAST N/.test(rd(f)) && /by its `y`/.test(rd(f))));
+  // X-02: `scroll` is a node field, never `layout.scroll`.
+  const x02Bad = pluginDocs.filter((f) => /layout\.scroll/.test(read(f)));
+  check("[X02-1] no plugin skill/agent doc says `layout.scroll`" + (x02Bad.length ? " (" + x02Bad.join(", ") + ")" : ""), pluginDocs.length > 20 && x02Bad.length === 0);
+  // X-05 / X-06 corrections outside the block
+  const ir = flat(irRaw);
+  check("[X05] ir-fields Text: with runs[] `font` holds the FIRST run's values; \"mixed\" only when Figma could not split into runs",
+    /`font\.size`\*\* px\. With `runs\[\]`[^.]{0,60}`font` holds the FIRST run's values/.test(ir) && /`"mixed"` appears only when Figma could not split/.test(ir) && !/\(or `"mixed"` → read `runs`\)/.test(ir));
+  check("[X06] ir-fields tokens example: a single bound paint is a string, a list only when several paints are bound",
+    /fills:"color\/surface"/.test(ir) && !/fills:\["color\/surface"\]/.test(ir) && /a string, a list only when\s+several paints are bound/.test(ir));
+  check("[ir-fields] hidden sits on the layer switched off (descendants not flagged on its account); box x/y presence rule + group container rule; children[] order line",
+    /sits on the layer that was switched off itself/.test(ir) && /present only where the parent does not lay the node out/.test(ir) && /skips GROUP and boolean-operation parents/.test(ir) && /\*\*`children\[\]`\*\* is Figma's layer order, normally bottom → top/.test(ir));
+  // DT-08: one wording — a consuming file's --design-system is not the library's catalog.
+  check("[DT08-4] extract theme input 1 is libraries/<slug>/tokens.json (--as-library) for CONSUMING screens; design-system/tokens.json only from the DEFINING file",
+    /1\. `design\/export\/libraries\/<slug>\/tokens\.json` \(from `--as-library`\) when the screens CONSUME a library/.test(ext) && /pulled from the file that DEFINES\s+the tokens/.test(ext) && !/it is the library's own definition of every token/.test(ext));
+  const mcpSrc = read("bridge/src/figma-mcp.ts");
+  check("[DT08-4] README, help, extract and the MCP description: --design-system on a consuming file is that file's own tokens + referenced library variables, never the catalog; no 'fewer of them than a full pull would'",
+    [readme, help, ext].every((d) => /CONSUMES a library/.test(d) && /--as-library/.test(d) && /never the library's catalog/.test(d)) && ![readme, help, ext, flat(mcpSrc)].some((d) => /fewer of them than a full pull would/.test(d)));
+  // F-02: use what is set up; the MCP first calls
+  check("[F02-1] help: 'use what is already set up' (no unconditional manual default) + the MCP first calls in order with writeToDisk:true",
+    /\*\*Use what is already set up\.\*\*/.test(help) && !/Default to manual export for a brand-new user/.test(help) && /`figma_status`[^.]{0,120}→ `figma_list_pages \{depth:1\}` → `figma_list_children[^→]*→[^→]*→ `figma_export_url \{url:"<node id>",\s*writeToDisk:true\}`/.test(help));
+  check("[F02-1] extract: the MCP order ends in figma_export_url for one screen, figma_export_full only for a whole page, list_libraries out of the default",
+    /`figma_status`[\s\S]{0,300}→[\s\S]{0,300}`figma_export_url \{url:"<node id>",\s*writeToDisk:true\}` for one screen/.test(ext) && /`figma_export_full\(\{page:\[id\]\}\)` is for a whole page only/.test(ext) && /`figma_list_libraries` stays out of the default sequence/.test(ext));
+  // F-04: list libraries timing (docs; the verbs.ts help and the figma-mcp.ts description are checked in cli-help)
+  const timing = [["extract", ext], ["help", help], ["README", readme]] as const;
+  const timingBad = timing.filter(([, d]) => /5[-–]15\s?s/.test(d) || !/~15 s[^.]{0,80}about 2 s on a file with no libraries enabled/.test(d)).map(([n]) => n);
+  check("[F04-1] extract, help and README say list libraries takes a few seconds up to ~15 s (about 2 s with no libraries enabled), never a bare '5-15s'" + (timingBad.length ? " (" + timingBad.join(", ") + ")" : ""), timingBad.length === 0);
+  // Review 1 (group 15) M5 / L5: list libraries is a side step everywhere (never "before any pull" / "the step before
+  // that" / "intended order is listLibraries →"), and its per-collection reads are one call each, not "one at a time".
+  const arch = rd("ARCHITECTURE.md"), testing = rd("TESTING.md");
+  const libFirst = ([["README", readme], ["ARCHITECTURE", arch], ["TESTING", testing], ["extract", ext], ["help", help]] as const)
+    .filter(([, d]) => /is the step \*before\* that|intended order is `listLibraries`|dtwin list libraries\s+# 1\.|then scope by library|Before any pull, run `node bridge\/src\/figma-pull\.ts --list-libraries`|\(do this first\)/.test(d)).map(([n]) => n);
+  check("[M5-1] README, ARCHITECTURE, TESTING, extract, help: list libraries is never the default first step" + (libFirst.length ? " (" + libFirst.join(", ") + ")" : ""),
+    libFirst.length === 0 && /`figma_list_libraries` \(no arguments\) is a side step/.test(readme) && /`listLibraries` is a side step, never the default first one/.test(arch) && /Not a default first step/.test(testing));
+  const oneAtATime = ([["README", readme], ["extract", ext], ["help", help]] as const).filter(([, d]) => /variable collections one at a time|collections one at a time/.test(d)).map(([n]) => n);
+  check("[L5-1] README, extract, help: one Figma call per enabled library collection, never \"one at a time\"" + (oneAtATime.length ? " (" + oneAtATime.join(", ") + ")" : ""),
+    oneAtATime.length === 0 && [readme, ext, help].every((d) => /one Figma call per enabled library (variable )?collection/.test(d)));
+  // L6 / L9: the offline counts are carried (not opened with), absent when nothing is in the flagged collections, name-based.
+  check("[L6-1] extract: the message carries the Offline check (no 'opens with'); counts absent → nameMap all zero; counts are name-based (K-4)",
+    /The message carries "Offline check/.test(ext) && !/The message opens with "Offline check/.test(ext) && /the counts are absent, and `nameMap` all zero/.test(ext) && /go by collection and variable NAME, not key/.test(ext));
+  // L10: SCHEMA.md is listed where files are found; help echoes the registration-prefix caveat.
+  const exportLayout = rd("claude-plugin/skills/build-screen/references/export-layout.md");
+  check("[L10-1] export-layout.md and ARCHITECTURE.md list SCHEMA.md; help says another registration key changes the prefix",
+    /`design\/export\/SCHEMA\.md` holds the scripting quick keys/.test(exportLayout) && /SCHEMA\.md \(scripting quick keys\)/.test(arch) && /under another registration key the prefix differs/.test(help));
+  // F2 LOW-2: the extract index paragraph — a page-walk row carries `bytes` and `nodes` (a single-screen row has `nodes` too), no w/h.
+  check("[F2 L2] extract index paragraph: a page-walk row carries `bytes` (and `nodes`) but no `w`/`h`; no \"paths to all three sibling files\"",
+    /a page-walk row \(`--page`, `--all-pages`, `pull design`\) carries `bytes` \(and `nodes`\) but no `w`\/`h`; its `reference` sits in the layer file/.test(ext) &&
+    !/paths to all\s+three sibling files/.test(ext) && !/carries `nodes`\/`bytes` instead/.test(ext));
+  // F-42 / F-05 / DT-05 / DT-07
+  check("[F42-1] extract names --variant-visuals and variantVisuals (design-system pulls to build from; the library's pull needs it)", /--variant-visuals/.test(ext) && /`variantVisuals: true`/.test(ext) && /`--as-library` pull/.test(ext));
+  check("[F-05] extract: a design-system export takes ~15–40 s and reports progress only to clients that send a progress token", /~15–40 s on a real file/.test(ext) && /progress\s+token/.test(ext));
+  check("[DT05-1] extract: list children gives childCount + title on rows sharing name+size; no 'returns only name/id/type/size'", /`list children` gives every row a `childCount`/.test(ext) && /share name \+ size a `title`/.test(ext) && !/returns only name\/id\/type\/size/.test(ext));
+  check("[DT07-1] extract and build-screen: read the foreign-token-library offline counts (nameMap, D = 0 → map by name) before the live list-libraries step",
+    [ext, skill].every((d) => /Offline check \(no Figma needed\)/.test(d) && /nameMap/.test(d) && /D = 0/.test(d) && /(only for finding|only to find) the owning file|is only for finding the owning file/.test(d)));
+  // F-109: which source wins
+  const rule = (d: string): boolean => /\*\*Values come from the export JSON/.test(d) && /designer question/.test(d) && /never change the build to match the PNG/i.test(d);
+  check("[F109-1] visual-verifier, references/verify.md and the verify skill: values come from the export JSON, a PNG disagreement is a designer question", rule(verifier) && rule(verifyRef) && rule(verifySkill));
+  // …placed AFTER the grainy-illustration text, which belongs to the downscale rule: spliced between them, "the usual
+  // instance" / "the common case of this" would point at the values rule and the two rules would contradict each other.
+  const placed = (d: string): boolean => {
+    const dn = d.search(/reference is downscaled/i);
+    if (dn < 0) return false;
+    const after = d.slice(dn);
+    const gr = after.search(/grainy|speckled/i);
+    const va = after.search(/\*\*Values come from the export JSON/);
+    return gr >= 0 && gr < 900 && va > gr;
+  };
+  check("[F109-1] visual-verifier and references/verify.md: the grainy-illustration text follows the downscale rule directly; the values rule comes after it", placed(verifier) && placed(verifyRef));
+  // D7 pointers (DT-38): every script-writing reader is sent to design/export/SCHEMA.md
+  const schemaNamed = [["extract", ext], ["build-screen", skill], ["screen-builder", builder], ["visual-verifier", verifier], ["audit-design", rd("claude-plugin/skills/audit-design/SKILL.md")]].filter(([, d]) => !/design\/export\/SCHEMA\.md/.test(d ?? "")).map(([n]) => n);
+  check("[DT38-1] extract, build-screen, screen-builder, visual-verifier and audit-design name design/export/SCHEMA.md" + (schemaNamed.length ? " (missing: " + schemaNamed.join(", ") + ")" : ""), schemaNamed.length === 0);
+  check("[DT38-1] SCHEMA.md is listed in help's table, extract 'What lands' and README's layout block, and is 'rewritten only when its text changes'",
+    /\| every pull that writes to disk \| `SCHEMA\.md`/.test(help) && /Every pull that writes to disk also leaves \*\*`design\/export\/SCHEMA\.md`\*\*/.test(ext) && /SCHEMA\.md\s+scripting quick keys/.test(readme) && [help, ext, readme].every((d) => /[Rr]ewritten only when its text changes/.test(d)) && exists("bridge/src/quick-keys.ts"));
+}
+
 report();

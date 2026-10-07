@@ -191,6 +191,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     if (c.name) dsCollByName.set(norm(c.name), c);
   }
   const screenColls = (variables && variables.collections) || [];
+  let foreignPatch: { foreign: Array<{ name: string }>; head: string; tail: string; at: number } | null = null;
 
   if (!tokens) {
     notChecked.push(
@@ -215,19 +216,28 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       // D11: a warning to confirm, never a blocker — "you passed the wrong design system" has a default
       // (build from the screen's own .vars.json values) and a question, not a hard stop.
       const all = foreign.length === screenColls.length;
-      push(
-        "warning",
-        "foreign-token-library",
-        `${foreign.length} of ${screenColls.length} variable collection(s) the screen binds are NOT in the design-system export — ` +
+      // DT-07: the message is finished once the screen's variables are classified by name (below, after
+      // sameResolution exists): `head` + the offline counts + `tail`.
+      foreignPatch = {
+        foreign,
+        head:
+          `${foreign.length} of ${screenColls.length} variable collection(s) the screen binds are NOT in the design-system export — ` +
           `the screen consumes a DIFFERENT library than the one you pulled. ` +
           (sameNameDifferentKey.length
             ? `${sameNameDifferentKey.length} of them carry a design-system collection's name under a different key ` +
               `(${sameNameDifferentKey.slice(0, 3).map((f) => `'${f.name}'`).join(", ")}), which is the signature of a DUPLICATED Figma file: ` +
               `duplicating a library re-keys everything while leaving names and values identical. `
             : "") +
-          `Names and values may still line up (check the collisions below), but nothing here is the same variable. ` +
-          `To find the real owner: run ${LIST_LIBRARIES} — variable collections are the ONE thing ` +
+          `Names and values may still line up (check the collisions below), but nothing here is the same variable. `,
+        tail:
+          `Only to find the owning file: run ${LIST_LIBRARIES} — variable collections are the ONE thing ` +
           `Figma attributes to a library by name — then open that file and ${EXPORT_LIBRARY}.`,
+        at: findings.length,
+      };
+      push(
+        "warning",
+        "foreign-token-library",
+        foreignPatch.head + foreignPatch.tail,
         { collections: foreign, confirm: `${all ? "None" : `Only ${screenColls.length - foreign.length} of ${screenColls.length}`} of the screen's variable collections are in the design system you passed — is it the library this screen uses? Until confirmed, values come from the screen's own .vars.json.` }
       );
     } else {
@@ -311,6 +321,43 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     if (!sa.size || !sb.size) return null;
     for (const x of sa) if (sb.has(x)) return null; // some overlap — not provably a disagreement
     return false; // disjoint under every mode either side defines
+  }
+
+  // DT-07: classify the screen's variables in the flagged foreign collections against the design system BY
+  // NAME (collection-blind, K-4): agree / differ / undecidable / absent — the offline answer to "can I map by name?".
+  // Collections are matched by NAME too: when the screen uses two collections of one name (two `Spacing`,
+  // different keys) and only one is flagged, the other's variables are counted in as well (K-4).
+  if (foreignPatch) {
+    const fp = foreignPatch;
+    const foreignNames = new Set(fp.foreign.map((f) => f.name));
+    const nameMap = { agree: 0, differ: 0, undecidable: 0, absent: 0 };
+    const seen = new Set<string>();
+    for (const v of screenVars) {
+      if (!v || !v.name || !v.collection || !foreignNames.has(v.collection)) continue;
+      const id = v.key || `${v.collection}\u0000${v.name}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const dv = dsVarByName.get(v.name);
+      if (!dv) { nameMap.absent++; continue; }
+      const r = sameResolution(v, dv);
+      if (r === true) nameMap.agree++; else if (r === false) nameMap.differ++; else nameMap.undecidable++;
+    }
+    const n = seen.size;
+    let offline = "";
+    if (n) {
+      offline =
+        `Offline check (no Figma needed): of the ${n} variables in those collections, ${nameMap.agree} have a design-system variable of the same name ` +
+        `resolving the same in every shared mode, ${nameMap.differ} resolve differently (listed as token-name-collision), ${nameMap.undecidable} cannot be compared ` +
+        `(no shared mode), ${nameMap.absent} have no same-name variable. ` +
+        (nameMap.differ === 0 && nameMap.agree > 0
+          ? `Mapping by NAME is safe for the ${nameMap.agree}: the screen's own .vars.json is the ground truth for names and values. `
+          : "") +
+        (nameMap.agree === 0 && nameMap.absent === n
+          ? `None of them exists here by name — this is not the screen's library; pull the one it uses. `
+          : "");
+    }
+    const f = findings[fp.at];
+    if (f) { f.message = fp.head + offline + fp.tail; f.nameMap = nameMap; }
   }
 
   if (tokens && screenVarByName.size) {

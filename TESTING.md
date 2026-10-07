@@ -207,11 +207,13 @@ layer's metadata) plus, per page, `design/export/pages/<page>/index.json` (that 
 id, page, tree, reference, devResources}`). Read the root index to find the PAGE you want, its own
 index.json to find the LAYER, then read only that file — never a whole directory.
 
-### Discovering which libraries a file uses (do this first)
+### Discovering which libraries a file uses
 
-Before any pull, run `node bridge/src/figma-pull.ts --list-libraries` (MCP twin: `figma_list_libraries`).
-It prints the local file's published assets plus every **enabled** team library, each with its variable
-collections and a component count, then you scope the pull with `--list` → `--page <id>`.
+Not a default first step (the default is `--list` → `--children <id>` → `--node <id>`): when you need to
+know which library owns a token, or before an `--as-library` pull, run
+`node bridge/src/figma-pull.ts --list-libraries` (MCP twin: `figma_list_libraries`). It prints the local
+file's published assets plus every **enabled** team library, each with its variable collections and a
+component count.
 
 What to check in the output, and what NOT to read into it:
 - Component counts are **usage-derived** — Figma has no API to enumerate a library's contents, so the
@@ -371,7 +373,7 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect `529/529` |
 | `node bridge/src/figma-pull.ts --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
 | `node bridge/src/figma-pull.ts --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
-| `node bridge/src/figma-pull.ts --list-libraries` | Cheap: which design libraries this file draws on (prints a table to stdout) |
+| `node bridge/src/figma-pull.ts --list-libraries` | Slowest discovery read (a few s to ~15 s): which design libraries this file draws on (prints a table to stdout) |
 | `node bridge/src/figma-pull.ts --list-pages` | Cheap: page names only, no page load (prints to stdout) |
 | `node bridge/src/figma-pull.ts --list` | Cheap: pages + their top-level frames (prints to stdout) |
 | `node bridge/src/figma-pull.ts --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |

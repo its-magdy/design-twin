@@ -169,5 +169,27 @@ console.log("\ntokens CLI — DT-73: --lookup <#hex>:");
   ok("[DT73] --lookup is a registered flag (usage lists it)", /--lookup/.test(run(dir, "--help").out));
 }
 
+// ---------- DT-08 (c): an all-remote catalog is a consuming file's pull, not the library's ----------
+console.log("\ntokens CLI — DT-08: all-remote catalog warns:");
+{
+  const dir = path.join(tmp, "d8"); fs.mkdirSync(dir);
+  const remote = (v: V): V & { remote: true } => ({ ...v, remote: true });
+  const allRemote = path.join(dir, "all.json"), mixed = path.join(dir, "mixed.json"), local = path.join(dir, "local.json");
+  fs.writeFileSync(allRemote, catalog(BASE.map(remote)));
+  fs.writeFileSync(mixed, catalog([remote(BASE[0] as V), BASE[1] as V]));
+  fs.writeFileSync(local, catalog(BASE));
+  const a = run(dir, allRemote, "outa");
+  const warns = a.err.split("\n").filter((l) => /^warn /.test(l) && /--as-library/.test(l));
+  ok(`[DT08-2] every variable remote:true -> exactly one stderr warn naming --as-library (got ${warns.length}; exit ${a.status})`,
+    a.status === 0 && warns.length === 1 && /all 2 variable\(s\)/.test(warns[0] ?? "") && /CONSUMES a library/.test(warns[0] ?? ""));
+  ok("[DT08-2] the files are still written (a warning, not a refusal)", fs.existsSync(path.join(dir, "outa", "tokens.css")));
+  ok("[DT08-2] a MIXED local/remote catalog prints no such warn", !/--as-library/.test(run(dir, mixed, "outm").err));
+  ok("[DT08-2] a catalog with no remote variable prints none", !/--as-library/.test(run(dir, local, "outl").err));
+  ok("[DT08-2] --lookup / --check stay silent (they write nothing)", !/--as-library/.test(run(dir, allRemote, "--lookup", "#ffbc1c").err));
+  const slice = path.join(dir, "Home__1_2.vars.json");
+  fs.writeFileSync(slice, catalog(BASE.map(remote)));
+  ok("[DT08-2 rv] a screen's own all-remote .vars.json (the documented theme input on a consuming file) prints no such warn", !/--as-library/.test(run(dir, slice, "outs").err));
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 report();

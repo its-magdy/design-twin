@@ -104,6 +104,9 @@ design/
                                               guessed from another file's export)
     pages/index.json                          every screen pulled, each row also carrying `sourceFile`
     design-system/                            tokens, styles, component catalogs
+    SCHEMA.md                                 scripting quick keys (generated beside the data; same text
+                                              as the top of ir-fields.md; rewritten only when its text
+                                              changes, a SCHEMA.md of your own is never touched)
     variables.json                            the union of every screen's tokens (merged, never replaced)
     assets/                                   named after the Figma layer, deduped by content
   README.md                what dtwin owns vs what you own
@@ -259,17 +262,18 @@ dtwin design --node <id>      # ONE node, fully exported (properties + assets) �
 ```
 **Recommended workflow — discover, then scope.** Never open with a whole-file pull. Work down from
 cheap questions to expensive ones, which is also what Figma's own agent guidance recommends
-(discover first, then scope by library):
+(discover first, then scope):
 ```
 dtwin whoami                   # 0. (optional) which file am I actually connected to?
-dtwin list libraries           # 1. WHICH libraries does this file draw on?
-dtwin list pages               # 1b. page NAMES only (near-free — loads no page)
-dtwin list                     # 2. WHERE is what — pages + top-level frames (ids)
-dtwin list children <id>       # 3. (optional) peek inside one frame
-dtwin pull --page <id>  # 4. pull only what you need — or just ONE node:
-dtwin pull --node <id>  # 4b. (optional) just that ONE node, real export + its own assets
+dtwin list pages               # 1. page NAMES only (near-free — loads no page)
+dtwin list                     # 2. WHERE is what — pages + top-level layers (ids)
+dtwin list children <id>       # 3. peek inside one frame / SECTION
+dtwin pull --node <id>         # 4. pull just that ONE node, real export + its own assets
+dtwin pull --page <id>         # 4b. (only for a whole page)
 dtwin screenshot <id>          # 5. (optional) visually check ONE component after generating code for it
 ```
+`dtwin list libraries` is a side step, not part of that order (the slowest read): run it to learn which
+library owns a token, or before an `--as-library` pull.
 (The flag spellings — `--whoami`, `--list-libraries`, `--list-pages`, `--list`, `--children`,
 `--screenshot` — are the same commands; the sections below are titled by flag.)
 
@@ -479,14 +483,16 @@ Use `--list-clients` to see *which* files are connected; use `--whoami` to inter
 
 MCP twin: `figma_whoami`.
 
-### `--list-libraries` — the library discovery step
+### `--list-libraries` — which library owns a token
 ```
 dtwin --list-libraries
 ```
 Prints an aligned table of the libraries this file uses — the local file's own published assets plus
 every **enabled** team library — with each one's variable collections (and variable counts) and how
-many of its components this file uses. It's the library-scoped sibling of `--list`: same cost tier
-(no recursion, no node properties, no assets), same `--timeout`, prints to stdout and writes nothing.
+many of its components this file uses. It's the library-scoped sibling of `--list`: no tree export, no node
+properties, no assets, same `--timeout`, prints to stdout and writes nothing — but the slowest read there
+is, a few seconds up to ~15 s (about 2 s on a file with no libraries enabled), because it walks every
+instance in the file and makes one Figma call per enabled library variable collection.
 
 **Waiting for the plugin.** Every command that needs Figma first waits for the plugin to connect:
 `--timeout <seconds>` bounds that wait as well as the command itself. Without the flag it is 10
@@ -570,7 +576,7 @@ and "what props does this component *really* take?".
 
 Because the layout matches `design-system/`, existing tooling runs on it unchanged:
 ```
-node design-to-code/tokens.ts design/export/libraries/nera-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
+node design-to-code/tokens.ts design/export/libraries/acme-kit-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
 ```
 The generated `tokens.css` / `theme.css` start with a provenance line (`designtwin-source: <dir>/<input> · <n>
 variables · sha256 <12>`); `tokens.js <input> --check <file>` exits 0 when the file is current, 1 when the
@@ -582,9 +588,11 @@ file. **Frame trees** default to the current page; `--all-pages` walks every pag
 tagged with its `page` name). All-pages can be large — the CLI is the right tool for it because it
 streams to disk, not into the context window. `--design-system` narrows the OTHER way: it skips the
 frame walk (and therefore the assets a walk would export) and writes only `design-system.json` +
-`design-system/` — tokens, styles, local + library components, hygiene. One honest limit: library
-(remote) *variables* are recovered from nodes/styles actually walked, so a run with no page walk sees
-fewer of them than a full pull would; local variables, styles and components are unaffected. It shares
+`design-system/` — tokens, styles, local + library components, hygiene. One honest limit: on a file
+that CONSUMES a library, `--design-system` returns that file's OWN tokens, styles and components plus only
+the library (remote) variables something in the file references (a page pull adds the ones its nodes
+bind) — never the library's catalog. For that, open the LIBRARY file and run `--as-library "<name>"`
+(CLI only); the tell is `remote: true` on the variables and `hygiene.json`'s count line. It shares
 `--selection`/`--all-pages`/`--page`/`--as-library`'s scope slot (pass only one) and, like `--list`/`--list-libraries`,
 refuses the read-option flags (`--css`/`--measurements`/…) since there is no node walk for them to apply to.
 It waits for the plugin to connect, pulls, writes files to `design/`, and exits. The agent then
@@ -743,19 +751,24 @@ all of it: measured 12+ minutes and tens of MB straight into the context window 
 system. Use the index to pick a target, then `figma_export_full({ page: ["<id>"] })` — or
 `skipAssets: true`, which is close to free here since asset bytes are stripped from MCP results anyway.
 
-`figma_list_libraries` (no arguments) is the step *before* that: it answers **which design libraries**
-the file draws on, so an export can be scoped to the one you care about. Its result is deliberately
+`figma_list_libraries` (no arguments) is a side step, not part of that order: it answers **which design
+libraries** the file draws on — which library owns a token, or what to name in an `--as-library` pull. Its result is deliberately
 compact — libraries, their variable collections, and usage-derived component counts — because a
 discovery call that costs context defeats its own purpose. The same three limits apply as for the CLI
 flag above (usage-derived counts, UI-only library enablement, empty-is-normal), and the tool reports
-them in-result rather than leaving an empty list ambiguous. Recommended order:
-`figma_list_libraries` → `figma_list_pages` → `figma_export_full({ page: [...] })`.
+them in-result rather than leaving an empty list ambiguous. It is a discovery read (no export) but the
+slowest one — a few seconds up to ~15 s (about 2 s on a file with no libraries enabled): it walks every
+instance and makes one Figma call per enabled library collection. Recommended order for one
+screen: `figma_status` → `figma_list_pages {depth:1}` → `figma_list_children` → `figma_export_url
+{url:"<node id>", writeToDisk:true}`; `figma_export_full({ page: [...] })` only for a whole page, and
+`figma_list_libraries` when you need to know which library owns a token.
 
 **Only want the design system?** `figma_export_design_system` skips the page/frame walk (and the
 assets that walk would produce) and returns just variables/styles/components/hygiene — the MCP twin of
 the CLI's `--design-system` flag. Same `writeToDisk`/`outDir` contract as the other export tools; same
-one honest gap, too: library (remote) variable completeness depends on nodes/styles actually walked in
-this session, so a bare design-system pull may see fewer of them than a full pull would.
+one honest gap, too: on a file that CONSUMES a library this returns that file's own tokens plus only the
+library variables something in it references — never the library's catalog (that is `--as-library`, CLI
+only, run with the library open).
 
 ### "Paste a link and ask about it" (`figma_export_url`)
 CLI twin: `dtwin design --node <id>` (see above) — same underlying `exportNode` op, so a pull from

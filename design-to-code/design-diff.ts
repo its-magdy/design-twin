@@ -62,7 +62,7 @@ const CATEGORY: Partial<Record<DiffCategory, string[]>> = {
   typography: ["font", "textTokens", "missingFont", "textStyleOverrides"], // overrides sit over the text STYLE the font came from
   paint: ["fills", "strokes", "effects", "opacity", "blendMode", "mask", "maskType"],
   layout: ["layout", "widthMode", "heightMode", "sizeLimits", "aspectRatio", "grow", "alignSelf", "absolute", "pin", "clip", "fixedChildren", "strokesInLayout", "layoutGrids",
-    "gridColumnSpan", "gridRowSpan", "gridColumnStart", "gridRowStart", "gridJustifySelf", "gridAlignSelf", "size"],
+    "gridColumnSpan", "gridRowSpan", "gridColumnStart", "gridRowStart", "gridJustifySelf", "gridAlignSelf", "size", "scroll"],
   shape: ["radius", "cornerSmoothing", "rotation", "flipped", "skew", "sourceTransform", "arc", "shape", "booleanOp"],
   tokens: ["tokens", "styles", "variableModes", "propTokens"],
   component: ["component", "mainComponent", "props", "propRefs", "overrides", "exposedInstances", "detachedFrom", "tableCells"],

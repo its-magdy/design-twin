@@ -138,6 +138,7 @@ delete the whole directory and re-pull and you lose nothing.
     export/pages/index.json                        every screen pulled, whatever the pull shape
     export/design-system/                          tokens.json, styles.*.json, components.*.json
     export/variables.json                          the union of every screen's slice (merged, never replaced)
+    export/SCHEMA.md                               scripting quick keys (generated)
     export/assets/                                 shared and cumulative across screens
 
 ## design/.sync/ — a working snapshot, not an export

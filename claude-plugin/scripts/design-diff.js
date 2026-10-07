@@ -453,7 +453,8 @@ var CATEGORY = {
     "gridRowStart",
     "gridJustifySelf",
     "gridAlignSelf",
-    "size"
+    "size",
+    "scroll"
   ],
   shape: ["radius", "cornerSmoothing", "rotation", "flipped", "skew", "sourceTransform", "arc", "shape", "booleanOp"],
   tokens: ["tokens", "styles", "variableModes", "propTokens"],

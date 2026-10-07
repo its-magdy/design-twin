@@ -15,6 +15,11 @@ about to delete files will see it.
 A project created before this split keeps its export directly in `design/`. Every path below works
 either way — drop the `export/` segment — and `dtwin doctor` reports which layout it found.
 
+`design/export/SCHEMA.md` holds the scripting quick keys (the same text as the top of `ir-fields.md`) —
+read it before writing any script against the export. Every CLI pull and MCP `writeToDisk` export
+writes it, rewritten only when its text changes; a `SCHEMA.md` without dtwin's first-line marker is
+yours and is never touched. A browser-downloaded export has none.
+
 ## Contents
 - [Read the manifest first](#read-the-manifest-first)
 - [`design-system.json` + `design-system/`](#design-systemjson--design-system)

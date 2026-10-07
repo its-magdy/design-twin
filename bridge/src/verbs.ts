@@ -115,7 +115,7 @@ export const HELP: Record<string, string> = {
     "              the PNG is then <id>_shot@<N>x.png, so a thumbnail never takes the reference's name\n" +
     "  outDir      default design/export; the PNG lands in its assets/ subdirectory, which is exactly\n" +
     "              where a later `pull --node` of the same frame writes its own reference — so shooting\n" +
-    "              first costs nothing and leaves no duplicate.",
+    "              first costs nothing — at the default scale it leaves no duplicate (a --scale shot is its own file).",
   list:
     "dtwin list [pages|libraries|clients]      # structural indexes — cheap, write nothing\n" +
     "dtwin list children <id|figma-url>        # the direct children of one node\n\n" +
@@ -124,8 +124,12 @@ export const HELP: Record<string, string> = {
     "                         level deeper — use `list children <section id>` to reach them.\n" +
     "  dtwin list pages       just the page list\n" +
     "  dtwin list libraries   enabled libraries + their variable collections. The SLOWEST read\n" +
-    "                         there is (5-15s on a real file); it prints progress while it works.\n" +
-    "  dtwin list clients     which Figma files are on the bridge right now, with their connIds\n\n" +
+    "                         there is: a few seconds to ~15 s — it walks every instance and makes one Figma\n" +
+    "                         call per enabled library variable collection (about 2 s when no\n" +
+    "                         libraries are enabled). It prints progress while it works.\n" +
+    "  dtwin list clients     which Figma files are on the bridge right now, with their connIds\n" +
+    "  dtwin list children    one row per direct child: id, name, type, size, childCount; rows that share\n" +
+    "                         name + size also get a `title` (first visible text) and one warning per group\n\n" +
     "  --json                 machine output for the two that print a table (libraries, clients)\n" +
     "  --client <file>        WHICH connected Figma file, when more than one is open\n\n" +
     "  These take no read options (--css/--measurements/…): they emit structural fields only, so\n" +
@@ -146,6 +150,9 @@ export const HELP: Record<string, string> = {
     "    --page <id|name>   every top-level layer on one page (repeatable)\n" +
     "    --selection        whatever is selected in Figma right now\n" +
     "    --design-system    tokens, styles and component catalogs — no page walk, no assets\n" +
+    "                       On a file that CONSUMES a library it holds that file's own tokens plus only the\n" +
+    "                       library variables something in it references (`remote: true`) — never the library's\n" +
+    "                       catalog; for that run --as-library from inside the library file\n" +
     "    --as-library <n>   the same, from INSIDE a library file, into libraries/<slug>/\n\n" +
     "  Run `dtwin --help` for the full flag reference (read options, timeouts, the daemon).",
 };
