@@ -30,11 +30,12 @@ Output
 
 **Scroll, clip & sticky**
 - `clip:true` → `overflow-hidden` on that container.
-- `layout.scroll` (`horizontal`/`vertical`/`both`) → `overflow-x-auto`/`overflow-y-auto`/`overflow-auto`
+- `scroll` (`horizontal`/`vertical`/`both`) → `overflow-x-auto`/`overflow-y-auto`/`overflow-auto`
   (use `-scroll` instead of `-auto` only if the design clearly wants a persistent scrollbar).
-- `fixedChildren` **if present** on a scroll container (count of leading children pinned while the rest
-  scrolls) → apply `sticky top-0 z-10` (header) or `sticky bottom-0 z-10` (footer) to that many leading
-  children in DOM order; everything after scrolls normally. Absent → treat all children as normal flow.
+- `fixedChildren` **if present** on a scroll container (the LAST N entries of `children[]` are pinned
+  while the rest scrolls; place each by its `y`) → apply `sticky top-0 z-10` (a top bar — put it first in
+  the DOM) or `sticky bottom-0 z-10` (a bottom bar) to those N children; everything else scrolls
+  normally. Absent → treat all children as normal flow.
 
 **Tables** — a `table-fixed` table needs a `min-w-*` on its flexible column (or the table) inside an
 `overflow-x-auto` wrapper, else the name column collapses to 0 px below the design width.

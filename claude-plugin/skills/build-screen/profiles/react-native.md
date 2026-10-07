@@ -23,10 +23,10 @@ column widths. For a genuinely dense/irregular grid, prefer a grid-capable list 
 
 **Scroll, clip & sticky**
 - `clip:true` → `overflow:'hidden'` in the style object.
-- `layout.scroll` → wrap in `<ScrollView horizontal={scroll==='horizontal'}>` (or a virtualized
+- `scroll` → wrap in `<ScrollView horizontal={scroll==='horizontal'}>` (or a virtualized
   `FlatList`/`SectionList` for long lists).
-- `fixedChildren` **if present** (count of leading children pinned while the rest scrolls) → render those
-  children OUTSIDE/above the `ScrollView` (RN has no `position:sticky` support in plain `ScrollView`);
+- `fixedChildren` **if present** (the LAST N entries of `children[]` are pinned while the rest scrolls; place
+  each by its `y`) → render those children OUTSIDE/above the `ScrollView` (RN has no `position:sticky` support in plain `ScrollView`);
   use `SectionList` `stickySectionHeadersEnabled` or a fixed header `View` + `ScrollView` below it.
 
 **Prototype `reactions`/`flows` → navigation, not markup** — `flows` are candidate top-level screens for

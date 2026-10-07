@@ -200,8 +200,8 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     out.y = round(node.y);
   }
 
-  // Resolved page-space box — the ground-truth pixel size. `renderBox` adds stroke/shadow/blur extent,
-  // emitted only when it actually differs from the layout box.
+  // Resolved page-space box — the ground-truth pixel size. `renderBox` = Figma's render bounds (absoluteRenderBounds): larger
+  // with effects, tighter than `box` on TEXT; emitted only when it actually differs from the layout box.
   if ("absoluteBoundingBox" in node && node.absoluteBoundingBox) {
     const b = node.absoluteBoundingBox;
     // w/h always; x/y only under the SAME rule as the `x`/`y` fields above. These are PAGE-space
@@ -252,8 +252,9 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     out.pin = { h: lower(node.constraints.horizontal), v: lower(node.constraints.vertical) };
   }
 
-  // Sticky children: the first N children of a scrolling frame are PINNED (Figma's "fixed position
-  // when scrolling"). Without this a sticky header / bottom nav / FAB serializes as a plain flow
+  // Sticky children: the LAST N children of a scrolling frame are PINNED (Figma's "fixed position
+  // when scrolling"; children[] is back-to-front and Figma keeps the fixed children on top of the
+  // scrolling ones). Without this a sticky header / bottom nav / FAB serializes as a plain flow
   // child and codegen emits a header that scrolls away with the content.
   if ("numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) {
     out.fixedChildren = node.numberOfFixedChildren;

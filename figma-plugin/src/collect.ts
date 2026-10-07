@@ -637,9 +637,10 @@ export async function listChildren(rawId: string): Promise<ListChildrenResult> {
 // assets. This is the cheap sibling of collectFull for callers who want tokens/styles/components and
 // don't need any screen's layer tree: skipping the walk also skips the exportAsync render pass that
 // dominates a full pull's cost. One real gap vs collectFull's designSystem: buildDesignSystem's
-// library-variable dump only emits REMOTE variables referenced by nodes this run actually walked (see
-// dumpVariables in variables.ts) — with no walk, that set is empty, so only LOCAL variable collections
-// come back complete. Local variables/styles/components are unaffected; that limitation is called out
+// library-variable dump only emits REMOTE variables this run actually reached (see dumpVariables in
+// variables.ts) — with no page walk, only those the catalog itself reaches (local variables' alias
+// targets, styles/components it serializes), never the library's catalog. Local variables/styles/
+// components are unaffected; when the dump holds any remote variable that limitation is called out
 // via `designSystem.hygiene` — NOT `manifest().warnings` — because hygiene is the one field that
 // survives to disk: buildDesignSystemLayout (bridge/design-system-layout.js) splits designSystem into
 // tokens/styles/components.local/components.library/hygiene.json and a slim root manifest, copying
@@ -654,10 +655,14 @@ export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Desig
   // warned "unreadable" and skipped, components.ts), so it must not end here as a delivered doc with
   // every variant missing: the flag is still armed, and this throws it.
   checkCancelled();
-  designSystem.hygiene = [
-    "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced — pull a page for the full set.",
-    ...(Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []),
-  ];
+  // Only on a file that really consumes library variables: on the file that DEFINES its tokens (no remote
+  // variable) the line would call its own complete catalog partial.
+  if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true)) {
+    designSystem.hygiene = [
+      "design-system pull of a file that consumes libraries: library (remote) variables are only the ones this file references — this is not the library's catalog; open the library file and run `dtwin pull --as-library \"<name>\"` for it.",
+      ...(Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []),
+    ];
+  }
   return { designSystem };
 }
 

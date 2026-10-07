@@ -20,7 +20,8 @@ spec, instance and designed interaction, the `coordinates` convention, the canon
 and under `hidden` the ids of every layer the designer switched off); the reference PNG
 (`nodes[0].reference` in the screen export, a path relative to `design/export/`; its scale and offset live in the
 expectation's `referenceImage`, so never recompute the reference geometry); the plan at
-`design/plan/<screen>.json`; and how to reach the built screen (route / component / preview name). The plan's `route` is advisory free text; when the
+`design/plan/<screen>.json`; and how to reach the built screen (route / component / preview name). If you script against the export JSON,
+read `design/export/SCHEMA.md` first (the scripting quick keys: `text`, `box.w`, `hidden` on ancestors, `scroll`, `fixedChildren`). The plan's `route` is advisory free text; when the
 screen is a section of the app chosen by component state (not by the URL), the plan's `navigate` steps reach it (§4).
 
 **Hidden layers do not exist for you.** Never measure, hover, click or credit an id listed under
@@ -388,6 +389,10 @@ Report anything the measurement cannot express as a `note` (name the region and 
   independently. `grep -c '<path' design/export/assets/<file>.svg` in the hundreds confirms it, and
   the screen's `.assets.json` lists such files under `heavy`. Report it naming that cause — the fix is
   a re-export on the design side.
+- **Values come from the export JSON** — the expectation is built from it and the compare grades against it.
+  The PNG is the layout and visual aid (and the visual-diff input): a PNG pixel that disagrees with a JSON
+  value (a text colour, say) is not a build defect — anti-aliased glyph edges and colour-profile conversion
+  move sampled pixels. Report it as a designer question with both values, never change the build to match the PNG.
 - Ignore differences the plan marks as deliberate approximations or decided defaults.
 - **Every defect you put in `notes` must quote the line it contradicts**: the expectation row
   (`nodeId`, field, value) AND the export node's own value (`"text": …`, `"radius": …`). Open the

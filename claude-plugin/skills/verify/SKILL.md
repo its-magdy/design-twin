@@ -55,8 +55,13 @@ Three things that trip up a literal reading of the old recipe:
   `nodes[0].reference` (a single-screen pull puts the field on the node, not the root), a path
   relative to `design/export/`. Missing or stale → `/designtwin:extract` first; never compare against
   the PNG alone. A project from before the `export/` split has the same tree directly under `design/`.
-- **The user's name for the screen (e.g. "Job Roles") may not be the Figma layer name (e.g.
-  `positions `, trailing space, a different string entirely).** Resolve it with
+- **Values come from the export JSON, not from PNG pixels.** The expectation is built from the JSON and the
+  compare grades against it; the PNG is the layout and visual aid. A PNG pixel that disagrees with a JSON
+  value (a text colour, say) is not a build defect — anti-aliased glyph edges and colour-profile conversion
+  move sampled pixels. Report it as a designer question with both values; never change the build to match
+  the PNG.
+- **The user's name for the screen (e.g. "Members") may not be the Figma layer name (e.g.
+  `people `, trailing space, a different string entirely).** Resolve it with
   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan` — node id wins alone;
   otherwise exact layer name, the index's `title` and a plan's `screenName`/`route` are checked
   TOGETHER as one pool, never in sequence (more than one match anywhere in the pool stops the run —
@@ -101,7 +106,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect \
 
 Always use the `<Layer>__<id>` name (the screen file's own basename), never a nickname — the script
 refuses (exit 1, naming the existing file) if this node already has an expectation under a different
-name in `design/verify/`, precisely so "positions" and "Job Roles" don't end up as two artefact sets
+name in `design/verify/`, precisely so "people" and "Members" don't end up as two artefact sets
 for the same screen. The refusal lists the old name's files, names the canonical `<Layer>__<id>` and prints the
 step to retire the old expectation (`mv <old>.expected.json <old>.expected.json.retired`, which unblocks it —
 the old PNG and measured files stay); re-run with `--out <canonical>`. `--force` overrides, but there is

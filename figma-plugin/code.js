@@ -3413,10 +3413,12 @@
     applyOpts(opts);
     const designSystem = await buildDesignSystem(void 0, serialize);
     checkCancelled();
-    designSystem.hygiene = [
-      "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced \u2014 pull a page for the full set.",
-      ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
-    ];
+    if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true)) {
+      designSystem.hygiene = [
+        'design-system pull of a file that consumes libraries: library (remote) variables are only the ones this file references \u2014 this is not the library\'s catalog; open the library file and run `dtwin pull --as-library "<name>"` for it.',
+        ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
+      ];
+    }
     return { designSystem };
   }
   async function collectLibraryFile(opts) {

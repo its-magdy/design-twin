@@ -553,10 +553,11 @@ server.registerTool(
   "figma_list_libraries",
   {
     description:
-      "CHEAP discovery: which design libraries this file draws on — the local file's own published " +
+      "The SLOWEST discovery read (a few seconds to ~15 s: it walks every instance and makes one Figma call per enabled library variable collection; about 2 s when no libraries are enabled): which design libraries this file draws on — the local file's own published " +
       "assets plus every ENABLED team library — with each one's variable collections and how many of " +
-      "its components this file uses. Call this BEFORE exporting, then scope the export to what you " +
-      "actually need (figma_list_pages -> figma_export_full({page})). Limits worth knowing: component " +
+      "its components this file uses. Not part of the default discovery order (figma_status -> " +
+      "figma_list_pages -> figma_list_children -> figma_export_url): call it to learn which library owns a " +
+      "token, or before a CLI `dtwin pull --as-library`. Limits worth knowing: component " +
       "counts are USAGE-derived (Figma exposes no API to enumerate a library's full contents), and " +
       "libraries can only be enabled from the Figma UI — never via API — so results reflect whatever " +
       "was enabled at call time. An EMPTY result is a normal outcome (free plan, or no library " +
@@ -661,9 +662,11 @@ server.registerTool(
       "Export ONLY the design system — variables, styles, local + library components, hygiene report — " +
       "with no page/frame walk and therefore no assets (assets are exported per-node during that walk). " +
       "The cheap sibling of figma_export_full for callers who just want tokens/styles/components. One " +
-      "tradeoff: library (remote) variable completeness depends on nodes/styles actually walked in this " +
-      "session, so a bare design-system pull may see fewer of them than a full pull would — local " +
-      "variables, styles and components are unaffected. Pass writeToDisk:true for the design-system/ split. " +
+      "tradeoff: on a file that CONSUMES a library this returns that file's OWN tokens, styles and components " +
+      "plus only the library variables something in the file references (flagged remote:true) — never the " +
+      "library's catalog; for that, run `dtwin pull --as-library \"<name>\"` (CLI) inside the library file. " +
+      "A design-system export takes ~15–40 s on a real file and reports progress only to clients that send a " +
+      "progress token. Pass writeToDisk:true for the design-system/ split. " +
       "Each catalogued component/variant carries its own fills/strokes/effects/cornerRadius/opacity/blendMode " +
       "(componentsLocal[].visuals) — components DEFINED in this file only, not ones consumed from a published " +
       "library (pull dtwin --as-library on the source library file for those). Pass variantVisuals:true " +

@@ -112,6 +112,11 @@ texture as thousands of separate paths, every renderer antialiases each one, and
 result. Report it as a real delta naming that cause; the fix is a re-export on the design side, never
 a redraw or a blur in your stack.
 
+**Values come from the export JSON** — the expectation is built from it and the compare grades against it.
+The PNG is the layout and visual aid (and the visual-diff input): a PNG pixel that disagrees with a JSON value
+(a text colour, say) is not a build defect — anti-aliased glyph edges and colour-profile conversion move
+sampled pixels. Report it as a designer question with both values, and never change the build to match the PNG.
+
 ## Beyond the ideal frame
 Render at least once each, when the stack supports it:
 - Each interaction state with a design (or a derived default) — pressed/disabled/focus/error/selected.

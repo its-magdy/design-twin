@@ -338,7 +338,7 @@ function main(argv) {
       return 1;
     }
     if (!res.detail) {
-      console.error(`warn   '${handle}' has no variantsFile/nodeFile (no node trees were exported for it \u2014 re-run the export with variantVisuals:true) \u2014 printing the catalog entry only`);
+      console.error(`warn   '${handle}' has no variantsFile/nodeFile (no node trees were exported for it \u2014 re-run the export with \`--variant-visuals\` (MCP: variantVisuals:true)) \u2014 printing the catalog entry only`);
       process.stdout.write(JSON.stringify(res.component, null, 2) + "\n");
       return 0;
     }

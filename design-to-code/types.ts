@@ -226,6 +226,8 @@ export interface FindingExtras {
   // ---- cross-check.ts
   /** foreign-token-library: the screen's collections the design system does not have */
   collections?: Array<{ name: string; key?: string; twinKey?: string; twinName?: string }>;
+  /** foreign-token-library (DT-07): the screen's variables in those collections, classified by NAME against the design system */
+  nameMap?: { agree: number; differ: number; undecidable: number; absent: number };
   /** token-name-collision */
   token?: string; key?: string; alsoKnownAs?: string; screenValue?: Record<string, string>; designSystemValue?: Record<string, string>;
   usedAt?: Array<{ screen: string; nodeId: string; field: string }>; scope?: string;

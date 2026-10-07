@@ -96,7 +96,7 @@ function main(argv: string[]): number {
       return 1;
     }
     if (!res.detail) {
-      console.error(`warn   '${handle}' has no variantsFile/nodeFile (no node trees were exported for it — re-run the export with variantVisuals:true) — printing the catalog entry only`);
+      console.error(`warn   '${handle}' has no variantsFile/nodeFile (no node trees were exported for it — re-run the export with \`--variant-visuals\` (MCP: variantVisuals:true)) — printing the catalog entry only`);
       process.stdout.write(JSON.stringify(res.component, null, 2) + "\n");
       return 0;
     }

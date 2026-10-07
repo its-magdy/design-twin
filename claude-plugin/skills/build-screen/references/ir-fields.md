@@ -6,6 +6,53 @@ themed or animated. The audit-design skill reads it too — it is the one field 
 described (and corrected) in exactly one place. For *which file to open*, see `export-layout.md`. For
 how a value becomes code on your stack, see the profile.
 
+<!-- quick-keys:start — the same text is written to design/export/SCHEMA.md; edit bridge/src/quick-keys.ts and paste here -->
+## Scripting quick keys
+
+Read these before writing ANY script against an export JSON (field names guessed from Figma's Plugin API are wrong).
+
+- **The tree.** A screen file (`pages/<Page>/<Screen>__<id>.json`) holds it in `nodes[]` — a `--node` pull has exactly
+  one root, `nodes[0]`; a page-walk layer file holds it at `tree`. `pages/index.json` `layers[]` lists every screen
+  — `file` and `texts` on every row (`title` when the frame shows text); a `--node`/selection row also has `w`/`h`
+  and, when written, `variables`, `assets`, `reference` (a page-walk row has `nodes`/`bytes`; its `reference` is
+  in the layer file) — read it instead of building filenames.
+- **Text** is `text`, not `characters`. Type: `font.size`, `font.lineHeight`, `font.weightValue`, `font.letterSpacing`,
+  `font.family`, `font.color` (there is no `style`). `runs[]` present = mixed formatting: `font` is then the FIRST
+  run's — read every run.
+- **Size** is `box.w`/`box.h`; there are no top-level `width`/`height`. A single-screen index row repeats the size
+  as `w`/`h`.
+- **Position.** `box.x`/`box.y` are PAGE (canvas) coordinates — frame-relative = `box.x − <root>.box.x` (root = `nodes[0]` in a screen file,
+  `tree` in a page-walk layer file). A node's
+  own `x`/`y` are relative to its nearest frame / component / instance / section ancestor (Figma skips GROUPs and
+  boolean operations; the page at top level). Both exist only when the parent does not lay the node out (no auto layout,
+  or `absolute:true`); inside an auto-layout parent the position comes from the parent's `layout` (padding, gap,
+  order). `layout.inferred:true` is a guess on a frame without auto layout — its children still carry `x`/`y`.
+- **`absolute:true`** = out of the parent's auto-layout flow, placed by `x`/`y`; absent = in flow. `layout` describes
+  how a node lays out ITS OWN children: `layout.mode:"absolute"` means "no auto layout inside" (every TEXT carries it)
+  — it never means the node itself is absolute.
+- **Child order.** `children[]` is Figma's layer list: paint order bottom → top (reversed when the parent's
+  `layout.reverseZ` is set). In an auto-layout parent it is also the flow order (first = leading); otherwise — and for
+  every `absolute:true` child — the visual order comes only from `x`/`y`.
+- **Hidden layers stay in the tree.** `hidden:true` sits on the layer that was switched off; its descendants are not
+  flagged on its account (they may carry their own). Skip a node when it OR ANY ANCESTOR is hidden. There is no
+  node-level `visible` key.
+- **Scroll.** `clip:true`; `scroll` (`horizontal`/`vertical`/`both`, a node field — not under `layout`);
+  `fixedChildren:N` = the LAST N entries of `children[]` stay pinned while the rest scrolls (Figma keeps them on top);
+  place each by its `y` (top bar → sticky top, bottom bar → sticky bottom). A "Sticky" child is not marked at all.
+- **Render bounds.** `renderBox` (only when it differs from `box`) = Figma's render bounds: larger than `box` for
+  shadow / stroke / blur; on a TEXT usually smaller than `box` (observed).
+- **Three `strokes`.** `strokes` is always an object (`colors[]`, `weight` or `weights{}`, `align`…);
+  `geometry.strokes` is a list of SVG path strings; `tokens.strokes` is a variable name (or a list).
+- **Tokens.** `tokens.<property>` = the bound variable's NAME — a string, or a list when several paints are bound;
+  paint-level `fills[].tokens.color`; text `textTokens` / `runs[].tokens`. Never map by the hex beside it.
+- **Ids.** Inside an instance a node id looks like `I<instance id>;<layer id>` (observed) and differs per instance;
+  the component itself is `mainComponent` (`key`/`setKey`).
+- **Files.** `asset` and `reference` are paths relative to `design/export/` (`assets/<file>`); `assetFrom` = a hidden
+  graphic reusing a visible twin's file; `assetSkipped` = no file at all. `<Screen>.assets.json`
+  (single-screen pulls) lists every file.
+- **Noise to ignore.** `gridColumnStart:-1` / `gridRowStart:-1` on a node that is not a grid child (observed).
+<!-- quick-keys:end -->
+
 ## Contents
 - [Handoff: annotations, status, visibility](#handoff-annotations-status-visibility)
 - [Tokens, styles and theme modes](#tokens-styles-and-theme-modes)
@@ -29,6 +76,8 @@ how a value becomes code on your stack, see the profile.
 - **`devStatus`** (`ready_for_dev`/`completed`) + **`devStatusNote`** — whether the node is final.
 - **`hidden:true`** — the layer exists but is off by default: usually a conditional state (error
   message, tooltip, empty state). Implement it as conditional UI, don't render it and don't drop it.
+  The flag sits on the layer that was switched off itself; its descendants are not flagged on its
+  account (they may carry their own), so check every ancestor too (there is no node-level `visible` key).
 - Doc-level **`manifest`** (`truncated`/`assetsFailed`/`warnings`) — read before building.
   `assetsHidden` counts hidden graphics not exported (`assetSkipped:"hidden"`), `hiddenNodes` every node
   kept as hidden (itself or an ancestor).
@@ -36,7 +85,8 @@ how a value becomes code on your stack, see the profile.
 ## Tokens, styles and theme modes
 
 - **`tokens`** — node property → variable name (`{itemSpacing:"space/md", paddingLeft:"space/lg",
-  topLeftRadius:"radius/card", fills:["color/surface"]}`). Paint-level bindings live on the paint
+  topLeftRadius:"radius/card", fills:"color/surface"}`; a bound property is a string, a list only when
+  several paints are bound). Paint-level bindings live on the paint
   (`fills[].tokens.color`, `stops[].tokens`, `effects[].tokens`); text bindings on `textTokens` or
   `runs[].tokens`.
   **These names are the token's identity — the resolved value beside them is only what it happens to
@@ -55,7 +105,8 @@ how a value becomes code on your stack, see the profile.
 
 - **`text`** — the characters. **Figma's line breaks are not authoritative** (different text engine):
   let text wrap; keep an explicit break only when it's clearly intentional against the `.png`.
-- **`font.size`** px (or `"mixed"` → read `runs`). **`font.family`**, **`font.weight`** = the style
+- **`font.size`** px. With `runs[]` (mixed text) `font` holds the FIRST run's values — read `runs`;
+  `"mixed"` appears only when Figma could not split the text into runs. **`font.family`**, **`font.weight`** = the style
   string verbatim (`"Semibold Italic"` → weight 600 + italic), **`font.weightValue`** numeric when
   available, **`font.fontStyle:"italic"`** when Figma reports the text italic (absent = regular).
 - **`font.lineHeight`** — `{unit:"auto"}` (the font's natural leading) | `{value, unit:"px"}` |
@@ -98,15 +149,20 @@ how a value becomes code on your stack, see the profile.
   dividing the free space, not by the stored row spacing).
 - **`layout.inferred:true`** — flex guessed from a non-auto-layout frame. Trust it, but sanity-check
   against the `.png`.
-- **`layout.mode:"absolute"`** (+`width`/`height`) — no auto layout; children carry `x`/`y`. Infer a
-  flow layout; do not transcribe coordinates.
+- **`layout.mode:"absolute"`** (+`width`/`height`) — no auto layout inside THIS node; its children
+  carry `x`/`y`. Infer a flow layout; do not transcribe coordinates. On a TEXT or vector leaf it is
+  just the node's size; the node's own out-of-flow flag is `absolute:true`.
+- **`children[]`** is Figma's layer order, normally bottom → top (paint order; reversed under
+  `layout.reverseZ`); flow order only inside an auto-layout parent.
 - **`layout.display:"grid"`** → `columns`/`rows`/`columnGap`/`rowGap`/`columnSizes`/`rowSizes`
   (per-track `{type: flex|fixed|hug, value}`)/`autoFlow`/`autoTracks`; children
   `gridColumnSpan`/`gridRowSpan`/`gridColumnStart`/`gridRowStart` (0-based) and
   `gridJustifySelf`/`gridAlignSelf` (`start`/`center`/`end`). Don't flatten a real grid into rows.
-- **`clip:true`** + **`layout.scroll`** (`horizontal`/`vertical`/`both`) → overflow handling.
-- **`fixedChildren:N`** — the first N children are pinned while the rest scrolls (sticky
-  header/footer/FAB).
+- **`clip:true`** + **`scroll`** (`horizontal`/`vertical`/`both`; a node field, not under `layout`)
+  → overflow handling.
+- **`fixedChildren:N`** — the LAST N entries of `children[]` (the top of Figma's layer list) are pinned
+  while the rest scrolls (sticky header/footer/FAB); place each by its `y` (top bar → sticky top,
+  bottom bar → sticky bottom). A child set to "Sticky" in Figma is not marked in the export.
 - **`layoutGrids[]`** — column/row guides (`pattern`, `count`, `size`, `gutter`, `offset`,
   `alignment`): informs margins and breakpoints; not a grid container.
 
@@ -124,11 +180,16 @@ how a value becomes code on your stack, see the profile.
   there are no top-level `width`/`height` fields, so read `box.w`/`box.h` (a root frame's `box` is the
   screen size). It is the ground-truth dimension for children with no `x`/`y`. Its `x`/`y` are
   **page-space** coordinates and are routinely large negatives (a real root: `box.x -5535`) — they
-  locate the frame on the Figma canvas and mean nothing to your layout. A node's own top-level
-  `x`/`y`, which appear only when the parent doesn't lay it out, are **parent-relative** and are the
-  ones to build from; the two disagreeing is normal, not a bug. **`renderBox`** — includes
-  shadow/stroke/blur overflow; if it's larger than `box` inside a `clip:true` parent, the effect is
-  clipped in the design too.
+  locate the frame on the Figma canvas and mean nothing to your layout. `box.x`/`box.y` and a node's
+  own top-level `x`/`y` are present only where the parent does not lay the node out (no auto layout,
+  or `absolute:true`). That `x`/`y` is relative to the node's nearest frame / component / instance /
+  section ancestor (a screen inside a SECTION is placed against the section) — Figma skips GROUP and
+  boolean-operation parents, so a child of a group is placed against the group's container, not the
+  group — and is the one to build from; when in doubt derive the
+  placement from `box` (page) minus the container's `box`. The two disagreeing is normal, not a bug.
+  **`renderBox`** (only when it differs from `box`) — Figma's render bounds: larger than `box` for
+  shadow/stroke/blur overflow (inside a `clip:true` parent that overflow is clipped in the design
+  too); on a TEXT usually smaller than `box` (observed) — never an outset to add to `box`.
 
 ## Fills and strokes
 
