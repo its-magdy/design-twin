@@ -64,3 +64,20 @@ meeting.
 | Native | Draw a custom switch or use the platform Toggle/Switch styled with tokens? | Platform control |
 | Responsive | Desktop only drawn at 1440 — max content width and behavior at 768/1024? | Max 1200, single column below 768 |
 | Content | Price 'Total' — currency format, and how are values over 1M shown? | Locale currency, no abbreviation |
+
+## Audit findings that are questions by design
+
+These codes come out of `audit.js` as heuristics or measured failures; each becomes one question
+(merge the same one across screens), with the default below.
+
+| Finding | Ask | Default |
+|---|---|---|
+| `default-copy-in-instance` | 'Field Card' > 'Label' (1:23) still says "Description" — the component's default — where the other instance says "Units". The intended copy, or a placeholder left in? | Build the copy as drawn and list it |
+| `undesigned-open-state` | 'Category' (1:40) reads "Select a category" but no open list is drawn. The platform's native picker, or a designed list (which frame)? | The native control, styled with the field's tokens |
+| `near-token-color` | The footer fill #1a1b20 is ΔE 0.8 from `gray/900` (#1a1b21). A typo of the token, or deliberate? | The literal exactly as drawn, flagged — never the token (that would be an approximation) |
+| `duplicate-root-subtree` | A second 'Footer' (1:90) is laid absolutely over the frame on top of the in-flow one (1:12). A leftover copy? | Build the in-flow one; record the copy as a design artefact |
+| `non-text-contrast` | The input border `border/default` (#4a4a52) is 1.8:1 against the page around it (WCAG 1.4.11 needs 3:1). A darker border token, or a fill that sets the field apart? | Build it to pass (a border or fill reaching 3:1), recorded as a deviation |
+
+A measured contrast failure — text (1.4.3, placeholders too) or a control's boundary (1.4.11) — is never
+offered "keep as designed" as an option or a default: build-screen cannot waive it (its accessibility rule),
+so the question is only which passing value the designer wants.

@@ -384,7 +384,7 @@ it; show the user the difference and ask which is the source of truth.
 
 Report briefly: what landed, anything the manifest flagged, whether the PNG exists, and any
 cross-check blocker or `confirm` question. Then **`/designtwin:audit-design <screen>`** to check the design is buildable
-(missing states, contrast, touch targets, designer questions), and
+(missing states, contrast, touch targets, designer questions) — its `prototype-target-not-exported` names the dialogs and overlays the screen opens that nobody pulled: pull those too — and
 **`/designtwin:build-screen <screen>`** to build it.
 
 If something failed — bridge offline, `EADDRINUSE`, empty library list, 401 — the symptom→fix list is
