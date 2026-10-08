@@ -22,6 +22,7 @@ import { isScreenDoc } from "./export-shape.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { visibleInstances } from "./component-match.ts";
 import { isCodeConnectMap, validateMap } from "./map-validate.ts";
+import { readCatalogSet, unionCatalog, catalogSetLine } from "./design-system-dir.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { nullProto } from "../bridge/src/json-util.ts";
 
@@ -113,7 +114,16 @@ function bootstrap(catalog: ComponentsCatalog | null | undefined, existing?: Cod
     if (c.type !== "COMPONENT" && c.type !== "COMPONENT_SET") continue;
     const id = c.key || c.id;
     if (!id) continue;
-    const matchKey = [c.key, c.id, id].find((x) => x && prevByIdent.has(x));
+    // A node id is unique only within one Figma file: a keyed component must not take over an entry
+    // that already names a DIFFERENT publish key just because the two share an id (a library "1:5" in a
+    // map that also holds this file's "1:5") — that would re-point a hand-made mapping at another component.
+    const keyClash = (x: string): boolean => {
+      if (!c.key || x === c.key) return false;
+      const pk = prevByIdent.get(x);
+      const pkKey = pk ? (prev[pk]?.figma || {}).key : undefined;
+      return !!pkKey && pkKey !== c.key;
+    };
+    const matchKey = [c.key, c.id, id].find((x) => x && prevByIdent.has(x) && !keyClash(x));
     const prevKey = matchKey ? prevByIdent.get(matchKey) : null;
     const prevEntry = prevKey ? prev[prevKey] : null;
 
@@ -165,7 +175,9 @@ export interface ProposalsReport { confirmed: number; added: number; kept: numbe
 // figma.key/id pointing at the catalog component whose props it was matched on.
 // Never auto-accepts: an entry without `confirmed: true` is skipped. Never overwrites: an existing
 // entry under the same key is kept as it is.
-function bootstrapFromProposals(proposals: readonly ComponentProposal[] | null | undefined, catalog: ComponentsCatalog | null | undefined, existing?: CodeConnectMap | null): { map: CodeConnectMap; report: ProposalsReport } {
+// `others`: catalogs read beside `catalog` (libraries) — joined by publish KEY only, since a node id is
+// unique only within one Figma file (a library's "1:5" is not this file's "1:5").
+function bootstrapFromProposals(proposals: readonly ComponentProposal[] | null | undefined, catalog: ComponentsCatalog | null | undefined, existing?: CodeConnectMap | null, others?: ComponentsCatalog | null): { map: CodeConnectMap; report: ProposalsReport } {
   const out: CodeConnectMap = { version: 1, components: nullProto() };
   if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
   const prev: Record<string, MapEntry> = (existing && existing.components) || {};
@@ -176,7 +188,12 @@ function bootstrapFromProposals(proposals: readonly ComponentProposal[] | null |
     if (!p || p.confirmed !== true) continue;
     report.confirmed++;
     const want: { key?: string; id?: string } = p.catalog || {};
-    const c = comps.find((x) => (want.key && x.key === want.key) || (want.id && x.id === want.id));
+    // A proposal with a key is matched by that key ALONE (named catalog first, then the others): its id
+    // may belong to another file, and a local component sharing it is unrelated. Only a keyless proposal
+    // falls back to its id, and only in the named catalog (the file that id belongs to).
+    const c = want.key
+      ? comps.find((x) => x.key === want.key) || ((others && others.components) || []).find((x) => x.key === want.key)
+      : want.id ? comps.find((x) => x.id === want.id) : undefined;
     const mapKey = (p.instanceKeys || [])[0];
     if (!c) { report.skipped.push(`'${p.name}': catalog component ${want.id || want.key || "?"} is not in this catalog`); continue; }
     if (!mapKey) { report.skipped.push(`'${p.name}': the proposal carries no instance key to file it under`); continue; }
@@ -202,41 +219,63 @@ export { bootstrap, bootstrapFromProposals, proposalsIn };
 
 // CLI: node design-to-code/map-bootstrap.ts <design-system/components.local.json> [existing-map.json] [--out <file>]
 // The catalog argument is the SPLIT component file, not design-system.json — that is a slim pointer
-// manifest since the split and carries no `components` array (see bridge/design-system-layout.js).
+// manifest since the split and carries no `components` array (see bridge/src/design-system-layout.ts).
 // Without --out the map goes to stdout. With --out it is written to that file; when the file already
 // exists and no existing-map was named, it IS the existing map — so re-running merges into it (the
 // "never destroys human work" semantics above) instead of replacing it with fresh stubs.
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]`;
-  const argv = process.argv.slice(2);
+function main(argv: string[]): number {
+  const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>] [--catalog <components.json>]...`;
+  if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
   let outFile: string | null = null, proposalsFile: string | null = null, screenFile: string | null = null;
+  // --catalog is repeatable: each names one more catalog (beyond the ones found beside the named one)
+  // that --screen / --from-proposals may take a component from.
+  const extraCatalogFiles: string[] = [];
+  for (let ci = argv.indexOf("--catalog"); ci !== -1; ci = argv.indexOf("--catalog")) {
+    const next = argv[ci + 1];
+    if (!next || next.startsWith("--")) { console.error("--catalog needs a component catalog .json (components.json / components.library.json)\n" + usage); return 1; }
+    extraCatalogFiles.push(next);
+    argv.splice(ci, 2);
+  }
   const pi = argv.indexOf("--from-proposals");
   if (pi !== -1) {
     const next = argv[pi + 1];
-    if (!next || next.startsWith("--")) { console.error("--from-proposals needs the JSON report cross-check.js (or audit.js) wrote\n" + usage); process.exit(1); }
+    if (!next || next.startsWith("--")) { console.error("--from-proposals needs the JSON report the cross-check (or audit) script wrote with --out/--json\n" + usage); return 1; }
     proposalsFile = next;
     argv.splice(pi, 2);
   }
   const si = argv.indexOf("--screen");
   if (si !== -1) {
     const next = argv[si + 1];
-    if (!next || next.startsWith("--")) { console.error("--screen needs a screen export .json\n" + usage); process.exit(1); }
+    if (!next || next.startsWith("--")) { console.error("--screen needs a screen export .json\n" + usage); return 1; }
     screenFile = next;
     argv.splice(si, 2);
   }
   const o = argv.indexOf("--out");
   if (o !== -1) {
     const next = argv[o + 1];
-    if (!next || next.startsWith("--")) { console.error("--out needs a file path\n" + usage); process.exit(1); }
+    if (!next || next.startsWith("--")) { console.error("--out needs a file path\n" + usage); return 1; }
     outFile = next;
     argv.splice(o, 2);
   }
   const unknown = argv.find((a) => a.startsWith("--"));
-  if (unknown) { console.error(`unknown option ${unknown}\n${usage}`); process.exit(1); }
+  if (unknown) { console.error(`unknown option ${unknown}\n${usage}`); return 1; }
   const [catalogFile, existingArg] = argv;
-  if (!catalogFile) { console.error(usage); process.exit(1); }
+  if (!catalogFile) { console.error(usage); return 1; }
   const catalog = readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json",
     NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
+  // DT-26: a screen's components often live in a library — the sampled components.library.json beside
+  // the catalog, a pulled libraries/<dir>/components.json, a --catalog. --screen and --from-proposals take
+  // components from all of them; a FULL bootstrap (neither flag) stays the named catalog alone, since
+  // stubbing a whole library is finding 103's unreviewable list again.
+  // The set is read ONLY for those two flags: a full bootstrap must not start failing (exit 2) on a
+  // broken components.library.json it never uses.
+  const sources = screenFile || proposalsFile ? readCatalogSet(catalogFile, catalog, extraCatalogFiles, screenFile ?? undefined,
+    (f) => console.error(`map-bootstrap: warn  ${f} is not a readable component catalog — skipped`)) : [{ file: catalogFile, catalog, role: "named" as const }];
+  const union = unionCatalog(sources);
+  // Other catalogs' rows, without their node ids: an id is unique only within one Figma file, so a
+  // library's "1:5" must neither be matched by id nor merge into an existing entry filed under this file's "1:5".
+  const others: ComponentsCatalog = { components: unionCatalog(sources.slice(1)).components.filter((c) => !!c.key && !catalog.components.some((n) => n.key === c.key)).map(({ id: _foreignId, ...c }) => c) };
+  if (screenFile || proposalsFile) console.error(`map-bootstrap: ${catalogSetLine(sources)}`);
   const existingFile = existingArg || outFile;
   // A person's map (hand-edited): bootstrap merges into it and REWRITES it, so it is validated first
   // and an invalid one is refused, untouched. Merging trusted the shape: an array `components` was
@@ -247,26 +286,26 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const valid = validateMap(existingRaw);
     if (!valid.ok || !isCodeConnectMap(existingRaw)) {
       valid.errors.forEach((e) => console.error(`map-bootstrap: ${existingFile}: ${e.path || "(root)"}: ${e.message}`));
-      console.error(`map-bootstrap: ${existingFile} is not a valid component map (${valid.errors.length} error(s)) — refusing to rewrite it. Fix it (\`map-validate.js ${existingFile}\`) or move it aside. Nothing was written.`);
-      process.exit(1);
+      console.error(`map-bootstrap: ${existingFile} is not a valid component map (${valid.errors.length} error(s)) — refusing to rewrite it. Fix it (\`${scriptCmd("map-validate")} ${existingFile}\`) or move it aside. Nothing was written.`);
+      return 1;
     }
     existing = existingRaw;
   }
   if (proposalsFile) {
     const doc = readJsonFile(proposalsFile, "proposals report");
     const proposals = proposalsIn(doc);
-    if (!proposals) { console.error(`map-bootstrap: ${proposalsFile} has no componentProposals — run cross-check.js with --out (or --json) and pass the JSON it wrote`); process.exit(1); }
-    const { map, report } = bootstrapFromProposals(proposals, catalog, existing);
+    if (!proposals) { console.error(`map-bootstrap: ${proposalsFile} has no componentProposals — run \`${scriptCmd("cross-check")} <screen.json> --out <base>\` (or --json) and pass the JSON it wrote`); return 1; }
+    const { map, report } = bootstrapFromProposals(proposals, catalog, existing, others);
     if (!report.confirmed) {
       console.error(`map-bootstrap: none of the ${proposals.length} proposal(s) in ${proposalsFile} is confirmed. Show the user the list, set "confirmed": true on each ` +
         `entry they accept, and re-run. Nothing was written — proposals are never accepted automatically.`);
-      process.exit(1);
+      return 1;
     }
     const out = JSON.stringify(map, null, 2) + "\n";
     if (outFile) fs.writeFileSync(outFile, out); else process.stdout.write(out);
     for (const sk of report.skipped) console.error(`warn  ${sk}`);
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) → ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` — wrote ${outFile}` : ""}`);
-    process.exit(0);
+    return 0;
   }
   // Finding 103: a full bootstrap on a real catalog stubs EVERY component in the file (318 on the
   // live run) — a list nobody can evaluate, and none of them may even be on the screen the user is
@@ -282,10 +321,14 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
       if (i.key) used.add(i.key);
       if (i.setKey) used.add(i.setKey);
     }
-    const all = catalog.components;
-    const scoped = all.filter((c) => (c.key && used.has(c.key)) || (c.id && used.has(c.id)));
+    const all = union.components;
+    const fromNamed = catalog.components.filter((c) => (c.key && used.has(c.key)) || (c.id && used.has(c.id)));
+    const fromLibs = others.components.filter((c) => c.key && used.has(c.key)); // by key only (see `others`)
+    const scoped = [...fromNamed, ...fromLibs];
     scopedCatalog = safeAssign({}, catalog, { components: scoped });
-    console.error(`map-bootstrap: --screen scoped the catalog from ${all.length} to ${scoped.length} component(s) this screen actually uses.`);
+    const fromOthers = fromLibs.length;
+    console.error(`map-bootstrap: --screen scoped the catalog${sources.length > 1 ? `s` : ""} from ${all.length} to ${scoped.length} component(s) this screen actually uses` +
+      (fromOthers ? ` (${fromOthers} of them from a library catalog).` : "."));
   }
   const written = bootstrap(scopedCatalog, existing);
   const json = JSON.stringify(written, null, 2) + "\n";
@@ -297,4 +340,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const review = entries.filter((e) => e.status === "needs-review").length;
     console.error(`map-bootstrap: wrote ${outFile} — ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);
   }
+  return 0;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

@@ -2,8 +2,8 @@
 // re-inventing (or half-implementing) it. P3 #16/#17/#19/#70/#71/#72/#73/#90/#120/#150/#151/#152/#200.
 //
 // The defect this closes: the export indexes only the Figma LAYER name, which in a real file is
-// wrong ("positions " really shows "Job Roles"), duplicated (four "System Configurations" frames) or
-// a near-match to a DIFFERENT screen ("Job Role Details" for a query of "Job Roles"). Different
+// wrong ("positions " really shows "Jet Roles"), duplicated (four "Studio Configurations" frames) or
+// a near-match to a DIFFERENT screen ("Jet Role Details" for a query of "Jet Roles"). Different
 // skills used to pick different fallbacks for the same situation — silently auditing the wrong frame
 // in one, finding nothing in another, listing candidates in a third. This module is the one place
 // that decision gets made, so it is made the same way everywhere.
@@ -18,15 +18,22 @@
 //                            candidate pool; if that pool holds more than one row, the run stops and
 //                            lists them (naming which field each one matched) — it does NOT resolve
 //                            on whichever field happened to be checked first.
-//   5. text search         — query is a case-insensitive substring of row.name, row.title, or any of
+//   4b. a carried id      — only when the union is empty: the id a `<Layer>__<a>_<b>` basename (or a
+//                            path to its .json) or a dash/URL form carries (stage "node id").
+//   4c. the folded union  — only when 2–4b found nothing: the same three fields compared with ALL
+//                            whitespace removed and case folded, so a plan file's name (`CropPlans`,
+//                            `SeedSwaps`) finds the screen named "Crop Plans" / "Seed Swaps".
+//                            Two or more rows are still AMBIGUOUS (listed with their node ids); an
+//                            exact match always wins because this stage never runs after one.
+//   5. text search        — query is a case-insensitive substring of row.name, row.title, or any of
 //                            row.texts (the first N deduped text strings on the frame).
 //
 // Round 3 (finding 310): evaluating exact layer name -> title -> plan header as a SEQUENCE, each
 // tried only if the previous stage matched nothing, is itself a fuzziness bug — pull the empty-state
-// sibling of "Job Roles" (layer `Job roles`, node 7314:83742) next to the real one (layer
+// sibling of "Jet Roles" (layer `Jet roles`, node 7314:83742) next to the real one (layer
 // `positions `, node 7314:87192) and the case-insensitive layer-name stage matches exactly the ONE
-// row named `Job roles`, resolves, and never even LOOKS at the title stage — where the OTHER row
-// (`positions `, title "Job Roles") would also have matched. Two rows visibly titled "Job Roles" is
+// row named `Jet roles`, resolves, and never even LOOKS at the title stage — where the OTHER row
+// (`positions `, title "Jet Roles") would also have matched. Two rows visibly titled "Jet Roles" is
 // exactly the ambiguity Prompt 3 exists to catch, and a sequence of independent exact stages hid it.
 // Collecting the union first is what makes "evaluated together" true in code, not just in comment.
 //
@@ -40,7 +47,9 @@ import type { IndexRow, ResolveScreenResult, ScreenCandidate } from "./types.ts"
 import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { toNodeId } from "../bridge/src/node-id.ts";
 import { getOrInit } from "./map-util.ts";
+import { scriptCmd } from "./cli-args.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
@@ -50,6 +59,37 @@ import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main i
 // "I20173:137670;72:3148" — but a USER never types one of those; they type either a plain id or a
 // name). Treat only the plain "<digits>:<digits>" shape as an id query.
 const NODE_ID_RE = /^\d+:\d+$/;
+
+// The basename the skills pass, `<Layer>__<a>_<b>` (a screen file's name without its directory), with an
+// optional `.json` / `.vars.json` / `.expected.json` / `.png` tail -> the id "a:b"; undefined for anything else.
+const BASENAME_ID_RE = /__(\d+)_(\d+)(?:\.[A-Za-z0-9-]+)*$/;
+
+// The node ids a query could mean, most specific first: the basename form, then a dash/URL/percent form
+// ("10093-75273", "…?node-id=10093-75273"). A query that is already "a:b" needs no help (stage 1 takes it).
+function queryIds(q: string): string[] {
+  const out: string[] = [];
+  const base = q.split(/[\\/]/).pop() ?? q;
+  const m = BASENAME_ID_RE.exec(base);
+  if (m) out.push(`${m[1]}:${m[2]}`);
+  const t = toNodeId(q);
+  if (t !== q && NODE_ID_RE.test(t)) out.push(t);
+  return out;
+}
+
+// The export root a mistaken dir points at: the first ancestor holding pages/index.json, else one that sits
+// just below (`<dir>/export`, `<dir>/design/export`). null when there is none.
+function findExportRoot(dir: string): string | null {
+  const has = (d: string): boolean => fs.existsSync(path.join(d, "pages", "index.json"));
+  const abs = path.resolve(dir);
+  for (let d = path.dirname(abs); ; d = path.dirname(d)) {
+    if (has(d)) return d;
+    if (path.dirname(d) === d) break;
+  }
+  for (const sub of ["export", path.join("design", "export")]) {
+    if (has(path.join(abs, sub))) return path.join(abs, sub);
+  }
+  return null;
+}
 
 // Every screen row this export knows about, wherever it is indexed. Prefers the root index's
 // flattened `layers` (P3 #16 — the file every skill is told to read); falls back to walking each
@@ -87,7 +127,7 @@ function planRows(planDir: string | null | undefined): PlanRow[] {
 
 // One candidate line for the "stop and list" report: enough to tell same-named frames apart without
 // opening any file (finding 19 — node count / id / reference PNG are the only discriminators between
-// two `Create Activity Type` frames of identical name/type/w/h). `matchedVia`, when passed, is which
+// two `Create Assembly Type` frames of identical name/type/w/h). `matchedVia`, when passed, is which
 // field(s) in the exact union this particular row matched on (finding 310 — the report must say
 // WHICH field, not just that it matched, since two rows can carry the same title under different
 // layer names).
@@ -107,6 +147,8 @@ function describe(row: IndexRow, matchedVia?: string[]): ScreenCandidate {
 }
 
 const fold = (s: unknown): string => String(s || "").trim().toLowerCase();
+// The 4c comparison: every whitespace run dropped, case folded ("SeedSwaps" === "Seed Swaps").
+const foldCompact = (s: unknown): string => String(s || "").replace(/\s+/g, "").toLowerCase();
 
 // Returns one of:
 //   { status: "resolved", row, stage }                          — node id alone, or exactly one row
@@ -126,14 +168,21 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   const qFold = fold(q);
   const noTitles = rows.length > 0 && !rows.some((r) => r.title);
 
+  // Nothing to resolve against: <dir> is not an export root (no pages/index.json). Say so, and name the root
+  // when it is one level off — an empty "Known layers:" list reads as "this screen does not exist".
+  if (!fs.existsSync(path.join(exportDir, "pages", "index.json"))) {
+    return { status: "not-found", candidates: [], noIndex: { dir: exportDir, hint: findExportRoot(exportDir) } };
+  }
+
   // Stage 1: node id. Evaluated ALONE — an id is unique and never joins the name/title union below.
-  if (NODE_ID_RE.test(q)) {
-    const idMatches = rows.filter((r) => r.id === q);
-    const only = idMatches.length === 1 ? idMatches[0] : undefined;
-    if (only) return { status: "resolved", row: only, stage: "node id" };
+  const byId = (id: string): IndexRow | undefined => {
+    const idMatches = rows.filter((r) => r.id === id);
     // idMatches.length > 1 cannot legitimately happen (ids are unique in one export) and 0 falls
     // through to the union below on the off chance the query is BOTH id-shaped and a real name.
-  }
+    return idMatches.length === 1 ? idMatches[0] : undefined;
+  };
+  const typed = NODE_ID_RE.test(q) ? byId(q) : undefined;
+  if (typed) return { status: "resolved", row: typed, stage: "node id" };
 
   // Stages 2–4, evaluated TOGETHER as one union (finding 310): a row joins the pool if it matches on
   // ANY of exact layer name / indexed title / plan screenName-route, and every field it matched on
@@ -165,6 +214,44 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
     };
   }
 
+  // Stage 4b: an id the query CARRIES — `<Layer>__<a>_<b>` (basename or a path to the .json) or a dash/URL
+  // form. Only after the exact stages found nothing: a layer actually NAMED `Wizard__1_2` is that layer,
+  // not whichever row has id 1:2.
+  for (const id of NODE_ID_RE.test(q) ? [] : queryIds(q)) {
+    const hit = byId(id);
+    if (hit) return { status: "resolved", row: hit, stage: "node id" };
+  }
+
+  // Stage 4c: the same three fields, whitespace-insensitive. Nothing exact matched (or carried an id), so a
+  // query such as a plan file's name (`CropPlans.json` -> "CropPlans") can still find "Crop Plans". One row
+  // resolves; two or more stop and list (G18: two frames named "Crop Plans").
+  const qCompact = foldCompact(q);
+  if (qCompact) {
+    const planCompactIds = new Set(
+      plans.filter((p) => foldCompact(p.screenName) === qCompact || foldCompact(p.route) === qCompact).map((p) => p.nodeId).filter((id): id is string => !!id)
+    );
+    const compact = new Map<string, { row: IndexRow; via: Set<string> }>();
+    const joinCompact = (row: IndexRow, via: string): void => {
+      const key = row.id || row.file || JSON.stringify(row);
+      getOrInit(compact, key, () => ({ row, via: new Set<string>() })).via.add(via);
+    };
+    for (const r of rows) {
+      if (foldCompact(r.name) === qCompact) joinCompact(r, "layer name ignoring spaces");
+      if (r.title && foldCompact(r.title) === qCompact) joinCompact(r, "indexed title ignoring spaces");
+      if (planCompactIds.has(r.id)) joinCompact(r, "plan screenName/route ignoring spaces");
+    }
+    const compactRows = [...compact.values()];
+    const one = compactRows.length === 1 ? compactRows[0] : undefined;
+    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + ") };
+    if (compactRows.length > 1) {
+      return {
+        status: "ambiguous",
+        stage: "whitespace-insensitive match (layer name / title / plan header)",
+        candidates: compactRows.map((u) => describe(u.row, [...u.via])),
+      };
+    }
+  }
+
   // Stage 5: text search. A hit here is a CANDIDATE, never a result — see the file header. This is
   // what closes finding 70 for real: the pre-fix version resolved a single substring hit outright.
   const textMatches = rows.filter(
@@ -185,13 +272,15 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
 
 export { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
 
-// CLI: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]
-// (that is the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const [exportDir, query, planDir] = process.argv.slice(2);
+// CLI: node <plugin>/scripts/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]
+// (the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
+function main(argv: string[]): number {
+  const usage = `usage: ${scriptCmd("resolve-screen")} <design/export dir> <name-or-id> [design/plan dir]`;
+  if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
+  const [exportDir, query, planDir] = argv;
   if (!exportDir || !query) {
-    console.error('usage: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]');
-    process.exit(2);
+    console.error(usage);
+    return 2;
   }
   const NOTITLES_NOTE =
     "note   this export's index carries no titles (pulled before title indexing) — re-pull the " +
@@ -203,21 +292,27 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
     process.stdout.write(JSON.stringify(res.row, null, 2) + "\n");
-    process.exit(0);
+    return 0;
   }
   if (res.status === "ambiguous") {
     console.error(`error  '${query}' matches ${res.candidates.length} screens at the '${res.stage}' stage — pick one by node id:`);
     listCandidates(res.candidates);
-    process.exit(1);
+    return 1;
   }
   if (res.status === "needs-confirmation") {
     console.error(`error  '${query}' matched only by text search — confirm with the node id (never resolved automatically from a substring hit):`);
     listCandidates(res.candidates);
     if (res.noTitles) console.error(NOTITLES_NOTE);
-    process.exit(1);
+    return 1;
+  }
+  if (res.noIndex) {
+    console.error(`error  '${exportDir}' is not an export root (no pages/index.json) — ${res.noIndex.hint ? `pass ${res.noIndex.hint}` : "pass the dir that holds pages/ (design/export)"}`);
+    return 1;
   }
   console.error(`error  '${query}' matches no screen. Known layers:`);
   listCandidates(res.candidates);
   if (res.noTitles) console.error(NOTITLES_NOTE);
-  process.exit(1);
+  return 1;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

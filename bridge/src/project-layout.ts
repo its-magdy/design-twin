@@ -40,6 +40,32 @@ export const PLAN_DIR = path.join(DESIGN_DIR, "plan");
 export const AUDIT_DIR = path.join(DESIGN_DIR, "audit");
 export const VERIFY_DIR = path.join(DESIGN_DIR, "verify");
 
+// DT-79: Tailwind v4's automatic source detection scans every file git does not ignore — Markdown
+// included (tailwindcss.com/docs/detecting-classes-in-source-files) — so class names quoted in design/
+// notes, audits and plans are generated into the shipped CSS. The exclusion is `@source not "<path
+// relative to the stylesheet>";` (Tailwind v4.1+). Only SUGGESTED (D9): the path depends on where the
+// CSS entry lives, and the user's stylesheet is theirs. One wording for `dtwin init` and tokens.js.
+export const TAILWIND_SOURCE_NOT_NOTE =
+  `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. ` +
+  `Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` ` +
+  `(e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) — Tailwind v4.1+`;
+
+// F-91 (D9: suggest only). What was proven on a real Vite + Tailwind v4 app: with Tailwind's automatic source
+// detection, rewriting an existing text file under design/ makes Vite fully reload the page — the reload that aborted
+// a measurement. Either Vite's `server.watch.ignored` (chokidar options, vite.dev/config/server-options) or Tailwind's
+// `@source not` stops it. Only emitted when the project lists BOTH vite and Tailwind v4: without Tailwind scanning
+// design/, Vite reloads only for files in its module graph, which design/ is not — so the note would be noise there.
+// (The verify tools themselves write nothing under design/ while a page is open: live status + staging live in
+// node_modules/.cache/designtwin-verify/.) Never edited for the user: vite.config is theirs.
+export const VITE_WATCH_IGNORED_NOTE =
+  `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. ` +
+  `Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above — both stop it`;
+
+// F-91: design/verify/ is regenerated on every verify run (measurements, screenshots, reports); the
+// plan's waivers and descopes live in design/plan/, so ignoring it loses no decision.
+export const VERIFY_GITIGNORE_NOTE =
+  `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) — consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+
 // The marks of an export directory, in the order a pull creates them. Used to tell "this project uses
 // the old flat layout" from "this project has no export yet", which are different problems with
 // different fixes.
@@ -112,6 +138,7 @@ delete the whole directory and re-pull and you lose nothing.
     export/pages/index.json                        every screen pulled, whatever the pull shape
     export/design-system/                          tokens.json, styles.*.json, components.*.json
     export/variables.json                          the union of every screen's slice (merged, never replaced)
+    export/SCHEMA.md                               scripting quick keys (generated)
     export/assets/                                 shared and cumulative across screens
 
 ## design/.sync/ — a working snapshot, not an export

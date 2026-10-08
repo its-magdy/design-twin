@@ -1,6 +1,6 @@
 {
  "exportedAt": "2026-09-22T19:12:16.945Z",
- "file": "Design System - NERA (Copy)",
+ "file": "Design System - NIMA (Copy)",
  "colorProfile": "srgb",
  "components": [
   {
@@ -191,10 +191,10 @@
    "remote": true,
    "source": "unknown-library",
    "uses": 1,
-   "variant": "Team Calendar=default",
+   "variant": "Task Calendar=default",
    "props": {
-    "Team Calendar": {
-     "key": "Team Calendar",
+    "Task Calendar": {
+     "key": "Task Calendar",
      "type": "VARIANT",
      "observed": [
       "default"
@@ -204,16 +204,16 @@
    "derivedFrom": "instances"
   },
   {
-   "name": "License Health Check",
+   "name": "Leisure Health Check",
    "key": "99612d4cecf88aecd37c7877e2b10af97aed1826",
    "type": "COMPONENT",
    "remote": true,
    "source": "unknown-library",
    "uses": 1,
-   "variant": "License Health Check=default",
+   "variant": "Leisure Health Check=default",
    "props": {
-    "License Health Check": {
-     "key": "License Health Check",
+    "Leisure Health Check": {
+     "key": "Leisure Health Check",
      "type": "VARIANT",
      "observed": [
       "default"
@@ -223,7 +223,7 @@
    "derivedFrom": "instances"
   },
   {
-   "name": "Org Management",
+   "name": "Ops Management",
    "key": "a1e60129811a7502221cee1e47cd57e23c985ab1",
    "type": "COMPONENT",
    "remote": true,
@@ -242,16 +242,16 @@
    "derivedFrom": "instances"
   },
   {
-   "name": "Staff Management",
+   "name": "Stock Management",
    "key": "1b98a983c2dd2295f647bd421edb8b668ff45fe9",
    "type": "COMPONENT",
    "remote": true,
    "source": "unknown-library",
    "uses": 1,
-   "variant": "Staff Management=Default",
+   "variant": "Stock Management=Default",
    "props": {
-    "Staff Management": {
-     "key": "Staff Management",
+    "Stock Management": {
+     "key": "Stock Management",
      "type": "VARIANT",
      "observed": [
       "Default"
@@ -261,7 +261,7 @@
    "derivedFrom": "instances"
   },
   {
-   "name": "shift Demand",
+   "name": "stage Demand",
    "key": "3302b4a7810046a1b60bbe567db6f3d9c0b30367",
    "type": "COMPONENT",
    "remote": true,
@@ -299,7 +299,7 @@
    "derivedFrom": "instances"
   },
   {
-   "name": "activity demand",
+   "name": "assembly demand",
    "key": "207e4ae2ca6ca1863e0a58b4b491ed5d71fc014e",
    "type": "COMPONENT",
    "remote": true,
@@ -324,13 +324,13 @@
    "remote": true,
    "source": "unknown-library",
    "uses": 1,
-   "variant": "Rostering=Rostering7",
+   "variant": "Rehousing=Rehousing7",
    "props": {
-    "Rostering": {
-     "key": "Rostering",
+    "Rehousing": {
+     "key": "Rehousing",
      "type": "VARIANT",
      "observed": [
-      "Rostering7"
+      "Rehousing7"
      ]
     }
    },
@@ -362,10 +362,10 @@
    "remote": true,
    "source": "unknown-library",
    "uses": 1,
-   "variant": "Day Of Operation=default",
+   "variant": "Day Of Ownership=default",
    "props": {
-    "Day Of Operation": {
-     "key": "Day Of Operation",
+    "Day Of Ownership": {
+     "key": "Day Of Ownership",
      "type": "VARIANT",
      "observed": [
       "default"
@@ -375,7 +375,7 @@
    "derivedFrom": "instances"
   },
   {
-   "name": "OJT Management",
+   "name": "OKR Management",
    "key": "4e81e7cb888cb2cff8cb95c31b29492526fdc022",
    "type": "COMPONENT",
    "remote": true,

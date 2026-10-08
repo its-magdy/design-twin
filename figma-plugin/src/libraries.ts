@@ -227,7 +227,7 @@ export async function collectLibraryComponents(sinkIn?: (m: string) => void): Pr
   return out;
 }
 
-// ---------------------------------------------------------------- the cheap discovery call
+// ---------------------------------------------------------------- the library discovery call
 // Variable collections per enabled library. Wrapped whole: a missing "teamlibrary" permission and a
 // plan without shared libraries BOTH throw here, and neither is a reason to fail the call — the
 // component half below works regardless and is the half that needs no permission at all.
@@ -281,7 +281,7 @@ async function libraryVariableCollections(sink: (m: string) => void): Promise<Ma
   return byLibrary;
 }
 
-// The CHEAP discovery call: which libraries feed this file, so a caller can decide what to pull.
+// The library discovery call (no export, but the slowest read): which libraries feed this file, so a caller can decide what to pull.
 // Deliberately NOT part of an export — it is the "what's out there?" map, the twin of listPages.
 export async function listLibraries(): Promise<LibrariesListing> {
   const warnings: string[] = [];
@@ -370,4 +370,4 @@ export async function listLibraries(): Promise<LibrariesListing> {
 // No test-surface global here: main.ts imports listLibraries/collectLibraryComponents and exposes
 // them on the single `__designExport` namespace alongside every other entry point. A second global
 // registered from this module would be a parallel surface for the harness to keep in sync — and the
-// repo has already paid for parallel lists of the same thing once (see bridge/read-opts.js).
+// repo has already paid for parallel lists of the same thing once (see bridge/src/read-opts.ts).

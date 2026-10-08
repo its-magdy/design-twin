@@ -142,7 +142,7 @@ function variantValues(main: ComponentNode): Record<string, string> | undefined 
 // Function type of serialize.ts's `serialize` — injected as a parameter rather than imported, since
 // serialize.ts already imports FROM components.ts (instanceComponentRef/componentPropRefs/
 // instanceOverrides) and a direct import back here would be a cycle.
-type SerializeFn = (node: SceneNode, depth: number, parentControlsLayout?: boolean) => Promise<IrNode | null>;
+type SerializeFn = (node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean) => Promise<IrNode | null>;
 
 // Per-variant visual/layout truth (opt-in, runOpts.variantVisuals): the master COMPONENT itself, not
 // the COMPONENT_SET wrapper's own selection-chrome visuals. Depth-capped well below serialize.ts's
@@ -486,7 +486,7 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
   // all resolved, and dumpVariables uses it to include library variables this file merely consumes.
   const vars = await dumpVariables(opts);
 
-  // PROVENANCE. `exportedAt`/`file` stay top-level — snapshot-meta.js and drift-lint.js read them
+  // PROVENANCE. `exportedAt`/`file` stay top-level — snapshot-meta.ts and drift-lint.ts read them
   // off whatever catalog they are handed, and `file` must keep answering "which ONE Figma file is
   // this?". `source` is purely additive: role tells a consumer whether it is holding the design file's
   // own catalog or a library's, and collectionKeys is the join back to --list-libraries, which reports

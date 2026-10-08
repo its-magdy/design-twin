@@ -2,9 +2,9 @@
 
 
 // design-to-code/verify-build.ts
-import fs5 from "node:fs";
-import path3 from "node:path";
-import crypto2 from "node:crypto";
+import fs7 from "node:fs";
+import path5 from "node:path";
+import crypto3 from "node:crypto";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -45,6 +45,11 @@ function isUnknownArray(x) {
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
 
 // design-to-code/map-util.ts
 function getOrInit(m, k, init) {
@@ -60,18 +65,18 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path4, parent, depth) {
+  (function go(node, parentHidden, path6, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path4, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path6, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path4 ? path4 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path6 ? path6 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
 // design-to-code/audit-gate.ts
 import fs3 from "node:fs";
-import path from "node:path";
+import path2 from "node:path";
 
 // design-to-code/color.ts
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
@@ -86,6 +91,27 @@ function colorKey(v) {
   const h = normHex(v);
   return h === null ? null : h.length === 7 ? h + "ff" : h;
 }
+
+// design-to-code/finding-id.ts
+function findingIds(findings) {
+  const seen = /* @__PURE__ */ new Map();
+  return findings.map((f) => {
+    const base = f.nodeId ? `${f.code}@${f.nodeId}` : f.code;
+    const n = (seen.get(base) || 0) + 1;
+    seen.set(base, n);
+    return n === 1 ? base : `${base}~${n}`;
+  });
+}
+function legacyBlockerIds(findings) {
+  return findings.filter((f) => f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
+}
+
+// design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 // design-to-code/read-json.ts
 import fs from "node:fs";
@@ -129,324 +155,24 @@ function readJsonOrNull(file, guard) {
   return "doc" in r ? r.doc : null;
 }
 
-// design-to-code/doc-guards.ts
-function optArrayOf(x, each) {
-  return x === void 0 || Array.isArray(x) && x.every(each);
-}
-var isObj = isJsonObject;
-var optObj = (x) => x === void 0 || isObj(x);
-var optStr = (x) => x === void 0 || typeof x === "string";
-var anyObject = (x) => isObj(x);
-function isVariable(x) {
-  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
-}
-function isVariableCollection(x) {
-  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
-}
-function isTokensDoc(x) {
-  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
-}
-isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
-function isCatalogComponent(x) {
-  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
-}
-function isComponentsCatalog(x) {
-  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
-}
-isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
-function isComponentDetailFile(x) {
-  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
-}
-isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
-function isTextStylesDoc(x) {
-  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
-}
-isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
-function isAuditReport(x) {
-  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
-}
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
-function isProposal(x) {
-  return isObj(x) && typeof x.name === "string";
-}
-function isProposalList(x) {
-  return Array.isArray(x) && x.every(isProposal);
-}
-isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
-function isIndexRowLike(x) {
-  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
-}
-function isPagesRootIndex(x) {
-  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
-}
-isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
-function isPageIndex(x) {
-  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
-}
-isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
-function isVerifyExpectation(x) {
-  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
-}
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
-function isVerifyMeasured(x) {
-  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
-}
-isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
-function isEvidence(x) {
-  return isObj(x) && typeof x.nodeId === "string";
-}
-function isInteractionEvidenceList(x) {
-  return Array.isArray(x) && x.every(isEvidence);
-}
-isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
-function isVerifyReport(x) {
-  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
-}
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
-var PLAN_OBJECTS = ["anchors", "verification", "counts"];
-var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
-function planProblem(x) {
-  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
-  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
-  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
-  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
-  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden"]) {
-    const list = x[k];
-    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
-  }
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
-  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
-  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
-  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
-  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
-  return null;
-}
-function isPlan(x) {
-  return planProblem(x) === null;
-}
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
-function parsePlan(x) {
-  return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
-}
-function isStringRecord(x) {
-  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
-}
-isStringRecord.expected = "an object of strings";
-
-// design-to-code/cli-args.ts
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
-
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
-}
-
-// design-to-code/cross-check.ts
-if (false) {
-  const argv = process.argv.slice(2);
-  const USAGE3 = `usage: ${scriptCmd2("cross-check")} <screen.json>... [--design-system design/design-system] [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]`;
-  const OPTIONS = {
-    "design-system": { type: "string" },
-    variables: { type: "string" },
-    out: { type: "string" },
-    json: { type: "boolean" },
-    gate: { type: "boolean" },
-    help: { type: "boolean", short: "h" }
-  };
-  const { values: flags, positionals: files } = cliParse("cross-check", argv, OPTIONS, USAGE3, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  if (flags.help) {
-    console.log(USAGE3);
-    process.exit(0);
-  }
-  if (!files.length) {
-    console.error(USAGE3);
-    process.exit(2);
-  }
-  const { "design-system": dsDir, variables: varsFile, out } = flags;
-  const jsonOnly = !!flags.json, gate = !!flags.gate;
-  const ctx = variablesContext(files, varsFile);
-  for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) process.exit(2);
-  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc2), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
-  const dsBase = dsDir || "design/design-system";
-  const { variablesPath, variablesDoc } = ctx;
-  if (variablesPath) console.error(`variables: ${variablesPath}`);
-  if (ctx.staleLegacy) {
-    console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  }
-  const res = crossCheck({
-    screens,
-    sliceSources: ctx.sliceSources,
-    variables: variablesDoc,
-    variablesPath,
-    tokens: readOptionalDoc(path.join(dsBase, "tokens.json"), "design-system tokens", isTokensDoc2),
-    components: readOptionalDoc(path.join(dsBase, "components.local.json"), "component catalog", isComponentsCatalog2),
-    componentsLibrary: readOptionalDoc(path.join(dsBase, "components.library.json"), "library component catalog", isComponentsCatalog2),
-    stylesText: readOptionalDoc(path.join(dsBase, "styles.text.json"), "text styles", isTextStylesDoc2)
-  });
-  if (jsonOnly) {
-    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
-  } else if (out) {
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs.writeFileSync(out + ".md", toMarkdown(res));
-    console.error(`wrote ${out}.json and ${out}.md`);
-  } else {
-    process.stdout.write(toMarkdown(res));
-  }
-  console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
-  for (const n of res.notChecked) console.error(`note  not checked: ${n}`);
-  process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
-}
-
-// design-to-code/audit.ts
-var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
-var PLATFORMS = Object.keys(TOUCH_MIN);
-function blockerIds(auditDoc) {
-  const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
-  return findings.filter((f) => !!f && typeof f === "object" && "severity" in f && f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
-}
-if (false) {
-  const argv = process.argv.slice(2);
-  const USAGE3 = `usage: ${scriptCmd3("audit")} <screen.json>... [--platform web|ios|android|react-native|flutter]
-       [--design-system design/design-system] [--variables design/variables.json]
-       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]
-  --design-system turns on the cross-FILE pass (does this screen come from that design system?).
-  Without it every token-binding % below means "binds SOME variable", not "matches your design system".
-  --out defaults to design/audit/<input file's own basename> \u2014 the same <LayerName>__<node-id>
-  name write-out.js gave the screen file, so re-auditing the same screen always lands on the same
-  report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same
-  directory already covers this node under a DIFFERENT name \u2014 pass --force to write a second one.`;
-  const OPTIONS = {
-    platform: { type: "string" },
-    catalog: { type: "string" },
-    "design-system": { type: "string" },
-    variables: { type: "string" },
-    grid: { type: "string" },
-    out: { type: "string" },
-    json: { type: "boolean" },
-    gate: { type: "boolean" },
-    force: { type: "boolean" },
-    help: { type: "boolean", short: "h" }
-  };
-  const { values: flags, positionals: files } = cliParse2("audit", argv, OPTIONS, USAGE3, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  if (flags.help) {
-    console.log(USAGE3);
-    process.exit(0);
-  }
-  const firstFile = files[0];
-  if (firstFile === void 0) {
-    console.error(USAGE3);
-    process.exit(2);
-  }
-  const { platform, catalog: catalogFile, "design-system": dsDir, variables: varsFile, grid: gridArg, out } = flags;
-  const jsonOnly = !!flags.json, gate = !!flags.gate, force = !!flags.force;
-  if (platform && !PLATFORMS.includes(platform)) {
-    console.error(`--platform must be one of ${PLATFORMS.join(", ")}`);
-    process.exit(2);
-  }
-  const grid = gridArg === void 0 ? void 0 : Number(gridArg);
-  if (grid !== void 0 && !(Number.isFinite(grid) && grid > 0)) {
-    console.error(`--grid must be a positive number of px, got ${JSON.stringify(gridArg)}`);
-    process.exit(2);
-  }
-  const ctx = variablesContext2(files, varsFile, { sliceFallback: true });
-  for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) process.exit(2);
-  const inputs = files.map((f, i) => ({ doc: readDocFile2(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
-  const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog3, "components", "design-system/components.local.json") : void 0;
-  const designSystem = dsDir ? {
-    tokens: readOptionalDoc2(path.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc3),
-    ...ifDefined("components", readOptionalDoc2(path.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog3) || catalog),
-    componentsLibrary: readOptionalDoc2(path.join(dsDir, "components.library.json"), "library component catalog", isComponentsCatalog3),
-    stylesText: readOptionalDoc2(path.join(dsDir, "styles.text.json"), "text styles", isTextStylesDoc3)
-  } : void 0;
-  const variables = ctx.variablesDoc;
-  if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  const res = audit(inputs, { ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid) });
-  const md = jsonOnly ? "" : toMarkdown(res);
-  const outBase = out || path.join("design", "audit", path.basename(firstFile, ".json"));
-  if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
-    const dup = findExistingAuditFor(path.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
-    if (dup && !force) {
-      console.error(
-        `error  node ${res.nodeIds[0]} already has an audit report at ${dup} \u2014 refusing to also write ${outBase}.json/.md (one screen, one report pair). Use that existing name, or pass --force to write this one anyway.`
-      );
-      process.exit(1);
-    }
-  }
-  if (jsonOnly) {
-    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
-  } else if (outBase) {
-    fs.mkdirSync(path.dirname(outBase), { recursive: true });
-    fs.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs.writeFileSync(outBase + ".md", md);
-    console.error(`wrote ${outBase}.json and ${outBase}.md`);
-  } else {
-    process.stdout.write(md);
-  }
-  if (res.platformAssumed) console.error("warn  no --platform given \u2014 assumed 'web'. Touch targets, shadow spread and blur support differ per platform; pass --platform or write design/target.json.");
-  if (!jsonOnly) console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
-  for (const n of res.crossFile && res.crossFile.notChecked || []) console.error(`note  not checked: ${n}`);
-  process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
-}
-
-// design-to-code/audit-gate.ts
-function slug(s) {
-  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-function locateAuditFile(cwd, screenFile, screenName) {
-  const dir = path.join(cwd, "design", "audit");
-  if (!fs3.existsSync(dir)) return null;
-  const base = screenFile ? path.basename(screenFile, ".json") : null;
-  const candidates = [];
-  if (base) candidates.push(path.join(dir, base + ".json"));
-  let entries = [];
-  try {
-    entries = fs3.readdirSync(dir).filter((f) => f.endsWith(".json"));
-  } catch {
-    entries = [];
-  }
-  for (const c of candidates) if (fs3.existsSync(c)) return path.relative(cwd, c).split(path.sep).join("/");
-  const wantSlug = slug(screenName);
-  if (wantSlug) {
-    const stem = (f) => f.replace(/\.json$/, "");
-    const nameOf = (f) => {
-      const s = stem(f);
-      const i = s.lastIndexOf("__");
-      return i > 0 ? s.slice(0, i) : null;
-    };
-    const hit = entries.find((f) => slug(stem(f)) === wantSlug) ?? entries.find((f) => {
-      const n = nameOf(f);
-      return n !== null && slug(n) === wantSlug;
-    });
-    if (hit) return path.relative(cwd, path.join(dir, hit)).split(path.sep).join("/");
-  }
-  return null;
-}
-function auditGateStatus(cwd, screenFile, screenName) {
-  const rel = locateAuditFile(cwd, screenFile, screenName);
-  if (!rel) return { auditFile: null, blockers: [] };
-  const r = readJson(path.join(cwd, rel), isAuditReport);
-  if (!("doc" in r)) return { auditFile: rel, blockers: [], unreadable: true, error: r.error };
-  return { auditFile: rel, blockers: blockerIds(r.doc) };
 }
 
 // design-to-code/map-validate.ts
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
   root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
   figma: ["key", "id", "name", "unstable"],
   code: ["module", "export", "targets"],
   target: ["module", "export"],
@@ -462,7 +188,7 @@ var KEYS = {
 };
 var PROP_KINDS = Object.keys(KEYS.prop);
 var isStr = (v) => typeof v === "string";
-var isObj2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 var isBool = (v) => typeof v === "boolean";
 var noExtra = (obj, allowed, at, err) => {
   if (!Array.isArray(allowed)) return;
@@ -473,40 +199,40 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path4, message) => errors.push({ path: path4, message });
-  if (!isObj2(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  const err = (path6, message) => errors.push({ path: path6, message });
+  if (!isObj(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
   if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
-  if (!isObj2(map.components)) {
+  if (!isObj(map.components)) {
     err("components", "must be an object");
     return { ok: false, errors };
   }
   for (const key of Object.keys(map.components)) {
     const e = map.components[key];
     const at = `components.${key}`;
-    if (!isObj2(e)) {
+    if (!isObj(e)) {
       err(at, "entry must be an object");
       continue;
     }
     noExtra(e, KEYS.entry, at, err);
-    if (!isObj2(e.figma)) err(`${at}.figma`, "required object");
+    if (!isObj(e.figma)) err(`${at}.figma`, "required object");
     else {
       noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
       if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
       optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
       if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
     }
-    if (!isObj2(e.code)) err(`${at}.code`, "required object");
+    if (!isObj(e.code)) err(`${at}.code`, "required object");
     else {
       noExtra(e.code, KEYS.code, `${at}.code`, err);
       if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
       if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
       if (e.code.targets !== void 0) {
-        if (!isObj2(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        if (!isObj(e.code.targets)) err(`${at}.code.targets`, "must be an object");
         else for (const t of Object.keys(e.code.targets)) {
           const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
-          if (!isObj2(tv)) err(ta, "must be an object");
+          if (!isObj(tv)) err(ta, "must be an object");
           else {
             noExtra(tv, KEYS.target, ta, err);
             optStrings(tv, ["module", "export"], ta, err);
@@ -515,22 +241,23 @@ function validateMap(map) {
       }
     }
     if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
     if (e.props !== void 0) {
-      if (!isObj2(e.props)) err(`${at}.props`, "must be an object");
+      if (!isObj(e.props)) err(`${at}.props`, "must be an object");
       else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
     }
     if (e.variantOverrides !== void 0) {
       if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
       else e.variantOverrides.forEach((vo, i) => {
         const va = `${at}.variantOverrides[${i}]`;
-        if (!isObj2(vo)) {
+        if (!isObj(vo)) {
           err(va, "must be an object");
           return;
         }
         noExtra(vo, KEYS.vo, va, err);
-        if (!isObj2(vo.when)) err(`${va}.when`, "required object");
+        if (!isObj(vo.when)) err(`${va}.when`, "required object");
         else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
-        if (!isObj2(vo.code)) err(`${va}.code`, "required object");
+        if (!isObj(vo.code)) err(`${va}.code`, "required object");
         else {
           noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
           if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
@@ -539,7 +266,7 @@ function validateMap(map) {
       });
     }
     if (e.childrenByLayer !== void 0) {
-      if (!isObj2(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      if (!isObj(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
       else {
         noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
         optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
@@ -549,7 +276,7 @@ function validateMap(map) {
   return { ok: errors.length === 0, errors };
 }
 function validateProp(p, at, err) {
-  if (!isObj2(p)) {
+  if (!isObj(p)) {
     err(at, "prop must be an object");
     return;
   }
@@ -563,8 +290,8 @@ function validateProp(p, at, err) {
   if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
   if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
   if (p.kind === "enum") {
-    if (p.values !== void 0 && !isObj2(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
-    else if (isObj2(p.values)) for (const k of Object.keys(p.values)) {
+    if (p.values !== void 0 && !isObj(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isObj(p.values)) for (const k of Object.keys(p.values)) {
       const t = typeof p.values[k];
       if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
     }
@@ -576,38 +303,297 @@ function validateProp(p, at, err) {
 function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
-isCodeConnectMap.expected = "a valid component map (map-validate.js <file> lists what is wrong with it)";
-if (false) {
-  const file = process.argv[2];
-  const USAGE3 = `usage: ${scriptCmd4("map-validate")} <map.json>`;
-  if (file === "--help" || file === "-h") {
-    console.log(USAGE3);
-    process.exit(0);
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/plan-waivers.ts
+import crypto from "node:crypto";
+var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
+function isPassingVerdict(v) {
+  return typeof v === "string" && PASSING_VERDICTS.includes(v);
+}
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
   }
-  if (!file || file.startsWith("-")) {
-    console.error((file ? `map-validate: unknown flag ${file}
-` : "") + USAGE3);
-    process.exit(1);
+  return JSON.stringify(v ?? null);
+}
+function waiversHash(plan) {
+  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
+  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
+  return crypto.createHash("sha256").update(canonical({ descopes, waivers })).digest("hex");
+}
+
+// design-to-code/probe-steps.ts
+function isPlanExpect(x) {
+  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
+}
+
+// design-to-code/doc-guards.ts
+function optArrayOf(x, each) {
+  return x === void 0 || Array.isArray(x) && x.every(each);
+}
+var isObj2 = isJsonObject;
+var optObj = (x) => x === void 0 || isObj2(x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var anyObject = (x) => isObj2(x);
+function isVariable(x) {
+  return isObj2(x) && typeof x.name === "string" && typeof x.type === "string" && isObj2(x.values) && optStr(x.collection);
+}
+function isVariableCollection(x) {
+  return isObj2(x) && typeof x.name === "string" && isStringArray(x.modes);
+}
+function isTokensDoc(x) {
+  return isObj2(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+}
+isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
+function isCatalogComponent(x) {
+  return isObj2(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+}
+function isComponentsCatalog(x) {
+  return isObj2(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+}
+isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
+function isComponentDetailFile(x) {
+  return isObj2(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+}
+isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
+function isTextStylesDoc(x) {
+  return isObj2(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj2(s) && typeof s.name === "string");
+}
+isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isObj2(x) && optArrayOf(x.heavy, (h) => isObj2(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj2(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isObj2(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj2(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+var SEVERITIES = ["blocker", "warning", "info"];
+function isAuditOverridesDoc(x) {
+  return isObj2(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj2(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
+function isAuditReport(x) {
+  return isObj2(x) && isObj2(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj2(f) && typeof f.severity === "string" && typeof f.code === "string");
+}
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
+function isProposal(x) {
+  return isObj2(x) && typeof x.name === "string";
+}
+function isProposalList(x) {
+  return Array.isArray(x) && x.every(isProposal);
+}
+isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
+function isIndexRowLike(x) {
+  return isObj2(x) && typeof x.id === "string" && typeof x.name === "string";
+}
+function isPagesRootIndex(x) {
+  return isObj2(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj2(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+}
+isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
+function isPageIndex(x) {
+  return isObj2(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+}
+isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
+function isVerifyExpectation(x) {
+  return isObj2(x) && isObj2(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj2(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+}
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+var isNameVersion = (x) => isObj2(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+function isProbeIdentity(x) {
+  return isObj2(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+function isBuildIdentity(x) {
+  return isObj2(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
+var isProbeFrame = (x) => isObj2(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj2(x.rect);
+var isCountMap = (x) => isObj2(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isObj2(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj2(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj2(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isObj2(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isObj2(x) && Array.isArray(x.steps) && x.steps.every(isObj2) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isObj2(x) && isObj2(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj2(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj2(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj2(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+function isMeasuredVisual(x) {
+  return isObj2(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+function isReportBehaviour(x) {
+  return isObj2(x) && typeof x.ran === "boolean" && isObj2(x.summary) && ["pass", "fail", "warn", "notRun", "unsupported"].every((k) => isObj2(x.summary) && isNum(x.summary[k])) && Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) && optStr(x.why) && optStr(x.headline);
+}
+var MEASURED_EXTRAS = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // group 11 (DT-47): the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // 12c: the visual diff (informational, D40(3))
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
+];
+function isMeasuredCore(x) {
+  return isObj2(x) && optArrayOf(x.nodes, (n) => isObj2(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+function isVerifyMeasured(x) {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj2(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
+}
+isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
+function isEvidence(x) {
+  return isObj2(x) && typeof x.nodeId === "string";
+}
+function isInteractionEvidenceList(x) {
+  return Array.isArray(x) && x.every(isEvidence);
+}
+isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isMeasuredComponentList(x) {
+  return Array.isArray(x) && x.every((c) => isObj2(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
+}
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
+function isVerifyReport(x) {
+  return isObj2(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_OBJECTS = ["anchors", "verification", "counts"];
+var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
+function planProblem(x) {
+  if (!isObj2(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj2(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
+  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
+    const list = x[k];
+    if (Array.isArray(list) && !list.every(isObj2)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
-  const res = validateMap(readJsonFile(file, "component map"));
-  if (res.ok) {
-    console.log("map valid");
-    process.exit(0);
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj2(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isObj2(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isObj2(x.anchors) && !Object.values(x.anchors).every(isObj2)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj2(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj2(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isObj2(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj2(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
+  if (isObj2(x.verification) && x.verification.hook !== void 0 && !isObj2(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  return null;
+}
+function isPlan(x) {
+  return planProblem(x) === null;
+}
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+function parsePlan(x) {
+  return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
+}
+var reqStr = (v) => typeof v === "string" && v.trim() !== "";
+function isPlanWaiver(x) {
+  return isObj2(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+function isPlanDescope(x) {
+  return isObj2(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isPlanInteraction(x) {
+  return isObj2(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
+}
+isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
+function isStringRecord(x) {
+  return isObj2(x) && Object.values(x).every((v) => typeof v === "string");
+}
+isStringRecord.expected = "an object of strings";
+
+// design-to-code/cross-check.ts
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/audit.ts
+var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
+var PLATFORMS = Object.keys(TOUCH_MIN);
+function blockerIds(auditDoc) {
+  const findings = reportFindings(auditDoc);
+  const ids = findingIds(findings.map((f) => ({ code: f.code || "blocker", nodeId: f.nodeId })));
+  return findings.flatMap((f, i) => f.severity === "blocker" ? [f.id || ids[i] || f.code || "blocker"] : []);
+}
+function reportFindings(auditDoc) {
+  const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
+  const str = (v) => typeof v === "string" && v ? v : void 0;
+  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
+}
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/audit-gate.ts
+function slug(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+function locateAuditFile(cwd, screenFile, screenName) {
+  const dir = path2.join(cwd, "design", "audit");
+  if (!fs3.existsSync(dir)) return null;
+  const base = screenFile ? path2.basename(screenFile, ".json") : null;
+  const candidates = [];
+  if (base) candidates.push(path2.join(dir, base + ".json"));
+  let entries = [];
+  try {
+    entries = fs3.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes("."));
+  } catch {
+    entries = [];
   }
-  res.errors.forEach((e) => console.error(`  ${e.path || "(root)"}: ${e.message}`));
-  console.error(`
-${res.errors.length} error(s)`);
-  process.exit(1);
+  for (const c of candidates) if (fs3.existsSync(c)) return path2.relative(cwd, c).split(path2.sep).join("/");
+  const wantSlug = slug(screenName);
+  if (wantSlug) {
+    const stem = (f) => f.replace(/\.json$/, "");
+    const nameOf = (f) => {
+      const s = stem(f);
+      const i = s.lastIndexOf("__");
+      return i > 0 ? s.slice(0, i) : null;
+    };
+    const hit = entries.find((f) => slug(stem(f)) === wantSlug) ?? entries.find((f) => {
+      const n = nameOf(f);
+      return n !== null && slug(n) === wantSlug;
+    });
+    if (hit) return path2.relative(cwd, path2.join(dir, hit)).split(path2.sep).join("/");
+  }
+  return null;
+}
+function auditGateStatus(cwd, screenFile, screenName) {
+  const rel = locateAuditFile(cwd, screenFile, screenName);
+  if (!rel) return { auditFile: null, blockers: [], legacyBlockers: [] };
+  const r = readJson(path2.join(cwd, rel), isAuditReport);
+  if (!("doc" in r)) return { auditFile: rel, blockers: [], legacyBlockers: [], unreadable: true, error: r.error };
+  return { auditFile: rel, blockers: blockerIds(r.doc), legacyBlockers: legacyBlockerIds(reportFindings(r.doc)) };
 }
 
 // design-to-code/plan-skeleton.ts
 var USAGE = [
-  `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>]`,
+  `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
   "",
   "  Emits the build-screen plan skeleton for one screen, derived from the export:",
   "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
   "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping)",
   "    anchors{}     every VISIBLE node id, mapModule empty \u2014 fill it on sections and instances",
+  "    anchorsSuggested[]  the few anchors worth filling first (the screen frame, root sections, outermost instances, repeated lists)",
   "    hidden[]      roots of hidden subtrees (hidden: true or a hidden ancestor) \u2014 never built, never anchored",
   "    screenName / nodeId / file / route   the header every skill resolves a plan by",
   "",
@@ -621,7 +607,12 @@ var USAGE = [
   "                       overwritten: every field you filled is kept.",
   "  --map <file>         codeconnect.local.json (default: design/codeconnect.local.json or",
   "                       codeconnect.local.json in the current directory, when present).",
-  "  --route <route>      the app route this screen will live at (else left null for you to fill)."
+  "  --route <route>      the app route this screen will live at (else left null for you to fill).",
+  "  --seed-from <plan>   a sibling screen's plan (repeatable; the first that has an answer wins). A row still",
+  "                       empty here takes that plan's answer when it is the SAME thing: a token with the same",
+  "                       key (or, both keyless, the same Figma name) AND the same value \u2192 codeToken/verdict/",
+  "                       decision; a component with the same setKey (else key) \u2192 mapModule/verdict/decision.",
+  "                       Nothing filled is ever overwritten. Seeded rows carry `seededFrom` \u2014 review them."
 ].join("\n");
 function walkNodes(doc, visit) {
   const instAbove = /* @__PURE__ */ new Map();
@@ -661,9 +652,9 @@ if (false) process.exitCode = main(process.argv.slice(2));
 
 // design-to-code/content-hash.ts
 import fs4 from "node:fs";
-import path2 from "node:path";
-import crypto from "node:crypto";
-var sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
+import path3 from "node:path";
+import crypto2 from "node:crypto";
+var sha256 = (s) => crypto2.createHash("sha256").update(s).digest("hex");
 function stripPullTimes(v, parentKey) {
   if (isUnknownArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
   if (!v || typeof v !== "object") return v;
@@ -683,12 +674,138 @@ function fileHashes(files, cwd) {
   const out = {};
   for (const rel of isUnknownArray(files) ? files.map(String) : []) {
     try {
-      out[rel] = sha256(fs4.readFileSync(path2.join(cwd, rel))).slice(0, 16);
+      out[rel] = sha256(fs4.readFileSync(path3.join(cwd, rel))).slice(0, 16);
     } catch {
       out[rel] = null;
     }
   }
   return out;
+}
+var isRec = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+var RESOLVE_EXT = ["tsx", "ts", "jsx", "js"];
+var isFile = (abs) => {
+  try {
+    return fs4.statSync(abs).isFile();
+  } catch {
+    return false;
+  }
+};
+function mappedModulePath(raw, cwd) {
+  if (typeof raw !== "string") return null;
+  const s = (raw.split("#")[0] ?? "").trim().split("\\").join("/");
+  if (!s || s.startsWith("/") || /^[A-Za-z]:/.test(s) || /^[@~]/.test(s) || s.includes(":")) return null;
+  const rel = path3.posix.normalize(s).replace(/\/+$/, "");
+  if (rel === ".." || rel.startsWith("../") || rel === "." || !rel) return null;
+  const dotted = /\.[A-Za-z0-9]+$/.test(path3.posix.basename(rel));
+  if (cwd === void 0) return dotted ? rel : null;
+  if (dotted && isFile(path3.join(cwd, rel))) return rel;
+  const tries = [...RESOLVE_EXT.map((e) => `${rel}.${e}`), ...RESOLVE_EXT.map((e) => `${rel}/index.${e}`)];
+  return tries.find((t) => isFile(path3.join(cwd, t))) ?? (dotted ? rel : null);
+}
+function mapModules(plan) {
+  const out = [];
+  if (isRec(plan.anchors)) {
+    for (const a of Object.values(plan.anchors)) if (isRec(a)) out.push(a.mapModule);
+  }
+  if (isUnknownArray(plan.components)) {
+    for (const c of plan.components) if (isRec(c)) out.push(c.mapModule);
+  }
+  return out;
+}
+function planCodeFiles(plan, cwd) {
+  const listed = isUnknownArray(plan.files) ? plan.files.map(String) : [];
+  const seen = new Set(listed.map((f) => path3.posix.normalize(f.trim().split("\\").join("/"))));
+  const extra = /* @__PURE__ */ new Set();
+  for (const m of mapModules(plan)) {
+    const rel = mappedModulePath(m, cwd);
+    if (rel !== null && !seen.has(rel)) extra.add(rel);
+  }
+  return [...listed, ...[...extra].sort()];
+}
+function planCodeSkipped(plan, cwd) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of mapModules(plan)) {
+    if (typeof m !== "string" || !m.trim()) continue;
+    const rel = mappedModulePath(m, cwd);
+    if (rel === null || !isFile(path3.join(cwd, rel))) out.add(m.trim());
+  }
+  return [...out].sort();
+}
+function planCodeSkippedNote(plan, cwd) {
+  const s = planCodeSkipped(plan, cwd);
+  return s.length ? `mapModule path(s) not hashed with this plan's code: ${s.slice(0, 6).join(", ")}${s.length > 6 ? `, +${s.length - 6} more` : ""} \u2014 not a file under the project (an \`@/\`/\`~/\` alias, a package, a path outside the project, or a path that names no file even with .tsx/.ts/.jsx/.js or /index added), so an edit to it does not reopen the plan; for code this project owns write the project-relative file path` : null;
+}
+function planHash(plan) {
+  const copy = { ...plan || {} };
+  delete copy.status;
+  delete copy.waivers;
+  delete copy.descopes;
+  delete copy.verification;
+  return sha256(JSON.stringify(copy)).slice(0, 16);
+}
+function legacyPlanHash(plan) {
+  const copy = structuredClone({ ...plan || {} });
+  delete copy.status;
+  delete copy.waivers;
+  delete copy.descopes;
+  if (isRec(copy.verification)) {
+    const v = { ...copy.verification };
+    delete v.hook;
+    if (Object.keys(v).length) copy.verification = v;
+    else delete copy.verification;
+  }
+  return sha256(JSON.stringify(copy)).slice(0, 16);
+}
+
+// design-to-code/plan-record.ts
+import fs6 from "node:fs";
+
+// design-to-code/verify-run.ts
+import fs5 from "node:fs";
+import path4 from "node:path";
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+function writeFileAtomic(file, data) {
+  fs5.mkdirSync(path4.dirname(path4.resolve(file)), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  try {
+    fs5.writeFileSync(tmp, data);
+    fs5.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs5.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+
+// design-to-code/plan-record.ts
+var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+function formatPlan(value, raw) {
+  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
+  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const text = raw.slice(bom.length);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
+}
+function writePlan(file, value, raw) {
+  let was = raw ?? null;
+  if (raw === void 0) try {
+    was = fs6.readFileSync(file, "utf8");
+  } catch {
+    was = null;
+  }
+  const out = formatPlan(value, was);
+  if (out === was) return false;
+  writeFileAtomic(file, out);
+  return true;
 }
 
 // design-to-code/verify-build.ts
@@ -705,7 +822,7 @@ function readHookInput() {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st;
   try {
-    st = fs5.fstatSync(0);
+    st = fs7.fstatSync(0);
   } catch {
     return Promise.resolve({ payload: {}, source: "closed" });
   }
@@ -720,7 +837,7 @@ function readHookInput() {
   };
   if (st.isFile() || st.isCharacterDevice()) {
     try {
-      return Promise.resolve({ payload: parse(fs5.readFileSync(0, "utf8")), source: "file" });
+      return Promise.resolve({ payload: parse(fs7.readFileSync(0, "utf8")), source: "file" });
     } catch {
       return Promise.resolve({ payload: {}, source: "unreadable" });
     }
@@ -765,7 +882,7 @@ function isStale(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs5.statSync(file).mtimeMs > cutoff;
+    return now - fs7.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
@@ -778,53 +895,57 @@ function readPlan(file) {
 }
 var isPlanFile = (p) => "plan" in p;
 function findPlans(cwd) {
-  const dir = path3.join(cwd, "design", "plan");
-  if (!fs5.existsSync(dir)) return { plans: [], bad: [] };
-  const read = fs5.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path3.join(dir, f)));
+  const dir = path5.join(cwd, "design", "plan");
+  if (!fs7.existsSync(dir)) return { plans: [], bad: [] };
+  const read = fs7.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path5.join(dir, f)));
   return { plans: read.filter(isPlanFile), bad: read.filter((p) => !isPlanFile(p)) };
 }
 function rootOfPlan(file, fallback) {
-  const abs = path3.resolve(file);
-  const dir = path3.dirname(abs);
-  if (path3.basename(dir) === "plan" && path3.basename(path3.dirname(dir)) === "design") return path3.dirname(path3.dirname(dir));
+  const abs = path5.resolve(file);
+  const dir = path5.dirname(abs);
+  if (path5.basename(dir) === "plan" && path5.basename(path5.dirname(dir)) === "design") return path5.dirname(path5.dirname(dir));
   return fallback || process.cwd();
 }
 var REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
 var LIFECYCLE = /* @__PURE__ */ new Set(["pending", "awaiting-user", "abandoned"]);
-var COMPUTED_STORED = /* @__PURE__ */ new Set(["verified", "static-only"]);
+var COMPUTED_STORED = /* @__PURE__ */ new Set(["verified", "verified-with-deviations", "static-only"]);
 var isLifecycle = (s) => LIFECYCLE.has(s);
 var lifecycleOf = (plan) => {
   const s = String(plan && plan.status || "pending").trim().toLowerCase();
   return isLifecycle(s) ? s : "pending";
 };
-var sha = (buf) => crypto2.createHash("sha256").update(buf).digest("hex").slice(0, 16);
 function fileHashes2(plan, cwd) {
-  return fileHashes(plan && plan.files, cwd);
+  return fileHashes(planCodeFiles(plan || {}, cwd), cwd);
 }
-function planHash(plan) {
-  const copy = structuredClone(plan || {});
-  delete copy.status;
-  if (copy.verification) {
-    delete copy.verification.hook;
-    if (!Object.keys(copy.verification).length) delete copy.verification;
-  }
-  return sha(JSON.stringify(copy));
-}
-function changedFiles(plan, cwd) {
+var planHash2 = (plan) => planHash(plan);
+var hookHashMatches = (hook, plan) => hook.planHash === planHash2(plan) || hook.planHash === legacyPlanHash(plan);
+function hookFileDiff(plan, cwd) {
   const hook = plan.verification && plan.verification.hook;
   if (!hook || !hook.files) return null;
   const now = fileHashes2(plan, cwd);
-  const changed = [];
+  const listed = new Set(Array.isArray(plan.files) ? plan.files.map(String) : []);
+  const changed = [], unhashed = [];
   const all = /* @__PURE__ */ new Set([...Object.keys(hook.files), ...Object.keys(now)]);
-  for (const f of all) if (hook.files[f] !== now[f]) changed.push(now[f] === void 0 ? `${f} (no longer in files[])` : hook.files[f] === void 0 ? `${f} (added to files[])` : now[f] === null ? `${f} (missing)` : f);
-  return changed;
+  for (const f of all) {
+    if (hook.files[f] === now[f]) continue;
+    if (now[f] === void 0) changed.push(`${f} (no longer hashed: not in files[] nor a mapped module that resolves)`);
+    else if (hook.files[f] === void 0) {
+      if (listed.has(f)) changed.push(`${f} (added to files[])`);
+      else unhashed.push(`${f} (now hashed: mapped module)`);
+    } else changed.push(now[f] === null ? `${f} (missing)` : f);
+  }
+  return { changed, unhashed };
+}
+function changedFiles(plan, cwd) {
+  const d = hookFileDiff(plan, cwd);
+  return d && d.changed;
 }
 function isOpen(p, cwd) {
   if (lifecycleOf(p.plan) !== "pending") return false;
   if (isStale(p.file)) return false;
   const hook = p.plan.verification && p.plan.verification.hook;
   if (!hook || hook.result !== "pass") return true;
-  if (hook.planHash !== planHash(p.plan)) return true;
+  if (!hookHashMatches(hook, p.plan)) return true;
   const ch = changedFiles(p.plan, cwd);
   return !ch || ch.length > 0;
 }
@@ -993,6 +1114,8 @@ function moduleSegments(spec) {
   if (first !== void 0 && /^[@~#]$/.test(first)) segs.shift();
   return segs;
 }
+var importCache = /* @__PURE__ */ new Map();
+var cachedImports = (text) => getOrInit(importCache, text, () => importsOf(text));
 function moduleImported(mapModule, byFile, cwd) {
   const want = moduleSegments(mapModule);
   if (!want.length) return true;
@@ -1005,11 +1128,11 @@ function moduleImported(mapModule, byFile, cwd) {
     }
     return true;
   };
-  const wantAbs = moduleSegments(path3.relative(cwd, path3.resolve(cwd, String(mapModule))));
+  const wantAbs = moduleSegments(path5.relative(cwd, path5.resolve(cwd, String(mapModule))));
   for (const f of byFile) {
-    for (const spec of importsOf(f.text)) {
+    for (const spec of cachedImports(f.text)) {
       if (spec.startsWith(".")) {
-        const resolved = moduleSegments(path3.relative(cwd, path3.resolve(cwd, path3.dirname(f.rel), spec)));
+        const resolved = moduleSegments(path5.relative(cwd, path5.resolve(cwd, path5.dirname(f.rel), spec)));
         if (resolved.join("/").toLowerCase() === wantAbs.join("/").toLowerCase() || suffixMatch(resolved)) return true;
       } else if (suffixMatch(moduleSegments(spec))) return true;
     }
@@ -1021,20 +1144,20 @@ function moduleImported(mapModule, byFile, cwd) {
   return false;
 }
 function exportDirOf(cwd) {
-  const e = path3.join(cwd, "design", "export");
-  return fs5.existsSync(path3.join(e, "pages")) ? e : path3.join(cwd, "design");
+  const e = path5.join(cwd, "design", "export");
+  return fs7.existsSync(path5.join(e, "pages")) ? e : path5.join(cwd, "design");
 }
 var idFromStem = (s) => {
   const m = /__(I?\d+)_(\d+)$/.exec(String(s || ""));
   return m ? `${m[1]}:${m[2]}` : null;
 };
 function indexRows(exportDir) {
-  const root = readJsonOrNull(path3.join(exportDir, "pages", "index.json"), isPagesRootIndex);
+  const root = readJsonOrNull(path5.join(exportDir, "pages", "index.json"), isPagesRootIndex);
   if (!root) return [];
   if (root.layers) return root.layers;
   const rows = [];
   for (const pd of root.pageDirs) {
-    const idx = readJsonOrNull(path3.join(exportDir, pd.index || path3.join("pages", pd.dir || "", "index.json")), isPageIndex);
+    const idx = readJsonOrNull(path5.join(exportDir, pd.index || path5.join("pages", pd.dir || "", "index.json")), isPageIndex);
     if (idx) rows.push(...idx.layers);
   }
   return rows;
@@ -1043,7 +1166,7 @@ function locateExport(plan, planFile, cwd) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
     if (!rel) return null;
-    for (const f of [path3.resolve(cwd, rel), path3.resolve(exportDir, rel)]) {
+    for (const f of [path5.resolve(cwd, rel), path5.resolve(exportDir, rel)]) {
       const doc = readJsonOrNull(f, isScreenDoc);
       if (doc) return { file: f, doc };
     }
@@ -1051,7 +1174,7 @@ function locateExport(plan, planFile, cwd) {
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
   const rows = indexRows(exportDir);
-  const ids = [plan.nodeId, idFromStem(plan.screen), planFile ? idFromStem(path3.basename(planFile, ".json")) : null].filter((id) => !!id);
+  const ids = [plan.nodeId, idFromStem(plan.screen), planFile ? idFromStem(path5.basename(planFile, ".json")) : null].filter((id) => !!id);
   let row = null;
   for (const id of ids) {
     row = rows.find((r) => r.id === id) || null;
@@ -1117,7 +1240,7 @@ var verdictOf = (row) => String(row && row.verdict || "").trim().toLowerCase();
 var NO_TOKEN = /* @__PURE__ */ new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
 var hasToken = (row) => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
 function loadMapKeys(cwd) {
-  for (const f of [path3.join(cwd, "design", "codeconnect.local.json"), path3.join(cwd, "codeconnect.local.json")]) {
+  for (const f of [path5.join(cwd, "design", "codeconnect.local.json"), path5.join(cwd, "codeconnect.local.json")]) {
     const map = readJsonOrNull(f, isCodeConnectMap);
     if (!map) continue;
     const keys = /* @__PURE__ */ new Map();
@@ -1134,9 +1257,14 @@ function checkVerification(plan, cwd) {
     return ['no `verification.mode` in the plan \u2014 record how the build was checked: {mode:"rendered", renderer, artifacts:[\u2026], deltas:[\u2026]} after rendering and comparing (references/verify.md), or {mode:"static-only", reason} if the project genuinely has no way to render'];
   }
   if (v.mode === "rendered") {
+    const shape = (x) => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
+    const wrongShape = [];
+    if (v.artifacts !== void 0 && !Array.isArray(v.artifacts)) wrongShape.push(`verification.artifacts must be an array of paths, got ${shape(v.artifacts)} \u2014 e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
+    if (v.deltas !== void 0 && !Array.isArray(v.deltas)) wrongShape.push(`verification.deltas must be an array of the residual differences, got ${shape(v.deltas)} \u2014 the counts live in the report; list each difference ([] if none were found)`);
+    if (wrongShape.length) return v.deltas === void 0 ? [...wrongShape, "verification.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)"] : wrongShape;
     const artifacts = Array.isArray(v.artifacts) ? v.artifacts : [];
     if (!artifacts.length) return ['verification.mode is "rendered" but `artifacts` is empty \u2014 list the screenshot(s)/report the render produced'];
-    const missing = artifacts.filter((a) => !fs5.existsSync(path3.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs7.existsSync(path5.join(cwd, String(a))));
     if (missing.length) return [`verification artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(v.deltas)) return ["verification.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)"];
     return [];
@@ -1152,8 +1280,67 @@ function verificationWarnings(plan) {
   const out = [];
   const c = v.coverage;
   if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push('verification.coverage is missing \u2014 record {rendered:[\u2026], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, "Beyond the ideal frame")');
-  if (!v.a11y) out.push("verification.a11y is missing \u2014 no accessibility check is recorded (web: @axe-core/playwright on the rendered page); say so in the report rather than implying one ran");
+  if (!v.a11y) out.push("verification.a11y is missing \u2014 copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) \u2014 `verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded \u2014 say so in the report rather than implying one ran");
   return out;
+}
+function recordedReportWarnings(plan, cwd) {
+  const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
+  if (!rec || typeof rec !== "object" || typeof rec.report !== "string" || !rec.report) return [];
+  let bytes;
+  try {
+    bytes = fs7.readFileSync(path5.resolve(cwd, rec.report));
+  } catch {
+    return [];
+  }
+  const now = crypto3.createHash("sha256").update(bytes).digest("hex");
+  return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} \u2014 re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
+}
+var newestOwn = (reports) => {
+  const own = reports.filter((r) => r.matchedBy === "name");
+  return (own.length ? own : reports).reduce((best, r) => !best || r.mtimeMs > best.mtimeMs ? r : best, null);
+};
+function a11yReportOf(named, reports, ctx = {}) {
+  if (named === void 0 || !named.trim()) return { ref: newestOwn(reports) };
+  const json = (x) => x.replace(/\.report\.md$/, ".report.json");
+  const slash = (x) => x.split(path5.sep).join("/").split("\\").join("/");
+  const want = slash(named.trim());
+  const rels = /* @__PURE__ */ new Set([json(want.replace(/^\.\//, ""))]);
+  if (ctx.cwd !== void 0) {
+    rels.add(json(slash(path5.relative(ctx.cwd, path5.resolve(ctx.cwd, named.trim())))));
+    if (ctx.planFile !== void 0) rels.add(json(slash(path5.relative(ctx.cwd, path5.resolve(path5.dirname(path5.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
+  }
+  const exact = reports.find((r) => rels.has(r.rel));
+  if (exact) return { ref: exact };
+  const base = json(path5.posix.basename(want));
+  const byBase = reports.filter((r) => path5.posix.basename(r.rel) === base);
+  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
+  return { ref: null, missing: want };
+}
+function behaviourWarnings(plan, reports, ctx = {}) {
+  const out = [];
+  const all = reports || [];
+  const a11y = plan.verification && typeof plan.verification === "object" ? plan.verification.a11y : void 0;
+  const recorded = a11y && typeof a11y === "object" ? a11y.violations : void 0;
+  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : void 0, all, ctx);
+  if (recorded !== void 0 && target.missing !== void 0 && all.some((r2) => r2.behaviour && r2.behaviour.ran)) out.push(`verification.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ \u2014 the a11y count was not checked against it`);
+  const r = target.ref ?? newestOwn(all);
+  const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+  const failWarning = (ref, fail, failed) => {
+    const ids = [...new Set(failed)];
+    return `${ref.rel}: behaviour/a11y \u2014 ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) \u2014 not the fidelity verdict, but a measurable accessibility failure is never waived: fix it or raise a designer question`;
+  };
+  const others = all.filter((x) => x !== r);
+  const otherFails = others.flatMap((x) => x.behaviour && x.behaviour.ran && x.behaviour.fail > 0 ? [failWarning(x, x.behaviour.fail, x.behaviour.failed)] : []);
+  const b = r ? r.behaviour : null;
+  if (!r || !b) return [...out, ...otherFails];
+  if (!b.ran) {
+    if (b.why !== "--behaviour off" && !r.shippedProbe) return out;
+    out.push(b.why === "--behaviour off" ? `${r.rel}: behaviour/a11y checks were not run (--behaviour off) \u2014 the skills never pass that switch; re-run the probe without it before claiming accessibility` : `${r.rel}: behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 re-run the shipped probe, or say in the report that accessibility was not checked`);
+    return [...out, ...otherFails];
+  }
+  if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
+  if (recorded !== void 0 && target.missing === void 0 && recorded !== b.fail) out.push(`verification.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} \u2014 copy report.behaviour.summary`);
+  return [...out, ...otherFails];
 }
 var A11Y = /\b(a11y|axe|accessib)/i;
 function verificationContradictions(plan, reports) {
@@ -1169,11 +1356,13 @@ function verificationContradictions(plan, reports) {
   }
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
   for (const r of reports || []) {
-    if (Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 copy them (or the ones you judged real, with why) into the plan`);
+    const recordedHere = !!(v.recorded && typeof v.recorded === "object" && v.recorded.report === r.rel);
+    if (!recordedHere && Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 copy them (or the ones you judged real, with why) into the plan`);
     for (const k of ["verifyScreenVerdict", "verdict"]) {
       const claimed = v[k];
       const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
-      if (typeof s === "string" && /pass/i.test(s) && r.verdict !== "pass") out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} \u2014 the report is the verdict; the plan cannot overrule it`);
+      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict)) out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} \u2014 the report is the verdict; the plan cannot overrule it`);
+      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations") out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" \u2014 say the accepted deviations, not a plain pass`);
     }
   }
   return out;
@@ -1195,7 +1384,7 @@ function validatePlanHeader(plan) {
   const missing = ["screenName", "nodeId", "route", "file"].filter((k) => plan[k] === void 0 || plan[k] === null || plan[k] === "");
   if (!missing.length) return [];
   return [
-    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} \u2014 other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (plan-skeleton.js writes the header; only the route is yours to fill)`
+    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} \u2014 other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (the plan-skeleton script writes the header; only the route is yours to fill)`
   ];
 }
 var DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
@@ -1206,30 +1395,300 @@ function tokenCore(x) {
   s = s.replace(/^figma-/, "").replace(/-[0-9a-f]{8}$/, "");
   return slug2(s);
 }
-function declaresToken(line, literal, codeToken) {
-  const at = line.indexOf(literal);
-  if (at === -1) return false;
+var STYLESHEET_EXT = /* @__PURE__ */ new Set(["css", "scss", "sass", "less", "styl"]);
+var isStylesheet = (rel) => STYLESHEET_EXT.has(extOf(rel));
+var COLOUR_UTILITY = /^(bg|text|border|ring|fill|stroke|outline|divide|placeholder|decoration|accent|caret|from|via|to|shadow)-(.+)$/;
+var TW_PALETTE = /^(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}$/;
+var TW_KEYWORD = /* @__PURE__ */ new Set(["white", "black", "transparent", "current", "inherit"]);
+function tokenParts(codeToken) {
+  const out = [];
+  for (const raw of codeToken.replace(/var\(\s*(--[\w-]+)\s*,[^)]*\)/g, "var($1)").split(/[\s,]+/)) {
+    let t = raw.trim().toLowerCase().replace(/!$/, "");
+    if (!t || t === "/") continue;
+    const v = /^var\((--[\w-]+)\)$/.exec(t);
+    if (v && v[1]) {
+      out.push({ text: v[1], prop: v[1], builtin: false });
+      continue;
+    }
+    if (t.startsWith("--")) {
+      const n = t.replace(/:$/, "");
+      out.push({ text: n, prop: n, builtin: false });
+      continue;
+    }
+    t = t.slice(t.lastIndexOf(":") + 1).replace(/^!/, "").replace(/\/[\w.[\]%]+$/, "");
+    const v4 = /^[a-z-]+-\((--[\w-]+)\)$/.exec(t);
+    if (v4 && v4[1]) {
+      out.push({ text: t, prop: v4[1], builtin: false });
+      continue;
+    }
+    const name = COLOUR_UTILITY.exec(t)?.[2];
+    if (!name) {
+      out.push({ text: t, prop: null, builtin: false });
+      continue;
+    }
+    out.push({ text: t, prop: `--color-${name}`, builtin: TW_KEYWORD.has(name) || TW_PALETTE.test(name) || /^[\d.]+$|^\[/.test(name) });
+  }
+  return out;
+}
+var tokenCandidates = (codeToken) => [.../* @__PURE__ */ new Set([codeToken, ...tokenParts(codeToken).flatMap((p) => p.prop ? [p.text, p.prop] : [p.text])])];
+function namesToken(name, codeToken, stylesheet) {
+  if (stylesheet && !name.startsWith("--")) return false;
+  const declared = slug2(name), dc = tokenCore(name);
+  if (!declared) return false;
+  return tokenCandidates(codeToken).some((c) => {
+    const tc = tokenCore(c);
+    return declared === slug2(c) || !!dc && dc === tc;
+  });
+}
+function declaresTokenAt(line, at, codeToken, stylesheet) {
   const m = DECLARATION.exec(line.slice(0, at));
-  if (!m) return false;
-  const declared = slug2(m[2]), token = slug2(codeToken);
-  if (!declared || !token) return false;
-  const dc = tokenCore(m[2]), tc = tokenCore(codeToken);
-  return declared === token || declared.includes(token) || token.includes(declared) || !!dc && !!tc && (dc === tc || dc.includes(tc) || tc.includes(dc));
+  return !!m && namesToken(m[2] ?? "", codeToken, stylesheet);
+}
+function definesAny(line, literal, codeTokens, stylesheet) {
+  let at = line.indexOf(literal);
+  if (at === -1) return false;
+  while (at !== -1) {
+    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, stylesheet))) return false;
+    at = line.indexOf(literal, at + literal.length);
+  }
+  return true;
+}
+var isAcknowledged = (row) => typeof row.acknowledged === "string" && !!row.acknowledged.trim();
+function readFiles(rels, cwd) {
+  const out = [];
+  for (const rel of rels) {
+    const abs = path5.join(cwd, rel);
+    try {
+      if (fs7.statSync(abs).isFile()) out.push({ rel, text: fs7.readFileSync(abs, "utf8") });
+    } catch {
+    }
+  }
+  return out;
+}
+var SCRIPT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro)$/i;
+function buildGraph(cwd, extra = []) {
+  const listCount = /* @__PURE__ */ new Map();
+  for (const p of findPlans(cwd).plans) for (const f of new Set(p.plan.files || [])) listCount.set(f, (listCount.get(f) || 0) + 1);
+  const files = readFiles([.../* @__PURE__ */ new Set([...listCount.keys(), ...extra])], cwd);
+  const byRel = new Map(files.map((f) => [f.rel, f]));
+  const scripts = files.filter((f) => SCRIPT_RE.test(f.rel));
+  const lower = (segs) => segs.map((x) => x.toLowerCase()).join("/");
+  const bySuffix = /* @__PURE__ */ new Map(), byFull = /* @__PURE__ */ new Map();
+  for (const f of scripts) {
+    const segs = moduleSegments(f.rel);
+    getOrInit(byFull, lower(segs), () => []).push(f.rel);
+    for (let i = 0; i < segs.length; i++) getOrInit(bySuffix, lower(segs.slice(i)), () => []).push(f.rel);
+  }
+  const kids = /* @__PURE__ */ new Map(), parents = /* @__PURE__ */ new Map();
+  for (const f of scripts) {
+    const found = /* @__PURE__ */ new Set();
+    for (const spec of cachedImports(f.text)) {
+      const segs = spec.startsWith(".") ? moduleSegments(path5.relative(cwd, path5.resolve(cwd, path5.dirname(f.rel), spec))) : moduleSegments(spec);
+      if (!segs.length) continue;
+      for (const r of bySuffix.get(lower(segs)) || []) found.add(r);
+      for (let i = 1; i < segs.length; i++) for (const r of byFull.get(lower(segs.slice(i))) || []) found.add(r);
+    }
+    found.delete(f.rel);
+    kids.set(f.rel, [...found]);
+    for (const r of found) getOrInit(parents, r, () => []).push(f.rel);
+  }
+  let scanned = null;
+  const scan = () => {
+    if (scanned) return scanned;
+    const walked = projectScan(cwd);
+    const dirs = /* @__PURE__ */ new Set([path5.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
+    return scanned = { css: walked.css, tailwindConfig: walked.tailwindConfig || [...dirs].some(hasTwConfig) };
+  };
+  return { files, listCount, kids, parents, byRel, scan };
+}
+function reachableFor(g, own) {
+  const mine = new Set(own);
+  const ancestors = /* @__PURE__ */ new Set();
+  const queue = own.filter((r) => g.kids.has(r));
+  for (let i = 0; i < queue.length; i++) {
+    for (const par of g.parents.get(queue[i] ?? "") || []) if (!mine.has(par) && !ancestors.has(par)) {
+      ancestors.add(par);
+      queue.push(par);
+    }
+  }
+  const out = /* @__PURE__ */ new Set([...mine, ...ancestors]);
+  for (const r of mine) for (const k of g.kids.get(r) || []) out.add(k);
+  const steppable = (r) => mine.has(r) || (g.listCount.get(r) || 0) !== 1;
+  for (const r of ancestors) for (const k of g.kids.get(r) || []) if (steppable(k)) out.add(k);
+  return [...out].map((r) => g.byRel.get(r)).filter((f) => !!f);
+}
+function profileOf(plan, cwd) {
+  const t = plan.target;
+  if (typeof t === "string" && t.trim()) return t.trim();
+  if (t && typeof t === "object" && typeof t.profile === "string" && t.profile.trim()) return t.profile.trim();
+  const doc = readJsonOrNull(path5.join(cwd, "design", "target.json"), isJsonObject);
+  return doc && typeof doc.profile === "string" && doc.profile.trim() ? doc.profile.trim() : null;
+}
+var isWebProfile = (p) => !!p && /^web(-|$)/i.test(p);
+function tagCoverageOf(plan, exp, files) {
+  const anchors = plan.anchors || {};
+  const vis = exp ? visibility(exp.doc).visible : null;
+  const ids = Object.keys(anchors).filter((id) => {
+    const a = anchors[id];
+    return anchored(a) && !(a && typeof a.omitted === "string" && a.omitted.trim()) && (!vis || vis.has(id));
+  });
+  const attribute = files.some((f) => f.text.includes("data-dt-node"));
+  const untagged = attribute ? ids.filter((id) => !files.some((f) => f.text.includes(`"${id}"`) || f.text.includes(`'${id}'`) || f.text.includes("`" + id + "`"))) : ids;
+  return { tagged: ids.length - untagged.length, anchored: ids.length, attribute, untagged };
+}
+var SKIP_DIRS = /* @__PURE__ */ new Set([
+  "node_modules",
+  "dist",
+  "build",
+  ".git",
+  "design",
+  ".next",
+  "out",
+  "coverage",
+  ".turbo",
+  ".svelte-kit",
+  ".nuxt",
+  ".output",
+  "Pods",
+  ".venv",
+  "venv",
+  "vendor",
+  "target",
+  "tmp"
+]);
+var TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
+var hasTwConfig = (dir) => {
+  try {
+    return fs7.readdirSync(dir).some((n) => TW_CONFIG.test(n));
+  } catch {
+    return false;
+  }
+};
+function packageDirOf(cwd, rel) {
+  const root = path5.resolve(cwd);
+  for (let d = path5.dirname(path5.resolve(cwd, rel)); d.startsWith(root); d = path5.dirname(d)) {
+    if (fs7.existsSync(path5.join(d, "package.json"))) return d;
+    if (d === root) break;
+  }
+  return root;
+}
+function projectScan(cwd, limit = 2e3) {
+  const css = [];
+  let tailwindConfig = false;
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs7.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (css.length >= limit) return;
+      const abs = path5.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) walk(abs);
+      } else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
+      else if (e.isFile() && /\.css$/i.test(e.name)) {
+        try {
+          css.push({ rel: path5.relative(cwd, abs).split(path5.sep).join("/"), text: fs7.readFileSync(abs, "utf8") });
+        } catch {
+        }
+      }
+    }
+  };
+  walk(cwd);
+  return { css, tailwindConfig };
+}
+function declaredCustomProps(files) {
+  const out = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    const text = isSourceFile(f.rel) ? scanText(f.rel, f.text) : f.text;
+    for (const m of text.matchAll(/(--[\w-]+)\s*:/g)) {
+      const n = m[1];
+      if (n !== void 0) out.add(n.toLowerCase());
+    }
+  }
+  return out;
+}
+var requiredCustomProps = (codeToken) => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
+function undeclaredColourTokens(live, g) {
+  const colour = [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() === "color").map((r) => String(r.codeToken).trim()))];
+  const wanted = colour.map((t) => ({ t, props: requiredCustomProps(t) })).filter((x) => x.props.length);
+  if (!wanted.length) return [];
+  const scan = g.scan();
+  if (scan.tailwindConfig) return [];
+  const declared = declaredCustomProps([...g.files, ...scan.css]);
+  const missing = wanted.filter((x) => x.props.some((p) => !declared.has(p)));
+  if (!missing.length) return [];
+  const show = missing.slice(0, 8).map((x) => `'${x.t}' (needs ${x.props.filter((p) => !declared.has(p)).join(", ")})`).join(", ");
+  return [`${missing.length} colour code token(s) are declared nowhere \u2014 not in any plan's files[] nor in a .css file of the project: ${show}${missing.length > 8 ? `, +${missing.length - 8} more` : ""} \u2014 a utility or variable with no definition renders nothing; add the alias to the theme (e.g. in the @theme block the tokens script writes)`];
+}
+var STYLE_FIELDS = /* @__PURE__ */ new Set([
+  "effects",
+  "shadow",
+  "fill",
+  "fills",
+  "stroke",
+  "strokes",
+  "radius",
+  "cornerradius",
+  "opacity",
+  "padding",
+  "gap",
+  "font",
+  "typography",
+  "color",
+  "background",
+  "border",
+  "blur",
+  "size",
+  "width",
+  "height",
+  "fontsize",
+  "fontweight",
+  "lineheight",
+  "letterspacing",
+  "borderradius",
+  "borderwidth",
+  "textalign",
+  "textcase"
+]);
+function deviationConflicts(plan) {
+  const out = [];
+  const anchors = plan.anchors || {};
+  (plan.deviations || []).forEach((d, i) => {
+    if (!d) return;
+    const field = typeof d.field === "string" ? d.field.trim().toLowerCase().split(/[.[\]\s/]+/).filter(Boolean).pop() ?? "" : "";
+    if (STYLE_FIELDS.has(field)) return;
+    const built = d.built;
+    const omitted = built === null || built === false || typeof built === "string" && /^(omitted|not built|not rendered|removed)/i.test(built.trim());
+    if (!omitted) return;
+    const ids = [...typeof d.nodeId === "string" && d.nodeId ? [d.nodeId] : [], ...Array.isArray(d.nodeIds) ? d.nodeIds : []];
+    for (const id of ids) {
+      const comp = (plan.components || []).find((c) => c.nodeId === id && verdictOf(c) === "reused");
+      const a = anchors[id];
+      const mod = a && typeof a.mapModule === "string" && a.mapModule.trim() ? a.mapModule : null;
+      if (!comp && !mod) continue;
+      const says = [comp ? `components[] marks '${comp.name}' "reused"${comp.mapModule ? ` from ${comp.mapModule}` : ""}` : null, mod ? `anchors["${id}"] maps it to ${mod}` : null].filter(Boolean).join(" and ");
+      out.push(`deviation #${i}${d.id ? ` (${d.id})` : ""} says node ${id} was not built, but ${says} \u2014 one of them is wrong: if it was left out, anchor it as {"omitted": "<why>"} and drop the reuse claim; if it was built, correct the deviation`);
+    }
+  });
+  return out;
 }
 function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed = plan.files || [];
-  const absent = listed.filter((f) => !fs5.existsSync(path3.join(cwd, f)));
+  const absent = listed.filter((f) => !fs7.existsSync(path5.join(cwd, f)));
   if (!listed.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
-  const byFile = listed.filter((rel) => fs5.existsSync(path3.join(cwd, rel)) && fs5.statSync(path3.join(cwd, rel)).isFile()).map((rel) => ({ rel, text: fs5.readFileSync(path3.join(cwd, rel), "utf8") }));
+  const byFile = listed.filter((rel) => fs7.existsSync(path5.join(cwd, rel)) && fs7.statSync(path5.join(cwd, rel)).isFile()).map((rel) => ({ rel, text: fs7.readFileSync(path5.join(cwd, rel), "utf8") }));
   const code = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
   const allowedFiles = (plan.allowedLiterals || []).filter((a) => a && a.reason && a.file).map((a) => String(a.file));
   const isAllowed = (row, literal) => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
-  function definedOnlyInTokenSource(literal, codeToken) {
+  function definedOnlyInTokenSource(literal, codeTokens) {
     if (!literal) return false;
     let seen = false;
     for (const f of code) {
@@ -1240,7 +1699,7 @@ function checkPlan({ plan, file }, cwd, opts) {
       }
       for (const line of f.text.split("\n")) {
         if (!line.includes(literal)) continue;
-        if (!declaresToken(line, literal, codeToken)) return false;
+        if (!definesAny(line, literal, codeTokens, isStylesheet(f.rel))) return false;
         seen = true;
       }
     }
@@ -1248,14 +1707,17 @@ function checkPlan({ plan, file }, cwd, opts) {
   }
   const tokens = plan.tokens || [];
   const live = tokens.filter((r) => verdictOf(r) !== "hidden-only");
+  const colourTokensOf = (key) => [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() === "color" && colorKey(r.value) === key).map((r) => String(r.codeToken)))];
+  const dimTokensOf = (n) => [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() !== "color" && parseFloat(String(r.value)) === n).map((r) => String(r.codeToken)))];
   const undecided = live.filter((row) => (verdictOf(row) === "missing" || !hasToken(row)) && !row.decision);
   if (undecided.length) {
     const show = undecided.slice(0, 8).map((row) => `${row.figmaName ? `'${row.figmaName}' ` : ""}${String(row.value)} (${row.kind})`).join(", ");
     warnings.push(`${undecided.length} token row(s) have no token and no recorded decision: ${show}${undecided.length > 8 ? `, +${undecided.length - 8} more` : ""} \u2014 fill codeToken, or say what you did about it in \`decision\` (a one-off literal is a legitimate answer; say so)`);
   }
+  for (const row of live) if (row.acknowledged !== void 0 && !isAcknowledged(row)) warnings.push(`token row '${row.figmaName || String(row.value)}' has an empty \`acknowledged\` \u2014 say why the shared code token is right, or remove the field`);
   const byCodeToken = /* @__PURE__ */ new Map();
   for (const row of live) {
-    if (!hasToken(row) || !row.figmaName) continue;
+    if (!hasToken(row) || !row.figmaName || isAcknowledged(row)) continue;
     const c = String(row.codeToken).trim();
     const names = byCodeToken.get(c) || /* @__PURE__ */ new Map();
     if (!names.has(row.figmaName)) names.set(row.figmaName, row.value);
@@ -1264,7 +1726,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   for (const [c, names] of byCodeToken) {
     if (names.size < 2) continue;
     const l = [...names].map(([n, v]) => `'${n}' (${String(v)})`).join(" and ");
-    warnings.push(`code token '${c}' is mapped from ${names.size} DIFFERENT Figma tokens \u2014 ${l}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name`);
+    warnings.push(`code token '${c}' is mapped from ${names.size} DIFFERENT Figma tokens \u2014 ${l}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name (or, if sharing is deliberate, add "acknowledged": "<why>" to the row that shares it)`);
   }
   const colors = colorLiterals(source);
   const colourHits = /* @__PURE__ */ new Map();
@@ -1272,13 +1734,14 @@ function checkPlan({ plan, file }, cwd, opts) {
     if (!hasToken(row) || String(row.kind).toLowerCase() !== "color") continue;
     const h = colorKey(row.value);
     const lit = h && colors.get(h);
-    if (lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, row.codeToken)) {
-      const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [] }));
+    if (h && lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, colourTokensOf(h))) {
+      const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [], defs: colourTokensOf(h) }));
       if (!e.tokens.includes(row.codeToken)) e.tokens.push(row.codeToken);
     }
   }
   for (const [lit, e] of colourHits) {
-    const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel) && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => e.tokens.some((t) => declaresToken(l, lit, t)))).map((f) => f.rel);
+    const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel) && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => definesAny(l, lit, e.defs, isStylesheet(f.rel)))).map((f) => f.rel);
+    if (!where.length) continue;
     blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${String(e.value)} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} \u2014 use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "\u2026"}, matched on the exact value string, or name the file that defines the tokens: {"file": "\u2026", "reason": "\u2026"}`);
   }
   const dims = arbitraryPx(source);
@@ -1286,16 +1749,21 @@ function checkPlan({ plan, file }, cwd, opts) {
     if (!hasToken(row) || String(row.kind).toLowerCase() === "color") continue;
     const n = parseFloat(String(row.value));
     const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
-    const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, row.codeToken));
+    const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, dimTokensOf(n)));
     if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${String(row.value)} (${row.kind}) to token '${String(row.codeToken)}' \u2014 use the token (or add it to allowedLiterals with a reason)`);
   }
+  let built = null;
+  const graph = () => built || (built = o.graph ? o.graph() : buildGraph(cwd, listed));
+  const sharedByFile = () => graph().files.filter((f) => !listed.includes(f.rel));
+  let reach = null;
+  const reachable = () => reach || (reach = reachableFor(graph(), listed));
   const mapped = loadMapKeys(cwd);
   const seenModule = /* @__PURE__ */ new Set();
   for (const row of plan.components || []) {
     const verdict = verdictOf(row);
     if (verdict === "reused" && row.mapModule && !seenModule.has(row.mapModule)) {
       seenModule.add(row.mapModule);
-      if (!moduleImported(row.mapModule, byFile, cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) \u2014 was it regenerated instead of reused?`);
+      if (!moduleImported(row.mapModule, byFile, cwd) && !moduleImported(row.mapModule, reachable(), cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (neither this plan's files, nor a plan file they import, nor one that renders them \u2014 an app shell \u2014 or its direct imports; compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) \u2014 was it regenerated instead of reused? If it is rendered by a shared layout above this screen (e.g. an app shell), list that layout file in this plan's files[] too`);
     }
     const mappedTo = verdict === "new" && row.key ? mapped.get(row.key) : void 0;
     if (mappedTo) {
@@ -1305,27 +1773,48 @@ function checkPlan({ plan, file }, cwd, opts) {
   }
   const exp = o.export === void 0 ? locateExport(plan, file, cwd) : o.export;
   if (!exp) {
-    warnings.push("could not find this plan's screen export (no `file`/`nodeId` header, and no node id in its name) \u2014 the anchor check did not run; plan-skeleton.js writes the header");
+    warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) \u2014 the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
     const cov = anchorCoverage(plan, exp.doc);
     if (cov.unmapped.length) {
       const show = cov.unmapped.slice(0, 10).map((u) => `${u.id} '${String(u.name).trim()}' (${u.type})`).join(", ");
-      blocking.push(`${cov.unmappedNodes} visible design node(s) have no anchor in the plan \u2014 neither they nor any ancestor map to code. Top of each unmapped subtree: ${show}${cov.unmapped.length > 10 ? `, +${cov.unmapped.length - 10} more` : ""}. Add anchors["<id>"] = {"mapModule": "<the file that renders it>"} on the subtree's top (children inherit it), or {"omitted": "<why it is not built>"} \u2014 plan-skeleton.js lists every visible node`);
+      blocking.push(`${cov.unmappedNodes} visible design node(s) have no anchor in the plan \u2014 neither they nor any ancestor map to code. Top of each unmapped subtree: ${show}${cov.unmapped.length > 10 ? `, +${cov.unmapped.length - 10} more` : ""}. Add anchors["<id>"] = {"mapModule": "<the file that renders it>"} on the subtree's top (children inherit it), or {"omitted": "<why it is not built>"} \u2014 the plan-skeleton script lists every visible node`);
     }
     if (cov.wrappers.length) warnings.push(`${cov.wrappers.length} visible container(s) have anchored children but no anchor of their own (e.g. ${cov.wrappers.slice(0, 3).map((w) => `${w.id} '${String(w.name).trim()}'`).join(", ")}) \u2014 anchor the frame to the screen component so sync-design can place a change to it`);
     if (cov.hiddenAnchored.length) warnings.push(`${cov.hiddenAnchored.length} anchor(s) point at HIDDEN nodes (${cov.hiddenAnchored.slice(0, 4).join(", ")}${cov.hiddenAnchored.length > 4 ? ", \u2026" : ""}) \u2014 hidden layers are not built; remove them`);
     if (cov.unknown.length) warnings.push(`${cov.unknown.length} anchor(s) name node ids that are not on this frame (${cov.unknown.slice(0, 4).join(", ")}${cov.unknown.length > 4 ? ", \u2026" : ""}) \u2014 e.g. a shared shell tagged with another frame's instance ids; anchor THIS frame's ids`);
   }
+  let tagCoverage;
+  if (isWebProfile(profileOf(plan, cwd))) {
+    const optOut = plan.tagging;
+    const reason = optOut && optOut.off === true && typeof optOut.reason === "string" ? optOut.reason.trim() : "";
+    if (optOut && optOut.off === true && !reason) warnings.push("`tagging.off` is set with no `reason` \u2014 the opt-out is ignored until it says why this project cannot carry data-dt-node tags");
+    if (!reason && listed.length) {
+      const tagged = tagCoverageOf(plan, exp, [...code, ...sharedByFile().filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }))]);
+      if (tagged.anchored > 0) {
+        tagCoverage = { tagged: tagged.tagged, anchored: tagged.anchored };
+        const pct = Math.round(100 * tagged.tagged / tagged.anchored);
+        const how = 'tag every element that implements a design node one-to-one with data-dt-node="<node id>" (an id from a lookup table counts: the id string only has to appear in a listed file), so the verify step measures the right element instead of guessing';
+        if (!tagged.attribute) blocking.push(`web build with no data-dt-node tags: none of the files in any plan's files[] carries the attribute, so 0 of ${tagged.anchored} anchored visible node(s) can be measured \u2014 ${how}. A project that genuinely cannot tag records "tagging": {"off": true, "reason": "\u2026"} in the plan`);
+        else if (tagged.tagged * 2 < tagged.anchored) warnings.push(`data-dt-node tag coverage is ${tagged.tagged}/${tagged.anchored} anchored visible node(s) (${pct}%), below 50% \u2014 ${how}${tagged.untagged.length ? `; untagged e.g. ${tagged.untagged.slice(0, 5).join(", ")}` : ""}`);
+      }
+    }
+  }
+  warnings.push(...undeclaredColourTokens(live, graph()));
   warnings.push(...checkVerification(plan, cwd));
   warnings.push(...verificationWarnings(plan));
-  warnings.push(...verificationContradictions(plan, o.reports || locateReports(plan, file, cwd, exp)));
+  warnings.push(...recordedReportWarnings(plan, cwd));
+  const reports = o.reports || locateReports(plan, file, cwd, exp);
+  warnings.push(...verificationContradictions(plan, reports));
+  warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
   warnings.push(...deviationWarnings(plan));
+  warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
   warnings.push(...auditGateWarnings(plan, cwd, exp));
-  return { blocking, warnings };
+  return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...tagCoverage ? { tagCoverage } : {} };
 }
 function auditGateWarnings(plan, cwd, exp) {
-  const screenFile = plan.file ? path3.resolve(cwd, plan.file) : null;
+  const screenFile = plan.file ? path5.resolve(cwd, plan.file) : null;
   const screenName = plan.screenName || exp && exp.layerName || null;
   let g;
   try {
@@ -1333,62 +1822,79 @@ function auditGateWarnings(plan, cwd, exp) {
   } catch {
     return [];
   }
-  if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} \u2014 the audit gate was NOT checked; re-run audit.js for this screen`];
+  if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} \u2014 the audit gate was NOT checked; re-run the audit script for this screen`];
   if (!g.auditFile || !g.blockers.length) return [];
   const gate = plan.auditGate;
   if (!gate) {
     return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` \u2014 either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
   }
   const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
-  const uncovered = g.blockers.filter((id) => !overridden.has(id));
-  if (uncovered.length) return [`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} \u2014 either resolve them or add them with a reason`];
-  if (!gate.reason) return [`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` \u2014 say why it is safe to build past ${g.auditFile}`];
-  return [];
+  const out = [];
+  const uncovered = g.blockers.filter((id, i) => !overridden.has(id) && !overridden.has(g.legacyBlockers[i] ?? id));
+  if (uncovered.length) out.push(`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} \u2014 either resolve them or add them with a reason`);
+  else if (!gate.reason) out.push(`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` \u2014 say why it is safe to build past ${g.auditFile}`);
+  const legacySet = new Set(g.legacyBlockers);
+  const viaLegacy = [];
+  g.blockers.forEach((id, i) => {
+    const old = g.legacyBlockers[i];
+    if (old !== void 0 && !overridden.has(id) && overridden.has(old)) viaLegacy.push(`${old} \u2192 ${id}`);
+  });
+  const staleLegacy = [...overridden].filter((e) => typeof e === "string" && /^[^@#~]+#\d+$/.test(e) && !legacySet.has(e));
+  if (viaLegacy.length || staleLegacy.length) {
+    const parts = [...viaLegacy, ...staleLegacy.length ? [`no current blocker: ${staleLegacy.map((e) => `${e} (drop it)`).join(", ")}`] : []];
+    out.push(`${g.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id \u2014 a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker \u2014 if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
+  }
+  return out;
+}
+function behaviourRef(x) {
+  if (!isReportBehaviour(x)) return null;
+  return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
 function locateReports(plan, planFile, cwd, exp) {
-  const dir = path3.join(cwd, "design", "verify");
-  if (!fs5.existsSync(dir)) return [];
+  const dir = path5.join(cwd, "design", "verify");
+  if (!fs7.existsSync(dir)) return [];
   const e = exp === void 0 ? locateExport(plan, planFile, cwd) : exp;
   const stems = new Set([
-    plan.file ? path3.basename(String(plan.file)).replace(/\.json$/i, "") : null,
-    e ? path3.basename(e.file).replace(/\.json$/i, "") : null,
-    planFile ? path3.basename(planFile, ".json") : null,
+    plan.file ? path5.basename(String(plan.file)).replace(/\.json$/i, "") : null,
+    e ? path5.basename(e.file).replace(/\.json$/i, "") : null,
+    planFile ? path5.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null
   ].filter((s) => !!s));
-  const nodeId = plan.nodeId || e && e.nodeId || idFromStem(plan.screen) || (planFile ? idFromStem(path3.basename(planFile, ".json")) : null);
+  const nodeId = plan.nodeId || e && e.nodeId || idFromStem(plan.screen) || (planFile ? idFromStem(path5.basename(planFile, ".json")) : null);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
-  for (const f of fs5.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
-    const abs = path3.join(dir, f);
+  for (const f of fs7.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+    const abs = path5.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
     let by = null;
-    const expFile = path3.join(dir, stem + ".expected.json");
+    const expFile = path5.join(dir, stem + ".expected.json");
+    if (!fs7.existsSync(expFile) && fs7.existsSync(expFile + ".retired")) continue;
     const expFrame = () => {
       const x = readJsonOrNull(expFile, isJsonObject);
       return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null;
     };
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
-    else if (nodeId && fs5.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
+    else if (nodeId && fs7.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try {
-      mtimeMs = fs5.statSync(abs).mtimeMs;
+      mtimeMs = fs7.statSync(abs).mtimeMs;
     } catch {
     }
     const want = r.inputs && r.inputs.expectationSha256;
     let expectationChanged = false;
-    if (want && fs5.existsSync(expFile)) {
+    if (want && fs7.existsSync(expFile)) {
       try {
-        expectationChanged = crypto2.createHash("sha256").update(fs5.readFileSync(expFile)).digest("hex") !== want;
+        expectationChanged = crypto3.createHash("sha256").update(fs7.readFileSync(expFile)).digest("hex") !== want;
       } catch {
       }
     }
     out.push({
-      rel: path3.relative(cwd, abs).split(path3.sep).join("/"),
+      rel: path5.relative(cwd, abs).split(path5.sep).join("/"),
       matchedBy: by,
       schema: r.schema || null,
       verdict: r.verdict || null,
@@ -1401,40 +1907,50 @@ function locateReports(plan, planFile, cwd, exp) {
       exportContentSha256: r.inputs && r.inputs.exportContentSha256 || null,
       code: r.inputs && r.inputs.code || null,
       expectationChanged,
-      expectationRel: expectationChanged ? path3.relative(cwd, expFile).split(path3.sep).join("/") : null
+      expectationRel: expectationChanged ? path5.relative(cwd, expFile).split(path5.sep).join("/") : null,
+      waiversSha256: r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256 || null,
+      behaviour: behaviourRef(r.behaviour),
+      shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe)
     });
   }
   return out;
 }
+var NO_WAIVERS = waiversHash(null);
+var waiversChanged = (r, now) => (r.waiversSha256 || NO_WAIVERS) !== now;
+var WAIVERS_CHANGED = "waivers changed since the last compare \u2014 re-run --compare (with --plan <plan.json> when several plans describe the frame)";
 function reportVerdict(plan, cwd, exp, reports) {
   const v = plan.verification;
   if (!reports.length) {
     if (v && v.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically \u2014 not rendered (${v.reason || "no reason recorded"})`] };
-    return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ \u2014 run verify-screen.js --expect/--compare (the report's verdict is what grants "verified")`] };
+    return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ \u2014 run ${scriptCmd("verify-screen")} --expect/--compare (the report's verdict is what grants "verified")`] };
   }
   const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
-  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) \u2014 it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: verify-screen.js --expect, then --compare`) };
+  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) \u2014 it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
   const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
+  const waiversNow = waiversHash(plan);
   const failing = reports.filter((r) => r.verdict === "fail");
-  if (failing.length) return { status: "failed", reasons: failing.map(said) };
-  const notPass = reports.filter((r) => r.verdict !== "pass");
+  if (failing.length) return { status: "failed", reasons: failing.map((r) => said(r) + (waiversChanged(r, waiversNow) ? ` \u2014 ${WAIVERS_CHANGED}` : "")) };
+  const notPass = reports.filter((r) => !isPassingVerdict(r.verdict));
   if (notPass.length) return { status: "unverified", reasons: notPass.map(said) };
   const expSha = exp && exp.doc ? exportContentSha256(exp.doc) : null;
   for (const r of reports) {
     if (!r.exportContentSha256) {
       if (r.expectationChanged) return { status: "unverified", reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`] };
-      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run verify-screen.js --expect and --compare`] };
+      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run ${scriptCmd("verify-screen")} --expect and --compare`] };
     }
     if (!expSha) return { status: "unverified", reasons: [`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`] };
     if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}\u2026 \u2192 ${expSha.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`] };
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
-    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) \u2014 re-run verify-screen.js --compare from the project root, where design/plan/ lists this screen's files`] };
+    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) \u2014 re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
     const now = fileHashes2(plan, cwd);
-    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]);
+    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => measured[f] === void 0 ? `${f} (not recorded)` : f);
     if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code \u2014 changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} \u2014 re-run --compare`] };
+    if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
   }
   const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
-  return { status: "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} says pass and measured this design and exactly these files (by content)${head ? ` \u2014 at git ${head.slice(0, 12)}` : ""}`] };
+  const withDeviations = reports.filter((r) => r.verdict === "pass-with-deviations");
+  const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations \u2014 accepted deltas / descoped interactions are listed in the report)` : "says pass";
+  return { status: withDeviations.length ? "verified-with-deviations" : "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} ${says} and measured this design and exactly these files (by content)${head ? ` \u2014 at git ${head.slice(0, 12)}` : ""}`] };
 }
 function computeStatus(plan, opts) {
   const o = opts || {};
@@ -1448,93 +1964,283 @@ function computeStatus(plan, opts) {
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
   const rv = reportVerdict(plan, cwd, exp, reports);
   const hook = plan.verification && plan.verification.hook;
-  let hookState = null, hookWhy = [];
+  let hookState = null, hookWhy = [], unhashedWhy = [];
   if (!hook || !hook.result) {
     hookState = "pending";
     hookWhy = ["the build-screen Stop hook has not checked this plan"];
-  } else if (hook.planHash && hook.planHash !== planHash(plan)) {
+  } else if (hook.planHash && !hookHashMatches(hook, plan)) {
     hookState = "pending";
     hookWhy = ["the plan changed after the hook's last check"];
   } else if (hook.result !== "pass") {
     hookState = "blocked";
     hookWhy = hook.blocking && hook.blocking.length ? hook.blocking : ["the hook's last check blocked"];
   } else {
-    const ch = changedFiles(plan, cwd) || [];
+    const d = hookFileDiff(plan, cwd);
+    const ch = d ? d.changed : [];
     if (ch.length) {
       hookState = "stale";
       hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`];
     }
+    if (d && d.unhashed.length) unhashedWhy = [`hook: not hashed by the hook's last check (its record predates D117), so not a change: ${d.unhashed.slice(0, 6).join(", ")}${d.unhashed.length > 6 ? `, +${d.unhashed.length - 6} more` : ""} \u2014 the hook's next check of this plan records it; until then an edit to it does not reopen the plan (\`verify-build <plan>\` re-checks now)`];
   }
   const reportWhy = rv.reasons.map((r) => (hookState ? "report: " : "") + r);
-  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h)), reports };
-  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy), reports };
-  return { status: rv.status, reasons: notes.concat(rv.status === "verified" ? ["hook passed; " + rv.reasons[0]] : rv.reasons), reports };
+  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h), unhashedWhy), reports };
+  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy, unhashedWhy), reports };
+  return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons, unhashedWhy), reports };
 }
-function ownPlans(open, input, all) {
-  const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
-  if (!file || typeof file !== "string") return open;
-  let text;
-  try {
-    text = fs5.readFileSync(file, "utf8");
-  } catch {
-    return open;
+var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+function transcriptActions(text, ownOnly) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let v = null;
+    try {
+      const parsed = JSON.parse(line);
+      v = parsed;
+    } catch {
+      continue;
+    }
+    if (!isJsonObject(v) || ownOnly && v.isSidechain === true || !isJsonObject(v.message) || !Array.isArray(v.message.content)) continue;
+    for (const item of v.message.content) {
+      if (!isJsonObject(item) || item.type !== "tool_use" || typeof item.name !== "string" || !isJsonObject(item.input)) continue;
+      const inp = item.input;
+      const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
+      if (WRITE_TOOLS.has(item.name)) {
+        for (const k of ["file_path", "notebook_path"]) {
+          const f = inp[k];
+          if (typeof f === "string") out.push({ path: f, base });
+        }
+      } else if (item.name === "Bash" && typeof inp.command === "string") for (const f of bashWriteTargets(inp.command)) out.push({ path: f, base });
+    }
   }
-  const mentioned = (p) => {
-    const base = path3.basename(p.file);
-    return text.includes("plan/" + base) || text.includes("plan\\\\" + base);
+  return out;
+}
+function bashWriteTargets(cmd) {
+  const kept = [];
+  let delim = null;
+  for (const line of cmd.split("\n")) {
+    if (delim !== null) {
+      if (line.trim() === delim) delim = null;
+      continue;
+    }
+    kept.push(line);
+    const h = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
+    if (h && h[2]) delim = h[2];
+  }
+  const toks = [];
+  const text = kept.join("\n");
+  let i = 0, word = null;
+  const flush = () => {
+    if (word !== null) {
+      toks.push({ word });
+      word = null;
+    }
+  };
+  while (i < text.length) {
+    const c = text[i] ?? "";
+    if (c === "'" || c === '"') {
+      const j = text.indexOf(c, i + 1);
+      const end = j === -1 ? text.length : j;
+      word = (word ?? "") + text.slice(i + 1, end).replace(/\\(.)/g, c === '"' ? "$1" : "\\$1");
+      i = end + 1;
+      continue;
+    }
+    if (c === "\\" && i + 1 < text.length) {
+      word = (word ?? "") + (text[i + 1] ?? "");
+      i += 2;
+      continue;
+    }
+    if (/\s/.test(c) && c !== "\n") {
+      flush();
+      i++;
+      continue;
+    }
+    const two = text.slice(i, i + 2);
+    const fdThenFlush = () => {
+      if (word !== null && /^\d+$/.test(word)) word = null;
+      else flush();
+    };
+    if (two === ">>" || two === "&>") {
+      fdThenFlush();
+      toks.push({ op: two === "&>" ? ">" : ">>" });
+      i += 2;
+      continue;
+    }
+    if (c === ">") {
+      fdThenFlush();
+      toks.push({ op: ">" });
+      i++;
+      continue;
+    }
+    if (two === "&&" || two === "||" || two === "<<") {
+      flush();
+      toks.push({ op: two });
+      i += 2;
+      continue;
+    }
+    if ([";", "|", "\n", "<", "&", "(", ")"].includes(c)) {
+      flush();
+      toks.push({ op: c });
+      i++;
+      continue;
+    }
+    word = (word ?? "") + c;
+    i++;
+  }
+  flush();
+  const out = [];
+  let cmdWords = [];
+  const endCommand = () => {
+    const [head, ...args] = cmdWords;
+    const name = head === void 0 ? "" : path5.posix.basename(head.replace(/\\/g, "/"));
+    const plain = args.filter((w) => !w.startsWith("-"));
+    if (["cp", "mv", "install", "ln"].includes(name) && plain.length >= 2) out.push(plain[plain.length - 1] ?? "");
+    if (name === "sed" && args.some((w) => w === "-i" || w.startsWith("-i") || w.startsWith("--in-place")) || name === "perl" && args.some((w) => /^-\w*i/.test(w))) {
+      let script = false;
+      for (let k = 0; k < args.length; k++) {
+        const w = args[k] ?? "";
+        if (w === "-i" && args[k + 1] === "") {
+          k++;
+          continue;
+        }
+        if (w === "-e" || w === "-f" || name === "perl" && /^-\w*e$/.test(w)) {
+          k++;
+          script = true;
+          continue;
+        }
+        if (w.startsWith("-")) continue;
+        if (!script && name === "sed") {
+          script = true;
+          continue;
+        }
+        out.push(w);
+      }
+    }
+    if (/^(python3?|node)$/.test(name)) {
+      const at = args.findIndex((w) => w === "-c" || w === "-e");
+      const code = at === -1 ? void 0 : args[at + 1];
+      if (code) {
+        for (const m of code.matchAll(/['"`]([^'"`\n]+)['"`]/g)) if (m[1]) out.push(m[1]);
+      }
+    }
+    if (cmdWords.some((w) => /plan-skeleton/.test(w))) out.push(...cmdWords.filter((w) => !w.startsWith("-")));
+    const tee = cmdWords.findIndex((w) => w === "tee" || w.endsWith("/tee"));
+    if (tee !== -1) out.push(...cmdWords.slice(tee + 1).filter((w) => !w.startsWith("-")));
+    cmdWords.forEach((w, k) => {
+      if ((w === "--out" || w === "-o") && cmdWords[k + 1] !== void 0) out.push(cmdWords[k + 1] ?? "");
+      const eq = /^--out=(.+)$/.exec(w);
+      if (eq && eq[1]) out.push(eq[1]);
+    });
+    cmdWords = [];
+  };
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k];
+    if (!t) continue;
+    if ("word" in t) {
+      cmdWords.push(t.word);
+      continue;
+    }
+    if (t.op === ">" || t.op === ">>") {
+      const n = toks[k + 1];
+      if (n && "word" in n) {
+        out.push(n.word);
+        k++;
+      }
+      continue;
+    }
+    if (t.op === "<" || t.op === "<<") {
+      const n = toks[k + 1];
+      if (n && "word" in n) k++;
+      continue;
+    }
+    endCommand();
+  }
+  endCommand();
+  return out.filter(Boolean);
+}
+function sameFile(w, rel, cwd) {
+  const c = w.path.trim().replace(/\\/g, "/");
+  if (!c) return false;
+  const want = path5.resolve(cwd, rel).replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path5.posix.normalize(c).toLowerCase().endsWith("/" + path5.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
+  const got = path5.resolve(w.base || cwd, c).replace(/\\/g, "/");
+  return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
+}
+function ownPlans(open, input, all, cwd) {
+  const agent = typeof input.agent_transcript_path === "string" && !!input.agent_transcript_path;
+  const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
+  if (!file || typeof file !== "string") return { plans: open, scope: "unscoped" };
+  let writes;
+  try {
+    writes = transcriptActions(fs7.readFileSync(file, "utf8"), !agent);
+  } catch {
+    return { plans: open, scope: "unscoped" };
+  }
+  const listers = /* @__PURE__ */ new Map();
+  for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
+  const owns = (p) => {
+    const planRel = path5.relative(cwd, path5.resolve(p.file));
+    if (writes.some((w) => sameFile(w, planRel, cwd))) return true;
+    return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile(w, f, cwd)));
   };
   const known = all && all.length ? all : open;
-  if (!known.some(mentioned)) return open;
-  return open.filter(mentioned);
+  if (!known.some(owns)) return { plans: [], scope: "none-named" };
+  return { plans: open.filter(owns), scope: "named" };
 }
 var USAGE2 = [
   `usage: ${scriptCmd("verify-build")}                     (Stop hook: reads the hook JSON from stdin when stdin is not a terminal)`,
   `       ${scriptCmd("verify-build")} <plan.json>\u2026        check these plans now (no stdin read)`,
   `       ${scriptCmd("verify-build")} --status [<plan.json>\u2026] [--json]   print each plan's computed status (all of design/plan/ by default); never writes`,
   "",
-  "Blocks (exit 2) on exactly two things: a raw colour the plan resolved to a token, in a source file of",
-  "files[] (comments, prose strings and .svg/.json/non-source files are not scanned); and a visible",
-  "design node with no anchor (itself or an ancestor) in anchors{}. Everything else is a warning (exit 0).",
+  "Blocks (exit 2) on: a raw colour the plan resolved to a token, in a source file of files[] (comments,",
+  "prose strings and .svg/.json/non-source files are not scanned); a visible design node with no anchor",
+  "(itself or an ancestor) in anchors{}; and, on web profiles, no data-dt-node tag in any plan's files[]",
+  '(opt out: "tagging": {"off": true, "reason": "\u2026"}). Everything else is a warning (exit 0).',
+  "Hook mode checks the plans the stopping agent's transcript names; a transcript that names none checks nothing.",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<\u2026>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
   "  2. failed       a verify-report@2 for this screen says fail (never hidden behind the hook's state)",
   "  3. blocked      the Stop hook's last check blocked",
-  "  4. stale        a file in files[] changed (by content) since the hook passed",
+  "  4. stale        a file in files[] or a module anchors/components map changed (by content) since the hook passed",
   "  5. pending      the hook has not checked this version of the plan",
-  "  6. unverified | static-only | verified   what the report says: verified only for an @2 'pass' that",
-  "     measured this design and these files, by content hash (no report / a pre-@2 report / other",
-  '     design or code -> unverified). A stored "verified" is ignored.',
+  "  6. unverified | static-only | verified | verified-with-deviations   what the report says: verified",
+  "     only for an @2 'pass' that measured this design, these files and the plan's current waivers[]/",
+  "     descopes[], by content hash (no report / a pre-@2 report / other design, code or waivers ->",
+  "     unverified); verified-with-deviations when every report passes and >=1 says 'pass-with-deviations'.",
+  `     A stored "verified" is ignored. waivers[]/descopes[] and verification{} are not part of the hook's`,
+  "     planHash (a hook record with the older formula, which hashed verification, is still accepted).",
   "Every non-verified status carries a non-empty why: the hook's state AND what the report says (a",
   "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}."
 ].join("\n");
-function checkAndRecord(p, cwd) {
+function checkAndRecord(p, cwd, graph) {
   const exp = locateExport(p.plan, p.file, cwd);
   const reports = locateReports(p.plan, p.file, cwd, exp);
-  setPhase(`checking ${path3.basename(p.file)}`);
-  const { blocking, warnings } = checkPlan(p, cwd, { export: exp, reports });
+  setPhase(`checking ${path5.basename(p.file)}`);
+  const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...graph ? { graph } : {} });
   const plan = p.plan;
   const cleared = COMPUTED_STORED.has(String(plan.status || "").toLowerCase()) ? plan.status : null;
   if (cleared) delete plan.status;
   if (!plan.verification) plan.verification = {};
-  setPhase(`hashing files[] of ${path3.basename(p.file)}`);
+  setPhase(`hashing files[] of ${path5.basename(p.file)}`);
   plan.verification.hook = {
     result: blocking.length ? "blocked" : "pass",
     checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
     blocking,
     warnings: warnings.length,
-    planHash: planHash(plan),
-    files: fileHashes2(plan, cwd)
+    planHash: planHash2(plan),
+    files: fileHashes2(plan, cwd),
+    ...tagCoverage ? { tagCoverage } : {}
   };
   let times = null;
   try {
-    const s = fs5.statSync(p.file);
+    const s = fs7.statSync(p.file);
     times = [s.atime, s.mtime];
   } catch {
   }
-  fs5.writeFileSync(p.file, JSON.stringify(plan, null, 2) + "\n");
+  writePlan(p.file, plan);
   if (times) try {
-    fs5.utimesSync(p.file, times[0], times[1]);
+    fs7.utimesSync(p.file, times[0], times[1]);
   } catch {
   }
   const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports });
@@ -1557,14 +2263,18 @@ ${USAGE2}`);
   }
   if (statusMode) {
     setPhase("computing plan status");
-    const found = planArgs.length ? planArgs.map((f) => readPlan(path3.resolve(f))) : null;
+    const found = planArgs.length ? planArgs.map((f) => readPlan(path5.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p) => !isPlanFile(p)) } : findPlans(process.cwd());
     for (const b of bad) console.error(`verify-build: cannot read plan ${b.file}: ${b.error}`);
     const show = (f) => {
-      const r = path3.relative(process.cwd(), f);
+      const r = path5.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;
     };
-    const rows = plans.map((p) => Object.assign({ plan: show(p.file) }, computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) })));
+    const rows = plans.map((p) => {
+      const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });
+      const skipped = planCodeSkippedNote(p.plan, rootOfPlan(p.file));
+      return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
+    });
     if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" \xB7 ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
     else for (const r of rows) console.log(`${r.plan}: ${r.status}${r.reasons.length ? "\n  - " + r.reasons.join("\n  - ") : ""}`);
     if (!plans.length) console.error("verify-build: no plans found (design/plan/*.json)");
@@ -1573,10 +2283,10 @@ ${USAGE2}`);
   let input = {};
   let targets;
   if (planArgs.length) {
-    const read = planArgs.map((f) => readPlan(path3.resolve(f)));
+    const read = planArgs.map((f) => readPlan(path5.resolve(f)));
     const bad = read.filter((p) => !isPlanFile(p));
     if (bad.length) {
-      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path3.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
+      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path5.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
       return 1;
     }
     targets = read.filter(isPlanFile);
@@ -1596,7 +2306,7 @@ ${USAGE2}`);
       const cwd = rootOfPlan(p.file);
       const life = lifecycleOf(p.plan);
       if (life !== "pending") {
-        console.error(`verify-build: ${path3.basename(p.file)} is "${life}" \u2014 not checked`);
+        console.error(`verify-build: ${path5.basename(p.file)} is "${life}" \u2014 not checked`);
         continue;
       }
       all.push({ p, cwd });
@@ -1605,21 +2315,30 @@ ${USAGE2}`);
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
     setPhase("finding open plans in design/plan/");
     const { plans, bad } = findPlans(cwd);
-    for (const b of bad) console.error(`verify-build: warning: ${path3.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; fix it (plan-skeleton.js rewrites the skeleton fields and keeps what you filled)`);
+    for (const b of bad) console.error(`verify-build: warning: ${path5.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
     const open = plans.filter((p) => isOpen(p, cwd));
     if (!open.length) return 0;
-    for (const p of ownPlans(open, input, plans)) all.push({ p, cwd });
+    const own = ownPlans(open, input, plans, cwd);
+    if (own.scope === "none-named") {
+      console.error(`verify-build: this session wrote or ran nothing naming a plan under design/plan/ \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
+      return 0;
+    }
+    for (const p of own.plans) all.push({ p, cwd });
   }
-  const blockedOut = [];
+  const blockedOut = [], lines = [];
+  const warned = /* @__PURE__ */ new Map();
+  const graphs = /* @__PURE__ */ new Map();
   for (const { p, cwd } of all) {
-    const res = checkAndRecord(p, cwd);
-    const name = path3.basename(p.file);
-    if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (verify-build.js --status), never stored`);
-    for (const w of res.warnings) console.error(`verify-build: warning (${name}): ${w}`);
+    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd)));
+    const name = path5.basename(p.file);
+    if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
+    for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
     if (res.blocking.length) blockedOut.push(`# ${name}`, ...res.blocking.map((m) => `  - ${m}`));
     const why = res.blocking.length ? "see below" : res.status.reasons[res.status.reasons.length - 1];
-    console.error(`verify-build: ${name}: hook ${res.blocking.length ? "BLOCKED" : "passed"} \xB7 computed status: ${res.status.status}${why ? ` \u2014 ${why}` : ""}`);
+    lines.push(`verify-build: ${name}: hook ${res.blocking.length ? "BLOCKED" : "passed"} \xB7 computed status: ${res.status.status}${why ? ` \u2014 ${why}` : ""}`);
   }
+  for (const [w, names] of warned) console.error(`verify-build: warning (${names.join(", ")}): ${w}`);
+  for (const l of lines) console.error(l);
   if (blockedOut.length) {
     console.error("\nverify-build: build-screen check failed \u2014 do not report this screen as done until these are resolved");
     console.error('(a plan that will not be finished: set its status to "abandoned"; a build paused on a question for the user: "awaiting-user", then ask):\n');
@@ -1646,11 +2365,13 @@ export {
   anchorCoverage,
   arbitraryPx,
   auditGateWarnings,
+  behaviourWarnings,
   checkPlan,
   checkVerification,
   colorKey,
   colorLiterals,
   computeStatus,
+  deviationConflicts,
   deviationWarnings,
   fileHashes2 as fileHashes,
   importsOf,
@@ -1662,8 +2383,9 @@ export {
   main,
   moduleImported,
   ownPlans,
-  planHash,
+  planHash2 as planHash,
   readHookInput,
+  recordedReportWarnings,
   scanText,
   validatePlanHeader,
   verificationContradictions,

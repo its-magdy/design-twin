@@ -1,0 +1,853 @@
+{
+  "exportedAt": "2026-10-02T00:00:00Z",
+  "screen": "Crates",
+  "page": "Shelf",
+  "pageId": "80:0",
+  "nodeId": "80:1",
+  "nodes": [
+    {
+      "type": "FRAME",
+      "name": "Crates",
+      "id": "80:1",
+      "box": {
+        "w": 1280,
+        "h": 800,
+        "x": 0,
+        "y": 0
+      },
+      "clip": true,
+      "fills": [
+        {
+          "type": "solid",
+          "color": "#f6f4ee"
+        }
+      ],
+      "children": [
+        {
+          "type": "FRAME",
+          "name": "Top Bar",
+          "id": "80:3",
+          "box": {
+            "w": 1280,
+            "h": 56
+          },
+          "layout": {
+            "display": "flex",
+            "flexDirection": "row",
+            "gap": 16,
+            "padding": [
+              0,
+              16,
+              0,
+              16
+            ]
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#2e4a2e"
+            }
+          ],
+          "children": [
+            {
+              "type": "TEXT",
+              "name": "Brand",
+              "id": "80:4",
+              "box": {
+                "w": 80,
+                "h": 20
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#ffffff"
+                }
+              ],
+              "text": "Seed Shelf",
+              "font": {
+                "size": 14,
+                "family": "Arial",
+                "weight": "Bold",
+                "lineHeight": {
+                  "value": 20,
+                  "unit": "px"
+                },
+                "color": "#ffffff"
+              }
+            }
+          ]
+        },
+        {
+          "type": "TEXT",
+          "name": "Page Title",
+          "id": "80:2",
+          "box": {
+            "w": 80,
+            "h": 28
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#1d1d1f"
+            }
+          ],
+          "text": "Crates",
+          "font": {
+            "size": 20,
+            "family": "Arial",
+            "weight": "Bold",
+            "lineHeight": {
+              "value": 28,
+              "unit": "px"
+            },
+            "color": "#1d1d1f"
+          }
+        },
+        {
+          "type": "FRAME",
+          "name": "Crate Table",
+          "id": "80:10",
+          "box": {
+            "w": 640,
+            "h": 66
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#ffffff"
+            }
+          ],
+          "layout": {
+            "display": "flex",
+            "flexDirection": "column"
+          },
+          "children": [
+            {
+              "type": "FRAME",
+              "name": "Crate Row",
+              "id": "80:11",
+              "box": {
+                "w": 640,
+                "h": 33
+              },
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Crate Name",
+                  "id": "80:13",
+                  "box": {
+                    "w": 80,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#1d1d1f"
+                    }
+                  ],
+                  "text": "Oak crate",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#1d1d1f"
+                  }
+                },
+                {
+                  "type": "FRAME",
+                  "name": "Edit Crate",
+                  "id": "80:12",
+                  "box": {
+                    "w": 84,
+                    "h": 32
+                  },
+                  "radius": 4,
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#2e4a2e"
+                    }
+                  ],
+                  "children": [
+                    {
+                      "type": "TEXT",
+                      "name": "Label",
+                      "id": "80:14",
+                      "box": {
+                        "w": 64,
+                        "h": 20
+                      },
+                      "fills": [
+                        {
+                          "type": "solid",
+                          "color": "#ffffff"
+                        }
+                      ],
+                      "text": "Edit crate",
+                      "font": {
+                        "size": 14,
+                        "family": "Arial",
+                        "weight": "Regular",
+                        "lineHeight": {
+                          "value": 20,
+                          "unit": "px"
+                        },
+                        "color": "#ffffff"
+                      }
+                    }
+                  ],
+                  "reactions": [
+                    {
+                      "trigger": "on_click",
+                      "actions": [
+                        {
+                          "type": "node",
+                          "destinationId": "80:60",
+                          "destination": "Crate Form",
+                          "navigation": "overlay",
+                          "transition": {
+                            "type": "dissolve",
+                            "duration": 0.2,
+                            "easing": "ease_out"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "FRAME",
+          "name": "Crate Actions",
+          "id": "80:30",
+          "box": {
+            "w": 1248,
+            "h": 32
+          },
+          "layout": {
+            "display": "flex",
+            "flexDirection": "row",
+            "gap": 8
+          },
+          "children": [
+            {
+              "type": "FRAME",
+              "name": "Sort Crates",
+              "id": "80:15",
+              "box": {
+                "w": 96,
+                "h": 32
+              },
+              "radius": 4,
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#2e4a2e"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "80:51",
+                  "box": {
+                    "w": 76,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Sort crates",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "80:60",
+                      "destination": "Crate Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Move Crate",
+              "id": "80:16",
+              "box": {
+                "w": 96,
+                "h": 32
+              },
+              "radius": 4,
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#2e4a2e"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "80:52",
+                  "box": {
+                    "w": 76,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Move crate",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "80:60",
+                      "destination": "Crate Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Label Crate",
+              "id": "80:17",
+              "box": {
+                "w": 96,
+                "h": 32
+              },
+              "radius": 4,
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#2e4a2e"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "80:53",
+                  "box": {
+                    "w": 76,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Label crate",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "80:60",
+                      "destination": "Crate Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Stack Crate",
+              "id": "80:18",
+              "box": {
+                "w": 96,
+                "h": 32
+              },
+              "radius": 4,
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#2e4a2e"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "80:54",
+                  "box": {
+                    "w": 76,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Stack crate",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "80:60",
+                      "destination": "Crate Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Plant Crate",
+              "id": "80:22",
+              "box": {
+                "w": 96,
+                "h": 32
+              },
+              "radius": 4,
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#2e4a2e"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "80:55",
+                  "box": {
+                    "w": 76,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Plant crate",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "80:60",
+                      "destination": "Crate Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Ship Crate",
+              "id": "80:23",
+              "box": {
+                "w": 96,
+                "h": 32
+              },
+              "radius": 4,
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#2e4a2e"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "80:56",
+                  "box": {
+                    "w": 76,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Ship crate",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "80:60",
+                      "destination": "Crate Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Weigh Crate",
+              "id": "80:24",
+              "box": {
+                "w": 96,
+                "h": 32
+              },
+              "radius": 4,
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#2e4a2e"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "80:57",
+                  "box": {
+                    "w": 76,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Weigh crate",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "80:60",
+                      "destination": "Crate Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Filter",
+              "id": "80:21",
+              "box": {
+                "w": 36,
+                "h": 32
+              },
+              "radius": 4,
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#2e4a2e"
+                }
+              ],
+              "children": [
+                {
+                  "type": "VECTOR",
+                  "name": "Filter Icon",
+                  "id": "80:20",
+                  "box": {
+                    "w": 16,
+                    "h": 16
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Print Labels",
+              "id": "80:19",
+              "box": {
+                "w": 96,
+                "h": 32
+              },
+              "radius": 4,
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#2e4a2e"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "80:58",
+                  "box": {
+                    "w": 76,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Print labels",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Export",
+              "id": "80:25",
+              "box": {
+                "w": 72,
+                "h": 32
+              },
+              "radius": 4,
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#2e4a2e"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "80:59",
+                  "box": {
+                    "w": 52,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Export",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "FRAME",
+          "name": "Seed Trays",
+          "id": "80:40",
+          "box": {
+            "w": 640,
+            "h": 100
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#ffffff"
+            }
+          ],
+          "layout": {
+            "display": "flex",
+            "flexDirection": "column",
+            "padding": [
+              12,
+              12,
+              12,
+              12
+            ]
+          },
+          "children": [
+            {
+              "type": "TEXT",
+              "name": "Trays Title",
+              "id": "80:41",
+              "box": {
+                "w": 120,
+                "h": 24
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#1d1d1f"
+                }
+              ],
+              "text": "Seed Trays",
+              "font": {
+                "size": 16,
+                "family": "Arial",
+                "weight": "Bold",
+                "lineHeight": {
+                  "value": 20,
+                  "unit": "px"
+                },
+                "color": "#1d1d1f"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

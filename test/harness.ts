@@ -12,8 +12,10 @@ import type {
 } from "../bridge/src/doc-types.ts";
 import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, Cmd } from "../bridge/src/commands.ts";
 import { argsShapeError } from "../bridge/src/commands.ts";
+import { QUICK_KEYS } from "../bridge/src/quick-keys.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 import { must } from "./fixtures.ts";
+import { buildExpectation } from "../design-to-code/verify-screen.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
 // are plain objects; the types below name only what the harness itself builds or reads back. (The real
@@ -36,13 +38,15 @@ interface FakeVariable {
   /** raw Plugin API values: RGBA, number, or a VARIABLE_ALIAS — code.js decodes them */
   valuesByMode: Record<string, unknown>;
 }
-interface FakeCollection { id: string; name: string; modes: Array<{ modeId: string; name: string }>; defaultModeId: string }
+interface FakeCollection { id: string; name: string; modes: Array<{ modeId: string; name: string }>; defaultModeId: string; key?: unknown }
 interface FakeImage { getSizeAsync(): Promise<{ width: number; height: number }>; getBytesAsync(): Promise<Uint8Array> }
 /** What the plugin posts to its UI (progress.ts): run-begin / progress / run-end frames. */
 interface PostedMessage {
   type: string; source?: string; label?: string; phase?: string;
   page?: { index: number; of: number; name: string; pageId?: string };
   nodes?: number; assets?: number;
+  /** progress.ts run-begin / queued: the bridge request a run serves */
+  requestId?: string;
   /** main.ts `bridge-result` */
   id?: string; ok?: boolean; result?: unknown; error?: string;
 }
@@ -108,6 +112,7 @@ interface DesignSystemResult extends DesignSystemReply { designSystem: DesignSys
  *  never emitted — an index is not an export (the [LIST]/[CHILDREN] checks assert exactly that). */
 interface NodeSummary {
   name: string; id: string; type: string; w?: number; h?: number; hidden?: true; hasChildren?: boolean;
+  childCount?: number; title?: string; distinctTexts?: string[];
   children?: undefined; fills?: undefined; layout?: undefined; tokens?: undefined;
 }
 interface ListPagesResult {
@@ -128,12 +133,15 @@ type LibrariesOut = ListLibrariesReply;
 interface WriteResult { ok: boolean; applied: Array<{ id?: string }>; failedAt?: number; failedOp?: string; error?: string }
 interface WriteOp { op: string; [field: string]: unknown }
 /** progress.ts RunInfo */
-interface RunInfo { source: "ui" | "bridge"; label: string }
+interface RunInfo { source: "ui" | "bridge"; label: string; requestId?: string }
+/** collect.ts ScreenshotResult (DT-06: w/h/scale). */
+interface ScreenshotOut { id: string; name: string; type: string; w?: number; h?: number; scale?: number; reference: string; assets: Asset[] }
 /** collect.ts CollectOpts */
 interface CollectOpts extends Partial<Record<ReadOptName, boolean>> { allPages?: boolean; page?: string | string[] }
 interface DesignExportApi {
   serialize(node: FakeNode, depth: number, parentControlsLayout?: boolean): Promise<IrNode>;
   collectSelection(opts?: CollectOpts): Promise<SelectionResult>;
+  collectNode(rawId: string, opts?: CollectOpts): Promise<SelectionResult>;
   collectFull(opts?: CollectOpts): Promise<FullResult>;
   collectDesignSystemOnly(opts?: CollectOpts): Promise<DesignSystemResult>;
   collectLibraryFile(opts?: CollectOpts & { asLibrary?: string }): Promise<DesignSystemResult>;
@@ -145,6 +153,7 @@ interface DesignExportApi {
   applyWrites(ops?: WriteOp[]): Promise<WriteResult>;
   serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T>;
   requestCancel(): RunInfo | null;
+  collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotOut>;
 }
 /** The VM global object after the lift below: the export API plus the fake `figma` it reads. */
 type Sandbox = DesignExportApi & { figma: FakeFigma };
@@ -371,9 +380,9 @@ Object.assign(context, context.__designExport || {});
 // Narrowed by a runtime check — every API member present as a function, `figma` the fake passed in —
 // so a bundle that stopped exporting a method fails here by name, not as a TypeError at first use.
 const API_MEMBERS: Record<keyof DesignExportApi, true> = {
-  serialize: true, collectSelection: true, collectFull: true, collectDesignSystemOnly: true, collectLibraryFile: true,
+  serialize: true, collectSelection: true, collectNode: true, collectFull: true, collectDesignSystemOnly: true, collectLibraryFile: true,
   buildDesignSystem: true, listPages: true, listChildren: true, listLibraries: true, collectLibraryComponents: true,
-  applyWrites: true, serializeRun: true, requestCancel: true,
+  applyWrites: true, serializeRun: true, requestCancel: true, collectScreenshot: true,
 };
 const missingApi = (c: Record<string, unknown>): string[] => Object.keys(API_MEMBERS).filter((k) => typeof c[k] !== "function");
 function isSandbox(c: Record<string, unknown>): c is Record<string, unknown> & Sandbox {
@@ -520,7 +529,6 @@ const sandbox: Sandbox = context;
   const abs = await sandbox.serialize(absNode, 0, false);
   ok("hidden node kept + flagged", abs.hidden === true && abs.name === "Overlay");
   ok("absolute x/y captured", abs.x === 12.4 && abs.y === 40);
-  ok("grid column span", abs.gridColumnSpan === 2);
   ok("frame layoutGrids captured", Array.isArray(abs.layoutGrids) && abs.layoutGrids[0]?.pattern === "columns" && abs.layoutGrids[0]?.count === 12);
   ok("COLUMNS grid keeps its sectionSize as `size` (only GRID's cell size was read after the de-any)", abs.layoutGrids?.[0]?.size === 60);
   ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0]?.label === "Use spacing token md");
@@ -602,11 +610,12 @@ const sandbox: Sandbox = context;
   ok("collectDesignSystemOnly's designSystem carries the same variable/style/component data as buildDesignSystem",
     dsOnly.designSystem.variables.some((v) => v.name === "color/primary") &&
     Array.isArray(dsOnly.designSystem.styles.paint) && Array.isArray(dsOnly.designSystem.components));
-  // The one documented gap (see collect.ts): with no page walk, the note lands in `hygiene` — the ONE
-  // field buildDesignSystemLayout's split actually persists to disk (hygiene.json) and forwards
-  // through the MCP writeToDisk path, unlike a `manifest.warnings` field the split would drop.
-  ok("collectDesignSystemOnly notes the library-variable limitation in hygiene (the field that survives to disk)",
-    dsOnly.designSystem.hygiene.some((h) => /library \(remote\) variables/.test(h)));
+  // The one documented gap (see collect.ts) is a consuming file's: its library (remote) variables are only
+  // the ones it references. This mock DEFINES its tokens (no remote variable), so the line would be false
+  // here and must be absent; the consuming case (one remote variable) is pinned in [RD-alias] below.
+  ok("[DT08-3 rv] a file with no remote variable gets no 'consumes libraries' hygiene line (its catalog is its own)",
+    !dsOnly.designSystem.variables.some((v) => v.remote === true) &&
+    !dsOnly.designSystem.hygiene.some((h) => /library \(remote\) variables|consumes libraries|--as-library/.test(h)));
 
   // --- new READ additions (Tier 1: variable modes, prop-driven wiring, reference render, token bindings) ---
   ok("variable mode pin resolved to names", !!(tree.variableModes && tree.variableModes.Semantic === "Dark"));
@@ -633,6 +642,37 @@ const sandbox: Sandbox = context;
     sel.assets.some((a) => a.kind === "reference" && /_ref\.png$/.test(a.file)));
   ok("every asset carries a content hash, so a consumer can spot duplicates without diffing bytes",
     sel.assets.every((a) => typeof a.hash === "string" && a.hash.length > 0));
+  // DT-25 / F-08 end to end: the REAL plugin reply above, written by the REAL bridge writer over an
+  // assets/ dir that already holds (a) a different image under the reference's own name — a discovery
+  // thumbnail — and (b) the first SVG's exact bytes under another name. Every pointer the written screen
+  // JSON carries must name a file on disk (exact case), and the reference must be this pull's render.
+  {
+    const os = await import("node:os");
+    const OUT = await import("../bridge/src/write-out.ts");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-e2e-assets-"));
+    fs.mkdirSync(path.join(dir, "assets"));
+    const refAsset = must(sel.assets.find((a) => a.kind === "reference"), "the reply's reference asset");
+    fs.writeFileSync(path.join(dir, "assets", refAsset.file), Buffer.from([137, 80, 78, 71, 1, 2, 3])); // a different PNG under the same name
+    const reply = JSON.parse(JSON.stringify({ ...sel, screenName: sel.screen.screen || "Harness screen", nodeId: tree.id, page: "Harness page", pageId: "0:1" })) as ScreenReply;
+    const res = OUT.writeScreen(dir, reply, undefined);
+    const written = JSON.parse(fs.readFileSync(res.wrote.screen, "utf8")) as ScreenExport;
+    const ptrs: string[] = [];
+    const visit = (v: unknown): void => {
+      if (!v || typeof v !== "object") return;
+      if (Array.isArray(v)) { v.forEach(visit); return; }
+      for (const [k, val] of Object.entries(v)) (k === "asset" || k === "reference") && typeof val === "string" ? ptrs.push(val) : visit(val);
+    };
+    visit(written.nodes);
+    const onDisk = new Set(fs.readdirSync(path.join(dir, "assets")));
+    // This fixture's reply carries one asset, the reference (the SVG/content-reuse cases run with the
+    // plugin's asset shape in bridge.test.ts). With a thumbnail pre-seeded under its name, the check that
+    // tells a working writer from a broken one is the next: the pointer must MOVE to this pull's render.
+    ok("[DT-25 e2e] every pointer the plugin's reply produces names a file on disk (exact case)",
+      ptrs.length >= 1 && ptrs.every((p) => p.startsWith("assets/") && onDisk.has(p.slice("assets/".length))));
+    ok("[F-08 e2e] the root reference is this pull's render, not the file that already held its name",
+      written.nodes[0]?.reference !== "assets/" + refAsset.file && fs.readFileSync(path.join(dir, must(written.nodes[0]?.reference, "reference"))).equals(Buffer.from(must(refAsset.base64, "base64"), "base64")));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   ok("componentPropertyReferences -> propRefs (stripped)", !!(txt.propRefs && txt.propRefs.characters === "Label"));
   const btnOverride0 = btn.overrides?.[0];
   ok("instance overrides captured (empty filtered)", Array.isArray(btn.overrides) && btn.overrides.length === 1 && btnOverride0 !== undefined && btnOverride0.fields.indexOf("characters") !== -1);
@@ -723,8 +763,82 @@ const sandbox: Sandbox = context;
   ok("grid track sizes (fixed px + flex fr)", gfLayout.display === "grid" && Array.isArray(gfLayout.columnSizes) && gfLayout.columnSizes[0]?.type === "fixed" && gfLayout.columnSizes[0]?.value === 200 && gfLayout.columnSizes[1]?.type === "flex");
   const gfCol2 = must(gfLayout.columnSizes?.[2], "gf.layout.columnSizes[2]");
   ok("grid HUG track (value-less) handled", gfCol2.type === "hug" && gfCol2.value === undefined);
-  ok("grid child anchor index (start cell)", abs.gridColumnStart === 1 && abs.gridRowStart === 0);
-  ok("grid child cell align (justify/align-self)", abs.gridJustifySelf === "center" && abs.gridAlignSelf === "end");
+
+  // ---- [G21-X03] grid-child fields only on an IN-FLOW child of a GRID frame, anchors >= 0 ----
+  // Off a grid every node reads gridColumnAnchorIndex/gridRowAnchorIndex -1 (observed on all 7,882 nodes of
+  // the field exports) — not a track index. A root never gets them (its parent is not exported): the
+  // `absNode` root above carries span 2 / anchors 1,0 / CENTER,MAX in its fake and must emit none of it.
+  {
+    const gridKid = (id: string, extra: Record<string, unknown>) => ({ type: "FRAME", name: "Cell", visible: true, id, width: 10, height: 10,
+      x: 3, y: 4, layoutMode: "NONE", children: [], ...extra });
+    const gA = gridKid("g21g:a", { gridColumnAnchorIndex: 1, gridRowAnchorIndex: 0, gridColumnSpan: 2, gridRowSpan: 1,
+      gridChildHorizontalAlign: "CENTER", gridChildVerticalAlign: "MAX" });
+    const gB = gridKid("g21g:b", { gridColumnAnchorIndex: 0, gridRowAnchorIndex: 1, gridColumnSpan: 1, gridRowSpan: 1 });
+    const gC = gridKid("g21g:c", { layoutPositioning: "ABSOLUTE", gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0, gridColumnSpan: 2 });
+    const gE = gridKid("g21g:e", { gridColumnAnchorIndex: -1, gridRowAnchorIndex: 0 }); // in flow, column anchor not a track index
+    const gD = gridKid("g21g:d", { gridColumnAnchorIndex: -1, gridRowAnchorIndex: -1, gridColumnSpan: 1, gridRowSpan: 1, gridChildHorizontalAlign: "MIN",
+      children: [gridKid("g21g:d1", { gridColumnAnchorIndex: -1, gridRowAnchorIndex: -1 })] });
+    const g21Grid = { type: "FRAME", name: "Gallery", visible: true, id: "g21g:0", width: 100, height: 100, layoutMode: "GRID",
+      gridColumnCount: 2, gridRowCount: 2, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+      gridColumnAnchorIndex: 1, gridRowAnchorIndex: 1, children: [gA, gB, gC, gE] };
+    const g21Plain = { type: "FRAME", name: "Plain", visible: true, id: "g21g:p", width: 100, height: 100, layoutMode: "NONE", children: [gD] };
+    const gOut = await sandbox.serialize(g21Grid, 0, false);
+    const [oA, oB, oC, oE] = must(gOut.children, "g21 grid children");
+    const pOut = await sandbox.serialize(g21Plain, 0, false);
+    const oD = must(pOut.children?.[0], "g21 plain child");
+    const gridKeys = ["gridColumnStart", "gridRowStart", "gridColumnSpan", "gridRowSpan", "gridJustifySelf", "gridAlignSelf"] as const;
+    const noGrid = (n: IrNode | undefined): boolean => !!n && gridKeys.every((k) => !(k in n));
+    ok("[G21-X03] an in-flow grid child carries its span (grid column span)", oA?.gridColumnSpan === 2 && oA.gridRowSpan === undefined);
+    ok("[G21-X03] grid child anchor index (start cell) on an in-flow child of a GRID frame",
+      oA?.gridColumnStart === 1 && oA.gridRowStart === 0 && oB?.gridColumnStart === 0 && oB.gridRowStart === 1);
+    ok("[G21-X03] grid child cell align (justify/align-self)", oA?.gridJustifySelf === "center" && oA.gridAlignSelf === "end");
+    ok("[G21-X03] an ABSOLUTE child of the grid is not a grid item: no anchors/span (its x/y instead)", noGrid(oC) && oC?.absolute === true && oC.x === 3);
+    ok("[G21-X03] an anchor of -1 is not a track index: dropped, the valid one kept", !!oE && !("gridColumnStart" in oE) && oE.gridRowStart === 0);
+    ok("[G21-X03] a child of a non-grid frame (anchors -1) carries no grid fields, nor does its own child", noGrid(oD) && noGrid(oD.children?.[0]));
+    ok("[G21-X03] a root carries no grid-child fields (its parent is not exported)", noGrid(gOut) && noGrid(pOut) && noGrid(abs));
+  }
+
+  // ---- [G21-X04] `layout` = how a node lays out ITS OWN children: only on nodes that can hold children ----
+  // TEXT/shapes/vectors carried {mode:"absolute",width,height} (a copy of box.w/h) on every node.
+  {
+    const leafBox = { visible: true, width: 40, height: 12, absoluteBoundingBox: { x: 0, y: 0, width: 40, height: 12 } };
+    const xText = { ...leafBox, type: "TEXT", name: "Label", id: "g21x:t", characters: "Hi", fontName: { family: "Inter", style: "Regular" }, fontSize: 12,
+      getStyledTextSegments: () => [] };
+    const xRect = { ...leafBox, type: "RECTANGLE", name: "Bg", id: "g21x:r" };
+    const xVec = { ...leafBox, type: "VECTOR", name: "Line", id: "g21x:v" };
+    const xEmpty = { ...leafBox, type: "FRAME", name: "Spacer", id: "g21x:f", layoutMode: "NONE", children: [] };
+    const xGroup = { ...leafBox, type: "GROUP", name: "Bits", id: "g21x:g", children: [] };
+    const xHost = { type: "FRAME", name: "Host", visible: true, id: "g21x:0", width: 200, height: 100, layoutMode: "NONE",
+      children: [xText, xRect, xVec, xEmpty, xGroup] };
+    const xOut = await sandbox.serialize(xHost, 0, false);
+    const [oT, oR, oV, oF, oG] = must(xOut.children, "g21 x04 children");
+    ok("[G21-X04] TEXT, RECTANGLE and VECTOR children carry no `layout` key",
+      !!oT && !!oR && !!oV && !("layout" in oT) && !("layout" in oR) && !("layout" in oV) && oT.box?.w === 40);
+    ok("[G21-X04] a childless FRAME (layoutMode NONE) keeps {mode:\"absolute\",width,height}", JSON.stringify(oF?.layout) === '{"mode":"absolute","width":40,"height":12}');
+    ok("[G21-X04] a GROUP keeps its layout too", JSON.stringify(oG?.layout) === '{"mode":"absolute","width":40,"height":12}');
+  }
+
+  // ---- [G21-L8] a PINNED child (one of the LAST numberOfFixedChildren) always carries x/y + box.x/y ----
+  // Figma lets only an absolute child of an auto-layout frame be fixed; this guards a pinned child that is
+  // still in flow (a frame given auto layout after its children were fixed). Figma counts the LAST N over ALL
+  // children, hidden ones included: with N = 2 and a hidden child among the last two, the hidden one and the
+  // last are pinned and the visible one before them is not (counting only visible children would pin it).
+  // (Indexing by the serialized kids instead of all children is equivalent here: serialize returns null for a
+  // child only past MAX_DEPTH, which hits every sibling at once.)
+  {
+    const pin = (id: string, y: number) => ({ type: "FRAME", name: "Bar", visible: true, id, x: 0, y, width: 375, height: 60,
+      layoutPositioning: "AUTO", layoutMode: "NONE", absoluteBoundingBox: { x: 0, y, width: 375, height: 60 }, children: [] });
+    const lScreen = { type: "FRAME", name: "Feed", visible: true, id: "g21l:0", width: 375, height: 800, layoutMode: "VERTICAL",
+      itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, overflowDirection: "VERTICAL",
+      numberOfFixedChildren: 2, children: [pin("g21l:a", 0), pin("g21l:b", 60), { ...pin("g21l:h", 680), visible: false }, pin("g21l:c", 740)] };
+    const lOut = await sandbox.serialize(lScreen, 0, false);
+    const [la, lb, lh, lc] = must(lOut.children, "g21 l8 children");
+    ok("[G21-L8] the pinned LAST child carries x/y and box.x/y although it is in flow", lc?.x === 0 && lc.y === 740 && lc.box?.x === 0 && lc.box.y === 740);
+    ok("[G21-L8] a HIDDEN child among the last N is pinned too (Figma counts all children)", lh?.hidden === true && lh.y === 680 && lh.box?.y === 680);
+    ok("[G21-L8] the in-flow, unpinned children carry none (the visible one just before the pinned ones included)", !!la && !!lb && la.x === undefined && la.box?.y === undefined &&
+      lb.x === undefined && lb.box?.y === undefined);
+    ok("[G21-L8] fixedChildren still counts them", lOut.fixedChildren === 2);
+  }
 
   const absFill3 = abs.fills?.[3];
   ok("shader paint id captured", absFill3 !== undefined && absFill3.type === "shader" && absFill3.shaderId === "shader_1");
@@ -853,6 +967,25 @@ const sandbox: Sandbox = context;
     exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
   const imgLeaf = await sandbox.serialize(imageRect, 0, false);
   ok("childless image node still exported as PNG asset", typeof imgLeaf.asset === "string" && imgLeaf.asset.indexOf(".png") !== -1);
+
+  // --- [DT-75 / D29] end to end: code.js IR → verify-screen --expect. A fixed-width text box (textAutoResize HEIGHT)
+  // is wider than its words, so its width is expected at the INK width (absoluteRenderBounds → renderBox.w), with the
+  // box width listed as not comparable — never the 121px box a build's hugging <span> can never fill.
+  const inkFrame = {
+    type: "FRAME", name: "Card", visible: true, id: "ink:0", layoutMode: "NONE",
+    absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 100 }, fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 1, b: 1 }, opacity: 1 }],
+    children: [{ type: "TEXT", name: "Date", visible: true, id: "ink:1", characters: "Date", textAutoResize: "HEIGHT", textAlignHorizontal: "LEFT",
+      fontName: { family: "Inter", style: "Regular" }, fontSize: 14, width: 121, height: 20,
+      absoluteBoundingBox: { x: 16, y: 20, width: 121, height: 20 }, absoluteRenderBounds: { x: 16.62, y: 24, width: 32.14, height: 11 },
+      fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], getStyledTextSegments: () => [] }],
+  };
+  const inkIr = await sandbox.serialize(inkFrame, 0, false);
+  const inkText = inkIr.children?.[0];
+  const inkSpec = buildExpectation([{ doc: { nodes: [inkIr] }, label: "Card" }]).nodes.find((n) => n.nodeId === "ink:1");
+  ok("[DT-75] code.js writes the HEIGHT text's autoResize lowercase and its renderBox narrower than its box",
+    inkText?.autoResize === "height" && inkText.box?.w === 121 && inkText.renderBox?.w === 32.14);
+  ok("[DT-75 / D29] --expect: that TEXT's spec.width === renderBox.w (32.14, the ink), widthFrom renderBox, no height",
+    inkSpec?.width === inkText?.renderBox?.w && inkSpec?.width === 32.14 && inkSpec.widthFrom === "renderBox" && inkSpec.height === undefined);
 
   // --- [RD-noassets] skipAssets: the per-node exportAsync pass is the dominant cost on a real file
   // (it hung a ~1000-node page past 300s and outgrew the bridge's frame limit on --all-pages), yet it
@@ -1080,6 +1213,17 @@ const sandbox: Sandbox = context;
     }
     return true;
   })());
+  // The same mock now CONSUMES a library (a local token aliases library variables): a design-system pull
+  // carries the limitation in `hygiene` — the ONE field buildDesignSystemLayout's split persists to disk
+  // (hygiene.json) and forwards through the MCP writeToDisk path, unlike a `manifest.warnings` field.
+  const dsConsumer = await sandbox.collectDesignSystemOnly();
+  ok("collectDesignSystemOnly on a consuming file notes the library-variable limitation in hygiene (the field that survives to disk)",
+    dsConsumer.designSystem.variables.some((v) => v.remote === true) && dsConsumer.designSystem.hygiene.some((h) => /library \(remote\) variables/.test(h)));
+  // [DT08-3] the line names the real remedy (--as-library) and no longer promises a page pull completes it.
+  ok("[DT08-3] design-system hygiene names --as-library and says it is not the library's catalog",
+    dsConsumer.designSystem.hygiene.some((h) => /--as-library/.test(h) && /not the library's catalog/.test(h)));
+  ok("[DT08-3] and no longer says a page pull gives the full set",
+    !dsConsumer.designSystem.hygiene.some((h) => /pull a page for the full set|prior\/no page walk/.test(h)));
   // Drop only the local seed. The id resolver STAYS on the EXTRA-aware handler — it is a superset of
   // the v_lib override above, and later alias-hygiene tests still need v_lib to resolve.
   delete VARS.v_semlib;
@@ -1171,6 +1315,45 @@ const sandbox: Sandbox = context;
   sandbox.figma.variables.getVariableByIdAsync = prevGetVar;
   sandbox.figma.variables.getVariableCollectionByIdAsync = prevGetColl;
   sandbox.figma.currentPage.selection = [scrollFrame];
+
+  // ---- [G21-NM] every variable row carries its collection's KEY: collection names repeat ----
+  // Two local collections both named "Spacing" (keys K1/K2) plus a library one also named "Spacing" reached
+  // through a remote variable: the name cannot tell the rows apart, `collectionKey` can. A collection whose
+  // key is not a non-empty string (the typings promise it only on local and published collections) -> omitted.
+  {
+    const nmMode = [{ modeId: "nm_m", name: "Value" }];
+    const nmColls: FakeCollection[] = [
+      { id: "nm_c1", name: "Spacing", key: "K1", modes: nmMode, defaultModeId: "nm_m" },
+      { id: "nm_c2", name: "Spacing", key: "K2", modes: nmMode, defaultModeId: "nm_m" },
+      { id: "nm_c4", name: "Radius", key: "", modes: nmMode, defaultModeId: "nm_m" },
+      { id: "nm_c5", name: "Sizing", key: 42, modes: nmMode, defaultModeId: "nm_m" },
+      { id: "nm_c6", name: "Motion", key: { id: "K6" }, modes: nmMode, defaultModeId: "nm_m" },
+    ];
+    const nmRemoteColl: FakeCollection = { id: "nm_c3", name: "Spacing", key: "K3", modes: nmMode, defaultModeId: "nm_m" };
+    const nmVar = (id: string, cid: string, remote = false): FakeVariable => ({ id, name: "space/4", resolvedType: "FLOAT", variableCollectionId: cid,
+      scopes: ["GAP"], codeSyntax: {}, remote, valuesByMode: { nm_m: 4 } });
+    const nmLocal = [nmVar("nm_v1", "nm_c1"), nmVar("nm_v2", "nm_c2"), { ...nmVar("nm_v4", "nm_c4"), name: "radius/2" },
+      { ...nmVar("nm_v5", "nm_c5"), name: "size/2" }, { ...nmVar("nm_v6", "nm_c6"), name: "motion/2" }];
+    const nmRemote = nmVar("nm_v3", "nm_c3", true);
+    const nmPrev = { ...sandbox.figma.variables };
+    sandbox.figma.variables.getLocalVariablesAsync = async () => nmLocal;
+    sandbox.figma.variables.getLocalVariableCollectionsAsync = async () => nmColls;
+    sandbox.figma.variables.getVariableByIdAsync = async (id: string) => (id === "nm_v3" ? nmRemote : nmLocal.find((v) => v.id === id) || null);
+    sandbox.figma.variables.getVariableCollectionByIdAsync = async (id: string) => (id === "nm_c3" ? nmRemoteColl : nmColls.find((c) => c.id === id) || null);
+    sandbox.figma.currentPage.selection = [{ type: "FRAME", name: "Gap", visible: true, id: "nm:1", width: 10, height: 10, layoutMode: "HORIZONTAL",
+      itemSpacing: 4, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, boundVariables: { itemSpacing: { type: "VARIABLE_ALIAS", id: "nm_v3" } }, children: [] }];
+    const nmSel = await sandbox.collectSelection({ css: false });
+    const spacingRows = nmSel.variables.variables.filter((v) => v.collection === "Spacing");
+    ok("[G21-NM] three 'Spacing' rows (two local, one library), each with its own collection's key",
+      spacingRows.length === 3 && JSON.stringify(spacingRows.map((r) => r.collectionKey).sort()) === '["K1","K2","K3"]' &&
+      spacingRows.find((r) => r.remote)?.collectionKey === "K3");
+    ok("[G21-NM] a collection whose key is empty, a number or an object gives its rows no collectionKey", (() => {
+      const rows = ["radius/2", "size/2", "motion/2"].map((n) => nmSel.variables.variables.find((v) => v.name === n));
+      return rows.every((r) => !!r && !("collectionKey" in r)) && rows.map((r) => r?.collection).join() === "Radius,Sizing,Motion";
+    })());
+    Object.assign(sandbox.figma.variables, nmPrev);
+    sandbox.figma.currentPage.selection = [scrollFrame];
+  }
 
   // ---- source-image container format (magic bytes, not a hardcoded ".img") ----
   const prevGetImage = sandbox.figma.getImageByHash;
@@ -1758,6 +1941,43 @@ const sandbox: Sandbox = context;
     width: 10, height: 10, layoutMode: "NONE", numberOfFixedChildren: 0, children: [] }, 0, false);
   ok("[AUDIT-5] and is omitted at the 0 default (it is on every frame)", plainFrame.fixedChildren === undefined);
 
+  // ---- [QK-3] the keys the quick-keys block (bridge/src/quick-keys.ts) names are the keys the plugin really emits ----
+  // Builders guessed Plugin API names (`characters`, `width`, `visible`, `layout.scroll`); the doc says
+  // `text`, `box.w`, `hidden`, a top-level `scroll`. Serialize one scroll screen and check both halves:
+  // every key the doc names is there (and named in QUICK_KEYS), and the guessed ones are nowhere.
+  {
+    const qkText = { type: "TEXT", name: "Title", visible: true, id: "qk:t", characters: "Hello", fontName: { family: "Inter", style: "Bold" },
+      fontSize: 20, width: 120, height: 24, absoluteBoundingBox: { x: 0, y: 0, width: 120, height: 24 }, getStyledTextSegments: () => [] };
+    const qkHiddenKid = { type: "FRAME", name: "Toast", visible: true, id: "qk:hk", width: 10, height: 10, layoutMode: "NONE", children: [] };
+    const qkHidden = { type: "FRAME", name: "Banner", visible: false, id: "qk:h", width: 50, height: 20, layoutMode: "NONE", children: [qkHiddenKid] };
+    const qkAbs = { type: "FRAME", name: "Badge", visible: true, id: "qk:a", x: 7, y: 9, width: 12, height: 12, layoutMode: "NONE",
+      layoutPositioning: "ABSOLUTE", children: [] };
+    const qkRow = { type: "FRAME", name: "Row", visible: true, id: "qk:r", width: 100, height: 40, layoutMode: "HORIZONTAL", itemSpacing: 0,
+      paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, children: [qkAbs] };
+    const qkScreen = { type: "FRAME", name: "Screen", visible: true, id: "qk:s", width: 375, height: 800, layoutMode: "NONE",
+      overflowDirection: "VERTICAL", numberOfFixedChildren: 1, clipsContent: true, children: [qkText, qkHidden, qkRow] };
+    const qk = await sandbox.serialize(qkScreen, 0, false);
+    const [qkT, qkH, qkR] = must(qk.children, "qk.children");
+    const qkHK = must(qkH?.children?.[0], "qk hidden child");
+    const qkA = must(qkR?.children?.[0], "qk absolute child");
+    const named = (key: string): boolean => QUICK_KEYS.includes("`" + key);
+    ok("[QK-3] a TEXT carries `text` (not `characters`)", qkT?.text === "Hello" && named("text"));
+    ok("[QK-3] size is `box.w` (not `width`)", qkT?.box?.w === 120 && named("box.w"));
+    ok("[QK-3] scroll is a top-level `scroll`", qk.scroll === "vertical" && named("scroll"));
+    ok("[QK-3] `fixedChildren` is the pinned count", qk.fixedChildren === 1 && named("fixedChildren"));
+    ok("[QK-3] `clip` rides along with it", qk.clip === true && named("clip"));
+    ok("[QK-3] `hidden` sits on the switched-off layer only, not on its child", qkH?.hidden === true && qkHK.hidden === undefined && named("hidden"));
+    ok("[QK-3] an absolute child carries `absolute` + its own `x`", qkA.absolute === true && qkA.x === 7 && named("absolute") && named("x"));
+    ok("[QK-3] the TEXT has no `layout` key (only a node that holds children has one)", !!qkT && !("layout" in qkT));
+    const qkWalk = (n: IrNode, f: (n: IrNode) => void): void => { f(n); (n.children || []).forEach((c) => qkWalk(c, f)); };
+    const qkGuessed: string[] = [];
+    qkWalk(qk, (n) => {
+      for (const k of ["characters", "width", "height", "visible"]) if (k in n) qkGuessed.push(n.name + "." + k);
+      if (n.layout && "scroll" in n.layout) qkGuessed.push(n.name + ".layout.scroll");
+    });
+    ok("[QK-3] no `characters` / `width` / `height` / `visible` / `layout.scroll` anywhere in the export (" + qkGuessed.join(",") + ")", qkGuessed.length === 0);
+  }
+
   // ---- [AUDIT-5] exportSettings: the designer's own asset intent ----
   const exportNode = await sandbox.serialize({ type: "FRAME", name: "Logo", visible: true, id: "ex:1",
     width: 40, height: 40, layoutMode: "NONE", children: [],
@@ -1952,7 +2172,7 @@ const sandbox: Sandbox = context;
   ok("[LIB] a corrupt registry degrades to no attribution, it does not throw", badReg.length === 2 && badReg.every((c) => c.source === "unknown-library"));
   delete sandbox.figma.root.getPluginData;
 
-  // --- listLibraries: the cheap discovery map ---
+  // --- listLibraries: the library discovery map ---
   // DEFAULT state first: no figma.teamLibrary at all (permission missing / older host).
   const noPerm = await sandbox.listLibraries();
   ok("[LIB] a missing teamlibrary permission is a WARNING, not a crash", Array.isArray(noPerm.libraries) && noPerm.warnings.some((w) => /teamlibrary/.test(w)));
@@ -2000,6 +2220,19 @@ const sandbox: Sandbox = context;
   ok("[LIB] the local catalog walk still works alongside them", dsLib.components.some((c) => c.key === "compkey123" && !c.remote));
   ok("[LIB] a library main already present locally is not double-listed", dsLib.components.filter((c) => c.key === "compkey123").length === 1);
   ok("[LIB] hygiene warns that inferred props are a sample", dsLib.hygiene.some((h) => /published LIBRARY/.test(h) && /sample/.test(h)));
+  // [F2 L1] the "not the library's catalog" line also fires when the file consumes a library only through
+  // COMPONENTS (no remote variable reaches the catalog); a local-only file (same page, no library instance) gets none.
+  const dsRemoteComp = (await sandbox.collectDesignSystemOnly()).designSystem;
+  ok("[F2 L1] consuming mock with only a remote component (no remote variable) gets the --as-library line",
+    !dsRemoteComp.variables.some((v) => v.remote === true) && dsRemoteComp.components.some((c) => c.remote === true) &&
+    dsRemoteComp.hygiene.some((h) => /--as-library/.test(h) && /not the library's catalog/.test(h)));
+  const localOnlyPage = { ...libPage, findAllWithCriteria: ({ types }: { types: string[] }) => (types.indexOf("INSTANCE") !== -1 ? [] : [buttonComponent]) };
+  sandbox.figma.root.children = [localOnlyPage];
+  const dsLocalOnly = (await sandbox.collectDesignSystemOnly()).designSystem;
+  ok("[F2 L1] a local-only mock (no remote variable, no remote component) gets no such line",
+    !dsLocalOnly.variables.some((v) => v.remote === true) && !dsLocalOnly.components.some((c) => c.remote === true) &&
+    !dsLocalOnly.hygiene.some((h) => /--as-library|consumes libraries/.test(h)));
+  sandbox.figma.root.children = [libPage];
   delete sandbox.figma.teamLibrary;
   sandbox.figma.root.children = prevKids3;
 
@@ -2007,12 +2240,12 @@ const sandbox: Sandbox = context;
   // Run INSIDE the library file, everything is local, so the ordinary local reads return the COMPLETE
   // catalog — that is the whole reason this mode exists instead of importVariableByKeyAsync.
   {
-    const lib = await sandbox.collectLibraryFile({ asLibrary: "NERA" });
+    const lib = await sandbox.collectLibraryFile({ asLibrary: "NIMA" });
     const d = lib.designSystem;
 
     ok("[LIB-FILE] stamps source.role=library", !!(d.source && d.source.role === "library"));
     const src = must(d.source, "d.source");
-    ok("[LIB-FILE] carries the library name the user typed", src.libraryName === "NERA");
+    ok("[LIB-FILE] carries the library name the user typed", src.libraryName === "NIMA");
     ok("[LIB-FILE] records fileKey as the durable directory identity", src.fileKey === "FILEKEY1234567");
     ok("[LIB-FILE] collectionKeys are the join back to --list-libraries", Array.isArray(src.collectionKeys));
     // exportedAt/file must stay top-level and unchanged — snapshot-meta.js and drift-lint read them.
@@ -2024,9 +2257,9 @@ const sandbox: Sandbox = context;
     ok("[LIB-FILE] component carries publish status", !!(btn && btn.publish === "current"));
     const paint = must(d.styles.paint[0], "d.styles.paint[0]");
     ok("[LIB-FILE] style carries publish status", paint.publish === "changed");
-    ok("[LIB-FILE] hygiene states the catalog is complete", d.hygiene.some((h) => /COMPLETE local catalog of 'NERA'/.test(h)));
+    ok("[LIB-FILE] hygiene states the catalog is complete", d.hygiene.some((h) => /COMPLETE local catalog of 'NIMA'/.test(h)));
     ok("[LIB-FILE] hygiene admits the published snapshot is unlistable", d.hygiene.some((h) => /last PUBLISHED snapshot/.test(h)));
-    ok("[LIB-FILE] does NOT claim the false design-system caveat", !d.hygiene.some((h) => /prior\/no page walk referenced/.test(h)));
+    ok("[LIB-FILE] does NOT claim the false design-system caveat", !d.hygiene.some((h) => /this file references — this is not the library's catalog/.test(h)));
 
     // The style fixes, which apply on BOTH paths — `key` is what makes a library style joinable at all.
     ok("[LIB-FILE] paint style carries its cross-file key", paint.key === "paintkey123");
@@ -2533,6 +2766,475 @@ const sandbox: Sandbox = context;
 
     sandbox.figma.root.children = prevKids;
     sandbox.figma.ui.postMessage = prevPost;
+  }
+
+  // ---------- [LIVE] liveness frames + the per-node abandon check (group 14, F-51 / the live stall) ----------
+  // A cold direct pull was aborted by the CLI's 20 s stall check while the plugin was working: the
+  // plugin's first frame for an exportNode was its first per-asset tick, and a run queued behind an
+  // earlier one said nothing at all. Now a bridge run queued behind another posts a `queued` progress
+  // frame (ui.html relays it over the socket), and an abandoned walk stops within one node.
+  {
+    const ABANDONED = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
+    const posted: PostedMessage[] = [];
+    const prevPost = sandbox.figma.ui.postMessage;
+    sandbox.figma.ui.postMessage = (m: PostedMessage) => { posted.push(m); };
+    const handler = must(sandbox.figma.ui.onmessage, "figma.ui.onmessage");
+    const gate = (): { p: Promise<void>; open: () => void } => {
+      let open = (): void => {};
+      const p = new Promise<void>((r) => { open = r; });
+      return { p, open };
+    };
+    const settle = <T>(p: Promise<T>): Promise<{ v: T | null; err: Thrown | null }> => p.then((v) => ({ v, err: null }), (e: unknown) => ({ v: null, err: thrown(e) }));
+    const queuedFrames = (): PostedMessage[] => posted.filter((m) => m.type === "progress" && m.phase === "queued");
+
+    // [LIVE-1] a bridge run that arrives while a UI run executes posts `queued` at once, before its run-begin.
+    posted.length = 0;
+    const gU = gate(), startU = gate();
+    const pU = settle(sandbox.serializeRun(async () => { startU.open(); await gU.p; return "U"; }, { source: "ui", label: "live-ui" }));
+    await startU.p;
+    const pB = settle(sandbox.serializeRun(async () => "B", { source: "bridge", label: "exportNode", requestId: "live-b" }));
+    const queuedEarly = queuedFrames().map((m) => JSON.stringify(m)).join("|");
+    gU.open();
+    await pU; const rB = await pB;
+    const qAt = posted.findIndex((m) => m.type === "progress" && m.phase === "queued");
+    const bBeganAt = posted.findIndex((m) => m.type === "run-begin" && m.label === "exportNode");
+    // pre-change: fails — nothing was posted for a bridge run until its run-begin.
+    ok("[LIVE-1] a bridge run queued behind an executing UI run posts {type:\"progress\",phase:\"queued\",source:\"bridge\",label} at once, before its run-begin",
+      queuedEarly === '{"type":"progress","phase":"queued","source":"bridge","label":"exportNode","requestId":"live-b"}' && qAt >= 0 && bBeganAt > qAt && rB.v === "B");
+    // Review 1 L-8: the queued frame (above) and the run-begin name the bridge request, so the bridge can hand
+    // the relayed `start` / `queued` to that request only.
+    const bBegin = posted[bBeganAt];
+    ok("[L-8] a bridge run's run-begin carries its requestId (the queued frame above carries it too)",
+      !!bBegin && bBegin.type === "run-begin" && bBegin.requestId === "live-b");
+    // A bridge run with nothing ahead of it, and a UI run queued behind another, post no `queued` frame.
+    posted.length = 0;
+    await sandbox.serializeRun(async () => "alone", { source: "bridge", label: "exportNode", requestId: "live-alone" });
+    const gU2 = gate(), startU2 = gate();
+    const pU2 = settle(sandbox.serializeRun(async () => { startU2.open(); await gU2.p; return "U2"; }, { source: "ui", label: "live-ui-2" }));
+    await startU2.p;
+    const pU3 = settle(sandbox.serializeRun(async () => "U3", { source: "ui", label: "live-ui-3" }));
+    gU2.open();
+    await pU2; await pU3;
+    ok("[LIVE-1] …a bridge run with nothing ahead of it and a UI run queued behind another post no `queued` frame",
+      queuedFrames().length === 0);
+    // [LIVE-2] (control) the run-begin of a bridge run carries source "bridge" — what ui.html relays as `start`.
+    ok("[LIVE-2] the run-begin of a bridge run is posted with source \"bridge\" and its label",
+      posted.some((m) => m.type === "run-begin" && m.source === "bridge" && m.label === "exportNode"));
+
+    // [LIVE-5] (b2) an abandon armed MID-SERIALIZE stops the walk before the next node. collectNode has
+    // no page/frame safe point and these nodes paint nothing, so before the per-node check the walk
+    // read every sibling and delivered the doc to a caller that had gone.
+    posted.length = 0;
+    let readAfter = 0;
+    const counted = (id: string): FakeNode => ({ type: "FRAME", id, visible: true, width: 10, height: 10, layoutMode: "NONE", children: [],
+      get name() { readAfter++; return "After " + id; } });
+    const trap: FakeNode = { type: "FRAME", name: "Trap", id: "lv:2", visible: true, width: 10, height: 10, layoutMode: "NONE",
+      get children() { void handler({ type: "cancel", id: "lv-req" }); return []; } };
+    const liveRoot: FakeNode = { type: "FRAME", name: "Live", id: "lv:1", visible: true, width: 100, height: 100, layoutMode: "NONE",
+      exportAsync: async () => new Uint8Array([137, 80, 78, 71]), children: [trap, counted("lv:3"), counted("lv:4")] };
+    const prevGetNodeL = sandbox.figma.getNodeByIdAsync;
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "lv:1" ? liveRoot : null);
+    const prevSkip = sandbox.figma.skipInvisibleInstanceChildren;
+    sandbox.figma.skipInvisibleInstanceChildren = false;
+    await handler({ type: "bridge", id: "lv-req", cmd: "exportNode", args: { nodeId: "lv:1", css: false } });
+    const resL = posted.find((m) => m.type === "bridge-result");
+    // pre-change: fails — ok:true, both siblings read (readAfter 2).
+    ok("[LIVE-5] an abandon armed mid-serialize aborts before the next node: bridge-result ok:false with ABANDONED_MESSAGE, no sibling read after the trap",
+      !!resL && resL.ok === false && resL.id === "lv-req" && resL.error === ABANDONED && resL.result === undefined && readAfter === 0);
+    ok("[LIVE-5] …the run is closed out as abandoned, and skipInvisibleInstanceChildren is untouched",
+      JSON.stringify(posted.filter((m) => m.type === "run-end")) === '[{"type":"run-end","abandoned":true}]' && sandbox.figma.skipInvisibleInstanceChildren === false);
+    // The same node with no abandon exports normally — the check costs a clean run nothing.
+    posted.length = 0;
+    readAfter = 0;
+    Object.defineProperty(trap, "children", { value: [], configurable: true }); // the getter becomes a plain value: no cancel this time
+    await handler({ type: "bridge", id: "lv-req-2", cmd: "exportNode", args: { nodeId: "lv:1", css: false } });
+    const resL2 = posted.find((m) => m.type === "bridge-result");
+    ok("[LIVE-5] …and without an abandon the same node exports in full",
+      !!resL2 && resL2.ok === true && readAfter >= 2);
+
+    // [LIVE-5] inside the catalog's variant walk: each variant's serialize is wrapped in a catch that
+    // WARNS and moves on (components.ts), so the per-node throw is swallowed there — the collector's
+    // backstop must still refuse to deliver, and the walk's toggles must be restored by their finally.
+    posted.length = 0;
+    let variantKidsRead = 0;
+    const vTrap: FakeNode = { type: "FRAME", name: "VTrap", id: "lvv:3", visible: true, width: 4, height: 4, layoutMode: "NONE",
+      get children() { void handler({ type: "cancel", id: "lv-ds" }); return []; } };
+    const vAfter: FakeNode = { type: "FRAME", id: "lvv:4", visible: true, width: 4, height: 4, layoutMode: "NONE", children: [],
+      get name() { variantKidsRead++; return "VAfter"; } };
+    const lvSet: FakeNode = { type: "COMPONENT_SET", id: "lvset:1", name: "Chip", key: "lvsetkey",
+      componentPropertyDefinitions: { State: { type: "VARIANT", variantOptions: ["A", "B"] } } };
+    const lvA: FakeNode = { type: "COMPONENT", id: "lvv:1", name: "State=A", key: "lvkey_a", parent: lvSet, visible: true, children: [vTrap, vAfter] };
+    const lvB: FakeNode = { type: "COMPONENT", id: "lvv:2", name: "State=B", key: "lvkey_b", parent: lvSet, visible: true,
+      get children() { variantKidsRead++; return []; } };
+    const lvPage = { name: "Chips", id: "p:lv", loadAsync: async () => {},
+      findAllWithCriteria: ({ types }: { types: string[] }) => (types.indexOf("COMPONENT_SET") !== -1 ? [lvSet, lvA, lvB] : []) };
+    const prevKidsL = sandbox.figma.root.children;
+    sandbox.figma.root.children = [lvPage];
+    sandbox.figma.skipInvisibleInstanceChildren = false;
+    const rDs = await settle(sandbox.serializeRun(() => sandbox.collectDesignSystemOnly({ variantVisuals: true }), { source: "bridge", label: "exportDesignSystem", requestId: "lv-ds" }));
+    // pre-change: fails — the variant walk ran to the end and the design-system doc was delivered.
+    ok("[LIVE-5] an abandon inside the variant walk (whose per-variant catch swallows it) still rejects with ABANDONED_MESSAGE — no doc",
+      rDs.v === null && rDs.err?.message === ABANDONED && variantKidsRead === 0);
+    ok("[LIVE-5] …and skipInvisibleInstanceChildren is back to its value before the run (the catalog's finally)",
+      sandbox.figma.skipInvisibleInstanceChildren === false);
+    // runOpts.skipAssets was set by the variant walk and must be restored by its finally: the next
+    // export of a vector really exports it.
+    let liveSvg = 0;
+    const vecFrame: FakeNode = { type: "FRAME", name: "VecHost", id: "lvx:1", visible: true, width: 20, height: 20, layoutMode: "NONE",
+      exportAsync: async () => new Uint8Array([137, 80, 78, 71]),
+      children: [{ type: "VECTOR", name: "Dot", id: "lvx:2", visible: true, width: 8, height: 8,
+        fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], fillGeometry: [{ data: "M0 0L8 0L8 8Z", windingRule: "NONZERO" }],
+        exportAsync: async () => { liveSvg++; return "<svg width=\"8\" height=\"8\"><path d=\"M0 0h8\"/></svg>"; } }] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "lvx:1" ? vecFrame : null);
+    const afterVar = await sandbox.collectNode("lvx:1", { css: false });
+    ok("[LIVE-5] …and the variant walk's skipAssets toggle was restored (the next export renders its vector)",
+      liveSvg === 1 && typeof afterVar.screen.nodes[0]?.children?.[0]?.asset === "string");
+
+    sandbox.figma.root.children = prevKidsL;
+    sandbox.figma.getNodeByIdAsync = prevGetNodeL;
+    if (prevSkip === undefined) delete sandbox.figma.skipInvisibleInstanceChildren;
+    else sandbox.figma.skipInvisibleInstanceChildren = prevSkip;
+    sandbox.figma.ui.postMessage = prevPost;
+  }
+
+  // ---------- [SHOT] screenshot reply carries the node size and the render scale (DT-06) ----------
+  {
+    const prevGetNodeS = sandbox.figma.getNodeByIdAsync;
+    const shot: FakeNode = { type: "FRAME", name: "Shot", id: "sh:1", visible: true, width: 1440, height: 1236,
+      exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "sh:1" ? shot : null);
+    const s1 = await sandbox.collectScreenshot("sh:1");
+    // pre-change: fails — the reply had id/name/type/reference only.
+    ok("[SHOT-1] collectScreenshot on a 1440×1236 frame → w 1440, h 1236, scale 2048/1440 (the auto cap it rendered at)",
+      s1.w === 1440 && s1.h === 1236 && typeof s1.scale === "number" && Math.abs(s1.scale - 2048 / 1440) < 1e-9 && typeof s1.reference === "string");
+    const s2 = await sandbox.collectScreenshot("sh:1", { scale: 3 });
+    ok("[SHOT-1] …an explicit scale is the one reported", s2.scale === 3 && s2.w === 1440);
+    sandbox.figma.getNodeByIdAsync = prevGetNodeS;
+  }
+
+  // ---------- [G13] hidden graphics, icon containers, asset-leaf layout/transform, same-name children ----------
+  // Group 13 (DT-10, DT-50, DT-72, DT-53, DT-04/F-03). Every hidden graphic used to be sent to
+  // exportAsync, come back with no `<svg`, and land as `geometry` — for an icon CONTAINER that was its
+  // own background square. Real shapes: `assetSkipped` a string/true, `geometry` {fills,strokes,w,h}.
+  {
+    const solid = [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }];
+    const square = [{ data: "M0 0L16 0L16 16L0 16L0 0Z", windingRule: "NONZERO" }];
+    let g13Exports = 0;
+    const spySvg = async () => { g13Exports++; return "<svg width=\"16\" height=\"16\"><path d=\"M1 1h14\"/></svg>"; };
+    const png = async () => new Uint8Array([137, 80, 78, 71]); // the root's reference PNG — not a per-node asset
+    const prevSelG = sandbox.figma.currentPage.selection;
+    const hiddenScreen = () => ({
+      type: "FRAME", name: "Screen", visible: true, id: "g13:1", width: 400, height: 300, layoutMode: "NONE", exportAsync: png,
+      children: [
+        { type: "FRAME", name: "Panel", visible: false, id: "g13:2", width: 200, height: 100, layoutMode: "NONE",
+          children: [
+            { type: "INSTANCE", name: "icon/x", visible: true, id: "g13:3", width: 16, height: 16, findOne: () => null,
+              getMainComponentAsync: async () => null, fills: solid, fillGeometry: square, exportAsync: spySvg,
+              children: [{ type: "VECTOR", name: "path", visible: true, id: "g13:4", width: 16, height: 16, fills: solid, fillGeometry: square, exportAsync: spySvg }] },
+          ] },
+        { type: "FRAME", name: "Btn", visible: true, id: "g13:5", width: 80, height: 32, layoutMode: "NONE",
+          children: [{ type: "VECTOR", name: "Glyph", visible: false, id: "g13:6", width: 12, height: 12, fills: solid, fillGeometry: square, exportAsync: spySvg }] },
+      ],
+    });
+    sandbox.figma.currentPage.selection = [hiddenScreen()];
+    const hRun = await sandbox.collectSelection({ css: false });
+    const hRoot = must(hRun.screen.nodes[0], "[G13] hidden screen root");
+    const hPanel = hRoot.children?.[0];
+    const hIcon = hPanel?.children?.[0];
+    const hGlyph = hRoot.children?.[1]?.children?.[0];
+    // pre-change: fails — the icon came back as `geometry` (the square), assetSkipped undefined.
+    ok("[G13-hidden] an icon INSTANCE under a hidden FRAME is a leaf with assetSkipped:\"hidden\" (no geometry, no asset, no children)",
+      hIcon?.assetSkipped === "hidden" && hIcon.geometry === undefined && hIcon.asset === undefined && hIcon.children === undefined);
+    // pre-change: fails — the Glyph came back as `geometry`.
+    ok("[G13-hidden] a VECTOR that is itself visible:false is the same leaf, and keeps hidden:true",
+      hGlyph?.assetSkipped === "hidden" && hGlyph.geometry === undefined && hGlyph.asset === undefined && hGlyph.hidden === true);
+    ok("[G13-hidden] the hidden Panel itself stays a container (only graphics become leaves)", hPanel?.hidden === true && hPanel.assetSkipped === undefined && hPanel.children?.length === 1);
+    // pre-change: fails — exportAsync was called for both (2).
+    ok("[G13-hidden] exportAsync is never called for a hidden graphic", g13Exports === 0);
+    const hm = hRun.screen.manifest;
+    // pre-change: fails — assetsHidden absent, assetsGeometry 2.
+    ok("[G13-hidden] manifest: assetsHidden === 2, assetsGeometry === 0, assetsFailed === 0",
+      hm.assetsHidden === 2 && hm.assetsGeometry === 0 && hm.assetsFailed === 0);
+    // Panel (self) + icon/x (under Panel) + Glyph (self); the icon's own child is never serialized.
+    ok("[G13-hidden] manifest.hiddenNodes counts the hidden node AND what is under it (3)", hm.hiddenNodes === 3);
+    ok("[G13-hidden] no asset files are produced for hidden graphics (only the root reference)",
+      hRun.assets.length === 1 && hRun.assets[0]?.kind === "reference");
+
+    // [G13-noassets-wins] --no-assets keeps its own marker even for a hidden graphic.
+    g13Exports = 0;
+    sandbox.figma.currentPage.selection = [hiddenScreen()];
+    const naRun = await sandbox.collectSelection({ css: false, skipAssets: true });
+    const naRoot = must(naRun.screen.nodes[0], "[G13] no-assets root");
+    ok("[G13-noassets-wins] skipAssets + hidden -> assetSkipped === true on both graphics",
+      naRoot.children?.[0]?.children?.[0]?.assetSkipped === true && naRoot.children?.[1]?.children?.[0]?.assetSkipped === true);
+    ok("[G13-noassets-wins] counted as assetsSkipped (2), not assetsHidden (0), no export",
+      naRun.screen.manifest.assetsSkipped === 2 && naRun.screen.manifest.assetsHidden === 0 && g13Exports === 0);
+
+    // [G13-hidden-root] a frame pulled BY ID out of a hidden panel: its ancestor chain is hidden, so
+    // its graphics are too, though serialize() never sees the panel.
+    g13Exports = 0;
+    const g13Page: FakeNode = { type: "PAGE", name: "Page G13", id: "g13p:0" };
+    const hiddenParent: FakeNode = { type: "FRAME", name: "Drawer", visible: false, id: "g13p:1", parent: g13Page };
+    const card: FakeNode = { type: "FRAME", name: "Card", visible: true, id: "g13p:2", width: 100, height: 60, layoutMode: "NONE",
+      parent: hiddenParent, exportAsync: png,
+      children: [{ type: "VECTOR", name: "Mark", visible: true, id: "g13p:3", width: 12, height: 12, fills: solid, fillGeometry: square, exportAsync: spySvg }] };
+    const prevGetNodeG = sandbox.figma.getNodeByIdAsync;
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g13p:2" ? card : null);
+    const rootRun = await sandbox.collectNode("g13p:2", { css: false });
+    const rootTree = must(rootRun.screen.nodes[0], "[G13] hidden-root tree");
+    // pre-change: fails — Mark exported (asset path), spy called once.
+    ok("[G13-hidden-root] collectNode on a frame whose PARENT is hidden: its vector is assetSkipped:\"hidden\", never exported",
+      rootTree.children?.[0]?.assetSkipped === "hidden" && rootTree.children[0].asset === undefined && g13Exports === 0);
+    ok("[G13-hidden-root] the root keeps no hidden flag of its own (it is not visible:false), hiddenNodes counts root + child",
+      rootTree.hidden === undefined && rootRun.screen.manifest.hiddenNodes === 2 && rootRun.screen.manifest.assetsHidden === 1);
+    // The same frame under a VISIBLE parent exports normally — the walk is what decides.
+    hiddenParent.visible = true;
+    const visRun = await sandbox.collectNode("g13p:2", { css: false });
+    ok("[G13-hidden-root] …and under a visible parent the same vector exports (asset path, hiddenNodes 0)",
+      typeof visRun.screen.nodes[0]?.children?.[0]?.asset === "string" && visRun.screen.manifest.hiddenNodes === 0 && g13Exports === 1);
+    // [G13-fix1 M-4] a root hidden by an ancestor, or hidden itself, is exported WITH a warning.
+    // pre-fix: no warning in either case.
+    const hiddenRootNote = (w: string[]) => w.filter((m) => /^'Card' \(g13p:2\) is hidden /.test(m));
+    hiddenParent.visible = false;
+    const ancRun = await sandbox.collectNode("g13p:2", { css: false });
+    ok("[G13-fix1 M-4] a root under a hidden ancestor warns once: hidden under a hidden ancestor, graphics not exported, reference may be blank",
+      hiddenRootNote(ancRun.screen.manifest.warnings).length === 1 && /is hidden under a hidden ancestor — its graphics are not exported \(assetSkipped:"hidden"\) and its reference image may be blank$/.test(hiddenRootNote(ancRun.screen.manifest.warnings)[0] ?? ""));
+    hiddenParent.visible = true;
+    card.visible = false;
+    const selfRun = await sandbox.collectNode("g13p:2", { css: false });
+    ok("[G13-fix1 M-4] a root that is hidden itself warns too (\"hidden itself\"), and keeps hidden:true",
+      hiddenRootNote(selfRun.screen.manifest.warnings).some((m) => /is hidden itself —/.test(m)) && selfRun.screen.nodes[0]?.hidden === true);
+    card.visible = true;
+    const visRun2 = await sandbox.collectNode("g13p:2", { css: false });
+    ok("[G13-fix1 M-4] a visible root under visible parents: no such warning (the default)", hiddenRootNote(visRun2.screen.manifest.warnings).length === 0);
+    sandbox.figma.getNodeByIdAsync = prevGetNodeG;
+
+    // [G13-fix1 L-11] a hidden layer that paints nothing (no visible paint, or no area) stays what it was
+    // before group 13: assetsSkippedInvisible, no marker — and a zero-area icon container still recurses.
+    // pre-fix: both became assetSkipped:"hidden" leaves and were counted assetsHidden (3).
+    const ghost = { type: "VECTOR", name: "Ghost", visible: false, id: "g13i:1", width: 12, height: 12, fills: [{ type: "SOLID", visible: false, color: { r: 0, g: 0, b: 0 } }], strokes: [], exportAsync: spySvg };
+    const flat = { type: "INSTANCE", name: "icon/flat", visible: false, id: "g13i:2", width: 0, height: 16, findOne: () => null,
+      getMainComponentAsync: async () => null, exportAsync: spySvg,
+      children: [{ type: "VECTOR", name: "inner", visible: true, id: "g13i:3", width: 8, height: 8, fills: solid, exportAsync: spySvg }] };
+    g13Exports = 0;
+    sandbox.figma.currentPage.selection = [{ type: "FRAME", name: "Inv", visible: true, id: "g13i:0", width: 50, height: 50, layoutMode: "NONE", exportAsync: png, children: [ghost, flat] }];
+    const iRun = await sandbox.collectSelection({ css: false });
+    const [iGhost, iFlat] = [iRun.screen.nodes[0]?.children?.[0], iRun.screen.nodes[0]?.children?.[1]];
+    ok("[G13-fix1 L-11] a hidden VECTOR with no visible paint carries no assetSkipped (and no asset/geometry)",
+      !!iGhost && iGhost.assetSkipped === undefined && iGhost.asset === undefined && iGhost.geometry === undefined && iGhost.hidden === true);
+    ok("[G13-fix1 L-11] a hidden zero-area icon container still recurses: its painting child is the assetSkipped:\"hidden\" leaf",
+      !!iFlat && iFlat.assetSkipped === undefined && iFlat.children?.length === 1 && iFlat.children[0]?.assetSkipped === "hidden");
+    ok("[G13-fix1 L-11] counts: assetsSkippedInvisible 2, assetsHidden 1, no export",
+      iRun.screen.manifest.assetsSkippedInvisible === 2 && iRun.screen.manifest.assetsHidden === 1 && g13Exports === 0);
+    sandbox.figma.currentPage.selection = prevSelG;
+
+    // [G13-container] a VISIBLE icon container whose export fails: its fillGeometry is the frame's own
+    // background rect, which must never stand in for the icon.
+    const brokenIcon = { type: "INSTANCE", name: "icon/broken", visible: true, id: "g13c:1", width: 16, height: 16, findOne: () => null,
+      getMainComponentAsync: async () => null, fills: solid, fillGeometry: square, exportAsync: async () => "" };
+    sandbox.figma.currentPage.selection = [{ type: "FRAME", name: "Host", visible: true, id: "g13c:0", width: 50, height: 50, layoutMode: "NONE",
+      exportAsync: png, children: [brokenIcon] }];
+    const cRun = await sandbox.collectSelection({ css: false });
+    const cNode = cRun.screen.nodes[0]?.children?.[0];
+    // pre-change: fails — geometry {fills:["M0 0L16 0…"]}, assetsGeometry 1, assetsFailed 0.
+    ok("[G13-container] a failed icon CONTAINER gets no geometry (never its background rect)", !!cNode && cNode.geometry === undefined && cNode.asset === undefined);
+    ok("[G13-container] it is a real failure: assetsFailed === 1, assetsGeometry === 0",
+      cRun.screen.manifest.assetsFailed === 1 && cRun.screen.manifest.assetsGeometry === 0);
+    ok("[G13-container] and the grouped warning names it",
+      cRun.screen.manifest.warnings.some((w) => /asset export failed/.test(w) && /icon\/broken \(g13c:1\)/.test(w)));
+
+    // [G13-layout] an asset leaf ships as ONE picture; its own layout (inferred padding, or a real
+    // auto-layout icon's padding + gap) is an inset baked into the file.
+    const padVec = { type: "VECTOR", name: "inset-vec", visible: true, id: "g13l:1", width: 20, height: 20, fills: solid, exportAsync: spySvg,
+      inferredAutoLayout: { layoutMode: "HORIZONTAL", paddingTop: 2, paddingRight: 2, paddingBottom: 2, paddingLeft: 2, itemSpacing: 0 },
+      layoutAlign: "STRETCH", layoutSizingHorizontal: "FILL" };
+    const flexIcon = { type: "INSTANCE", name: "icon/flex", visible: true, id: "g13l:2", width: 24, height: 24, findOne: () => null,
+      getMainComponentAsync: async () => null, exportAsync: spySvg, layoutMode: "HORIZONTAL", itemSpacing: 4,
+      paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, layoutSizingHorizontal: "HUG",
+      children: [{ type: "VECTOR", name: "a", visible: true, id: "g13l:3", width: 8, height: 8, fills: solid, exportAsync: spySvg }] };
+    const plainFrame = { type: "FRAME", name: "Row", visible: true, id: "g13l:4", width: 100, height: 24, layoutMode: "HORIZONTAL", itemSpacing: 8,
+      paddingTop: 4, paddingRight: 4, paddingBottom: 4, paddingLeft: 4, children: [] };
+    sandbox.figma.currentPage.selection = [{ type: "FRAME", name: "Bar", visible: true, id: "g13l:0", width: 200, height: 40, exportAsync: png,
+      layoutMode: "HORIZONTAL", itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, children: [padVec, flexIcon, plainFrame] }];
+    const lRun = await sandbox.collectSelection({ css: false });
+    const lKids = lRun.screen.nodes[0]?.children || [];
+    const [lVec, lIcon, lRow] = [lKids[0], lKids[1], lKids[2]];
+    // pre-change: fails — layout {display:"flex",…,padding:[2,2,2,2],inferred:true}.
+    ok("[G13-layout] a VECTOR asset leaf with inferred padding carries no `layout`; its role in the parent stays (widthMode, alignSelf)",
+      typeof lVec?.asset === "string" && lVec.layout === undefined && lVec.widthMode === "fill" && lVec.alignSelf === "stretch");
+    // pre-change: fails — layout {display:"flex",flexDirection:"row",gap:4}.
+    ok("[G13-layout] an auto-layout icon INSTANCE asset (gap, no padding) carries no `layout` either; widthMode kept",
+      typeof lIcon?.asset === "string" && lIcon.layout === undefined && lIcon.widthMode === "hug");
+    ok("[G13-layout] a non-asset frame keeps its layout", lRow?.asset === undefined && lRow?.layout?.gap === 8 && JSON.stringify(lRow.layout.padding) === "[4,4,4,4]");
+    ok("[G13-layout] an assetSkipped:\"hidden\" leaf carries no layout", hIcon?.layout === undefined && hGlyph?.layout === undefined);
+
+    // [G13-transform] exportAsync draws the node as it is on screen, so rotation/flip already live in
+    // the file — on an asset leaf they move under sourceTransform; a geometry leaf keeps them bare.
+    const rotVec = { type: "VECTOR", name: "chevron", visible: true, id: "g13t:1", width: 18, height: 10, fills: solid, exportAsync: spySvg,
+      rotation: 90, relativeTransform: [[0, 1, 0], [1, 0, 0]] };
+    const rotGeo = { type: "VECTOR", name: "chevron-geo", visible: true, id: "g13t:2", width: 18, height: 10, fills: solid, fillGeometry: square,
+      exportAsync: async () => { throw new Error("could not be exported"); }, rotation: 45, relativeTransform: [[0.7071, -0.7071, 0], [0.7071, 0.7071, 0]] };
+    const host = () => ({ type: "FRAME", name: "Host", visible: true, id: "g13t:0", width: 50, height: 50, layoutMode: "NONE", exportAsync: png, children: [rotVec, rotGeo] });
+    sandbox.figma.currentPage.selection = [host()];
+    const tRun = await sandbox.collectSelection({ css: false });
+    const [tVec, tGeo] = [tRun.screen.nodes[0]?.children?.[0], tRun.screen.nodes[0]?.children?.[1]];
+    // pre-change: fails — sourceTransform absent, bare rotation 90 + flipped true.
+    ok("[G13-transform] an asset leaf: sourceTransform {rotation:90, flipped:true}, no bare rotation/flipped",
+      typeof tVec?.asset === "string" && JSON.stringify(tVec.sourceTransform) === '{"rotation":90,"flipped":true}' && tVec.rotation === undefined && tVec.flipped === undefined);
+    ok("[G13-transform] a geometry leaf keeps bare rotation (paths are in local space), no sourceTransform",
+      !!tGeo?.geometry && tGeo.rotation === 45 && tGeo.sourceTransform === undefined);
+    sandbox.figma.currentPage.selection = [host()];
+    const tNa = await sandbox.collectSelection({ css: false, skipAssets: true });
+    const tNaVec = tNa.screen.nodes[0]?.children?.[0];
+    ok("[G13-transform] an assetSkipped:true leaf (--no-assets) keeps bare rotation/flipped",
+      tNaVec?.assetSkipped === true && tNaVec.rotation === 90 && tNaVec.flipped === true && tNaVec.sourceTransform === undefined);
+    ok("[G13-transform] a node with no transform carries no sourceTransform (default absent)", lIcon?.sourceTransform === undefined);
+    sandbox.figma.currentPage.selection = prevSelG;
+
+    // [G13-children] listChildren: two FRAMEs "Screen A" 1440×1236 told apart by childCount + title
+    // (the hidden TEXT skipped), one "Screen B", one TEXT.
+    const txt = (id: string, characters: string, visible = true) => ({ type: "TEXT", name: "t", id, visible, characters, width: 10, height: 10 });
+    const screenA1 = { type: "FRAME", name: "Screen A", id: "g13s:1", width: 1440, height: 1236, children: [txt("g13s:11", "Welcome back")] };
+    const screenA2 = { type: "FRAME", name: "Screen A", id: "g13s:2", width: 1440, height: 1236.2,
+      children: [txt("g13s:21", "Draft note", false), txt("g13s:22", "Settings")] };
+    const screenB = { type: "FRAME", name: "Screen B", id: "g13s:3", width: 1440, height: 1236, children: [txt("g13s:31", "Other")] };
+    const caption = txt("g13s:4", "Caption");
+    // A third same-name pair that is too big to search: the title walk stops at its cap.
+    const huge = (id: string) => ({ type: "FRAME", name: "Big", id, width: 10, height: 10,
+      children: Array.from({ length: 5001 }, (_, i) => ({ type: "FRAME", name: "f", id: id + ":" + i, width: 1, height: 1, children: [] })) });
+    const section = { type: "SECTION", name: "Flows", id: "g13s:0", children: [screenA1, screenA2, screenB, caption, huge("g13s:5"), huge("g13s:6")] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g13s:0" ? section : null);
+    const lc = await sandbox.listChildren("g13s:0");
+    // [G13-fix1 L-5] the "Page Title" search uses up its budget on a wide frame, and the first-text
+    // fallback still gets one of its own: a heading that is node #2 is found. [M-4] a hidden colliding row
+    // is titled from its own (visible) text. pre-fix: no title for either.
+    const wide = (id: string, heading: string, visible = true) => ({ type: "FRAME", name: "Grid", id, width: 900, height: 600, visible,
+      children: [txt(id + ":h", heading), ...Array.from({ length: 6000 }, (_, i) => ({ type: "FRAME", name: "cell", id: id + ":" + i, width: 1, height: 1, children: [] }))] });
+    const hiddenTwin = (id: string, label: string, visible: boolean) => ({ type: "FRAME", name: "Sheet", id, width: 300, height: 200, visible, children: [txt(id + ":t", label)] });
+    const section2 = { type: "SECTION", name: "More", id: "g13s:9", children: [wide("g13w:1", "Team members"), wide("g13w:2", "Projects"), hiddenTwin("g13w:3", "Filters", false), hiddenTwin("g13w:4", "Sort", true)] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g13s:9" ? section2 : null);
+    const lc2 = await sandbox.listChildren("g13s:9");
+    const row2 = (id: string) => lc2.children.find((c) => c.id === id);
+    ok("[G13-fix1 L-5] a colliding frame with 6000 cells and its heading first is titled by the fallback's own budget",
+      row2("g13w:1")?.title === "Team members" && row2("g13w:2")?.title === "Projects" && !lc2.manifest.warnings.some((w) => /no title for 'Grid'/.test(w)));
+    ok("[G13-fix1 M-4] a HIDDEN colliding row gets its own visible text as title (hidden:true kept)",
+      row2("g13w:3")?.title === "Filters" && row2("g13w:3")?.hidden === true && row2("g13w:4")?.title === "Sort");
+    const row = (id: string) => lc.children.find((c) => c.id === id);
+    // pre-change: fails — childCount absent.
+    ok("[G13-children] childCount on every row with children (1, 2, 1), absent on the TEXT row",
+      row("g13s:1")?.childCount === 1 && row("g13s:2")?.childCount === 2 && row("g13s:3")?.childCount === 1 && row("g13s:4")?.childCount === undefined);
+    ok("[G13-children] hasChildren still agrees with childCount", row("g13s:1")?.hasChildren === true && row("g13s:4")?.hasChildren === undefined);
+    // pre-change: fails — title absent. The hidden "Draft note" is skipped (F-53 rule in deriveTitle).
+    ok("[G13-children] the two colliding rows carry their first VISIBLE text as title",
+      row("g13s:1")?.title === "Welcome back" && row("g13s:2")?.title === "Settings");
+    ok("[G13-children] no title on a row with no name+size twin (Screen B, the TEXT)", row("g13s:3")?.title === undefined && row("g13s:4")?.title === undefined);
+    ok("[G13-children] a colliding row too big to search gets no title, and says so",
+      row("g13s:5")?.title === undefined && lc.manifest.warnings.some((w) => /no title for 'Big' \(g13s:5\): more than 5000 nodes/.test(w)));
+    const notes = lc.manifest.warnings.filter((w) => /share name/.test(w));
+    ok("[G13-children] one manifest warning per collision group, naming the group and its ids",
+      notes.length === 2 && notes.some((w) => /^2 children share name 'Screen A' and size 1440×1236 — told apart by `title`\/`childCount`.*dtwin screenshot.*g13s:1, g13s:2/.test(w)));
+
+    // [G21-K6] colliding rows whose titles match too: `distinctTexts` — <= 3 texts that row shows and its twins
+    // do not. Texts NO twin has come first (U), then those not on EVERY row (N∖U); placeholders and hidden
+    // texts are skipped; each cut to 60 chars. The unique text sits late, behind the shared chrome.
+    const chrome = (id: string) => [
+      { type: "FRAME", name: "Page Title", id: id + ":pt", visible: true, width: 10, height: 10, children: [{ ...txt(id + ":pt:t", "Shared heading"), name: "Title" }] },
+      ...["Home", "Reports", "Settings", "Help", "Sign out"].map((t, i) => txt(id + ":c" + i, t)),
+    ];
+    const k6Screen = (id: string, extra: FakeNode[]) => ({ type: "FRAME", name: "Screen", id, width: 1440, height: 900, children: [...chrome(id), ...extra] });
+    const longText = "A very long status line that goes on well past the sixty character cut";
+    const k6Rows = [
+      k6Screen("g21k:1", [txt("g21k:1a", "Gamma shared"), txt("g21k:1h", "Draft only", false), txt("g21k:1b", "Alpha only")]),
+      k6Screen("g21k:2", [txt("g21k:2p", "Label"), txt("g21k:2a", "Beta only"), txt("g21k:2b", longText)]),
+      k6Screen("g21k:3", [txt("g21k:3a", "Gamma shared"), txt("g21k:3b", "Line one\n  Line\ttwo ")]),
+    ];
+    const k6Titled = (id: string, title: string) => ({ type: "FRAME", name: "Card", id, width: 300, height: 200, children: [txt(id + ":t", title), txt(id + ":u", "Only " + title)] });
+    // Too big to read whole: the shared first text is the title of both; the walk ends at the cap (soft), so
+    // the early unique text is found and the late one is not — no throw.
+    const k6Huge = (id: string, early: string) => ({ type: "FRAME", name: "Huge", id, width: 50, height: 50, children: [txt(id + ":s", "Shared top"), txt(id + ":e", early),
+      ...Array.from({ length: 5001 }, (_, i) => ({ type: "FRAME", name: "f", id: id + ":" + i, width: 1, height: 1, children: [] })), txt(id + ":l", "Late " + early)] });
+    const k6Section = { type: "SECTION", name: "Flows", id: "g21k:0", children: [...k6Rows, k6Titled("g21k:4", "One"), k6Titled("g21k:5", "Two"),
+      k6Huge("g21k:6", "First huge"), k6Huge("g21k:7", "Second huge")] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g21k:0" ? k6Section : null);
+    let k6: ListChildrenResult | null = null;
+    let k6Err: Thrown | null = null;
+    try { k6 = await sandbox.listChildren("g21k:0"); } catch (e) { k6Err = thrown(e); }
+    const k6Row = (id: string) => k6?.children.find((c) => c.id === id);
+    ok("[G21-K6] listChildren over a too-big colliding pair does not throw (" + (k6Err ? k6Err.message : "") + ")", !!k6 && !k6Err);
+    ok("[G21-K6] the three 'Screen' rows share their title", ["g21k:1", "g21k:2", "g21k:3"].every((id) => k6Row(id)?.title === "Shared heading"));
+    ok("[G21-K6] a row's own text comes first, ahead of a text only some twins share",
+      JSON.stringify(k6Row("g21k:1")?.distinctTexts) === '["Alpha only","Gamma shared"]');
+    ok("[G21-K6] a placeholder is skipped and each text is cut to 60 chars",
+      JSON.stringify(k6Row("g21k:2")?.distinctTexts) === JSON.stringify(["Beta only", longText.slice(0, 60)]));
+    ok("[G21-K6] a multi-line text is one line (whitespace and line breaks collapsed), ahead of a text only some twins share",
+      JSON.stringify(k6Row("g21k:3")?.distinctTexts) === '["Line one Line two","Gamma shared"]');
+    ok("[G21-K6] rows whose titles already differ get no distinctTexts", k6Row("g21k:4")?.title === "One" && k6Row("g21k:4")?.distinctTexts === undefined &&
+      k6Row("g21k:5")?.distinctTexts === undefined);
+    ok("[G21-K6] a pair past the visit cap gets partial lists (the early text, never the late one) and a warning",
+      JSON.stringify(k6Row("g21k:6")?.distinctTexts) === '["First huge"]' && JSON.stringify(k6Row("g21k:7")?.distinctTexts) === '["Second huge"]' &&
+      !!k6?.manifest.warnings.some((w) => /`distinctTexts` for 'Huge' \(g21k:6\) read only its first 5000 nodes/.test(w)));
+    ok("[G21-K6] no row lists more than 3 texts",
+      !!k6 && k6.children.every((c) => (c.distinctTexts || []).length <= 3));
+    ok("[G21-K6] the collision note names `distinctTexts`",
+      !!k6?.manifest.warnings.some((w) => /^3 children share name 'Screen' .*told apart by `title`\/`childCount`\/`distinctTexts`/.test(w)));
+
+    // [G21-K6] ONE budget of 20000 extra node reads for the whole listing, shared across collision groups: two
+    // groups of four 3000-node twins (a cheap "Page Title" title each, so the reads are distinctTexts'). Six rows
+    // fit (18000), the 7th runs it out mid-walk, the 8th is never read: D149 — then NO row of that group gets any (a
+    // "unique" text cannot be claimed against unread twins), one warning names them, no throw, and the listing reads no
+    // more than the budget plus the title walks (counted on every node's `name`). A cheap pair after the heavy groups
+    // is still titled (the title search never depends on the spent budget).
+    let k6Reads = 0;
+    const counted = <T extends object>(n: T, name: string): T => Object.defineProperty(n, "name", { get: () => { k6Reads++; return name; }, enumerable: true });
+    const k6Big = (id: string, name: string, slot = true) => counted({ type: "FRAME", id, width: 800, height: 600, visible: true, children: [
+      slot ? counted({ type: "FRAME", id: id + ":pt", visible: true, width: 10, height: 10, children: [counted({ ...txt(id + ":pt:t", "Same heading") }, "Title")] }, "Page Title")
+        : counted({ ...txt(id + ":pt:t", "Same heading") }, "Heading"),
+      counted({ ...txt(id + ":u", "Own " + id) }, "t"),
+      ...Array.from({ length: 2997 }, (_, i) => counted({ type: "FRAME", id: id + ":" + i, width: 1, height: 1, visible: true, children: [] }, "f")),
+    ] }, name);
+    const k6BigSection = { type: "SECTION", name: "Explorations", id: "g21b:0", children: [
+      ...[1, 2, 3, 4].map((i) => k6Big("g21b:a" + i, "Big A")), ...[1, 2, 3, 4].map((i) => k6Big("g21b:b" + i, "Big B")),
+      ...["Alpha", "Beta"].map((t, i) => ({ type: "FRAME", name: "Small", id: "g21b:s" + i, width: 20, height: 20, visible: true,
+        children: [{ type: "FRAME", name: "Page Title", id: "g21b:s" + i + ":pt", width: 10, height: 10, visible: true, children: [{ ...txt("g21b:s" + i + ":t", t), name: "Title" }] }] }))] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g21b:0" ? k6BigSection : null);
+    let k6b: ListChildrenResult | null = null;
+    let k6bErr: Thrown | null = null;
+    k6Reads = 0;
+    try { k6b = await sandbox.listChildren("g21b:0"); } catch (e) { k6bErr = thrown(e); }
+    const k6bRow = (id: string) => k6b?.children.find((c) => c.id === id);
+    ok("[G21-K6] a listing of many big colliding frames does not throw (" + (k6bErr ? k6bErr.message : "") + ")", !!k6b && !k6bErr);
+    ok("[G21-K6] reads stay within the listing budget (20000) plus the title walks (" + k6Reads + ")", k6Reads <= 20000 + 200);
+    ok("[G21-K6] a group read in full before the budget ran out gets its own texts",
+      ["g21b:a1", "g21b:a2", "g21b:a3", "g21b:a4"].every((id) => k6bRow(id)?.distinctTexts?.[0] === "Own " + id));
+    ok("[G21-K6] D149: the group the budget ran out in gets NO distinctTexts — not even its fully read rows (twins unread)",
+      ["g21b:b1", "g21b:b2", "g21b:b3", "g21b:b4"].every((id) => k6bRow(id)?.distinctTexts === undefined) && k6bRow("g21b:b4")?.title === "Same heading");
+    ok("[G21-K6] D149: a cheap pair AFTER the spent budget is still titled",
+      k6bRow("g21b:s0")?.title === "Alpha" && k6bRow("g21b:s1")?.title === "Beta");
+    ok("[G21-K6] ONE warning names the listing budget and the rows it skipped",
+      k6b?.manifest.warnings.filter((w) => /distinctTexts/.test(w) && /budget/.test(w)).length === 1 &&
+      !!k6b.manifest.warnings.some((w) => /^`distinctTexts` skipped for 4 row\(s\) \(g21b:b1, g21b:b2, g21b:b3, g21b:b4\): the listing's budget of 20000 node reads ran out/.test(w)));
+    // The same walk feeds both: with no "Page Title" slot the title search reads every node of each frame, and
+    // distinctTexts then walks those SAME (memoised) nodes for free — all eight rows get theirs, no budget warning,
+    // and the listing reads each node about once (a second walk per row would read ~2 × 8 × 3000).
+    const k6WalkedSection = { type: "SECTION", name: "Explorations", id: "g21w:0", children: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => k6Big("g21w:" + i, "Walked", false)) };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g21w:0" ? k6WalkedSection : null);
+    k6Reads = 0;
+    const k6w = await sandbox.listChildren("g21w:0");
+    ok("[G21-K6] nodes the title search already read cost distinctTexts nothing: every row gets its own text, no budget warning, ~one read per node (" + k6Reads + ")",
+      k6w.children.every((c) => c.title === "Same heading" && c.distinctTexts?.[0] === "Own " + c.id) && k6Reads <= 8 * 3000 + 200 &&
+      !k6w.manifest.warnings.some((w) => /budget/.test(w)));
+    sandbox.figma.getNodeByIdAsync = prevGetNodeG;
+
+    // listPages depth 2: childCount through the same summarize(), plus the per-page note (no titles).
+    const prevRootG = sandbox.figma.root.children;
+    sandbox.figma.root.children = [{ type: "PAGE", name: "Flows", id: "g13pg:1", loadAsync: async () => {}, children: [screenA1, screenA2, screenB] }];
+    const lp = await sandbox.listPages({ depth: 2 });
+    const lpFrames = lp.pages[0]?.frames || [];
+    ok("[G13-children] listPages frames carry childCount, never title",
+      lpFrames.map((f) => f.childCount).join() === "1,2,1" && lpFrames.every((f) => f.title === undefined));
+    ok("[G13-children] listPages notes the same-name group once, per page",
+      lp.manifest.warnings.filter((w) => /^page 'Flows': 2 frames share name 'Screen A'/.test(w)).length === 1);
+    sandbox.figma.root.children = prevRootG;
   }
 
   report();

@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Staff Directory (probe fixture)</title>
+<style>
+  /* F-63: a transparent <body>; the frame's paint is on #root > .app */
+  html, body { margin: 0; background: transparent; font-family: Arial, sans-serif; }
+  #root > .app { position: relative; width: 800px; height: 600px; background: #1d1d1f; }
+  main { position: absolute; left: 220px; top: 16px; width: 560px; }
+  h1 { font-size: 20px; font-weight: 600; color: #ffffff; margin: 0 0 16px; }
+  nav { position: absolute; left: 0; top: 0; width: 200px; height: 600px; box-sizing: border-box; padding: 16px;
+        background: #121319; display: flex; flex-direction: column; gap: 8px; }
+  nav ul { list-style: none; margin: 0; padding: 0; color: #ffffff; font-size: 16px; }
+  nav button { font: 12px/16px Arial, sans-serif; color: #d4d4d4; background: none; border: 0; padding: 4px 8px; text-align: left; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; width: 188px; height: 32px; padding: 0 12px; border: 0;
+         background: #0a84ff; color: #ffffff; font: 500 14px/20px Arial, sans-serif; }
+  .icons { display: flex; gap: 8px; margin: 16px 0; }
+  .row { height: 40px; width: 560px; background: #121319; color: #ffffff; font: 14px/20px Arial, sans-serif; }
+  .row:hover { background: #46464f; }
+  /* hover-only content, display:none at rest (M2) */
+  .row-edit { display: none; width: 40px; height: 24px; border: 0; background: #0a84ff; color: #ffffff; }
+  .row:hover .row-edit { display: inline-block; }
+  .search { display: block; margin-top: 12px; width: 200px; height: 28px; box-sizing: border-box; border: 0; background: #121319; color: #ffffff; }
+  /* the focus paint appears only after a real Tab key press (see the script), so the e2e test proves the probe
+     focused from the keyboard rather than by a bare focus() */
+  .search::placeholder { color: #8a8a8a; }
+  .note { display: block; margin-top: 8px; width: 200px; height: 28px; border: 0; background: #121319; color: #ffffff; }
+  .note::placeholder { color: #8a8a8a; }
+  .filter { display: inline-flex; align-items: center; gap: 4px; width: 80px; height: 28px; margin-top: 8px; border: 0; background: #0a84ff; color: #ffffff; font: 13px/20px Arial, sans-serif; }
+  .filter-ref { display: inline-block; margin-left: 8px; color: #ffffff; font: 13px/20px Arial, sans-serif; }
+  .save { margin-top: 8px; border: 0; background: #333333; color: #ffffff; }
+  .glyph { display: inline-block; width: 12px; height: 12px; background: #555555; }
+  body.keyboard .save:focus .glyph { background: #ffcc00; }
+  .open { margin: 8px 0 0; color: #ffffff; font: 14px/20px Arial, sans-serif; }
+  body.keyboard .search:focus { background: #2c2c34; outline: none; }
+  .card { width: 100px; height: 40px; margin-top: 12px; background: #333333; }
+  .shift { width: 560px; height: 24px; margin-top: 4px; background: #202020; color: #ffffff; font: 14px/20px Arial, sans-serif; }
+</style>
+<!-- DT-81: a same-origin script the e2e server serves from its temp dir (build identity) -->
+<script src="asset.js"></script>
+</head>
+<body>
+<dialog><h2>Shift Planner</h2><p>Add Rule</p></dialog>
+<div id="root"><div class="app">
+  <main>
+    <h1>Shift Planner</h1>
+    <button class="btn" data-dt-node="50:4"><svg width="12" height="12" aria-hidden="true"></svg><span style="font-weight: 400">Add Rule</span></button>
+    <div class="icons">
+      <svg data-dt-node="50:5" width="16" height="16" viewBox="0 0 16 16"><path d="M0 0h16v16H0z" fill="#ff8800"/></svg>
+      <img data-dt-node="50:6" width="16" height="16" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Crect width='16' height='16' fill='%2300aa55'/%3E%3C/svg%3E">
+    </div>
+    <div class="row" data-dt-node="50:7"><span>Jordan Avery</span><button class="row-edit" data-dt-node="50:11">Edit</button></div>
+    <input class="search" data-dt-node="50:12" aria-label="Search staff" placeholder="Find staff">
+    <div class="card" data-dt-node="50:13"></div>
+    <!-- H1: the same date designed in two rows; the build shows it only in the first -->
+    <div class="shift" data-dt-node="50:14"><span>12 Mar</span></div>
+    <div class="shift" data-dt-node="50:16"><span>no date</span></div>
+    <!-- a placeholder nested under its tagged field; a label written straight into its tagged button -->
+    <input class="note" data-dt-node="50:22" placeholder="Add a note" aria-label="Note">
+    <button class="filter" data-dt-node="50:24"><svg width="12" height="12" aria-hidden="true"></svg>Filter</button>
+    <!-- the same word in the same font, alone: the width a textBox over just the label's text must have -->
+    <span class="filter-ref">Filter</span>
+    <!-- a focus spec on a non-focusable <span> inside a focusable <button> -->
+    <button class="save">Save <span class="glyph" data-dt-node="50:26"></span></button>
+    <!-- two specs ("Open shifts" and "open shifts") that only claimOnce keeps off one element -->
+    <p class="open">Open shifts</p>
+  </main>
+  <nav>
+    <ul>
+      <li><button>Shift Planner</button></li>
+      <li><button>Rota Settings</button></li>
+    </ul>
+  </nav>
+</div></div>
+<script>
+  // Reload behaviours the e2e test drives through ?mode= (DT-39 / D19).
+  addEventListener("keydown", (e) => { if (e.key === "Tab") document.body.classList.add("keyboard"); });
+  const mode = new URLSearchParams(location.search).get("mode");
+  if (mode === "reload-once" && !sessionStorage.getItem("reloaded")) {
+    sessionStorage.setItem("reloaded", "1");
+    setTimeout(() => location.reload(), 200);
+  }
+  if (mode === "reload-forever") setTimeout(() => location.reload(), 200);
+  // F-107: a script that never yields once the page has loaded — every evaluate after it hangs
+  if (mode === "busy") addEventListener("load", () => setTimeout(() => { for (;;) { /* never yields */ } }, 50));
+  // DT-81: a dev server's client module, as Vite serves it
+  if (mode === "vite") { const s = document.createElement("script"); s.type = "module"; s.src = "/@vite/client"; document.head.appendChild(s); }
+  // H-1: once loaded, the page navigates to a document the server never finishes (/held-page.html), which moves on by
+  // itself 300 ms later (back here, ?mode=held-doc-done) — that cuts the held document's load short (its response body
+  // never settles in Playwright), in the same pass the probe measures
+  if (mode === "held-doc") addEventListener("load", () => setTimeout(() => { location.href = "/held-page.html"; }, 50));
+  if (mode === "reload-on-first-hover" || mode === "reload-on-every-hover") {
+    document.querySelector(".row").addEventListener("mouseenter", () => {
+      if (mode === "reload-on-every-hover" || !sessionStorage.getItem("hovered")) { sessionStorage.setItem("hovered", "1"); location.reload(); }
+    });
+  }
+</script>
+</body>
+</html>

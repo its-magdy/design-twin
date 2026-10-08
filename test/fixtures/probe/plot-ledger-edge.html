@@ -1,0 +1,627 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Plot Ledger edge cases (probe fixture)</title>
+<style>
+  html, body { margin: 0; font-family: Arial, sans-serif; }
+  .app { position: relative; width: 1024px; min-height: 300px; background: #f5f5f0; }
+  h1 { margin: 0; font: 600 20px/28px Arial, sans-serif; color: #1d1d1f; }
+  button { width: 96px; height: 28px; margin: 4px; }
+  [role=dialog] { width: 300px; height: 100px; background: #ffffff; }
+</style>
+</head>
+<body>
+<script>
+  // Every case is one ?mode= (the probe e2e serves this file and /plot-ledger-slow.js, which it answers 2.5 s late).
+  const q = new URLSearchParams(location.search);
+  const mode = q.get("mode");
+  const beds = '<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1></div>';
+  const post = (what) => fetch("/mutate?" + what, { method: "POST", keepalive: true });
+
+  if (mode === "reload-settle") {
+    // H1 (D19): the first document shows the screen, then reloads 300 ms after it started; the reloaded document stays
+    // half-loaded (its load event held by a script answered 2.5 s late) and only that script draws the screen
+    if (!sessionStorage.getItem("reloaded")) {
+      sessionStorage.setItem("reloaded", "1");
+      document.write(beds);
+      setTimeout(() => location.reload(), 300);
+    } else {
+      const s = document.createElement("script"); s.src = "/plot-ledger-slow.js"; document.head.appendChild(s);
+    }
+  } else if (mode === "reload-step") {
+    // H1 (steps): clicking the sidebar button picks the Beds section in place (no load), and — once — the page then
+    // reloads by itself 300 ms later (a dev-server restart): a load the step did not start
+    const draw = () => {
+      const on = sessionStorage.getItem("section") === "beds";
+      document.body.innerHTML = '<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => {
+        sessionStorage.setItem("section", "beds");
+        draw();
+        if (!sessionStorage.getItem("reloaded")) { sessionStorage.setItem("reloaded", "1"); setTimeout(() => location.reload(), 300); }
+      };
+    };
+    draw();
+  } else if (mode === "reload-after-goto") {
+    // H1 (steps): after a goto step, the loaded page reloads once by itself 300 ms later — the goto's load is the
+    // step's own, the reload is not
+    if (q.get("after") === "goto" && !sessionStorage.getItem("reloaded")) { sessionStorage.setItem("reloaded", "1"); setTimeout(() => location.reload(), 300); }
+    document.write(beds);
+  } else if (mode === "reload-late") {
+    // H1 (steps): a reload 1 s after a step's in-place click — after the step has settled, while the probe waits for
+    // --ready; the reloaded document is back on the default section (the click's state is gone)
+    const draw = (on) => {
+      document.body.innerHTML = '<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => {
+        draw(true);
+        if (!sessionStorage.getItem("reloaded")) { sessionStorage.setItem("reloaded", "1"); setTimeout(() => location.reload(), 1000); }
+      };
+    };
+    draw(false);
+  } else if (mode === "link-step") {
+    // a step whose click follows a real link: that load is the step's own (not after the initial load)
+    const on = q.get("section") === "beds";
+    document.write('<nav><a data-dt-node="70:30" href="/plot-ledger-edge.html?mode=link-step&section=beds">Beds</a></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>'));
+  } else if (mode === "slow-reach") {
+    // M1: the server answers this URL at once the first time and holds every later request (the driving pages' reach)
+    document.write(beds);
+  } else if (mode === "ancestor") {
+    // M2: a destination-tagged wrapper already on screen around the opener; an unrelated dialog opening inside it is
+    // NOT the destination. A destination wrapper that appears with its dialog is. B3: disabled openers (aria-disabled on
+    // it or an ancestor, [disabled]) are never clicked — their handlers record a write. L3: a typeless <button> in a
+    // <form> is never clicked (it would submit).
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div data-dt-node="70:60" id="wrap" style="padding:8px">
+        <button data-dt-node="70:47" id="archive">Archive</button>
+        <div id="unrelated" role="dialog" hidden>Unrelated confirm</div>
+      </div>
+      <button data-dt-node="70:44" aria-disabled="true" id="edit">Edit</button>
+      <div aria-disabled="true"><button data-dt-node="70:45" id="split">Split</button></div>
+      <button data-dt-node="70:46" disabled id="rename">Rename</button>
+      <form id="f"><button data-dt-node="70:48">Refresh</button></form>
+      <button data-dt-node="70:49" id="move">Move</button>
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Move bed</div></div>
+    </div>`);
+    document.getElementById("archive").onclick = () => { document.getElementById("unrelated").hidden = false; };
+    document.getElementById("edit").onclick = () => post("aria-disabled");
+    document.getElementById("split").onclick = () => post("ancestor-disabled");
+    document.getElementById("rename").onclick = () => post("disabled");
+    document.getElementById("f").onsubmit = (e) => { e.preventDefault(); post("submit"); };
+    document.getElementById("move").onclick = () => { document.getElementById("fresh").hidden = false; };
+  } else if (mode === "slow-nav") {
+    // H-a: the sidebar button navigates to another URL only ?delay= ms after the click (an app that awaits a request first)
+    const on = q.get("section") === "beds";
+    document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>'));
+    const d = Number(q.get("delay") || 400);
+    document.getElementById("go").onclick = () => { setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=slow-nav&delay=" + d + "&section=beds"; }, d); };
+  } else if (mode === "clicknav-slow") {
+    // M-a: the click navigates at once; the new document stays half-loaded (no screen yet) until a script answered 2.5 s late
+    if (q.get("section") === "beds") { const s = document.createElement("script"); s.src = "/plot-ledger-slow.js"; document.head.appendChild(s); }
+    else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=clicknav-slow&section=beds"; }, 0); };
+    }
+  } else if (mode === "click-reloads") {
+    // H-a: the click picks the section in place, then reloads the SAME URL 400 ms later — every time (the click itself reloads).
+    // M-2: &delay=sync reloads inside the click handler, &delay=100 100 ms after it (both while the click still runs or just
+    // after — never the click's own navigation: the same URL); &once=1 reloads on the first click of the session only
+    const delay = q.get("delay") || "400", once = q.get("once") === "1";
+    const draw = (on) => {
+      document.body.innerHTML = '<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => {
+        draw(true);
+        if (once && sessionStorage.getItem("reloaded")) return;
+        sessionStorage.setItem("reloaded", "1");
+        if (delay === "sync") location.reload(); else setTimeout(() => location.reload(), Number(delay));
+      };
+    };
+    draw(false);
+  } else if (mode === "hang-img") {
+    // M-1: the click navigates at once to a page whose image never loads (the server holds /plot-ledger-hang.png): that
+    // document never reaches readyState "complete" — each later settle (the waitFor step's, the --ready one) must not wait
+    // for its load again
+    if (q.get("section") === "beds") document.write(beds + '<img src="/plot-ledger-hang.png" width="1" height="1" alt="">');
+    else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { location.href = "/plot-ledger-edge.html?mode=hang-img&section=beds"; };
+    }
+  } else if (mode === "same-link") {
+    // fix 4 (MED 1): a URL-tab link to the tab the URL already shows — the click reloads the same URL (a refresh step, its
+    // load the step's own); the tag is on a <span> inside the <a> (the link is its closest a[href])
+    const on = q.get("section") === "beds";
+    // fix 5 (LOW 6): &target=_top on the link (the main frame: the same tab)
+    const tg = q.get("target");
+    document.write('<nav><a href="/plot-ledger-edge.html?mode=same-link&section=beds' + (tg ? "&target=" + tg : "") + '"' + (tg ? ' target="' + tg + '"' : "") + '><span data-dt-node="70:30">Beds</span></a></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>'));
+  } else if (mode === "churn-dom") {
+    // fix 5 (HIGH 1): a live ticker — the DOM never goes quiet (no navigation)
+    document.write(beds + '<p id="t"></p>');
+    let n = 0;
+    setInterval(() => { document.getElementById("t").textContent = "x".repeat(1 + (n++ % 7)); }, 150);
+  } else if (mode === "late-ready") {
+    // fix 5 (HIGH 1): the screen appears ?d= ms (default 12 s) after load (a slow API)
+    setTimeout(() => { document.body.insertAdjacentHTML("beforeend", beds); }, Number(q.get("d") || 12000));
+  } else if (mode === "slow-img") {
+    // fix 5 (MED 5): an image answered ?d= ms late keeps the document loading; the screen is there at once
+    document.write(beds + '<img src="/plot-ledger-slow.png?d=' + Number(q.get("d") || 13000) + '" width="1" height="1" alt="">');
+  } else if (mode === "slow-stay") {
+    // fix 5 (HIGH 2): the first document's image answers ?d= ms late; the click picks the section in place
+    document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div id="sec"><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div></div><img src="/plot-ledger-slow.png?d=' + Number(q.get("d") || 7000) + '" width="1" height="1" alt="">');
+    document.getElementById("go").onclick = () => {
+      document.getElementById("sec").innerHTML = beds;
+      setTimeout(() => document.body.insertAdjacentHTML("beforeend", '<p id="later">loaded</p>'), 2500); // the waitFor step's
+    };
+  } else if (mode === "link-inplace-reload" || mode === "link-empty-reload") {
+    // fix 5 (MED 3): a link to the current URL (or href="") that the app handles in place; the page reloads ?d= ms later,
+    // once per session (a dev-server reload) — the reloaded page is back on the default section
+    const href = mode === "link-empty-reload" ? "" : location.pathname + location.search;
+    document.write('<nav><a id="go" data-dt-node="70:30" href="' + href + '">Beds</a></nav><div id="sec"><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div></div>');
+    document.getElementById("go").onclick = (e) => {
+      e.preventDefault();
+      document.getElementById("sec").innerHTML = beds;
+      if (!sessionStorage.getItem("reloaded")) { sessionStorage.setItem("reloaded", "1"); setTimeout(() => location.reload(), Number(q.get("d") || 300)); }
+    };
+  } else if (mode === "link-inplace-late-away") {
+    // fix 5 (MED 4): a link to the current URL handled in place; the app navigates to ANOTHER URL 1.2 s later
+    document.write('<nav><a id="go" data-dt-node="70:30" href="' + location.pathname + location.search + '">Beds</a></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+    document.getElementById("go").onclick = (e) => {
+      e.preventDefault();
+      setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=link-step&section=beds"; }, 1200);
+    };
+  } else if (mode === "slow-churn") {
+    // fix 5 (LOW 7): the loaded page reloads 8 s later into a document that never finishes loading and reloads again 6 s
+    // later, and so on (the counter is per session)
+    const n = Number(sessionStorage.getItem("churn") || 0);
+    sessionStorage.setItem("churn", String(n + 1));
+    if (n === 0) { document.write(beds); setTimeout(() => location.reload(), 8000); }
+    else { document.write(beds + '<img src="/plot-ledger-hang.png" width="1" height="1" alt="">'); setTimeout(() => location.reload(), 6000); }
+  } else if (mode === "bounce-hang") {
+    // fix 6 (MED 1): the page arrives, then — before its load (an image answered 2 s late) — goes on to a URL whose server
+    // never answers (an auth bounce to a host that is down)
+    document.write(beds + '<img src="/plot-ledger-slow.png?d=2000" width="1" height="1" alt="">');
+    setTimeout(() => { location.href = "/plot-ledger-hangdoc"; }, 300);
+  } else if (mode === "redir-slow") {
+    // fix 6 (MED 2): the landing URL redirects client-side 200 ms later to the app, whose image answers 11 s late (its load
+    // past the 10 s cap); the button changes the app in place
+    if (q.get("section") !== "app") {
+      document.write('<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=redir-slow&section=app"; }, 200);
+    } else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div id="sec"><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div></div><img src="/plot-ledger-slow.png?d=11000" width="1" height="1" alt="">');
+      document.getElementById("go").onclick = () => { document.getElementById("sec").innerHTML = beds; };
+    }
+  } else if (mode === "hang-late") {
+    // fix 4 (MED 2): the click navigates to another URL 400 ms later; that document's image never loads
+    if (q.get("section") === "beds") document.write(beds + '<img src="/plot-ledger-hang.png" width="1" height="1" alt="">');
+    else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=hang-late&section=beds"; }, 400); };
+    }
+  } else if (mode === "late-slow") {
+    // fix 4 (MED 2): the click navigates 7 s later (late in the click's settle) to a document held half-loaded 5 s (a script
+    // answered late draws the screen): that document gets its own 10 s for its load, not what is left of the settle's
+    if (q.get("section") === "beds") { const s = document.createElement("script"); s.src = "/plot-ledger-slow.js?d=5000"; document.head.appendChild(s); }
+    else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=late-slow&section=beds"; }, 7000); };
+    }
+  } else if (mode === "reload-hang") {
+    // fix 4 (MED 2 guard): the click picks the section in place, then reloads the same URL 300 ms later — into a document
+    // that never finishes loading (a reload-type navigation holds an image that never answers): the state is lost all the same
+    const reloaded = (performance.getEntriesByType("navigation")[0] || {}).type === "reload";
+    const draw = (on) => {
+      document.body.innerHTML = '<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>') + (reloaded ? '<img src="/plot-ledger-hang.png" width="1" height="1" alt="">' : "");
+      document.getElementById("go").onclick = () => { draw(true); setTimeout(() => location.reload(), 300); };
+    };
+    draw(false);
+  } else if (mode === "hang-first") {
+    // fix 4 (MED 2): the first document never finishes loading (its image never answers); the click picks the section in place
+    const draw = (on) => {
+      document.body.innerHTML = '<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>') + '<img src="/plot-ledger-hang.png" width="1" height="1" alt="">';
+      document.getElementById("go").onclick = () => draw(true);
+    };
+    draw(false);
+  } else if (mode === "late-load") {
+    // fix 4 (LOW b): the click navigates at once to a document whose image answers only after 12 s (its load times out in
+    // the click's settle, then completes); #late appears 13 s in (the waitFor step's) — the note must not outlive the load
+    if (q.get("section") === "beds") {
+      document.write(beds + '<img src="/plot-ledger-late.png" width="1" height="1" alt="">');
+      setTimeout(() => document.body.insertAdjacentHTML("beforeend", '<p id="late">ready</p>'), 13000);
+    } else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { location.href = "/plot-ledger-edge.html?mode=late-load&section=beds"; };
+    }
+  } else if (mode === "no-token") {
+    // fix 4 (LOW c): the per-document token is gone (as when the init script could not define it) — "" on every document.
+    // The click goes to a document that never finishes loading (its load times out in the waitFor step's settle); its #next
+    // link goes to one held half-loaded 2.5 s (the slow script draws the screen): that one's load must still be waited for
+    delete window.__dtProbeDoc;
+    const sec = q.get("section");
+    if (sec === "beds") { const s = document.createElement("script"); s.src = "/plot-ledger-slow.js"; document.head.appendChild(s); }
+    else if (sec === "hang") document.write('<nav><a id="next" href="/plot-ledger-edge.html?mode=no-token&section=beds">Beds</a></nav><img src="/plot-ledger-hang.png" width="1" height="1" alt="">');
+    else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { location.href = "/plot-ledger-edge.html?mode=no-token&section=hang"; };
+    }
+  } else if (mode === "inline-wrap") {
+    // fix 4 (LOW d): a tagged inline <span> over two lines — its first line is a typeless button of a form (form=), the middle
+    // of its whole box is an empty inline-block: Playwright clicks the middle of the FIRST line box (it would submit)
+    document.write(`<form id="f"></form><div style="width:200px;font:16px Arial"><span data-dt-node="70:30"><button form="f" style="width:190px;height:40px;margin:0;vertical-align:top">Beds</button> <i style="display:inline-block;width:190px;height:400px"></i></span></div>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1></div>`);
+    document.getElementById("f").onsubmit = (e) => { e.preventDefault(); post("inline-wrap"); };
+  } else if (mode === "tall-wrapper") {
+    // L-2: a tagged wrapper taller than the viewport; Playwright clicks the middle of its part ON SCREEN — a form's typeless
+    // button sits there (the middle of the whole box, far below, is empty): as a step (70:30) the click would submit
+    document.write(`<div data-dt-node="70:30" style="position:relative;height:4000px;width:300px">
+      <form class="f" style="position:absolute;top:300px;left:0;margin:0"><button style="width:300px;height:200px;margin:0">Beds</button></form></div>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1></div>`);
+    for (const f of document.querySelectorAll(".f")) f.onsubmit = (e) => { e.preventDefault(); post("tall-wrapper"); };
+  } else if (mode === "token-switch") {
+    // L-a: stands in for a document replaced right after the probe saw the page quiet: once (per session) the per-document
+    // token changes at the first read that is not one of the settle polls, after ≥ 3 of them — the probe must compare
+    // against the token it saw quiet. L-4: told apart without stack columns: a settle poll reads the token and then, in the
+    // same expression, calls document.getElementsByTagName (counted as a poll); polls are ≥ 100 ms apart with nothing of
+    // the probe running in the page between them, so a read < 60 ms after the last poll, or after the probe measured
+    // something (getComputedStyle), is not a poll
+    const orig = window.__dtProbeDoc;
+    let val = orig, polls = 0, lastPoll = 0, busy = false, inRead = false;
+    const byTag = Document.prototype.getElementsByTagName;
+    Document.prototype.getElementsByTagName = function (...a) { if (inRead) { polls++; lastPoll = performance.now(); busy = false; } return byTag.apply(this, a); };
+    const styleOf = window.getComputedStyle;
+    window.getComputedStyle = function (...a) { busy = true; return styleOf.apply(this, a); };
+    Object.defineProperty(window, "__dtProbeDoc", { configurable: true, get() {
+      inRead = true;
+      queueMicrotask(() => { inRead = false; });
+      if (polls >= 3 && !sessionStorage.getItem("switched") && (busy || performance.now() - lastPoll < 60)) { sessionStorage.setItem("switched", "1"); val = orig + "-replaced"; }
+      return val;
+    } });
+    document.write(beds);
+  } else if (mode === "wrapper-submit") {
+    // L-c: tagged wrappers whose click point is a typeless <button> inside a <form>: a step's (70:30) and an opener (70:47)
+    document.write(`<nav><span data-dt-node="70:30" style="display:inline-block"><form class="f"><button>Beds</button></form></span></nav>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div data-dt-node="70:47" style="display:inline-block"><form class="f"><button>Archive</button></form></div></div>`);
+    for (const f of document.querySelectorAll(".f")) f.onsubmit = (e) => { e.preventDefault(); post("wrapper-submit"); };
+  } else if (mode === "remount") {
+    // L-b: a destination-tagged wrapper already on screen that the app RE-MOUNTS in place (a new element, same position)
+    // when an unrelated dialog opens inside it — still not the destination
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div data-dt-node="70:60" id="wrap" style="padding:8px"><button data-dt-node="70:47" id="archive">Archive</button></div></div>`);
+    document.getElementById("archive").onclick = () => {
+      const w = document.getElementById("wrap"), n = w.cloneNode(true);
+      n.insertAdjacentHTML("beforeend", '<div role="dialog">Unrelated confirm</div>');
+      w.replaceWith(n);
+    };
+  } else if (mode === "cb-creators") {
+    // L-d: a position:fixed strip under a transformed ancestor scrolls with the page (it widens it: named); an absolute one
+    // under a static filtered overflow:hidden wrapper, or a static contain:layout one, is held there (not named)
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div style="transform:translateX(0);height:20px"><div data-dt-node="70:57" style="position:fixed;left:1300px;top:40px;width:400px;height:10px;background:#dddddd"></div></div>
+      <div style="filter:blur(0);overflow:hidden;height:20px;width:100px"><div data-dt-node="70:58" style="position:absolute;left:1200px;top:0;width:900px;height:10px;background:#cccccc"></div></div>
+      <div style="contain:layout;height:20px;width:100px"><div data-dt-node="70:59" style="position:absolute;left:1100px;top:0;width:900px;height:10px;background:#bbbbbb"></div></div>
+    </div>`);
+  } else if (mode === "abs-escape") {
+    // L7: an absolutely positioned strip inside a static overflow:hidden wrapper is not clipped by it (its containing
+    // block is the page) — it widens the page; one inside a positioned overflow:hidden wrapper is clipped
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div style="overflow:hidden;height:20px;width:200px"><div data-dt-node="70:57" style="position:absolute;left:900px;top:200px;width:600px;height:20px;background:#dddddd"></div></div>
+      <div style="position:relative;overflow:hidden;height:20px;width:100px"><div data-dt-node="70:58" style="position:absolute;left:1200px;top:0;width:900px;height:10px;background:#cccccc"></div></div>
+    </div>`);
+  } else if (mode === "card-centre") {
+    // 12b review 3 L-2: a clickable card (70:47) whose centre is its own "Delete bed" icon button (which writes), with a 2nd
+    // control beside it — the drive clicks the opener's centre, so it would press Delete: never clicked. D47's shape (70:49): a
+    // cell whose ONLY focusable is its centred icon button — that button is the opener, driven as before.
+    // D51: a card with its own label whose ONLY control is a centred Delete (70:45) — not the card's own control, never clicked;
+    // a cell whose only other content is an sr-only label (70:53) — shows nothing of its own, driven as before.
+    // Review 4 H-1: a keyboard-accessible card (role=button tabindex=0, 70:46) and an <a href> card (70:48), each with a centred
+    // Delete — a focusable opener is never exempt, never clicked
+    const card = (id, elId, attrs, label, delId, extra) => `<div data-dt-node="${id}" id="${elId}" ${attrs} style="display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px;border:1px solid #999;cursor:pointer">
+        <span>${label}</span><button id="${delId}" aria-label="Delete bed" style="width:28px">x</button>${extra}</div>`;
+    document.write(`<style>.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}</style>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div data-dt-node="70:47" id="card" style="display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px;border:1px solid #999;cursor:pointer">
+        <span>Archive bed</span><button id="card-del" aria-label="Delete bed" style="width:28px">x</button><button aria-label="Open bed" style="width:28px;justify-self:end">&gt;</button></div>
+      <div data-dt-node="70:49" style="display:inline-block;width:160px;height:44px;text-align:center"><button id="move" aria-label="Move bed" style="margin-top:8px">m</button></div>
+      ${card("70:45", "split", "", "Split bed", "split-del", "<span></span>")}
+      ${card("70:46", "rename", 'role="button" tabindex="0"', "Rename bed", "rename-del", '<button aria-label="More" style="width:28px;justify-self:end">&gt;</button>')}
+      <a data-dt-node="70:48" id="refresh" href="#refresh" style="display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px;border:1px solid #999;text-decoration:none"><span>Refresh beds</span><button id="refresh-del" aria-label="Delete bed" style="width:28px">x</button><span></span></a>
+      <div data-dt-node="70:53" style="display:inline-block;position:relative;width:160px;height:44px;text-align:center;background:#eef"><span class="sr-only">Notes for this bed</span><button id="notes" aria-label="Show notes" style="margin-top:8px">n</button></div>
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div>
+    </div>`);
+    const show = (e) => { if (e) e.preventDefault(); document.getElementById("fresh").hidden = false; };
+    for (const id of ["card", "split", "rename", "refresh", "move", "notes"]) document.getElementById(id).onclick = show;
+    for (const id of ["card-del", "split-del", "rename-del", "refresh-del"]) document.getElementById(id).onclick = (e) => { e.preventDefault(); e.stopPropagation(); post(`${id}-centre-delete`); };
+  } else if (mode === "click-hidden") {
+    // review 5 H-1: what the drive's centre click would press beyond a plain focusable inside the card — a <label for> its
+    // checkbox (70:44), a label wrapping its checkbox (70:45), a span role=button without tabindex (70:46), a web component's
+    // shadow <button> (70:47), an iframe holding a button (70:48), text slotted into a shadow <button> (70:50) — each writes:
+    // never clicked. D47's cell (70:49) is still driven. The cards open the form on a click anywhere else (no preventDefault: a
+    // label's click must keep toggling its checkbox, as in an app).
+    const card = (id, elId, inner) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px;border:1px solid #999;cursor:pointer">${inner}</div></div>`;
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      ${card("70:44", "lf", '<input type="checkbox" id="lf-box" aria-label="Packed"><label for="lf-box" style="text-align:center">Packed</label><span></span>')}
+      ${card("70:45", "wl", '<span></span><label style="text-align:center"><input type="checkbox" id="wl-box" aria-label="Done"> Done</label><span></span>')}
+      ${card("70:46", "rb", '<span>Water bed</span><span role="button" id="rb-del" aria-label="Delete bed" style="padding:2px 8px">x</span><span></span>')}
+      ${card("70:47", "sb", '<span>Weed bed</span><x-del id="sb-del"></x-del><span></span>')}
+      ${card("70:48", "fr", '<span>Feed bed</span><iframe id="fr-frame" title="Bed tools" style="width:60px;height:28px;border:0"></iframe><span></span>')}
+      <div data-dt-node="70:49" style="display:inline-block;width:160px;height:44px;text-align:center"><button id="move" aria-label="Move bed" style="margin-top:8px">m</button></div>
+      ${card("70:50", "sl", '<span>Mulch bed</span><x-btn id="sl-del">Delete</x-btn><span></span>')}
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div>
+    </div>`);
+    customElements.define("x-del", class extends HTMLElement { constructor() { super(); const r = this.attachShadow({ mode: "open" }); r.innerHTML = '<button aria-label="Delete" style="width:auto;padding:2px 8px">x</button>'; r.querySelector("button").onclick = (e) => { e.stopPropagation(); post("sb-shadow-delete"); }; } });
+    customElements.define("x-btn", class extends HTMLElement { constructor() { super(); const r = this.attachShadow({ mode: "open" }); r.innerHTML = '<button aria-label="Remove" style="width:auto;padding:2px 8px"><slot></slot></button>'; r.querySelector("button").onclick = (e) => { e.stopPropagation(); post("sl-slotted-delete"); }; } });
+    document.getElementById("fr-frame").srcdoc = "<body style='margin:0'><button id='b' style='width:100%;height:28px;margin:0'>x</button><script>document.getElementById('b').onclick = () => fetch('/mutate?fr-frame-delete', { method: 'POST' });<\/script></body>";
+    document.getElementById("lf-box").onchange = () => post("lf-label-toggle");
+    document.getElementById("wl-box").onchange = () => post("wl-label-toggle");
+    document.getElementById("rb-del").onclick = (e) => { e.stopPropagation(); post("rb-role-delete"); };
+    const show = () => { document.getElementById("fresh").hidden = false; };
+    for (const id of ["lf", "wl", "rb", "sb", "fr", "move", "sl"]) document.getElementById(id).addEventListener("click", show);
+  } else if (mode === "own-content") {
+    // review 5 H-2: cards whose ONLY control is a centred Delete, showing content of their own the earlier check missed — text in
+    // display:contents wrappers (70:44), a title in a shadow root (70:45), a ::before label (70:46), a background-image logo
+    // (70:47): never clicked. H-3: cells whose sole centred button IS the opener's own, beside text that shows nothing — an
+    // opacity-0 hover tooltip (70:48), a clip-path-only sr-only label (70:49), a tooltip inside an opacity-0 wrapper (70:50), an
+    // aria-hidden scale(0) tooltip (70:53): driven, ok:true.
+    const card = (id, elId, before, after) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px;border:1px solid #999;cursor:pointer">${before}<button id="${elId}-del" aria-label="Delete bed" style="width:28px">x</button>${after}</div></div>`;
+    const cell = (id, elId, extra) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="display:inline-block;position:relative;width:160px;height:44px;text-align:center"><button id="${elId}-btn" aria-label="Open bed" style="margin-top:8px">o</button>${extra}</div></div>`;
+    document.write(`<style>#bf .lbl::before { content: "Split bed"; }</style>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      ${card("70:44", "dc", '<span style="display:contents">Split bed</span>', '<span style="display:contents">in two</span>')}
+      ${card("70:45", "sh", "<x-title></x-title>", "<span></span>")}
+      ${card("70:46", "bf", '<span class="lbl"></span>', "<span></span>")}
+      ${card("70:47", "bg", '<span style="display:inline-block;width:80px;height:20px;background:linear-gradient(#333333, #999999)"></span>', "<span></span>")}
+      ${cell("70:48", "tip", '<span style="position:absolute;left:0;top:-22px;opacity:0;white-space:nowrap;background:#000000;color:#ffffff;font-size:11px;padding:2px 4px">Open bed</span>')}
+      ${cell("70:49", "cp", '<span style="position:absolute;left:0;top:0;clip-path:inset(50%);white-space:nowrap">Open the bed form</span>')}
+      ${cell("70:50", "grp", '<span style="position:absolute;left:0;top:-22px;opacity:0"><span style="white-space:nowrap">Open bed</span></span>')}
+      ${cell("70:53", "sc", '<span aria-hidden="true" style="position:absolute;left:0;top:-22px;transform:scale(0);white-space:nowrap">Open bed</span>')}
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div>
+    </div>`);
+    customElements.define("x-title", class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: "open" }).innerHTML = "<span>Weed bed</span>"; } });
+    const show = () => { document.getElementById("fresh").hidden = false; };
+    for (const id of ["dc", "sh", "bf", "bg", "tip", "cp", "grp", "sc"]) document.getElementById(id).addEventListener("click", show);
+    for (const id of ["dc", "sh", "bf", "bg"]) document.getElementById(`${id}-del`).onclick = (e) => { e.stopPropagation(); post(`${id}-own-delete`); };
+  } else if (mode === "covered-tall") {
+    // review 5 M-1: a covered opener (70:49, under a transparent layer) on a tall page, in view near the bottom of the window.
+    // Playwright's click retries each scroll it in with another alignment (centre, start…) before the drive falls back to a
+    // synthetic click — which must start from the scroll the drive had (0), never from where the last retry left the page
+    document.write(`<div class="app" data-dt-node="70:1" style="height:4000px"><h1 data-dt-node="70:2">Beds</h1>
+      <div style="position:absolute;left:20px;top:calc(100vh - 60px)"><button data-dt-node="70:49" id="move">Move</button><div style="position:absolute;inset:-4px;z-index:2"></div></div>
+      <div data-dt-node="70:60" id="fresh" hidden style="position:fixed;left:40px;top:40px"><div role="dialog">Bed form</div></div>
+    </div>`);
+    document.getElementById("move").onclick = () => { document.getElementById("fresh").hidden = false; };
+  } else if (mode === "own-content-2") {
+    // review 6 H-1 / H-3 (D51): cards whose ONLY control is a centred Delete, showing content of their own the earlier check
+    // missed — a label at opacity 0 IN FLOW that fades in once scrolled into view (reveal-on-scroll, below the fold: 70:44), a
+    // label absolutely (70:45) or fixed (70:46) positioned inside a 1 × 1 overflow:hidden static wrapper (it escapes the clip),
+    // a logo drawn by an empty ::before on a background-image (70:47), a CSS-mask icon (70:48), a colour swatch (70:49): never
+    // clicked. D47 cells whose sole centred button IS the opener's own: under a pointer-events:none hover tint over the whole
+    // cell (70:50), inside a filled wrapper (70:53): driven, ok:true.
+    const card = (id, elId, before) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="position:relative;display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px;border:1px solid #999;cursor:pointer">${before}<button id="${elId}-del" aria-label="Delete bed" style="width:28px">x</button><span></span></div></div>`;
+    const cell = (id, elId, inner) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="display:inline-block;position:relative;width:160px;height:44px;text-align:center">${inner}</div></div>`;
+    document.write(`<style>#pe .logo::before { content: ""; display: inline-block; width: 80px; height: 20px; background-image: linear-gradient(#333333, #999999); }</style>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      ${card("70:45", "ae", '<span style="display:inline-block;width:1px;height:1px;overflow:hidden"><span style="position:absolute;left:8px;top:8px;white-space:nowrap">Split bed</span></span>')}
+      ${card("70:46", "fe", '<span style="display:inline-block;width:1px;height:1px;overflow:hidden"><span id="fe-label" style="position:fixed;white-space:nowrap">Weed bed</span></span>')}
+      ${card("70:47", "pe", '<span class="logo"></span>')}
+      ${card("70:48", "mi", '<span style="display:inline-block;width:24px;height:24px;background-color:#333333;-webkit-mask:radial-gradient(circle, #000000 60%, transparent 61%);mask:radial-gradient(circle, #000000 60%, transparent 61%)"></span>')}
+      ${card("70:49", "sw", '<span style="display:inline-block;width:40px;height:20px;background-color:#22aa77"></span>')}
+      ${cell("70:50", "tint", '<button id="tint-btn" aria-label="Open bed" style="margin-top:8px">o</button><span style="position:absolute;inset:0;background:rgba(0, 0, 0, 0.04);pointer-events:none"></span>')}
+      ${cell("70:53", "wrap", '<span style="display:inline-block;margin-top:4px;padding:2px;background:#eeeeff"><button id="wrap-btn" aria-label="Open bed" style="margin:0">o</button></span>')}
+      <div style="height:1500px"></div>
+      ${card("70:44", "rv", '<span id="rv-label" style="opacity:0">Move bed</span>')}
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div>
+    </div>`);
+    const fr = document.getElementById("fe").getBoundingClientRect(), fl = document.getElementById("fe-label");
+    fl.style.left = `${fr.x + 8}px`; fl.style.top = `${fr.y + 8}px`;
+    // the entrance: 800 ms after the label scrolls into view (a staggered reveal) — the drive checks its click point before that
+    const label = document.getElementById("rv-label");
+    new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) setTimeout(() => { label.style.opacity = "1"; }, 800); }).observe(label);
+    const show = () => { document.getElementById("fresh").hidden = false; };
+    for (const id of ["rv", "ae", "fe", "pe", "mi", "sw", "tint", "wrap"]) document.getElementById(id).addEventListener("click", show);
+    for (const id of ["rv", "ae", "fe", "pe", "mi", "sw"]) document.getElementById(`${id}-del`).onclick = (e) => { e.stopPropagation(); post(`${id}-r6-delete`); };
+  } else if (mode === "own-content-3") {
+    // review 6 L-2: a D47 cell whose sr-only label is the old position:absolute; left:-9999px idiom (off the document's start
+    // edge: shows nothing) → driven (70:44). H-3: a card's status dot drawn by an empty ::before on a background colour beside its
+    // centred Delete (70:45) → never clicked; a cell's hover tint drawn by an empty ::after on a background colour over the whole
+    // cell (70:46) and an out-of-flow opacity-0 ::after tooltip (70:47) show nothing of the cell's own → driven. L-1: a card
+    // whose label sits 8000 elements deep (70:48) → a clean refusal (was: the walk's RangeError). 70:49: the plain D47 cell.
+    const card = (id, elId, before) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="position:relative;display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px;border:1px solid #999;cursor:pointer">${before}<button id="${elId}-del" aria-label="Delete bed" style="width:28px">x</button><span></span></div></div>`;
+    const cell = (id, elId, extra) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="display:inline-block;position:relative;width:160px;height:44px;text-align:center"><button id="${elId}-btn" aria-label="Open bed" style="margin-top:8px">o</button>${extra}</div></div>`;
+    document.write(`<style>#dot .dot::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background-color: #22aa77; }
+      #tn::after { content: ""; position: absolute; inset: 0; background-color: rgba(0, 0, 0, 0.04); pointer-events: none; }
+      #tp::after { content: "Open bed"; position: absolute; left: 0; top: -22px; opacity: 0; white-space: nowrap; }</style>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      ${cell("70:44", "off", '<span style="position:absolute;left:-9999px">Open the bed form</span>')}
+      ${card("70:45", "dot", '<span class="dot"></span>')}
+      ${cell("70:46", "tn", "")}
+      ${cell("70:47", "tp", "")}
+      ${card("70:48", "deep", '<span id="deep-root"></span>')}
+      <div data-dt-node="70:49" style="display:inline-block;width:160px;height:44px;text-align:center"><button id="move" aria-label="Move bed" style="margin-top:8px">m</button></div>
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div>
+    </div>`);
+    let p = document.getElementById("deep-root");
+    for (let i = 0; i < 8000; i++) { const s = document.createElement("span"); p.appendChild(s); p = s; }
+    p.textContent = "Feed bed";
+    const show = () => { document.getElementById("fresh").hidden = false; };
+    for (const id of ["off", "dot", "tn", "tp", "deep", "move"]) document.getElementById(id).addEventListener("click", show);
+    for (const id of ["dot", "deep"]) document.getElementById(`${id}-del`).onclick = (e) => { e.stopPropagation(); post(`${id}-r6-delete`); };
+  } else if (mode === "click-hidden-2") {
+    // review 6 H-2: what the centre click presses beyond the first focusable on its path — a <button> Delete whose glyph is a
+    // tabindex=-1 span (70:44), a span role=button Delete with such a glyph (70:45) or with a contenteditable label (70:46), a
+    // same-origin page in an <object> (70:47) or an <embed> (70:48) whose Delete fills it: each writes, never clicked. 70:49:
+    // the plain D47 cell, still driven.
+    const card = (id, elId, inner) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px;border:1px solid #999;cursor:pointer">${inner}</div></div>`;
+    const doc = (w) => `plot-ledger-edge.html?mode=frame-del&w=${w}`;
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      ${card("70:44", "tb", '<span>Water bed</span><button id="tb-del" aria-label="Delete bed" style="width:auto;padding:0"><span tabindex="-1" style="display:inline-block;padding:4px 10px">x</span></button><span></span>')}
+      ${card("70:45", "ts", '<span>Weed bed</span><span role="button" id="ts-del" aria-label="Delete bed"><span tabindex="-1" style="display:inline-block;padding:4px 10px">x</span></span><span></span>')}
+      ${card("70:46", "ce", '<span>Feed bed</span><span role="button" id="ce-del" aria-label="Delete bed"><span contenteditable="true" style="display:inline-block;padding:4px 10px">x</span></span><span></span>')}
+      ${card("70:47", "ob", `<span>Mulch bed</span><object type="text/html" data="${doc("ob")}" style="width:60px;height:28px;border:0"></object><span></span>`)}
+      ${card("70:48", "em", `<span>Rake bed</span><embed type="text/html" src="${doc("em")}" style="width:60px;height:28px;border:0"><span></span>`)}
+      <div data-dt-node="70:49" style="display:inline-block;width:160px;height:44px;text-align:center"><button id="move" aria-label="Move bed" style="margin-top:8px">m</button></div>
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div>
+    </div>`);
+    const show = () => { document.getElementById("fresh").hidden = false; };
+    for (const id of ["tb", "ts", "ce", "ob", "em", "move"]) document.getElementById(id).addEventListener("click", show);
+    for (const id of ["tb", "ts", "ce"]) document.getElementById(`${id}-del`).onclick = (e) => { e.stopPropagation(); post(`${id}-inner-delete`); };
+  } else if (mode === "frame-del") {
+    // the page inside click-hidden-2's <object> / <embed>: a Delete filling it
+    document.write('<button id="fd" style="position:fixed;inset:0;width:100%;height:100%;margin:0">x</button>');
+    document.getElementById("fd").onclick = () => post(`${q.get("w")}-frame-delete`);
+  } else if (mode === "own-pixels-1" || mode === "own-pixels-2" || mode === "own-pixels-3") {
+    // 12b review 7 (D52: a container's own content is decided by pixels, as a union with the DOM check). Cards whose ONLY control
+    // is a centred Delete (it writes) with content of their own the DOM check misses — never clicked:
+    //   own-pixels-1 (H-1, H-2a): a labelled card whose Delete shows only on :hover — by visibility (70:44), display (70:45),
+    //     opacity + pointer-events (70:46); a status dot drawn by the card's own empty ::before (70:47), by an empty ::before of a
+    //     wrapper holding the Delete (70:48); a swatch drawn by the card's own ::after (70:49);
+    //   own-pixels-2 (H-2b–d): a <progress> (70:44), a <meter> (70:45), a dot drawn by a border (70:46), a swatch drawn by a
+    //     box-shadow (70:47), a band across the centre (70:48), a colour tile holding the Delete (70:49);
+    //   own-pixels-3: a label revealed (IntersectionObserver) once scrolled in, out of flow (H-2e, 70:44, below the fold); a label
+    //     painted past its 1 × 1 box by overflow-clip-margin (L-2, 70:45); a cell with a 3-px selection stripe beside its icon
+    //     button (L-3, 70:46: by D52 a stripe is the cell's own content — refused).
+    // D47 cells whose sole centred button IS the opener's own — driven, ok:true: a hover tint over the whole cell (own-pixels-1
+    // 70:53), a filled wrapper (own-pixels-1 70:50), a Tailwind sr-only label (own-pixels-2 70:53), a transform:scale(0)
+    // aria-hidden tooltip (own-pixels-2 70:50), an icon inside the button (own-pixels-3 70:47), a clip-path sr-only label (70:48), an
+    // opacity-0 tooltip (70:49), a left:-9999px sr-only label (70:53), the plain cell (70:50).
+    const card = (id, elId, inner, css) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="position:relative;display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px;border:1px solid #999;background:#ffffff;cursor:pointer;${css || ""}">${inner}</div></div>`;
+    const del = (elId) => `<button id="${elId}-del" aria-label="Delete bed" style="width:28px">x</button>`;
+    const cell = (id, elId, inner) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="display:inline-block;position:relative;width:160px;height:44px;text-align:center">${inner}</div></div>`;
+    const btn = (elId, inner) => `<button id="${elId}-btn" aria-label="Open bed" style="margin-top:8px">${inner || "o"}</button>`;
+    const sets = {
+      "own-pixels-1": [
+        card("70:44", "hv", `<span>Move bed</span>${del("hv")}<span></span>`), card("70:45", "hd", `<span>Split bed</span>${del("hd")}<span></span>`),
+        card("70:46", "hp", `<span>Rename bed</span>${del("hp")}<span></span>`), card("70:47", "pd", `${del("pd")}<span></span>`),
+        card("70:48", "pw", `<span></span><span class="wr">${del("pw")}</span><span></span>`), card("70:49", "ps", `<span></span>${del("ps")}<span></span>`),
+        cell("70:53", "tint", `${btn("tint")}<span style="position:absolute;inset:0;background:rgba(0, 0, 0, 0.04);pointer-events:none"></span>`),
+        cell("70:50", "wrap", `<span style="display:inline-block;margin-top:4px;padding:4px;background:#eeeeff">${btn("wrap").replace("margin-top:8px", "margin:0")}</span>`),
+      ],
+      "own-pixels-2": [
+        card("70:44", "pg", `<progress value="60" max="100" style="width:70px"></progress>${del("pg")}<span></span>`),
+        card("70:45", "mt", `<meter value="0.6" style="width:70px"></meter>${del("mt")}<span></span>`),
+        card("70:46", "bd", `<span style="display:inline-block;width:0;height:0;border:6px solid #22aa77;border-radius:50%"></span>${del("bd")}<span></span>`),
+        card("70:47", "sh", `<span style="display:inline-block;width:1px;height:1px;box-shadow:0 0 0 10px #22aa77;margin:10px"></span>${del("sh")}<span></span>`),
+        card("70:48", "bn", `<span style="position:absolute;left:0;top:50%;margin-top:-5px;height:10px;width:60%;background:#22aa77;pointer-events:none"></span><span></span>${del("bn")}<span></span>`),
+        card("70:49", "tl", `<span></span><span style="display:inline-flex;align-items:center;justify-content:center;width:80px;height:40px;background:#22aa77">${del("tl")}</span><span></span>`),
+        cell("70:53", "sro", `${btn("sro")}<span style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0">Open the bed form</span>`),
+        cell("70:50", "ah", `<span style="position:relative">${btn("ah")}<span aria-hidden="true" style="position:absolute;left:0;top:-22px;transform:scale(0);white-space:nowrap">Open bed</span></span>`),
+      ],
+      "own-pixels-3": [
+        card("70:45", "cm", `<span style="display:inline-block;width:1px;height:1px;overflow:clip;overflow-clip-margin:120px;white-space:nowrap">Rake bed</span>${del("cm")}<span></span>`),
+        cell("70:46", "sel", `<span style="position:absolute;left:0;top:0;bottom:0;width:3px;background:#4477ff"></span>${btn("sel")}`),
+        cell("70:47", "svg", btn("svg", '<svg width="12" height="12"><rect width="12" height="12"/></svg> Open')),
+        cell("70:48", "cpth", `${btn("cpth")}<span style="position:absolute;left:0;top:0;clip-path:inset(50%);white-space:nowrap">Open bed</span>`),
+        cell("70:49", "otip", `<span style="position:relative">${btn("otip")}<span style="position:absolute;left:0;top:-22px;opacity:0;white-space:nowrap;background:#000000;color:#ffffff;font-size:11px;padding:2px 4px">Open bed</span></span>`),
+        cell("70:53", "osr", `${btn("osr")}<span style="position:absolute;left:-9999px">Open the bed form</span>`),
+        cell("70:50", "plain", btn("plain")),
+        '<div style="height:1500px"></div>',
+        card("70:44", "ar", `<span class="rv" style="position:absolute;left:8px;top:8px;opacity:0;white-space:nowrap">Weed bed</span><span></span>${del("ar")}<span></span>`),
+      ],
+    };
+    document.write(`<style>#hv #hv-del { visibility: hidden; } #hv:hover #hv-del { visibility: visible; }
+      #hd #hd-del { display: none; } #hd:hover #hd-del { display: inline-block; }
+      #hp #hp-del { opacity: 0; pointer-events: none; } #hp:hover #hp-del { opacity: 1; pointer-events: auto; }
+      #pd::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: #22aa77; }
+      #pw .wr::before { content: ""; position: absolute; left: 12px; top: 12px; width: 10px; height: 10px; border-radius: 50%; background: #22aa77; }
+      #ps::after { content: ""; position: absolute; left: 10px; top: 6px; width: 40px; height: 20px; background: #22aa77; }</style>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>${sets[mode].join("\n")}
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div>
+    </div>`);
+    const io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) e.target.style.opacity = "1"; });
+    for (const r of document.querySelectorAll(".rv")) io.observe(r);
+    const show = () => { document.getElementById("fresh").hidden = false; };
+    for (const el of document.querySelectorAll("[data-dt-node^='70:4'], [data-dt-node='70:50'], [data-dt-node='70:53']")) el.addEventListener("click", show);
+    for (const b of document.querySelectorAll("[id$='-del']")) b.onclick = (e) => { e.stopPropagation(); post(`${b.id}-r7`); };
+  } else if (mode === "own-pixels-4") {
+    // 12b review 8 (fix 9, owner D53): cards whose ONLY control is a centred Delete (it writes) with content of their own that D52's
+    // first pixel check let through — never clicked: an inset:0 fill clipped to a corner flag by clip-path polygon (70:44), an
+    // inset:0 fill painted only in a 4-px content box by background-clip (70:45), a web-component card whose shadow root holds a
+    // status dot drawn by a border beside its slotted Delete (70:46), a card that is a list item with its own "1." marker (70:47), a
+    // wrapper hugging the Delete whose box-shadow paints a 14-px ring (70:48), a status dot forced visible by an !important inside
+    // a cascade layer (70:49). D47 cells — driven, ok:true: a cell whose icon button is mounted by JS on hover and unmounted when
+    // the pointer leaves (70:53), a cell under a foreign ticker bar that repaints over it every 10 ms (70:50).
+    const card = (id, elId, inner, css) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="position:relative;display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px;border:1px solid #999;background:#ffffff;cursor:pointer;${css || ""}">${inner}</div></div>`;
+    const del = (elId) => `<button id="${elId}-del" aria-label="Delete bed" style="width:28px">x</button>`;
+    const cell = (id, elId, inner) => `<div style="margin:30px 0"><div data-dt-node="${id}" id="${elId}" style="display:inline-block;position:relative;width:160px;height:44px;text-align:center">${inner}</div></div>`;
+    document.write(`<style>@layer base { #ly .dot { visibility: visible !important; } }</style>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      ${card("70:44", "fl", `<span style="position:absolute;inset:0;background:#22aa77;clip-path:polygon(0 0,28px 0,0 28px)"></span><span></span><span style="position:relative">${del("fl")}</span><span></span>`)}
+      ${card("70:45", "bc", `<span style="position:absolute;inset:0;box-sizing:border-box;padding-left:calc(100% - 4px);background:#dd3333;background-clip:content-box"></span><span></span><span style="position:relative">${del("bc")}</span><span></span>`)}
+      ${card("70:46", "hs", del("hs"))}
+      ${card("70:47", "mk", del("mk"), "display:list-item;list-style:inside decimal;text-align:center")}
+      ${card("70:48", "hg", `<span></span><span style="display:inline-block;padding:2px;box-shadow:0 0 0 14px #22aa77">${del("hg")}</span><span></span>`)}
+      ${card("70:49", "ly", `<span class="dot" style="display:inline-block;width:0;height:0;border:6px solid #22aa77;border-radius:50%"></span>${del("ly")}<span></span>`)}
+      ${cell("70:53", "jh", '<span id="jh-slot"></span>')}
+      ${cell("70:50", "tk", '<button aria-label="Open bed" style="margin-top:8px">o</button>')}
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div>
+    </div>`);
+    document.getElementById("hs").attachShadow({ mode: "open" }).innerHTML = '<style>:host { display: inline-grid !important; grid-template-columns: 1fr auto 1fr; align-items: center; }</style><span style="display:inline-block;width:0;height:0;border:6px solid #22aa77;border-radius:50%"></span><slot></slot><span></span>';
+    const jh = document.getElementById("jh"), slot = document.getElementById("jh-slot");
+    jh.addEventListener("mouseenter", () => { slot.innerHTML = '<button aria-label="Open bed" style="margin-top:8px">o</button>'; });
+    jh.addEventListener("mouseleave", () => { slot.innerHTML = ""; });
+    const tk = document.createElement("div"), tr = document.getElementById("tk").getBoundingClientRect();
+    tk.style.cssText = `position:absolute;height:6px;background:#4477ff;left:${tr.right - 60 + scrollX}px;top:${tr.y + scrollY + 4}px;width:50px`;
+    document.body.appendChild(tk);
+    let w = 50; setInterval(() => { w = w > 2 ? w - 1 : 50; tk.style.width = `${w}px`; }, 10);
+    const show = () => { document.getElementById("fresh").hidden = false; };
+    for (const el of document.querySelectorAll("[data-dt-node^='70:4'], [data-dt-node='70:50'], [data-dt-node='70:53']")) el.addEventListener("click", show);
+    for (const b of document.querySelectorAll("[id$='-del']")) b.onclick = (e) => { e.stopPropagation(); post(`${b.id}-r8`); };
+  } else if (mode === "own-pixels-csp") {
+    // fix 8 (D52) under a strict CSP (the e2e server sends style-src 'nonce-dtcsp' for &csp=1, so an injected <style> without the
+    // nonce — and every style="" attribute — is blocked): the probe's hiding rules must still take. A card whose status dot is its
+    // own empty ::before beside its sole centred Delete (70:44) → never clicked; a plain D47 cell (70:53) → driven; review 8 L-1: a
+    // D47 cell whose button has transition:all (70:50) → driven (the probe's init CSS and its hiding rules still take).
+    document.write(`<style nonce="dtcsp">.app { position: relative; width: 1024px; background: #f5f5f0; } .bx { margin: 30px 0; }
+      #cd { position: relative; display: inline-grid; grid-template-columns: 1fr auto 1fr; align-items: center; width: 240px; padding: 6px; border: 1px solid #999999; background: #ffffff; cursor: pointer; }
+      #cd::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: #22aa77; }
+      #cd-del { width: 28px; height: 28px; } #pc, #tr { display: inline-block; width: 160px; height: 44px; text-align: center; } #pc button, #tr button { width: 40px; height: 28px; margin-top: 8px; }
+      #tr button { transition: all 0.3s; }</style>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div class="bx"><div data-dt-node="70:44" id="cd"><button id="cd-del" aria-label="Delete bed">x</button><span></span></div></div>
+      <div class="bx"><div data-dt-node="70:53" id="pc"><button aria-label="Open bed">o</button></div></div>
+      <div class="bx"><div data-dt-node="70:50" id="tr"><button aria-label="Open bed">o</button></div></div>
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div></div>`);
+    const show = () => { document.getElementById("fresh").hidden = false; };
+    document.getElementById("cd").addEventListener("click", show); document.getElementById("pc").addEventListener("click", show); document.getElementById("tr").addEventListener("click", show);
+    document.getElementById("cd-del").onclick = (e) => { e.stopPropagation(); post("cd-del-csp"); };
+  } else if (mode === "tall-shell") {
+    // 12b review 7 L-1: an app shell (a fixed inset:0 scroller) scrolled so a 900-px card's label lies above the shell's top; the
+    // card's sole control, its Delete, fills the card below the label (the centre of what shows) — the label is the card's own content (scrolling the shell
+    // reaches it), so the Delete is never clicked (70:44). 70:53: a D47 cell in the same shell, driven.
+    document.write(`<div id="shell" style="position:fixed;inset:0;overflow:auto"><div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div style="height:1000px"></div>
+      <div data-dt-node="70:44" id="tall" style="position:relative;height:900px;width:240px;border:1px solid #999;cursor:pointer"><div style="padding:6px">Move bed</div>
+        <button id="tall-del" aria-label="Delete bed" style="position:absolute;left:0;top:100px;width:100%;height:800px;border:0;background:#f4f4f4">x</button></div>
+      <div data-dt-node="70:53" id="tc" style="display:inline-block;width:160px;height:44px;text-align:center"><button aria-label="Open bed" style="margin-top:8px">o</button></div>
+      <div style="height:2000px"></div>
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div></div></div>`);
+    const shell = document.getElementById("shell"), tall = document.getElementById("tall"), d = document.getElementById("tall-del");
+    // the shell scrolled 450 px into the card: its label is above the shell's top; the Delete fills the card below the label
+    shell.scrollTop = tall.offsetTop + 450;
+    const show = () => { document.getElementById("fresh").hidden = false; };
+    tall.addEventListener("click", show); document.getElementById("tc").addEventListener("click", show);
+    d.onclick = (e) => { e.stopPropagation(); post("tall-del-r7"); };
+  } else if (mode === "smooth-shell") {
+    // review 6 H-4 (D4): an app shell whose scroller is scroll-behavior:smooth (a fixed, inset:0, overflow:auto box) holds a
+    // covered opener (70:49, under a transparent layer) in view near the bottom: Playwright's click retries scroll the shell,
+    // the drive puts it back before its synthetic click. Its popover is anchored at click time (top = 100 px + the shell's
+    // scrollTop then), so its rect says where the shell was when the click landed — 100 when put back at once. "Jump" (70:50)
+    // scrolls the shell to 300 itself when clicked (a smooth scroll in the page) and anchors its popover the same way — 400 when
+    // that scroll is instant (the probe's init CSS). &important=1: the page forces smooth with an !important ID rule the init
+    // CSS cannot beat — the drive's own restore must still be instant.
+    document.write(`${q.get("important") ? "<style>#shell { scroll-behavior: smooth !important; }</style>" : ""}<div id="shell" style="position:fixed;inset:0;overflow:auto;scroll-behavior:smooth">
+      <div class="app" data-dt-node="70:1" style="height:4000px"><h1 data-dt-node="70:2">Beds</h1>
+      <button data-dt-node="70:50" id="jump">Jump</button>
+      <div style="position:absolute;left:20px;top:calc(100vh - 60px)"><button data-dt-node="70:49" id="move">Move</button><div style="position:absolute;inset:-4px;z-index:2"></div></div>
+      </div></div>
+      <div data-dt-node="70:60" id="fresh" hidden style="position:fixed;left:40px;top:100px"><div role="dialog">Bed form</div></div>`);
+    const shell = document.getElementById("shell"), f = document.getElementById("fresh");
+    // &painted=1 (fix 8, D4): the popover is anchored where the shell was at the last frame the page PAINTED before the click (a
+    // page reading scroll in requestAnimationFrame) — 100 only when the drive's restored scroll held for a frame before its
+    // synthetic click, whatever the machine's load
+    let painted = 0;
+    if (q.get("painted")) { const tick = () => { painted = shell.scrollTop; requestAnimationFrame(tick); }; requestAnimationFrame(tick); }
+    document.getElementById("move").onclick = () => { f.style.top = `${100 + (q.get("painted") ? painted : shell.scrollTop)}px`; f.hidden = false; };
+    document.getElementById("jump").onclick = () => { shell.scrollTo({ top: 300 }); f.style.top = `${100 + shell.scrollTop}px`; f.hidden = false; };
+  }
+</script>
+</body>
+</html>

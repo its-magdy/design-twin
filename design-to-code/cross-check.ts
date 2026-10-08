@@ -10,7 +10,7 @@
 //     drift-lint still printed "318/318 components mapped · 0 error(s)" because its coverage metric
 //     measures the catalog against itself and never against the screen.
 //   * every collection key differed between the screen's variables and the design system's
-//     (Semantic Variables 02 was ebac83f1… in one and 64113d4c… in the other) — the design file had
+//     (Semantic Vectors 02 was ebac83f1… in one and 64113d4c… in the other) — the design file had
 //     been DUPLICATED, which re-keys everything while leaving names and values identical.
 //   * two names collided across the two libraries with DIFFERENT values: `(Space 3)` = 12 on the
 //     screen vs `Space 3` = 16 in the design system; `light blue` = #1289db vs #94e2ff. A builder who
@@ -30,22 +30,27 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./component-match.ts";
+import { visibleInstances, matchByNameAndSignature, nameVerdict, isRekeyed } from "./component-match.ts";
+import { findingIds } from "./finding-id.ts";
+import { isCodeConnectMap } from "./map-validate.ts";
+import { readJson, readJsonOrNull } from "./read-json.ts";
+import { isPageIndex, isPagesRootIndex } from "./doc-guards.ts";
 // hidden.ts's one predicate: `hidden: true` on the node or an ancestor. Both walks below return at a
 // hidden node, so its whole subtree is skipped — ancestry is carried by not descending.
 import { hiddenSelf } from "./hidden.ts";
+import { outermostControl, isDisabledLayer } from "./control-kind.ts";
 import { parseHex, contrastRatio, composeAlpha, compositeOver } from "./color.ts";
 import type { Rgba } from "./color.ts";
-import { readDocFile, readOptionalDoc } from "./catalog-input.ts";
-import { isComponentsCatalog, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
+import { readDocFile } from "./catalog-input.ts";
+import { readDesignSystemDir } from "./design-system-dir.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import type {
-  CatalogComponent, ComponentsCatalog, ContrastFailure, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
-  IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
+  CatalogComponent, CodeConnectMap, ComponentProposal, ComponentsCatalog, ContrastFailure, TokenPairRow, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
+  BlockerCode, IndexRow, IrNode, MatchResult, MatchRow, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
@@ -73,9 +78,26 @@ export interface CrossCheckInput {
   components?: ComponentsCatalog | null;
   componentsLibrary?: ComponentsCatalog | null;
   stylesText?: TextStylesDoc | null;
+  /** the component catalog's file as findings should name it (default "components.local.json"; a
+   *  --as-library export's is "components.json") */
+  componentsFile?: string;
+  /** the design-system dir given IS a --as-library export — changes the "export the library" advice */
+  designSystemIsLibrary?: boolean;
+  /** F-47: the project's component map (codeconnect.local.json) — a proposal it already covers is labelled
+   *  `alreadyMapped` and listed last; nothing else changes */
+  map?: CodeConnectMap | null;
+  /** F-47: the OTHER exported screens (exportSiblings), called only when there are proposals — each
+   *  proposal's `sharedWith` counts the ones using the same component; null/absent = unknown (no field) */
+  siblings?: (() => CrossCheckScreen[]) | null;
 }
 
-type Push = (severity: Severity, code: CrossCheckFindingCode, message: string, extra?: FindingExtras) => void;
+// D1: "blocker" only with a BlockerCode — any other blocker is a compile error.
+// `nodeId` (a Finding field, not an extra): the node a finding is about, when there is one.
+type PushExtra = FindingExtras & { nodeId?: string };
+interface Push {
+  (severity: "blocker", code: BlockerCode & CrossCheckFindingCode, message: string, extra?: PushExtra): void;
+  (severity: "warning" | "info", code: CrossCheckFindingCode, message: string, extra?: PushExtra): void;
+}
 
 // Visible layers only: a token bound on a layer the designer switched off is not built, so it is not
 // a token the build has to resolve (livetest-3 P2a — the same rule as audit.ts and verify-screen.ts).
@@ -107,10 +129,17 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   const components = input.components || null;
   const componentsLibrary = input.componentsLibrary || null;
   const stylesText = input.stylesText || null;
+  const catFile = input.componentsFile || "components.local.json";
+  // F-19: the remediation hints named only the CLI. Listing libraries has an MCP twin; exporting a
+  // library does not (the MCP export tool's own description points at the CLI's --as-library).
+  const LIST_LIBRARIES = "`dtwin list libraries --client <the screen's file>` (MCP: `figma_list_libraries`)";
+  const EXPORT_LIBRARY = input.designSystemIsLibrary
+    ? "check that the library export you passed is the one the screen consumes (a DUPLICATED library file re-keys everything — re-export the original with `dtwin pull --as-library \"<name>\"`, CLI only)"
+    : "export it with `dtwin pull --as-library \"<name>\"` (CLI only — the MCP server has no library export)";
 
   const findings: CrossCheckFinding[] = [];
   const notChecked: string[] = [];
-  const push: Push = (severity, code, message, extra) => findings.push(Object.assign({ severity, code, message }, extra || {}));
+  const push: Push = (severity: Severity, code: CrossCheckFindingCode, message: string, extra?: PushExtra): void => { findings.push(Object.assign({ severity, code, message }, extra || {})); };
 
   // ---------------------------------------------------------------- what the screens actually use
   const usedTokenNames = new Map<string, UsedAt[]>(); // name -> [{screen, nodeId, field}]
@@ -165,6 +194,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     if (c.name) dsCollByName.set(norm(c.name), c);
   }
   const screenColls = (variables && variables.collections) || [];
+  let foreignPatch: { foreign: Array<{ name: string; key?: string }>; head: string; tail: string; at: number } | null = null;
 
   if (!tokens) {
     notChecked.push(
@@ -186,21 +216,32 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     }
     if (foreign.length) {
       const sameNameDifferentKey = foreign.filter((f) => f.twinKey);
-      const severity: Severity = foreign.length === screenColls.length ? "blocker" : "warning";
-      push(
-        severity,
-        "foreign-token-library",
-        `${foreign.length} of ${screenColls.length} variable collection(s) the screen binds are NOT in the design-system export — ` +
+      // D11: a warning to confirm, never a blocker — "you passed the wrong design system" has a default
+      // (build from the screen's own .vars.json values) and a question, not a hard stop.
+      const all = foreign.length === screenColls.length;
+      // DT-07: the message is finished once the screen's variables are classified by name (below, after
+      // sameResolution exists): `head` + the offline counts + `tail`.
+      foreignPatch = {
+        foreign,
+        head:
+          `${foreign.length} of ${screenColls.length} variable collection(s) the screen binds are NOT in the design-system export — ` +
           `the screen consumes a DIFFERENT library than the one you pulled. ` +
           (sameNameDifferentKey.length
             ? `${sameNameDifferentKey.length} of them carry a design-system collection's name under a different key ` +
               `(${sameNameDifferentKey.slice(0, 3).map((f) => `'${f.name}'`).join(", ")}), which is the signature of a DUPLICATED Figma file: ` +
               `duplicating a library re-keys everything while leaving names and values identical. `
             : "") +
-          `Names and values may still line up (check the collisions below), but nothing here is the same variable. ` +
-          `To find the real owner: run \`dtwin list libraries --client <the screen's file>\` — variable collections are the ONE thing ` +
-          `Figma attributes to a library by name — then open that file and export it with \`dtwin pull --as-library "<name>"\`.`,
-        { collections: foreign }
+          `Names and values may still line up (check the collisions below), but nothing here is the same variable. `,
+        tail:
+          `Only to find the owning file: run ${LIST_LIBRARIES} — variable collections are the ONE thing ` +
+          `Figma attributes to a library by name — then open that file and ${EXPORT_LIBRARY}.`,
+        at: findings.length,
+      };
+      push(
+        "warning",
+        "foreign-token-library",
+        foreignPatch.head + foreignPatch.tail,
+        { collections: foreign, confirm: `${all ? "None" : `Only ${screenColls.length - foreign.length} of ${screenColls.length}`} of the screen's variable collections are in the design system you passed — is it the library this screen uses? Until confirmed, values come from the screen's own .vars.json.` }
       );
     } else {
       push("info", "token-library-matches", `all ${screenColls.length} variable collection(s) the screen binds resolve to the design-system export by key.`, {});
@@ -285,6 +326,57 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     return false; // disjoint under every mode either side defines
   }
 
+  // DT-07: classify the screen's variables in the flagged foreign collections against the design system BY
+  // NAME (collection-blind): agree / differ / undecidable / absent — the offline answer to "can I map by name?".
+  // Which variables are IN a foreign collection is decided by the collection's KEY when the row carries one
+  // (`collectionKey`, FU-namemap: names repeat — two `Spacing`, one of them the design system's own). An
+  // export from before collection keys has only the collection NAME: those rows are matched by name as
+  // before, and counted in `ambiguous` when a non-foreign collection of the screen has that name too (the
+  // row may belong to either of them).
+  if (foreignPatch) {
+    const fp = foreignPatch;
+    const foreignNames = new Set(fp.foreign.map((f) => f.name));
+    const foreignKeys = new Set(fp.foreign.map((f) => f.key).filter((k): k is string => !!k));
+    const screenKeys = new Set(screenColls.map((c) => c.key).filter((k): k is string => !!k));
+    const sharedNames = new Set(screenColls.filter((c) => c.key && dsCollByKey.has(c.key) && foreignNames.has(c.name)).map((c) => c.name));
+    const nameMap = { agree: 0, differ: 0, undecidable: 0, absent: 0 };
+    let ambiguous = 0;
+    const seen = new Set<string>();
+    for (const v of screenVars) {
+      if (!v || !v.name || !v.collection) continue;
+      // A key the screen's collection list does not know cannot select anything: fall back to the name.
+      const byKey = !!v.collectionKey && screenKeys.has(v.collectionKey);
+      if (byKey ? !foreignKeys.has(v.collectionKey ?? "") : !foreignNames.has(v.collection)) continue;
+      const id = v.key || `${v.collection}\u0000${v.name}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (!byKey && sharedNames.has(v.collection)) ambiguous++;
+      const dv = dsVarByName.get(v.name);
+      if (!dv) { nameMap.absent++; continue; }
+      const r = sameResolution(v, dv);
+      if (r === true) nameMap.agree++; else if (r === false) nameMap.differ++; else nameMap.undecidable++;
+    }
+    const n = seen.size;
+    let offline = "";
+    if (n) {
+      offline =
+        `Offline check (no Figma needed): of the ${n} variables in those collections, ${nameMap.agree} have a design-system variable of the same name ` +
+        `resolving the same in every shared mode, ${nameMap.differ} resolve differently (listed as token-name-collision), ${nameMap.undecidable} cannot be compared ` +
+        `(no shared mode), ${nameMap.absent} have no same-name variable. ` +
+        (nameMap.differ === 0 && nameMap.agree > 0
+          ? `Mapping by NAME is safe for the ${nameMap.agree}: the screen's own .vars.json is the ground truth for names and values. `
+          : "") +
+        (nameMap.agree === 0 && nameMap.absent === n
+          ? `None of them exists here by name — this is not the screen's library; pull the one it uses. `
+          : "") +
+        (ambiguous
+          ? `(${ambiguous} of them come from a collection whose name a design-system collection also has — this export predates collection keys on variables; re-pull to tell them apart.) `
+          : "");
+    }
+    const f = findings[fp.at];
+    if (f) { f.message = fp.head + offline + fp.tail; f.nameMap = ambiguous ? { ...nameMap, ambiguous } : nameMap; }
+  }
+
   if (tokens && screenVarByName.size) {
     const collisions: Collision[] = [], missing: Array<{ name: string; near: string | null }> = [];
     for (const [name, list] of screenVarsByName) {
@@ -333,18 +425,20 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           c.twins.map((t) => `${shortKey(t) ? "key " + shortKey(t) : "'" + (t.collection || "") + "'"} = ${JSON.stringify(flatten(t))}${fromWhere(t)}`).join(" vs ") +
           ` — only the one(s) listed as colliding differ from the design system.`
         : "";
-      push(
-        "blocker",
-        "token-name-collision",
-        // Both subjects are named, whether the names are identical or only near-identical (livetest-3 #326).
+      // D1: a clash blocks only when the screen really USES the token (a visible layer binds it); a clash on
+      // a variable the slice merely carries is a warning to confirm.
+      const used = c.usedAt.length > 0;
+      // Both subjects are named, whether the names are identical or only near-identical (livetest-3 #326).
+      const message =
         `The screen's '${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""} and the design system's '${c.alsoKnownAs || c.name}' ` +
           `${c.alsoKnownAs ? "differ only by case or punctuation" : "share a name"} but resolve DIFFERENTLY: ` +
           `screen ${JSON.stringify(c.screen)} vs design system ${JSON.stringify(c.designSystem)}` +
           (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " — no mode name is shared and the two value sets are disjoint. ") +
           `Slugging the name onto the existing token would silently apply the wrong value — namespace the screen's copy, or confirm which library is authoritative.` +
-          twinNote + scopeNote,
-        { token: c.name, ...ifDefined("key", c.key), ...ifDefined("alsoKnownAs", c.alsoKnownAs), screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
-      );
+          twinNote + scopeNote;
+      const extra: FindingExtras = { token: c.name, ...ifDefined("key", c.key), ...ifDefined("alsoKnownAs", c.alsoKnownAs), screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope };
+      if (used) push("blocker", "token-name-collision", message, extra);
+      else push("warning", "token-name-collision", message, { ...extra, confirm: `'${c.name}' has different values here and in the design system, but no visible layer on this screen binds it — which one is authoritative if it is used later?` });
     }
     // The union's own ambiguity, when it is NOT this screen's: said once, as a note naming the other
     // screen, so nobody "fixes" this screen's correct value to match someone else's variable.
@@ -417,6 +511,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
 
   // ---------------------------------------------------------------- (b) catalog coverage
   let rekey: MatchResult | null = null;
+  let proposals: ComponentProposal[] = [];
   const coverage: CrossCheckCoverage = { instances: instances.length, distinct: 0, matchedByKey: 0, matchedByLocalKey: 0, matchedByName: 0, ambiguousName: 0, unmatched: 0, pct: null, localPct: null, entries: [] };
   // The LOCAL catalog is the one that matters: components.local.json is what map-bootstrap keys
   // codeconnect.local.json on and what build-screen resolves an instance against. components.library.json
@@ -428,17 +523,21 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   const localKeys = new Set(localComps.map((c) => c.key).filter((k): k is string => !!k));
   const catalog: CatalogComponent[] = localComps.concat((componentsLibrary && componentsLibrary.components) || []);
   if (!catalog.length) {
-    notChecked.push("component coverage — no components.local.json was given, so every instance counts as new by default.");
+    notChecked.push(`component coverage — no ${catFile} was given, so every instance counts as new by default.`);
   } else if (!instances.length) {
     notChecked.push("component coverage — the screen export contains no INSTANCE nodes to compare.");
   } else {
     const byKey = new Map<string, CatalogComponent>();
-    const byName = new Map<string, CatalogComponent[]>();
-    for (const c of catalog) {
-      if (c.key) byKey.set(c.key, c);
-      const k = norm(c.name);
-      getOrInit(byName, k, () => []).push(c);
-    }
+    for (const c of catalog) if (c.key) byKey.set(c.key, c);
+    // DT-27: the name stage is component-match's — the SAME rows plan-skeleton reads, judged by the same
+    // nameVerdict — so the coverage table and the plan's catalog column cannot disagree on a component.
+    // Its catalog is the LOCAL one (components.library.json only explains residuals there), so a name
+    // that exists only in the library is no longer a name match here (K-5; a key hit there still counts).
+    // Duplicating a Figma file re-mints every component key, so 0% by key is ALSO what a duplicated design
+    // system looks like — and there the names AND prop signatures still agree. Its matches are only ever
+    // proposals for a person to confirm.
+    rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
+    const rowByName = new Map<string, MatchRow>((rekey ? rekey.rows : []).map((r): [string, MatchRow] => [r.name, r]));
     // Distinct on the SET key where there is one: a screen using six Button variants is one component
     // to map, not six, and counting variants would flatter the coverage number.
     const distinct = new Map<string, ScreenInstance & { count: number }>();
@@ -456,52 +555,48 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
         coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
         continue;
       }
-      // Name+structure fallback. Never authoritative: a name match is a CANDIDATE, carried with
-      // `verified: false` so build-screen can say "mapped by name, unverified" instead of either
-      // pretending it is a real mapping or throwing away the only lead there is. Structure — how many
-      // of the instance's prop names the candidate actually declares — is what separates a real
-      // rename from two unrelated components both called `Header`.
-      const cands = byName.get(norm(i.setName)) || [];
-      let best: { c: CatalogComponent; score: number; hit: number; of: number } | null = null;
-      for (const c of cands) {
-        const props = Object.keys(c.props || {}).map((p) => norm(String(p).split("#")[0]));
-        const want = i.propNames.map((p) => norm(String(p).split("#")[0]));
-        const hit = want.filter((p) => props.includes(p)).length;
-        const score = want.length ? hit / want.length : props.length ? 0 : 0.5;
-        if (!best || score > best.score) best = { c, score, hit, of: want.length };
-      }
-      // An AMBIGUOUS name is not a lead, it is a coin flip. The live file's own hygiene output flags
-      // `Component 1`, `Header`, `Tabs` as duplicated/unnamed, and several catalog entries share each —
-      // binding on that is the failure a name fallback exists to avoid, so it counts as unmatched and
-      // is carried only as a suggestion.
-      if (best && cands.length > 1) {
-        coverage.ambiguousName++;
-        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
-      } else if (best && (best.score >= 0.5 || cands.length === 1)) {
+      // Name fallback. Never authoritative: a name match is a CANDIDATE, carried with `verified: false`
+      // so build-screen can say "mapped by name, unverified" instead of either pretending it is a real
+      // mapping or throwing away the only lead there is. A match needs the prop SIGNATURE to agree too —
+      // that is what separates a real rename from two unrelated components both called `Header` — and a
+      // name several entries share is AMBIGUOUS (a coin flip, left unmatched) unless the signature picks
+      // one or they are duplicates of one definition (nameVerdict).
+      const row = rowByName.get(i.setName);
+      const verdict = row ? nameVerdict(row) : null;
+      const matched = row && verdict && verdict.status === "matched" ? row.match : null;
+      if (row && matched) {
         coverage.matchedByName++;
+        // how many of the instance's prop names the matched entry declares (informational)
+        const cat = localComps.find((c) => (matched.key ? c.key === matched.key : matched.id !== undefined && c.id === matched.id));
+        const props = Object.keys((cat && cat.props) || {}).map((p) => norm(String(p).split("#")[0]));
+        const hit = i.propNames.filter((p) => props.includes(norm(String(p).split("#")[0]))).length;
         coverage.entries.push({
           setName: i.setName,
           ...ifDefined("key", i.setKey || i.key),
           matchedBy: "name",
           verified: false,
-          catalogName: best.c.name,
-          ...ifDefined("catalogKey", best.c.key),
-          propOverlap: `${best.hit}/${best.of}`,
+          catalogName: matched.name,
+          ...ifDefined("catalogKey", matched.key),
+          ...ifDefined("evidence", row.evidence),
+          propOverlap: `${hit}/${i.propNames.length}`,
           instances: i.count,
         });
+      } else if (row && verdict && verdict.status === "ambiguous") {
+        coverage.ambiguousName++;
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: (row.candidates || []).length, reason: verdict.reason, instances: i.count });
       } else {
         coverage.unmatched++;
-        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, verified: false, instances: i.count });
+        coverage.entries.push({
+          setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, verified: false,
+          reason: verdict ? verdict.reason : `no ${catFile} to match names against (a components.library.json name alone is not a match)`,
+          instances: i.count,
+        });
       }
     }
     coverage.pct = Math.round((coverage.matchedByKey / coverage.distinct) * 100);
     coverage.localPct = Math.round((coverage.matchedByLocalKey / coverage.distinct) * 100);
 
-    // Before concluding "wrong catalog": the copy/re-key case (livetest-3 #226). Duplicating a Figma
-    // file re-mints every component key, so 0% by key is ALSO what a duplicated design system looks
-    // like — and there the names AND prop signatures still agree. component-match.ts decides, and its
-    // matches are only ever proposals for a person to confirm.
-    rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
+    // Before concluding "wrong catalog": the copy/re-key case (livetest-3 #226) — `rekey` above.
     // the re-key result, only when it says the catalog was re-keyed (null otherwise)
     const rekeyedBy = rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey) ? rekey : null;
     const rekeyed = !!rekeyedBy;
@@ -539,31 +634,38 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     for (const s of screens) for (const root of screenRoots(s.doc)) everyInstance(root);
     coverage.hiddenOnly = hiddenOnly.size;
     if (rekeyedBy) {
-      const s = rekeyedBy.summary, props = rekeyedBy.proposals;
+      const s = rekeyedBy.summary;
+      proposals = labelProposals(rekeyedBy, visible, input.map || null, input.siblings || null);
+      const props = proposals;
+      const mapped = props.filter((p) => p.alreadyMapped).length, toConfirm = props.length - mapped;
+      const shared = props.filter((p) => !p.alreadyMapped && (p.sharedWith || 0) > 0).length;
       const residual = rekeyedBy.rows.filter((r) => !r.match);
       push(
-        "blocker",
+        "warning",
         "catalog-rekeyed",
-        `0 of ${s.names} component(s) on this screen resolve to components.local.json by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog ` +
+        `0 of ${s.names} component(s) on this screen resolve to ${catFile} by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog ` +
           `also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. ` +
           `That is not a foreign library — it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every ` +
           `component key), or the library was re-published. Proposed matches (confirm each before reuse — nothing is auto-accepted): ` +
-          props.slice(0, 12).map((r) => `'${r.name}' → ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare — weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") +
+          props.slice(0, 12).map((r) => `'${r.name}' → ${r.catalog ? r.catalog.id : "?"}${r.evidence === "name+no-props" ? " (no props to compare — weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}${r.alreadyMapped ? " (already mapped)" : ""}`).join(", ") +
           (props.length > 12 ? `, … (${props.length} in all — see componentProposals)` : "") + `. ` +
-          `${residual.length} name(s) are not in components.local.json` +
-          (buckets.libraryKey + buckets.nameOnly
-            ? ` — of the table's rows, ${buckets.libraryKey + buckets.nameOnly} are third-party components.library.json matches and ${buckets.newWork} new work`
+          // F-47: labels only — what is already in the map, and what other exported screens share
+          (mapped ? (toConfirm ? `${props.length} proposals, ${mapped} already mapped in the component map — confirm only the other ${toConfirm}. ` : `All ${props.length} proposals are already mapped in the component map — nothing is left to confirm. `) : "") +
+          (shared ? `${shared} of the proposals to confirm are on other exported screens too (shared chrome) — confirm those once. ` : "") +
+          `${residual.length} name(s) are not in ${catFile}` +
+          (buckets.libraryKey
+            ? ` — of the table's rows, ${buckets.libraryKey} are third-party components.library.json key matches and ${buckets.newWork} new work`
             : ` and stay new work`) +
           (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", …" : ""})` : "") + `. ` +
           `To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run ` +
-          `\`map-bootstrap.js <components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\` — it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
-        { rekey: s, proposals: props.length }
+          `the map-bootstrap script (\`<${catFile}> --out design/codeconnect.local.json --from-proposals <this report>.json\`) — it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
+        { rekey: s, proposals: props.length, confirm: `${toConfirm} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file)${mapped ? ` — ${mapped} more are already mapped` : ""} — confirm the proposed matches before reusing them as mappings.` }
       );
     } else if (coverage.localPct <= WRONG_CATALOG_PCT) {
       push(
-        "blocker",
+        "warning",
         "catalog-covers-nothing",
-        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) used on this screen (${coverage.localPct}%) are in components.local.json by key — ` +
+        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) used on this screen (${coverage.localPct}%) are in ${catFile} by key — ` +
           `the catalog you exported is not the library this screen is built from. ` +
           (coverage.matchedByKey > coverage.matchedByLocalKey
             ? `${coverage.matchedByKey - coverage.matchedByLocalKey} more match components.library.json, which only means both files consume the same third-party set. `
@@ -572,25 +674,25 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           (coverage.ambiguousName ? `${coverage.ambiguousName} more share a name with SEVERAL catalog entries ('Component 1'-class names) and are deliberately left unmatched. ` : "") +
           `A "318/318 mapped" count measures the catalog against itself and means nothing here. ` +
           `To find the owning library: open any instance in Figma and use right-click > "Go to main component" — it jumps to the file that ` +
-          `defines it. Then connect that file and run \`dtwin pull --as-library "<name>"\`. ` +
+          `defines it. Then connect that file and ${EXPORT_LIBRARY}. ` +
           `Until then every instance is correctly a \`verdict:"new"\` build, not a port of the catalog.` +
           (rekey && rekey.summary.withCandidates
             ? ` (Checked for the duplicated-file case too: only ${rekey.summary.proposedWithSignature} of the ${rekey.summary.withCandidates} name twin(s) also agree on prop signature — ` +
               `too few to call it the same library under new keys.)`
             : ""),
-        { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, ambiguousName: coverage.ambiguousName, localPct: coverage.localPct } }
+        { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, ambiguousName: coverage.ambiguousName, localPct: coverage.localPct }, confirm: `Only ${coverage.localPct}% of this screen's components are in ${catFile} by key — is that the component library this screen is built from? Until confirmed, every instance is new work.` }
       );
     } else if (coverage.localPct < 100) {
       push(
         "warning",
         "partial-catalog-coverage",
-        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) on this screen (${coverage.localPct}%) resolve to components.local.json by key` +
+        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) on this screen (${coverage.localPct}%) resolve to ${catFile} by key` +
           (coverage.matchedByName ? `, ${coverage.matchedByName} more by name only (unverified)` : "") +
           `. The rest are new work: ${coverage.entries.filter((e) => !e.matchedBy).slice(0, 6).map((e) => "'" + e.setName + "'").join(", ")}.`,
         { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, localPct: coverage.localPct } }
       );
     } else {
-      push("info", "catalog-covers-screen", `all ${coverage.distinct} component(s) on this screen resolve to components.local.json by key.`, {});
+      push("info", "catalog-covers-screen", `all ${coverage.distinct} component(s) on this screen resolve to ${catFile} by key.`, {});
     }
     // ONE finding for the whole name-matched set. Emitting one per component produced 37 identical
     // paragraphs on the live run — a list nobody reads is the same as no list.
@@ -599,8 +701,8 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       push(
         "info",
         "name-matched-components",
-        `${named.length} component(s) have no key in the catalog but DO have an exact name twin there: ` +
-          named.slice(0, 10).map((e) => `'${e.setName}' (props ${e.propOverlap})`).join(", ") + (named.length > 10 ? `, …` : "") +
+        `${named.length} component(s) have no key in the catalog but DO have an exact name twin there whose prop signature agrees: ` +
+          named.slice(0, 10).map((e) => `'${e.setName}' (${e.evidence === "name+no-props" ? "no props to compare" : `props ${e.propOverlap}`})`).join(", ") + (named.length > 10 ? `, …` : "") +
           `. Mapped BY NAME, UNVERIFIED — confirm one with "Go to main component" before reusing any of their code; ` +
           `if that one instance points at the catalog's file, the rest almost certainly do too.`,
         { components: named.map((e) => ({ setName: e.setName, ...ifDefined("catalogName", e.catalogName), ...ifDefined("catalogKey", e.catalogKey), ...ifDefined("propOverlap", e.propOverlap), verified: false })) }
@@ -612,7 +714,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       push(
         "warning",
         "ambiguous-component-name",
-        `${amb.length} component(s) share their name with SEVERAL catalog entries and were left unmatched on purpose: ` +
+        `${amb.length} component(s) share their name with SEVERAL catalog entries, and no prop signature picks one of them, so they were left unmatched on purpose: ` +
           amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", …" : "") +
           `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed — ` +
           `binding code to one of them by name would be a guess with a 1-in-${firstAmb.candidates} chance.`,
@@ -665,12 +767,12 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     }
     if (nearMiss.length) {
       push(
-        "blocker",
+        "warning",
         "text-style-near-miss",
         `${nearMiss.length} text style name(s) differ from a design-system style ONLY by case or punctuation: ` +
           nearMiss.map((n) => `'${n.name}' vs '${n.near}'`).join(", ") +
           `. That is the exact near-miss a name-based mapping binds wrongly and silently. Confirm they are the same style before reusing it.`,
-        { styles: nearMiss }
+        { styles: nearMiss, confirm: `${nearMiss.map((n) => `'${n.name}' = '${n.near}'`).join(", ")} — the same style? Until confirmed, use the screen's own text values, not the design-system style.` }
       );
     }
     if (absent.length) {
@@ -731,17 +833,28 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     const only = seen.size === 1 ? [...seen][0] : undefined; // a Set<string>: set exactly when size is 1
     if (only !== undefined && c.modes.length > 1) {
       const rest = c.modes.filter((m) => m !== only);
+      // F-20: the example fits the collection — a colour theme's failure is a surface that stays dark; a
+      // number collection's (sizes, spacing — often one mode per breakpoint) is a value that never changes.
+      const colour = [...((tokens && tokens.variables) || []), ...((variables && variables.variables) || [])].some((v) => v.collection === c.name && v.type === "COLOR");
+      const example = colour ? "a dark surface token that stays dark in Light" : `a size or spacing value that should differ in '${rest[0] ?? "another mode"}' but keeps its '${only}' value`;
       push(
         "warning",
         "single-mode-export",
         `every exported frame resolved collection '${c.name}' in mode '${only}', but it defines ${c.modes.length} modes (${c.modes.join(", ")}). ` +
           `The other ${rest.length} mode(s) are DERIVED from variable values, never seen rendered — so any element whose ${only}-mode token has no ` +
-          `sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. ` +
+          `sensible counterpart (${example}) will be mechanically correct and visually broken. ` +
           `Export a frame in ${rest.map((m) => `'${m}'`).join(" / ")} too, or have the designer confirm the derivation before it ships.`,
         { collection: c.name, exportedMode: only, modes: c.modes }
       );
     }
   }
+
+  // ---------------------------------------------------------------- F-126: one screen, two modes
+  // Every collection in the file appears in a root's resolvedModes (Figma lists them all, each in the mode
+  // it inherits), so "the root resolves collections in different modes" is true of every real screen. The
+  // signal is narrower: the collections the screen binds a COLOUR from, sharing a mode vocabulary, resolve
+  // to different mode names — a Dark screen whose two tags bind a starter-kit collection still in Light.
+  mixedModeBindings(screens, variables, tokens, push);
 
   // ---------------------------------------------------------------- contrast in the modes nobody drew
   //
@@ -755,20 +868,23 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   // bound to, its ancestors carry the token their background is bound to, and the variable file gives
   // both tokens' value in EVERY mode. So resolve the pair per mode and do the contrast arithmetic.
   contrastPerMode(screens, variables, tokens, push, resolvedModes);
+  // DT-63: …and in the modes that WERE rendered, one table for the whole run (info: the per-screen audit
+  // does not merge cross-file info, so this is never doubled into each screen's own findings).
+  contrastRendered(screens, variables, tokens, push);
 
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
+  // F-44: every finding carries the id a plan's auditGate.overridden names (finding-id.ts) — the same
+  // function audit.ts uses, over the report in its final order.
+  const ids = findingIds(findings);
+  findings.forEach((f, i) => { const id = ids[i]; if (id !== undefined) f.id = id; });
   const count = (s: Severity): number => findings.filter((f) => f.severity === s).length;
   return {
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
     coverage,
     // The confirmation list (catalog-rekeyed). Every entry starts unconfirmed; map-bootstrap.ts
     // --from-proposals stubs only the ones a person set "confirmed": true on.
-    componentProposals: rekey && coverage.rekey && coverage.rekey.rekeyed
-      ? rekey.proposals.map((r) => ({
-          name: r.name, instances: r.instances, screens: r.screens, instanceKeys: r.instanceKeys, remote: r.remote,
-          catalog: r.match, ...ifDefined("evidence", r.evidence), tie: r.tie || null, alternatives: r.alternatives, reasons: r.reasons, confirmed: false,
-        }))
-      : [],
+    // F-47: unconfirmed first (shared chrome before screen-only), already-mapped last.
+    componentProposals: proposals,
     componentResidual: rekey && coverage.rekey && coverage.rekey.rekeyed ? rekey.rows.filter((r) => !r.match).map((r) => ({ name: r.name, instances: r.instances, reasons: r.reasons })) : [],
     findings,
     notChecked,
@@ -782,6 +898,87 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   };
 }
 
+
+// ---------------------------------------------------------------- F-47: proposals, labelled
+// On a re-keyed file most proposals are the shell every screen shares (header, sidebar, page title),
+// re-proposed on every screen, and several are already in the map. Two LABELS say so — nothing is
+// auto-confirmed, no severity changes:
+//   * alreadyMapped — the map has an entry under, or whose figma.key is, one of the name's instance keys /
+//     set keys (the screen's own keys: an entry under the catalog key alone resolves no re-keyed instance);
+//   * sharedWith    — how many OTHER exported screens use the same component (by instance or set key);
+//                     absent when the export's other screens are unknown (K-12: unexported ones never count).
+// Order: to confirm first — shared before screen-only, most-shared first — then the already-mapped ones.
+function labelProposals(rekey: MatchResult, visible: ReturnType<typeof visibleInstances>, map: CodeConnectMap | null, siblings: (() => CrossCheckScreen[]) | null): ComponentProposal[] {
+  const mapKeys = new Set<string>();
+  for (const [k, e] of Object.entries((map && map.components) || {})) {
+    mapKeys.add(k);
+    if (e && e.figma && e.figma.key) mapKeys.add(e.figma.key);
+  }
+  // every key and set key the screen's instances of a name carry (proposal.instanceKeys has one per instance)
+  const keysOf = new Map<string, Set<string>>();
+  for (const i of visible) {
+    const ks = getOrInit(keysOf, i.name, () => new Set<string>());
+    if (i.key) ks.add(i.key);
+    if (i.setKey) ks.add(i.setKey);
+  }
+  const others = rekey.proposals.length && siblings ? siblings().map((s) => {
+    const ks = new Set<string>();
+    for (const i of visibleInstances(s.doc, s.label)) { if (i.key) ks.add(i.key); if (i.setKey) ks.add(i.setKey); }
+    return ks;
+  }) : null;
+  const out = rekey.proposals.map((r): ComponentProposal => {
+    const keys = keysOf.get(r.name) || new Set<string>(r.instanceKeys);
+    // the screen's OWN keys only: a map entry under the catalog key (a map-bootstrap stub) resolves no re-keyed instance
+    const mapped = [...keys].some((k) => mapKeys.has(k));
+    return {
+      name: r.name, instances: r.instances, screens: r.screens, instanceKeys: r.instanceKeys, remote: r.remote,
+      catalog: r.match, ...ifDefined("evidence", r.evidence), tie: r.tie || null, alternatives: r.alternatives, reasons: r.reasons, confirmed: false,
+      ...(mapped ? { alreadyMapped: true as const } : {}),
+      ...ifDefined("sharedWith", others ? others.filter((o) => [...keys].some((k) => o.has(k))).length : undefined),
+    };
+  });
+  const rank = (p: ComponentProposal): number => (p.alreadyMapped ? 2 : (p.sharedWith || 0) > 0 ? 0 : 1);
+  return out.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || (b.p.sharedWith || 0) - (a.p.sharedWith || 0) || a.i - b.i).map((x) => x.p);
+}
+
+// The OTHER screens of the export a screen file sits in (<root>/pages/<Page>/<Screen>.json, rows from
+// <root>/pages/index.json — or each page's own index.json for an older export), minus the files being
+// checked. A thunk: nothing is read until a report has proposals to label. null when a file is not inside
+// such an export (a legacy design/<Screen>.json) — sharedWith is then unknown, not 0.
+function exportSiblings(files: readonly string[]): (() => CrossCheckScreen[]) | null {
+  const checked = new Set(files.map((f) => path.resolve(f)));
+  const roots = new Set<string>();
+  for (const f of checked) {
+    const pages = path.dirname(path.dirname(f));
+    if (path.basename(pages) === "pages" && fs.existsSync(path.join(pages, "index.json"))) roots.add(path.dirname(pages));
+  }
+  if (!roots.size) return null;
+  return () => {
+    const out: CrossCheckScreen[] = [];
+    const seen = new Set<string>(checked);
+    for (const root of roots) {
+      const index = readJsonOrNull(path.join(root, "pages", "index.json"), isPagesRootIndex);
+      if (!index) continue;
+      let rows: IndexRow[] = index.layers || [];
+      if (!index.layers) {
+        for (const pd of index.pageDirs) {
+          const idx = pd.dir ? readJsonOrNull(path.join(root, "pages", pd.dir, "index.json"), isPageIndex) : null;
+          if (idx) rows = rows.concat(idx.layers);
+        }
+      }
+      for (const row of rows) {
+        const rel = row.file;
+        if (!rel || path.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) continue; // a path inside the export only
+        const file = path.resolve(root, rel);
+        if (seen.has(file)) continue;
+        seen.add(file);
+        const doc = readJsonOrNull(file, isScreenDoc);
+        if (doc) out.push({ doc, label: path.basename(file, ".json") });
+      }
+    }
+    return out;
+  };
+}
 
 // ---------------------------------------------------------------- contrast (WCAG 2.2: color.ts)
 // WCAG AA for body text. Large text is 3:1, but the export does not reliably say which is which and
@@ -801,6 +998,36 @@ function composedRgba(color: Rgba | null, opacity: number | null): Rgba | null {
   return { ...color, a: composeAlpha(color.a, opacity) };
 }
 
+const aliasName = (val: unknown): string | null =>
+  val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
+// A FLOAT token's number, following aliases (the opacity half of a composed colour). `valueOf` is the
+// token's raw value in whatever mode the caller resolves in.
+function resolveNumberWith(valueOf: (name: string) => VariableValue | undefined, name: string, depth: number): number | null {
+  if (depth > 8) return null;
+  const val = valueOf(name);
+  if (typeof val === "number") return Number.isFinite(val) ? val : null;
+  const next = aliasName(val);
+  return next ? resolveNumberWith(valueOf, next, depth + 1) : null;
+}
+// A token's colour, following aliases. Depth-limited rather than cycle-tracked: a Figma alias chain is
+// two or three links in practice, and a malformed file must not hang the check.
+function resolveColourWith(valueOf: (name: string) => VariableValue | undefined, name: string, depth: number): Rgba | null {
+  if (depth > 8) return null;
+  const val = valueOf(name);
+  if (typeof val === "string") return parseHex(val);
+  const next = aliasName(val);
+  if (next) return resolveColourWith(valueOf, next, depth + 1);
+  // A composed colour (doc-types ComposedColor): the colour half (alias -> resolved, hex -> parsed)
+  // and the opacity half (a number, or an alias -> that FLOAT's number), folded by composedRgba.
+  if (val && typeof val === "object" && "composed" in val) {
+    const { color, opacity } = val.composed;
+    const c = typeof color === "string" ? parseHex(color) : resolveColourWith(valueOf, color.aliasOf, depth + 1);
+    const o = typeof opacity === "number" ? opacity : resolveNumberWith(valueOf, opacity.aliasOf, depth + 1);
+    return composedRgba(c, o);
+  }
+  return null;
+}
+
 function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | null, tokens: TokensDoc | null, push: Push, resolvedModes: Map<string, Set<string>>): void {
   const defs = new Map<string, Variable>(); // token name -> variable record (the screen's own library wins: it is what the screen binds)
   for (const v of (tokens && tokens.variables) || []) if (v.name) defs.set(v.name, v);
@@ -817,34 +1044,7 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
     const [onlyKey] = keys;
     return keys.length === 1 && onlyKey !== undefined ? v.values[onlyKey] : undefined; // several modes and none of them is this one — do not guess
   }
-  const aliasName = (val: unknown): string | null =>
-    val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
-  // A FLOAT token's number in one mode, following aliases (the opacity half of a composed colour).
-  function resolveNumber(name: string, mode: string, depth: number): number | null {
-    if (depth > 8) return null;
-    const val = valueIn(name, mode);
-    if (typeof val === "number") return Number.isFinite(val) ? val : null;
-    const next = aliasName(val);
-    return next ? resolveNumber(next, mode, depth + 1) : null;
-  }
-  // A token's hex in one mode, following aliases. Depth-limited rather than cycle-tracked: a Figma
-  // alias chain is two or three links in practice, and a malformed file must not hang the check.
-  function resolve(name: string, mode: string, depth: number): Rgba | null {
-    if (depth > 8) return null;
-    const val = valueIn(name, mode);
-    if (typeof val === "string") return parseHex(val);
-    const next = aliasName(val);
-    if (next) return resolve(next, mode, depth + 1);
-    // A composed colour (doc-types ComposedColor): the colour half (alias -> resolved, hex -> parsed)
-    // and the opacity half (a number, or an alias -> that FLOAT's number), folded by composedRgba.
-    if (val && typeof val === "object" && "composed" in val) {
-      const { color, opacity } = val.composed;
-      const c = typeof color === "string" ? parseHex(color) : resolve(color.aliasOf, mode, depth + 1);
-      const o = typeof opacity === "number" ? opacity : resolveNumber(opacity.aliasOf, mode, depth + 1);
-      return composedRgba(c, o);
-    }
-    return null;
-  }
+  const resolve = (name: string, mode: string, depth: number): Rgba | null => resolveColourWith((n) => valueIn(n, mode), name, depth);
 
   // Which modes to check: every mode of every collection that actually defines one of the tokens in
   // play. Names are per-collection, so this is a union of names, not a cross-product.
@@ -904,7 +1104,7 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
   }
   for (const [mode, list] of byMode) {
     push(
-      "blocker",
+      "warning",
       "derived-mode-contrast",
       `in mode '${mode}', ${list.length} text/background token pair(s) fall below WCAG AA (${MIN_CONTRAST}:1): ` +
         list.slice(0, 4).map((f) => `'${f.fg}' on '${f.bg}' = ${f.ratio}:1 (e.g. ${f.sample})`).join("; ") +
@@ -912,7 +1112,7 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
         `. No frame was exported in '${mode}', so this mode is DERIVED from variable values and nobody has ever seen it rendered — ` +
         `the derivation is mechanically correct and visually broken. Export a '${mode}' frame, or get the designer to say ` +
         `which token each of these should use there. Do not invent an override and call it done.`,
-      { mode, pairs: list }
+      { mode, pairs: list, confirm: `Mode '${mode}' was never drawn and ${list.length} derived text/background pair(s) in it fail contrast — ship '${mode}' as derived, or will the designer supply it?` }
     );
   }
 }
@@ -924,12 +1124,268 @@ function walkWithBg(node: IrNode | null | undefined, bgToken: string | null, fn:
   // Was `node.visible === false`, which the export never uses — so every hidden layer's text was
   // contrast-checked. `hidden` (and, by not descending, its ancestry) is the flag.
   if (hiddenSelf(node)) return;
-  let bg = bgToken;
-  const own = (node.tokens && node.tokens.fills) ||
-    ((node.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean));
-  if (own && typeof own === "string" && node.type !== "TEXT") bg = own;
+  const bg = backdropTokenAfter(node, bgToken);
   fn(node, bg);
   for (const c of node.children || []) walkWithBg(c, bg, fn);
+}
+// The backdrop TOKEN a node leaves for its subtree (H-1 of review 1). A token-bound opaque solid fill names it; anything
+// else the node paints — a gradient / image / video / pattern / shader, a raw solid, a translucent fill — leaves a
+// colour no token names, so the backdrop is UNKNOWN (null: no pair is judged under it; the audit's contrast-manual /
+// low-contrast measure what renders). No fill, or a fully transparent one, leaves it as it was; a TEXT's fill is its
+// glyph colour. A node-level `tokens.fills` with no `fills[]` (older exports, hand-written inputs) still names it.
+function backdropTokenAfter(n: IrNode, above: string | null): string | null {
+  if (n.type === "TEXT") return above;
+  const fills = (n.fills || []).filter(Boolean);
+  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+  if (!fills.length) return nodeTok ?? above;
+  let cur = above;
+  for (const f of fills) {
+    if (f.opacity === 0) continue;
+    if (f.type !== "solid") { cur = null; continue; }
+    const c = parseHex(f.color);
+    if (c && c.a <= 0) continue;
+    const t = f.tokens && f.tokens.color;
+    const tok = typeof t === "string" && t ? t : fills.length === 1 ? nodeTok : null;
+    cur = tok && (!c || c.a >= 1) ? tok : null;
+  }
+  return cur;
+}
+// The colour token a node's fill is bound to (the node-level binding, else the first bound fill paint).
+function fillToken(n: IrNode): string | null {
+  const own = (n.tokens && n.tokens.fills) || ((n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean));
+  return own && typeof own === "string" ? own : null;
+}
+// A text node's colour token: its fill binding, a uniform run binding, or the text-level one.
+function textToken(n: IrNode): string | null {
+  const t = n.tokens || {}, tt = n.textTokens || {};
+  for (const x of [t.fills, t.textRangeFills, fillToken(n), tt.fills]) if (typeof x === "string" && x) return x;
+  return null;
+}
+// Every COLOUR binding on a node, for F-126: fill / stroke keys of `tokens`, bound fill paints, text fills.
+function colourBindings(n: IrNode): string[] {
+  const out: string[] = [];
+  const add = (x: unknown): void => { for (const s of Array.isArray(x) ? x : [x]) if (typeof s === "string" && s && !out.includes(s)) out.push(s); };
+  for (const [k, v] of Object.entries(n.tokens || {})) if (/fill|stroke/i.test(k)) add(v);
+  for (const f of n.fills || []) add(f && f.tokens && f.tokens.color);
+  add((n.textTokens || {}).fills);
+  return out;
+}
+
+// ---------------------------------------------------------------- F-126: mixed-mode colour bindings
+// Per screen root: each visible colour binding's variable -> its collection (the screen's own .vars.json,
+// else the merged variables.json, else the design system's tokens). Only multi-mode collections the root
+// resolves (resolvedModes) count. They are grouped by shared mode vocabulary (a collection joins a group
+// when it declares a mode name some member declares); in each group the majority mode is the one with the most
+// bindings, and a collection bound in another mode is a mix only when it ALSO declares the majority mode
+// (Dark/Light). A breakpoint collection on Desktop beside a theme on Dark is not a mix, a Brand 1/Brand 2
+// collection never outvotes a theme, and a collection the screen resolves but binds nothing from is not counted
+// (every collection in the file is in resolvedModes). One warning per mixed group; `bindings` rows carry at
+// most 20 tokens and 8 nodes each.
+/** One bound colour collection on one screen root: the mode it resolves in and what binds it. */
+interface ModeUse { coll: VariableCollection; mode: string; count: number; tokens: string[]; nodes: string[]; samples: string[] }
+function mixedModeBindings(screens: CrossCheckScreen[], variables: TokensDoc | null, tokens: TokensDoc | null, push: Push): void {
+  for (const s of screens) {
+    const label = s.label || screenExportOf(s.doc)?.screen || "screen";
+    const defs = new Map<string, Variable>();
+    for (const doc of [tokens, variables, s.vars || null]) for (const v of (doc && doc.variables) || []) if (v.name) defs.set(v.name, v);
+    const colls: VariableCollection[] = [...((s.vars && s.vars.collections) || []), ...((variables && variables.collections) || []), ...((tokens && tokens.collections) || [])];
+    // Same-named collections exist (a one-mode and a three-mode `Spacing`): the row's `collectionKey` picks one
+    // when both sides carry a key (L6); else the one declaring every mode the variable has values for.
+    const collOf = (v: Variable): VariableCollection | undefined => {
+      const keyed = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && Array.isArray(c.modes)) : undefined;
+      if (keyed) return keyed;
+      const named = colls.filter((c) => c.name === v.collection && Array.isArray(c.modes));
+      const modes = Object.keys(v.values || {});
+      return named.find((c) => modes.every((m) => c.modes.includes(m))) ?? named[0];
+    };
+    for (const root of screenRoots(s.doc)) {
+      const rm = root.resolvedModes;
+      if (!rm) continue;
+      const use = new Map<string, ModeUse>();
+      walk(root, (n) => {
+        for (const name of colourBindings(n)) {
+          const v = defs.get(name);
+          if (!v || v.type !== "COLOR") continue;
+          const c = collOf(v);
+          const mode = c ? rm[c.name] : undefined;
+          if (!c || c.modes.length < 2 || mode === undefined) continue;
+          const u = getOrInit(use, c.name, () => ({ coll: c, mode, count: 0, tokens: [], nodes: [], samples: [] }));
+          u.count++;
+          if (!u.tokens.includes(name) && u.tokens.length < 20) u.tokens.push(name);
+          if (!u.nodes.includes(n.id) && u.nodes.length < 8) u.nodes.push(n.id);
+          if (u.samples.length < 3) u.samples.push(`'${name}' on '${n.name}'`);
+        }
+      });
+      // M-1: the majority is chosen per group of collections that share a mode vocabulary (connected by "declares a
+      // mode name of the other"): a Brand 1 / Brand 2 collection never outvotes Theme=Dark vs Kit=Light.
+      const groups: ModeUse[][] = [];
+      for (const u of use.values()) {
+        const joined = groups.filter((g) => g.some((o) => o.coll.modes.some((m) => u.coll.modes.includes(m))));
+        const merged = [...joined.flat(), u];
+        for (const g of joined) groups.splice(groups.indexOf(g), 1);
+        groups.push(merged);
+      }
+      for (const group of groups) {
+        const perMode = new Map<string, number>();
+        for (const u of group) perMode.set(u.mode, (perMode.get(u.mode) || 0) + u.count);
+        if (perMode.size < 2) continue;
+        const [major] = [...perMode].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] ?? [];
+        if (major === undefined) continue;
+        const majority = group.filter((u) => u.mode === major);
+        const minority = group.filter((u) => u.mode !== major && u.coll.modes.includes(major));
+        const first = minority[0];
+        if (!first) continue;
+        const names = (list: typeof minority): string => list.map((u) => `'${u.coll.name}'`).join(", ");
+        const minModes = [...new Set(minority.map((u) => `'${u.mode}'`))].join("/");
+        push(
+          "warning",
+          "mixed-mode-bindings",
+          `'${label}' renders ${names(majority)} in '${major}' (×${perMode.get(major)} bindings) but ` +
+            minority.map((u) => `'${u.coll.name}' in '${u.mode}' (×${u.count}: ${u.samples.join(", ")}${u.count > u.samples.length ? " …" : ""})`).join(", ") +
+            ` — ${minority.length > 1 ? "tokens from these collections show their" : `a token from '${first.coll.name}' shows its`} ${minModes} value in a '${major}' screen. ` +
+            `Pin ${names(minority)} to '${major}' in Figma (the frame's variable mode), or alias these tokens under a role name in code — a theme built from one mode per collection gives them their '${major}' value, which nobody drew.`,
+          {
+            ...ifDefined("nodeId", first.nodes[0]), // the first node binding a minority-mode token
+            bindings: [...majority, ...minority].map((u) => ({ collection: u.coll.name, mode: u.mode, tokens: u.tokens, nodes: u.nodes })),
+            confirm: `'${label}' binds ${minority.reduce((k, u) => k + u.count, 0)} colour token(s) from ${names(minority)} in ${minModes} while the rest of the screen is '${major}' — intended, or should they follow '${major}'? Until confirmed, build what was drawn (the ${minModes} values).`,
+          }
+        );
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- DT-63: token pairs in the RENDERED modes
+// contrastPerMode covers the modes nobody drew; this covers the ones that WERE drawn, deduplicated over the
+// run — the same input-border token on the same field background fails on every screen that has a form,
+// and the designer is asked once per pair, not once per screen. Per screen root, each token resolves in the
+// mode the root renders its collection in (resolvedModes; else the collection's exported default; a
+// one-mode variable's only value). Pairs:
+//   * text: the text's colour token on the token-bound background around it — 4.5:1, 3:1 for large text
+//     (≥ 24px, or ≥ 18.66px bold — WCAG 2.2's 18pt / 14pt bold);
+//   * non-text (WCAG 1.4.11): a CONTROL's stroke token (D126: the audit's non-text-contrast name rule —
+//     the layer or its nearest 3 ancestors named an input / select / toggle; a badge's border is decoration)
+//     against the background ABOVE the control's outermost layer — the colour outside the control, never its
+//     own fill, even when the fill is on the instance and the border on an inner frame — at 3:1; skipped when
+//     what the control paints inside already contrasts 3:1 with that background (the fill draws the boundary).
+// The background is known only while every fill between it and the node is a token-bound opaque solid: a
+// gradient / image / raw or translucent fill in between makes it unknown and the pair is not judged (H-1 — the
+// audit's contrast-manual / low-contrast cover it). Disabled variants (control-kind.ts isDisabledLayer, and
+// everything inside them) are exempt under both SCs. LINE nodes (dividers) and transparent strokes are not checked.
+const LARGE_TEXT_PX = 24, LARGE_BOLD_TEXT_PX = 18.66, NON_TEXT_CONTRAST = 3;
+function isLargeText(n: IrNode): boolean {
+  const f = n.font;
+  const size = f && typeof f.size === "number" ? f.size : 0;
+  const bold = !!f && (typeof f.weightValue === "number" ? f.weightValue >= 700 : /(^|\s)(extra\s*)?(bold|black|heavy)/i.test(f.weight || "") && !/semi|demi/i.test(f.weight || ""));
+  return size >= LARGE_TEXT_PX || (size >= LARGE_BOLD_TEXT_PX && bold);
+}
+// M-5: the audit's rule (control-kind.ts) — "State=Disabled", "Disabled=True", a BOOLEAN `Disabled` prop.
+const isDisabledVariant = (n: IrNode): boolean => n.type === "INSTANCE" && isDisabledLayer(n);
+function contrastRendered(screens: CrossCheckScreen[], variables: TokensDoc | null, tokens: TokensDoc | null, push: Push): void {
+  const rows = new Map<string, TokenPairRow>();
+  for (const s of screens) {
+    const label = s.label || screenExportOf(s.doc)?.screen || "screen";
+    const defs = new Map<string, Variable>(); // the screen's own variables win: they are what it binds
+    for (const doc of [tokens, variables, s.vars || null]) for (const v of (doc && doc.variables) || []) if (v.name) defs.set(v.name, v);
+    if (!defs.size) continue;
+    const colls: VariableCollection[] = [...((s.vars && s.vars.collections) || []), ...((variables && variables.collections) || []), ...((tokens && tokens.collections) || [])];
+    for (const root of screenRoots(s.doc)) {
+      const rm = root.resolvedModes || {};
+      // The mode a variable renders in on this root; undefined = several modes and no way to pick one.
+      const modeOf = (v: Variable): string | undefined => {
+        const keys = Object.keys(v.values || {});
+        const coll = v.collection;
+        const r = coll !== undefined ? rm[coll] : undefined;
+        if (r !== undefined && keys.includes(r)) return r;
+        // The collection's default: by `collectionKey` when both sides carry one (same-named collections — L6),
+        // else by name. resolvedModes above is keyed by name only, so that half cannot tell them apart.
+        const hasDefault = (c: VariableCollection): boolean => c.default !== undefined && keys.includes(c.default);
+        const byKey = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && hasDefault(c)) : undefined;
+        const def = (byKey ?? colls.find((c) => c.name === coll && hasDefault(c)))?.default;
+        if (def !== undefined) return def;
+        return keys.length === 1 ? keys[0] : undefined;
+      };
+      const valueOf = (name: string): VariableValue | undefined => {
+        const v = defs.get(name);
+        const m = v ? modeOf(v) : undefined;
+        return v && m !== undefined ? v.values[m] : undefined;
+      };
+      const resolve = (name: string): Rgba | null => resolveColourWith(valueOf, name, 0);
+      // the mode label a row is keyed by: the modes of the pair's multi-mode variables
+      const modeLabel = (...names: string[]): string => {
+        const ms: string[] = [];
+        for (const nm of names) {
+          const v = defs.get(nm);
+          const m = v && Object.keys(v.values || {}).length > 1 ? modeOf(v) : undefined;
+          if (m !== undefined && !ms.includes(m)) ms.push(m);
+        }
+        return ms.join("/") || "single mode";
+      };
+      const check = (kind: TokenPairRow["kind"], fgTok: string, bgTok: string, required: number, nodeId: string): void => {
+        const fg = resolve(fgTok), bg = resolve(bgTok);
+        if (!fg || !bg) return; // not defined in the rendered mode — say nothing rather than guess
+        if (kind === "non-text" && fg.a <= 0) return; // a fully transparent border paints nothing to measure
+        const r = contrastRatio(fg.a < 1 ? compositeOver(fg, bg) : fg, bg);
+        if (r >= required) return;
+        const mode = modeLabel(fgTok, bgTok);
+        const row = getOrInit(rows, [kind, fgTok, bgTok, mode].join("\u0000"), () => ({ kind, fg: fgTok, bg: bgTok, mode, ratio: Number(r.toFixed(2)), required, screens: [], nodes: [] }));
+        if (!row.screens.includes(label)) row.screens.push(label);
+        if (row.nodes.length < 4 && !row.nodes.includes(nodeId)) row.nodes.push(nodeId);
+      };
+      // `above`: the backdrop token around n (null = unknown, H-1); `aboves[i]`: the one around ancestors[i].
+      const visit = (n: IrNode, above: string | null, disabled: boolean, ancestors: IrNode[], aboves: Array<string | null>): void => {
+        if (hiddenSelf(n)) return;
+        const off = disabled || isDisabledVariant(n);
+        const next = backdropTokenAfter(n, above);
+        if (!off && n.type === "TEXT") {
+          const fg = textToken(n);
+          if (fg && above) check("text", fg, above, isLargeText(n) ? NON_TEXT_CONTRAST : MIN_CONTRAST, n.id);
+        } else if (!off && n.type !== "LINE") {
+          const st = n.tokens && n.tokens.strokes;
+          const w = n.strokes ? Math.max(n.strokes.weight || 0, ...Object.values(n.strokes.weights || {}).map((x) => x || 0)) : 0;
+          const colours = (n.strokes && n.strokes.colors) || [];
+          const painted = !colours.length || colours.some((c) => { const x = parseHex(c); return !x || x.a > 0; });
+          // M-2: the colour outside the control is the backdrop above its OUTERMOST layer (the fill may sit on the
+          // instance and the border on an inner frame); the fills from that layer down to n may draw the boundary.
+          const outer = typeof st === "string" && st && w > 0 && painted ? outermostControl([n, ...ancestors.slice(-3).reverse()]) : -1;
+          const outside = outer < 0 ? null : outer === 0 ? above : aboves[ancestors.length - outer] ?? null;
+          const bg = outside ? resolve(outside) : null;
+          if (typeof st === "string" && outside && bg) {
+            // what the control paints inside, from its outermost layer down to n, over the backdrop — the rendered
+            // hex (the exported mode's value); a gradient / image in there leaves the rescue unknown: no row
+            let inner: Rgba | null = null, unknown = false;
+            for (const l of [...ancestors.slice(ancestors.length - outer), n]) {
+              const fills = (l.fills || []).filter(Boolean);
+              const lt = !fills.length && l.tokens && typeof l.tokens.fills === "string" ? resolve(l.tokens.fills) : null;
+              if (lt) inner = compositeOver(lt, inner || bg);
+              for (const f of fills) {
+                if (f.opacity === 0) continue;
+                if (f.type !== "solid") { unknown = true; break; }
+                const c = parseHex(f.color);
+                if (c && c.a > 0) inner = compositeOver(c, inner || bg);
+              }
+            }
+            const rescued = !!inner && contrastRatio(inner, bg) >= NON_TEXT_CONTRAST;
+            if (!rescued && !unknown) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
+          }
+        }
+        const chain = [...ancestors, n], chainAbove = [...aboves, above];
+        for (const c of n.children || []) visit(c, next, off, chain, chainAbove);
+      };
+      visit(root, null, false, [], []);
+    }
+  }
+  if (!rows.size) return;
+  const list = [...rows.values()].sort((a, b) => b.screens.length - a.screens.length || a.ratio - b.ratio || a.fg.localeCompare(b.fg));
+  push(
+    "info",
+    "token-pair-contrast",
+    `${list.length} token pair(s) fail WCAG in the rendered mode(s) — ask the designer once per pair: ` +
+      list.slice(0, 8).map((p) => `${p.kind === "text" ? "" : "stroke "}'${p.fg}' on '${p.bg}' (${p.mode}) ${p.ratio}:1 < ${p.required}:1 — ${p.screens.length} screen(s)`).join("; ") +
+      (list.length > 8 ? `; … (${list.length} in all — see tokenPairs)` : "") +
+      `. Token-level: the token-bound background (a gradient / image / raw or translucent fill in between is not judged), no compositing — the per-screen audit's low-contrast / non-text-contrast / contrast-manual measure what renders.`,
+    { tokenPairs: list }
+  );
 }
 
 function toMarkdown(res: CrossCheckReport): string {
@@ -947,7 +1403,7 @@ function toMarkdown(res: CrossCheckReport): string {
     L.push(`| visible instances on the screen | ${c.instances} |`);
     L.push(`| **distinct components** (each lands in exactly one row below) | **${c.distinct}** |`);
     const b: Partial<Record<CoverageBucket, number>> = c.buckets || {};
-    L.push(`| in **components.local.json** by key (verified) | ${b.localKey || 0} (${c.localPct}%) |`);
+    L.push(`| in **the component catalog** by key (verified) | ${b.localKey || 0} (${c.localPct}%) |`);
     L.push(`| in components.library.json by key (a shared third-party set) | ${b.libraryKey || 0} |`);
     if (c.rekey && c.rekey.rekeyed) L.push(`| same name **and** prop signature as a catalog entry — proposed, confirm below | ${b.proposed || 0} |`);
     L.push(`| exact name twin only (**unverified**) | ${b.nameOnly || 0} |`);
@@ -960,19 +1416,31 @@ function toMarkdown(res: CrossCheckReport): string {
     L.push("## Proposed component matches — confirm before reuse", "");
     L.push("*Matched by name + prop signature because the keys were re-minted (a duplicated file or a re-published library).",
       "Nothing here is accepted until a person sets `\"confirmed\": true` on the entry in the JSON report.*", "");
-    L.push("| instance name | × | → catalog | id | page | evidence | why |", "|---|--:|---|---|---|---|---|");
-    for (const p of res.componentProposals) {
-      // crossCheck builds every proposal from a ProposedMatchRow (match typed non-null), so no row is skipped
-      const cat = p.catalog;
-      if (!cat) continue;
-      L.push(`| \`${p.name}\` | ${p.instances} | \`${cat.name}\` | ${cat.id} | ${cat.page || ""} | ${p.evidence}${p.tie ? ` (${p.tie})` : ""} | ${p.reasons.join("; ")} |`);
+    // F-47: grouped by what a person has to do — confirm a shared one once, confirm a screen-only one, or
+    // nothing (already mapped). Labels only; every row is still unconfirmed in the JSON.
+    const all = res.componentProposals;
+    const groups: Array<[string, ComponentProposal[]]> = [
+      ["Shared with other exported screens — confirm once", all.filter((p) => !p.alreadyMapped && (p.sharedWith || 0) > 0)],
+      [all.some((p) => p.sharedWith !== undefined) ? "This screen only" : "To confirm", all.filter((p) => !p.alreadyMapped && !((p.sharedWith || 0) > 0))],
+      ["Already in the component map — nothing to confirm", all.filter((p) => p.alreadyMapped)],
+    ];
+    for (const [title, list] of groups) {
+      if (!list.length) continue;
+      L.push(`### ${title} (${list.length})`, "");
+      L.push("| instance name | × | → catalog | id | page | evidence | shared with | why |", "|---|--:|---|---|---|---|--:|---|");
+      for (const p of list) {
+        // crossCheck builds every proposal from a ProposedMatchRow (match typed non-null), so no row is skipped
+        const cat = p.catalog;
+        if (!cat) continue;
+        L.push(`| \`${p.name}\` | ${p.instances} | \`${cat.name}\` | ${cat.id} | ${cat.page || ""} | ${p.evidence}${p.tie ? ` (${p.tie})` : ""} | ${p.sharedWith === undefined ? "?" : `${p.sharedWith} other screen(s)`} | ${p.reasons.join("; ")} |`);
+      }
+      L.push("");
     }
-    L.push("");
     if (res.componentResidual && res.componentResidual.length) {
-      const twin = new Set((c && c.entries ? c.entries : []).filter((e) => e.bucket === "nameOnly" || e.bucket === "libraryKey").map((e) => e.setName));
+      const twin = new Set((c && c.entries ? c.entries : []).filter((e) => e.bucket === "libraryKey").map((e) => e.setName));
       const fresh = res.componentResidual.filter((r) => !twin.has(r.name)), known = res.componentResidual.filter((r) => twin.has(r.name));
-      L.push(`**Not in components.local.json (${res.componentResidual.length}):** ` +
-        (known.length ? `${known.length} are in (or named like an entry of) components.library.json — third-party, see the table: ${known.map((r) => `\`${r.name}\``).join(", ")}. ` : "") +
+      L.push(`**Not in the component catalog (${res.componentResidual.length}):** ` +
+        (known.length ? `${known.length} are in components.library.json by key — third-party, see the table: ${known.map((r) => `\`${r.name}\``).join(", ")}. ` : "") +
         `${fresh.length} are new work${fresh.length ? ": " + fresh.map((r) => `\`${r.name}\``).join(", ") : ""}.`, "");
     }
   }
@@ -983,6 +1451,16 @@ function toMarkdown(res: CrossCheckReport): string {
     for (const f of fs) L.push(`- \`${f.code}\` ${f.message}`);
     L.push("");
   }
+  // DT-63: the run's failing token pairs, one row each — the question to ask the designer once.
+  const pairs = res.findings.find((f) => f.code === "token-pair-contrast")?.tokenPairs || [];
+  if (pairs.length) {
+    L.push("## Token pairs below WCAG in the rendered modes — ask once per pair", "");
+    L.push("| kind | foreground | background | mode | ratio | needs | screens | nodes |", "|---|---|---|---|--:|--:|---|---|");
+    for (const p of pairs) {
+      L.push(`| ${p.kind} | \`${p.fg}\` | \`${p.bg}\` | ${p.mode} | ${p.ratio}:1 | ${p.required}:1 | ${p.screens.length}: ${p.screens.slice(0, 4).join(", ")}${p.screens.length > 4 ? ", …" : ""} | ${p.nodes.join(", ")} |`);
+    }
+    L.push("");
+  }
   if (res.notChecked.length) {
     L.push("## Not checked", "", "*These are gaps in the INPUT, not clean results:*", "");
     for (const n of res.notChecked) L.push(`- ${n}`);
@@ -991,24 +1469,23 @@ function toMarkdown(res: CrossCheckReport): string {
   return L.join("\n") + "\n";
 }
 
-export { crossCheck, toMarkdown, composedRgba, ABSURD_NUMBER, WRONG_CATALOG_PCT };
+export { crossCheck, toMarkdown, composedRgba, exportSiblings, ABSURD_NUMBER, WRONG_CATALOG_PCT };
 
 // CLI: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system]
-//        [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]
+//        [--variables design/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]
 // Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
 // document it should be is a one-line error and exit 2.
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const argv = process.argv.slice(2);
+function main(argv: string[]): number {
   const USAGE =
-    `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/design-system] ` +
-    "[--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
+    `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/export/design-system | design/export/libraries/<dir>] ` +
+    "[--variables design/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
   const OPTIONS = {
-    "design-system": { type: "string" }, variables: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    "design-system": { type: "string" }, variables: { type: "string" }, map: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals: files } = cliParse("cross-check", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  if (flags.help) { console.log(USAGE); process.exit(0); }
-  if (!files.length) { console.error(USAGE); process.exit(2); }
-  const { "design-system": dsDir, variables: varsFile, out } = flags;
+  if (flags.help) { console.log(USAGE); return 0; }
+  if (!files.length) { console.error(USAGE); return 2; }
+  const { "design-system": dsDir, variables: varsFile, map: mapFlag, out } = flags;
   const jsonOnly = !!flags.json, gate = !!flags.gate;
 
   // Optional inputs are read only when present: the whole point is that this runs on a project that
@@ -1020,7 +1497,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // token-collision check reads each screen's own slice (livetest-3 #40/#311).
   const ctx = variablesContext(files, varsFile);
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) process.exit(2);
+  if (ctx.invalid.length) return 2;
   const screens: CrossCheckScreen[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) })); // own[i] is set: own is files.map(...)
   const dsBase = dsDir || "design/design-system";
   const { variablesPath, variablesDoc } = ctx;
@@ -1031,15 +1508,32 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (ctx.staleLegacy) {
     console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
   }
+  // design-system/ or a library export's libraries/<dir>/ (components.json) — design-system-dir.ts, shared with audit.ts
+  const ds = readDesignSystemDir(dsBase);
+  // F-47: the component map only LABELS proposals (alreadyMapped). --map is checked like any named input;
+  // the default (design/codeconnect.local.json, else ./codeconnect.local.json — plan-skeleton's discovery)
+  // is optional, so a broken one is a warning, never a failed check.
+  let map: CodeConnectMap | null = null;
+  if (mapFlag) map = readDocFile(mapFlag, "component map", isCodeConnectMap);
+  else {
+    const found = ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs.existsSync(f));
+    const r = found ? readJson(found, isCodeConnectMap) : null;
+    if (found && r && "doc" in r) { map = r.doc; console.error(`map: ${found}`); }
+    else if (found && r && "error" in r) console.error(`warn  ${found} ${r.error} — proposals are not labelled alreadyMapped (pass --map to fail on it)`);
+  }
   const res = crossCheck({
     screens,
     sliceSources: ctx.sliceSources,
     variables: variablesDoc,
     variablesPath,
-    tokens: readOptionalDoc(path.join(dsBase, "tokens.json"), "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(path.join(dsBase, "components.local.json"), "component catalog", isComponentsCatalog),
-    componentsLibrary: readOptionalDoc(path.join(dsBase, "components.library.json"), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path.join(dsBase, "styles.text.json"), "text styles", isTextStylesDoc),
+    tokens: ds.tokens,
+    components: ds.components,
+    componentsLibrary: ds.componentsLibrary,
+    stylesText: ds.stylesText,
+    componentsFile: ds.componentsFile,
+    designSystemIsLibrary: ds.isLibrary,
+    map,
+    siblings: exportSiblings(files),
   });
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
@@ -1053,5 +1547,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   }
   console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
   for (const n of res.notChecked) console.error(`note  not checked: ${n}`);
-  process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
+  return gate && res.summary.blockers > 0 ? 1 : 0;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

@@ -25,7 +25,8 @@ import path from "node:path";
 // connected Figma file the command goes to — a connId, a fileKey, or part of the file name. Omitted
 // with one file connected, required with several (the bridge refuses rather than guessing; see
 // server-core's resolveClient).
-import { createBridge, TIMEOUTS, exportTimeout, errMsg } from "./server-core.ts";
+import { createBridge, connectionFor, TIMEOUTS, exportTimeout, errMsg } from "./server-core.ts";
+import { stampSource } from "./source-stamp.ts";
 import { NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
@@ -42,7 +43,7 @@ import type { Cmd, Commands, ExportReply, WriteOp } from "./commands.ts";
 // restate (or, as it once did, omit) a tier the CLI has.
 // The ONE registry of read options (shared with the dtwin CLI and the plugin's runOpts).
 import { READ_OPTS } from "./read-opts.ts";
-import { ifDefined } from "./json-util.ts";
+import { ifDefined, isStringArray } from "./json-util.ts";
 import type { ReadOptName } from "./read-opts.ts";
 import { parseNodeId, toNodeId } from "./node-id.ts";
 
@@ -53,9 +54,16 @@ import { parseNodeId, toNodeId } from "./node-id.ts";
 // daemon socket so the NEXT session (or a `dtwin pull`) shares it instead of fighting for the port.
 // Re-resolved when the holder goes away (that session closed, `dtwin stop`), never cached past it.
 import * as daemon from "./daemon.ts";
-import type { DaemonBridge, DaemonConnection } from "./daemon.ts";
+import type { DaemonBridge, DaemonConnection, ServeHandle } from "./daemon.ts";
 type Holder = { own: Bridge } | { via: DaemonConnection };
 let own: Bridge | null = null;
+// The daemon socket this process serves while it holds the bridge (null until serve() has bound it, and
+// again after `dtwin stop` / an idle shutdown). Its activity() is how this process learns, once its own
+// client has gone, whether any OTHER process uses the shared bridge (afterClientGone below).
+let served: ServeHandle | null = null;
+// The held bridge's close wrapper (`shared.close` below), so leave() can close a bridge whose socket
+// never got served. Idempotent.
+let closeOwn: (() => void) | null = null;
 // The in-flight (or settled) resolution, shared. Without it, two tool calls arriving together (or one
 // arriving while main() is still resolving at startup) each saw no daemon and each called
 // createBridge() — the second bind hit EADDRINUSE. Kept while we OWN the bridge (it is the answer);
@@ -79,14 +87,38 @@ async function resolveHolder(): Promise<Holder> {
     mine.close();
     throw e;
   }
+  // The client went away while the bridge was still binding: nobody is left to use it.
+  if (clientGone.signal.aborted || leaving) {
+    mine.close();
+    throw new Error("the MCP client went away before the bridge was up");
+  }
   own = mine;
   // `dtwin stop` closes the bridge through this wrapper, so the next call re-resolves instead of
-  // talking to a closed server — which means the memo goes with it.
+  // talking to a closed server — which means the memo goes with it. Once the client has gone, a
+  // close from outside (`dtwin stop`, the idle shutdown afterClientGone armed) is also this
+  // process's cue to exit: nothing is left for it to do.
   // A spread copy is exact: createBridge() returns a plain object literal whose members (methods, `port`,
   // `listening`) are all own data properties — no getters, no prototype. Only close is overridden.
-  const shared: DaemonBridge = { ...mine, close: () => { own = null; holding = null; mine.close(); } };
-  daemon.serve(shared, { idleMin: 0, signals: false, log: (m) => console.error("[figma-mcp] " + m) })
-    .catch((e) => console.error("[figma-mcp] not sharing the bridge with other sessions: " + errMsg(e)));
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    own = null; holding = null; served = null; closeOwn = null;
+    mine.close();
+    if (clientGone.signal.aborted) leave("the shared bridge was stopped after the MCP client went away — exiting");
+  };
+  closeOwn = close;
+  const shared: DaemonBridge = { ...mine, close };
+  // idleMin 0 while the client is here: this server lives as long as its session (afterClientGone
+  // re-arms the window once the session has gone and others still use the socket).
+  daemon.serve(shared, { idleMin: 0, signals: false, log: wlog }).then(
+    (h) => {
+      // Gone (or this bridge stopped) while the socket was binding: take it down again at once.
+      if (closed || leaving) { h.shutdown(); return; }
+      served = h;
+    },
+    (e) => wlog("not sharing the bridge with other sessions: " + errMsg(e)),
+  );
   return { own: mine };
 }
 const bridge = {
@@ -109,25 +141,41 @@ const bridge = {
   // the same purpose; the daemon waits for a first connection and then for the name, capped at
   // NAMED_CLIENT_WAIT_MS (daemon.ts). Either way a name that never lands now fails after the window
   // instead of at once; a bare connId never waits (it does not depend on identification).
-  async request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void): Promise<Commands[C]["reply"]> {
+  //
+  // `requestWithClient` also hands back WHICH connected file answered (null from a daemon too old to relay
+  // it) — what the export tools stamp as `sourceFile` (L-5) and whoami describes (DT-03). `signal` (D82) is
+  // the tool call's own: the SDK aborts `extra.signal` on notifications/cancelled, and stdin closing aborts
+  // every in-flight call (callSignal below). Holding the bridge, server-core then sends the plugin a cancel
+  // frame for the request.
+  async requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void, signal?: AbortSignal): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }> {
     const h = await holder();
     const named = target !== undefined && target !== "" && !/^c\d+$/.test(target);
     if ("own" in h) {
       if (named) await h.own.waitForClient(target, NAMED_CLIENT_WAIT_MS);
-      return h.own.request(cmd, args, timeoutMs, target, undefined, onProgress);
+      return h.own.requestWithClient(cmd, args, timeoutMs, target, undefined, onProgress, signal);
     }
-    return h.via.request({ cmd, args, timeoutMs, ...ifDefined("client", target), ...(named ? { waitForConnection: NAMED_CLIENT_WAIT_MS } : {}) }, timeoutMs + 30000, onProgress);
+    // Through a daemon the signal closes this request's socket; the daemon then abandons the request and
+    // its bridge sends the plugin the same cancel frame.
+    return h.via.requestWithClient({ cmd, args, timeoutMs, ...ifDefined("client", target), ...(named ? { waitForConnection: NAMED_CLIENT_WAIT_MS } : {}) }, timeoutMs + 30000, onProgress, signal);
+  },
+  async request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void, signal?: AbortSignal): Promise<Commands[C]["reply"]> {
+    return (await bridge.requestWithClient(cmd, args, timeoutMs, target, onProgress, signal)).reply;
   },
   async listClients(): Promise<ClientRow[]> {
     const h = await holder();
     return "own" in h ? h.own.listClients() : (await daemon.status())?.clients || [];
   },
-  async connectionInfo(): Promise<ConnectionInfo | { via: string; port: number | undefined; pluginConnected: boolean | undefined }> {
+  // `connId` (DT-03): describe THAT connection — the one a request was answered by — not the first live one.
+  // Through a daemon, its status().connection is the same ConnectionInfo (server-core's), narrowed the same
+  // way; `via` names the shared bridge. Only a daemon too old to send `connection` gets the 3-field stub.
+  async connectionInfo(connId?: string | null): Promise<ConnectionInfo | (ConnectionInfo & { via: string }) | { via: string; port: number | undefined; pluginConnected: boolean | undefined }> {
     const h = await holder();
-    if ("own" in h) return h.own.connectionInfo();
+    if ("own" in h) return h.own.connectionInfo(connId ?? undefined);
     // An older daemon may omit fields (daemon.ts DaemonStatusView) — reported as undefined, never guessed.
     const st = await daemon.status();
-    return { via: "shared bridge (pid " + (st?.pid ?? "?") + ")", port: st?.port, pluginConnected: st?.pluginConnected };
+    const via = "shared bridge (pid " + (st?.pid ?? "?") + ")";
+    if (st && st.connection) return { via, ...connectionFor(st.connection, connId) };
+    return { via, port: st?.port, pluginConnected: st?.pluginConnected };
   },
 };
 
@@ -153,7 +201,7 @@ const guarded = <A extends unknown[], R>(fn: (...a: A) => Promise<R>) => async (
 // CLI is the path that actually writes asset bytes to disk.
 /** An asset row with its bytes stripped: identity only. */
 interface LightAsset { id: string; name: string; format: string; kind?: string }
-function stripAssets(r: ExportReply): unknown {
+function stripAssets(r: ExportReply): object {
   if (!("assets" in r)) return r; // a catalog-only pull carries no assets at all
   const light: Omit<typeof r, "assets"> & { assets: LightAsset[]; assetsNote?: string } =
     { ...r, assets: r.assets.map((a) => ({ id: a.id, name: a.name, format: a.format, ...(a.kind ? { kind: a.kind } : {}) })) };
@@ -175,6 +223,8 @@ function stripAssets(r: ExportReply): unknown {
 // running, because both call createBridge() and bind port 8787 — the second to start hits EADDRINUSE
 // and exits (server-core.ts). Before this, an MCP-only session had no way to get assets at all.
 import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
+import { findExportDir, findMapFile } from "./project-layout.ts";
+import type { Stamped } from "./write-out.ts";
 import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./doc-types.ts";
 
 // stderr, never stdout: stdout IS the MCP stdio transport, and a stray line there corrupts the
@@ -203,8 +253,14 @@ async function withProgress<R>(extra: ToolExtra | undefined, run: (onTick: OnTic
   const progressToken = extra?._meta?.progressToken;
   if (!extra || progressToken === undefined) return run(undefined);
   let progress = 0;
+  // Spec (basic/utilities/progress): "Progress notifications MUST stop after completion" — and Claude Code
+  // has torn a stdio server down over a notification whose token was no longer in flight (facts Q-M4). So a
+  // tick that lands once run() has settled (a late frame from the plugin or the daemon), or after the call
+  // was cancelled, is dropped here; no notification ever carries a `total`, so none reads as a final one.
+  let settled = false;
   const pending: Promise<void>[] = [];
   const onTick: OnTick = (t) => {
+    if (settled || extra.signal.aborted || clientGone.signal.aborted) return;
     const parts = [t.phase ?? "export"];
     if (t.page) parts.push(`page ${t.page.index} of ${t.page.of}${t.page.name ? ` (${t.page.name})` : ""}`);
     if (t.nodes !== null) parts.push(`${t.nodes} nodes`);
@@ -215,32 +271,267 @@ async function withProgress<R>(extra: ToolExtra | undefined, run: (onTick: OnTic
   try {
     return await run(onTick);
   } finally {
+    settled = true;
     // Every entry already has its rejection handled, so this never throws and never masks run()'s
     // own error; it only holds the result until the last notification is on the wire.
     await Promise.all(pending);
   }
 }
 
+// D82: the signal every bridge request of a tool call carries. The SDK aborts `extra.signal` when the client
+// sends notifications/cancelled for that call; but its stdio transport never notices stdin ENDING (it
+// listens for data/error only — facts Q-M3), so a client that exits mid-export left the plugin walking for
+// nobody. `clientGone` is that half: main() aborts it on stdin end/close, which aborts every call in flight.
+const clientGone = new AbortController();
+// The client has gone: stdin ended/closed, or (R1) a write to stdout found the client's read end closed.
+// When the client is killed both pipes break at once, and a progress tick can reach stdout before stdin's
+// 'end' is handled — whichever is seen first decides; the rest are no-ops.
+let goneHandled = false;
+function clientWentAway(how: string): void {
+  // R1: stdout is guarded from startup (main()); this call is the belt for any path that runs earlier.
+  guardStdio();
+  if (!clientGone.signal.aborted) clientGone.abort(new Error(`the MCP client went away (${how}) — request abandoned`));
+  // 'end' and 'close' both fire (and with fd 0 closed only 'end' does — facts-20 §4): decide once.
+  if (goneHandled) return;
+  goneHandled = true;
+  afterClientGone(how);
+}
+function watchStdin(): void {
+  process.stdin.once("end", () => clientWentAway("stdin closed"));
+  process.stdin.once("close", () => clientWentAway("stdin closed"));
+}
+
+// FU-stdin (D130): what this process does once its MCP client has gone.
+// - Not holding the bridge (routed through someone else's daemon, or no bridge yet): exit now.
+// - Holding it, and the served socket never received a frame: no other process uses it — close the
+//   bridge and exit now.
+// - Holding it, and other processes (a `dtwin` command, another session's MCP server — every frame on
+//   the served socket comes from another process: this one talks to its own bridge directly) have used
+//   it: keep serving them, and idle out like `dtwin serve` does — FIGMA_DAEMON_IDLE_MIN (default 120 min,
+//   0 = never) after the last activity, a request in flight holding it off; checked once at once.
+// This deliberately departs from the MCP stdio binding's "Servers SHOULD exit promptly when their standard
+// input is closed" (spec revision 2026-07-28, the stdio transport): the process is by then the shared daemon
+// other sessions and commands route through, and exiting would cut them off mid-use. The window is how it
+// still goes away on its own once they stop.
+function afterClientGone(how: string): void {
+  if (leaving) return;
+  const s = served;
+  if (!own || !s) return leave(`the MCP client went away (${how}) — exiting`);
+  const a = s.activity();
+  if (a.frames === 0) return leave(`the MCP client went away (${how}) and no other dtwin command or session used the shared bridge — closing it and exiting`);
+  const ms = daemon.idleMsFromEnv();
+  // Already quiet for the whole window (and nothing in flight): idleOut's check-at-once would shut it down
+  // right away, so say that instead of "still serving".
+  if (ms && a.inFlight === 0 && Date.now() - a.lastActivity >= ms) {
+    return leave(`the MCP client went away (${how}); other dtwin commands/sessions used this shared bridge (${a.frames} request(s)), but none in the last ${daemon.humanMs(ms)} (FIGMA_DAEMON_IDLE_MIN) — closing it and exiting`);
+  }
+  const used = `other dtwin commands/sessions use this shared bridge (${a.frames} request(s) so far)`;
+  wlog(ms
+    ? `the MCP client went away (${how}); ${used} — still serving it, shutting down after ${daemon.humanMs(ms)} without one (FIGMA_DAEMON_IDLE_MIN)`
+    : `the MCP client went away (${how}); ${used} — still serving it, and it never shuts down on its own (${idleOffWhy(process.env.FIGMA_DAEMON_IDLE_MIN)}) — stop it with dtwin stop`);
+  // Its shutdown closes the bridge through `shared.close`, which calls leave().
+  s.idleOut(ms);
+}
+// Why the idle window is 0: the variable says 0, or it is not a usable number of minutes (idleMsFromEnv
+// turns an unparsable or negative value into 0 = off, as it always has) — name which, with the raw value.
+function idleOffWhy(raw: string | undefined): string {
+  const v = (raw ?? "").trim();
+  return v !== "" && Number(v) === 0
+    ? `FIGMA_DAEMON_IDLE_MIN=${v}`
+    : `FIGMA_DAEMON_IDLE_MIN=${JSON.stringify(raw ?? "")} is not a number of minutes above 0, which turns the idle shutdown off`;
+}
+
+// Leave: close what this process holds (cancel frames go to the plugin for every request still in flight —
+// server-core's close() sends them before it closes the sockets), then let the loop drain to exit 0, with a
+// backstop for any handle that keeps it open (an unref'd timer never holds the loop, but fires if
+// something else does). Runs once: stdin EOF, a signal and the idle shutdown can race.
+let leaving = false;
+function leave(msg: string): void {
+  if (leaving) return;
+  leaving = true;
+  guardStdio();
+  wlog(msg);
+  const s = served;
+  served = null;
+  if (s) s.shutdown(); // aborts its forwarded requests, unlinks the socket, closes the bridge (shared.close)
+  else if (closeOwn) closeOwn();
+  process.exitCode = 0;
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+
+// R1: once the client has gone, its end of our stdout (and maybe stderr) is closed, and the next write —
+// the result of a call the abort just settled, a progress notification — raises EPIPE as an 'error'
+// event. The SDK's StdioServerTransport has no stdout 'error' listener, so that event is an uncaught
+// exception and would kill the process that may now be serving other sessions. Installed at STARTUP
+// (main()), not when the client is seen to go: a killed client breaks both pipes at once, and a progress
+// tick written before stdin's 'end' is handled must not be the thing that kills the orphan. A stdout
+// error IS the client going away (EPIPE: its read end is closed; ERR_STREAM_DESTROYED: a write after that);
+// a stderr one is swallowed — there is nobody left to tell.
+let stdioGuarded = false;
+function guardStdio(): void {
+  if (stdioGuarded) return;
+  stdioGuarded = true;
+  process.stdout.on("error", (e: Error) => {
+    const code = "code" in e ? e.code : undefined;
+    clientWentAway(code === "EPIPE" || code === "ERR_STREAM_DESTROYED" ? "stdout closed" : `stdout failed: ${String(code ?? e.message)}`);
+  });
+  process.stderr.on("error", () => { /* the client is gone */ });
+}
+
+// D131: SIGTERM / SIGINT / SIGHUP end this process — even while it serves other sessions (a signal is an
+// explicit request). Node's default handler would kill it outright: no 'exit' event (so the daemon
+// socket file stays behind) and no cancel frame for a read in flight. Claude Code ends a stdio server
+// with SIGINT, then SIGTERM ~100 ms later, then SIGKILL ~400 ms after that (facts-20 §2, secondary
+// source), so this runs once, cancels and unlinks synchronously, gives the cancel frames ~150 ms to reach
+// the plugin, and exits 0 well inside that window.
+let signalled = false;
+function onSignal(sig: NodeJS.Signals): void {
+  if (signalled) return;
+  signalled = true;
+  guardStdio();
+  if (!clientGone.signal.aborted) clientGone.abort(new Error(`${sig} — request abandoned`));
+  leave(`${sig} — closing the bridge and exiting`);
+  setTimeout(() => process.exit(0), 150);
+}
+const callSignal = (extra: ToolExtra | undefined): AbortSignal => (extra ? AbortSignal.any([extra.signal, clientGone.signal]) : clientGone.signal);
+
 /** The two writeShape arguments every export tool reads — what Zod parses them to, not a restatement. */
 type WriteArgs = z.output<z.ZodObject<typeof writeShape>>;
 
-function exportResult(a: WriteArgs, r: ExportReply) {
+/** An export the bridge answered: the reply stamped with its source file (L-5), and the clock (F-27). */
+interface Pulled { r: Stamped<ExportReply>; t0: number; requestMs: number }
+// One export request: timed, progress-relaying, cancellable, and stamped with WHICH connected file
+// answered — the same `sourceFile` the CLI writes (figma-pull.ts), on written and inline results alike.
+async function pull<C extends "exportFull" | "exportDesignSystem" | "exportSelection" | "exportNode" | "screenshot">(
+  extra: ToolExtra | undefined, cmd: C, args: Commands[C]["args"], timeoutMs: number, client: string | undefined, progress = true,
+): Promise<Pulled> {
+  const t0 = Date.now();
+  const sent = progress
+    ? await withProgress(extra, (onTick) => bridge.requestWithClient(cmd, args, timeoutMs, client, onTick, callSignal(extra)))
+    : await bridge.requestWithClient(cmd, args, timeoutMs, client, undefined, callSignal(extra));
+  const reply: ExportReply = sent.reply;
+  return { r: stampSource({ reply, client: sent.client }), t0, requestMs: Date.now() - t0 };
+}
+
+// F-07: the most recent write THIS server made (per process — gone on restart, K-4). figma_status reports
+// it beside lastScreenExport (which is read from disk), so an agent can see what an implicit spill touched.
+// `prevKept` (D133): how many .prev copies an implicit full/design-system spill kept (0 when none differed).
+interface LastWrite { tool: string; at: string; implicit: boolean; file: string; prev?: string; prevKept?: number }
+let lastWrite: LastWrite | null = null;
+
+// Every pages/**/*.json under `dir` with its inode: a file the write replaces gets a new inode (writeJson
+// renames over it), which is how an implicit full/page spill counts what it overwrote.
+function pageFileInodes(dir: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const walk = (d: string): void => {
+    let ents: fs.Dirent[] = [];
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f);
+      else if (e.name.endsWith(".json") && e.name !== "index.json") { try { out.set(f, fs.statSync(f).ino); } catch { /* vanished */ } }
+    }
+  };
+  walk(path.join(dir, "pages"));
+  return out;
+}
+
+// FU-outDir (D132): an outDir the caller NAMED (or a writeToDisk:true, which writes to the default) is
+// checked BEFORE the export, so a refused path costs no plugin walk — the plugin is never asked.
+// exportResult still checks again after it (the one case left: FIGMA_EXPORT_DIR alone plus an implicit
+// spill — pre-checking that would refuse every inline call for a user whose env names a directory
+// outside the project). writeToDisk:false writes nothing, so its outDir is not checked.
+function preflightOut(a: WriteArgs): void {
+  // `outDir: ""` is not a named outDir: resolveOutDir treats it as absent too (the env/default dir).
+  if (a.writeToDisk === true || (a.writeToDisk !== false && !!a.outDir)) assertInsideCwd(a.outDir);
+}
+
+// Every `*.prev` an implicit full/design-system spill can keep: under pages/, design-system/ and libraries/,
+// plus the export ROOT's own (design-system.json.prev — the manifest sits at the root, not in a tree).
+function prevFilesUnder(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    let ents: fs.Dirent[] = [];
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f);
+      else if (e.name.endsWith(".prev")) out.push(f);
+    }
+  };
+  for (const sub of ["pages", "design-system", "libraries"]) walk(path.join(dir, sub));
+  let root: fs.Dirent[] = [];
+  try { root = fs.readdirSync(dir, { withFileTypes: true }); } catch { /* no export dir yet */ }
+  for (const e of root) if (e.isFile() && e.name.endsWith(".prev")) out.push(path.join(dir, e.name));
+  return out;
+}
+
+function exportResult(tool: string, a: WriteArgs, p: Pulled, opts?: { scale?: number | undefined }) {
+  const { r, t0, requestMs } = p;
   let spilled = "";
   if (!a || !a.writeToDisk) {
-    const inline = textResult(stripAssets(r));
+    // F-27: the clock rides along inline too (top level); `write` is 0 — nothing was written.
+    const inline = textResult({ ...stripAssets(r), durationMs: { total: Date.now() - t0, request: requestMs, write: 0 } });
     const size = inline.content[0].text.length, limit = inlineLimitChars();
     if (size <= limit) return inline;
-    const why = `this export is ${size.toLocaleString("en-US")} characters (~${Math.round(size / 4000)}k tokens), past what the client accepts inline (~${Math.round(limit / 4000)}k tokens; MAX_MCP_OUTPUT_TOKENS raises it)`;
+    const why = `this export is ${size.toLocaleString("en-US")} characters (~${Math.round(size / 4000)}k tokens), past what the client accepts inline (~${Math.round(limit / 4000)}k tokens; Claude Code keeps larger results out of the conversation, and MAX_MCP_OUTPUT_TOKENS can only lower this)`;
     if (a && a.writeToDisk === false) throw new Error(`${why}, and writeToDisk:false was passed. Omit it (or pass true) to get the files plus a compact index, or narrow the scope (a node id instead of a page, a lower depth).`);
     spilled = `Written to disk WITHOUT being asked: ${why}, so returning it inline would have been cut off mid-JSON. `;
   }
+  const implicit = spilled !== "";
   // Validate BEFORE writing anything: a rejected outDir must not leave a half-written export behind.
   // guarded() turns the throw into an isError result naming the offending path.
-  assertInsideCwd(a.outDir);
-  const written = writeAny(a.outDir, r, wlog);
+  const dir = assertInsideCwd(a.outDir);
+  // F-06: an IMPLICIT spill must not silently replace what is on disk. A screen keeps `<screen>.json.prev`
+  // (when the old file differs); a full/design-system export (D133) keeps `<file>.prev` beside every JSON
+  // under pages/, design-system/ or libraries/ it replaces with different content (`wrote.prevKept`), and
+  // the replaced pages/ layer files are counted by inode.
+  const before = implicit && !("screen" in r) && !("reference" in r) ? pageFileInodes(dir) : null;
+  const w0 = Date.now();
+  const written = writeAny(a.outDir, r, wlog, { scale: opts && opts.scale, keepPrev: implicit });
+  const writeMs = Date.now() - w0;
+  const wrote = written.wrote;
+  const newPrev = "prev" in wrote && typeof wrote.prev === "string" ? wrote.prev : undefined;
+  // L-4: a re-spill of an unchanged design keeps no NEW .prev, but the one the first spill wrote still holds the
+  // user's original: point at it (an agent that never saw that first result has no other pointer to it).
+  const earlierPrev = implicit && !newPrev && "screen" in wrote && typeof wrote.screen === "string" && fs.existsSync(wrote.screen + ".prev") ? wrote.screen + ".prev" : undefined;
+  const prev = newPrev ?? earlierPrev;
+  let replacedNote = "";
+  let prevKept: number | undefined;
+  if (newPrev && "screen" in wrote) {
+    replacedNote = `It replaced ${wrote.screen}; the previous version is kept at ${newPrev} (one level — the next implicit spill replaces it). `;
+  } else if (earlierPrev) {
+    replacedNote = `An earlier version is still at ${earlierPrev} (this export matched what was on disk). `;
+  } else if (before) {
+    const after = pageFileInodes(dir);
+    let n = 0;
+    for (const [f, ino] of before) { const now = after.get(f); if (now !== undefined && now !== ino) n++; }
+    // write-out.ts's writeExport lists the .prev copies it made (absolute paths), only when there are any.
+    const keptRaw: unknown = "prevKept" in wrote ? wrote.prevKept : undefined;
+    const kept = isStringArray(keptRaw) ? keptRaw : [];
+    prevKept = kept.length;
+    const replaced = n ? `It replaced ${n} existing screen file(s) under ${path.join(dir, "pages")}` : "";
+    if (kept.length) {
+      replacedNote = `${replaced ? replaced + ". The" : "The"} previous version of each changed file — ${kept.length} file(s) under pages/ or design-system/ (or design-system.json), e.g. ${kept[0]} — is kept beside it as <file>.prev (one level — the next implicit spill replaces it). `;
+    } else {
+      // L-4's analogue: nothing new kept, but an earlier spill's .prev files still hold what was replaced then.
+      const k = prevFilesUnder(dir).length;
+      if (k) replacedNote = `${replaced ? replaced + ". " : ""}Earlier versions are still kept as ${k} .prev file(s) beside their files (this export matched what was on disk). `;
+      else if (replaced) replacedNote = `${replaced} (none differed from what was on disk, so no .prev was kept). `;
+    }
+  }
+  const file = "screen" in wrote && typeof wrote.screen === "string" ? wrote.screen
+    : "reference" in wrote ? path.join(dir, wrote.reference)
+    : dir;
+  lastWrite = { tool, at: new Date().toISOString(), implicit, file, ...ifDefined("prev", prev), ...ifDefined("prevKept", prevKept) };
+  // DT-06: a screenshot's node size and render scale (from the plugin; absent from an older one) beside the
+  // PNG's own pixel size (writeScreenshot reads it from the bytes).
+  const shot = "reference" in r ? { ...ifDefined("w", r.w), ...ifDefined("h", r.h), ...ifDefined("scale", r.scale) } : {};
   return textResult({
+    ...shot,
     ...written,
-    note: spilled + "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity.",
+    durationMs: { total: Date.now() - t0, request: requestMs, write: writeMs },
+    note: spilled + replacedNote + "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity.",
   });
 }
 
@@ -251,13 +542,30 @@ function exportResult(a: WriteArgs, r: ExportReply) {
 // same reason writeShape is shared: a tool that forgets to declare it has the argument silently
 // STRIPPED by Zod before the handler runs, so `client` would be accepted and ignored — routing the
 // call to whatever file the bridge picked, with no error to notice.
+// D87: an array parameter that also accepts what some clients actually send for one — a JSON-encoded array
+// string ('["1:2"]', facts Q-M5: Claude Code has stringified array/object args on their way to tools/call)
+// or a bare string where a one-element array was meant — including one that starts with "[" but does not
+// parse as a JSON array (a page named "[WIP] Screens"). Anything else (a number, an object) reaches z.array
+// unchanged and fails its validation as before. The
+// advertised JSON Schema is still the inner `type: "array"` (zod's pipe emits its input side's target —
+// mcp-smoke checks it through listTools), so a well-behaved client sees no change.
+function tolerantStringArray() {
+  return z.preprocess((v: unknown): unknown => {
+    if (typeof v !== "string") return v;
+    const t = v.trim();
+    if (!t.startsWith("[")) return [v];
+    // a page literally named "[WIP] Screens" is not JSON (or not an array): it is still one bare name
+    try { const p: unknown = JSON.parse(t); return Array.isArray(p) ? p : [v]; } catch { return [v]; }
+  }, z.array(z.string()));
+}
+
 const clientShape = {
   client: z.string().optional().describe("WHICH connected Figma file to talk to — a connId (from figma_list_clients), a fileKey, or part of the file's name. The bridge accepts one connection per open Figma file, so a design file and the library it draws on can both be connected at once. Omit when only one file is connected. With several connected, omitting this is an ERROR listing the choices rather than a guess — an export from the wrong file is indistinguishable from a correct one."),
 };
 
 const writeShape = {
   writeToDisk: z.boolean().optional().describe("Write the export to disk and return a compact index (counts + file paths) instead of the node payloads. REQUIRED to get asset bytes — they are never returned inline — and the right choice for anything beyond one small frame. Omitted: a result that fits the client's output cap comes back inline, a larger one is written to disk automatically (the note says so). false: never write — a result too large to return is an error."),
-  outDir: z.string().optional().describe("Directory for writeToDisk, relative to the directory this MCP server was started in (i.e. your project). Default: FIGMA_EXPORT_DIR or 'design'."),
+  outDir: z.string().optional().describe("Directory for writeToDisk, relative to the directory this MCP server was started in (i.e. your project). Default: FIGMA_EXPORT_DIR or 'design/export'."),
 };
 
 // ---- read options, shared across the export tools (opt-in; each costs extra Plugin-API work) ----
@@ -288,22 +596,24 @@ const READ_ONLY = { readOnlyHint: true } as const;
 // errmsg.ts) so the test suite can read it directly without importing this file — this file's
 // top-level `createBridge()`/`main()` open a real WebSocket server and stdio transport, unsafe to
 // trigger from a test.
-import { readSnapshotInfo } from "./snapshot-meta.ts";
+import { readSnapshotInfo, lastScreenExport } from "./snapshot-meta.ts";
 
 const server = new McpServer({ name: "designtwin", version: "0.1.0" });
 
 server.registerTool(
   "figma_status",
   {
-    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the age of the last dtwin export on disk (design-system.json's exportedAt), if any — so an agent can tell whether it's about to read a stale snapshot.",
+    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the age of the last dtwin export on disk (design-system.json's exportedAt), if any — so an agent can tell whether it's about to read a stale snapshot — plus `lastScreenExport` (the newest screen in pages/index.json) and `lastWrite` (the last file this server wrote, and whether that was an implicit spill).",
     inputSchema: { ...clientShape },
     annotations: READ_ONLY,
   },
-  guarded(async (a) => {
+  guarded(async (a, extra) => {
     const snapshot = readSnapshotInfo();
+    // F-07: the newest screen row of pages/index.json (disk) and this server's own last write (session).
+    const ledger = { lastScreenExport: lastScreenExport(), lastWrite };
     if (!(a && a.client)) {
       const clients = await bridge.listClients();
-      if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot });
+      if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot, ...ledger });
       // With several connected, an unaddressed ping would be REFUSED — so report the roster instead of
       // failing. "Which files can I talk to?" is exactly what this tool is for.
       if (clients.length > 1) {
@@ -311,6 +621,7 @@ server.registerTool(
           connected: true,
           clients,
           snapshot,
+          ...ledger,
           note: "Several Figma files are connected. Pass `client` (connId, fileKey, or part of the file name) to every tool call, or it will be refused rather than guess which file you meant.",
         });
       }
@@ -322,8 +633,8 @@ server.registerTool(
     // `client` the early returns are skipped, so the wait applies; listing after the ping also means the
     // roster shows the window the ping reached, identified. A bare connId never waits (resolveClient's
     // own refusal, as for every other tool).
-    const pong = await bridge.request("ping", {}, TIMEOUTS.command, a && a.client);
-    return textResult({ connected: true, clients: await bridge.listClients(), ...pong, snapshot });
+    const pong = await bridge.request("ping", {}, TIMEOUTS.command, a && a.client, undefined, callSignal(extra));
+    return textResult({ connected: true, clients: await bridge.listClients(), ...pong, snapshot, ...ledger });
   })
 );
 
@@ -377,10 +688,11 @@ server.registerTool(
     inputSchema: { ...clientShape },
     annotations: READ_ONLY,
   },
-  guarded(async (a) => textResult({
-    plugin: await bridge.request("whoami", {}, TIMEOUTS.command, a && a.client),
-    connection: await bridge.connectionInfo(),
-  }))
+  // `connection` describes the socket that ANSWERED (DT-03 / F-01), not whichever file connected first.
+  guarded(async (a, extra) => {
+    const sent = await bridge.requestWithClient("whoami", {}, TIMEOUTS.command, a && a.client, undefined, callSignal(extra));
+    return textResult({ plugin: sent.reply, connection: await bridge.connectionInfo(sent.client ? sent.client.connId : null) });
+  })
 );
 
 server.registerTool(
@@ -390,7 +702,7 @@ server.registerTool(
     inputSchema: { ...clientShape },
     annotations: READ_ONLY,
   },
-  guarded(async (a) => textResult(await bridge.request("getSelection", {}, TIMEOUTS.command, a && a.client)))
+  guarded(async (a, extra) => textResult(await bridge.request("getSelection", {}, TIMEOUTS.command, a && a.client, undefined, callSignal(extra))))
 );
 
 // The cheap map. This is the tool an agent should reach for FIRST: every other read here
@@ -413,7 +725,7 @@ server.registerTool(
   },
   // Pass `depth` through unnormalised: listPages owns the default (and the 1-vs-2 clamp), so a third
   // tier there doesn't need a matching edit here.
-  guarded(async (a) => textResult(await bridge.request("listPages", ifDefined("depth", a && a.depth), TIMEOUTS.list, a && a.client)))
+  guarded(async (a, extra) => textResult(await bridge.request("listPages", ifDefined("depth", a && a.depth), TIMEOUTS.list, a && a.client, undefined, callSignal(extra))))
 );
 
 // The library-scoped discovery call, and the other half of "look before you pull": figma_list_pages
@@ -424,10 +736,11 @@ server.registerTool(
   "figma_list_libraries",
   {
     description:
-      "CHEAP discovery: which design libraries this file draws on — the local file's own published " +
+      "The SLOWEST discovery read (a few seconds to ~15 s: it walks every instance and makes one Figma call per enabled library variable collection; about 2 s when no libraries are enabled): which design libraries this file draws on — the local file's own published " +
       "assets plus every ENABLED team library — with each one's variable collections and how many of " +
-      "its components this file uses. Call this BEFORE exporting, then scope the export to what you " +
-      "actually need (figma_list_pages -> figma_export_full({page})). Limits worth knowing: component " +
+      "its components this file uses. Not part of the default discovery order (figma_status -> " +
+      "figma_list_pages -> figma_list_children -> figma_export_url): call it to learn which library owns a " +
+      "token, or before a CLI `dtwin pull --as-library`. Limits worth knowing: component " +
       "counts are USAGE-derived (Figma exposes no API to enumerate a library's full contents), and " +
       "libraries can only be enabled from the Figma UI — never via API — so results reflect whatever " +
       "was enabled at call time. An EMPTY result is a normal outcome (free plan, or no library " +
@@ -439,8 +752,8 @@ server.registerTool(
   // Compacted here rather than passed through: the plugin's shape is already small, but an agent
   // reads this tool's result in full, so collapse each library's collections to name+count and keep
   // `warnings` (the field that explains an empty list) intact. Same spirit as stripAssets.
-  guarded(async (a) => {
-    const r = await bridge.request("listLibraries", {}, TIMEOUTS.list, a && a.client);
+  guarded(async (a, extra) => {
+    const r = await bridge.request("listLibraries", {}, TIMEOUTS.list, a && a.client, undefined, callSignal(extra));
     const libraries = r.libraries.map((l) => ({
       key: l.key,
       name: l.name,
@@ -473,8 +786,8 @@ server.registerTool(
   "figma_list_children",
   {
     description:
-      "CHEAP listing of ONE node's DIRECT children (id/name/type/size/hasChildren) — no recursion, no " +
-      "assets. Use it to drill into a frame that figma_list_pages surfaced before committing to a full " +
+      "CHEAP listing of ONE node's DIRECT children (id/name/type/size/childCount/hasChildren) — no recursion, no " +
+      "assets. Rows that share name + size also carry a `title` (first visible text), with one warning per group; when their titles match too, `distinctTexts` (up to 3 texts that row shows and its twins do not; a very large listing skips it with a warning). Use it to drill into a frame that figma_list_pages surfaced before committing to a full " +
       "export of it. Accepts a bare node id or a figma.com URL containing ?node-id=.",
     inputSchema: {
       ...clientShape,
@@ -482,10 +795,10 @@ server.registerTool(
     },
     annotations: READ_ONLY,
   },
-  guarded(async (a) => {
+  guarded(async (a, extra) => {
     const nodeId = toNodeId(a.nodeId);
     if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... — see figma_list_pages.");
-    return textResult(await bridge.request("listChildren", { nodeId }, TIMEOUTS.list, a && a.client));
+    return textResult(await bridge.request("listChildren", { nodeId }, TIMEOUTS.list, a && a.client, undefined, callSignal(extra)));
   })
 );
 
@@ -502,7 +815,7 @@ server.registerTool(
     inputSchema: {
       ...clientShape,
       allPages: z.boolean().optional().describe("Export frame trees from every page. Can be very large and slow (measured >15 min on a 25-page file) — prefer `page` with ids from figma_list_pages, or the dtwin CLI."),
-      page: z.array(z.string()).optional().describe("Export these page(s) by id (preferred) or exact name, instead of the current page. Ids come from figma_list_pages. Cannot be combined with allPages — passing both is refused rather than silently resolved. An unknown or ambiguous name fails with the available pages listed."),
+      page: tolerantStringArray().optional().describe("Export these page(s) by id (preferred) or exact name, instead of the current page. Ids come from figma_list_pages. Cannot be combined with allPages — passing both is refused rather than silently resolved. An unknown or ambiguous name fails with the available pages listed."),
       ...readOptsShape,
       ...writeShape,
     },
@@ -516,18 +829,13 @@ server.registerTool(
   // `page` is forwarded only when non-empty — an empty array must not read as a selector (collect.ts
   // would warn and fall back to the current page).
   guarded(async (a, extra) => {
+    preflightOut(a);
     const page = Array.isArray(a.page) && a.page.length ? a.page : undefined;
     const allPages = !!a.allPages;
     // The allPages+page conflict is refused by collectFull itself (one guard, every caller) — no copy
     // of the rule here. This path always needs a connected plugin anyway, so there is nothing to
     // answer faster.
-    return exportResult(a, await withProgress(extra, (onTick) => bridge.request(
-      "exportFull",
-      { allPages, ...ifDefined("page", page), ...readOpts(a) },
-      exportTimeout({ allPages }),
-      a && a.client,
-      onTick
-    )));
+    return exportResult("figma_export_full", a, await pull(extra, "exportFull", { allPages, ...ifDefined("page", page), ...readOpts(a) }, exportTimeout({ allPages }), a && a.client));
   })
 );
 
@@ -538,9 +846,11 @@ server.registerTool(
       "Export ONLY the design system — variables, styles, local + library components, hygiene report — " +
       "with no page/frame walk and therefore no assets (assets are exported per-node during that walk). " +
       "The cheap sibling of figma_export_full for callers who just want tokens/styles/components. One " +
-      "tradeoff: library (remote) variable completeness depends on nodes/styles actually walked in this " +
-      "session, so a bare design-system pull may see fewer of them than a full pull would — local " +
-      "variables, styles and components are unaffected. Pass writeToDisk:true for the design-system/ split. " +
+      "tradeoff: on a file that CONSUMES a library this returns that file's OWN tokens, styles and components " +
+      "plus only the library variables something in the file references (flagged remote:true) — never the " +
+      "library's catalog; for that, run `dtwin pull --as-library \"<name>\"` (CLI) inside the library file. " +
+      "A design-system export takes ~15–40 s on a real file and reports progress only to clients that send a " +
+      "progress token. Pass writeToDisk:true for the design-system/ split. " +
       "Each catalogued component/variant carries its own fills/strokes/effects/cornerRadius/opacity/blendMode " +
       "(componentsLocal[].visuals) — components DEFINED in this file only, not ones consumed from a published " +
       "library (pull dtwin --as-library on the source library file for those). Pass variantVisuals:true " +
@@ -553,7 +863,10 @@ server.registerTool(
   },
   // buildDesignSystem() walks every page's component catalog (loadAllPages + findAllWithCriteria), so
   // this is EXPORT-tier work despite taking no scope arguments — TIMEOUTS.list would undersell it.
-  guarded(async (a, extra) => exportResult(a, await withProgress(extra, (onTick) => bridge.request("exportDesignSystem", ifDefined("variantVisuals", a && a.variantVisuals), TIMEOUTS.export, a && a.client, onTick))))
+  guarded(async (a, extra) => {
+    preflightOut(a);
+    return exportResult("figma_export_design_system", a, await pull(extra, "exportDesignSystem", ifDefined("variantVisuals", a && a.variantVisuals), TIMEOUTS.export, a && a.client));
+  })
 );
 
 server.registerTool(
@@ -563,7 +876,10 @@ server.registerTool(
     inputSchema: { ...clientShape, ...readOptsShape, ...writeShape },
     annotations: READ_ONLY,
   },
-  guarded(async (a, extra) => exportResult(a, await withProgress(extra, (onTick) => bridge.request("exportSelection", readOpts(a), exportTimeout({ selection: true }), a && a.client, onTick))))
+  guarded(async (a, extra) => {
+    preflightOut(a);
+    return exportResult("figma_export_selection", a, await pull(extra, "exportSelection", readOpts(a), exportTimeout({ selection: true }), a && a.client));
+  })
 );
 
 server.registerTool(
@@ -585,7 +901,8 @@ server.registerTool(
   guarded(async (a, extra) => {
     const nodeId = parseNodeId(a.url);
     if (!nodeId) return errorResult("Couldn't find a node id in: " + a.url + " — paste a link that contains ?node-id=..., or the node id directly (e.g. 123:456).");
-    return exportResult(a, await withProgress(extra, (onTick) => bridge.request("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export, a && a.client, onTick)));
+    preflightOut(a);
+    return exportResult("figma_export_url", a, await pull(extra, "exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export, a && a.client));
   })
 );
 
@@ -608,10 +925,11 @@ server.registerTool(
     },
     annotations: READ_ONLY,
   },
-  guarded(async (a) => {
+  guarded(async (a, extra) => {
     const nodeId = toNodeId(a.nodeId);
     if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... — see figma_list_pages.");
-    return exportResult(a, await bridge.request("screenshot", { nodeId, ...ifDefined("scale", a.scale) }, TIMEOUTS.export, a && a.client));
+    preflightOut(a);
+    return exportResult("figma_screenshot", a, await pull(extra, "screenshot", { nodeId, ...ifDefined("scale", a.scale) }, TIMEOUTS.export, a && a.client, false), { scale: a.scale });
   })
 );
 
@@ -699,6 +1017,8 @@ server.registerTool(
     // The preview is built HERE, not plugin-side: it must work before a connection exists, and the
     // annotations above are only a hint — not every MCP client turns destructiveHint into a prompt.
     if (a.dryRun) return textResult(previewWrites(a.ops || []));
+    // No cancel signal here (unlike the reads): a write cannot be un-applied, and aborting the wait would
+    // only lose the `applied` ids below.
     const r = await bridge.request("write", { ops: a.ops || [] }, TIMEOUTS.command, a && a.client);
     // Partial failure is reported as an error result, but MUST still carry `applied` — those nodes
     // exist in the document and the agent needs their ids to continue or undo.
@@ -739,8 +1059,14 @@ export interface GetComponentModule {
 }
 export interface DriftLintModule {
   validateMap(map: unknown): { ok: boolean; errors: Array<{ path: string; message: string }> };
-  driftLint(map: unknown, catalog: ComponentsCatalog | null | undefined, opts?: { maxAgeMs?: number; now?: number }):
+  driftLint(map: unknown, catalog: ComponentsCatalog | null | undefined, opts?: { maxAgeMs?: number; now?: number; extraCatalogs?: ReadonlyArray<{ file: string; catalog: ComponentsCatalog }> }):
     { errors: unknown[]; warnings: unknown[]; freshness: unknown; summary: unknown };
+  discoverExtraCatalogs(namedFile: string, screenFile?: string): Array<{ file: string; catalog: ComponentsCatalog }>;
+  /** The CLI's --screen guard (export-shape.ts isScreenDoc), with the text naming what it expects. */
+  isScreenDoc: ((x: unknown) => boolean) & { expected: string };
+  /** The CLI's --screen block as a value (F-30): `map` validated, each `doc` passed isScreenDoc. */
+  screenCoverageReport(input: { map: unknown; catalogFile: string; catalog: ComponentsCatalog | null; screens: ReadonlyArray<{ file: string; doc: unknown }>; extraCatalogs: ReadonlyArray<{ file: string; catalog: ComponentsCatalog }> }):
+    { coverage: unknown; warnings: Array<{ code: string; message: string }>; catalogsRead: string[] };
 }
 async function loadLayer<T>(mod: string, tool: string): Promise<T> {
   try {
@@ -771,8 +1097,10 @@ const dsManifestShape = z.looseObject({ files: z.looseObject({ componentsLocal: 
 
 // Follow design-system.json's `files.componentsLocal` pointer rather than guessing the split layout's
 // filenames — the manifest is the ONE place that records where the export actually landed.
+// No exportDir: the same precedence snapshot-meta.ts reads the export with — FIGMA_EXPORT_DIR, else wherever this
+// project's export actually is (project-layout findExportDir: design/export, or design/ on the older flat layout).
 function componentsLocalPath(exportDir?: string): string {
-  const dir = assertInsideCwd(exportDir, "exportDir");
+  const dir = assertInsideCwd(exportDir || process.env.FIGMA_EXPORT_DIR || findExportDir(process.cwd()).rel, "exportDir");
   const manifestPath = path.join(dir, "design-system.json");
   // The slim design-system.json manifest (JSON from disk — an older export or a hand edit): only its
   // componentsLocal pointer is read, and it is checked before it is followed.
@@ -807,7 +1135,7 @@ const exportDirShape = {
     .string()
     .optional()
     .describe(
-      "Directory holding the design export, relative to the directory this server was started in. Default: FIGMA_EXPORT_DIR or 'design'."
+      "Directory holding the design export, relative to the directory this server was started in. Default: FIGMA_EXPORT_DIR, else this project's export (design/export, or design/ on the older flat layout)."
     ),
 };
 
@@ -844,14 +1172,17 @@ server.registerTool(
     description:
       "Check a codeconnect.local.json map against the design export for DRIFT, and report snapshot staleness. Joins on the stable publish `key`, so it catches the case Figma's own Code Connect ships silently (its node-id join misses renamed/republished components — issue #337): orphaned map entries, unmapped components, stale or uncovered props, kind/enum mismatches. Also warns when the export on disk is older than --max-age. Run it before building a screen (so you find out the map is wrong BEFORE generating code against it) and in CI/pre-commit. Needs NO Figma connection.",
     inputSchema: {
-      map: z.string().optional().describe("Path to the map, relative to the server's start directory. Default: 'codeconnect.local.json'."),
+      map: z.string().optional().describe("Path to the map, relative to the server's start directory. Default: design/codeconnect.local.json (or a root codeconnect.local.json an older project still has)."),
       maxAgeHours: z.number().optional().describe("Warn if the export snapshot is older than this many hours. Omit for the built-in default."),
+      screens: tolerantStringArray().optional().describe("Screen export JSON file(s) (e.g. design/export/pages/<Page>/<Screen>__<id>.json), relative to the server's start directory — the CLI's --screen. Adds `screenCoverage`: how many of the component sets placed on THOSE screens your map covers (by key), with the same warnings the CLI prints. The number that matters before building a screen."),
       ...exportDirShape,
     },
     annotations: READ_ONLY,
   },
   guarded(async (a) => {
-    const mapPath = assertInsideCwd(a.map || "codeconnect.local.json", "map");
+    // The project layout's map (design/codeconnect.local.json), or the root copy an older project still has.
+    const mapRel = a.map || findMapFile(process.cwd()).rel;
+    const mapPath = assertInsideCwd(mapRel, "map");
     // The map and the catalog are untyped JSON from disk. The map goes through validateMap below before
     // driftLint sees it; the catalog is handed over as the shape driftLint reads.
     let map: unknown;
@@ -860,7 +1191,7 @@ server.registerTool(
     } catch (e) {
       throw new Error(
         `Could not read the map at ${mapPath}: ${errMsg(e)}. Scaffold one with ` +
-          `\`node design-to-code/map-bootstrap.ts <componentsLocal> > codeconnect.local.json\`.`
+          `\`node design-to-code/map-bootstrap.ts <componentsLocal> > ${mapRel}\`.`
       );
     }
     const layer = await driftLintLayer();
@@ -873,13 +1204,33 @@ server.registerTool(
           `\n\n${mapPath} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`node design-to-code/map-validate.ts ${mapPath}\`.`
       );
     }
-    const catalogRaw = JSON.parse(fs.readFileSync(componentsLocalPath(a.exportDir), "utf8")) as unknown;
+    const catalogFile = componentsLocalPath(a.exportDir);
+    const catalogRaw = JSON.parse(fs.readFileSync(catalogFile, "utf8")) as unknown;
     // Same as the CLI (design-to-code/drift-lint.ts): a non-catalog is linted as "no catalog".
     const catalog = isCatalogLike(catalogRaw) ? catalogRaw : null;
-    const res = layer.driftLint(map, catalog, a.maxAgeHours ? { maxAgeMs: a.maxAgeHours * 3600000 } : undefined);
+    // Same catalog set as the CLI (DT-26): components.library.json beside it and every pulled library, so a
+    // map entry for a library component is not "orphaned". Discovery never exits (this is the server process).
+    // F-30: `screens` are read like the CLI's --screen — each held inside the server's directory, parsed, and
+    // checked by the CLI's own guard. A non-screen file is a tool error naming it, never a process exit.
+    const screens = (a.screens || []).map((f) => {
+      const file = assertInsideCwd(f, "screens");
+      let doc: unknown;
+      try { doc = JSON.parse(fs.readFileSync(file, "utf8")) as unknown; } catch (e) { throw new Error(`Could not read the screen export at ${file}: ${errMsg(e)}.`); }
+      if (!layer.isScreenDoc(doc)) throw new Error(`${file} is not a screen export — expected ${layer.isScreenDoc.expected}.`);
+      return { file, doc };
+    });
+    // The first screen also decides which pulled libraries count (the CLI passes its first --screen too).
+    const extraCatalogs = layer.discoverExtraCatalogs(catalogFile, screens[0] ? screens[0].file : undefined);
+    const res = layer.driftLint(map, catalog, { ...(a.maxAgeHours ? { maxAgeMs: a.maxAgeHours * 3600000 } : {}), extraCatalogs });
+    const cov = screens.length ? layer.screenCoverageReport({ map, catalogFile, catalog, screens, extraCatalogs }) : null;
     // Drift is a FINDING, not a tool failure — return it as a normal result so the agent reads the
     // errors instead of an isError blob it may discard. `ok` is the thing to branch on.
-    return textResult({ ok: res.errors.length === 0, ...res });
+    return textResult({
+      ok: res.errors.length === 0,
+      catalogsRead: [catalogFile, ...extraCatalogs.map((x) => x.file)],
+      ...res,
+      ...(cov ? { screenCoverage: { ...(typeof cov.coverage === "object" && cov.coverage ? cov.coverage : {}), warnings: cov.warnings } } : {}),
+    });
   })
 );
 
@@ -888,9 +1239,13 @@ async function main() {
   // uncaught exception is logged and exits 1 (daemon.ts installCrashHandlers says why). The daemon
   // socket this process may serve is unlinked by daemon.ts's own exit hook.
   daemon.installCrashHandlers(wlog);
+  // R1: before anything can write to stdout (guardStdio says why it cannot wait for the client to go).
+  guardStdio();
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, () => onSignal(sig));
   // stdio is the transport Claude Code speaks; the WebSocket to the plugin is internal.
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  watchStdin();
   // Resolve the bridge up front, so a port problem is reported at startup — but only REPORTED: the
   // stdio session stays up, every tool call retries the resolution, and a held port comes back as that
   // call's error (the port may be free by then). Exiting here killed the whole MCP server.

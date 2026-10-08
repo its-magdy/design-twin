@@ -1,0 +1,9 @@
+{
+  "components": [
+    { "name": "icon/check-circle", "id": "10:1", "key": "acme-check-a", "type": "COMPONENT", "page": "Icons", "props": {} },
+    { "name": "icon/check-circle", "id": "10:2", "key": "acme-check-b", "type": "COMPONENT", "page": "Icons", "props": {} },
+    { "name": "Header", "id": "11:1", "key": "acme-header", "type": "COMPONENT", "page": "Layout", "props": { "Title#11:0": { "type": "TEXT" } } },
+    { "name": "Badge", "id": "12:1", "key": "acme-badge-a", "type": "COMPONENT_SET", "page": "Status", "props": { "Tone": { "type": "VARIANT", "options": ["Info", "Warn"] } } },
+    { "name": "Badge", "id": "12:2", "key": "acme-badge-b", "type": "COMPONENT_SET", "page": "Status", "props": { "Tone": { "type": "VARIANT", "options": ["Info", "Warn"] }, "Size": { "type": "VARIANT", "options": ["S", "M"] } } }
+  ]
+}

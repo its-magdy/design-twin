@@ -35,7 +35,7 @@ export interface XY { x: number; y: number }
 /** `box`: the absoluteBoundingBox, page-space. `x`/`y` only when the parent does not auto-position
  *  the node (serialize.ts) — inside an auto-layout parent they are absent on purpose. */
 export interface Box { w: number; h: number; x?: number; y?: number }
-/** `renderBox`: absoluteRenderBounds (stroke/shadow/blur extent), emitted only when it differs from `box`. */
+/** `renderBox`: absoluteRenderBounds: larger than `box` with effects, tighter on TEXT; emitted only when it differs from `box`. */
 export interface RenderBox { x: number; y: number; w: number; h: number }
 
 export interface RadiusCorners { tl?: number; tr?: number; br?: number; bl?: number }
@@ -516,7 +516,12 @@ export interface IrNode extends Partial<TextFields> {
 
   // assets (asset nodes are LEAVES — no children)
   asset?: string;
-  assetSkipped?: true;
+  /** `true` = skipped via --no-assets; `"hidden"` = a graphic that is hidden (itself or an ancestor) — never exported */
+  assetSkipped?: true | "hidden";
+  /** a hidden node whose `asset` is a visible twin's file (set by the bridge): the twin's node id */
+  assetFrom?: string;
+  /** on an `asset` leaf only: the rotation/flip/skew Figma already drew into the file — never apply it again */
+  sourceTransform?: { rotation?: number; flipped?: true; skew?: number };
   geometry?: Geometry;
   tableCells?: TableCell[][];
 
@@ -541,6 +546,10 @@ export interface Manifest {
   assetsSkippedInvisible: number;
   /** real export failures RECOVERED as inline path geometry (assets.ts geometryOf) */
   assetsGeometry: number;
+  /** hidden graphics (the node or an ancestor hidden) not exported — `assetSkipped:"hidden"`; absent on older exports */
+  assetsHidden?: number;
+  /** nodes kept as hidden (the node or an ancestor hidden); absent on older exports */
+  hiddenNodes?: number;
   /** which opt-in reads ran */
   reads?: string[];
   warnings: string[];
@@ -661,6 +670,11 @@ export interface IndexRow {
   /** sibling <Screen>.assets.json */
   assets?: string;
   reference?: string;
+  /** reference PNG px per design px (write-out.js writeScreen; F-118). */
+  referenceScale?: number;
+  /** where the reference PNG's top-left sits relative to the node's `box` top-left, in design px — the
+   *  render bounds include shadows/outside strokes, so it is usually <= 0 (F-118). */
+  referenceOffset?: { x: number; y: number };
   w?: number;
   h?: number;
 }
@@ -746,6 +760,8 @@ export interface Variable {
   type: VariableType;
   /** Absent when the plugin could not resolve the variable's collection (variables.ts writes `collOf(id)?.name`). */
   collection?: string;
+  /** FU-namemap (D146): the collection's Figma key — collection NAMES repeat ("Spacing" ×2); absent on old exports */
+  collectionKey?: string;
   tier: "primitive" | "semantic";
   /** keyed by MODE NAME */
   values: Record<string, VariableValue>;

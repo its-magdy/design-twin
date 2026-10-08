@@ -31,12 +31,12 @@ Output
 
 **Scroll, clip & sticky**
 - `clip:true` → `overflow: hidden` on that container.
-- `layout.scroll` (`horizontal`/`vertical`/`both`) → `overflow-x: auto`/`overflow-y: auto`/`overflow: auto`
+- `scroll` (`horizontal`/`vertical`/`both`) → `overflow-x: auto`/`overflow-y: auto`/`overflow: auto`
   (use `scroll` instead of `auto` only if the design clearly wants a persistent scrollbar).
-- `fixedChildren` **if present** on a scroll container (count of leading children pinned while the rest
-  scrolls) → `position: sticky; top: 0` (header) or `position: sticky; bottom: 0` (footer), plus a
-  `z-index`, on that many leading children in DOM order; everything after scrolls normally. Absent →
-  treat all children as normal flow.
+- `fixedChildren` **if present** on a scroll container (the LAST N entries of `children[]` are pinned
+  while the rest scrolls; place each by its `y`) → `position: sticky; top: 0` (a top bar — put it first
+  in the DOM) or `position: sticky; bottom: 0` (a bottom bar), plus a `z-index`, on those N children;
+  everything else scrolls normally. Absent → treat all children as normal flow.
 
 **Prototype `reactions`/`flows` → behavior, not markup**
 - `flows` (named entry points) are candidate top-level routes for your router; don't render them.
@@ -72,6 +72,19 @@ arrow-key handling), combobox/autocomplete. **The project's own component or an 
 library (Radix, React Aria, Headless UI…) beats all of the above** — check `design/codeconnect.local.json` and
 `package.json` before writing either.
 
+**Date and select fields keep the drawn text colours** — a native control draws its own text, so the design's
+placeholder/value colours do not arrive by themselves. `::placeholder` never applies to `<input type="date">`
+(it has no placeholder). Chromium/WebKit, non-standard — check in the browser: colour `::-webkit-datetime-edit`
+(and its `-fields-wrapper` / `-text` parts) with the placeholder token while the field is empty (`:invalid` on a
+`required` field, else a `data-empty` attribute you toggle) and the value token once set. Firefox: no such
+pseudo-elements that we know of — set `color` on the input itself and check it in the browser. Set `color-scheme`
+(dark) so the native picker usually matches the theme. A `<select>` placeholder is a first
+`<option value="">` on a `required` select (the spec's placeholder label option), coloured with `select:invalid`.
+If you make it `disabled hidden`, also mark it `selected`; in React, use `defaultValue=""` or a controlled
+`value=""` on the `<select>`. Otherwise the first enabled option is selected, the field is valid, and the
+placeholder never shows. Record the substitution in the plan as a `deviations[]` row
+`{nodeId, field: "control", designed, built, reason}` and verify the colour on the element's own text.
+
 **Idiomatic web (patterns by structure)** — decide from the node's STRUCTURE; its name is only a hint.
 - Full-width bar pinned to the top of the root frame (`fixedChildren`, or first child with logo/title/
   actions) → `<header>`, `position: sticky`/`fixed` per the scroll section; a row of destinations inside it →
@@ -81,7 +94,9 @@ library (Radix, React Aria, Headless UI…) beats all of the above** — check `
 - A bottom bar of 3–5 icon+label destinations (mobile web) → `<nav>` with `<a aria-current="page">`,
   fixed to the bottom with `padding-bottom: env(safe-area-inset-bottom)`.
 - N siblings with the same structure → `<ul><li>` rendered by ONE `.map()` over sample data with a
-  stable `key`, never N pasted blocks. Rows of aligned cells under column labels → a real `<table>`.
+  stable `key`, never N pasted blocks. Rows of aligned cells under column labels → a real `<table>`; derive
+  column x/widths from the BODY cells (header cells often carry different padding in the design — if header and
+  body x disagree, that is a designer question).
   A wrapping set of equal cards → CSS grid (`repeat(auto-fill, minmax(…))`), not fixed columns copied
   from one frame width.
 - A row that navigates → the whole row is one `<a>`; a card with one primary action → a single link/
@@ -153,8 +168,13 @@ before the image loads; always set explicit width+height on the container.
 **Interaction states** — look up the component in `design/export/design-system/components.local.json`'s `components` catalog and
 check its variant `options` for hover/focus/disabled/error/selected states before shipping. Always add a
 visible `:focus-visible` rule even if the Figma design only shows a `:hover` state — it's the most
-commonly missed a11y requirement. Gate `:hover` with `@media (hover:hover)`; add `:active`, `:disabled`/
+commonly missed a11y requirement. A reset that sets `outline-style: none` defeats a bare `outline-width`:
+state `outline-style: solid` (or the full `outline` shorthand) in the `:focus-visible` rule. Gate `:hover` with `@media (hover:hover)`; add `:active`, `:disabled`/
 `[aria-disabled="true"]`.
+The browser's default `<button>` cursor is the arrow: set `cursor:pointer` on enabled buttons in the base CSS. A design
+with no Pressed variant still gets a default `:active` treatment (defaulted state, designer question).
+Hover-revealed row actions: `opacity: 0` at rest, `opacity: 1` on `:hover`, `:focus-within` and under `@media (pointer: coarse)`;
+never `visibility: hidden` or `display: none`, which drop the control from the tab order and leave a dialog opener unable to take focus back.
 
 **Accessibility & RTL** — WCAG contrast 4.5:1 text, 3:1 large text (≥24px or ≥18.66px bold) and UI parts;
 target size ≥24×24 CSS px (2.5.8 AA), 44 recommended; 2.4.7 Focus Visible is AA (2.4.13 appearance is AAA).
@@ -185,8 +205,9 @@ appears on a vector node whose SVG export failed. Render it inline as
 
 **Tokens** — the right-hand value in `tokens.json` is a CSS custom property (e.g. `var(--color-primary)`).
 Use it inside the module CSS (`color: var(--color-text)`), not inline literals.
-- Generated theme: `tokens.js <variables file> <dir>` with **no** `--web` flag — `tokens.css` is the
-  file for this stack (`:root` plus a `[data-theme="…"]` block per non-default mode). Its names keep
+- Generated theme: `node "<scripts>/tokens.js" <variables file> <dir>` with **no** `--web` flag — `tokens.css` is the
+  file for this stack (`:root` plus a `[data-theme="…"]` block per non-default mode; when several collections share a mode name each is scoped
+  `[data-theme-<collection>="<mode>"]` and `tokens.js` warns which attributes to set). Its names keep
   the Figma name's case and turn `/` and spaces into `-`: `Primary/Primary` → `--Primary-Primary`,
   `Space 4` → `--Space-4`. CSS has no built-in scale for them to shadow, so there is no prefix.
 - A name ending in `-<8 hex>` (`--Space-4-1a2b3c4d`) means two Figma variables share that name with

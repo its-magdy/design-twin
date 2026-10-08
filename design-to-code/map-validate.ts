@@ -30,7 +30,7 @@ interface KeyTables {
 }
 const KEYS: KeyTables = {
   root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
   figma: ["key", "id", "name", "unstable"],
   code: ["module", "export", "targets"],
   target: ["module", "export"],
@@ -101,6 +101,9 @@ function validateMap(map: unknown): MapValidationResult {
 
     // A non-string status is "not one of the statuses" (Array.prototype.includes never matches it).
     if (e.status !== undefined && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    // A free-text note a person (or build-screen) leaves on an entry — "props mapped by hand", "why it is
+    // deprecated". No tool reads it; it only has to be a string (F-32).
+    optStrings(e, ["note"], at, err);
 
     if (e.props !== undefined) {
       if (!isObj(e.props)) err(`${at}.props`, "must be an object");
@@ -149,19 +152,21 @@ function validateProp(p: unknown, at: string, err: Err): void {
 function isCodeConnectMap(x: unknown): x is CodeConnectMap {
   return validateMap(x).ok;
 }
-isCodeConnectMap.expected = "a valid component map (map-validate.js <file> lists what is wrong with it)";
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
 
 export { validateMap, isCodeConnectMap };
 
 // CLI: node design-to-code/map-validate.ts <codeconnect.local.json>
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const file = process.argv[2];
+function main(argv: string[]): number {
+  const file = argv[0];
   const USAGE = `usage: ${scriptCmd("map-validate")} <map.json>`;
-  if (file === "--help" || file === "-h") { console.log(USAGE); process.exit(0); }
-  if (!file || file.startsWith("-")) { console.error((file ? `map-validate: unknown flag ${file}\n` : "") + USAGE); process.exit(1); }
+  if (file === "--help" || file === "-h") { console.log(USAGE); return 0; }
+  if (!file || file.startsWith("-")) { console.error((file ? `map-validate: unknown flag ${file}\n` : "") + USAGE); return 1; }
   const res = validateMap(readJsonFile(file, "component map"));
-  if (res.ok) { console.log("map valid"); process.exit(0); }
+  if (res.ok) { console.log("map valid"); return 0; }
   res.errors.forEach((e) => console.error(`  ${e.path || "(root)"}: ${e.message}`));
   console.error(`\n${res.errors.length} error(s)`);
-  process.exit(1);
+  return 1;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

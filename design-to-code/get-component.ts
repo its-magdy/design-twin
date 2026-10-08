@@ -83,28 +83,33 @@ function getComponent(catalogFile: string, handle: string): GetComponentResult {
 export { getComponent, findComponent, resolveVariantsFile };
 
 // CLI: node design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const [catalogFile, handle] = process.argv.slice(2);
+function main(argv: string[]): number {
+  const usage = `usage: ${scriptCmd("get-component")} <design-system/components.local.json> <key|id|name>`;
+  if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
+  const [catalogFile, handle] = argv;
   if (!catalogFile || !handle) {
-    console.error(`usage: ${scriptCmd("get-component")} <design-system/components.local.json> <key|id|name>`);
-    process.exit(2);
+    console.error(usage);
+    return 2;
   }
   try {
     const res = getComponent(catalogFile, handle);
     if (!res.found) {
       console.error(`error  no component matches '${handle}' in ${catalogFile}`);
-      process.exit(1);
+      return 1;
     }
     if (!res.detail) {
-      console.error(`warn   '${handle}' has no variantsFile/nodeFile (no node trees were exported for it — re-run the export with variantVisuals:true) — printing the catalog entry only`);
+      console.error(`warn   '${handle}' has no variantsFile/nodeFile (no node trees were exported for it — re-run the export with \`--variant-visuals\` (MCP: variantVisuals:true)) — printing the catalog entry only`);
       process.stdout.write(JSON.stringify(res.component, null, 2) + "\n");
-      process.exit(0);
+      return 0;
     }
     process.stdout.write(JSON.stringify(res.detail, null, 2) + "\n");
   } catch (e) {
     // `${e.message}` verbatim: a thrown non-Error prints "undefined" here, as it did.
     const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
     console.error(`error  ${String(message)}`);
-    process.exit(2);
+    return 2;
   }
+  return 0;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

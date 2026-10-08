@@ -338,10 +338,15 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
       }
       values[modeName[modeId] || modeId] = value;
     }
+    const coll = collOf(v.variableCollectionId);
+    // The collection's KEY tells two same-named collections apart ("Spacing" ×2). Read defensively: the
+    // typings say only that it is "present on local and published variable collections".
+    const collKey: unknown = coll ? coll.key : undefined;
     const rec: IrVariable = {
       name: v.name,
       type: v.resolvedType,
-      collection: (collOf(v.variableCollectionId) || ({} as VariableCollection)).name,
+      collection: (coll || ({} as VariableCollection)).name,
+      ...ifDefined("collectionKey", typeof collKey === "string" && collKey ? collKey : undefined),
       // tier: alias => semantic; raw+meaningfully-scoped => semantic leaf; raw+unscoped => primitive.
       // ALL_SCOPES is Figma's default catch-all (it pollutes every picker — see the hygiene flag below),
       // so it does NOT count as a meaningful scope; otherwise almost every variable would read semantic.

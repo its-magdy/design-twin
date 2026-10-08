@@ -7,7 +7,7 @@
 // also appears in the export as a component PROPERTY name (`"visible": "Show Breadcrumb"`), so a
 // grep for "visible" gives a confidently wrong answer (livetest-3 finding 34). verify-screen.js used
 // to test `n.visible === false`, which never matched a single real node, and so emitted 83 of 272
-// Job Roles specs, 61 of 112 instances and 22 of 28 interactions for layers nobody draws (findings
+// Jet Roles specs, 61 of 112 instances and 22 of 28 interactions for layers nobody draws (findings
 // 97/126/157/159/181/185). audit.js had the right predicate and then emitted findings for hidden
 // nodes anyway (finding 74).
 //

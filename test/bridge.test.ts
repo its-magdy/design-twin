@@ -47,6 +47,17 @@ const core = await import("../bridge/src/server-core.ts");
 // A caught/rejected value as the Error every bridge path throws. A non-Error is wrapped rather than
 // cast, so a check reading `.message` still sees a string (and stays truthy, like the raw value).
 const asErr = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
+// Wait for a condition instead of sleeping a guessed time: polls every 10 ms, resolves true once it
+// holds, false at the cap — so a check that never comes true fails cleanly instead of hanging, and a
+// loaded machine only makes it slower, never wrong (group 16, H-1).
+const until = async (cond: () => boolean, capMs = 10_000): Promise<boolean> => {
+  const end = Date.now() + capMs;
+  while (!cond()) {
+    if (Date.now() >= end) return false;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return true;
+};
 // The one bridge -> plugin frame the fake plugins below read: `{ id, cmd, args }` (not exported by server-core).
 interface CommandFrame { id: string; cmd: Cmd; args?: Record<string, unknown> }
 // A fixture asset with the producer-owned identity fields filled in (doc-types.ts Asset).
@@ -406,12 +417,13 @@ void (async () => {
   // ------------------------------------------------- server-core: heartbeat (ws README ping/pong)
   // A peer that silently stopped answering (lid closed, cable pulled) used to sit in the registry as a
   // live client forever, so every command routed to it waited out its whole timeout. The bridge now
-  // pings on an interval and terminates a client that missed the previous pong. A short heartbeatMs
-  // stands in for the 30 s default; `autoPong: false` is a client whose network stack never answers.
+  // pings on an interval and terminates a client that missed the previous pong. `autoPong: false` is a
+  // client whose network stack never answers. The rounds are stepped by hand (`heartbeatMs: 0` +
+  // heartbeatTick(), D108): with a real short interval, one loop stall after a ping fired the next tick
+  // before the alive client's pong was read, and terminated it (group 16, H-1b).
   {
     const port = nextPort++;
-    const HB = 150;
-    const bridge = core.createBridge(port, { heartbeatMs: HB });
+    const bridge = core.createBridge(port, { heartbeatMs: 0 });
     const open = (autoPong: boolean) => new Promise<WebSocket>((res, rej) => {
       const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", autoPong });
       c.on("open", () => res(c));
@@ -419,22 +431,59 @@ void (async () => {
     });
     const alive = await open(true);
     const dead = await open(false);
-    let deadClosedAt = 0;
-    const openedAt = Date.now();
-    dead.on("close", () => { deadClosedAt = Date.now(); });
+    let alivePings = 0;
+    let deadPings = 0;
+    let deadPingsAtClose = -1;
+    alive.on("ping", () => { alivePings++; });
+    dead.on("ping", () => { deadPings++; });
+    dead.on("close", () => { deadPingsAtClose = deadPings; });
+    // The alive client answers every command. Its reply is written after its pong on the same socket,
+    // so a round trip that resolves proves the bridge has READ the pong — the fence before each tick.
+    alive.on("message", (d: RawData) => {
+      const f = JSON.parse(d.toString()) as CommandFrame;
+      if (f.cmd === "ping") alive.send(JSON.stringify({ id: f.id, ok: true, result: { pong: true, page: "P", file: "F" } }));
+    });
+    const fence = async (): Promise<boolean> => {
+      try { await bridge.request("ping", {}, 5000, "c1"); return true; } catch { return false; }
+    };
     ok("[heartbeat] both clients are registered at first", bridge.listClients().length === 2);
     // An in-flight request on the dead client must fail on termination, not wait out its budget.
     let hbErr: Error | undefined;
     const inflight = bridge.request("exportFull", {}, 20000, "c2").catch((e: unknown) => { hbErr = asErr(e); });
-    await new Promise((r) => setTimeout(r, HB * 5));
+    bridge.heartbeatTick();
+    const pinged = await until(() => alivePings === 1 && deadPings === 1);
+    const fenced = await fence();
+    bridge.heartbeatTick();
+    const terminated = await until(() => deadPingsAtClose >= 0);
+    // The same tick pinged the alive client a second time: its pong is fenced before the next tick.
+    const second = await until(() => alivePings === 2) && await fence();
     await inflight;
     console.log("\nserver-core — heartbeat:");
-    ok("[heartbeat] a client that never answers pings is terminated within two intervals (+ slack)",
-      deadClosedAt > 0 && deadClosedAt - openedAt <= HB * 3 + 200);
+    ok("[heartbeat] a client that never answers pings is terminated at the tick after ONE unanswered ping",
+      pinged && fenced && terminated && deadPingsAtClose === 1);
     ok("[heartbeat] and is removed from the client registry", bridge.listClients().map((c) => c.connId).join() === "c1");
     ok("[heartbeat] its in-flight request fails fast with the disconnect diagnosis", !!hbErr && /disconnected before replying/.test(hbErr.message));
-    ok("[heartbeat] a client that answers pings survives many intervals", alive.readyState === WebSocket.OPEN && bridge.isConnected());
+    let rounds = 0;
+    for (let want = 3; want <= 5; want++) {
+      bridge.heartbeatTick();
+      if ((await until(() => alivePings === want)) && (await fence())) rounds++;
+    }
+    ok("[heartbeat] a client that answers pings survives many rounds (pinged each one, still open and routed to)",
+      second && rounds === 3 && alivePings === 5 && alive.readyState === WebSocket.OPEN && bridge.isConnected());
     alive.close();
+    bridge.close();
+  }
+  // The real interval is armed: a silent client is terminated with no hand-stepping (no upper time
+  // bound — a loaded machine may run it late, which is not the bug this guards).
+  {
+    const port = nextPort++;
+    const bridge = core.createBridge(port, { heartbeatMs: 50 });
+    const dead = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", autoPong: false });
+    let deadClosed = false;
+    dead.on("close", () => { deadClosed = true; });
+    dead.on("error", () => {});
+    ok("[heartbeat] with a real heartbeatMs the interval runs and terminates a client that never answers pings",
+      await until(() => deadClosed) && bridge.listClients().length === 0);
     bridge.close();
   }
 
@@ -501,7 +550,7 @@ void (async () => {
 
     // The second file connects. Under the old rule this terminated the first.
     const lib = await open();
-    identify(lib, { instanceId: "fig-lib", file: "NERA Library", fileKey: "KEYLIB", page: "Tokens" });
+    identify(lib, { instanceId: "fig-lib", file: "NIMA Library", fileKey: "KEYLIB", page: "Tokens" });
     autoReply(lib, { pong: true, page: "Tokens", file: "lib" });
     await new Promise((r) => setTimeout(r, 80));
 
@@ -516,7 +565,7 @@ void (async () => {
     ok("[multi] routes by connId", (await bridge.request("ping", {}, 5000, "c2")).file === "lib");
     ok("[multi] routes by fileKey", (await bridge.request("ping", {}, 5000, "KEYBASE")).file === "base");
     ok("[multi] routes by file-name substring (case-insensitive)",
-      (await bridge.request("ping", {}, 5000, "nera")).file === "lib");
+      (await bridge.request("ping", {}, 5000, "nima")).file === "lib");
 
     // waitForClient: a NAMED target whose window has not redialled yet (two files open, the other
     // one landed first — seen live) is waited for, bounded; an unknown name times out quietly and
@@ -537,7 +586,9 @@ void (async () => {
     const tl = Date.now() - tl0;
     ok("[multi] waitForClient resolves as soon as the late window identifies under that name (not at the timeout)", tl >= 150 && tl < 2500);
     ok("[multi] …and the named request then routes to it", (await bridge.request("ping", {}, 5000, "Docs")).file === "docs");
-    ok("[multi] waitForClient resolves at once for a name already connected", await (async () => { const t0 = Date.now(); await bridge.waitForClient("nera", 3000); return Date.now() - t0 < 100; })());
+    // Raced against a timer shorter than its own 3 s window: a wait that only ended at the window loses.
+    ok("[multi] waitForClient resolves at once for a name already connected",
+      await Promise.race([bridge.waitForClient("nima", 3000).then(() => "resolved"), new Promise((r) => setTimeout(() => r("window"), 2000))]) === "resolved");
     lateWs?.close();
     await new Promise((r) => setTimeout(r, 80));
 
@@ -547,7 +598,7 @@ void (async () => {
     try { await bridge.request("ping", {}, 5000); } catch (e) { ambErr = asErr(e); }
     ok("[multi] an unaddressed request with two files connected is REFUSED", !!ambErr);
     ok("[multi] the refusal lists both files so the caller can choose",
-      !!ambErr && /App — Base/.test(ambErr.message) && /NERA Library/.test(ambErr.message));
+      !!ambErr && /App — Base/.test(ambErr.message) && /NIMA Library/.test(ambErr.message));
     ok("[multi] and names the flags that fix it", !!ambErr && /--client/.test(ambErr.message));
 
     let missErr: Error | undefined;
@@ -631,13 +682,13 @@ void (async () => {
   console.log("\nfigma-pull — argument parsing:");
   // --as-library is a SCOPE: it selects what is exported, so it collides with the other scopes and,
   // like --design-system, walks no page (making every read option inert and therefore refused).
-  ok("[as-library] parses and carries the library name", parse(["--as-library", "NERA"]).asLibrary === "NERA");
+  ok("[as-library] parses and carries the library name", parse(["--as-library", "NIMA"]).asLibrary === "NIMA");
   ok("[as-library] requires a name rather than defaulting silently", /library name/.test(usage(["--as-library"]) || ""));
-  ok("[as-library] is refused alongside --design-system", /select different scopes/.test(usage(["--as-library", "NERA", "--design-system"]) || ""));
-  ok("[as-library] is refused alongside --page", /select different scopes/.test(usage(["--as-library", "NERA", "--page", "1:2"]) || ""));
-  ok("[as-library] is refused alongside a list command", /cannot be combined/.test(usage(["--as-library", "NERA", "--list-libraries"]) || ""));
-  ok("[as-library] refuses read options, which would be silently ignored", /silently ignored/.test(usage(["--as-library", "NERA", "--css"]) || ""));
-  ok("[as-library] is refused alongside a daemon command", /cannot be combined/.test(usage(["--as-library", "NERA", "--serve"]) || ""));
+  ok("[as-library] is refused alongside --design-system", /select different scopes/.test(usage(["--as-library", "NIMA", "--design-system"]) || ""));
+  ok("[as-library] is refused alongside --page", /select different scopes/.test(usage(["--as-library", "NIMA", "--page", "1:2"]) || ""));
+  ok("[as-library] is refused alongside a list command", /cannot be combined/.test(usage(["--as-library", "NIMA", "--list-libraries"]) || ""));
+  ok("[as-library] refuses read options, which would be silently ignored", /silently ignored/.test(usage(["--as-library", "NIMA", "--css"]) || ""));
+  ok("[as-library] is refused alongside a daemon command", /cannot be combined/.test(usage(["--as-library", "NIMA", "--serve"]) || ""));
 
   // The regression: `--timeout` with no value fell into the validator's own `!== undefined` exemption,
   // so it was silently IGNORED and the default applied — invisible until the export died at a limit
@@ -742,6 +793,41 @@ void (async () => {
     (() => {
       const note = init.plan(mk({ ".gitignore": "node_modules/\ndesign/\n" }), { token: tok }).find((a) => a.kind === "note");
       return !!note && /NOT regenerable/.test(note.note) && /design\/export\//.test(note.note);
+    })());
+    // DT-79 (D9: suggest only): Tailwind v4 compiles class names quoted in design/ notes unless excluded.
+    ok("[DT-79] a project whose package.json lists tailwindcss (deps or devDeps) gets ONE @source not note; others get none", (() => {
+      const notes = (files: Record<string, string>) => init.plan(mk(files), { token: tok }).filter((a) => a.kind === "note" && /@source not "<path from that CSS file to design\/>";/.test(a.note) && /v4\.1\+/.test(a.note));
+      return notes({ "package.json": '{"devDependencies":{"tailwindcss":"4"}}' }).length === 1 && notes({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' }).length === 1
+        && notes({ "package.json": '{"dependencies":{"react":"19"}}' }).length === 0 && notes({}).length === 0 && notes({ "package.json": "not json" }).length === 0;
+    })());
+    ok("[DT-79] no note for a Tailwind pinned to v3 (^3 / ~3 / 3.x / >=3 <4 — v3 does not auto-scan); v4 ranges and the v4-only plugins still get it", (() => {
+      const n = (pkg: string) => init.plan(mk({ "package.json": pkg }), { token: tok }).filter((a) => a.kind === "note" && /@source not/.test(a.note)).length;
+      return ["^3.4.1", "~3.3", "3.x", ">=3 <4"].every((r) => n(`{"devDependencies":{"tailwindcss":"${r}"}}`) === 0)
+        && n('{"devDependencies":{"tailwindcss":"^4.1.0"}}') === 1 && n('{"devDependencies":{"tailwindcss":"^3.0.0 || ^4.0.0"}}') === 1 && n('{"devDependencies":{"tailwindcss":"^3.0.0 || ~3.4"}}') === 0 && n('{"devDependencies":{"tailwindcss":">=3"}}') === 1 && n('{"devDependencies":{"@tailwindcss/vite":"^4"}}') === 1;
+    })());
+    // F-91 (D9: suggest only): a watched write into design/ can hot-reload the page being measured.
+    // M2: proven only for vite + Tailwind v4 (its source detection is what makes Vite reload on a design/ rewrite)
+    ok("[F-91] a project listing vite AND Tailwind v4 gets ONE server.watch.ignored note naming the proven mechanism; vite alone, Tailwind v3 or no vite get none; vite.config is never written", (() => {
+      const notes = (files: Record<string, string>) => init.plan(mk(files), { token: tok }).filter((a) => a.kind === "note" && /server: \{ watch: \{ ignored: \['\*\*\/design\/\*\*'\] \} \}/.test(a.note));
+      const n = (files: Record<string, string>) => notes(files).length;
+      const d = mk({ "package.json": '{"devDependencies":{"vite":"7","tailwindcss":"^4.1.0"}}', "vite.config.ts": "export default {};\n" });
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      const both = notes({ "package.json": '{"devDependencies":{"vite":"7","@tailwindcss/vite":"^4"}}' });
+      return both.length === 1 && /Tailwind v4's automatic source detection/.test(both[0]?.kind === "note" ? both[0].note : "") && /fully reload/.test(both[0]?.kind === "note" ? both[0].note : "")
+        && n({ "package.json": '{"dependencies":{"vite":"7","tailwindcss":"4"}}' }) === 1
+        && n({ "package.json": '{"devDependencies":{"vite":"7"}}' }) === 0 && n({ "package.json": '{"devDependencies":{"vite":"7","tailwindcss":"^3.4.1"}}' }) === 0
+        && n({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' }) === 0 && n({}) === 0 && fs.readFileSync(path.join(d, "vite.config.ts"), "utf8") === "export default {};\n";
+    })());
+    ok("[F-91] init suggests gitignoring design/verify/ unless .gitignore already covers it", (() => {
+      const n = (files: Record<string, string>) => init.plan(mk(files), { token: tok }).filter((a) => a.kind === "note" && /consider adding `design\/verify\/` to \.gitignore/.test(a.note)).length;
+      return n({}) === 1 && n({ ".gitignore": "node_modules/\n" }) === 1 && n({ ".gitignore": "design/verify/\n" }) === 0 && n({ ".gitignore": "design/\n" }) === 0
+        && ["design/verify/**\n", "/design/verify\n", "/design/verify/\n", "design/verify/*\n", "design/verify\n"].every((g) => n({ ".gitignore": g }) === 0)
+        && n({ ".gitignore": "design/verify-old/\n" }) === 1 && n({ ".gitignore": "design/export/\n" }) === 1;
+    })());
+    ok("[DT-79] init only suggests it — nothing is written into a stylesheet", (() => {
+      const d = mk({ "package.json": '{"devDependencies":{"tailwindcss":"4"}}', "src/app.css": '@import "tailwindcss";\n' });
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      return fs.readFileSync(path.join(d, "src/app.css"), "utf8") === '@import "tailwindcss";\n';
     })());
   // The layout split, asserted where it is decided: dtwin writes only under design/export/, and
   // everything a re-pull must not destroy sits beside it (see bridge/project-layout.js).
@@ -858,7 +944,7 @@ void (async () => {
   ok("[args] --children accepts the DASH form (normalised to colons)",
     parse(["--children", "131-1879"]).childrenId === "131:1879");
   ok("[args] --children accepts a full figma.com design URL",
-    parse(["--children", "https://www.figma.com/design/abc123/NERA?node-id=131-1879&t=x"]).childrenId === "131:1879");
+    parse(["--children", "https://www.figma.com/design/abc123/NIMA?node-id=131-1879&t=x"]).childrenId === "131:1879");
   ok("[args] --children accepts a percent-encoded id",
     parse(["--children=131%3A1879"]).childrenId === "131:1879");
   ok("[args] --children accepts a nested-instance path",
@@ -881,7 +967,7 @@ void (async () => {
   ok("[args] --node accepts the DASH form (normalised to colons)",
     parse(["--node", "131-1879"]).nodeId === "131:1879");
   ok("[args] --node accepts a full figma.com design URL",
-    parse(["--node", "https://www.figma.com/design/abc123/NERA?node-id=131-1879&t=x"]).nodeId === "131:1879");
+    parse(["--node", "https://www.figma.com/design/abc123/NIMA?node-id=131-1879&t=x"]).nodeId === "131:1879");
   ok("[args] --node accepts a percent-encoded id",
     parse(["--node=131%3A1879"]).nodeId === "131:1879");
   ok("[args] --node accepts a nested-instance path",
@@ -1032,7 +1118,7 @@ void (async () => {
   // --client is an ADDRESS, not a scope: unlike every other flag here it must COMPOSE with all of
   // them, so the guards that refuse combinations must leave it alone.
   ok("[client] --client takes a value", parse(["design", "--client", "c2"]).client === "c2");
-  ok("[client] the = form works too", parse(["design", "--client=NERA"]).client === "NERA");
+  ok("[client] the = form works too", parse(["design", "--client=NIMA"]).client === "NIMA");
   ok("[client] a file name with spaces survives", parse(["design", "--client", "App — Base"]).client === "App — Base");
   ok("[client] it is null when absent", parse(["design"]).client === null);
   ok("[client] --client with no value is a usage error",
@@ -1069,7 +1155,7 @@ void (async () => {
   ok("[list-clients] and mentions that SEVERAL files can connect", /SEVERAL files at once/.test(noClients));
   const twoClients = pull.formatClients([
     { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", uptimeMs: 65000, identified: true },
-    { connId: "c2", file: "NERA Library", fileKey: null, page: "Tokens", uptimeMs: 3000, identified: true },
+    { connId: "c2", file: "NIMA Library", fileKey: null, page: "Tokens", uptimeMs: 3000, identified: true },
   ]);
   ok("[list-clients] the listing counts the files", /2 Figma files connected/.test(twoClients));
   ok("[list-clients] each row leads with the connId --client takes", /c1\s+"App — Base"/.test(twoClients));
@@ -1097,14 +1183,14 @@ void (async () => {
   const libOut = pull.formatLibraries({
     libraries: [
       { key: "k1", name: "This file", kind: "local", componentCount: 3, variableCollections: [{ key: "c1", name: "Primitives", variableCount: 40 }] },
-      { key: "k2", name: "NERA Design System", kind: "library", componentCount: 12,
+      { key: "k2", name: "NIMA Design System", kind: "library", componentCount: 12,
         variableCollections: [{ key: "c2", name: "Semantic", variableCount: 120 }, { key: "c3", name: "Brand", variableCount: 8 }],
         note: "variable collections unavailable on this plan" },
     ],
     warnings: [],
   });
   ok("[lib] it prints a table, not raw JSON", !/^\s*[{[]/.test(libOut) && /LIBRARIES \(2\)/.test(libOut));
-  ok("[lib] every library name appears", /This file/.test(libOut) && /NERA Design System/.test(libOut));
+  ok("[lib] every library name appears", /This file/.test(libOut) && /NIMA Design System/.test(libOut));
   ok("[lib] local vs library kind is shown", /\blocal\b/.test(libOut) && /\blibrary\b/.test(libOut));
   ok("[lib] variable counts are summed per library", /\b128\b/.test(libOut) && /\b40\b/.test(libOut));
   ok("[lib] each collection is listed with its own count", /Primitives \(40 variables\)/.test(libOut) && /Brand \(8 variables\)/.test(libOut));
@@ -1117,7 +1203,7 @@ void (async () => {
     // The header and both data rows must start their NAME column at the same offset — the one thing
     // that makes this a table rather than JSON with extra steps.
     const rows = libOut.split("\n").filter((l: string) => /^ {2}(KIND|local|library) /.test(l));
-    const nameAt = rows.map((l: string) => ["This file", "NERA Design System", "NAME"].reduce((n, s) => (l.includes(s) ? l.indexOf(s) : n), -1));
+    const nameAt = rows.map((l: string) => ["This file", "NIMA Design System", "NAME"].reduce((n, s) => (l.includes(s) ? l.indexOf(s) : n), -1));
     return rows.length === 3 && new Set(nameAt).size === 1 && (nameAt[0] ?? -1) > 0;
   })());
 
@@ -1468,26 +1554,26 @@ void (async () => {
 
   // ---------- writeScreen: title/texts land in the index (P3 #16 #17 #70 #90 #120) ----------
   // Real node tree from the livetest3 fixture (the `positions ` frame — layer name "positions ",
-  // visible title "Job Roles"), pruned to the fields deriveTitle/collectTexts read.
+  // visible title "Jet Roles"), pruned to the fields deriveTitle/collectTexts read.
   {
     const fixtureScreen = JSON.parse(fs.readFileSync(
-      path.join(import.meta.dirname, "fixtures", "livetest3", "pages-titled", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
+      path.join(import.meta.dirname, "fixtures", "livetest3", "pages-titled", "__Optimization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     const sdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-"));
     OUT.writeScreen(sdir, screenReply({
       screenName: "positions ",
       nodeId: "7314:87192",
-      page: "✅ Organization management ",
+      page: "✅ Optimization management ",
       pageId: "5282:58823",
       screen: { screen: "positions ", nodes: fixtureScreen.nodes, manifest: fixtureScreen.manifest, exportedAt: "2026-09-23T00:00:00.000Z" },
     }), undefined);
     const rootIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "index.json"), "utf8")) as PagesRootIndex;
-    const pageIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "__Organization_management_", "index.json"), "utf8")) as PageIndex;
+    const pageIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "__Optimization_management_", "index.json"), "utf8")) as PageIndex;
     const rootRow0 = must(rootIdx.layers?.[0], "rootIdx.layers[0]");
     ok("[write-screen] the ROOT index row carries the visible title, not just the Figma layer name",
       Array.isArray(rootIdx.layers) && rootIdx.layers.length === 1 &&
-      rootRow0.name === "positions " && rootRow0.title === "Job Roles");
+      rootRow0.name === "positions " && rootRow0.title === "Jet Roles");
     ok("[write-screen] the PAGE index row carries the same title",
-      pageIdx.layers.length === 1 && pageIdx.layers[0]?.title === "Job Roles");
+      pageIdx.layers.length === 1 && pageIdx.layers[0]?.title === "Jet Roles");
     ok("[write-screen] the row also carries a texts[] fingerprint, deduped and non-empty",
       Array.isArray(rootRow0.texts) && rootRow0.texts.length > 0 &&
       new Set(rootRow0.texts).size === rootRow0.texts.length);
@@ -1506,15 +1592,15 @@ void (async () => {
     OUT.writeScreen(sdir2, screenReply({
       screenName: "positions ",
       nodeId: "7314:87192",
-      page: "✅ Organization management ",
+      page: "✅ Optimization management ",
       pageId: "5282:58823",
-      sourceFile: "TeamSmart (Copy)",
+      sourceFile: "TideStack (Copy)",
       screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
     }), undefined);
-    const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
+    const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Optimization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     const rootIdx2 = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "index.json"), "utf8")) as PagesRootIndex;
-    ok("[write-screen sourceFile] lands on the screen doc's own top level", screenDoc.sourceFile === "TeamSmart (Copy)");
-    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers?.[0]?.sourceFile === "TeamSmart (Copy)");
+    ok("[write-screen sourceFile] lands on the screen doc's own top level", screenDoc.sourceFile === "TideStack (Copy)");
+    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers?.[0]?.sourceFile === "TideStack (Copy)");
     fs.rmSync(sdir2, { recursive: true, force: true });
 
     // No sourceFile given (an unresolved/ambiguous client, or a caller that never asked) — the field
@@ -1523,11 +1609,11 @@ void (async () => {
     OUT.writeScreen(sdir3, screenReply({
       screenName: "positions ",
       nodeId: "7314:87192",
-      page: "✅ Organization management ",
+      page: "✅ Optimization management ",
       pageId: "5282:58823",
       screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
     }), undefined);
-    const screenDoc2 = JSON.parse(fs.readFileSync(path.join(sdir3, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
+    const screenDoc2 = JSON.parse(fs.readFileSync(path.join(sdir3, "pages", "__Optimization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     ok("[write-screen sourceFile] absent when the pull result carried none — never defaulted", !("sourceFile" in screenDoc2));
     fs.rmSync(sdir3, { recursive: true, force: true });
   }
@@ -1537,10 +1623,10 @@ void (async () => {
   // describe different Figma files and answer different questions.
   {
     const libDoc: DesignSystemDoc = {
-      file: "NERA DS",
+      file: "NIMA DS",
       exportedAt: "2026-08-16T00:00:00.000Z",
       colorProfile: "srgb",
-      source: { role: "library", libraryName: "NERA", fileKey: "ABCDEFGH12345", collectionKeys: ["ck_core"] },
+      source: { role: "library", libraryName: "NIMA", fileKey: "ABCDEFGH12345", collectionKeys: ["ck_core"] },
       collections: [collection({ name: "Core", modes: ["Light"], default: "Light", key: "ck_core", publish: "current" })],
       variables: [variable({ name: "color/primary", type: "COLOR", collection: "Core", tier: "primitive", values: { Light: "#112233" }, key: "vk1", publish: "current" })],
       styles: { paint: [{ name: "Brand", key: "pk1", publish: "changed" }], text: [], effect: [], grid: [] },
@@ -1551,7 +1637,7 @@ void (async () => {
     const ldir = fs.mkdtempSync(path.join(os.tmpdir(), "write-lib-"));
     const res: WriteView = OUT.writeExport(path.join(ldir, "design"), { designSystem: libDoc }, () => {});
     const base = path.join(ldir, "design");
-    const dirName = "nera-ABCDEFGH".slice(0, 4) + "-ABCDEFGH"; // slug("NERA") + first 8 of fileKey
+    const dirName = "nima-ABCDEFGH".slice(0, 4) + "-ABCDEFGH"; // slug("NIMA") + first 8 of fileKey
     ok("[lib-layout] lands under libraries/<slug>-<fileKey8>/", res.wrote.library === "libraries/" + dirName);
     ok("[lib-layout] directory identity uses fileKey, which survives a rename", /-ABCDEFGH$/.test(res.wrote.library ?? ""));
     ok("[lib-layout] never writes into design-system/", !fs.existsSync(path.join(base, "design-system")));
@@ -1561,7 +1647,7 @@ void (async () => {
     // rejecting this as the slim manifest, and what lets design-to-code/tokens.ts run on it unchanged.
     ok("[lib-layout] tokens.json carries a top-level variables array", Array.isArray(tok.variables) && tok.variables.length === 1);
     ok("[lib-layout] tokens.json carries collections for the mode join", Array.isArray(tok.collections));
-    ok("[lib-layout] every split file repeats the freshness stamp", tok.exportedAt === libDoc.exportedAt && tok.file === "NERA DS");
+    ok("[lib-layout] every split file repeats the freshness stamp", tok.exportedAt === libDoc.exportedAt && tok.file === "NIMA DS");
     ok("[lib-layout] and carries source so a consumer knows it is a library", tok.source?.role === "library");
 
     const comps = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "components.json"), "utf8")) as ComponentsCatalog;
@@ -1576,7 +1662,7 @@ void (async () => {
     // LibrariesIndex types carried-through rows as unknown[]; every row here was written by this run, so read them as rows.
     type LibrariesIndexView = LibrariesIndex & { libraries: LibrariesIndexRow[] };
     const root = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8")) as LibrariesIndexView;
-    ok("[lib-layout] libraries/index.json lists the library", root.libraries.length === 1 && root.libraries[0]?.libraryName === "NERA");
+    ok("[lib-layout] libraries/index.json lists the library", root.libraries.length === 1 && root.libraries[0]?.libraryName === "NIMA");
     // A second library must not erase the first: each is a separate plugin run in a separate file.
     const second = JSON.parse(JSON.stringify(libDoc)) as DesignSystemDoc;
     second.file = "Icons";
@@ -1865,7 +1951,7 @@ void (async () => {
   const vdir = path.join(wdir, "vars");
   const V = (name: string, key: string, values: Record<string, string>, coll?: string) => variable({ name, key, collection: coll || "Sem", type: "COLOR", values });
   OUT.writeAny(vdir, screenReply({
-    screenName: "Job roles", page: "P", pageId: "0:1", nodeId: "1:1", screen: { nodes: [] }, assets: [],
+    screenName: "Jet roles", page: "P", pageId: "0:1", nodeId: "1:1", screen: { nodes: [] }, assets: [],
     variables: {
       collections: [collection({ name: "Sem", key: "ck1", modes: ["Dark"] })],
       variables: [V("Text/Main", "k1", { Dark: "#fff" }), V("Bg/Page", "k2", { Dark: "#111" })],
@@ -1893,10 +1979,10 @@ void (async () => {
   ok("[write-out/vars] hygiene lines from both slices are kept, deduped",
     merged.hygiene.includes("one") && merged.hygiene.includes("two"));
   ok("[write-out/vars] provenance records BOTH contributing screens",
-    merged._slices.length === 2 && merged._slices.map((s) => s.screen).join(",") === "Job_roles__1_1,Filter__2_2");
+    merged._slices.length === 2 && merged._slices.map((s) => s.screen).join(",") === "Jet_roles__1_1,Filter__2_2");
   ok("[write-out/vars] the note says the file accumulates", /UNION/.test(merged._note ?? ""));
   ok("[write-out/vars] each pull's raw slice is kept verbatim beside its screen",
-    fs.existsSync(path.join(vdir, "pages", "P", "Job_roles__1_1.vars.json")) && fs.existsSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json")));
+    fs.existsSync(path.join(vdir, "pages", "P", "Jet_roles__1_1.vars.json")) && fs.existsSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json")));
   ok("[write-out/vars] a slice file holds ONLY that screen's variables",
     (JSON.parse(fs.readFileSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json"), "utf8")) as TokensDoc).variables?.length === 2);
 
@@ -1924,7 +2010,7 @@ void (async () => {
   // ------------------------------------------------------------- reference PNGs land in ONE place
   // Three docs used to give three different answers and the printed path found nothing (20/31/34).
   const shot: WriteView = OUT.writeAny(path.join(wdir, "shot"), {
-    id: "7410:12299", name: "Job Role Details", type: "FRAME",
+    id: "7410:12299", name: "Jet Role Details", type: "FRAME",
     reference: "assets/7410_12299_ref.png", manifest: manifest(),
     assets: [asset({ id: "7410:12299", file: "7410_12299_ref.png", base64: Buffer.from("png").toString("base64"), kind: "reference" })],
   });
@@ -1981,7 +2067,7 @@ void (async () => {
     // too — two rows, so the routing assertions below have something to disambiguate between.
     listClients: () => [
       clientRow({ connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true }),
-      clientRow({ connId: "c2", file: "NERA Library", fileKey: "KEYLIB", page: "Tokens", instanceId: "fig-b", connectedAt: 2, uptimeMs: 2000, identified: true }),
+      clientRow({ connId: "c2", file: "NIMA Library", fileKey: "KEYLIB", page: "Tokens", instanceId: "fig-b", connectedAt: 2, uptimeMs: 2000, identified: true }),
     ],
     close: () => calls.push("close"),
     waitForConnection: async () => {},
@@ -2083,8 +2169,8 @@ void (async () => {
   // if `client` were dropped in the unix-socket frame the command would silently run against whichever
   // file the bridge picked — the exact wrong-file export the refusal in resolveClient exists to prevent.
   calls.length = 0;
-  const routed = await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000 }, 5000);
-  ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NERA Library"));
+  const routed = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000 }, 5000);
+  ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NIMA Library"));
   ok("[daemon] and the command itself still arrives", calls.includes("whoami"));
   ok("[daemon] a bridge that cannot name the client it used leaves `client` null — never a guess", routed.client === null);
   ok("[daemon] a named client with no connect window asks for no wait", !calls.some((c) => c.startsWith("wait:")));
@@ -2092,11 +2178,11 @@ void (async () => {
   // waitForClient before the request — min(window, 15 s) — so the second file's window has time to
   // redial; a bare connId never waits (it does not depend on identification).
   calls.length = 0;
-  await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
-  ok("[daemon] a named client WITH a connect window is waited for, capped at 15 s", calls[0] === "wait:NERA Library:15000" && calls.includes("client:NERA Library"));
+  await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
+  ok("[daemon] a named client WITH a connect window is waited for, capped at 15 s", calls[0] === "wait:NIMA Library:15000" && calls.includes("client:NIMA Library"));
   calls.length = 0;
-  await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000, waitForConnection: 4000 }, 5000);
-  ok("[daemon] …and a shorter window is used as-is", calls[0] === "wait:NERA Library:4000");
+  await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 4000 }, 5000);
+  ok("[daemon] …and a shorter window is used as-is", calls[0] === "wait:NIMA Library:4000");
   calls.length = 0;
   await dcli.requestWithClient({ cmd: "whoami", client: "c2", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
   ok("[daemon] a bare connId target never waits", !calls.some((c) => c.startsWith("wait:")) && calls.includes("client:c2"));
@@ -2108,11 +2194,11 @@ void (async () => {
   const wasConnected = fakeBridge.isConnected, wasWait = fakeBridge.waitForConnection;
   fakeBridge.isConnected = () => false;
   fakeBridge.waitForConnection = async () => { calls.push("waitConn"); throw new Error("timed out waiting for the plugin to connect"); };
-  const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
+  const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
   fakeBridge.isConnected = wasConnected;
   fakeBridge.waitForConnection = wasWait;
   ok("[daemon] a connect window that runs out falls through to the request (the bridge's own not-connected text), not the daemon's timeout text",
-    calls[0] === "waitConn" && calls[1] === "wait:NERA Library:50" && calls.includes("whoami") && afterWindow === "answered");
+    calls[0] === "waitConn" && calls[1] === "wait:NIMA Library:50" && calls.includes("whoami") && afterWindow === "answered");
   // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
   const cstat = await daemon.status(D_PORT);
   ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
@@ -2678,8 +2764,17 @@ void (async () => {
 
   // ---------------------------------------------------------------- verbs
   console.log("\nverbs — `dtwin <verb>` is a pure argv → argv translation:");
-  const { translate, VerbError, VERBS } = await import("../bridge/src/verbs.ts");
+  const { translate, VerbError, VERBS, HELP } = await import("../bridge/src/verbs.ts");
   const tr = (...a: string[]) => translate(a).join(" ");
+  // s19 L9: zero scopes is a real pull (the current page) — the help page said "Exactly one scope" and left out --all-pages.
+  ok("[verbs] `dtwin pull --help`: at most one scope, none = the current page, --all-pages listed, default design/export",
+    !/Exactly one scope/.test(HELP.pull ?? "") && /with none it pulls the CURRENT page/.test(HELP.pull ?? "") && /--all-pages/.test(HELP.pull ?? "") && /default design\/export/.test(HELP.pull ?? ""));
+  // s19 L9: the design-to-code scripts an agent probes answer --help with their usage and exit 0 (map-bootstrap said
+  // "unknown option --help" and exited 1).
+  for (const script of ["map-bootstrap", "resolve-screen", "get-component"]) {
+    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", script + ".ts"), "--help"], { encoding: "utf8", timeout: 5000 });
+    ok(`[help] ${script} --help prints its usage to stdout and exits 0`, r.status === 0 && /^usage: /.test(r.stdout) && r.stdout.includes(script));
+  }
   ok("[verbs] flags pass through untouched", tr("--list", "--json") === "--list --json" && tr() === "");
   ok("[verbs] `dtwin design` is still a positional outDir, not a verb", tr("design", "--page", "Screens") === "design --page Screens");
   ok("[verbs] pull strips itself and keeps everything after", tr("pull", "design", "--page", "Screens") === "design --page Screens" && tr("pull") === "");
@@ -2854,13 +2949,13 @@ void (async () => {
   // Live run #2: two files were connected, doctor reported a plain ✓, and the very next command
   // refused with "say which one to use". Healthy AND ambiguous is one state, not two.
   (() => {
-    const one = doctor.checkPlugin({ clients: [{ file: "TeamSmart", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
-    const two = doctor.checkPlugin({ clients: [{ file: "TeamSmart", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }, { file: "NERA", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
+    const one = doctor.checkPlugin({ clients: [{ file: "TideStack", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
+    const two = doctor.checkPlugin({ clients: [{ file: "TideStack", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }, { file: "NIMA", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
     ok("[doctor] plugin: one connected file is a plain ✓ with no flag to add", one.status === "ok" && one.next === undefined);
     ok("[doctor] plugin: several connected files stay ✓ but warn that commands must disambiguate",
       two.status === "ok" && /2 files, so commands must say which/.test(two.detail) && /--client/.test(two.next ?? ""));
     ok("[doctor] plugin: both file names are still named either way",
-      /TeamSmart/.test(one.detail) && /TeamSmart/.test(two.detail) && /NERA/.test(two.detail));
+      /TideStack/.test(one.detail) && /TideStack/.test(two.detail) && /NIMA/.test(two.detail));
   })();
 
   const projDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-"));
@@ -2912,13 +3007,13 @@ void (async () => {
   // P4 #33: doctor's export line, built from exportSourceCounts(), on a livetest3-shaped copy — 5
   // screens across two pages, none stamped (an older-bridge export), plus one design system. Before
   // the fix this reported a single line naming only the design system's file for the WHOLE export
-  // ("exported 12.7h ago from 'Design System - NERA (Copy)'"); after, it counts screens separately
+  // ("exported 12.7h ago from 'Design System - NIMA (Copy)'"); after, it counts screens separately
   // from the design system and says plainly when a screen's source was never recorded.
   {
     const dsDir3 = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-sourcecounts-"));
     const at = new Date().toISOString();
     fs.mkdirSync(path.join(dsDir3, "design", "export"), { recursive: true });
-    fs.writeFileSync(path.join(dsDir3, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: at, file: "Design System - NERA (Copy)" }));
+    fs.writeFileSync(path.join(dsDir3, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: at, file: "Design System - NIMA (Copy)" }));
     fs.mkdirSync(path.join(dsDir3, "design", "export", "pages", "PageA"), { recursive: true });
     fs.mkdirSync(path.join(dsDir3, "design", "export", "pages", "PageB"), { recursive: true });
     // Root index has NO layers[] at all (the older-bridge shape) — only pageDirs, forcing the
@@ -2940,7 +3035,7 @@ void (async () => {
     ok("[doctor] exportSourceCounts: 5 unstamped screens are counted and named as source-not-recorded",
       exp3.status === "ok" && /5 screen\(s\) \(source not recorded — pulled by an older bridge; re-pull to stamp it\)/.test(exp3.detail));
     ok("[doctor] exportSourceCounts: the design system is reported separately, by its own name",
-      /design system from 'Design System - NERA \(Copy\)'/.test(exp3.detail));
+      /design system from 'Design System - NIMA \(Copy\)'/.test(exp3.detail));
     ok("[doctor] exportSourceCounts: never attributes the screens to the design-system file",
       !new RegExp(`5 screen\\(s\\) from 'Design System`).test(exp3.detail));
   }
@@ -3070,7 +3165,8 @@ void (async () => {
     // ever touching outDir — is the exact shape finding 13 reproduces (`dtwin nonexistent` with two
     // clients connected). We don't need a real daemon: --list-clients against no bridge at all also
     // exercises the same "no mkdir before any client contact" code path, and is deterministic offline.
-    spawnSync(process.execPath, [cli, "nonexistent-outdir"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    // --timeout 1: with no plugin to wait for the command fails in ~1 s instead of idling until the 5 s cap kills it
+    spawnSync(process.execPath, [cli, "nonexistent-outdir", "--timeout", "1"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[mkdir] a command that never reaches a plugin leaves no stray outDir behind",
       !fs.existsSync(path.join(dir, "nonexistent-outdir")));
   }
@@ -3082,12 +3178,12 @@ void (async () => {
     fs.mkdirSync(path.join(dir, "design", "export"), { recursive: true });
     // No daemon/plugin reachable on this port — the command still fails downstream (no client), but
     // the warning is printed BEFORE any network attempt, so it is present regardless of what happens next.
-    const r = spawnSync(process.execPath, [cli, "design", "--list"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    const r = spawnSync(process.execPath, [cli, "design", "--list", "--timeout", "1"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[outdir-trap] warns when the user-typed outDir already contains export/",
       /warn: design already contains design(\/|\\)export/.test(r.stderr));
     ok("[outdir-trap] never refuses — `design` is still a legitimate, deliberate outDir", r.status !== 2 || !/unknown/.test(r.stderr));
     const clean = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-outdir-clean-"));
-    const r2 = spawnSync(process.execPath, [cli, "somewhere-else", "--list"], { encoding: "utf8", cwd: clean, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    const r2 = spawnSync(process.execPath, [cli, "somewhere-else", "--list", "--timeout", "1"], { encoding: "utf8", cwd: clean, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[outdir-trap] no warning when the outDir does not already contain export/", !/already contains/.test(r2.stderr));
   }
 
@@ -3177,7 +3273,7 @@ void (async () => {
       // Mirrors the daemon branch of doctor.run() directly (that branch requires server-core lazily
       // the same way connectedDetail does), using a client shaped exactly like an old daemon's own
       // describe() output — no pluginVersion/pluginStale keys at all.
-      const oldDaemonClients: Partial<ClientRow>[] = [{ connId: "c1", file: "TeamSmart (Copy)", identified: true }];
+      const oldDaemonClients: Partial<ClientRow>[] = [{ connId: "c1", file: "TideStack (Copy)", identified: true }];
       const stale = oldDaemonClients.some((cl) => cl.pluginStale || core.daemonRowStalenessNote(cl));
       return stale === true;
     })());
@@ -3213,7 +3309,7 @@ void (async () => {
     const ticker = setInterval(() => { try { ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); } catch {} }, 100);
     const req = b.request("exportFull", {}, 5000, undefined, 300);
     let rejectedWithStall = false;
-    req.catch((e: unknown) => { if (e instanceof Error && /no response from the Figma plugin/.test(e.message)) rejectedWithStall = true; });
+    req.catch((e: unknown) => { if (e instanceof Error && /connected but sent nothing/.test(e.message)) rejectedWithStall = true; });
     await new Promise((r) => setTimeout(r, 900)); // 3x the stall window, with progress the whole time
     clearInterval(ticker);
     ok("[stall] periodic progress frames keep resetting the stall clock (no premature abort)", !rejectedWithStall);
@@ -3227,7 +3323,7 @@ void (async () => {
     ok("[stall] once the plugin has shown life, silence is NOT a stall: the request stays pending past the stall window", outcome === undefined && !rejectedWithStall);
     await new Promise((r) => setTimeout(r, 3000)); // now the real timeout (5000 ms from send) has passed
     ok("[stall] …and the real per-command timeout still bounds it, with the timeout text (not the stall text)",
-      typeof outcome === "string" && /did not answer 'exportFull' within 5s/.test(outcome) && !/no response from the Figma plugin/.test(outcome));
+      typeof outcome === "string" && /did not answer 'exportFull' within 5s/.test(outcome) && !/connected but sent nothing/.test(outcome));
     ws1.close();
     b.close();
   }
@@ -3246,7 +3342,7 @@ void (async () => {
     try { await b.request("exportFull", {}, 60000, undefined, 300); }
     catch (e) { err = asErr(e); }
     ok("[stall] activity from BEFORE the command was sent does not disarm the check: a request with no life since send still stalls",
-      !!err && Date.now() - start < 5000 && /no response from the Figma plugin/.test(err.message));
+      !!err && Date.now() - start < 5000 && /connected but sent nothing/.test(err.message));
     ws1.close();
     b.close();
   }
@@ -3263,7 +3359,7 @@ void (async () => {
     try { await b.request("exportFull", {}, 60000, undefined, 300); }
     catch (e) { err = asErr(e); }
     ok("[stall] a client that connected in the same instant as the send and sent nothing since still stalls (frame count, not clock)",
-      !!err && Date.now() - start < 5000 && /no response from the Figma plugin/.test(err.message));
+      !!err && Date.now() - start < 5000 && /connected but sent nothing/.test(err.message));
     ws1.close();
     b.close();
   }
@@ -3306,7 +3402,7 @@ void (async () => {
       await sleep(100); // the frame was sent BEFORE the rejection; give it its trip over loopback
       const sent = cmdFrames(seen)[0];
       ok("[cancel] stall check fires → the plugin gets { type: \"cancel\", id } for the request it was sent",
-        !!err && /no response from the Figma plugin/.test(err.message) && !!sent && cancelsFor(seen, sent.id).length === 1);
+        !!err && /connected but sent nothing/.test(err.message) && !!sent && cancelsFor(seen, sent.id).length === 1);
       ws1.close();
       b.close();
     }
@@ -3361,10 +3457,13 @@ void (async () => {
       await sleep(60);
       ac.abort();
       await inflight;
-      await sleep(100);
+      // "At once" = well inside the 20 s budget: the abort path is synchronous, so only a request left
+      // waiting for its timeout could come near it (no tighter wall-clock bound: a loaded machine is late).
+      const abortedMs = Date.now() - start;
+      await until(() => cancelsFor(seen, cmdFrames(seen)[0]?.id).length >= 1);
       const sent = cmdFrames(seen)[0];
       ok("[cancel] signal aborted while pending → cancel frame sent, rejects \"request aborted by the caller\" at once",
-        err?.message === "request aborted by the caller" && Date.now() - start < 2000 && !!sent && cancelsFor(seen, sent.id).length === 1);
+        err?.message === "request aborted by the caller" && abortedMs < 20000 && !!sent && cancelsFor(seen, sent.id).length === 1);
       // An Error reason of the caller's own is passed through (the daemon names its departed client).
       const ac2 = new AbortController();
       let err2: Error | undefined;
@@ -3438,29 +3537,295 @@ void (async () => {
         c.on("connect", () => { c.write(JSON.stringify(frame) + "\n"); resolve(c); });
       });
       // In flight: sent, plugin silent, client destroys its socket → the plugin gets the cancel frame.
+      const beforeF = cmdFrames(seen).length;
       const c1 = await openRaw({ cmd: "exportFull", args: {}, timeoutMs: 20000 });
-      await sleep(150); // forwarded to the plugin
-      const sent = cmdFrames(seen)[0];
+      await until(() => cmdFrames(seen).length > beforeF); // forwarded to the plugin
+      const sent = cmdFrames(seen)[beforeF];
       c1.destroy();
-      await sleep(200);
+      await until(() => cancelsFor(seen, sent?.id).length >= 1);
       ok("[cancel-daemon] a client that disconnects while its request is in flight → the plugin gets the cancel frame",
         !!sent && sent.cmd === "exportFull" && cancelsFor(seen, sent.id).length === 1);
-      // Queued: A (short timeout) in flight on one client, B queued behind it on another that then
-      // disconnects. When A times out, B must NOT be forwarded. Pre-change B went to the plugin as soon
-      // as A's 500 ms timeout released the queue.
+      // Queued: A in flight on one client (the fake plugin holds it), B queued behind it on another
+      // that then disconnects. When A is answered, B must NOT be forwarded. Pre-change B went to the
+      // plugin as soon as A released the queue. No timer decides the order (group 16, H-1c): B's
+      // client ends its socket after writing the frame, so the daemon reads B, then its 'end' aborts B
+      // (allowHalfOpen:false: the daemon's own FIN goes out after that listener ran) — the client's
+      // 'close' therefore proves B is aborted before A is answered. A third request C is the fence:
+      // the queue is FIFO, so a forwarded B would sit between A and C.
+      const replyOn = (c: net.Socket) => new Promise<string>((resolve) => {
+        let buf = "";
+        c.setEncoding("utf8");
+        c.on("data", (d: string) => { buf += d; if (buf.includes("\n")) resolve(buf); });
+        c.on("close", () => resolve(buf));
+      });
       const beforeQ = cmdFrames(seen).length;
-      const cA = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 500 });
-      await sleep(60);
+      const cA = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 20000 });
+      const aReply = replyOn(cA);
+      await until(() => cmdFrames(seen).length > beforeQ);
+      const aSent = cmdFrames(seen)[beforeQ];
       const cB = await openRaw({ cmd: "exportDesignSystem", args: {}, timeoutMs: 20000 });
-      await sleep(60);
-      cB.destroy();
-      await sleep(1000); // A's timeout has passed; the queue has moved on
+      cB.end();
+      await new Promise((r) => cB.once("close", r));
+      const pagesReply = { pages: [], manifest: {} }; // the minimum listPages reply server-core accepts
+      if (aSent) ws1.send(JSON.stringify({ id: aSent.id, ok: true, result: pagesReply }));
+      const aGot = await aReply;
+      const cC = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 20000 });
+      await until(() => cmdFrames(seen).length > beforeQ + 1);
+      const cSent = cmdFrames(seen)[beforeQ + 1];
+      if (cSent) ws1.send(JSON.stringify({ id: cSent.id, ok: true, result: pagesReply }));
       const afterQ = cmdFrames(seen).slice(beforeQ).map((f) => f.cmd);
       ok("[cancel-daemon] a request still QUEUED when its client disconnects is never forwarded to the plugin",
-        afterQ.join(",") === "listPages");
+        /"ok":true/.test(aGot) && afterQ.join(",") === "listPages,listPages" && cancelsFor(seen, sent?.id).length === 1);
+      cC.destroy();
       cA.destroy();
       shutdown();
       ws1.close();
+    }
+
+    // (f) the daemon's OWN queued-abandon check, with no server-core behind it. In (e) server-core's pre-send
+    // `signal.aborted` check also stops B, so a daemon that forwarded an abandoned queued request still passed
+    // (group 16 review: daemon.ts `abandoned()` → false survived). This fake bridge ignores `signal` entirely:
+    // only the daemon can keep B from reaching it. A is held, B's client ends while B is queued, C is the FIFO fence.
+    {
+      const seenCmds: string[] = [];
+      let releaseA: (() => void) | undefined;
+      const row = clientRow({ connId: "c1" });
+      const blindBridge: DaemonBridge = {
+        port: 0, isConnected: () => true, waitForConnection: async () => {}, close: () => {},
+        request: async () => ({}),
+        requestWithClient: (cmd) => {
+          seenCmds.push(cmd);
+          if (cmd === "listPages") return new Promise((r) => { releaseA = () => r({ reply: {}, client: row }); });
+          return Promise.resolve({ reply: {}, client: row });
+        },
+      };
+      const F_PORT = 19793; // a socket name only
+      const { shutdown } = await daemon.serve(blindBridge, { port: F_PORT, signals: false, crashHandlers: false });
+      const openRaw = (frame: object) => new Promise<net.Socket>((resolve, reject) => {
+        const c = net.createConnection(daemon.sockPath(F_PORT));
+        c.on("error", reject);
+        c.on("connect", () => { c.write(JSON.stringify(frame) + "\n"); resolve(c); });
+      });
+      const fA = await openRaw({ cmd: "listPages", args: {}, timeoutMs: 20000 });
+      await until(() => seenCmds.length === 1);
+      const fB = await openRaw({ cmd: "exportDesignSystem", args: {}, timeoutMs: 20000 });
+      fB.end();
+      await new Promise((r) => fB.once("close", r));
+      releaseA?.();
+      const fC = await openRaw({ cmd: "whoami", args: {}, timeoutMs: 20000 });
+      await until(() => seenCmds.includes("whoami"));
+      ok(`[cancel-daemon] the daemon itself drops a queued request whose client left — a bridge that ignores the abort never sees it (${seenCmds.join(",")})`,
+        seenCmds.join(",") === "listPages,whoami");
+      fA.destroy();
+      fC.destroy();
+      shutdown();
+    }
+  }
+
+  // ---------------------------------------------------------------- group 14: request ids, reply routing, stall wording, whoami connection
+  // Live (session 14): a direct pull stalled out; the next request through a fresh daemon failed with
+  // "export cancelled: … abandoned" — the plugin's late failure for the dead bridge's `r1` settled the
+  // daemon's own `r1`. Ids are now unique per bridge, and a reply settles only from the socket the
+  // request went to. Each check drives the REAL socket path with a fake plugin.
+  console.log("\nserver-core — per-bridge request ids, reply routing, stall wording, whoami connection (group 14):");
+  {
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const ABANDONED = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
+    /** Every command frame a fake plugin socket receives. */
+    const commandsOf = (ws: WebSocket): CommandFrame[] => {
+      const into: CommandFrame[] = [];
+      ws.on("message", (d: RawData) => {
+        const v = JSON.parse(d.toString()) as unknown;
+        if (v !== null && typeof v === "object" && "cmd" in v && "id" in v && typeof v.id === "string") into.push(v as CommandFrame);
+      });
+      return into;
+    };
+    const pingReply = (file: string) => ({ pong: true, page: "P", file });
+    const settle = <T>(p: Promise<T>): Promise<{ v: T | null; err: Error | null }> => p.then((v) => ({ v, err: null }), (e: unknown) => ({ v: null, err: asErr(e) }));
+
+    // [ID-1] two bridges' first wire ids differ. Pre-change both were "r1".
+    const A = await connectedBridge();
+    const seenA = commandsOf(A.client);
+    const aReq = settle(A.bridge.request("ping", {}, 3000));
+    await sleep(80);
+    const idA = seenA[0]?.id;
+    A.bridge.close(); // the stalled one-shot CLI goes away with its request unanswered
+    await aReq;
+    A.client.close();
+    const B = await connectedBridge();
+    const seenB = commandsOf(B.client);
+    const bReq = settle(B.bridge.request("ping", {}, 3000));
+    await sleep(80);
+    const idB = seenB[0]?.id;
+    ok("[ID-1] two bridges' first request ids differ (per-bridge nonce), and stay opaque strings starting \"r\"",
+      typeof idA === "string" && typeof idB === "string" && idA !== idB && /^r/.test(idA) && /^r/.test(idB));
+    // [ID-2] the plugin first posts the OLD bridge's failure (its run for idA finally threw), then answers
+    // the new request. Pre-change idA === idB, so the stale failure rejected the new request.
+    B.client.send(JSON.stringify({ id: idA, ok: false, error: ABANDONED }));
+    await sleep(50);
+    B.client.send(JSON.stringify({ id: idB, ok: true, result: pingReply("for-B") }));
+    const rB = await bReq;
+    ok("[ID-2] a reply carrying the previous bridge's id does not settle the new request — B resolves with its own reply",
+      rB.err === null && rB.v?.file === "for-B");
+    B.client.close();
+    B.bridge.close();
+
+    // [ID-3] two clients; a reply for c1's request arriving on c2 is ignored, c1's own reply resolves it.
+    // Pre-change it settled from c2.
+    {
+      const { bridge: b, client: c1 } = await connectedBridge();
+      const c2 = new WebSocket(`ws://127.0.0.1:${b.port}/?token=${TOKEN}`, { origin: "null" });
+      await new Promise((res, rej) => { c2.on("open", res); c2.on("error", rej); });
+      const seen1 = commandsOf(c1);
+      await sleep(30);
+      const req = settle(b.request("ping", {}, 3000, "c1"));
+      await sleep(80);
+      const sent = seen1[0];
+      c2.send(JSON.stringify({ id: sent?.id, ok: true, result: pingReply("from-c2") }));
+      await sleep(80);
+      c1.send(JSON.stringify({ id: sent?.id, ok: true, result: pingReply("from-c1") }));
+      const r = await req;
+      ok("[ID-3] a reply for c1's request that arrives on c2 is ignored; c1's own reply resolves it",
+        !!sent && r.err === null && r.v?.file === "from-c1");
+      // [WHO-1] the connection named by connId, not the first live one. Pre-change connectionInfo()
+      // took no target and connectionFor did not exist.
+      const rows = b.listClients();
+      const row2 = rows.find((c) => c.connId === "c2");
+      const viaArg = b.connectionInfo("c2");
+      const pure = typeof core.connectionFor === "function" ? core.connectionFor(b.connectionInfo(), "c2") : null;
+      ok("[WHO-1] connectionFor(connectionInfo(), \"c2\") / connectionInfo(\"c2\") describe c2 (connId + its connectedAt), keeping the clients list",
+        !!row2 && !!pure && pure.connId === "c2" && pure.connectedAt === row2.connectedAt && viaArg.connId === "c2" &&
+        viaArg.connectedAt === row2.connectedAt && pure.clientsConnected === 2 && pure.clients.length === 2);
+      ok("[WHO-1] …no connId, or an unknown one, still describes the first connection",
+        b.connectionInfo().connId === "c1" && b.connectionInfo("c9").connId === "c1");
+      c1.close();
+      c2.close();
+      b.close();
+    }
+
+    // [STALL-1] the stall fires only after connect + identify, so it says the plugin IS connected and
+    // busy — not that a reconnect is what takes the time. Pre-change: the "missing daemon" text.
+    {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      ws1.send(JSON.stringify({ type: "hello", instanceId: "stall-g14", file: "Sample App" }));
+      await b.waitForIdentified(1000);
+      await sleep(20);
+      let err: Error | undefined;
+      try { await b.request("exportNode", { nodeId: "5:6" }, 10000, undefined, 300); } catch (e) { err = asErr(e); }
+      ok("[STALL-1] the stall text says the plugin is connected but sent nothing, names the node and `dtwin serve`, and does not blame a reconnect",
+        !!err && /the plugin is connected but sent nothing for 'exportNode' \(node 5:6\) in 0s/.test(err.message) &&
+        /dtwin serve/.test(err.message) && !/reconnect/i.test(err.message));
+      ws1.close();
+      b.close();
+    }
+    // [STALL-2] (control) a `start` frame — what the plugin relays at the run's run-begin — is life:
+    // the stall disarms and the reply at 600 ms resolves. Same for a `queued` frame.
+    for (const phase of ["start", "queued"]) {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      const seen = commandsOf(ws1);
+      ws1.send(JSON.stringify({ type: "hello", instanceId: "stall2-" + phase, file: "Sample App" }));
+      await b.waitForIdentified(1000);
+      await sleep(20);
+      const ticks: ProgressTick[] = [];
+      const req = settle(b.request("ping", {}, 10000, undefined, 300, (t) => ticks.push(t)));
+      setTimeout(() => ws1.send(JSON.stringify({ type: "progress", phase })), 100);
+      setTimeout(() => ws1.send(JSON.stringify({ id: seen[0]?.id, ok: true, result: pingReply("late") })), 600);
+      const r = await req;
+      ok(`[STALL-2] a \`${phase}\` progress frame at 100 ms disarms the 300 ms stall; the reply at 600 ms resolves, and the tick reaches the listener`,
+        r.err === null && r.v?.file === "late" && ticks.length === 1 && ticks[0]?.phase === phase);
+      ws1.close();
+      b.close();
+    }
+
+    // [L-8] (review 1) two requests in flight on ONE connection: the plugin executes A and queues B. A `start`
+    // / `queued` frame carrying a requestId reaches only that request (the executing A never hears it is
+    // "queued"); an id-less frame (page ticks, an older plugin) still reaches both.
+    {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      const seen = commandsOf(ws1);
+      ws1.send(JSON.stringify({ type: "hello", instanceId: "l8", file: "Sample App" }));
+      await b.waitForIdentified(1000);
+      await sleep(20);
+      const ticksA: string[] = [], ticksB: string[] = [];
+      const pA = settle(b.request("ping", {}, 5000, undefined, undefined, (t) => ticksA.push(String(t.phase))));
+      await sleep(30);
+      const pB = settle(b.request("ping", {}, 5000, undefined, undefined, (t) => ticksB.push(String(t.phase))));
+      await sleep(30);
+      const idA = seen[0]?.id, idB = seen[1]?.id;
+      ws1.send(JSON.stringify({ type: "progress", phase: "start", requestId: idA }));
+      ws1.send(JSON.stringify({ type: "progress", phase: "queued", requestId: idB }));
+      ws1.send(JSON.stringify({ type: "progress", phase: "pages" }));
+      await sleep(30);
+      ws1.send(JSON.stringify({ id: idA, ok: true, result: pingReply("A") }));
+      ws1.send(JSON.stringify({ type: "progress", phase: "start", requestId: idB }));
+      await sleep(30);
+      ws1.send(JSON.stringify({ id: idB, ok: true, result: pingReply("B") }));
+      const [rA, rB] = [await pA, await pB];
+      ok(`[L-8] an id-carrying start/queued frame reaches only its own request; an id-less tick reaches both (A saw ${ticksA.join(",")} | B saw ${ticksB.join(",")})`,
+        typeof idA === "string" && typeof idB === "string" && rA.v?.file === "A" && rB.v?.file === "B" &&
+        ticksA.join(",") === "start,pages" && ticksB.join(",") === "queued,pages,start");
+      ws1.close();
+      b.close();
+    }
+
+    // [DSIG-1] the daemon client's optional trailing `signal` (slice C's MCP cancel via a daemon): an
+    // abort closes the request's socket, so the daemon abandons it on the wire. Pre-change the client
+    // had no signal: the call ran to its reply and the bridge's signal was never aborted.
+    {
+      const S_PORT = 19792; // a socket name only: the fake bridge binds no TCP port
+      const row: ClientRow = { connId: "c1", file: "Sample App", fileKey: null, page: "Home", instanceId: "fig-s", connectedAt: 1, uptimeMs: 1, identified: true, pluginVersion: null, pluginStale: null };
+      const bridgeSaw: string[] = [];
+      const sigBridge: DaemonBridge = {
+        port: S_PORT,
+        isConnected: () => true,
+        waitForConnection: async () => {},
+        close: () => {},
+        request: async () => { throw new Error("never asked through request()"); },
+        requestWithClient: (cmd, _args, _timeoutMs, _target, _stallMs, _onProgress, signal) => new Promise((resolve) => {
+          bridgeSaw.push("got:" + cmd);
+          const t = setTimeout(() => resolve({ reply: pingReply("answered"), client: row }), 1500);
+          signal?.addEventListener("abort", () => {
+            clearTimeout(t);
+            bridgeSaw.push("aborted:" + (signal.reason instanceof Error ? signal.reason.message : String(signal.reason)));
+            resolve({ reply: pingReply("aborted"), client: row });
+          }, { once: true });
+        }),
+      };
+      const { shutdown } = await daemon.serve(sigBridge, { port: S_PORT, signals: false, crashHandlers: false });
+      const scli = await daemon.connect(S_PORT);
+      if (!scli) throw new Error("daemon.connect() returned null right after serve() (signal daemon)");
+      const ac = new AbortController();
+      const t0 = Date.now();
+      const pending = settle(scli.requestWithClient({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, ac.signal));
+      setTimeout(() => ac.abort(), 100);
+      const r = await pending;
+      const elapsed = Date.now() - t0;
+      await sleep(150); // the daemon sees the socket close and aborts the bridge request
+      ok("[DSIG-1] daemon client: aborting the signal rejects at once with \"request aborted by the caller\"",
+        r.v === null && r.err?.message === "request aborted by the caller" && elapsed < 1000);
+      ok("[DSIG-1] …and the daemon abandons the in-flight bridge request (its signal is aborted: the plugin gets a cancel frame)",
+        bridgeSaw.join("|") === "got:ping|aborted:the daemon's client disconnected before the reply");
+      // An Error reason of the caller's own is the rejection; an already-aborted signal sends nothing.
+      const ac2 = new AbortController();
+      const p2 = settle(scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, ac2.signal));
+      setTimeout(() => ac2.abort(new Error("caller went away")), 50);
+      const r2 = await p2;
+      await sleep(150);
+      const pre = new AbortController();
+      pre.abort();
+      const before = bridgeSaw.length;
+      const r3 = await settle(scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, pre.signal));
+      await sleep(100);
+      ok("[DSIG-1] …an Error reason passes through; an already-aborted signal rejects \"request aborted before it was sent\" and forwards nothing",
+        r2.err?.message === "caller went away" && r3.err?.message === "request aborted before it was sent" && bridgeSaw.length === before);
+      // A request that settles normally leaves no abort listener behind on a long-lived signal.
+      const ac4 = new AbortController();
+      const p4 = scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, ac4.signal);
+      const listening = getEventListeners(ac4.signal, "abort").length;
+      const r4 = await p4;
+      ok("[DSIG-1] …a request that settles normally answers and removes its abort listener",
+        r4.file === "answered" && listening === 1 && getEventListeners(ac4.signal, "abort").length === 0);
+      shutdown();
     }
   }
 
@@ -3582,11 +3947,15 @@ void (async () => {
     ok("[ref-asset] the reference PNG still gets a manifest row, under `reference`", Array.isArray(doc.reference) && doc.reference.length === 1);
   }
   {
-    // Finding 30: a screen with a high `assetsGeometry` ratio should be flaggable at pull time.
+    // Finding 30: a screen with geometry fallbacks is flagged at pull time. D63 (group 13): every fallback
+    // left after the plugin stopped exporting hidden graphics is a real degraded vector, so ANY count warns —
+    // the old 10 % threshold (and its "a low ratio produces nothing" case) is gone on purpose.
     ok("[geometry-warn] a 40% geometry-fallback ratio produces a warning",
-      typeof writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 40 }) === "string");
-    ok("[geometry-warn] a low ratio produces nothing",
-      writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 2 }) === null);
+      /^warn {2}40 of 100 node\(s\) fell back to raw geometry/.test(writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 40 }) ?? ""));
+    ok("[geometry-warn] a low ratio warns too (D63: every fallback)",
+      /^warn {2}2 of 100 node\(s\) fell back to raw geometry/.test(writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 2 }) ?? ""));
+    ok("[geometry-warn] no fallback produces nothing",
+      writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 0 }) === null && writeOut.assetsGeometryWarning({ nodes: 100 }) === null);
   }
   {
     // Criterion 10, end to end: writeScreen() itself must surface the warning through `log` — not just
@@ -3653,6 +4022,318 @@ void (async () => {
     const prevIdentical = prevFor(read("arrow-down-3ea6be.svg"));
     const redrawnIdentical = diffMod.redrawnAssets(now3ea6be.file, docFor(), prevIdentical, now3ea6be.root);
     ok("[svg-tolerance] a byte-identical re-pull reports zero redrawn assets", redrawnIdentical.size === 0);
+  }
+
+  // ---------- DT-25 / F-35 / F-08 / F-118: the tree names the asset files actually written ----------
+  // writeAssets reuses a byte-identical file already on disk under another name and version-suffixes a
+  // same-name (or same-name-but-case) different file. The screen JSON used to be written BEFORE that, with
+  // the plugin's own names, so nodes pointed at files never written — or, on a case-insensitive disk, at a
+  // different icon — and the index's `reference` at a thumbnail that held the plain name. Fixtures use the
+  // PLUGIN's shape: `Asset.file` is the bare name, the tree's pointer is `assets/<name>` (assets.ts
+  // register()). Invented names.
+  {
+    const dt = await import("../bridge/src/write-out.ts");
+    // A minimal PNG: signature + IHDR (w, h) — enough for writeScreen's size read; `tag` varies the bytes.
+    const png = (w: number, h: number, tag: number): Buffer => {
+      const b = Buffer.alloc(33);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+      b.writeUInt32BE(13, 8); b.write("IHDR", 12, "latin1"); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); b[32] = tag;
+      return b;
+    };
+    const exactExists = (dir: string, rel: string): boolean => {
+      try { return fs.readdirSync(path.join(dir, path.dirname(rel))).includes(path.basename(rel)); } catch { return false; }
+    };
+    const pointers = (tree: unknown): string[] => {
+      const out: string[] = [];
+      const visit = (v: unknown): void => {
+        if (!v || typeof v !== "object") return;
+        if (Array.isArray(v)) { v.forEach(visit); return; }
+        for (const [k, val] of Object.entries(v)) (k === "asset" || k === "reference") && typeof val === "string" ? out.push(val) : visit(val);
+      };
+      visit(tree);
+      return out;
+    };
+    const ddir = fs.mkdtempSync(path.join(os.tmpdir(), "write-asset-ptrs-"));
+    const adir = path.join(ddir, "assets");
+    fs.mkdirSync(adir, { recursive: true });
+    // Already on disk from an earlier pull: a chevron under the LOWER-case name (different glyph), a dot
+    // under its plain name (same bytes the plugin will send under a suffixed name), and a discovery
+    // thumbnail holding the frame's reference slot.
+    fs.writeFileSync(path.join(adir, "chevron-left.svg"), '<svg viewBox="0 0 18 10"><path d="M0 0L9 10L18 0"/></svg>');
+    const dot = '<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4"/></svg>';
+    fs.writeFileSync(path.join(adir, "Dot.svg"), dot);
+    fs.writeFileSync(path.join(adir, "9_1_ref.png"), png(360, 309, 1));
+    const logged: string[] = [];
+    dt.writeScreen(ddir, screenReply({
+      screenName: "Screen A", nodeId: "9:1", page: "Page A", pageId: "1:1",
+      screen: {
+        screen: "Screen A", exportedAt: "2026-09-30T00:00:00.000Z", manifest: { nodes: 3 },
+        nodes: [{
+          id: "9:1", type: "FRAME", name: "Screen A", reference: "assets/9_1_ref.png",
+          box: { x: 100, y: 50, w: 100, h: 50 }, renderBox: { x: 79, y: 49, w: 142, h: 52 },
+          children: [
+            { id: "9:2", type: "VECTOR", name: "Chevron-left", asset: "assets/Chevron-left.svg" },
+            { id: "9:3", type: "ELLIPSE", name: "Dot", asset: "assets/Dot-1a2b3c.svg" },
+          ],
+        }],
+      },
+      assets: [
+        { id: "9:1:ref", name: "Screen A (reference)", format: "png", file: "9_1_ref.png", base64: png(284, 104, 2).toString("base64"), kind: "reference" },
+        { id: "9:2", name: "Chevron-left", format: "svg", file: "Chevron-left.svg", text: '<svg viewBox="0 0 10 18"><path d="M10 0L0 9L10 18"/></svg>' },
+        { id: "9:3", name: "Dot", format: "svg", file: "Dot-1a2b3c.svg", text: dot },
+      ],
+    }), (m) => logged.push(m));
+    const screenFile = path.join(ddir, "pages", "Page_A", "Screen_A__9_1.json");
+    const written = JSON.parse(fs.readFileSync(screenFile, "utf8")) as ScreenExport;
+    const ptrs = pointers(written.nodes);
+    const manifestFiles = JSON.parse(fs.readFileSync(path.join(ddir, "pages", "Page_A", "Screen_A__9_1.assets.json"), "utf8")) as { files: Array<{ file: string }>; reference?: Array<{ file: string }> };
+    const listed = new Set([...manifestFiles.files, ...(manifestFiles.reference || [])].map((f) => f.file));
+    ok("[DT-25] every asset/reference pointer in the written screen JSON names a file on disk (exact case)",
+      ptrs.length === 3 && ptrs.every((p) => exactExists(ddir, p)));
+    ok("[DT-25] …and the same file .assets.json lists", ptrs.every((p) => listed.has(p)));
+    const kids = written.nodes[0]?.children ?? [];
+    ok("[DT-25] a content-identical asset points at the file already on disk (Dot.svg), not the plugin's suffixed name",
+      kids[1]?.asset === "assets/Dot.svg");
+    ok("[F-35] a same-name-but-case different glyph gets its own file, and the node points at IT — never at the lower-case chevron",
+      typeof kids[0]?.asset === "string" && kids[0].asset !== "assets/Chevron-left.svg" && kids[0].asset !== "assets/chevron-left.svg" &&
+      fs.readFileSync(path.join(ddir, kids[0].asset), "utf8").includes("M10 0L0 9L10 18"));
+    const rootRow = must((JSON.parse(fs.readFileSync(path.join(ddir, "pages", "index.json"), "utf8")) as PagesRootIndex).layers?.[0], "root row");
+    const refFile = must(rootRow.reference, "rootRow.reference");
+    const refPng = fs.readFileSync(path.join(ddir, refFile));
+    ok("[F-08] the index row's reference is the full-size render this pull wrote, not the thumbnail that held the plain name",
+      refFile !== "assets/9_1_ref.png" && refPng.readUInt32BE(16) === 284 && written.nodes[0]?.reference === refFile);
+    ok("[F-118] the index row records the reference's scale and its offset from the box (render bounds include the shadow)",
+      rootRow.referenceScale === 2 && rootRow.referenceOffset?.x === -21 && rootRow.referenceOffset?.y === -1);
+    ok("[DT-25] the pull says it rewired pointers, and reports no dangling pointer", logged.some((m) => /rewired 3 asset pointer/.test(m)) && !logged.some((m) => /not on disk/.test(m)));
+
+    // A discovery thumbnail at an explicit scale never takes the reference slot.
+    const sh = fs.mkdtempSync(path.join(os.tmpdir(), "write-shot-"));
+    const shot = dt.writeScreenshot(sh, { id: "9:1", name: "Screen A", type: "FRAME", reference: "assets/9_1_ref.png", manifest: manifest({ nodes: 1 }),
+      assets: [{ id: "9:1:ref", name: "Screen A (reference)", format: "png", file: "9_1_ref.png", base64: png(90, 77, 3).toString("base64"), kind: "reference" }] }, undefined, { scale: 0.25 });
+    ok("[F-08] a screenshot at an explicit --scale is written as <id>_shot@<scale>x.png and leaves <id>_ref.png free",
+      shot.reference === "assets/9_1_shot@0.25x.png" && exactExists(sh, "assets/9_1_shot@0.25x.png") && !exactExists(sh, "assets/9_1_ref.png"));
+    const sh2 = fs.mkdtempSync(path.join(os.tmpdir(), "write-shot2-"));
+    const shot2 = dt.writeScreenshot(sh2, { id: "9:1", name: "Screen A", type: "FRAME", reference: "assets/9_1_ref.png", manifest: manifest({ nodes: 1 }),
+      assets: [{ id: "9:1:ref", name: "Screen A (reference)", format: "png", file: "9_1_ref.png", base64: png(284, 104, 4).toString("base64"), kind: "reference" }] }, undefined);
+    ok("[F-08] a default-scale screenshot keeps the shared <id>_ref.png name (a later pull reuses the same render)", shot2.reference === "assets/9_1_ref.png");
+
+    // A page walk: the layer files are written after the assets, with rewired pointers too.
+    const pw = fs.mkdtempSync(path.join(os.tmpdir(), "write-walk-"));
+    fs.mkdirSync(path.join(pw, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(pw, "assets", "Dot.svg"), dot);
+    dt.writeExport(pw, {
+      designSystem: { variables: [], collections: [], components: [] },
+      layersDoc: {
+        layers: [{ id: "9:1", name: "Screen A", page: "Page A", pageId: "1:1", tree: node({ id: "9:1", type: "FRAME", name: "Screen A", children: [{ id: "9:3", type: "ELLIPSE", name: "Dot", asset: "assets/Dot-1a2b3c.svg" }] }) }],
+        index: [{ id: "9:1", name: "Screen A", type: "FRAME", page: "Page A", pageId: "1:1" }],
+      },
+      assets: [{ id: "9:3", name: "Dot", format: "svg", file: "Dot-1a2b3c.svg", text: dot }],
+    }, undefined);
+    const walkFiles = fs.readdirSync(path.join(pw, "pages"), { recursive: true }).map(String).filter((f) => f.endsWith(".json") && !f.endsWith("index.json"));
+    const walkPtrs = walkFiles.flatMap((f) => pointers(JSON.parse(fs.readFileSync(path.join(pw, "pages", f), "utf8")) as unknown));
+    ok("[DT-25] a page walk's layer files also point at the file actually on disk", walkPtrs.length === 1 && walkPtrs[0] === "assets/Dot.svg" && exactExists(pw, "assets/Dot.svg"));
+    // Two frames that render identically keep their OWN reference files (the plugin never dedups a
+    // reference; one `reference` naming another frame's PNG is the confusion it exists to prevent).
+    const twin = fs.mkdtempSync(path.join(os.tmpdir(), "write-twin-refs-"));
+    const same = png(200, 100, 7).toString("base64");
+    for (const id of ["9:5", "9:6"]) {
+      const safeId = id.replace(":", "_");
+      dt.writeScreen(twin, screenReply({
+        screenName: "Twin " + safeId, nodeId: id, page: "Page A", pageId: "1:1",
+        screen: { screen: "Twin " + safeId, manifest: { nodes: 1 }, nodes: [{ id, type: "FRAME", name: "Twin " + safeId, reference: `assets/${safeId}_ref.png`, box: { x: 0, y: 0, w: 100, h: 50 } }] },
+        assets: [{ id: id + ":ref", name: "Twin (reference)", format: "png", file: `${safeId}_ref.png`, base64: same, kind: "reference" }],
+      }), undefined);
+    }
+    const twinRows = (JSON.parse(fs.readFileSync(path.join(twin, "pages", "index.json"), "utf8")) as PagesRootIndex).layers ?? [];
+    ok("[DT-25] two identical-looking frames keep their own <id>_ref.png — a reference is never shared across frames",
+      twinRows.length === 2 && twinRows.some((r) => r.reference === "assets/9_5_ref.png") && twinRows.some((r) => r.reference === "assets/9_6_ref.png") &&
+      exactExists(twin, "assets/9_5_ref.png") && exactExists(twin, "assets/9_6_ref.png"));
+    ok("[F-08] a default-scale screenshot followed by the pull's identical render reuses the one file (no suffixed copy)", (() => {
+      const d = fs.mkdtempSync(path.join(os.tmpdir(), "write-shot-then-pull-"));
+      const bytes = png(284, 104, 9).toString("base64");
+      dt.writeScreenshot(d, { id: "9:7", name: "Screen B", type: "FRAME", reference: "assets/9_7_ref.png", manifest: manifest({ nodes: 1 }),
+        assets: [{ id: "9:7:ref", name: "Screen B (reference)", format: "png", file: "9_7_ref.png", base64: bytes, kind: "reference" }] }, undefined);
+      dt.writeScreen(d, screenReply({ screenName: "Screen B", nodeId: "9:7", page: "Page A", pageId: "1:1",
+        screen: { screen: "Screen B", manifest: { nodes: 1 }, nodes: [{ id: "9:7", type: "FRAME", name: "Screen B", reference: "assets/9_7_ref.png", box: { x: 0, y: 0, w: 142, h: 52 } }] },
+        assets: [{ id: "9:7:ref", name: "Screen B (reference)", format: "png", file: "9_7_ref.png", base64: bytes, kind: "reference" }] }), undefined);
+      const files = fs.readdirSync(path.join(d, "assets"));
+      fs.rmSync(d, { recursive: true, force: true });
+      return files.length === 1 && files[0] === "9_7_ref.png";
+    })());
+    // Re-pulls over a reference name that holds OTHER bytes (an old thumbnail): the first pull writes one
+    // suffixed copy, every later pull of the same render reuses it — never `_1`, `_2`, … (review of this fix).
+    const again = fs.mkdtempSync(path.join(os.tmpdir(), "write-repull-"));
+    fs.mkdirSync(path.join(again, "assets"));
+    fs.writeFileSync(path.join(again, "assets", "9_9_ref.png"), png(90, 77, 11));
+    const render = png(284, 104, 12).toString("base64");
+    const pullOnce = () => dt.writeScreen(again, screenReply({ screenName: "Screen C", nodeId: "9:9", page: "Page A", pageId: "1:1",
+      screen: { screen: "Screen C", manifest: { nodes: 1 }, nodes: [{ id: "9:9", type: "FRAME", name: "Screen C", reference: "assets/9_9_ref.png", box: { x: 0, y: 0, w: 142, h: 52 } }] },
+      assets: [{ id: "9:9:ref", name: "Screen C (reference)", format: "png", file: "9_9_ref.png", base64: render, kind: "reference" }] }), undefined);
+    pullOnce(); pullOnce(); pullOnce();
+    const walkOnce = () => dt.writeExport(again, {
+      designSystem: { variables: [], collections: [], components: [] },
+      layersDoc: { layers: [{ id: "9:9", name: "Screen C", page: "Page A", pageId: "1:1", reference: "assets/9_9_ref.png", tree: node({ id: "9:9", type: "FRAME", name: "Screen C" }) }], index: [{ id: "9:9", name: "Screen C", type: "FRAME", page: "Page A", pageId: "1:1" }] },
+      assets: [{ id: "9:9:ref", name: "Screen C (reference)", format: "png", file: "9_9_ref.png", base64: render, kind: "reference" }],
+    }, undefined);
+    walkOnce(); walkOnce();
+    const refFiles = fs.readdirSync(path.join(again, "assets")).filter((f) => f.startsWith("9_9_ref")).sort();
+    ok("[DT-25] three pulls and two page walks of an unchanged frame over an old thumbnail leave exactly ONE extra reference file",
+      refFiles.length === 2 && refFiles.includes("9_9_ref.png") && refFiles.some((f) => /^9_9_ref-[0-9a-z]{6}\.png$/.test(f)));
+    const shotsDir = fs.mkdtempSync(path.join(os.tmpdir(), "write-reshoot-"));
+    fs.mkdirSync(path.join(shotsDir, "assets"));
+    fs.writeFileSync(path.join(shotsDir, "assets", "9_9_shot@0.25x.png"), png(20, 10, 13));
+    const thumb = { id: "9:9", name: "Screen C", type: "FRAME", reference: "assets/9_9_ref.png", manifest: manifest({ nodes: 1 }),
+      assets: [{ id: "9:9:ref", name: "Screen C (reference)", format: "png" as const, file: "9_9_ref.png", base64: png(36, 13, 14).toString("base64"), kind: "reference" as const }] };
+    dt.writeScreenshot(shotsDir, structuredClone(thumb), undefined, { scale: 0.25 });
+    dt.writeScreenshot(shotsDir, structuredClone(thumb), undefined, { scale: 0.25 });
+    ok("[F-08] re-shooting the same thumbnail over a stale one adds one file, not one per shot",
+      fs.readdirSync(path.join(shotsDir, "assets")).length === 2);
+    for (const d of [ddir, sh, sh2, pw, twin, again, shotsDir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---------------------------------------------------------------- G20 (D132, D133): write-out
+  // RP-*: assertInsideCwd accepts a path that is inside the server's cwd once symlinks are resolved (macOS
+  // /tmp → /private/tmp: getcwd() is resolved, a path built from PWD or os.tmpdir() is not), and still
+  // refuses one whose REAL location is outside. Each test makes its own symlink, so it fails before the fix
+  // on every platform, not just macOS.
+  // PREV-*: the MCP server's implicit spill (keepPrev) keeps a one-level `<file>.prev` for every JSON it
+  // replaces with different content (stamps ignored); the CLI path (keepPrev omitted) keeps nothing.
+  {
+    const W = await import("../bridge/src/write-out.ts");
+    const real = (p: string) => fs.realpathSync.native(p);
+    const proj = real(fs.mkdtempSync(path.join(os.tmpdir(), "g20-proj-")));
+    const elsewhere = real(fs.mkdtempSync(path.join(os.tmpdir(), "g20-out-")));
+    const links = fs.mkdtempSync(path.join(os.tmpdir(), "g20-links-"));
+    const alias = path.join(links, "alias"); // -> the project (cwd)
+    const alias2 = path.join(links, "alias2"); // -> a directory OUTSIDE the project
+    fs.symlinkSync(proj, alias, "dir");
+    fs.symlinkSync(elsewhere, alias2, "dir");
+    const was = process.cwd();
+    const throwsMsg = (f: () => unknown): string | null => { try { f(); return null; } catch (e) { return e instanceof Error ? e.message : String(e); } };
+    try {
+      process.chdir(proj);
+      let got: string | null = null;
+      const err = throwsMsg(() => { got = W.assertInsideCwd(path.join(alias, "design")); });
+      ok("[G20 RP-1] an outDir reaching the cwd through a symlink is accepted (inside after realpath)", err === null);
+      ok("[G20 RP-1] and the returned path is the lexical one (no `..` steering after the link)", got === path.join(alias, "design"));
+      ok("[G20 RP-2] a nested not-yet-existing path under the alias is accepted (realpath of the existing prefix)",
+        throwsMsg(() => W.assertInsideCwd(path.join(alias, "a", "b", "c"))) === null && !fs.existsSync(path.join(proj, "a")));
+      ok("[G20 RP-2] `../x` is still refused", throwsMsg(() => W.assertInsideCwd("../x")) !== null);
+      ok("[G20 RP-2] `/` is still refused", throwsMsg(() => W.assertInsideCwd("/")) !== null);
+      const esc = throwsMsg(() => W.assertInsideCwd(path.join(alias2, "x")));
+      ok("[G20 RP-2] a symlink to a directory OUTSIDE the cwd is refused", esc !== null);
+      ok("[G20 RP-2] and the refusal names the real path it resolved to",
+        esc !== null && esc.includes("real path " + path.join(elsewhere, "x")));
+      ok("[G20 RP-2] a symlink escape with a non-existent tail is refused too",
+        throwsMsg(() => W.assertInsideCwd(path.join(alias2, "p", "q"))) !== null);
+      ok("[G20 RP-2] `<alias>/../alias2/x` is refused (resolved lexically first)",
+        throwsMsg(() => W.assertInsideCwd(path.join(alias, "..", "alias2", "x"))) !== null);
+      ok("[G20 RP-2] the argument name still leads the message",
+        (throwsMsg(() => W.assertInsideCwd("../x", "exportDir")) ?? "").startsWith("exportDir must stay inside"));
+    } finally {
+      process.chdir(was);
+    }
+    // RP-3: a server started in the filesystem root (some MCP hosts launch stdio servers in `/`) accepts no
+    // path below it — every path is lexically "inside" `/`, so the ordinary rule would accept them all.
+    try {
+      const fsRoot = path.parse(process.cwd()).root;
+      process.chdir(fsRoot);
+      const absElsewhere = throwsMsg(() => W.assertInsideCwd(path.join(elsewhere, "x")));
+      ok("[G20 RP-3] cwd = the filesystem root → an absolute outDir anywhere is refused", absElsewhere !== null);
+      ok("[G20 RP-3] …and so is a relative map path (etc/hosts)", throwsMsg(() => W.assertInsideCwd(path.join("etc", "hosts"), "map")) !== null);
+      ok("[G20 RP-3] …through a symlink too (realpath does not reopen it)", throwsMsg(() => W.assertInsideCwd(path.join(alias, "design"))) !== null);
+      ok("[G20 RP-3] …the root itself is still accepted, as it always was", throwsMsg(() => W.assertInsideCwd(fsRoot)) === null);
+      ok("[G20 RP-3] …and the refusal says to start the server in the project",
+        absElsewhere !== null && absElsewhere.includes("started in the filesystem root"));
+    } finally {
+      process.chdir(was);
+    }
+
+    // A full reply built fresh per call (writeExport stamps sourceFile onto layersDoc in place).
+    const fullReply = (stamp: string, label = "Go") => ({
+      designSystem: {
+        file: "Sample File", exportedAt: stamp, colorProfile: "srgb" as const,
+        collections: [collection({ name: "Core", modes: ["Light"] })],
+        variables: [variable({ name: "color/bg", type: "COLOR", values: { Light: "#ffffff" } })],
+        styles: { paint: [{ name: "Brand" }], text: [], effect: [], grid: [] },
+        components: [{ key: "k1", name: "Widget", type: "COMPONENT" as const, id: "2:1", page: "Page A", pageId: "1:0" }],
+        hygiene: [],
+      },
+      layersDoc: {
+        exportedAt: stamp,
+        index: [{ id: "1:2", name: "Panel", type: "FRAME", pageId: "1:0", page: "Page A" }, { id: "1:5", name: "Sheet", type: "FRAME", pageId: "1:0", page: "Page A" }],
+        layers: [
+          { id: "1:2", name: "Panel", page: "Page A", pageId: "1:0", tree: node({ type: "FRAME", id: "1:2", name: "Panel", children: [node({ type: "TEXT", id: "1:3", name: label })] }) },
+          { id: "1:5", name: "Sheet", page: "Page A", pageId: "1:0", tree: node({ type: "FRAME", id: "1:5", name: "Sheet" }) },
+        ],
+      },
+      assets: [],
+    });
+    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]);
+    const readOr = (f: string): string | null => { try { return fs.readFileSync(f, "utf8"); } catch { return null; } };
+    const prevs = (d: string) => walk(d).filter((f) => f.endsWith(".prev")).sort();
+    const pdir = fs.mkdtempSync(path.join(os.tmpdir(), "g20-prev-"));
+    const out = path.join(pdir, "design");
+    type Wrote = { prevKept?: string[] };
+    // prevKept is checked at runtime, not taken on the declared type's word (a non-array fails the test).
+    const { isStringArray } = await import("../bridge/src/json-util.ts");
+    const wroteOf = (r: { wrote: object }): Wrote => {
+      const raw: unknown = "prevKept" in r.wrote ? r.wrote.prevKept : undefined;
+      if (raw === undefined) return {};
+      if (!isStringArray(raw)) { ok(`[G20 PREV] wrote.prevKept is a string[] when present (got ${JSON.stringify(raw)})`, false); return {}; }
+      return { prevKept: raw };
+    };
+    const first = wroteOf(W.writeExport(out, fullReply("2026-10-01T00:00:00.000Z"), undefined, { keepPrev: true }));
+    ok("[G20 PREV-1] a first spill into an empty dir keeps nothing (no field, no .prev)", first.prevKept === undefined && prevs(out).length === 0);
+    const layerFile = walk(path.join(out, "pages")).find((f) => f.endsWith(".json") && !f.endsWith("index.json") && fs.readFileSync(f, "utf8").includes("\"Panel\""));
+    const dsFile = walk(path.join(out, "design-system")).find((f) => f.endsWith(".json") && fs.readFileSync(f, "utf8").includes("color/bg"));
+    ok("[G20 PREV-1] fixture: the layer file and a design-system file exist", !!layerFile && !!dsFile);
+    const editedLayer = '{"hand":"edited layer"}';
+    const editedDs = '{"hand":"edited tokens"}';
+    if (layerFile) fs.writeFileSync(layerFile, editedLayer);
+    if (dsFile) fs.writeFileSync(dsFile, editedDs);
+    const second = wroteOf(W.writeExport(out, fullReply("2026-10-02T00:00:00.000Z"), undefined, { keepPrev: true }));
+    const want = [layerFile + ".prev", dsFile + ".prev"].sort();
+    ok("[G20 PREV-1] exactly the two changed files get a .prev, and wrote.prevKept lists them",
+      JSON.stringify(prevs(out)) === JSON.stringify(want) && JSON.stringify([...(second.prevKept ?? [])].sort()) === JSON.stringify(want));
+    ok("[G20 PREV-1] each .prev holds the text the spill replaced",
+      readOr(layerFile + ".prev") === editedLayer && readOr(dsFile + ".prev") === editedDs);
+    ok("[G20 PREV-1] prevKept paths are absolute", (second.prevKept ?? []).every((p) => path.isAbsolute(p)));
+    const third = wroteOf(W.writeExport(out, fullReply("2026-10-03T00:00:00.000Z"), undefined, { keepPrev: true }));
+    ok("[G20 PREV-2] the same design re-spilled with a fresh exportedAt keeps nothing new",
+      third.prevKept === undefined && JSON.stringify(prevs(out)) === JSON.stringify(want));
+    ok("[G20 PREV-2] and the earlier .prev files are untouched",
+      readOr(layerFile + ".prev") === editedLayer && readOr(dsFile + ".prev") === editedDs);
+    const anyDispatch = wroteOf(W.writeAny(out, fullReply("2026-10-04T00:00:00.000Z", "Stop"), undefined, { keepPrev: true }));
+    ok("[G20 PREV-2] writeAny forwards keepPrev to a full export (a real design change → its layer file kept)",
+      (anyDispatch.prevKept ?? []).includes(layerFile + ".prev") && (readOr(layerFile + ".prev") ?? "").includes("\"Go\""));
+    for (const f of prevs(out)) fs.rmSync(f);
+    if (layerFile) fs.writeFileSync(layerFile, editedLayer);
+    const cli = wroteOf(W.writeExport(out, fullReply("2026-10-05T00:00:00.000Z"), undefined));
+    const cliAny = wroteOf(W.writeAny(out, fullReply("2026-10-06T00:00:00.000Z", "Stop"), undefined, {}));
+    ok("[G20 PREV-2] keepPrev omitted (the CLI path) keeps no .prev and reports no prevKept",
+      prevs(out).length === 0 && cli.prevKept === undefined && cliAny.prevKept === undefined);
+
+    // Libraries: the root index carries a fresh generatedAt and per-row exportedAt on every write.
+    const libReply = (stamp: string, hex: string) => ({ designSystem: {
+      file: "Sample Library", exportedAt: stamp, colorProfile: "srgb" as const,
+      source: { role: "library" as const, libraryName: "Sample", fileKey: "QWERTYUI12345" },
+      collections: [collection({ name: "Core", modes: ["Light"] })],
+      variables: [variable({ name: "color/fg", type: "COLOR", values: { Light: hex } })],
+      styles: { paint: [], text: [], effect: [], grid: [] }, components: [], hygiene: [],
+    } });
+    const lout = path.join(pdir, "lib");
+    W.writeExport(lout, libReply("2026-10-01T00:00:00.000Z", "#000000"), undefined, { keepPrev: true });
+    await new Promise((r) => setTimeout(r, 5)); // a different generatedAt
+    const lib2 = wroteOf(W.writeExport(lout, libReply("2026-10-02T00:00:00.000Z", "#000000"), undefined, { keepPrev: true }));
+    ok("[G20 PREV-2] an unchanged library re-spilled (fresh generatedAt + row exportedAt) keeps no .prev",
+      lib2.prevKept === undefined && prevs(lout).length === 0);
+    const lib3 = wroteOf(W.writeExport(lout, libReply("2026-10-03T00:00:00.000Z", "#111111"), undefined, { keepPrev: true }));
+    ok("[G20 PREV-1] a changed library variable keeps the replaced library file(s), not the unchanged root index",
+      (lib3.prevKept ?? []).length > 0 && prevs(lout).length === (lib3.prevKept ?? []).length &&
+      !prevs(lout).some((f) => f === path.join(lout, "libraries", "index.json.prev")));
+    for (const d of [proj, elsewhere, links, pdir]) fs.rmSync(d, { recursive: true, force: true });
   }
 
   // ---------------------------------------------------------------- report

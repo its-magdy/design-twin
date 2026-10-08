@@ -3,7 +3,7 @@
 
 import type { Asset, Manifest } from "../../bridge/src/doc-types.ts";
 import { errMsg } from "./util";
-import { abandonedError, beginRun, endRun, isAbandonment, requestAbandon, type RunInfo } from "./progress";
+import { abandonedError, beginRun, endRun, isAbandonment, postQueued, requestAbandon, type RunInfo } from "./progress";
 import { resetAssetNames } from "./assets";
 import { readOptDefaults, type ReadOptName } from "../../bridge/src/read-opts.ts";
 
@@ -22,14 +22,19 @@ export interface RunStats {
   assetsSkippedInvisible: number;
   /** Real export failures that were RECOVERED as inline path geometry (see assets.ts geometryOf). */
   assetsGeometry: number;
+  /** Graphics that are hidden (the node or an ancestor `visible:false`) — never sent to exportAsync,
+   *  which returns no SVG for them; the node stays a leaf with `assetSkipped: "hidden"`. */
+  assetsHidden: number;
+  /** Nodes kept as hidden: `visible:false` themselves or anywhere under a hidden ancestor. */
+  hiddenNodes: number;
   truncated: number;
 }
 
 export const assets: Asset[] = []; // { id, name, format, file, base64/text }
 
-// Per-run read options, mutated by the collect entrypoints and read in serialize. The NAMES and their rationale live in bridge/read-opts.js — the ONE registry
-// shared with the CLI flag table and the MCP tool schema (esbuild inlines that dependency-free CJS
-// module into this bundle, the same way it inlines pages-layout.js). Adding an option there is what
+// Per-run read options, mutated by the collect entrypoints and read in serialize. The NAMES and their rationale live in bridge/src/read-opts.ts — the ONE registry
+// shared with the CLI flag table and the MCP tool schema (esbuild inlines that dependency-free
+// module into this bundle, the same way it inlines pages-layout.ts). Adding an option there is what
 // turns it on here; this file only owns the fact that the values are per-run mutable state.
 export const runOpts: Record<ReadOptName, boolean> = readOptDefaults();
 
@@ -43,7 +48,8 @@ export const imageSizeCache = new Map<string, Promise<{ w: number; h: number } |
 export let warnings: string[] = [];
 // ONE spelling of the zeroed counters — resetRun() uses the same factory, so adding a counter to
 // RunStats is one edit the compiler checks, not two literals that can silently drift apart.
-const newStats = (): RunStats => ({ nodes: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0, truncated: 0 });
+const newStats = (): RunStats => ({ nodes: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0,
+  assetsHidden: 0, hiddenNodes: 0, truncated: 0 });
 export let stats: RunStats = newStats();
 
 export function warn(msg: string): void {
@@ -191,16 +197,24 @@ export const getCollection = collectionLookup.obj;
 interface QueuedRun { run: RunInfo; abandoned: boolean }
 const queuedRuns = new Set<QueuedRun>();
 let runChain: Promise<unknown> = Promise.resolve();
+// Runs accepted and not yet finished (queued or executing). Above 0 when a new run arrives = it will
+// wait, which a BRIDGE caller is told at once (postQueued): its stall check reads any frame as life,
+// and a run queued behind a long export is busy, not stalled. Counted down when the run itself settles
+// (not on a later tick of the chain), so a run that arrives just after the last one ended is not
+// reported as queued.
+let inChain = 0;
 export function serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
   const ticket: QueuedRun = { run, abandoned: false };
   queuedRuns.add(ticket);
+  if (inChain > 0) postQueued(run);
+  inChain++;
   const go = (): Promise<T> => {
     queuedRuns.delete(ticket);
     // Abandoned while it waited: fail at once, WITHOUT calling fn and without bracketing — it never
     // executed, so the window must never see a run-begin/run-end for it. The chain proceeds as it
     // does after any failed run.
-    if (ticket.abandoned) return Promise.reject(abandonedError());
-    return bracket(fn, run);
+    if (ticket.abandoned) { inChain--; return Promise.reject(abandonedError()); }
+    return bracket(fn, run).finally(() => { inChain--; });
   };
   const next = runChain.then(go, go);
   runChain = next.then(() => {}, () => {});

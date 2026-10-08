@@ -38,7 +38,7 @@ is the calling convention, spelled out under the diagram.
           holding the node tree(s) stripped out of components.local.json's variantsFile/nodeFile pointer) ·
           pages/index.json · pages/<page>/index.json +
           pages/<page>/<name>__<id>.json (+ .vars.json / .assets.json for a single-screen pull) ·
-          variables.json (the UNION across screens) · assets/
+          variables.json (the UNION across screens) · SCHEMA.md (scripting quick keys) · assets/
           — and NOTHING outside design/export/, so design/{target,codeconnect.local}.json,
             design/plan/, design/audit/ and design/verify/ survive a delete-and-re-pull
     Claude Code  ── runs `figma-pull` (Bash), then Reads files selectively ──►
@@ -60,11 +60,12 @@ convention and where the bytes land:
   `writeToDisk: true`, which returns a compact index (counts + paths) instead of the tree. Inline MCP
   results are capped (25k tokens by default) and asset bytes are never returned inline at all, so for
   anything real this is not an optimisation but the only correct path.
-- **Discovery reads → context, always.** `listLibraries` (which design libraries the file draws on) and
-  `listPages` are the two questions you ask *before* paying for anything, and both are bounded by
-  construction. The intended order is `listLibraries` → `listPages` → a scoped export
-  (`--page <id>` / `figma_export_full({page:[…]})`), which is also what Figma's own agent guidance
-  recommends: discover, then scope by library. Two limits are inherent, not implementation gaps —
+- **Discovery reads → context, always.** `listPages`, `listChildren` and `listLibraries` (which design
+  libraries the file draws on) are questions you ask *before* paying for anything, and all are bounded by
+  construction. The default order is `listPages` → `listChildren` → a scoped export (`--node <id>` /
+  `figma_export_url`; `--page <id>` / `figma_export_full({page:[…]})` for a whole page) — discover, then
+  scope. `listLibraries` is a side step, never the default first one: the slowest read, asked to learn
+  which library owns a token or before an `--as-library` pull. Two limits are inherent, not implementation gaps —
   Figma exposes **no API to enumerate a library's contents** (so component counts are usage-derived
   from *this* file), and libraries can be enabled **only through the Figma UI**, never via API (so
   every export is silently scoped to whatever was enabled when it ran). Both are reported in the
@@ -80,7 +81,7 @@ convention and where the bytes land:
 **One bridge, shared.** Port 8787 has one owner. `dtwin serve` and `figma-mcp` both publish the
 bridge they own on the daemon socket (`daemon.ts`), and every later `dtwin` command or MCP server —
 a second Claude Code session, say — routes through that socket instead of binding the port; an MCP
-server re-resolves the owner per call, so it takes the bridge over when the owning session ends.
+server re-resolves the owner per call, so it takes the bridge over when the owning session ends. An owning MCP server exits with its client unless others have used its socket, then idles out (`FIGMA_DAEMON_IDLE_MIN`).
 Only a one-shot pull does not share: a process that finds the port held by one exits on `EADDRINUSE`
 (`server-core.ts`). `writeToDisk` remains the in-session way to get files.
 

@@ -4,7 +4,7 @@
 
 // design-to-code/design-diff.ts
 import fs3 from "node:fs";
-import path from "node:path";
+import path2 from "node:path";
 import { execFileSync } from "node:child_process";
 
 // design-to-code/types.ts
@@ -105,6 +105,11 @@ function ifDefined(key, v) {
   return o;
 }
 
+// design-to-code/probe-steps.ts
+function isPlanExpect(x) {
+  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
+}
+
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -138,10 +143,23 @@ function isTextStylesDoc(x) {
   return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+var SEVERITIES = ["blocker", "warning", "info"];
+function isAuditOverridesDoc(x) {
+  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -163,9 +181,61 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
-function isVerifyMeasured(x) {
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+function isProbeIdentity(x) {
+  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+function isBuildIdentity(x) {
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
+var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
+var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+function isMeasuredVisual(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+var MEASURED_EXTRAS = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // group 11 (DT-47): the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // 12c: the visual diff (informational, D40(3))
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
+];
+function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+function isVerifyMeasured(x) {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
 }
 isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
 function isEvidence(x) {
@@ -175,11 +245,15 @@ function isInteractionEvidenceList(x) {
   return Array.isArray(x) && x.every(isEvidence);
 }
 isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
-function isVerifyReport(x) {
-  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+function isMeasuredComponentList(x) {
+  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -188,7 +262,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -196,13 +270,30 @@ function planProblem(x) {
   if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
   if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
   if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+var reqStr = (v) => typeof v === "string" && v.trim() !== "";
+function isPlanWaiver(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+function isPlanDescope(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isPlanInteraction(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
+}
+isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -218,8 +309,12 @@ function getOrInit(m, k, init) {
 }
 
 // design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -293,6 +388,7 @@ function normalizeForCompare(fileName, content) {
 function sha1Hex(buf) {
   return crypto.createHash("sha1").update(buf).digest("hex");
 }
+var EMPTY_NUMS = new Float64Array(0);
 
 // bridge/src/design-system-layout.ts
 var COMPONENTS_DIR = "components";
@@ -320,12 +416,12 @@ var DESIGN_SYSTEM_FILES = {
 
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -357,13 +453,14 @@ var CATEGORY = {
     "gridRowStart",
     "gridJustifySelf",
     "gridAlignSelf",
-    "size"
+    "size",
+    "scroll"
   ],
-  shape: ["radius", "cornerSmoothing", "rotation", "flipped", "skew", "arc", "shape", "booleanOp"],
+  shape: ["radius", "cornerSmoothing", "rotation", "flipped", "skew", "sourceTransform", "arc", "shape", "booleanOp"],
   tokens: ["tokens", "styles", "variableModes", "propTokens"],
   component: ["component", "mainComponent", "props", "propRefs", "overrides", "exposedInstances", "detachedFrom", "tableCells"],
   visibility: ["hidden"],
-  asset: ["asset", "geometry", "assetSkipped", "exportSettings"],
+  asset: ["asset", "assetFrom", "geometry", "assetSkipped", "exportSettings"],
   interaction: ["reactions", "overlay", "motion"],
   handoff: ["annotations", "devStatus", "devStatusNote", "name", "type"]
 };
@@ -396,12 +493,12 @@ function fieldDiffs(key, before, after, category) {
 }
 function index(doc) {
   const out = /* @__PURE__ */ new Map();
-  const walk = (node, parentId, trail) => {
+  const walk = (node, parent, trail) => {
     if (!node || typeof node !== "object" || node.id === void 0) return;
     const here = [...trail, node.name || node.type || node.id];
     const kids = Array.isArray(node.children) ? node.children : [];
-    out.set(String(node.id), { node, parentId, path: here.join(" > "), childIds: kids.map((k) => String(k && k.id)) });
-    for (const k of kids) walk(k, String(node.id), here);
+    out.set(String(node.id), { node, parent, parentId: parent ? String(parent.id) : null, path: here.join(" > "), childIds: kids.map((k) => String(k && k.id)) });
+    for (const k of kids) walk(k, node, here);
   };
   for (const r of screenRoots(doc)) walk(r, null, []);
   return out;
@@ -412,7 +509,37 @@ var nameOf = (idx, id) => {
   return e ? e.node.name || e.node.type || id : id;
 };
 var describe = (e) => ({ id: String(e.node.id), name: e.node.name, type: e.node.type, path: e.path, parentId: e.parentId });
-function nodeFields(before, after) {
+var CONTAINERS = /* @__PURE__ */ new Set([
+  "FRAME",
+  "COMPONENT",
+  "COMPONENT_SET",
+  "INSTANCE",
+  "GROUP",
+  "BOOLEAN_OPERATION",
+  "SECTION",
+  "TRANSFORM_GROUP",
+  "SLOT",
+  "SLIDE",
+  "SLIDE_ROW",
+  "SLIDE_GRID",
+  "PAGE"
+]);
+var GRID_CHILD_KEYS = ["gridColumnStart", "gridRowStart", "gridColumnSpan", "gridRowSpan", "gridJustifySelf", "gridAlignSelf"];
+var ABSOLUTE_ONLY = /* @__PURE__ */ new Set(["mode", "width", "height"]);
+function formatNoise(n, parent) {
+  const lay = n.layout, isAssetLeaf = n.asset !== void 0 || n.geometry !== void 0 || n.assetSkipped !== void 0;
+  const gridItem = !!parent && !n.absolute && parent.layout?.display === "grid";
+  const dropGrid = GRID_CHILD_KEYS.filter((k) => n[k] !== void 0 && (!gridItem || (k === "gridColumnStart" || k === "gridRowStart") && n[k] === -1));
+  const dropLayout = !!lay && !n.children && (isAssetLeaf || !CONTAINERS.has(n.type) && lay.mode === "absolute" && Object.keys(lay).every((k) => ABSOLUTE_ONLY.has(k)));
+  if (!dropGrid.length && !dropLayout) return n;
+  const out = { ...n };
+  for (const k of dropGrid) delete out[k];
+  if (dropLayout) delete out.layout;
+  return out;
+}
+var hasNoise = (e) => formatNoise(e.node, e.parent) !== e.node;
+function nodeFields(old, neu, raw = false) {
+  const before = raw ? old.node : formatNoise(old.node, old.parent), after = raw ? neu.node : formatNoise(neu.node, neu.parent);
   const fields = [];
   for (const key of /* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])) {
     if (IGNORED.has(key) || same(bag(before)[key], bag(after)[key])) continue;
@@ -428,7 +555,7 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
   const redrawn = opts.redrawn || /* @__PURE__ */ new Set();
   const A = index(oldDoc), B = index(newDoc);
   const added = [], removed = [], changed = [], reordered = [];
-  let positionOnly = 0;
+  let positionOnly = 0, formatOnly = 0;
   const swapped = /* @__PURE__ */ new Map();
   for (const [id, b] of B) {
     const a = A.get(id);
@@ -454,12 +581,13 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
   for (const [id, b] of B) {
     const a = A.get(id);
     if (!a) continue;
-    const fields = nodeFields(a.node, b.node);
+    const fields = nodeFields(a, b);
     if (a.parentId !== b.parentId) fields.push({ field: "parent", category: "layout", before: a.path, after: b.path });
     if (typeof b.node.asset === "string" && b.node.asset === a.node.asset && redrawn.has(b.node.asset)) fields.push({ field: "asset bytes", category: "asset", before: "the previous render", after: `re-drawn \u2014 ${b.node.asset} has different contents under the same node id` });
     const sw = swapped.get(id);
     if (sw && (sw.gone || sw.came)) fields.push({ field: "sublayers", category: "component", before: `${sw.gone} from the old main component`, after: `${sw.came} from the new one (regenerated by the swap \u2014 not listed)` });
     if (fields.length) changed.push({ ...describe(b), categories: [...new Set(fields.map((f) => f.category))], fields });
+    else if (hasNoise(a) !== hasNoise(b) && nodeFields(a, b, true).length) formatOnly++;
     else if (!same(a.node.box, b.node.box)) positionOnly++;
     const keptBefore = a.childIds.filter((c) => b.childIds.includes(c)), keptAfter = b.childIds.filter((c) => a.childIds.includes(c));
     if (!same(keptBefore, keptAfter)) reordered.push({ ...describe(b), before: keptBefore.map((c) => nameOf(A, c)), after: keptAfter.map((c) => nameOf(B, c)) });
@@ -471,7 +599,8 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
   const warnings = [];
   const trunc = truncatedOf(manifestOf(newDoc));
   if (trunc) warnings.push(`the NEW export is truncated (${trunc === true ? "some" : trunc} subtree(s) past the depth limit) \u2014 anything under "Removed" may simply not have been exported. Re-pull a narrower scope before acting on removals.`);
-  return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly }, warnings, added, removed, reordered, changed, document };
+  if (formatOnly) warnings.push(`${formatOnly} node(s) differ only by the exporter's format (an export from an older plugin: grid-child fields off a grid, layout on text/shapes/leaves or asset leaves) \u2014 not listed. The export's content hash changed, so verification reopens once: re-run verify-screen --expect and --compare.`);
+  return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly, formatOnly }, warnings, added, removed, reordered, changed, document };
 }
 function diffTokens(oldDoc, newDoc) {
   const idOf = (v) => typeof v.key === "string" && v.key ? "k:" + v.key : "n:" + JSON.stringify([v.collection || "", v.name]);
@@ -598,7 +727,10 @@ function markdown(d, label) {
   const s = d.summary, L = [`# What changed \u2014 ${label}`, ""];
   for (const w of d.warnings || []) L.push(`> **Warning:** ${w}`, "");
   const total = s.added + s.removed + s.changed + (s.reordered || 0);
-  if (!total) return L.concat(d.kind === "screen" && s.positionOnly ? `Nothing changed (${s.positionOnly} node(s) only moved with their surroundings).` : "Nothing changed.").join("\n") + "\n";
+  if (!total) {
+    const why = d.kind === "screen" ? [s.positionOnly ? `${s.positionOnly} node(s) only moved with their surroundings` : "", s.formatOnly ? `${s.formatOnly} node(s) differ only by the exporter's format` : ""].filter(Boolean) : [];
+    return L.concat(why.length ? `Nothing changed (${why.join("; ")}).` : "Nothing changed.").join("\n") + "\n";
+  }
   const line = (f) => `  - \`${f.field}\`: ${f.before === void 0 ? "\u2014" : f.before} \u2192 ${f.after === void 0 ? "\u2014" : f.after}`;
   if (d.kind === "tokens") {
     if (d.changed.length) L.push("## Token values changed", ...d.changed.map((c) => `- \`${c.name}\` \u2014 ${c.modes.map((m) => `${m.mode}: ${m.before} \u2192 ${m.after}`).join("; ")}`), "");
@@ -637,12 +769,13 @@ function markdown(d, label) {
   if (d.removed.length) L.push("## Removed (each stands for its whole subtree)", ...d.removed.map((n) => `- **${n.path}** (\`${n.id}\`, ${n.type})`), "");
   if (d.reordered.length) L.push("## Reordered children", ...d.reordered.map((r) => `- **${r.path}**: ${r.before.join(", ")} \u2192 ${r.after.join(", ")}`), "");
   if (s.positionOnly) L.push(`_${s.positionOnly} other node(s) only moved with their surroundings \u2014 not listed._`, "");
+  if (s.formatOnly) L.push(`_${s.formatOnly} other node(s) differ only by the exporter's format \u2014 not listed._`, "");
   return L.join("\n") + "\n";
 }
 function snapshotPath(file, cwd = process.cwd()) {
-  const rel = path.relative(path.join(cwd, "design"), path.resolve(cwd, file));
-  const flat = (rel.startsWith("..") ? path.basename(file) : rel).split(path.sep).join("__");
-  return path.join(cwd, "design", ".sync", flat);
+  const rel = path2.relative(path2.join(cwd, "design"), path2.resolve(cwd, file));
+  const flat = (rel.startsWith("..") ? path2.basename(file) : rel).split(path2.sep).join("__");
+  return path2.join(cwd, "design", ".sync", flat);
 }
 function hashAssetBytes(fileName, buf) {
   return sha1Hex(normalizeForCompare(fileName, buf));
@@ -658,15 +791,15 @@ function assetPaths(doc) {
   return [...out];
 }
 function assetRoot(file, assets) {
-  let dir = path.dirname(path.resolve(file));
-  for (let i = 0; i < 6; i++, dir = path.dirname(dir)) if (assets.some((a) => fs3.existsSync(path.join(dir, a)))) return dir;
+  let dir = path2.dirname(path2.resolve(file));
+  for (let i = 0; i < 6; i++, dir = path2.dirname(dir)) if (assets.some((a) => fs3.existsSync(path2.join(dir, a)))) return dir;
   return null;
 }
 function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
   if (root) for (const a of assets) {
     try {
-      out[a] = hashAssetBytes(a, fs3.readFileSync(path.join(root, a)));
+      out[a] = hashAssetBytes(a, fs3.readFileSync(path2.join(root, a)));
     } catch {
     }
   }
@@ -680,7 +813,7 @@ function redrawnAssets(file, newDoc, prev, cwd) {
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
     else if (prev.kind === "git") {
       try {
-        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path.relative(cwd, path.join(now.root, a)).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
+        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path2.relative(cwd, path2.join(now.root, a)).split(path2.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
       } catch {
       }
     }
@@ -697,16 +830,16 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   if (fs3.existsSync(snap)) {
     const assets = readJsonOrNull(snap + ".assets.json", isStringRecord);
     const r = readJson(snap, anyJson);
-    if (!("doc" in r)) throw new Error(`the snapshot ${path.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force, or pass --against <an older copy>`);
-    found.push({ doc: r.doc, source: path.relative(cwd, snap), kind: "snapshot", assets });
+    if (!("doc" in r)) throw new Error(`the snapshot ${path2.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force, or pass --against <an older copy>`);
+    found.push({ doc: r.doc, source: path2.relative(cwd, snap), kind: "snapshot", assets });
   }
   if (fs3.existsSync(snap + ".prev")) {
     const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord);
     const r = readJson(snap + ".prev", anyJson);
-    if ("doc" in r) found.push({ doc: r.doc, source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
+    if ("doc" in r) found.push({ doc: r.doc, source: path2.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
   }
   try {
-    const rel = path.relative(cwd, path.resolve(cwd, file)).split(path.sep).join("/");
+    const rel = path2.relative(cwd, path2.resolve(cwd, file)).split(path2.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
     const doc = JSON.parse(text);
     found.push({ doc, source: "git HEAD", kind: "git" });
@@ -734,31 +867,31 @@ function previous(file, against, cwd = process.cwd(), current = null) {
 }
 var DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
 function siblingFilesOf(f) {
-  const abs = path.resolve(f);
-  const dir = path.dirname(abs);
-  const base = path.basename(abs);
+  const abs = path2.resolve(f);
+  const dir = path2.dirname(abs);
+  const base = path2.basename(abs);
   const out = [];
   if (DS_FILE_NAMES.includes(base)) {
-    const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path.dirname(dir);
+    const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path2.dirname(dir);
     for (const name of DS_FILE_NAMES) {
       if (name === base) continue;
-      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path.join(dsRoot, "design-system");
-      out.push(path.relative(process.cwd(), path.join(siblingDir, name)));
+      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path2.join(dsRoot, "design-system");
+      out.push(path2.relative(process.cwd(), path2.join(siblingDir, name)));
     }
     return out;
   }
   const m = /\.json$/i.test(base) ? base.slice(0, -5) : null;
   if (m) {
     for (const suf of [".vars.json", ".assets.json"]) {
-      const p = path.join(dir, m + suf);
-      if (fs3.existsSync(p)) out.push(path.relative(process.cwd(), p));
+      const p = path2.join(dir, m + suf);
+      if (fs3.existsSync(p)) out.push(path2.relative(process.cwd(), p));
     }
   }
   const pageDir = dir;
-  const pagesDir = path.dirname(pageDir);
-  if (path.basename(pagesDir) === "pages") {
-    const idx = path.join(pagesDir, "index.json");
-    if (fs3.existsSync(idx)) out.push(path.relative(process.cwd(), idx));
+  const pagesDir = path2.dirname(pageDir);
+  if (path2.basename(pagesDir) === "pages") {
+    const idx = path2.join(pagesDir, "index.json");
+    if (fs3.existsSync(idx)) out.push(path2.relative(process.cwd(), idx));
   }
   return out;
 }
@@ -767,7 +900,7 @@ function main(argv) {
        ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]`;
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) {
     console.error(USAGE);
-    process.exit(argv.length ? 0 : 2);
+    return argv.length ? 0 : 2;
   }
   const OPTIONS = { snapshot: { type: "boolean" }, against: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" } };
   const { values: flags, positionals } = cliParse("design-diff", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
@@ -776,7 +909,7 @@ function main(argv) {
     const requested = positionals;
     if (!requested.length) {
       console.error(USAGE);
-      process.exit(2);
+      return 2;
     }
     const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
     let refused = 0;
@@ -786,7 +919,7 @@ function main(argv) {
         continue;
       }
       const dest = snapshotPath(f);
-      fs3.mkdirSync(path.dirname(dest), { recursive: true });
+      fs3.mkdirSync(path2.dirname(dest), { recursive: true });
       let identical = false;
       if (fs3.existsSync(dest)) {
         try {
@@ -795,7 +928,7 @@ function main(argv) {
         }
       }
       if (fs3.existsSync(dest) && !identical && !force) {
-        console.error(`design-diff: ${path.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
+        console.error(`design-diff: ${path2.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
         refused++;
         continue;
       }
@@ -820,34 +953,33 @@ function main(argv) {
         }
       } catch {
       }
-      console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
+      console.log(`snapshot: ${f} -> ${path2.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
     }
-    if (refused) process.exitCode = 1;
-    return;
+    return refused ? 1 : 0;
   }
   const { against, out } = flags;
   const json = !!flags.json;
   const file = positionals[0];
   if (!file) {
     console.error(USAGE);
-    process.exit(2);
+    return 2;
   }
   const current = readJsonFile(file, "export");
   const failed = (e) => {
     const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
     console.error(`design-diff: ${file}: ${String(message)}`);
-    process.exit(2);
+    return 2;
   };
   let prev = null;
   try {
     prev = previous(file, against, process.cwd(), current);
   } catch (e) {
-    failed(e);
+    return failed(e);
   }
   if (!prev) {
     console.error(`design-diff: nothing to compare ${file} against \u2014 no snapshot in design/.sync/, and it is not committed in git.
-Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
-    process.exit(2);
+Next time run \`${scriptCmd("design-diff")} --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
+    return 2;
   }
   let diff;
   try {
@@ -859,12 +991,13 @@ Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now p
   const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) {
-    fs3.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+    fs3.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
     fs3.writeFileSync(out, text);
     console.log(`wrote ${out} \u2014 ${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`);
   } else process.stdout.write(text);
+  return 0;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) main(process.argv.slice(2));
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   assetHashes,
   diffCatalog,
