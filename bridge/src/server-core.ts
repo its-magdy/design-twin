@@ -18,6 +18,7 @@ import { ifDefined } from "./json-util.ts";
 import { TIMEOUTS, exportTimeout, HEARTBEAT_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS } from "./ports.ts";
+import { legacySock } from "./daemon.ts";
 // The command/reply contract shared with the plugin: `request()` is typed per command from it, and
 // every reply is checked against it once, at the point it enters this process (see the message handler).
 import { replyShapeError } from "./commands.ts";
@@ -624,12 +625,19 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   let bound = false;
   const listening = new Promise<void>((resolve) => server.once("listening", () => { bound = true; resolve(); }));
 
+  // A daemon from an earlier dtwin build listens on a socket this build does not look at, so neither
+  // routing through it nor `dtwin --stop`'s first look finds it — the port error names it instead.
+  const legacyDaemonHint = (p: number): string => {
+    const sock = legacySock(p);
+    return sock ? ` A dtwin daemon from an earlier version may be holding it (socket ${sock}) — \`dtwin --stop\` stops it.` : "";
+  };
   server.on("error", (e) => {
     if (e && (e as NodeJS.ErrnoException).code === "EADDRINUSE") {
       const msg =
         `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. ` +
         `Stop it first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports ` +
-        `(${ALLOWED_PORTS.filter((p) => p !== port).join(", ")}) — the plugin walks all three.`;
+        `(${ALLOWED_PORTS.filter((p) => p !== port).join(", ")}) — the plugin walks all three.` +
+        legacyDaemonHint(port);
       if (opts.onListenError) return opts.onListenError(new Error(msg));
       console.error(msg);
       process.exit(1);

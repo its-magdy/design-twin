@@ -7,7 +7,7 @@
 //
 // Port rule: NOTHING here binds 8787–8789. The server runs under test/fixtures/no-shared-port.mjs, which
 // rewrites its TCP listen to an ephemeral port and prints it (`[no-shared-port] 8789 -> <port>`);
-// FIGMA_BRIDGE_PORT=8789 then only names the daemon socket, which lives in a short per-run TMPDIR
+// FIGMA_BRIDGE_PORT=8789 then only names the daemon socket, which lives under a short per-run TMPDIR
 // (/tmp/dtl-…: a unix socket path is capped at 104 bytes on macOS, and /var/folders/… is too long).
 // HOME is isolated and the token fixed, so nothing is minted into a real config dir.
 import fs from "node:fs";
@@ -31,6 +31,9 @@ const BASE = fs.realpathSync.native(fs.mkdtempSync("/tmp/dtl-"));
 const OWN_TMP = path.join(BASE, "t");
 fs.mkdirSync(OWN_TMP);
 process.env.TMPDIR = OWN_TMP;
+// The socket goes to XDG_RUNTIME_DIR when that is set; unset here (and in every spawned server's env) so
+// each process's socket follows its own TMPDIR and the servers below stay apart.
+delete process.env.XDG_RUNTIME_DIR;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, ms: number, step = 25): Promise<boolean> {
@@ -97,7 +100,7 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
   for (const d of [home, tmp, cwd]) fs.mkdirSync(d, { recursive: true });
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
-  for (const k of ["FIGMA_DAEMON_IDLE_MIN", "FIGMA_EXPORT_DIR", "FIGMA_BRIDGE_TOKEN_FILE", "XDG_CONFIG_HOME", "APPDATA"]) delete env[k];
+  for (const k of ["FIGMA_DAEMON_IDLE_MIN", "FIGMA_EXPORT_DIR", "FIGMA_BRIDGE_TOKEN_FILE", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "APPDATA"]) delete env[k];
   Object.assign(env, { HOME: home, TMPDIR: tmp, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: TOKEN, MAX_MCP_OUTPUT_TOKENS: "" }, opts.env ?? {});
   const p = spawn(process.execPath, ["--import", PRELOAD, MCP], { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
   let err = "";
@@ -136,7 +139,7 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
   });
   const s: Server = {
     p, dir, cwd,
-    sock: path.join(tmp, "designtwin-8789.sock"),
+    sock: daemon.sockPath(8789, { env: {}, tmpdir: tmp }),
     err: () => err,
     exit: () => exit,
     wsPort: () => { const m = /\[no-shared-port\] 8789 -> (\d+)/.exec(err); return m ? Number(m[1]) : null; },

@@ -178,7 +178,16 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
 // roulette instead of a stable id across a daemon's lifetime. That is a real cost, not a
 // cosmetic one, so a missing daemon is reported `warn`, never `ok` — "optional" undersold it.
 // `st` is read as DaemonStatusView: a daemon from an OLDER bridge may omit fields, which print as "?".
-function checkDaemon(st: DaemonStatusView | null | undefined, port: number): Check {
+// `refused` is daemon.sockProblem(port): the socket location is not private to this user, so no
+// daemon can be started or reached there — every command still works, one-shot. A fail, not a warn:
+// it is someone else's directory (or a loosened one) in the place this user's daemon would listen.
+function checkDaemon(st: DaemonStatusView | null | undefined, port: number, refused?: string | null): Check {
+  if (refused) {
+    return fail(
+      "daemon", "Daemon", refused,
+      "remove that directory (if another user owns it, ask them or an admin), or set XDG_RUNTIME_DIR or TMPDIR to a directory only you can access (mode 0700) — until then `dtwin serve` refuses to start and every command runs without a daemon"
+    );
+  }
   if (!st) {
     return warn(
       "daemon", "Daemon",
@@ -498,8 +507,11 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
     pluginCheck = checkPlugin({ skipped: "the port setting has to be fixed first" });
     add(pluginCheck);
   } else {
-    const st = await daemon.status(port).catch(() => null);
-    add(checkDaemon(st, port));
+    // A refused socket location is reported, not read as "no daemon" (status() alone would only warn
+    // on stderr and return null).
+    const refused = daemon.sockProblem(port);
+    const st = refused ? null : await daemon.status(port).catch(() => null);
+    add(checkDaemon(st, port, refused));
     const probe = await probePort(port);
     add(checkPort(port, probe, st, process.env.FIGMA_BRIDGE_PORT));
 

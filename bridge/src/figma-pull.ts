@@ -837,7 +837,10 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   // ---- daemon lifecycle commands. Each owns the whole invocation and returns.
   if (daemonCmd === "--stop") {
     const stopped = await daemon.stop();
-    console.error("[dtwin] " + (stopped ? "daemon stopped." : "no daemon is running."));
+    // Nothing at the current location: a daemon an earlier build started (before an upgrade) still
+    // listens at the old one, and is what holds the port.
+    const old = stopped ? null : await daemon.stopLegacy();
+    console.error("[dtwin] " + (stopped ? "daemon stopped." : old ? `stopped a daemon started by an earlier dtwin version (socket ${old}).` : "no daemon is running."));
     return;
   }
   if (daemonCmd === "--daemon-status") {
