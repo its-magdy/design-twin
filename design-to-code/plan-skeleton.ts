@@ -728,10 +728,10 @@ function main(argv: string[]): number {
     const prev = parsed && "plan" in parsed ? parsed.plan : null;
     const { plan, dropped } = merge(fresh, prev);
     seedAll(plan); // after the own-plan merge: this plan's own answers always win
-    fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
     // the one plan writer (plan-record.ts): atomic, so a kill mid-write cannot truncate a hand-answered plan, and in
-    // the file's own format (indent, CRLF, BOM), so a merge is not a whole-file diff
-    writePlan(out, plan);
+    // the file's own format (indent, CRLF, BOM), so a merge is not a whole-file diff. It skips identical bytes, so an
+    // unchanged plan is touched: verify-build treats a plan untouched for 12 h as a leftover and skips it.
+    if (!writePlan(out, plan)) { const now = new Date(); fs.utimesSync(out, now, now); }
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }
   console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded, ${fresh.anchorsSuggested.length} suggested anchor root(s) (anchorsSuggested)`);

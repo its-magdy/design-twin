@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ID, parseNodeId } from "./node-id.ts";
 import { ifDefined, nullProto } from "./json-util.ts";
+import { writeJsonLike } from "./json-file.ts";
 import { isMainFallback } from "./is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { SEED_HELP } from "./verbs.ts"; // the one help text, shared with `dtwin seed --help`
 
@@ -226,8 +227,7 @@ function run({ codeRoot, outDir, dryRun }: SeedOptions): void {
   // --dry-run: everything above only READ; the merge result is computed in memory and dropped here.
   const dry = dryRun ? "(dry run, nothing written) " : "";
   if (!dryRun) {
-    fs.mkdirSync(outDir, { recursive: true });
-    fs.writeFileSync(outPath, JSON.stringify(existing, null, 2));
+    writeJsonLike(outPath, existing); // a person's hand-edited map: atomic, in its own format
   }
   console.error(`[seed-components] ${dry}${found.length} mapping(s) from ${files.length} scanned file(s) → ${outPath}`);
   console.error(`[seed-components] ${dry}${added} new entr(ies), ${filled} field(s) filled. Fill in each entry's "import" and "props".`);

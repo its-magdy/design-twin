@@ -11,6 +11,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Browser, Page } from "playwright";
 import * as PD from "../design-to-code/probe-drive.ts";
+import { decodePng } from "../design-to-code/png.ts";
 import * as VP from "../design-to-code/verify-probe.ts";
 import { check, report } from "./assert.ts";
 
@@ -354,7 +355,7 @@ const rnd = (): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; ret
 let pngOk = true;
 for (const ch of [3, 4] as const) {
   const w = 13, h = 10, px = new Uint8Array(w * h * ch).map(() => rnd());
-  const d = PD.decodePng(encode(w, h, ch, px));
+  const d = decodePng(encode(w, h, ch, px));
   for (let i = 0, j = 0; i < px.length; i += ch, j += 4) if (d.data[j] !== px[i] || d.data[j + 1] !== px[i + 1] || d.data[j + 2] !== px[i + 2] || d.data[j + 3] !== (ch === 4 ? px[i + 3] : 255)) { pngOk = false; break; }
 }
 check("[review 9 m6] decodePng: RGB and RGBA PNGs using all five row filters (Average on odd sums) decode to the exact pixels", pngOk);

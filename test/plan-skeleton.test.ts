@@ -149,6 +149,12 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
   // pre-change: fails — rewritten as LF with 2-space indentation
   check("re-running --out keeps a hand-edited plan's own format (CRLF, 4-space indent) and leaves no temp file beside it",
     crlf.status === 0 && crlfText.includes("\r\n    \"") && !/[^\r]\n/.test(crlfText) && fs.readdirSync(dir).join() === "plan.json");
+  const old = new Date(Date.now() - 24 * 3600 * 1000);
+  fs.utimesSync(out, old, old);
+  const same = run([screen(JR), vars(JR), DS, "--out", out]);
+  // pre-change: fails — identical bytes were not rewritten, so the plan kept its day-old mtime and verify-build skipped it
+  check("re-running --out on an unchanged plan refreshes its mtime (verify-build's staleness cutoff reads it)",
+    same.status === 0 && fs.readFileSync(out, "utf8") === crlfText && Date.now() - fs.statSync(out).mtimeMs < 3600 * 1000);
   fs.writeFileSync(out, "{ not json");
   check("an existing plan that is not JSON is never overwritten", run([screen(JR), vars(JR), DS, "--out", out]).status === 1 && fs.readFileSync(out, "utf8") === "{ not json");
 }

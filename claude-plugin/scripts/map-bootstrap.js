@@ -2,7 +2,7 @@
 
 
 // design-to-code/map-bootstrap.ts
-import fs4 from "node:fs";
+import fs5 from "node:fs";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -407,7 +407,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path3, message) => errors.push({ path: path3, message });
+  const err = (path4, message) => errors.push({ path: path4, message });
   if (!isObj2(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -583,6 +583,41 @@ function unionCatalog(sources) {
   return { ...first ? first.catalog : {}, components };
 }
 var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + sources.map((s) => `${s.file} [${s.role}, ${s.catalog.components.length} component(s)]`).join(", ");
+
+// bridge/src/json-file.ts
+import fs4 from "node:fs";
+import path3 from "node:path";
+var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+function formatJsonLike(value, raw) {
+  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
+  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const text = raw.slice(bom.length);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
+}
+function writeJsonLike(file, value, raw) {
+  let was = raw ?? null;
+  if (raw === void 0) try {
+    was = fs4.readFileSync(file, "utf8");
+  } catch {
+    was = null;
+  }
+  const out = formatJsonLike(value, was);
+  if (out === was) return false;
+  fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  try {
+    fs4.writeFileSync(tmp, out);
+    fs4.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs4.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+  return true;
+}
 
 // design-to-code/map-bootstrap.ts
 var clone = (o) => structuredClone(o);
@@ -813,7 +848,7 @@ ${usage}`);
   const others = { components: unionCatalog(sources.slice(1)).components.filter((c) => !!c.key && !catalog.components.some((n) => n.key === c.key)).map(({ id: _foreignId, ...c }) => c) };
   if (screenFile || proposalsFile) console.error(`map-bootstrap: ${catalogSetLine(sources)}`);
   const existingFile = existingArg || outFile;
-  const existingRaw = existingFile && fs4.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  const existingRaw = existingFile && fs5.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
   let existing = null;
   if (existingRaw !== null) {
     const valid = validateMap(existingRaw);
@@ -837,7 +872,7 @@ ${usage}`);
       return 1;
     }
     const out = JSON.stringify(map, null, 2) + "\n";
-    if (outFile) fs4.writeFileSync(outFile, out);
+    if (outFile) fs5.writeFileSync(outFile, out);
     else process.stdout.write(out);
     for (const sk of report.skipped) console.error(`warn  ${sk}`);
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) \u2192 ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` \u2014 wrote ${outFile}` : ""}`);
@@ -860,11 +895,10 @@ ${usage}`);
     console.error(`map-bootstrap: --screen scoped the catalog${sources.length > 1 ? `s` : ""} from ${all.length} to ${scoped.length} component(s) this screen actually uses` + (fromOthers ? ` (${fromOthers} of them from a library catalog).` : "."));
   }
   const written = bootstrap(scopedCatalog, existing);
-  const json = JSON.stringify(written, null, 2) + "\n";
   if (!outFile) {
-    process.stdout.write(json);
+    process.stdout.write(JSON.stringify(written, null, 2) + "\n");
   } else {
-    fs4.writeFileSync(outFile, json);
+    writeJsonLike(outFile, written);
     const entries = Object.values(written.components);
     const review = entries.filter((e) => e.status === "needs-review").length;
     console.error(`map-bootstrap: wrote ${outFile} \u2014 ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);

@@ -25,6 +25,7 @@ import { isCodeConnectMap, validateMap } from "./map-validate.ts";
 import { readCatalogSet, unionCatalog, catalogSetLine } from "./design-system-dir.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { nullProto } from "../bridge/src/json-util.ts";
+import { writeJsonLike } from "../bridge/src/json-file.ts";
 
 const clone = <T>(o: T): T => structuredClone(o);
 
@@ -331,11 +332,10 @@ function main(argv: string[]): number {
       (fromOthers ? ` (${fromOthers} of them from a library catalog).` : "."));
   }
   const written = bootstrap(scopedCatalog, existing);
-  const json = JSON.stringify(written, null, 2) + "\n";
   if (!outFile) {
-    process.stdout.write(json);
+    process.stdout.write(JSON.stringify(written, null, 2) + "\n");
   } else {
-    fs.writeFileSync(outFile, json);
+    writeJsonLike(outFile, written); // a person's hand-edited map: atomic, in its own format
     const entries = Object.values(written.components);
     const review = entries.filter((e) => e.status === "needs-review").length;
     console.error(`map-bootstrap: wrote ${outFile} — ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);

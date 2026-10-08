@@ -1024,7 +1024,8 @@ const USAGE =
   "      --run <id> (from verify-screen --status … --new-run): writes the run's LIVE status (the run cache,\n" +
   "      node_modules/.cache/designtwin-verify/<Screen>.status.json — never the project tree a dev server watches) — `measuring`\n" +
   "      before the browser starts, `measured` (+ the measured file's sha256) after it is closed; an exit 3/4 bumps its rev. A run that\n" +
-  "      already ended (done/failed/blocked) is refused before anything starts (exit 2: start a --new-run).\n" +
+  "      already ended (done/failed/blocked) is refused before anything starts, and one that ends while the page is measured\n" +
+  "      gets no files (exit 2 both ways: start a --new-run).\n" +
   "      --max-time bounds the whole run (default 180000 ms): past it the browser is closed and nothing is written (exit 4).\n" +
   "      --steps: a JSON list of steps (or a plan whose `navigate` holds them) replayed after every page load, before --ready,\n" +
   "      to reach a screen that is a section of the app (not a URL): {\"click\": \"<selector>\"} | {\"waitFor\": \"<selector>\"} |\n" +
@@ -1143,13 +1144,15 @@ export async function main(argv: string[]): Promise<number> {
   const runId = f.run !== undefined && !f.check && statusBase ? f.run : undefined;
   // live F4 (s19): an ended run (done/failed/blocked) takes no more writes — a probe with its --run would reopen it
   // (phase back to measuring) and lose the verifier's `blocked` the same way a --status write would
-  if (runId !== undefined) {
+  // Checked again right before the files are written: a run ended while the page was measured gets none of them.
+  const endedRun = (): boolean => {
+    if (runId === undefined) return false;
     const prev = readStatus(statusBase);
-    if (prev && prev !== "v1" && prev.runId === runId && TERMINAL_PHASES.includes(prev.phase)) {
-      console.error(`verify-probe: run ${runId} already ended at ${prev.phase}${prev.detail ? ` (${prev.detail})` : ""} — start a new run with --new-run`);
-      return 2;
-    }
-  }
+    if (!prev || prev === "v1" || prev.runId !== runId || !TERMINAL_PHASES.includes(prev.phase)) return false;
+    console.error(`verify-probe: run ${runId} already ended at ${prev.phase}${prev.detail ? ` (${prev.detail})` : ""} — start a new run with --new-run`);
+    return true;
+  };
+  if (endedRun()) return 2;
   // M-a: a status write the run cache refuses (the sandbox's write scope) is a warning — the probe keeps its exit
   // contract (0/2/3/4) and never crashes on it. Returns false when the write was refused.
   let endedMeanwhile = false;
@@ -1383,6 +1386,7 @@ export async function main(argv: string[]): Promise<number> {
   const allNotes = [...notes, ...r.notes, ...(driveNote !== null ? [driveNote] : [])];
   // F-72: atomic, the picture first — a reader that sees measured.json sees the screenshot it lists
   const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
+  if (endedRun()) return 2;
   writeFileAtomic(png, r.png);
   // 12b: listed in behaviour.artifacts only (never measured.artifacts: compare's artifact check stays verdict-neutral). L4: a run
   // that takes none removes an earlier run's (that exact path) — it would sit unlisted next to a measured file that never saw
@@ -1421,6 +1425,7 @@ export async function main(argv: string[]): Promise<number> {
       `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` +
       (findable ? "" : ` — after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
   }
+  if (endedMeanwhile) return 2; // ended between the check before the writes and the `measured` write: no next step for it
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
   return 0;
 }

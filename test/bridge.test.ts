@@ -163,6 +163,15 @@ ok("[sec-seed-no-starve] unrelated entry still backfilled after a '__proto__' en
 ok("[sec-seed-no-pollute] Object.prototype was not mutated",
   ({} as Record<string, unknown>).source === undefined && ({} as Record<string, unknown>).nodeId === undefined);
 ok("[seed-preserves-human-fields] hand-authored import survives the merge", widget.import === "@/ui");
+{
+  // PR #1 review A9: the hand-edited map is rewritten atomically and in its own format (pre-change: LF, 2 spaces)
+  const map = path.join(tmp, "poison", "design", "components.json");
+  fs.writeFileSync(map, JSON.stringify({ Widget: { component: "Widget", import: "@/ui", props: {} } }, null, 4).split("\n").join("\r\n") + "\r\n");
+  execFileSync(process.execPath, [seed, path.join(tmp, "poison"), path.dirname(map)], { stdio: "pipe" });
+  const text = fs.readFileSync(map, "utf8");
+  ok("[A9] seed keeps a hand-edited map's own format (CRLF, 4-space indent) and leaves no temp file beside it",
+    text.includes("\r\n    \"") && !/[^\r]\n/.test(text) && text.endsWith("}\r\n") && !fs.readdirSync(path.dirname(map)).some((f) => f.includes(".tmp-")));
+}
 
 console.log("\nseed-components — node-id -> name via the split catalog:");
 // A Code Connect template that carries a node-id but NO `component=` can only be named by looking the

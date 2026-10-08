@@ -26,10 +26,10 @@
 //   - React commits a dialog opened from a click within a frame or two: the detector polls every 100 ms for 2 s.
 //   - :modal and :popover-open parse in Chromium; an unknown selector throws, so each contract selector is tried alone.
 import { setTimeout as sleep } from "node:timers/promises";
-import { inflateSync } from "node:zlib";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { InteractionEvidence, InteractionOutcome, PageOverflow, ProbeActivation, VerifyExpectation, VerifyInteraction } from "./types.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
+import { decodePng } from "./png.ts";
 
 // ---------------------------------------------------------------- the page, as far as these functions use it
 interface DRect { x: number; y: number; width: number; height: number; right: number; bottom: number }
@@ -1248,42 +1248,6 @@ const CLOSED = /Target closed|Target page, context or browser has been closed|Br
 const NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
 const firstLine = (e: unknown): string => errMsg(e).split("\n")[0] ?? "";
 const notRun = (row: VerifyInteraction, detail: string, extra?: Partial<InteractionEvidence>): InteractionEvidence => ({ nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `not-run: ${detail}`, ...extra });
-
-/** D53: a Playwright screenshot as RGBA pixels — PNG colour type 2 (RGB) or 6 (RGBA), depth 8, not interlaced (what Chromium
- *  writes; W3C PNG 3 §9 filters, §11.2.2 IHDR); anything else throws (the caller refuses). */
-export function decodePng(buf: Buffer): { w: number; h: number; data: Uint8Array } {
-  let o = 8, w = 0, h = 0, ct = -1, depth = 0, interlace = 0;
-  const idat: Buffer[] = [];
-  while (o + 8 <= buf.length) {
-    const len = buf.readUInt32BE(o), type = buf.toString("latin1", o + 4, o + 8), d = buf.subarray(o + 8, o + 8 + len);
-    if (type === "IHDR") { w = d.readUInt32BE(0); h = d.readUInt32BE(4); depth = d[8] ?? 0; ct = d[9] ?? -1; interlace = d[12] ?? 0; }
-    else if (type === "IDAT") idat.push(d);
-    else if (type === "IEND") break;
-    o += 12 + len;
-  }
-  if (depth !== 8 || (ct !== 2 && ct !== 6) || interlace !== 0) throw new Error(`unsupported PNG (colour type ${ct}, depth ${depth}${interlace ? ", interlaced" : ""})`);
-  const ch = ct === 6 ? 4 : 3, stride = w * ch;
-  const raw = inflateSync(Buffer.concat(idat));
-  if (raw.length < (stride + 1) * h) throw new Error("truncated PNG");
-  const px = new Uint8Array(stride * h);
-  for (let y = 0; y < h; y++) {
-    const f = raw[y * (stride + 1)] ?? 0, s = y * (stride + 1) + 1, dst = y * stride, prev = dst - stride;
-    for (let i = 0; i < stride; i++) {
-      const x = raw[s + i] ?? 0, a = i >= ch ? px[dst + i - ch] ?? 0 : 0, b = y ? px[prev + i] ?? 0 : 0, c = y && i >= ch ? px[prev + i - ch] ?? 0 : 0;
-      let v: number;
-      if (f === 0) v = x;
-      else if (f === 1) v = x + a;
-      else if (f === 2) v = x + b;
-      else if (f === 3) v = x + ((a + b) >> 1);
-      else { const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c); v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c); }
-      px[dst + i] = v & 255;
-    }
-  }
-  if (ch === 4) return { w, h, data: px };
-  const data = new Uint8Array(w * h * 4);
-  for (let i = 0, j = 0; i < px.length; i += 3, j += 4) { data[j] = px[i] ?? 0; data[j + 1] = px[i + 1] ?? 0; data[j + 2] = px[i + 2] ?? 0; data[j + 3] = 255; }
-  return { w, h, data };
-}
 
 /** Review 9 H-1: the signed distance (CSS px; < 0 inside) from (px, py) to a rounded rect — its rect, or by the corner's
  *  quadrant the ellipse of that corner (first-order: the implicit function over its gradient — exact at the edge, more negative

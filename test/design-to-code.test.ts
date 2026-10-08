@@ -1214,6 +1214,12 @@ console.log("map — SLOT props:");
   check("[map-invalid] map-bootstrap refuses an existing map whose components is an array (exit 1, names the problem)",
     mb.status === 1 && /components: must be an object/.test(mb.stderr) && /refusing to rewrite/.test(mb.stderr));
   check("[map-invalid] …and leaves the file byte-for-byte untouched", fs.readFileSync(path.join(cwd, "array-map.json"), "utf8") === arrayMap);
+  // PR #1 review A9: a valid hand-edited map is merged into atomically and in its own format (pre-change: LF, 2 spaces)
+  fs.writeFileSync(path.join(cwd, "hand-map.json"), JSON.stringify({ version: 1, components: {} }, null, 4).split("\n").join("\r\n") + "\r\n");
+  const hm = run("map-bootstrap.ts", ["catalog.json", "--out", "hand-map.json"]);
+  const hmText = fs.readFileSync(path.join(cwd, "hand-map.json"), "utf8");
+  check("[A9] map-bootstrap keeps a hand-edited map's own format (CRLF, 4-space indent) and leaves no temp file beside it",
+    hm.status === 0 && hmText.includes("\r\n    \"") && !/[^\r]\n/.test(hmText) && !fs.readdirSync(cwd).some((f) => f.includes(".tmp-")));
 })();
 
 // ---------- get-component.js: resolve a catalog entry -> its variantsFile detail -----------------

@@ -2,8 +2,8 @@
 
 
 // design-to-code/verify-screen.ts
-import fs6 from "node:fs";
-import path5 from "node:path";
+import fs7 from "node:fs";
+import path6 from "node:path";
 import crypto6 from "node:crypto";
 
 // design-to-code/hidden.ts
@@ -11,12 +11,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path6, parent, depth) {
+  (function go(node, parentHidden, path7, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path6, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path7, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path6 ? path6 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path7 ? path7 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -153,19 +153,469 @@ function legacyPlanHash(plan) {
 }
 
 // design-to-code/plan-record.ts
-import fs4 from "node:fs";
-import path4 from "node:path";
-import crypto5 from "node:crypto";
-
-// design-to-code/verify-run.ts
 import fs3 from "node:fs";
-import os from "node:os";
 import path3 from "node:path";
+import crypto4 from "node:crypto";
+
+// bridge/src/json-file.ts
+import fs2 from "node:fs";
+import path2 from "node:path";
+var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+function formatJsonLike(value, raw) {
+  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
+  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const text = raw.slice(bom.length);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
+}
+function writeJsonLike(file, value, raw) {
+  let was = raw ?? null;
+  if (raw === void 0) try {
+    was = fs2.readFileSync(file, "utf8");
+  } catch {
+    was = null;
+  }
+  const out = formatJsonLike(value, was);
+  if (out === was) return false;
+  fs2.mkdirSync(path2.dirname(path2.resolve(file)), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  try {
+    fs2.writeFileSync(tmp, out);
+    fs2.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs2.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+  return true;
+}
+
+// design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// design-to-code/probe-steps.ts
+import crypto3 from "node:crypto";
+
+// design-to-code/plan-waivers.ts
 import crypto2 from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
+var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
+function isPassingVerdict(v) {
+  return typeof v === "string" && PASSING_VERDICTS.includes(v);
+}
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+function waiversHash(plan) {
+  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
+  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
+  return crypto2.createHash("sha256").update(canonical({ descopes, waivers })).digest("hex");
+}
+function planInteractionsSha256(plan) {
+  const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
+  return crypto2.createHash("sha256").update(canonical(rows)).digest("hex");
+}
+
+// design-to-code/probe-steps.ts
+var STEP_KINDS = ["click", "waitFor", "goto"];
+var isStepKind = (k) => STEP_KINDS.includes(k);
+var REFUSED = {
+  fill: "a typed value may submit a form when the steps are replayed",
+  type: "a typed value may submit a form when the steps are replayed",
+  press: "a key press may submit a form when the steps are replayed",
+  hover: "a hover is not a navigation (hover-revealed openers are revealed by the probe itself)",
+  check: "a checked box is state, not navigation",
+  select: "a selected option is state, not navigation"
+};
+function isSameOriginPath(v) {
+  return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
+}
+function parseSteps(x) {
+  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
+  if (!Array.isArray(list)) {
+    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
+  }
+  const steps = [];
+  for (const [i, raw] of list.entries()) {
+    const at = `step ${i + 1}`;
+    if (!isJsonObject(raw)) return { error: `${at} is not an object like {"click": "<selector>"}` };
+    const keys = Object.keys(raw);
+    const k = keys[0];
+    if (keys.length !== 1 || k === void 0) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} \u2014 exactly one of ${STEP_KINDS.join(" / ")}` };
+    const v = raw[k];
+    if (!isStepKind(k)) {
+      const lk = k.toLowerCase();
+      const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : void 0;
+      return { error: `${at} {${k}: \u2026} is not a step \u2014 the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
+    }
+    if (typeof v !== "string" || v.trim() === "") return { error: `${at} {${k}: \u2026} needs a non-empty string` };
+    if (k === "goto" && !isSameOriginPath(v)) return { error: `${at} {goto: ${JSON.stringify(v)}} must be a same-origin path starting with "/" (e.g. "/orders?tab=open") \u2014 never "//" or "/\\", and no backslash, whitespace or control character` };
+    steps.push(k === "click" ? { click: v } : k === "waitFor" ? { waitFor: v } : { goto: v });
+  }
+  return { steps };
+}
+function stepsSha256(steps) {
+  return crypto3.createHash("sha256").update(canonical(steps)).digest("hex");
+}
+function isPlanExpect(x) {
+  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
+}
+function actionForExpect(expect) {
+  return expect === "dialog" ? "overlay" : expect === "url" ? "navigate" : "other";
+}
+
+// design-to-code/doc-guards.ts
+function optArrayOf(x, each) {
+  return x === void 0 || Array.isArray(x) && x.every(each);
+}
+var isObj = isJsonObject;
+var optObj = (x) => x === void 0 || isObj(x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var anyObject = (x) => isObj(x);
+function isVariable(x) {
+  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
+}
+function isVariableCollection(x) {
+  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
+}
+function isTokensDoc(x) {
+  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+}
+isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
+function isCatalogComponent(x) {
+  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+}
+function isComponentsCatalog(x) {
+  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+}
+isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
+function isComponentDetailFile(x) {
+  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+}
+isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
+function isTextStylesDoc(x) {
+  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
+}
+isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+var SEVERITIES = ["blocker", "warning", "info"];
+function isAuditOverridesDoc(x) {
+  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
+function isAuditReport(x) {
+  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
+}
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
+function isProposal(x) {
+  return isObj(x) && typeof x.name === "string";
+}
+function isProposalList(x) {
+  return Array.isArray(x) && x.every(isProposal);
+}
+isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
+function isIndexRowLike(x) {
+  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
+}
+function isPagesRootIndex(x) {
+  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+}
+isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
+function isPageIndex(x) {
+  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+}
+isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
+function isVerifyExpectation(x) {
+  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+}
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+function isProbeIdentity(x) {
+  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+function isBuildIdentity(x) {
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
+var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
+var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+var isRect4 = (x) => isObj(x) && isNum(x.x) && isNum(x.y) && isNum(x.w) && isNum(x.h);
+function isMeasuredVisual(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+function isVisualRegion(x) {
+  return isObj(x) && isRect4(x.rect) && isNum(x.pixels) && isNum(x.pct) && isStringArray(x.built) && isStringArray(x.designed);
+}
+var MEASURED_EXTRAS = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // group 11 (DT-47): the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // 12c: the visual diff (informational, D40(3))
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
+];
+function isMeasuredCore(x) {
+  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+function isVerifyMeasured(x) {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
+}
+function readableMeasured(x) {
+  if (!isMeasuredCore(x)) return null;
+  const copy = { ...x };
+  const notes = [];
+  const dropped = [];
+  for (const [k, ok, what] of MEASURED_EXTRAS) {
+    if (copy[k] !== void 0 && !ok(copy[k])) {
+      notes.push(`measured.${k} is not ${what}; ignored`);
+      dropped.push(k);
+      delete copy[k];
+    }
+  }
+  if (Array.isArray(copy.nodes)) {
+    let dropped2 = 0;
+    copy.nodes = copy.nodes.map((n) => {
+      if (!isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)) return n;
+      dropped2++;
+      const { unmeasured: _drop, ...rest } = n;
+      return rest;
+    });
+    if (dropped2) notes.push(`${dropped2} node(s) carry an \`unmeasured\` that is not a {key: reason} map; ignored (their nulls read as 'reported null')`);
+  }
+  return isVerifyMeasured(copy) ? { doc: copy, notes, dropped } : null;
+}
+isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
+function isEvidence(x) {
+  return isObj(x) && typeof x.nodeId === "string";
+}
+function isInteractionEvidenceList(x) {
+  return Array.isArray(x) && x.every(isEvidence);
+}
+isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isMeasuredComponentList(x) {
+  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
+}
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_OBJECTS = ["anchors", "verification", "counts"];
+var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
+function planProblem(x) {
+  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
+  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
+    const list = x[k];
+    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+  }
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
+  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  return null;
+}
+function isPlan(x) {
+  return planProblem(x) === null;
+}
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+function parsePlan(x) {
+  return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
+}
+var reqStr = (v) => typeof v === "string" && v.trim() !== "";
+function isPlanWaiver(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+function isPlanDescope(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isPlanInteraction(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
+}
+isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
+function isStringRecord(x) {
+  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
+}
+isStringRecord.expected = "an object of strings";
+
+// design-to-code/plan-record.ts
+var slash = (p) => p.split(path3.sep).join("/").split("\\").join("/");
+var writePlan = writeJsonLike;
+var RECORDED_DELTA_KEYS = /* @__PURE__ */ new Set(["nodeId", "field", "severity", "expected", "actual"]);
+var isRecordedDelta = (d) => isJsonObject(d) && typeof d.nodeId === "string" && typeof d.field === "string" && (d.severity === "high" || d.severity === "medium") && Object.keys(d).every((k) => RECORDED_DELTA_KEYS.has(k));
+function recordPlan(planFile, report, reportRel, opts = {}) {
+  const cwd = opts.cwd ?? process.cwd();
+  const abs = path3.resolve(cwd, planFile);
+  const notes = [];
+  const raw = fs3.readFileSync(abs, "utf8");
+  const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
+  const pp = parsePlan(parsed);
+  if (!("plan" in pp)) throw new Error(`${planFile} ${pp.error}`);
+  const plan = pp.plan;
+  const inside = (r) => !(r === ".." || r.startsWith("../") || path3.isAbsolute(r) || /^[A-Za-z]:/.test(r));
+  const realOf = (p) => {
+    try {
+      return fs3.realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  const rel = (p) => {
+    const lex = slash(path3.relative(cwd, path3.resolve(cwd, p)));
+    if (inside(lex)) return lex;
+    const real = slash(path3.relative(realOf(cwd), realOf(path3.resolve(cwd, p))));
+    return inside(real) ? real : null;
+  };
+  const reportAt = rel(reportRel);
+  if (reportAt === null) throw new Error(`the report ${slash(reportRel)} is outside the project (${slash(cwd)}) \u2014 the plan records project-relative paths only; write the report inside the project (--out design/verify/<Screen>)`);
+  const exists2 = (p) => {
+    try {
+      return fs3.statSync(path3.resolve(cwd, p)).isFile();
+    } catch {
+      return false;
+    }
+  };
+  const artifacts = [];
+  const outside = [];
+  const addArtifact = (p) => {
+    if (!p || !exists2(p)) return;
+    const r = rel(p);
+    if (r === null) {
+      if (!outside.includes(slash(p))) outside.push(slash(p));
+    } else if (!artifacts.includes(r)) artifacts.push(r);
+  };
+  addArtifact(reportAt);
+  addArtifact(reportAt.replace(/\.report\.json$/, ".report.md"));
+  for (const a of report.artifacts) {
+    if (typeof a === "string") addArtifact(a);
+    else if (a && typeof a.path === "string" && !("exists" in a && a.exists === false)) addArtifact(a.path);
+  }
+  if (outside.length) notes.push(`${outside.length} artifact(s) outside the project not recorded in verification.artifacts (project-relative paths only): ${outside.join(", ")}`);
+  const deltas = report.deltas;
+  const compact = deltas.filter((d) => !d.accepted && (d.severity === "high" || d.severity === "medium")).map((d) => ({ nodeId: d.nodeId, field: d.field, severity: d.severity, expected: d.expected, actual: d.actual }));
+  const s = report.summary;
+  const notMeasured = typeof report.coverage.nodesNotMeasured === "number" ? report.coverage.nodesNotMeasured : report.notMeasured.length;
+  let reportSha256;
+  try {
+    reportSha256 = crypto4.createHash("sha256").update(fs3.readFileSync(path3.resolve(cwd, reportAt))).digest("hex");
+  } catch {
+    reportSha256 = crypto4.createHash("sha256").update(JSON.stringify(report, null, 2) + "\n").digest("hex");
+    notes.push(`${reportAt} is not on disk \u2014 recorded the sha256 of the report as --compare writes it`);
+  }
+  const b = report.behaviour;
+  const recorded = {
+    by: "verify-screen --record-plan",
+    at: opts.now ?? (/* @__PURE__ */ new Date()).toISOString(),
+    report: reportAt,
+    reportSha256,
+    verdict: report.verdict,
+    headline: report.headline,
+    ...b.headline ? { behaviourHeadline: b.headline } : {},
+    counts: {
+      high: s.high,
+      medium: s.medium,
+      low: s.low,
+      accepted: s.accepted ?? deltas.filter((d) => d.accepted).length,
+      notMeasured,
+      inferred: s.inferred ?? (report.inferred ? report.inferred.length : 0)
+    }
+  };
+  const v = plan.verification ?? {};
+  const hook = v.hook;
+  if (hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan)) {
+    hook.planHash = planHash(plan);
+    notes.push("the hook's record held the pre-F-100 plan hash (it covered verification) \u2014 re-stamped with the current one, so this record does not reopen the plan");
+  }
+  const prev = v.recorded;
+  if (prev && typeof prev.at === "string" && JSON.stringify({ ...prev, at: "" }) === JSON.stringify({ ...recorded, at: "" })) recorded.at = prev.at;
+  if (report.mode === "static-only") {
+    v.mode = "static-only";
+    if (report.reason) v.reason = report.reason;
+    delete v.renderer;
+  } else {
+    if (v.mode === "static-only") delete v.reason;
+    v.mode = "rendered";
+    if (typeof report.renderer === "string" && report.renderer) v.renderer = report.renderer;
+  }
+  v.artifacts = artifacts;
+  const hand = Array.isArray(v.deltas) ? v.deltas.filter((d) => !isRecordedDelta(d)) : [];
+  if (hand.length) notes.push(`${hand.length} row(s) in verification.deltas were not written by --record-plan and are replaced by the report's open deltas (${hand.map((d) => isJsonObject(d) && typeof d.nodeId === "string" ? `${d.nodeId}${typeof d.field === "string" ? ` ${d.field}` : ""}` : JSON.stringify(d).slice(0, 40)).join(", ")}) \u2014 put builder-chosen residuals in deviations[] (with the why), never in verification.deltas`);
+  else if (v.deltas !== void 0 && !Array.isArray(v.deltas)) notes.push(`verification.deltas was a hand-written ${v.deltas === null ? "null" : typeof v.deltas} (${JSON.stringify(v.deltas).slice(0, 60)}), replaced by the report's open deltas (an array) \u2014 the counts are in verification.recorded.counts; put builder-chosen residuals in deviations[] (with the why)`);
+  v.deltas = compact;
+  const handText = (x) => typeof x === "string" ? x.trim() : isJsonObject(x) && typeof x.verdict === "string" ? x.verdict.trim() : null;
+  const stale = [];
+  const handHeadline = "headline" in v ? handText(v.headline) : null;
+  if (handHeadline !== null && handHeadline !== recorded.headline.trim()) stale.push(`verification.headline ("${handHeadline.slice(0, 60)}")`);
+  for (const k of ["verdict", "verifyScreenVerdict"]) {
+    const t = handText(v[k]);
+    if (t !== null && t.toLowerCase() !== recorded.verdict.toLowerCase()) stale.push(`verification.${k} ("${t.slice(0, 40)}")`);
+  }
+  if (stale.length) notes.push(`${stale.join(" and ")} \u2014 hand-written, and not what this report says (verdict "${recorded.verdict}"); stale beside verification.recorded, which is the record \u2014 update or remove ${stale.length > 1 ? "them" : "it"} by hand`);
+  if (b.ran) {
+    const tool = b.axe && "version" in b.axe ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks";
+    v.a11y = { tool, violations: b.summary.fail, warnings: b.summary.warn, report: reportAt };
+  } else if (v.a11y !== void 0) notes.push(`behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 verification.a11y left as it was`);
+  v.recorded = recorded;
+  plan.verification = v;
+  return { written: writePlan(abs, plan, raw), notes };
+}
 
 // design-to-code/read-json.ts
-import fs2 from "node:fs";
+import fs4 from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
@@ -182,7 +632,7 @@ function readFailure(e) {
 function readJson(file, guard) {
   let buf;
   try {
-    buf = fs2.readFileSync(file);
+    buf = fs4.readFileSync(file);
   } catch (e) {
     return readFailure(e);
   }
@@ -206,19 +656,34 @@ function readJsonOrNull(file, guard) {
   return "doc" in r ? r.doc : null;
 }
 
-// design-to-code/types.ts
-function isJsonObject(x) {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
+// design-to-code/catalog-input.ts
+function readJsonFile(file, what, hint) {
+  return readDocFile(file, what, anyJson, hint);
+}
+function readDocFile(file, what, guard, hint) {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : ""));
+  process.exit(2);
 }
 
+// design-to-code/verify-run.ts
+import fs5 from "node:fs";
+import os from "node:os";
+import path5 from "node:path";
+import crypto5 from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+
 // design-to-code/cli-args.ts
-import path2 from "node:path";
+import path4 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `node ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
+var scriptCmd = (name) => `node ${shellQuote(path4.join(path4.dirname(SELF), name + path4.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -269,16 +734,16 @@ var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "
 var TERMINAL_PHASES = ["done", "failed", "blocked"];
 var MEASURED_PHASES = ["measured", "done"];
 var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-var optStr = (x) => x === void 0 || typeof x === "string";
+var optStr2 = (x) => x === void 0 || typeof x === "string";
 function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr(x.expectationSha256) && optStr(x.measuredSha256) && optStr(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
-var sha256Of = (data) => crypto2.createHash("sha256").update(data).digest("hex");
+var sha256Of = (data) => crypto5.createHash("sha256").update(data).digest("hex");
 function sha256File(file) {
   try {
-    return sha256Of(fs3.readFileSync(file));
+    return sha256Of(fs5.readFileSync(file));
   } catch {
     return null;
   }
@@ -287,67 +752,67 @@ var CACHE_NAME = "designtwin-verify";
 var shortSha = (s) => sha256Of(s).slice(0, 16);
 var isDir = (p) => {
   try {
-    return fs3.statSync(p).isDirectory();
+    return fs5.statSync(p).isDirectory();
   } catch {
     return false;
   }
 };
-var exists = (p) => fs3.existsSync(p);
+var exists = (p) => fs5.existsSync(p);
 function realpath(p) {
-  if (typeof fs3.realpathSync.native === "function") {
+  if (typeof fs5.realpathSync.native === "function") {
     try {
-      return fs3.realpathSync.native(p);
+      return fs5.realpathSync.native(p);
     } catch {
     }
   }
-  return fs3.realpathSync(p);
+  return fs5.realpathSync(p);
 }
-function canonical(p) {
-  const abs = path3.resolve(p);
+function canonical2(p) {
+  const abs = path5.resolve(p);
   try {
     return realpath(abs);
   } catch {
-    const parent = path3.dirname(abs);
-    return parent === abs ? abs : path3.join(canonical(parent), path3.basename(abs));
+    const parent = path5.dirname(abs);
+    return parent === abs ? abs : path5.join(canonical2(parent), path5.basename(abs));
   }
 }
-var hasPnp = (d) => exists(path3.join(d, ".pnp.cjs")) || exists(path3.join(d, ".pnp.js"));
+var hasPnp = (d) => exists(path5.join(d, ".pnp.cjs")) || exists(path5.join(d, ".pnp.js"));
 function isWorkspaceRoot(d) {
-  if (exists(path3.join(d, "pnpm-workspace.yaml"))) return true;
-  const r = readJson(path3.join(d, "package.json"), anyJson);
+  if (exists(path5.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path5.join(d, "package.json"), anyJson);
   return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
 }
 function installRootOf(dir) {
   let P = null;
-  for (let d = dir; ; d = path3.dirname(d)) {
-    if (exists(path3.join(d, "package.json"))) {
+  for (let d = dir; ; d = path5.dirname(d)) {
+    if (exists(path5.join(d, "package.json"))) {
       P = d;
       break;
     }
-    if (exists(path3.join(d, ".git")) || path3.dirname(d) === d) return null;
+    if (exists(path5.join(d, ".git")) || path5.dirname(d) === d) return null;
   }
-  if (isDir(path3.join(P, "node_modules"))) return P;
+  if (isDir(path5.join(P, "node_modules"))) return P;
   let ws = null;
-  for (let d = P; ; d = path3.dirname(d)) {
+  for (let d = P; ; d = path5.dirname(d)) {
     if (isWorkspaceRoot(d)) {
       ws = d;
       break;
     }
-    if (exists(path3.join(d, ".git")) || path3.dirname(d) === d) break;
+    if (exists(path5.join(d, ".git")) || path5.dirname(d) === d) break;
   }
-  if (ws !== null && isDir(path3.join(ws, "node_modules"))) return ws;
+  if (ws !== null && isDir(path5.join(ws, "node_modules"))) return ws;
   if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
   return P;
 }
 function runCacheOf(verifyDir) {
-  const v = canonical(verifyDir);
+  const v = canonical2(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
-    const cache = path3.join(root, "node_modules", ".cache", CACHE_NAME);
-    const rel = path3.relative(root, v).split(path3.sep).join("/");
-    return { dir: rel === "design/verify" ? cache : path3.join(cache, "dirs", shortSha(rel)), root };
+    const cache = path5.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path5.relative(root, v).split(path5.sep).join("/");
+    return { dir: rel === "design/verify" ? cache : path5.join(cache, "dirs", shortSha(rel)), root };
   }
-  return { dir: path3.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+  return { dir: path5.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
 }
 function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
@@ -379,24 +844,24 @@ function inRunCache(verifyDir, fn) {
   }
 }
 var EXIT_RUN_CACHE = 6;
-var liveStatusFile = (base) => path3.join(runCacheDir(path3.dirname(base)), path3.basename(base) + ".status.json");
-var stageDirOf = (base, runId) => path3.join(runCacheDir(path3.dirname(base)), "stage", runId);
+var liveStatusFile = (base) => path5.join(runCacheDir(path5.dirname(base)), path5.basename(base) + ".status.json");
+var stageDirOf = (base, runId) => path5.join(runCacheDir(path5.dirname(base)), "stage", runId);
 function writeFileAtomic(file, data) {
-  fs3.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
+  fs5.mkdirSync(path5.dirname(path5.resolve(file)), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}`;
   try {
-    fs3.writeFileSync(tmp, data);
-    fs3.renameSync(tmp, file);
+    fs5.writeFileSync(tmp, data);
+    fs5.renameSync(tmp, file);
   } catch (e) {
     try {
-      fs3.rmSync(tmp, { force: true });
+      fs5.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
   }
 }
 function newRunId() {
-  return (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto2.randomBytes(3).toString("hex");
+  return (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto5.randomBytes(3).toString("hex");
 }
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
@@ -432,7 +897,7 @@ function writeStatus(base, p) {
   const published = p.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...p.published || []])].sort() : void 0;
   const doc = {
     schema: STATUS_SCHEMA,
-    screen: path3.basename(base),
+    screen: path5.basename(base),
     runId: p.runId,
     rev: same ? same.rev + 1 : 1,
     phase: p.phase,
@@ -445,43 +910,47 @@ function writeStatus(base, p) {
     ...published !== void 0 ? { published } : {}
   };
   const live = liveStatusFile(base);
-  inRunCache(path3.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+  inRunCache(path5.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
   return doc;
 }
 function publishStatus(base, doc) {
   writeFileAtomic(statusFile(base), JSON.stringify(doc, null, 2) + "\n");
 }
 var TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\.json)$/;
-function publishStaged(stageDir, destDir) {
+function prepareStaged(stageDir, destDir) {
   let entries;
   try {
-    entries = fs3.readdirSync(stageDir, { withFileTypes: true });
+    entries = fs5.readdirSync(stageDir, { withFileTypes: true });
   } catch (e) {
     return { error: `--publish ${stageDir}: ${errMsg(e).split("\n")[0]}` };
   }
-  if (canonical(stageDir) === canonical(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project (D9)` };
+  if (canonical2(stageDir) === canonical2(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project (D9)` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
   const owned = files.filter((f) => TOOL_OWNED.test(f));
   if (owned.length) return { error: `--publish refuses ${owned.join(", ")} \u2014 expected/report/status files are written by verify-screen itself, never copied in` };
-  fs3.mkdirSync(destDir, { recursive: true });
+  fs5.mkdirSync(destDir, { recursive: true });
+  const tmpOf = (name) => `${path5.join(destDir, name)}.tmp-${process.pid}`;
+  const abort = () => {
+    for (const f of files) try {
+      fs5.rmSync(tmpOf(f), { force: true });
+    } catch {
+    }
+  };
   for (const f of files) {
-    const dest = path3.join(destDir, f), tmp = `${dest}.tmp-${process.pid}`;
     try {
-      fs3.copyFileSync(path3.join(stageDir, f), tmp);
-      fs3.renameSync(tmp, dest);
+      fs5.copyFileSync(path5.join(stageDir, f), tmpOf(f));
     } catch (e) {
-      try {
-        fs3.rmSync(tmp, { force: true });
-      } catch {
-      }
-      return { error: `--publish: copying ${f} failed (${errMsg(e).split("\n")[0]}) \u2014 files before it were published` };
+      abort();
+      return { error: `--publish: copying ${f} failed (${errMsg(e).split("\n")[0]}) \u2014 nothing was published` };
     }
   }
-  return { published: files };
+  return { files, tmpOf, abort, commit: () => {
+    for (const f of files) fs5.renameSync(tmpOf(f), path5.join(destDir, f));
+  } };
 }
 function runBase(screen, dir) {
   const s = screen.replace(/\.(status|measured|expected|evidence)\.json$/, "");
-  return /[\\/]/.test(s) && dir === void 0 ? s : path3.join(dir ?? path3.join("design", "verify"), s);
+  return /[\\/]/.test(s) && dir === void 0 ? s : path5.join(dir ?? path5.join("design", "verify"), s);
 }
 function measuredExpectation(file) {
   const r = readJson(file, anyJson);
@@ -515,7 +984,7 @@ function statusMain(screen, f, usage) {
       return EXIT_RUN_CACHE;
     }
     if (e instanceof RunEnded) {
-      console.error(e.message + "\n" + usage);
+      console.error(e.message);
       return 2;
     }
     throw e;
@@ -565,18 +1034,18 @@ function statusRun(screen, f, usage) {
 ` + usage);
     return 2;
   }
-  const S = path3.basename(base), dir = path3.dirname(base);
+  const S = path5.basename(base), dir = path5.dirname(base);
   const cache = runCacheDir(dir);
   inRunCache(dir, () => {
-    fs3.mkdirSync(cache, { recursive: true });
-    const probe = path3.join(cache, `.w-${process.pid}`);
-    fs3.writeFileSync(probe, "");
-    fs3.rmSync(probe, { force: true });
+    fs5.mkdirSync(cache, { recursive: true });
+    const probe = path5.join(cache, `.w-${process.pid}`);
+    fs5.writeFileSync(probe, "");
+    fs5.rmSync(probe, { force: true });
   });
   const shas = {};
   if (phase === "done" || phase === "measured") {
-    const staged = phase === "done" ? f.publish !== void 0 ? path3.join(f.publish, S + ".measured.json") : null : path3.join(stageDirOf(base, runId), S + ".measured.json");
-    const measFile = staged !== null && fs3.existsSync(staged) ? staged : base + ".measured.json";
+    const staged = phase === "done" ? f.publish !== void 0 ? path5.join(f.publish, S + ".measured.json") : null : path5.join(stageDirOf(base, runId), S + ".measured.json");
+    const measFile = staged !== null && fs5.existsSync(staged) ? staged : base + ".measured.json";
     const checked = checkMeasured(base, measFile, runId, sameRun, prevV2);
     if ("refused" in checked) {
       console.error(`refused  ${checked.refused}`);
@@ -585,29 +1054,35 @@ function statusRun(screen, f, usage) {
     shas.expectationSha256 = checked.expectationSha256;
     shas.measuredSha256 = checked.measuredSha256;
   }
-  let published;
+  let prep;
   if (f.publish !== void 0) {
-    const now = readStatus(base);
-    if (now && now !== "v1" && now.runId === runId && TERMINAL_PHASES.includes(now.phase)) throw new RunEnded(now.runId, now.phase, now.detail);
-    const r = publishStaged(f.publish, dir);
+    const r = prepareStaged(f.publish, dir);
     if ("error" in r) {
       console.error(`refused  ${r.error}`);
       return 1;
     }
-    published = r.published;
-    console.error(`published ${published.length} file(s) from ${f.publish} into ${dir}${published.length ? `: ${published.join(", ")}` : ""}`);
+    prep = r;
   }
   if (phase === "done") {
     const evName = S + ".evidence.json";
-    const ours = (published || []).includes(evName) || !!(sameRun && sameRun.published && sameRun.published.includes(evName));
-    const ev = ours ? sha256File(base + ".evidence.json") : null;
+    const ev = prep?.files.includes(evName) ? sha256File(prep.tmpOf(evName)) : sameRun?.published?.includes(evName) ? sha256File(base + ".evidence.json") : null;
     if (ev) shas.evidenceSha256 = ev;
-    else if (fs3.existsSync(base + ".evidence.json")) console.error(`note  ${base}.evidence.json was not published in run ${runId} \u2014 not recorded as this run's evidence`);
+    else if (fs5.existsSync(base + ".evidence.json")) console.error(`note  ${base}.evidence.json was not published in run ${runId} \u2014 not recorded as this run's evidence`);
   }
-  const doc = writeStatus(base, { runId, phase, by, ...f.detail !== void 0 ? { detail: f.detail } : {}, ...shas, ...published ? { published } : {} });
+  let doc;
+  try {
+    doc = writeStatus(base, { runId, phase, by, ...f.detail !== void 0 ? { detail: f.detail } : {}, ...shas, ...prep ? { published: prep.files } : {} });
+  } catch (e) {
+    prep?.abort();
+    throw e;
+  }
+  if (prep) {
+    prep.commit();
+    console.error(`published ${prep.files.length} file(s) from ${f.publish} into ${dir}${prep.files.length ? `: ${prep.files.join(", ")}` : ""}`);
+  }
   if (phase === "done") publishStatus(base, doc);
   const stage = stageDirOf(base, runId);
-  if (!TERMINAL_PHASES.includes(phase)) inRunCache(dir, () => fs3.mkdirSync(stage, { recursive: true }));
+  if (!TERMINAL_PHASES.includes(phase)) inRunCache(dir, () => fs5.mkdirSync(stage, { recursive: true }));
   console.log(`run ${doc.runId} rev ${doc.rev}`);
   console.error(`status ${shellArg(liveStatusFile(base))}${phase === "done" ? ` (published to ${shellArg(statusFile(base))})` : ""}`);
   if (!TERMINAL_PHASES.includes(phase)) console.error(`stage  ${shellArg(stage)}`);
@@ -681,11 +1156,11 @@ async function waitMain(screen, f, usage) {
   }
 }
 function cacheUnreadable(base) {
-  const c = runCacheOf(path3.dirname(base));
-  const checks = [[c.dir, fs3.constants.R_OK | fs3.constants.X_OK], [liveStatusFile(base), fs3.constants.R_OK]];
+  const c = runCacheOf(path5.dirname(base));
+  const checks = [[c.dir, fs5.constants.R_OK | fs5.constants.X_OK], [liveStatusFile(base), fs5.constants.R_OK]];
   for (const [p, mode] of checks) {
     try {
-      fs3.accessSync(p, mode);
+      fs5.accessSync(p, mode);
     } catch (e) {
       const code = errCode2(e);
       if (code === "EACCES" || code === "EPERM") return new RunCacheUnwritable(c.dir, c.root, "read");
@@ -694,455 +1169,6 @@ function cacheUnreadable(base) {
   return null;
 }
 var describe = (st) => st === null ? "no status file" : st === "v1" ? "an older v1 status file, not written by the tools" : `last: run ${st.runId} rev ${st.rev} ${st.phase} at ${st.at}`;
-
-// design-to-code/probe-steps.ts
-import crypto4 from "node:crypto";
-
-// design-to-code/plan-waivers.ts
-import crypto3 from "node:crypto";
-var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
-function isPassingVerdict(v) {
-  return typeof v === "string" && PASSING_VERDICTS.includes(v);
-}
-function canonical2(v) {
-  if (Array.isArray(v)) return `[${v.map(canonical2).join(",")}]`;
-  if (v && typeof v === "object") {
-    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical2(x)}`).join(",")}}`;
-  }
-  return JSON.stringify(v ?? null);
-}
-function waiversHash(plan) {
-  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
-  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return crypto3.createHash("sha256").update(canonical2({ descopes, waivers })).digest("hex");
-}
-function planInteractionsSha256(plan) {
-  const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
-  return crypto3.createHash("sha256").update(canonical2(rows)).digest("hex");
-}
-
-// design-to-code/probe-steps.ts
-var STEP_KINDS = ["click", "waitFor", "goto"];
-var isStepKind = (k) => STEP_KINDS.includes(k);
-var REFUSED = {
-  fill: "a typed value may submit a form when the steps are replayed",
-  type: "a typed value may submit a form when the steps are replayed",
-  press: "a key press may submit a form when the steps are replayed",
-  hover: "a hover is not a navigation (hover-revealed openers are revealed by the probe itself)",
-  check: "a checked box is state, not navigation",
-  select: "a selected option is state, not navigation"
-};
-function isSameOriginPath(v) {
-  return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
-}
-function parseSteps(x) {
-  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
-  if (!Array.isArray(list)) {
-    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
-  }
-  const steps = [];
-  for (const [i, raw] of list.entries()) {
-    const at = `step ${i + 1}`;
-    if (!isJsonObject(raw)) return { error: `${at} is not an object like {"click": "<selector>"}` };
-    const keys = Object.keys(raw);
-    const k = keys[0];
-    if (keys.length !== 1 || k === void 0) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} \u2014 exactly one of ${STEP_KINDS.join(" / ")}` };
-    const v = raw[k];
-    if (!isStepKind(k)) {
-      const lk = k.toLowerCase();
-      const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : void 0;
-      return { error: `${at} {${k}: \u2026} is not a step \u2014 the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
-    }
-    if (typeof v !== "string" || v.trim() === "") return { error: `${at} {${k}: \u2026} needs a non-empty string` };
-    if (k === "goto" && !isSameOriginPath(v)) return { error: `${at} {goto: ${JSON.stringify(v)}} must be a same-origin path starting with "/" (e.g. "/orders?tab=open") \u2014 never "//" or "/\\", and no backslash, whitespace or control character` };
-    steps.push(k === "click" ? { click: v } : k === "waitFor" ? { waitFor: v } : { goto: v });
-  }
-  return { steps };
-}
-function stepsSha256(steps) {
-  return crypto4.createHash("sha256").update(canonical2(steps)).digest("hex");
-}
-function isPlanExpect(x) {
-  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
-}
-function actionForExpect(expect) {
-  return expect === "dialog" ? "overlay" : expect === "url" ? "navigate" : "other";
-}
-
-// design-to-code/doc-guards.ts
-function optArrayOf(x, each) {
-  return x === void 0 || Array.isArray(x) && x.every(each);
-}
-var isObj = isJsonObject;
-var optObj = (x) => x === void 0 || isObj(x);
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-var anyObject = (x) => isObj(x);
-function isVariable(x) {
-  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr2(x.collection);
-}
-function isVariableCollection(x) {
-  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
-}
-function isTokensDoc(x) {
-  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
-}
-isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
-function isCatalogComponent(x) {
-  return isObj(x) && typeof x.name === "string" && optStr2(x.key) && optStr2(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
-}
-function isComponentsCatalog(x) {
-  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
-}
-isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
-function isComponentDetailFile(x) {
-  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
-}
-isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
-function isTextStylesDoc(x) {
-  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
-}
-isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
-function isScreenAssetsDoc(x) {
-  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr2(f.node));
-}
-isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
-function isLibrariesIndex(x) {
-  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr2(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
-}
-isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
-var SEVERITIES = ["blocker", "warning", "info"];
-function isAuditOverridesDoc(x) {
-  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr2(o[k])));
-}
-isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
-function isAuditReport(x) {
-  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
-}
-isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
-function isProposal(x) {
-  return isObj(x) && typeof x.name === "string";
-}
-function isProposalList(x) {
-  return Array.isArray(x) && x.every(isProposal);
-}
-isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
-function isIndexRowLike(x) {
-  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
-}
-function isPagesRootIndex(x) {
-  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr2(d.dir) && optStr2(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
-}
-isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
-function isPageIndex(x) {
-  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
-}
-isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
-function isVerifyExpectation(x) {
-  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
-}
-isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
-var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
-function isProbeIdentity(x) {
-  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
-}
-function isBuildIdentity(x) {
-  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
-}
-var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
-var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
-var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
-var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
-var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
-var isNum = (x) => typeof x === "number" && Number.isFinite(x);
-function isProbeReach(x) {
-  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
-}
-function isPageOverflow(x) {
-  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr2(x.compatMode);
-}
-var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
-var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
-function isBehaviourCheck(x) {
-  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
-}
-function isMeasuredBehaviour(x) {
-  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
-}
-var isRect4 = (x) => isObj(x) && isNum(x.x) && isNum(x.y) && isNum(x.w) && isNum(x.h);
-function isMeasuredVisual(x) {
-  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
-}
-function isVisualRegion(x) {
-  return isObj(x) && isRect4(x.rect) && isNum(x.pixels) && isNum(x.pct) && isStringArray(x.built) && isStringArray(x.designed);
-}
-var MEASURED_EXTRAS = [
-  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
-  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
-  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
-  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
-  ["matchedByCensus", isCountMap, "a {rule: count} map"],
-  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
-  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
-  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
-  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
-  // group 11 (DT-47): the shipped probe's foreign tags
-  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
-  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
-  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
-  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
-  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
-  // 12c: the visual diff (informational, D40(3))
-  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
-];
-function isMeasuredCore(x) {
-  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr2(x.mode) && optStr2(x.expectationSha256);
-}
-function isVerifyMeasured(x) {
-  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
-}
-function readableMeasured(x) {
-  if (!isMeasuredCore(x)) return null;
-  const copy = { ...x };
-  const notes = [];
-  const dropped = [];
-  for (const [k, ok, what] of MEASURED_EXTRAS) {
-    if (copy[k] !== void 0 && !ok(copy[k])) {
-      notes.push(`measured.${k} is not ${what}; ignored`);
-      dropped.push(k);
-      delete copy[k];
-    }
-  }
-  if (Array.isArray(copy.nodes)) {
-    let dropped2 = 0;
-    copy.nodes = copy.nodes.map((n) => {
-      if (!isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)) return n;
-      dropped2++;
-      const { unmeasured: _drop, ...rest } = n;
-      return rest;
-    });
-    if (dropped2) notes.push(`${dropped2} node(s) carry an \`unmeasured\` that is not a {key: reason} map; ignored (their nulls read as 'reported null')`);
-  }
-  return isVerifyMeasured(copy) ? { doc: copy, notes, dropped } : null;
-}
-isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
-function isEvidence(x) {
-  return isObj(x) && typeof x.nodeId === "string";
-}
-function isInteractionEvidenceList(x) {
-  return Array.isArray(x) && x.every(isEvidence);
-}
-isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
-function isMeasuredComponentList(x) {
-  return Array.isArray(x) && x.every((c) => isObj(c) && optStr2(c.setName) && optStr2(c.name) && optStr2(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
-}
-isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
-function isVerifyReport(x) {
-  return isObj(x) && optStr2(x.schema) && optStr2(x.verdict) && optStr2(x.screen) && optStr2(x.nodeId) && optStr2(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
-}
-isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
-var PLAN_OBJECTS = ["anchors", "verification", "counts"];
-var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
-function planProblem(x) {
-  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
-  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
-  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
-  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
-  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
-    const list = x[k];
-    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
-  }
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr2(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
-  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
-  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
-  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
-  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
-  if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr2(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr2(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
-  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
-  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
-  return null;
-}
-function isPlan(x) {
-  return planProblem(x) === null;
-}
-isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
-function parsePlan(x) {
-  return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
-}
-var reqStr = (v) => typeof v === "string" && v.trim() !== "";
-function isPlanWaiver(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr2(x.cause);
-}
-isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
-function isPlanDescope(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr2(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
-}
-isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
-function isPlanInteraction(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr2(x.name);
-}
-isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
-function isStringRecord(x) {
-  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
-}
-isStringRecord.expected = "an object of strings";
-
-// design-to-code/plan-record.ts
-var slash = (p) => p.split(path4.sep).join("/").split("\\").join("/");
-var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
-function formatPlan(value, raw) {
-  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
-  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
-  const text = raw.slice(bom.length);
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
-}
-function writePlan(file, value, raw) {
-  let was = raw ?? null;
-  if (raw === void 0) try {
-    was = fs4.readFileSync(file, "utf8");
-  } catch {
-    was = null;
-  }
-  const out = formatPlan(value, was);
-  if (out === was) return false;
-  writeFileAtomic(file, out);
-  return true;
-}
-var RECORDED_DELTA_KEYS = /* @__PURE__ */ new Set(["nodeId", "field", "severity", "expected", "actual"]);
-var isRecordedDelta = (d) => isJsonObject(d) && typeof d.nodeId === "string" && typeof d.field === "string" && (d.severity === "high" || d.severity === "medium") && Object.keys(d).every((k) => RECORDED_DELTA_KEYS.has(k));
-function recordPlan(planFile, report, reportRel, opts = {}) {
-  const cwd = opts.cwd ?? process.cwd();
-  const abs = path4.resolve(cwd, planFile);
-  const notes = [];
-  const raw = fs4.readFileSync(abs, "utf8");
-  const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
-  const pp = parsePlan(parsed);
-  if (!("plan" in pp)) throw new Error(`${planFile} ${pp.error}`);
-  const plan = pp.plan;
-  const inside = (r) => !(r === ".." || r.startsWith("../") || path4.isAbsolute(r) || /^[A-Za-z]:/.test(r));
-  const realOf = (p) => {
-    try {
-      return fs4.realpathSync(p);
-    } catch {
-      return p;
-    }
-  };
-  const rel = (p) => {
-    const lex = slash(path4.relative(cwd, path4.resolve(cwd, p)));
-    if (inside(lex)) return lex;
-    const real = slash(path4.relative(realOf(cwd), realOf(path4.resolve(cwd, p))));
-    return inside(real) ? real : null;
-  };
-  const reportAt = rel(reportRel);
-  if (reportAt === null) throw new Error(`the report ${slash(reportRel)} is outside the project (${slash(cwd)}) \u2014 the plan records project-relative paths only; write the report inside the project (--out design/verify/<Screen>)`);
-  const exists2 = (p) => {
-    try {
-      return fs4.statSync(path4.resolve(cwd, p)).isFile();
-    } catch {
-      return false;
-    }
-  };
-  const artifacts = [];
-  const outside = [];
-  const addArtifact = (p) => {
-    if (!p || !exists2(p)) return;
-    const r = rel(p);
-    if (r === null) {
-      if (!outside.includes(slash(p))) outside.push(slash(p));
-    } else if (!artifacts.includes(r)) artifacts.push(r);
-  };
-  addArtifact(reportAt);
-  addArtifact(reportAt.replace(/\.report\.json$/, ".report.md"));
-  for (const a of report.artifacts) {
-    if (typeof a === "string") addArtifact(a);
-    else if (a && typeof a.path === "string" && !("exists" in a && a.exists === false)) addArtifact(a.path);
-  }
-  if (outside.length) notes.push(`${outside.length} artifact(s) outside the project not recorded in verification.artifacts (project-relative paths only): ${outside.join(", ")}`);
-  const deltas = report.deltas;
-  const compact = deltas.filter((d) => !d.accepted && (d.severity === "high" || d.severity === "medium")).map((d) => ({ nodeId: d.nodeId, field: d.field, severity: d.severity, expected: d.expected, actual: d.actual }));
-  const s = report.summary;
-  const notMeasured = typeof report.coverage.nodesNotMeasured === "number" ? report.coverage.nodesNotMeasured : report.notMeasured.length;
-  let reportSha256;
-  try {
-    reportSha256 = crypto5.createHash("sha256").update(fs4.readFileSync(path4.resolve(cwd, reportAt))).digest("hex");
-  } catch {
-    reportSha256 = crypto5.createHash("sha256").update(JSON.stringify(report, null, 2) + "\n").digest("hex");
-    notes.push(`${reportAt} is not on disk \u2014 recorded the sha256 of the report as --compare writes it`);
-  }
-  const b = report.behaviour;
-  const recorded = {
-    by: "verify-screen --record-plan",
-    at: opts.now ?? (/* @__PURE__ */ new Date()).toISOString(),
-    report: reportAt,
-    reportSha256,
-    verdict: report.verdict,
-    headline: report.headline,
-    ...b.headline ? { behaviourHeadline: b.headline } : {},
-    counts: {
-      high: s.high,
-      medium: s.medium,
-      low: s.low,
-      accepted: s.accepted ?? deltas.filter((d) => d.accepted).length,
-      notMeasured,
-      inferred: s.inferred ?? (report.inferred ? report.inferred.length : 0)
-    }
-  };
-  const v = plan.verification ?? {};
-  const hook = v.hook;
-  if (hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan)) {
-    hook.planHash = planHash(plan);
-    notes.push("the hook's record held the pre-F-100 plan hash (it covered verification) \u2014 re-stamped with the current one, so this record does not reopen the plan");
-  }
-  const prev = v.recorded;
-  if (prev && typeof prev.at === "string" && JSON.stringify({ ...prev, at: "" }) === JSON.stringify({ ...recorded, at: "" })) recorded.at = prev.at;
-  if (report.mode === "static-only") {
-    v.mode = "static-only";
-    if (report.reason) v.reason = report.reason;
-    delete v.renderer;
-  } else {
-    if (v.mode === "static-only") delete v.reason;
-    v.mode = "rendered";
-    if (typeof report.renderer === "string" && report.renderer) v.renderer = report.renderer;
-  }
-  v.artifacts = artifacts;
-  const hand = Array.isArray(v.deltas) ? v.deltas.filter((d) => !isRecordedDelta(d)) : [];
-  if (hand.length) notes.push(`${hand.length} row(s) in verification.deltas were not written by --record-plan and are replaced by the report's open deltas (${hand.map((d) => isJsonObject(d) && typeof d.nodeId === "string" ? `${d.nodeId}${typeof d.field === "string" ? ` ${d.field}` : ""}` : JSON.stringify(d).slice(0, 40)).join(", ")}) \u2014 put builder-chosen residuals in deviations[] (with the why), never in verification.deltas`);
-  else if (v.deltas !== void 0 && !Array.isArray(v.deltas)) notes.push(`verification.deltas was a hand-written ${v.deltas === null ? "null" : typeof v.deltas} (${JSON.stringify(v.deltas).slice(0, 60)}), replaced by the report's open deltas (an array) \u2014 the counts are in verification.recorded.counts; put builder-chosen residuals in deviations[] (with the why)`);
-  v.deltas = compact;
-  const handText = (x) => typeof x === "string" ? x.trim() : isJsonObject(x) && typeof x.verdict === "string" ? x.verdict.trim() : null;
-  const stale = [];
-  const handHeadline = "headline" in v ? handText(v.headline) : null;
-  if (handHeadline !== null && handHeadline !== recorded.headline.trim()) stale.push(`verification.headline ("${handHeadline.slice(0, 60)}")`);
-  for (const k of ["verdict", "verifyScreenVerdict"]) {
-    const t = handText(v[k]);
-    if (t !== null && t.toLowerCase() !== recorded.verdict.toLowerCase()) stale.push(`verification.${k} ("${t.slice(0, 40)}")`);
-  }
-  if (stale.length) notes.push(`${stale.join(" and ")} \u2014 hand-written, and not what this report says (verdict "${recorded.verdict}"); stale beside verification.recorded, which is the record \u2014 update or remove ${stale.length > 1 ? "them" : "it"} by hand`);
-  if (b.ran) {
-    const tool = b.axe && "version" in b.axe ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks";
-    v.a11y = { tool, violations: b.summary.fail, warnings: b.summary.warn, report: reportAt };
-  } else if (v.a11y !== void 0) notes.push(`behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 verification.a11y left as it was`);
-  v.recorded = recorded;
-  plan.verification = v;
-  return { written: writePlan(abs, plan, raw), notes };
-}
-
-// design-to-code/catalog-input.ts
-function readJsonFile(file, what, hint) {
-  return readDocFile(file, what, anyJson, hint);
-}
-function readDocFile(file, what, guard, hint) {
-  const r = readJson(file, guard);
-  if ("doc" in r) return r.doc;
-  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
-  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
-       ${hint}` : ""));
-  process.exit(2);
-}
 
 // design-to-code/verify-screen.ts
 import { parseArgs as parseArgs2 } from "node:util";
@@ -1198,13 +1224,13 @@ function getOrInit(m, k, init) {
 }
 
 // bridge/src/is-main.ts
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs5.realpathSync(argv1) === fs5.realpathSync(fileURLToPath2(metaUrl));
+    return fs6.realpathSync(argv1) === fs6.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -1993,8 +2019,8 @@ function pngHeader(b) {
 }
 var round4 = (n) => Math.round(n * 1e4) / 1e4;
 function resolveInside(base, rel, within = base) {
-  const root = path5.resolve(within), file = path5.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path5.sep) ? file : null;
+  const root = path6.resolve(within), file = path6.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path6.sep) ? file : null;
 }
 var figmaReferenceScale = (w, h) => Math.min(2, 2048 / (Math.max(w, h) || 1));
 var REFERENCE_SCALE_SLACK = 0.02;
@@ -2003,7 +2029,7 @@ function referenceImageFor(o) {
   const unusable = (p2, why) => ({ usable: false, path: p2, why });
   if (!reference) return unusable(null, "the export has no reference PNG for this screen \u2014 re-pull it with its reference");
   const p = "design/export/" + reference;
-  if (resolveInside(path5.resolve("design", "export"), reference) === null) return unusable(p, `the reference pointer ${reference} leads outside design/export \u2014 re-pull the screen`);
+  if (resolveInside(path6.resolve("design", "export"), reference) === null) return unusable(p, `the reference pointer ${reference} leads outside design/export \u2014 re-pull the screen`);
   if (!root || root.reference !== reference) return unusable(p, "the reference PNG belongs to another frame than the first one \u2014 only the first frame is diffed");
   const box = root.box;
   if (!box || !(num(box.w) && box.w > 0) || !(num(box.h) && box.h > 0)) return unusable(p, "the frame has no size in the export (box.w/h) \u2014 the reference cannot be placed");
@@ -3685,7 +3711,7 @@ function visualReport(v, malformed = false, o) {
   if (notCompared && notCompared.pct > 0) notes.push(`${pctText(notCompared.pct)}% of the design window not compared${notCompared.why ? ` (${notCompared.why})` : ""}`);
   const own = Array.isArray(v.notes) ? v.notes : [];
   notes.unshift(...own.filter((n) => typeof n === "string"));
-  const diff = typeof dp === "string" && dp ? o && o.diff ? o.diff : { path: dp, exists: fs6.existsSync(dp) } : void 0;
+  const diff = typeof dp === "string" && dp ? o && o.diff ? o.diff : { path: dp, exists: fs7.existsSync(dp) } : void 0;
   let against;
   const pv = o && o.against ? o.against.report.visual : void 0;
   if (o && o.against && isJsonObject(pv) && pv.ran === true && num(pv.shiftTolerantPct) && pv.grid === g && reference && reference.sha256 && isJsonObject(pv.reference) && pv.reference.sha256 === reference.sha256) against = { report: o.against.file, before: pv.shiftTolerantPct, after: v.shiftTolerantPct };
@@ -4020,7 +4046,7 @@ var STATUS_STALL_MS = 3e5;
 function runStatusNote(base, now = Date.now()) {
   const found = readStatusAt(base);
   if (!found) return null;
-  const st = found.status, name = path5.basename(base);
+  const st = found.status, name = path6.basename(base);
   if (st === "v1") return `${found.file} is a hand-written status (no run id) \u2014 not checked`;
   const detail = st.detail ? ` (${st.detail})` : "";
   if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} \u2014 its measured/report files are partial; this expectation is safe to re-measure against`;
@@ -4031,30 +4057,30 @@ function runStatusNote(base, now = Date.now()) {
 }
 var PREV_EXPECTED_SUFFIX = ".expected.prev.json";
 function findExistingExpectedFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs6.existsSync(dir)) return null;
-  for (const f of fs6.readdirSync(dir)) {
+  if (!nodeId || !fs7.existsSync(dir)) return null;
+  for (const f of fs7.readdirSync(dir)) {
     if (!f.endsWith(".expected.json")) continue;
-    const full = path5.join(dir, f);
-    if (path5.resolve(full) === path5.resolve(ownTarget)) continue;
+    const full = path6.join(dir, f);
+    if (path6.resolve(full) === path6.resolve(ownTarget)) continue;
     const doc = readJsonOrNull(full, isJsonObject);
     if (doc && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
   return null;
 }
 function plansFor(frameId, stem) {
-  const planDir = path5.join("design", "plan");
+  const planDir = path6.join("design", "plan");
   const hits = [];
-  for (const f of fs6.existsSync(planDir) ? fs6.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
-    const p = readJsonOrNull(path5.join(planDir, f), isPlan);
+  for (const f of fs7.existsSync(planDir) ? fs7.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
+    const p = readJsonOrNull(path6.join(planDir, f), isPlan);
     if (!p) continue;
-    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path5.basename(f, ".json")));
-    const byName = path5.basename(f, ".json") === stem || p.file && path5.basename(String(p.file), ".json") === stem;
-    if (byId || byName) hits.push({ file: path5.join(planDir, f).split(path5.sep).join("/"), plan: p });
+    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path6.basename(f, ".json")));
+    const byName = path6.basename(f, ".json") === stem || p.file && path6.basename(String(p.file), ".json") === stem;
+    if (byId || byName) hits.push({ file: path6.join(planDir, f).split(path6.sep).join("/"), plan: p });
   }
   return hits;
 }
 function samePlanFile(a, b) {
-  return path5.resolve(a) === path5.resolve(b);
+  return path6.resolve(a) === path6.resolve(b);
 }
 function choosePlan(flagged, frameId, stem) {
   if (flagged) return { hit: { ...flagged, choice: "flag" }, all: [flagged] };
@@ -4083,7 +4109,7 @@ function selectForAccept(rep, sel) {
   return { error: `no delta in the report for ${id}${sel.field !== void 0 ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
 }
 function main(argv) {
-  const sha = (file) => crypto6.createHash("sha256").update(fs6.readFileSync(file)).digest("hex");
+  const sha = (file) => crypto6.createHash("sha256").update(fs7.readFileSync(file)).digest("hex");
   const USAGE = `usage:
   ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force] [--plan <plan.json>]
       writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
@@ -4242,27 +4268,27 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       console.error("--expect needs at least one screen export\n" + USAGE);
       return 2;
     }
-    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path5.basename(f, ".json") }));
-    const indexFile = path5.join("design", "export", "pages", "index.json");
+    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path6.basename(f, ".json") }));
+    const indexFile = path6.join("design", "export", "pages", "index.json");
     const idx = readJson(indexFile, isPagesRootIndex);
     if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} \u2014 interaction destinations are checked against the given export(s) only`);
-    const pagesDir = path5.join("design", "export", "pages");
+    const pagesDir = path6.join("design", "export", "pages");
     const pageRows = [];
     let dirs = [];
     try {
-      dirs = fs6.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+      dirs = fs7.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     } catch {
     }
     for (const d of dirs) {
-      const pi2 = readJson(path5.join(pagesDir, d, "index.json"), isPageIndex);
+      const pi2 = readJson(path6.join(pagesDir, d, "index.json"), isPageIndex);
       if ("doc" in pi2) pageRows.push(...pi2.doc.layers);
     }
     const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
     const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
-    const exportRoot = path5.join("design", "export");
-    const readSibling = (file) => readJsonOrNull(path5.join(exportRoot, file), isScreenDoc);
-    const outBase0 = out || path5.join("design", "verify", path5.basename(firstFile, ".json"));
+    const exportRoot = path6.join("design", "export");
+    const readSibling = (file) => readJsonOrNull(path6.join(exportRoot, file), isScreenDoc);
+    const outBase0 = out || path6.join("design", "verify", path6.basename(firstFile, ".json"));
     let flagged2;
     if (planFlag !== void 0) {
       const r = readJson(planFlag, isPlan);
@@ -4270,10 +4296,10 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
         console.error(`--plan '${planFlag}' ${r.error}`);
         return 2;
       }
-      flagged2 = { file: planFlag.split(path5.sep).join("/"), plan: r.doc };
+      flagged2 = { file: planFlag.split(path6.sep).join("/"), plan: r.doc };
     }
     const firstRoot = docs.map((d) => screenRoots(d.doc)[0]).find((r) => r !== void 0);
-    const chosen = choosePlan(flagged2, firstRoot && firstRoot.id, path5.basename(outBase0));
+    const chosen = choosePlan(flagged2, firstRoot && firstRoot.id, path6.basename(outBase0));
     const planForExpect = chosen.hit;
     if (chosen.all.length > 1 && chosen.all.some((h2) => h2.plan.interactions !== void 0)) {
       console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another` : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
@@ -4282,12 +4308,12 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       const file = resolveInside(exportRoot, pointer);
       if (file === null) return null;
       try {
-        return fs6.readFileSync(file);
+        return fs7.readFileSync(file);
       } catch {
         return null;
       }
     };
-    const ds = readJsonOrNull(path5.join(exportRoot, "design-system.json"), isJsonObject);
+    const ds = readJsonOrNull(path6.join(exportRoot, "design-system.json"), isJsonObject);
     const colorProfile = ds && typeof ds.colorProfile === "string" ? ds.colorProfile : null;
     const expOpts = { ..."doc" in idx || layers.length ? { index: { layers }, readSibling } : {}, ...planForExpect ? { plan: planForExpect } : {}, readReference, colorProfile };
     const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
@@ -4298,15 +4324,15 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     }
     const outBase = outBase0;
     const target = outBase + ".expected.json";
-    const dup = findExistingExpectedFor(path5.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
+    const dup = findExistingExpectedFor(path6.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
       const oldBase = dup.slice(0, -".expected.json".length);
-      const dir = path5.dirname(dup), stemOld = path5.basename(oldBase);
-      const oldFiles = fs6.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path5.join(dir, f));
-      const canonical3 = path5.join(path5.dirname(target), path5.basename(firstFile, ".json"));
+      const dir = path6.dirname(dup), stemOld = path6.basename(oldBase);
+      const oldFiles = fs7.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path6.join(dir, f));
+      const canonical3 = path6.join(path6.dirname(target), path6.basename(firstFile, ".json"));
       const oldStatus = runStatusNote(oldBase);
       if (oldStatus) console.error(`note  ${oldStatus}`);
-      if (stemOld === path5.basename(canonical3)) {
+      if (stemOld === path6.basename(canonical3)) {
         console.error(
           `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). That is the canonical name: drop --out (the default is ${shellArg(canonical3)}), or pass --force to write a second set anyway.`
         );
@@ -4315,14 +4341,14 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       console.error(
         `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set).
        existing set under '${stemOld}' (${oldFiles.length} file(s)): ${oldFiles.join(", ")}
-       the canonical name for this screen is '${path5.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
-       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path5.resolve(target) === path5.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
+       the canonical name for this screen is '${path6.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
+       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path6.resolve(target) === path6.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
        Or keep the old name: --out ${shellArg(oldBase)}. (--force writes a second, parallel set \u2014 not recommended.)`
       );
       return 1;
     }
     const next = JSON.stringify(exp, null, 2) + "\n";
-    const prev = fs6.existsSync(target) ? fs6.readFileSync(target, "utf8") : null;
+    const prev = fs7.existsSync(target) ? fs7.readFileSync(target, "utf8") : null;
     const h = crypto6.createHash("sha256").update(next).digest("hex");
     let prevContent = null;
     try {
@@ -4344,7 +4370,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     } else if (prev !== null) {
       const why = typeof prevContent === "string" && prevContent === exp.exportContentSha256 ? "same export content \u2014 the expectation generator changed (verify-screen upgrade)" : typeof prevContent === "string" ? `the export changed (content sha ${prevContent.slice(0, 12)}\u2026 \u2192 ${exp.exportContentSha256.slice(0, 12)}\u2026)` : `the expectation recorded no export hash (exportContentSha256) \u2014 cannot tell whether the export or the expectation generator changed`;
       console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto6.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026): ${why}; the previous one is kept as ${prevFile}`);
-      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs6.existsSync(f));
+      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs7.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
     const hc = exp.counts.hidden;
@@ -4392,7 +4418,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
   const artifacts = measured.artifacts || [];
   const artifactCheck = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
-    const exists2 = !!p && fs6.existsSync(p);
+    const exists2 = !!p && fs7.existsSync(p);
     return { ...ifDefined("path", p), exists: exists2, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists2 ? sha(p) : void 0) };
   });
   let code;
@@ -4406,11 +4432,11 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       console.error(`--plan '${planFlag}' ${r.error}`);
       return 2;
     }
-    flagged = { file: planFlag.split(path5.sep).join("/"), plan: r.doc };
+    flagged = { file: planFlag.split(path6.sep).join("/"), plan: r.doc };
   }
   {
     const frameId = expectation.frame && expectation.frame.nodeId;
-    const stem = path5.basename(expFile, ".json").replace(/\.expected$/, "");
+    const stem = path6.basename(expFile, ".json").replace(/\.expected$/, "");
     const chosen = choosePlan(flagged, frameId, stem);
     const all = chosen.all;
     const hits = all.filter((h) => h.plan.files);
@@ -4449,7 +4475,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     ...ifDefined("anchors", planHit.plan.anchors),
     waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) }
   } : {};
-  const compareBase = out || path5.join("design", "verify", path5.basename(expFile, ".json").replace(/\.expected$/, ""));
+  const compareBase = out || path6.join("design", "verify", path6.basename(expFile, ".json").replace(/\.expected$/, ""));
   let against;
   if (againstFile !== void 0) {
     const r = readJson(againstFile, isVerifyReport);
@@ -4465,14 +4491,14 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     else if (!r.missing) console.error(`note  ${own} ${r.error} \u2014 no coverage baseline this round (it is about to be overwritten)`);
   }
   const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
-  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path5.join(path5.dirname(expFile), path5.basename(measuredBase)) : null;
-  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path5.resolve(probeBase) !== path5.resolve(measuredBase) ? readStatusAt(probeBase) : null);
-  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path5.basename(found.file) : `${path5.basename(found.file)} (live, ${found.file})`, status: found.status } } : measuredBase !== null ? { status: null } : {};
+  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path6.join(path6.dirname(expFile), path6.basename(measuredBase)) : null;
+  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path6.resolve(probeBase) !== path6.resolve(measuredBase) ? readStatusAt(probeBase) : null);
+  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path6.basename(found.file) : `${path6.basename(found.file)} (live, ${found.file})`, status: found.status } } : measuredBase !== null ? { status: null } : {};
   const vd = measured.visual && measured.visual.ran ? measured.visual.diff : void 0;
   let visualDiff = null;
   if (typeof vd === "string" && vd) {
-    const beside = path5.join(path5.dirname(measuredFile), path5.basename(vd));
-    visualDiff = fs6.existsSync(vd) ? { path: vd, exists: true } : fs6.existsSync(beside) ? { path: beside.split(path5.sep).join("/"), exists: true } : { path: vd, exists: false };
+    const beside = path6.join(path6.dirname(measuredFile), path6.basename(vd));
+    visualDiff = fs7.existsSync(vd) ? { path: vd, exists: true } : fs7.existsSync(beside) ? { path: beside.split(path6.sep).join("/"), exists: true } : { path: vd, exists: false };
   }
   const rep = compare(expectation, measured, { ...statusOpt, ...readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}, ...readable.dropped.includes("visual") ? { visualMalformed: true } : {}, ...visualDiff ? { visualDiff } : {}, ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}, ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...extraInferred !== void 0 ? { inferred: extraInferred } : {}, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...planHit ? { plan: planHit } : {} });
   const md = reportToMarkdown(rep);
@@ -4488,12 +4514,12 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
   if (recordPlanFlag && planHit) {
     const realOf = (p) => {
       try {
-        return fs6.realpathSync(p);
+        return fs7.realpathSync(p);
       } catch {
         return p;
       }
     };
-    const reportRel = path5.relative(realOf(process.cwd()), realOf(path5.resolve(compareBase + ".report.json"))).split(path5.sep).join("/");
+    const reportRel = path6.relative(realOf(process.cwd()), realOf(path6.resolve(compareBase + ".report.json"))).split(path6.sep).join("/");
     try {
       const r = recordPlan(planHit.file, rep, reportRel, { cwd: process.cwd() });
       for (const n of r.notes) console.error(`note  ${n}`);
@@ -4545,9 +4571,9 @@ function acceptMain(files, flags, USAGE) {
     console.error(`refused  ${sel.error}`);
     return 1;
   }
-  const stem = path5.basename(reportFile, ".json").replace(/\.report$/, "");
+  const stem = path6.basename(reportFile, ".json").replace(/\.report$/, "");
   const recorded = report.inputs && report.inputs.waivers && report.inputs.waivers.plan || report.inputs && report.inputs.code && report.inputs.code.plan || void 0;
-  let planFile = flags.plan ?? (recorded && fs6.existsSync(recorded) ? recorded : void 0);
+  let planFile = flags.plan ?? (recorded && fs7.existsSync(recorded) ? recorded : void 0);
   if (!planFile) {
     const hits = plansFor(report.nodeId, stem);
     const only = hits.length === 1 ? hits[0] : void 0;

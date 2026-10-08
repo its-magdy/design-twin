@@ -15,7 +15,7 @@ import type { AddressInfo } from "node:net";
 import { isVerifyMeasured } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-screen.ts";
-import { liveStatusFile, stageDirOf } from "../design-to-code/verify-run.ts";
+import { liveStatusFile, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { freeHoverPoint } from "../design-to-code/probe-page.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
@@ -313,6 +313,18 @@ check("[M-a] a refused post-measure status write → exit 0, the measured file s
 if (r10.status !== 0) console.log(r10.stderr);
 check("[M-1] …the warning says which write was refused and that the live status still says measuring (compare: incomplete)",
   /the run cache refused the probe's `measured` status write for run run-e2e-10 — the live status still says measuring/.test(r10.stderr));
+
+// PR #1 review A1: the orchestrator ends the run while the page is measured → the probe writes no files, exits 2,
+// and the ended status stays (pre-change: measured.json + PNG written, exit 0, "next --compare")
+const stageA1 = path.join(tmp, "stageA1", "Staff");
+onPage = () => writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-12", phase: "failed", by: "agent", detail: "gave up" });
+const rA1 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA1, "--project", ROOT, "--run", "run-e2e-12"]);
+onPage = null;
+const stA1 = readStatus(liveFile);
+check("[A1] a run ended while the page is measured → exit 2, no measured file or screenshot, the failed status unchanged, no next step",
+  rA1.status === 2 && !fs.existsSync(stageA1 + ".measured.json") && !fs.existsSync(stageA1 + ".png") && stA1?.phase === "failed" && stA1.runId === "run-e2e-12"
+  && rA1.stderr.includes("run run-e2e-12 already ended at failed (gave up)") && !/^next /m.test(rA1.stderr));
+if (rA1.status !== 2) console.log(rA1.stderr);
 
 // M-1 / L-3: a project whose path holds a space, and a run cache refusing every status write of the run (measuring
 // too): the warning says no live status exists (compare: unrecorded); its recovery command and the `next` line
