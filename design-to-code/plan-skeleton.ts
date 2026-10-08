@@ -1,36 +1,30 @@
 // plan-skeleton.ts — generate design/plan/<screen>.json's skeleton FROM THE EXPORT, so the model fills
-// in only what is genuinely a decision.
+// in only what is genuinely a decision (the fields and flags are in --help).
 //
 // Why: a model that hand-transcribes the whole plan — the token table, the component inventory, the
-// anchors — is how hidden nodes, mis-typed token names and wrong values
-// entered the plan and then passed the Stop hook, because code and plan agreed with each other. Every
-// fact below is DERIVED from the export; the model fills only `codeToken`, `mapModule`, `verdict`,
-// `decision`, `route` and `deviations[]` (plus `files[]`, `architecture` and `verification` as it
-// builds).
+// anchors — is how hidden nodes, mis-typed token names and wrong values entered the plan and then
+// passed the Stop hook, because code and plan agreed with each other. Every fact is DERIVED from the
+// export; the model fills only `codeToken`, `mapModule`, `verdict`, `decision`, `route` and
+// `deviations[]` (plus `files[]`, `architecture` and `verification` as it builds).
 //
-//   tokens[]      every variable the screen binds (node `tokens` maps, incl. fills/strokes/effects),
-//                 one row per bound NAME, carrying the Figma KEY it resolves to in the screen's own
-//                 .vars.json, its value in the mode this frame renders, the design-system definition
-//                 (matched by key; by name only as a labelled fallback — a name match with a different
-//                 value is exactly the `Space 4` 24-vs-16 trap), and how many VISIBLE / hidden nodes
-//                 bind it. A token bound only by hidden layers is pre-marked `verdict:"hidden-only"`.
-//   components[]  every VISIBLE instance (hidden layers are not built, so they are not planned), with
-//                 key/setKey/name/variant/props and its identity: the design-system catalog entry it
-//                 matches — by key, or by the name+prop-signature matcher (component-match.ts) when a
-//                 duplicated file re-keyed everything — and the codeconnect.local.json mapping when one
-//                 exists. Component identity comes from here, never from a hand-placed attribute. A name
-//                 that component-match calls ambiguous (nameVerdict — the rule cross-check uses too)
-//                 gets `catalog: {by:"ambiguous", candidates}`: never a match, the entries to choose from.
-//   anchors{}     every VISIBLE node id → {name, type, parent, mapModule:""}. Fill `mapModule` on
-//                 sections and instances; a node whose own mapModule is empty is covered by its nearest
-//                 mapped ancestor, so a 12-row `.map()` or a reused shell needs one entry, not twelve.
+//   tokens[]      one row per bound NAME, carrying the Figma KEY it resolves to in the screen's own
+//                 .vars.json. The design-system definition is matched by key; by name only as a labelled
+//                 fallback — a name match with a different value is exactly the `Space 4` 24-vs-16 trap.
+//                 A token bound only by hidden layers is pre-marked `verdict:"hidden-only"`.
+//   components[]  every VISIBLE instance (hidden layers are not built, so they are not planned) with its
+//                 identity: the catalog entry it matches — by key, or by the name+prop-signature matcher
+//                 (component-match.ts) when a duplicated file re-keyed everything. Component identity
+//                 comes from here, never from a hand-placed attribute. A name that component-match calls
+//                 ambiguous (nameVerdict — the rule cross-check uses too) gets
+//                 `catalog: {by:"ambiguous", candidates}`: never a match, the entries to choose from.
+//   anchors{}     a node whose own mapModule is empty is covered by its nearest mapped ancestor, so a
+//                 12-row `.map()` or a reused shell needs one entry, not twelve.
 //   anchorsSuggested[]  where to put those entries: the screen frame itself first ("screen"; when it is an
 //                 INSTANCE, that is all), the root's direct children ("section"), every outermost INSTANCE
 //                 ("instance"), and each container whose children are mostly rows of one shape, >= 3 (a list:
 //                 "repeat", its rows and the dividers between them are covered by it; its other children are still
-//                 suggested). Every visible anchor is a suggestion or under one.
-//                 Not part of counts; refreshed on every merge.
-//   hidden[]      the roots of every hidden subtree (`hidden: true`), with how many nodes each hides.
+//                 suggested). Every visible anchor is a suggestion or under one. Not part of counts; refreshed
+//                 on every merge.
 //
 // Hidden predicate — the ONE rule (design-to-code/hidden.ts, shared with verify-screen/audit/drift-lint
 // and, through visibility() below, verify-build.ts): a node is hidden when it or any ancestor carries
@@ -38,11 +32,10 @@
 // name in this export (`"visible": "Show Breadcrumb"`).
 //
 // Output is deterministic (no timestamps of its own), so a re-run diffs cleanly. With --out on an
-// existing plan it MERGES: every model-filled field (codeToken, mapModule, verdict, decision, …) and
-// every top-level field the skeleton does not own (files, architecture, verification, deviations,
-// status, …) is kept; rows that no longer exist in the export are dropped and counted on stderr.
-// --seed-from <sibling plan> then fills what is still empty from another screen's plan — only a
-// row with the same identity (and, for a token, the same value), marked `seededFrom` for review.
+// existing plan it MERGES: every model-filled field and every top-level field the skeleton does not own
+// (files, architecture, verification, deviations, status, …) is kept; rows that no longer exist in the
+// export are dropped and counted on stderr. --seed-from fills what is still empty from a sibling plan,
+// only for a row with the same identity, marked `seededFrom` for review.
 
 import fs from "node:fs";
 import path from "node:path";

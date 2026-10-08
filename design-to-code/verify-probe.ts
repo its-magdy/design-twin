@@ -1,54 +1,34 @@
 // verify-probe.ts — the shipped web probe: render the built screen, measure every expectation row the same
-// way every time, write <Screen>.measured.json for `verify-screen.js --compare`.
+// way every time, write <Screen>.measured.json for `verify-screen.js --compare`. Flags and exit codes: --help.
 //
-// Why it exists (seen in field tests): a verifier left to write its own Playwright script matches elements
-// differently each time (first element with the text; the <li> instead of the <button>; the <h2> of a CLOSED
-// dialog), leaves keys out (`fill` in 0 of 185 measurements), reads a text's font off its container, crashes on
-// a dev-server reload, and is patched mid-run — so the same unchanged screen measured 185 nodes one round and
-// 42 the next, and nothing said why. This probe fixes the method: one matching order (probe-match.ts), every
-// STYLE_KEY on every node with a reason for every null, the probe's own identity (version, sha256 of this file,
-// Playwright + browser versions) in the output, and a reload during measurement answered by ONE full re-run,
-// then exit 4 with nothing written.
-//
-//   verify-probe.js --expected design/verify/<S>.expected.json --url <url> [--out design/verify/<S>]
-//                   [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>]
-//                   [--run <id>] [--max-time <ms>] [--steps <steps.json | plan.json>] [--behaviour on|off]
-//                   [--browser-path <executable>]
-//   verify-probe.js --check [--project <dir>] [--browser-path <executable>]
+// Why it exists: a verifier left to write its own Playwright script matches elements differently each time
+// (first element with the text; the <li> instead of the <button>; the <h2> of a CLOSED dialog), leaves keys
+// out (`fill` in 0 of 185 measurements), reads a text's font off its container, crashes on a dev-server
+// reload, and is patched mid-run — so the same unchanged screen measured 185 nodes one round and 42 the
+// next, and nothing said why. This probe fixes the method: one matching order (probe-match.ts), every
+// STYLE_KEY on every node with a reason for every null, the probe's own identity (version, sha256 of this
+// file, Playwright + browser versions) in the output, and a reload during measurement answered by ONE full
+// re-run, then exit 4 with nothing written.
 //
 // Playwright is the PROJECT's: resolved with createRequire(<project>/package.json) — playwright, then
 // @playwright/test, then playwright-core — never bundled, never installed, and no browser is ever
 // downloaded by this script. Its types are `import type` only (erased from the bundle).
 //
-// Exit: 0 wrote · 2 usage · 3 renderer unavailable (nothing written) · 4 the page kept navigating, reloaded
-// twice during measurement, was unreachable or timed out, or the whole run passed --max-time (nothing written).
+// The whole run is bounded (--max-time: a page whose script never yields would hang the verifier for good).
+// With --run <id> the probe writes the run's status itself — `measuring` before the browser starts,
+// `measured` + the measured file's sha256 after it is closed, and nothing while a page is open. Files are
+// written atomically, the screenshot first and measured.json last (a reader that sees the measured file
+// sees its picture); measured.build records what was served (to expose a stale preview).
 //
-// The whole run is bounded (--max-time: a page whose script never yields would hang the
-// verifier for good); with --run <id> the probe writes the run's status itself — `measuring` before the browser
-// starts, `measured` + the measured file's sha256 after it is closed, and nothing while a page is open;
-// files are written atomically, the screenshot first and measured.json last (a reader that sees the
-// measured file sees its picture); measured.build records what was served (to expose a stale preview).
-//
-// A screen that is a section of a single-page app (chosen by component state, not by the URL) is reached
-// with --steps — a closed, navigation-only list (click / waitFor / goto, probe-steps.ts) replayed after every page
-// load; a step that fails in the measurement pass is exit 4 with nothing written. The measurement pass also
-// reads the page's horizontal overflow (measured.page). After it, the overlay interactions are DRIVEN, each on a
-// fresh page (probe-drive.ts) — evidence only, never a reason to exit 4 (measured.interactions).
-//
-// After the drive, the behaviour/accessibility checks run (probe-behaviour.ts) — landmarks, the PROJECT's
-// axe-core when it has one (resolved through the same project require as Playwright, injected with page.evaluate, never
-// bundled), a Tab walk, forced colours, 1024/320 px widths and a keyboard/scroll battery on modal overlays — each unit on a
-// fresh page within min(90 s, what --max-time leaves less 20 s). They are measured.behaviour (+ <out>.forced-colors.png), never
-// the fidelity verdict and never an exit 4: a failure is {ran:false, why}. `--behaviour off` skips them. The
-// browser is closed capped (CDP Browser.close, then close): the units run arbitrary page code.
-//
-// Between the drive and the behaviour checks, the built frame is captured ONCE more on a fresh page at the
-// reference's scale (expectation.referenceImage, written by --expect; probe-visual.ts) within min(30 s, what --max-time leaves
-// less the behaviour reserve); after the browser is closed it is diffed against the Figma reference in Node (pixelmatch-style
-// YIQ + anti-aliasing + a shift tolerance, visual-diff.ts) and <out>.diff.png is drawn. measured.visual — informational, never
-// the fidelity verdict, never an exit 4, never in measured.artifacts; a failure is {ran:false, why}. Not skipped by
-// --behaviour off (it is no behaviour check); a reference-less expectation skips it at once. The reference PNG is read from the
-// project that owns the expectation (the directory above design/verify/ of --expected, else --project — a monorepo).
+// After the measurement pass come three evidence-only stages, none of them the fidelity verdict, none an
+// exit 4 (a failure is {ran:false, why}): the overlay interactions are DRIVEN, each on a fresh page
+// (probe-drive.ts → measured.interactions); the built frame is captured once more at the reference's scale
+// (probe-visual.ts; a reference-less expectation skips it; `--behaviour off` does not) and diffed against the Figma
+// reference in Node after the browser is closed (visual-diff.ts → measured.visual, <out>.diff.png); and the
+// behaviour/accessibility checks run (probe-behaviour.ts → measured.behaviour; `--behaviour off` skips them; the
+// browser is closed capped — CDP Browser.close, then close — because the units run arbitrary page code). The
+// reference PNG is read from the project that owns the expectation (the directory above design/verify/ of
+// --expected, else --project — a monorepo).
 //
 // Navigation accounting: a navigation is a main-frame document LOAD (a reload, a cross-document
 // link) — never a `framenavigated`, which also fires for same-document history changes (pushState, a hash). Loads the

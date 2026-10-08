@@ -3,21 +3,18 @@
 // (a battery unit: its own share of it) — and they never change the fidelity verdict:
 // what they find goes to measured.behaviour, which verify-screen --compare copies into a second headline.
 //
-// Why: the verifier agents drove keyboard, focus and forced-colour checks by hand, differently every round (or not at all),
-// and focus that fell to <body> after closing a dialog opened from a hover-revealed row action, a listbox whose
-// Escape also closed its dialog, focus rings removed by a utility class and mask icons that vanish under
-// forced colours shipped as "verified". These are measurable; this module measures them the same way every run.
+// Why: verifier agents drove keyboard, focus and forced-colour checks by hand, differently every round (or not at all), and
+// focus that fell to <body> after closing a dialog opened from a hover-revealed row action, a listbox whose Escape also closed
+// its dialog, focus rings removed by a utility class and mask icons that vanish under forced colours shipped as "verified".
+// These are measurable; this module measures them the same way every run.
 //
-// Run shape (verify-probe.ts calls runBehaviour after driving the overlays):
-//   P1 (a11y): landmarks (ariaSnapshot), axe-core (when the PROJECT has it), one Tab walk from a focused sentinel →
-//      keyboard.reachable, keyboard.focus-visible, a11y.name.
-//   P2 (render): forced colours (mask icons), then design / 1024 / 320 widths by a live viewport change → layout.subpixel,
-//      overflow.mid, overflow.narrow.
+// Run shape (verify-probe.ts calls runBehaviour after driving the overlays; check ids are BehaviourCheckId):
+//   P1 (a11y): landmarks, axe-core (when the PROJECT has it), one Tab walk from a focused sentinel.
+//   P2 (render): forced colours (mask icons), then design / 1024 / 320 widths by a live viewport change.
 //   per battery row (a driven overlay whose drive evidence opened a modal by a real mouse click):
-//      R-key: keyboard.activation, dialog.focus-on-open, dialog.focus-trap, dialog.escape-closes, dialog.focus-return
-//      (escape, close), dialog.nested-escape — one Escape per open (a second Escape on the same open is not
-//      independent);
-//      R-scroll: dialog.scroll-open (y = 0 / 150 / max), dialog.scrim, dialog.click-outside.
+//      R-key: keyboard activation, focus on open, focus trap, Escape closes, focus return, nested Escape — one Escape
+//      per open (a second Escape on the same open is not independent);
+//      R-scroll: scroll-open (y = 0 / 150 / max), scrim, click-outside.
 //   A unit the budget does not reach (or cuts) reports its checks `not-run: time budget` and sets behaviour.cut; a document
 //   load inside a unit makes its remaining checks `not-run: the page loaded a new document`; a unit whose page, once reached,
 //   shows materially other tagged elements than the measured page (an error / empty state) reports them all not-run.
@@ -27,8 +24,9 @@
 // nothing is typed. The safety net under all of it is the write block (openWriteBlock / openUnitPage): from a unit's first
 // key press / click / scroll / hover / resize on, no request but GET/HEAD/OPTIONS leaves the browser, no WebSocket message
 // leaves the page and no WebSocket opened then reaches the server; the checks the write is charged to are not-run. A write
-// the page defers past the unit's end is never sent and never seen (WRITE_BLOCK_SCOPE). The drive has no write block. The drive's afterOpen hook is NOT used: battery time inside driveRow's cut
-// timer could cut a drive row and change interaction evidence, i.e. the verdict.
+// the page defers past the unit's end is never sent and never seen (WRITE_BLOCK_SCOPE). The drive has no write block, and its
+// afterOpen hook is NOT used: battery time inside driveRow's cut timer could cut a drive row and change interaction evidence,
+// i.e. the verdict.
 //
 // The page-side functions below are handed to page.evaluate, so — as in probe-page.ts / probe-drive.ts — each one is
 // SELF-CONTAINED (no outer reference; plain JSON in and out), typed by the module-local DOM declarations; the e2e test runs
@@ -2095,7 +2093,6 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         for (const c of perElement("forced-colors.visible", rows, okN, total, "CSS-mask icon(s) stay visible under forced colours")) u.add(c);
         if (!cands.length) u.add({ id: "forced-colors.visible", status: "not-run", detail: "not-run: no CSS-mask icon on the screen (the only kind this check tests: SVG fill/stroke, <img> and url() backgrounds are not forced; plain background-colour boxes become Canvas by design)" });
       }
-      // widths
       u.phase("layout.subpixel", "overflow.mid", "overflow.narrow");
       const subRows = (variant: string, list: BehaviourWidth["subpixel"]): void => {
         const rows: BehaviourCheck[] = list.map((s) => ({ id: "layout.subpixel" as const, status: "warn" as const, variant, ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `<${s.tag}>${s.text ? ` "${s.text}"` : ""} renders ${s.width}px wide — a collapsed ${s.tag === "td" || s.tag === "th" ? "table column" : "text box"} (a behaviour warning, not a fidelity delta)`, evidence: { width: s.width } }));

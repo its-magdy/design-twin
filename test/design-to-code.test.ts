@@ -910,7 +910,7 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   check("[enoent-hint] the catalog tools explain that a single-screen pull writes no design-system/",
     /--design-system/.test(boot) && /--node/.test(boot) && /every instance then counts as new/.test(boot));
   check("[enoent-hint] tokens.js points at the file a single-screen pull DOES write",
-    /design\/variables\.json/.test(run("tokens.ts", ["design/design-system/tokens.json", "out"]).stderr));
+    /design\/export\/variables\.json/.test(run("tokens.ts", ["design/design-system/tokens.json", "out"]).stderr));
   // …and a file that exists but is not JSON is its own sentence, not a SyntaxError stack.
   fs.writeFileSync(path.join(cwd, "broken.json"), "{oops");
   const bad = run("map-validate.ts", ["broken.json"]);

@@ -164,12 +164,10 @@ output and the CSS output.
    window and re-run it** (or re-import) so Figma reloads from disk.
 3. **`Unrecognized feature: 'local-network-access'` in the console is harmless noise** from Figma's own
    internals — ignore it. It is *not* a plugin error.
-4. **The localhost bridge DOES work — verified 2026-07-28** in the Figma **desktop app** (v126.7.8):
-   the plugin iframe connected to `ws://localhost:8787` on its own, and reconnects by itself after the
-   bridge restarts. (Earlier revisions of this file claimed Chrome's "Local Network Access" usually
-   blocks it and sent you to the manual path — that was wrong for the desktop app, and it steers you
-   away from the path that actually works. It may still hold for Figma in a *browser* tab; if so, the
-   manual download path below is the fallback, not the default.)
+4. **The localhost bridge works in the Figma desktop app** (checked on v126.7.8): the plugin iframe
+   connects to `ws://localhost:8787` on its own and reconnects by itself after the bridge restarts. Chrome's
+   "Local Network Access" may block it for Figma in a *browser* tab; if so, the manual download path below
+   is the fallback, not the default.
    *Symptom if it ever does block:* the bridge sits on "Open your Figma file and run…" and no
    `ESTABLISHED` socket appears in `lsof -nP -iTCP:8787`.
 5. **To see plugin errors:** turn on **Plugins → Development → Use Developer VM**, then
@@ -245,7 +243,7 @@ no-recursion, no-asset cost as `--list`), which is otherwise a jump straight to 
 skips `serialize()` and the recursive asset walk, so it stays cheap even on a node deep inside a large
 tree. Use it after `build-screen` generates code for a specific component in a dense screen, where the
 one whole-frame reference PNG every export already carries is too zoomed-out to compare against.
-Verified live (2026-09-08): a real node rendered a correct PNG at the default scale and at an explicit
+A real node renders a correct PNG at the default scale and at an explicit
 `--scale` override; combining it with a scope flag, another index command, or a read option is refused
 with a specific message rather than silently ignored.
 
@@ -300,13 +298,11 @@ The `design-to-code/` suite (`test/design-to-code.test.ts`) runs on **mock** dat
 genuine `design-system.json` once (a full export from Layer B) to catch what the mocks can't. Work
 top-to-bottom; each box is a concrete pass/fail.
 
-**Run 2026-07-29** against a real `design-system.json` (222 variables, 65 components, "🎨 Design System"
-page export): every checklist item below passed. One real bug found and fixed — a FLOAT variable scoped
-to `FONT_WEIGHT` *and* length scopes at once (e.g. a "Body 2" type-scale token also scoped to
-`FONT_SIZE`/`LINE_HEIGHT`/`LETTER_SPACING`) was emitted unitless (`--Body-2: 18;`, invalid as a
-font-size) because `numberUnit()` used `.some()` — one unitless scope silenced the length scopes sitting
-next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); regression tests
-`[RD2-mixed]`/`[RD2-pure]` added to `test/design-to-code.test.ts`.
+**What a real run catches.** Against a real `design-system.json` (hundreds of variables, dozens of
+components) the one defect the mocks missed was a FLOAT variable scoped to `FONT_WEIGHT` *and* length scopes
+at once (a type-scale token also scoped to `FONT_SIZE`/`LINE_HEIGHT`/`LETTER_SPACING`): it must not be emitted
+unitless (`--Body-2: 18;` is invalid as a font-size). `numberUnit()` is unitless only when *no* scope
+contradicts it (`.every()`, not `.some()`); `[RD2-mixed]`/`[RD2-pure]` in `test/design-to-code.test.ts` pin it.
 
 ### Prereq
 - [ ] You have a real export from **"Export design system + all page frames"** (Layer B): a

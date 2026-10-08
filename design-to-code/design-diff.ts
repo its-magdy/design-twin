@@ -4,11 +4,7 @@
 // A re-pull overwrites the export in place, and "the designer changed the header" then has no answer
 // except rebuilding the screen — which discards every hand edit made since the first build. This is
 // the deterministic half of the alternative: keep the previous export, diff the two by node id, and
-// hand the agent a short list of what actually moved so it can patch only that.
-//
-//   node design-diff.ts --snapshot <file.json>...        keep a copy BEFORE re-pulling (design/.sync/)
-//   node design-diff.ts <file.json> [--against <old>]    diff against the snapshot (else git HEAD)
-//        [--json] [--out <file>]
+// hand the agent a short list of what actually moved so it can patch only that. Usage: --help.
 //
 // Nodes are matched by `id` — stable across exports of one Figma file; a name is not (renaming a layer
 // must read as "renamed", not "deleted + added"). Exit 0 = compared (changes or not), 2 = usage /
@@ -31,11 +27,10 @@
 //   - descendants of an added/removed node: the top-most node stands for its subtree.
 //   - the exporter's FORMAT noise (`formatNoise` below): an export from an older plugin carried
 //     `gridColumnStart/RowStart: -1` on every node (and `gridAlignSelf/gridJustifySelf` off a grid),
-//     `layout: {mode:"absolute"}` on every text/shape/other leaf and a `layout` on asset leaves. A newer
-//     plugin writes none of them, so re-pulling an unchanged screen would otherwise list EVERY node as
-//     changed. Both sides are normalised before comparing; a node whose only differences were that noise,
-//     present on ONE side only, is counted as `formatOnly`, not listed. Permanent: old snapshots live in
-//     git for months.
+//     `layout: {mode:"absolute"}` on every text/shape/other leaf and a `layout` on asset leaves, so
+//     re-pulling an unchanged screen would otherwise list EVERY node as changed. Both sides are
+//     normalised before comparing; a node whose only differences were that noise, present on ONE side
+//     only, is counted as `formatOnly`, not listed. Permanent: old snapshots live in git for months.
 //   - sublayers of an instance whose main component was swapped: their ids (`I<instance>;<child>`)
 //     are derived from the main component, so every one of them "disappears" and "appears". The swap
 //     is the change; the sublayers are counted on it, not listed.

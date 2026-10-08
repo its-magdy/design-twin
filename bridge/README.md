@@ -419,7 +419,7 @@ Address one with --client <connId | fileKey | part of the file name>, e.g. --cli
 **`c1`/`c2` are display labels, not stable ids.** They are assigned in *reconnect order* for the
 current bridge's lifetime — whichever plugin's WebSocket lands first becomes `c1`. Two runs of the
 same `--client c1` can select **different Figma files** if the bridge restarted (no `dtwin serve`
-daemon) and the reconnect race went the other way between runs (finding 209). Prefer the **file name**
+daemon) and the reconnect race went the other way between runs. Prefer the **file name**
 (a substring match, e.g. `--client "App"`) or the **fileKey** when one is available — both are stable
 across restarts; `c1`/`c2` are only for telling two *currently open* files apart in one sitting, exactly
 like `--list-clients`' own listing does. Under a running `dtwin serve` daemon, connIds are assigned
@@ -482,7 +482,7 @@ Use `--list-clients` to see *which* files are connected; use `--whoami` to inter
 > `instanceId` is the symptom. Related and better attested: an *occluded* Figma window is fine, a
 > **minimized** one gets its renderer suspended.
 
-> **Background tab.** Measured live (2026-09-25, one page through the daemon): with the exporting
+> **Background tab.** Measured live (one page through the daemon): with the exporting
 > file's tab in front, 31–38 progress ticks and ~2,500 nodes per 10 s; with another file's tab in
 > front, 3–5 ticks and ~15 nodes per 10 s — about 100× slower; then 27 ticks in the first 10 s after
 > switching back and the normal 31–38 from the second window on. The export completes either way,
@@ -660,7 +660,16 @@ invocations, no reconnect, no second bridge to collide on 8787.
 Why a daemon rather than "a flag that just leaves the connection open": a long-running CLI has no way
 to receive further commands, so it would hold the port while being unreachable — blocking the MCP
 server and every other CLI call. Instead one process (`--serve`) owns the bridge and each later
-invocation is a thin client over a unix socket in `$TMPDIR`.
+invocation is a thin client over a unix socket, `designtwin-<port>.sock`, in a directory only you can
+access: `$XDG_RUNTIME_DIR` when it is set (and private), else `$TMPDIR/designtwin-<uid>/`, created
+`0700`. The socket takes no token, so dtwin refuses that directory if it is a symlink, owned by
+another user, or open to group/other — remove it, or point `XDG_RUNTIME_DIR` or `TMPDIR` at a
+directory only you can access. Until then ordinary commands and the MCP server run without a daemon
+(the refusal is printed once on stderr), `--serve` / `--stop` refuse, and `dtwin doctor` fails its
+daemon check with the same message. The location follows `XDG_RUNTIME_DIR` / `TMPDIR`, so two processes
+started with different values (a terminal, and an MCP server launched by an app) see different daemons.
+A daemon started by an earlier dtwin version listens at `$TMPDIR/designtwin-<port>.sock`: `--stop`
+stops it too, and a port-in-use error names that socket.
 
 Behaviour worth knowing:
 - Requests are **serialized**. The plugin is single-threaded and its heavy commands mutate shared
@@ -714,7 +723,9 @@ Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_sel
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
 `figma_write` (batch of safe ops — createFrame / createText / setFill / setText; **no arbitrary code
-execution**, unlike some community servers; `dryRun: true` returns a preview of what each op would
+execution**, unlike some community servers; a `fill` / `color` must be a hex colour — `#rgb`, `#rgba`,
+`#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
+schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
 create or overwrite without touching the file — there is no undo from the MCP side, so preview anything
 that overwrites; refused outright when the file is in read-only Dev Mode), and two that read the export already on disk and
 need no Figma connection — `design_get_component` (one component's variant node trees) and
