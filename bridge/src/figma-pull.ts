@@ -80,7 +80,8 @@
 //                                                   # every variable with full per-mode values, every
 //                                                   # style, every component. Run it with the LIBRARY
 //                                                   # file open, not the design file that consumes it.
-//                                                   # Writes design/libraries/<slug>-<fileKey8>/ and
+//                                                   # Writes <outDir>/libraries/<slug>-<fileKey8>/ (by
+//                                                   # default design/export/libraries/…) and
 //                                                   # never touches design-system/.
 //   dtwin [outDir] --timeout N  # seconds to wait for the export (default: 300,
 //                                            # 900 with --all-pages, 120 for --selection); also
@@ -845,7 +846,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     // Fields an OLDER daemon may not report (daemon.ts DaemonStatusView) print as "?", never as a guess.
     console.error("[dtwin] " + (st
       ? `daemon up (pid ${st.pid ?? "?"}, port ${st.port ?? "?"}) — plugin ${st.pluginConnected ? "CONNECTED" : "not connected"}` +
-        (st.idleMs ? `, idle ${Math.round((st.idleForMs ?? 0) / 60000)}/${Math.round(st.idleMs / 60000)} min before auto-shutdown.` : ", no idle shutdown.")
+        (st.idleMs ? `, idle ${daemon.humanMs(st.idleForMs ?? 0)}/${daemon.humanMs(st.idleMs)} before auto-shutdown.` : ", no idle shutdown.")
       : "no daemon is running — start one with --serve."));
     return;
   }
@@ -859,9 +860,9 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     console.error("[dtwin] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
     console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects).');
     console.error("[dtwin] The connection stays open until you run --stop (or Ctrl-C here).");
-    const idleMin = Number(process.env.FIGMA_DAEMON_IDLE_MIN ?? 120);
-    console.error("[dtwin] " + (idleMin > 0
-      ? `It also shuts down after ${idleMin} min idle, so an abandoned daemon can't hold port 8787 forever (FIGMA_DAEMON_IDLE_MIN=0 disables).`
+    const idleMs = daemon.idleMsFromEnv(); // the ONE rule serve() uses (an unparsable value disables it)
+    console.error("[dtwin] " + (idleMs > 0
+      ? `It also shuts down after ${daemon.humanMs(idleMs)} idle, so an abandoned daemon can't hold port 8787 forever (FIGMA_DAEMON_IDLE_MIN=0 disables).`
       : "Idle shutdown is DISABLED — remember to --stop it, or it holds port 8787 until you do."));
     return; // the socket + WS server keep the event loop alive; no close() here, by design
   }

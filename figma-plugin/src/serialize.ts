@@ -129,7 +129,8 @@ function bakeTransform(out: IrNode): void {
 
 // `underHidden`: some ANCESTOR is `visible:false`. A root's own ancestor chain is computed once by its
 // collector (collect.ts hiddenAncestor); below that it is threaded down here, never re-walked.
-export async function serialize(node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean): Promise<IrNode | null> {
+// `inGrid`: the parent is a GRID auto-layout frame. A root never gets it — its parent is not exported.
+export async function serialize(node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean, inGrid?: boolean): Promise<IrNode | null> {
   // The per-node abort point (b2): a cancel or an abandonment stops the walk within one node, not at
   // the next asset/frame/page — a cold first read of a dense screen can otherwise walk for a minute for
   // a caller that has already gone. Safe to throw here: children are serialized one at a time (never
@@ -185,14 +186,18 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   if ("layoutSizingVertical" in node && node.layoutSizingVertical && node.layoutSizingVertical !== "FIXED") out.heightMode = lower(node.layoutSizingVertical);
   if ("overflowDirection" in node && node.overflowDirection && node.overflowDirection !== "NONE") out.scroll = lower(node.overflowDirection);
 
-  // Grid child placement — span across tracks AND the starting (anchor) cell.
-  if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
-  if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
-  if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number") out.gridColumnStart = node.gridColumnAnchorIndex; // 0-based track index
-  if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number") out.gridRowStart = node.gridRowAnchorIndex;
-  // Grid child cell alignment, mapped through GRID_SELF (MIN/CENTER/MAX -> start/center/end).
-  if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
-  if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
+  // Grid child placement — span across tracks AND the starting (anchor) cell. Anchor/span/self-align
+  // are read only on an in-flow child of a GRID frame: off a grid the anchors read −1 on every node
+  // (observed 7,882/7,882), which is not a track index; an absolute child is not a grid item.
+  if (inGrid && !absoluteInParent) {
+    if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
+    if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
+    if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number" && node.gridColumnAnchorIndex >= 0) out.gridColumnStart = node.gridColumnAnchorIndex; // 0-based track index
+    if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number" && node.gridRowAnchorIndex >= 0) out.gridRowStart = node.gridRowAnchorIndex;
+    // Grid child cell alignment, mapped through GRID_SELF (MIN/CENTER/MAX -> start/center/end).
+    if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
+    if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
+  }
 
   // Position — only when the parent does NOT auto-position this node.
   if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof node.x === "number") {
@@ -255,7 +260,8 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   // Sticky children: the LAST N children of a scrolling frame are PINNED (Figma's "fixed position
   // when scrolling"; children[] is back-to-front and Figma keeps the fixed children on top of the
   // scrolling ones). Without this a sticky header / bottom nav / FAB serializes as a plain flow
-  // child and codegen emits a header that scrolls away with the content.
+  // child and codegen emits a header that scrolls away with the content. Every pinned child carries
+  // x/y + box.x/y (the children loop below).
   if ("numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) {
     out.fixedChildren = node.numberOfFixedChildren;
   }
@@ -484,10 +490,19 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   const children: readonly SceneNode[] | undefined = "children" in node ? node.children : undefined;
   if (children && children.length) {
     // An auto-layout or grid container positions its own children → they don't need x/y.
-    const controlsChildren = "layoutMode" in node && node.layoutMode && node.layoutMode !== "NONE";
+    const controlsChildren = "layoutMode" in node && !!node.layoutMode && node.layoutMode !== "NONE";
+    const grid = "layoutMode" in node && node.layoutMode === "GRID";
+    // A PINNED child (one of the LAST `numberOfFixedChildren`, counted by Figma over ALL children,
+    // hidden ones included — so index node.children, not `kids`) always gets x/y + box.x/y: a builder
+    // places it by its `y`. Figma lets only an absolute child of an auto-layout frame be fixed, so this
+    // normally changes nothing — it guards a frame that got auto layout after its children were fixed.
+    const nFixed = "numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" ? node.numberOfFixedChildren : 0;
+    const pinnedFrom = children.length - nFixed;
     const kids: IrNode[] = [];
-    for (const c of children) {
-      const s = await serialize(c, depth + 1, controlsChildren, hidden);
+    for (let i = 0; i < children.length; i++) {
+      const c = children[i];
+      if (!c) continue;
+      const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid);
       if (s) kids.push(s);
     }
     if (kids.length) out.children = kids;

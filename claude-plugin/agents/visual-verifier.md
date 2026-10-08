@@ -39,13 +39,17 @@ build-screen skill's `references/verify.md`
 (`${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md`) has the per-stack table — read it.
 
 Nothing available → write a `measured.json` with `{"mode": "static-only", "reason": "<exactly what
-you looked for>"}` and return. Do not install tooling or add dependencies without the caller saying so.
+you looked for>"}` and return (the caller's `--compare … --record-plan` records the plan as `static-only` with that
+reason). Do not install tooling or add dependencies without the caller saying so.
 
 **Web:** check with `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --check` (run from the web app's
 folder, or pass `--project <dir>`). It resolves the project's Playwright and launches Chromium once;
 nothing is measured. Exit 3 means no usable renderer: **stop and ask the user** — the command prints the
 install line. Never run `npx playwright install` (or `npm i -D playwright`) yourself: it edits the
-project's dependencies and, on a cold machine, downloads ~150 MB. Say the cost when you ask.
+project's dependencies and, on a cold machine, downloads ~150 MB. Say the cost when you ask. If the user names a
+Chromium they already have cached, `--browser-path <executable>` (on `--check` and on the probe) launches that one instead
+— the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`); a path that is not an executable file is
+exit 3. It is only guaranteed with the bundled Chromium; `measured.json` records the browser as `custom`, never the path.
 
 ## 2. Say you're alive as you go
 
@@ -58,11 +62,12 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Screen> --phase 
 ```
 
 Use the run id the caller gave you; with none, your first call uses `--new-run` instead of `--run` and
-prints `run <id> rev <n>`. Phases, in order: `queued` → `starting` → `renderer-found` → `renderer-ready` →
+prints `run <id> rev <n>`. A run id is good for ONE pass: once it ended (`done`, `failed`, `blocked`) every write to it
+is refused (exit 2) — if the id you were given has already ended, start a new run with `--new-run` and say so. Phases, in order: `queued` → `starting` → `renderer-found` → `renderer-ready` →
 `measuring` → `measured` → `driving` → `done` (or `failed`, or `blocked`). On web the probe writes
 `measuring` and `measured` itself when you pass it `--run <id>`. `measured` (and `done`) checks the file: `<Screen>.measured.json`
 must exist and name the current expectation (on native, write it before sending `measured`). Without `--run` a call only continues a
-run that has not ended; after `done`/`failed`/`blocked` pass `--run <id>` or `--new-run` (exit 2 otherwise).
+run that has not ended; a run that ended (`done`/`failed`/`blocked`) takes no more writes, with or without `--run <id>` (exit 2): an ended `blocked` stays `blocked` — the orchestrator reports its detail and never overwrites it with `done`; to retry, the next attempt starts a new run with `--new-run`.
 Write `failed` with the reason if you give up, so the last phase is never left hanging. The caller waits with
 `verify-screen.js --wait <Screen> --run <id>` (exit 0 done, 1 failed/blocked, 5 timeout or no progress, 6 run cache not accessible), which
 is why the status must move at every step.
@@ -108,6 +113,11 @@ evidence published in this run is recorded as this run's. If the project reloads
 elsewhere), suggest `server.watch.ignored: ['**/design/**']` (Vite) or a Tailwind `@source not` for
 `design/` to the caller; these are suggestions, never edits to their config.
 
+**Scratch files go in the run cache too.** Any throwaway script or probe you write to look at something goes in
+`node_modules/.cache/designtwin-verify/scratch/` (project-local, writable from the project root, created on demand) —
+never under `src/` or `design/`, where the project's linter, type-checker and dev server pick it up. Delete it when done.
+Write a script with the Write tool (e.g. `scratch/drive.cjs`), never a shell heredoc (`cat <<EOF`) or `node -e`: Claude Code asks for approval of those for a script with braces and quotes, while the Write tool is allowed under this directory by `Edit(node_modules/.cache/designtwin-verify/**)` (Claude Code checks file writes against `Edit(...)` rules only; a `Write(...)` path rule is never consulted).
+
 ## 2a. Process, permission and time limits
 
 - **Close only what you opened; stop only a PID you started and recorded.** Record the PID when you
@@ -125,7 +135,8 @@ elsewhere), suggest `server.watch.ignored: ['**/design/**']` (Vite) or a Tailwin
     to get round it.
   Either way, after that write status phase `blocked` (detail = the denied command) and hand back "blocked on
   permissions: done / remaining", suggesting the owner approve it or add a narrow allow rule for
-  `node …/verify-probe.js` / `node …/verify-screen.js`.
+  `node …/verify-probe.js` / `node …/verify-screen.js`, and `Edit(node_modules/.cache/designtwin-verify/**)` when it was
+  your own scratch script or staged evidence that was denied.
 - **Bounded runs.** The probe stops itself at `--max-time` (default 180000 ms) with exit 4 and nothing written.
   Re-run it ONCE after an exit 4 (with `--run` its exit 3/4 bumps the status, phase still `measuring`), then write
   status `failed` with the navigation log — never a loop.
@@ -234,8 +245,8 @@ Pass `--run <id>` so it writes the `measuring` / `measured` status itself. Rules
   match `:focus-visible` in Chromium, so check a designed focus ring visually or by keyboard Tab and put it in the evidence; whether
   a Tab stop shows a ring at all is the probe's `keyboard.focus-visible`); pressed and every designed interaction you drive yourself, recording results as in
   "Also collect" below into `<Screen>.evidence.json` (staged, §2) — an object
-  `{"interactions": [...], "components": [{"setName", "present": false, "detail"}]}` that the caller passes as
-  `--interactions`. Do not add them to `measured.json`.
+  `{"interactions": [...], "components": [{"setName", "present": false, "detail"}], "inferred": [...]}` that the caller passes as
+  `--interactions` (`inferred` is optional, see "Also collect"). Do not add them to `measured.json`.
 - **Behaviour is the probe's too.** The probe runs the dialog, keyboard, landmark, name, forced-colours and
   overflow battery (and axe when the project has it) after the measurement; read `report.behaviour`
   once the caller has compared, and do not re-drive the battery the probe ran. Never accept "the tool cannot
@@ -280,7 +291,9 @@ for a native stack's equivalent:
 | `fill` | for an SVG/vector node: `getComputedStyle(<path/rect/circle>).fill` — an SVG's colour is never `background-color` |
 | `placeholderText` / `placeholderColor` | for a placeholder spec (`placeholder: true`): `el.placeholder`, and `getComputedStyle(el, '::placeholder').color` or the stylesheet rule — `textContent` of an empty input is `""` |
 | `tag` | `el.tagName.toLowerCase()` — lets the comparison route table rows, containers and leaves correctly |
-| `states.<hover\|pressed\|focus>` | the same styles **with the element in that state** — required for every spec carrying `drawnState` (the designer drew that row hovered; measuring it at rest reports a colour bug that is not there) |
+| `paintedBy` | optional, inside `styles`: when the element's own `backgroundColor` is transparent, `{backgroundColor, via: "ancestor"\|"child", tag, depth}` of the nearest containing ancestor (or same-box child) that paints — a hovered `<tr>` paints through its transparent `<td>`s; `--compare` then compares that colour and says so |
+| `textTransform` | optional: the computed `text-transform` of a TEXT element — a designed upper/lower/title case is compared against the rendered string, so a CSS `uppercase` is not a copy bug |
+| `states.<hover\|pressed\|focus>` | the same styles **with the element in that state** — required for every spec carrying `drawnState` (the designer drew that row hovered; measuring it at rest reports a colour bug that is not there). It sits **beside** `styles` on the node (`nodes[].states`), never inside it — a `states` key inside `styles` is listed as an unknown key and never read — and only for a spec with `drawnState`: a state measured on a node the design never drew in that state is not compared, only listed under "Inferred, not designed" |
 
 On native stacks put `expectationSha256` (the sha256 of the `.expected.json` you measured against — `shasum -a 256`) at
 the top level, so a report can never be read against a newer expectation than it was measured on.
@@ -302,6 +315,15 @@ the top level, so a report can never be read against a newer expectation than it
   its position in the list), and `outline` with `outline-offset: -Npx` is an inside stroke. Report it as
   `borderWidth` / `borderColor` with `strokeFrom` (`box-shadow` | `outline`) and `strokeAlign`
   (`inside` | `outside`), as the probe does — `border-width: 0` alone is not a missing stroke.
+
+- **Whose hover it was.** A control inside a row the designer drew hovered inherits that state: its spec carries
+  `drawnStateFrom` (the row's node id), and the probe hovers the OWNER at a point clear of the control, so the row's
+  `:hover` is on and the control's own is not. Do the same if you measure by hand: hover the owner, not the control. A
+  note "hovered the element itself" means no free point or no tagged owner was found — tag the owner with its id.
+- **Hover and press feedback is more than a background.** Before calling a hover or press "no change", read
+  background, colour, `filter`, `opacity`, `box-shadow`, `transform` and `outline` with the element in that state —
+  all of them are readable with `getComputedStyle` (and `rotate`, above). The probe's effective-paint check
+  (`paintedBy`) covers `backgroundColor` only; the others are yours to look at, as a `note`.
 
 Also collect:
 
@@ -344,6 +366,12 @@ Also collect:
     recorded like any other; `--compare` reports it `undesigned`, which never fails the screen. A control
     that looks deliberately inert is still recorded as it behaves — descoping it is the user's decision,
     and you never write waivers or descopes.
+
+- **inferred**: something the build does that the design never drew (an error message, an empty list, an open
+  dropdown, a loading state) — one row `{"nodeId"?, "state", "built", "why"?}` in `inferred[]` of the evidence object.
+  `--compare` lists it under "Inferred, not designed" next to the plan-declared and undesigned interactions: judged
+  against best practice and the design's intent, never "matched", never part of the verdict. Say what you saw, not
+  that it is right or wrong.
 
 On web, `components` and `interactions` go to `<Screen>.evidence.json` in the staging directory (§2), published into `design/verify/` at `done` (§4) and the probe writes
 `measured.json`. On native stacks write it all to `design/verify/<screen>.measured.json`:
@@ -398,7 +426,8 @@ Report anything the measurement cannot express as a `note` (name the region and 
   (`nodeId`, field, value) AND the export node's own value (`"text": …`, `"radius": …`). Open the
   export and check before you write it. A reported "lodge specific vs Lodge Specific" copy bug was
   fabricated — the export itself says `"text": "lodge specific"`; the build was right. If you cannot
-  quote a contradicting line, it is not a defect.
+  quote a contradicting line, it is not a defect. Quote the report's own delta text — it names the axis or
+  dimension — and never restate a bound from memory.
 
 ## 6. Return
 

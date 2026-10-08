@@ -11,7 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { buildExpectation, compare, reportToMarkdown, normColor, normWeight, normFamily, lineHeightPx, FIELDS, tokenFor } from "../design-to-code/verify-screen.ts";
+import { buildExpectation, compare, reportToMarkdown, normColor, normWeight, normFamily, lineHeightPx, FIELDS, tokenFor, findExistingExpectedFor } from "../design-to-code/verify-screen.ts";
+import { planCodeFiles } from "../design-to-code/content-hash.ts";
 import { audit } from "../design-to-code/audit.ts";
 import type { ExpectInput } from "../design-to-code/verify-screen.ts";
 import type { FontSpec, MeasuredNode, MeasuredStyles, Paint, ScreenExport, VerifyMeasured } from "../design-to-code/types.ts";
@@ -572,7 +573,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const bytes1 = fs.readFileSync(expFile);
   const r2 = run("--expect", src, "--out", "design/verify/GuidedPolicies");
   ok("[lt3-cli] --expect prints what it skipped as hidden (45 instances, 11 interactions)", () => /skipped 23 hidden layer\(s\) \(\d+ spec\(s\), 45 instance\(s\), 11 interaction\(s\)\)/.test(r1.stderr));
-  ok("[lt3-cli] a second identical --expect is byte-identical and says 'unchanged'", () => r2.status === 0 && Buffer.compare(bytes1, fs.readFileSync(expFile)) === 0 && /already identical/.test(r2.stderr));
+  ok("[lt3-cli] a second identical --expect is byte-identical and says 'unchanged'", () => r2.status === 0 && Buffer.compare(bytes1, fs.readFileSync(expFile)) === 0 && /byte-identical to the expectation on disk \(same export inputs.*says nothing about the build/.test(r2.stderr));
   fs.writeFileSync(path.join(cwd, "design/verify/GuidedPolicies.measured.json"), JSON.stringify(Object.assign(clone(gpMeasured), { expectationSha256: "0".repeat(64) })));
   const c1 = run("--compare", expFile, "design/verify/GuidedPolicies.measured.json");
   // The CLI always runs the on-disk artifact check, so its report's artifacts are ArtifactCheck rows.
@@ -587,6 +588,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const r3 = run("--expect", "edited.json", "--out", "design/verify/GuidedPolicies");
   ok("[lt3-cli] re-running --expect over a different export says REPLACED and names the now-stale report/measurement",
     () => /REPLACED an existing/.test(r3.stderr) && /GuidedPolicies\.report\.json/.test(r3.stderr) && /PREVIOUS expectation/.test(r3.stderr));
+  ok("[DT-45] …it says the EXPORT changed and keeps the previous bytes as .expected.prev.json", () =>
+    /: the export changed \(content sha [0-9a-f]{12}… → [0-9a-f]{12}…\)/.test(r3.stderr) && Buffer.compare(bytes1, fs.readFileSync(path.join(cwd, "design/verify/GuidedPolicies.expected.prev.json"))) === 0);
   fs.writeFileSync(path.join(cwd, "ints.json"), JSON.stringify([{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, outcome: "dialog-opened", navEvents: 0 }]));
   run("--expect", src, "--out", "design/verify/GuidedPolicies");
   run("--compare", expFile, "design/verify/GuidedPolicies.measured.json", "--interactions", "ints.json");
@@ -617,6 +620,108 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     oneLine(run("--expect", put("notscreen.json", { nodes: "none" })), /screen export: 'notscreen\.json' is not a screen export/));
   okOuter("[args] `--out --force` is '--out needs a value' (was: an artefact set named --force)",
     (() => { const r = run("--expect", put("s.json", { nodes: [{ id: "1:1", type: "FRAME", name: "S" }] }), "--out", "--force"); return r.status === 2 && /verify-screen: --out needs a value/.test(r.stderr); })());
+})();
+
+// ---------- DT-45 (D102, D112): --expect says what state the old artefacts are in; a replaced expectation is kept ----------
+(() => {
+  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-dt45-"));
+  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const vdir = path.join(cwd, "design", "verify");
+  const screen = (fill: string) => ({ exportedAt: "2026-10-07T00:00:00.000Z", screen: "Orders",
+    nodes: [{ type: "FRAME", id: "5:6", name: "Orders", box: { x: 0, y: 0, w: 800, h: 600 }, fills: [{ type: "solid", color: fill }], children: [] }] });
+  const screenFile = path.join(cwd, "Orders__5_6.json");
+  fs.writeFileSync(screenFile, JSON.stringify(screen("#ffffff")));
+  const target = path.join(vdir, "Orders__5_6.expected.json"), prevFile = path.join(vdir, "Orders__5_6.expected.prev.json");
+  const statusAt = (base: string, phase: string, extra: Record<string, string> = {}): void =>
+    fs.writeFileSync(path.join(vdir, base + ".status.json"), JSON.stringify({ schema: "designtwin/verify-status@2", screen: base, runId: "r-7f3a", rev: 4, phase, detail: "", at: new Date().toISOString(), by: "verify-probe", ...extra }));
+  const r0 = run("--expect", screenFile);
+  const bytes0 = fs.readFileSync(target);
+  okOuter("[DT-45] first --expect: no .prev, no status note", r0.status === 0 && !fs.existsSync(prevFile) && !/note {2}the last run/.test(r0.stderr));
+  // the last run failed: its measured/report files are partial
+  statusAt("Orders__5_6", "failed", { detail: "the probe could not reach the page" });
+  const r1 = run("--expect", screenFile);
+  okOuter("[DT-45] a failed last run → the note names the run, the phase and its detail",
+    /note {2}the last run of Orders__5_6 \(run r-7f3a\) ended at phase failed \(the probe could not reach the page\) — its measured\/report files are partial/.test(r1.stderr));
+  okOuter("[DT-45] identical bytes → 'byte-identical … says nothing about the build', and no .prev written",
+    /byte-identical to the expectation on disk \(same export inputs/.test(r1.stderr) && /re-measure to check the code/.test(r1.stderr) && !fs.existsSync(prevFile));
+  statusAt("Orders__5_6", "measuring", { at: new Date(Date.now() - 3_600_000).toISOString() });
+  okOuter("[DT-45] a non-terminal phase older than the stall (300 s) → 'never finished'", /the last run of Orders__5_6 \(run r-7f3a\) never finished — still at phase measuring/.test(run("--expect", screenFile).stderr));
+  fs.writeFileSync(path.join(vdir, "Orders__5_6.status.json"), JSON.stringify({ phase: "done" }));
+  okOuter("[DT-45] a v1 (hand-written) status → 'hand-written status … not checked'", /Orders__5_6\.status\.json is a hand-written status \(no run id\) — not checked/.test(run("--expect", screenFile).stderr));
+  statusAt("Orders__5_6", "done");
+  okOuter("[DT-45] a done run → no status note", !/note {2}(the last run|a run of)/.test(run("--expect", screenFile).stderr));
+  // same export content, different bytes → the generator changed; the old bytes are kept, one generation
+  const edited: unknown = JSON.parse(bytes0.toString("utf8"));
+  if (isJsonObject(edited)) edited.note = "written by an older verify-screen";
+  const olderBytes = JSON.stringify(edited, null, 2) + "\n";
+  fs.writeFileSync(target, olderBytes);
+  const r2 = run("--expect", screenFile);
+  okOuter("[DT-45] same export content → REPLACED … 'the expectation generator changed (verify-screen upgrade)'",
+    r2.status === 0 && /REPLACED an existing [^\n]*: same export content — the expectation generator changed \(verify-screen upgrade\); the previous one is kept as [^\n]*Orders__5_6\.expected\.prev\.json/.test(r2.stderr));
+  okOuter("[DT-45] .expected.prev.json holds exactly the replaced bytes", fs.readFileSync(prevFile, "utf8") === olderBytes);
+  fs.writeFileSync(screenFile, JSON.stringify(screen("#f0f0f0")));
+  const r3 = run("--expect", screenFile);
+  okOuter("[DT-45] another export → 'the export changed (content sha a… → b…)'; .prev overwritten (one generation) with the last bytes",
+    /: the export changed \(content sha [0-9a-f]{12}… → [0-9a-f]{12}…\)/.test(r3.stderr) && Buffer.compare(fs.readFileSync(prevFile), bytes0) === 0);
+  // L6 (fix pass 1): the replaced expectation recorded no export hash (written before exportContentSha256) — say so; never
+  // claim "the export changed"
+  const noSha: unknown = JSON.parse(fs.readFileSync(target, "utf8"));
+  if (isJsonObject(noSha)) { delete noSha.exportContentSha256; noSha.note = "written before the export hash"; }
+  fs.writeFileSync(target, JSON.stringify(noSha, null, 2) + "\n");
+  const r4 = run("--expect", screenFile);
+  okOuter("[L6] the replaced expectation recorded no export hash → 'the expectation recorded no export hash … cannot tell whether the export or the expectation generator changed', not 'the export changed'",
+    /REPLACED an existing [^\n]*: the expectation recorded no export hash \(exportContentSha256\) — cannot tell whether the export or the expectation generator changed; the previous one is kept/.test(r4.stderr) && !/the export changed/.test(r4.stderr));
+  // .prev is never taken for a live expectation
+  fs.rmSync(target);
+  okOuter("[DT-45] findExistingExpectedFor never matches a .expected.prev.json", findExistingExpectedFor(vdir, "5:6", path.join(vdir, "Other.expected.json")) === null);
+  const rOther = run("--expect", screenFile, "--out", path.join(vdir, "Other"));
+  okOuter("[DT-45] …so --expect under another name is not refused because of a .prev", rOther.status === 0 && fs.existsSync(path.join(vdir, "Other.expected.json")));
+  // the dup refusal names the OLD set's last run
+  statusAt("Other", "blocked", { detail: "no dev server" });
+  const rDup = run("--expect", screenFile);
+  okOuter("[DT-45] the nickname refusal names the old set's status (blocked, detail)",
+    rDup.status === 1 && /already has an expectation/.test(rDup.stderr) && /the last run of Other \(run r-7f3a\) ended at phase blocked \(no dev server\)/.test(rDup.stderr));
+  fs.rmSync(cwd, { recursive: true, force: true });
+})();
+
+// ---------- F-100 (D115): --compare --record-plan — the plan is the one compare chose; none / several → exit 2 first ----------
+(() => {
+  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-record-"));
+  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const put = (rel: string, doc: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), JSON.stringify(doc, null, 4) + "\n"); return rel; };
+  const exp = put("design/verify/Orders__5_6.expected.json", buildExpectation([doc([textNode("2:1", "Title", "Orders", { family: "Inter", size: 14 })])]));
+  const meas = put("design/verify/Orders__5_6.measured.json", measured([{ nodeId: "2:1", styles: { fontSize: 14, fontFamily: "Inter", text: "Orders" } }]));
+  const report = path.join(cwd, "design/verify/Orders__5_6.report.json");
+  const none = run("--compare", exp, meas, "--record-plan");
+  okOuter("[F-100] --record-plan with no plan for the frame → exit 2, says so, NO report written",
+    none.status === 2 && /--record-plan: no plan in design\/plan\/ describes this frame/.test(none.stderr) && !fs.existsSync(report));
+  put("src/Orders.tsx", "export {}\n");
+  const planA = { nodeId: "1:1", files: ["src/Orders.tsx"], verification: { coverage: "hand-written" } };
+  put("design/plan/Orders__1_1.json", planA);
+  put("design/plan/Orders.json", { nodeId: "1:1", files: ["src/Orders.tsx"] });
+  const amb = run("--compare", exp, meas, "--record-plan");
+  okOuter("[F-100] two plans describe the frame, no --plan → exit 2 naming both, NO report written",
+    amb.status === 2 && /--record-plan: 2 plans in design\/plan\/ describe this frame/.test(amb.stderr) && /pass --plan/.test(amb.stderr) && !fs.existsSync(report));
+  okOuter("[F-100] --record-plan outside --compare → exit 2", run("--expect", "x.json", "--record-plan").status === 2);
+  fs.rmSync(path.join(cwd, "design/plan/Orders.json"));
+  const rec = run("--compare", exp, meas, "--record-plan");
+  const rep = fs.existsSync(report) ? readFixture(report, isVerifyReport) : null;
+  // slice B's recordPlan: until it lands the step-0 stub throws — the report is still written and the error is named
+  okOuter("[F-100] the one plan: report written, then recordPlan is called (recorded, or the stub's error with exit 1)",
+    !!rep && (/recorded design\/verify\/Orders__5_6\.report\.json in design\/plan\/Orders__1_1\.json/.test(rec.stderr)
+      || (rec.status === 1 && /error {2}--record-plan: .* — design\/verify\/Orders__5_6\.report\.json is written; design\/plan\/Orders__1_1\.json was not updated/.test(rec.stderr))));
+  okOuter("[FU-shared-shell] the report hashes planCodeFiles(plan) (files[] + mapped modules)",
+    !!rep && JSON.stringify(Object.keys(rep.inputs?.code?.files ?? {})) === JSON.stringify(planCodeFiles(planA)));
+  okOuter("[L12] a plan whose mapModules are all project files → no 'not hashed' input note", !!rep && !(rep.probe?.inputNotes || []).some((n) => /mapModule path\(s\) not hashed/.test(n)));
+  // L12 (D119 addendum): an alias / package mapModule is named once in the report's input notes (beside the code hashes)
+  put("design/plan/Orders__1_1.json", { ...planA, anchors: { "1:2": { mapModule: "@/components/Shell" } }, components: [{ name: "Badge", mapModule: "@acme/ui" }] });
+  run("--compare", exp, meas);
+  const rep2 = fs.existsSync(report) ? readFixture(report, isVerifyReport) : null;
+  const hits = (rep2?.probe?.inputNotes || []).filter((n) => /^design\/plan\/Orders__1_1\.json: mapModule path\(s\) not hashed with this plan's code: @\/components\/Shell, @acme\/ui — /.test(n));
+  okOuter(`[L12] an alias/package mapModule → ONE input note in the report naming them (got ${hits.length})`, hits.length === 1);
+  fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
 report();

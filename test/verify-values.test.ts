@@ -197,6 +197,7 @@ console.log("group 8 — the shipped probe drops impossible gaps (chromium):");
 {
   const CI = process.env.CI === "true";
   const pw = await import("playwright").catch(() => null); // not installed → skipped (locally)
+  // no LAUNCH_ARGS (--disable-lcd-text): these checks read geometry only, never rendered text pixels
   const browser = pw ? await pw.chromium.launch().catch(() => null) : null;
   if (!browser) {
     // the runner's marker (test/run-suites.ts): a local run lists this suite as skipped, not as a plain pass

@@ -12,6 +12,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { check, report } from "./assert.ts";
+import { limit, poolSize } from "./pool.ts";
 
 const RUNNER = path.join(import.meta.dirname, "run-suites.ts");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "run-suites-"));
@@ -96,7 +97,9 @@ try {
   const local = runner([], { DT_RUN_SUITES_LIST: okList });
   check("[D103] only pass + skipped, no CI: exit 0 and the warning", local.status === 0 && /warning: CI runs these/.test(local.out) && /2 suites: 1 passed, 0 FAILED, 1 skipped/.test(local.out));
   const ci = runner([], { DT_RUN_SUITES_LIST: okList, CI: "true" });
-  check("[D103] the same under CI=true: exit 1, the skipped suite is FAILED with the reason", ci.status === 1 && /^FAILED: skipped$/m.test(ci.out) && /SKIPPED under CI=true/.test(ci.out));
+  check("[D103] the same under CI=true: exit 1, the skipped suite is FAILED with the reason", ci.status === 1 && /^FAILED: skipped$/m.test(ci.out) && /SKIPPED under CI \(/.test(ci.out));
+  const ci1 = runner([], { DT_RUN_SUITES_LIST: okList, CI: "1" });
+  check("[D103] CI=1 (other runners) counts as CI too: exit 1", ci1.status === 1 && /^FAILED: skipped$/m.test(ci1.out));
   check("[D103] CI unset or other than \"true\" does not fail it (CI=false: exit 0)", runner([], { DT_RUN_SUITES_LIST: okList, CI: "false" }).status === 0);
   const allPass = runner([], { DT_RUN_SUITES_LIST: list(["pass", "after"]) });
   check("[H-1] all suites pass: exit 0, `2 suites: 2 passed, 0 FAILED, 0 skipped`, no FAILED/SKIPPED line", allPass.status === 0 && /2 suites: 2 passed, 0 FAILED, 0 skipped/.test(allPass.out) && !/^FAILED:/m.test(allPass.out) && !/^SKIPPED/m.test(allPass.out));
@@ -193,6 +196,22 @@ console.log("CMD " + JSON.stringify({
   const unknown = runner(["no-such-suite"], { DT_RUN_SUITES_LIST: list(["pass"]) });
   check("[H-1] an unknown name is a usage error (exit 2, names it)", unknown.status === 2 && /no suite matches "no-such-suite"/.test(unknown.err));
 
+  // ---- the compile cache the runner hands its suites (a user's own setting wins; NODE_DISABLE_COMPILE_CACHE is Node's to honour)
+  console.log("\nrun-suites — NODE_COMPILE_CACHE for the suites:");
+  {
+    const probeList = path.join(tmp, "list-envprobe.json");
+    fs.writeFileSync(probeList, JSON.stringify([{ name: "envprobe", file: fake("envprobe", `console.log("CC=" + (process.env.NODE_COMPILE_CACHE ?? "<unset>") + " DIS=" + (process.env.NODE_DISABLE_COMPILE_CACHE ?? "<unset>")); console.log("\\n1/1 checks passed");`) }]));
+    const probe = (set: Record<string, string>): string => {
+      const e: Record<string, string | undefined> = { ...process.env, DT_RUN_SUITES_LIST: probeList, ...set };
+      delete e.CI;
+      for (const k of ["NODE_COMPILE_CACHE", "NODE_DISABLE_COMPILE_CACHE"]) if (!(k in set)) delete e[k];
+      return spawnSync(process.execPath, [RUNNER], { encoding: "utf8", timeout: 60_000, env: e }).stdout;
+    };
+    check("[cache] by default a suite gets NODE_COMPILE_CACHE=<this checkout>/node_modules/.cache/designtwin-node-compile-cache (per checkout and per user, not a shared /tmp path)", probe({}).includes(`CC=${path.join(path.dirname(import.meta.dirname), "node_modules", ".cache", "designtwin-node-compile-cache")} `));
+    check("[cache] a NODE_COMPILE_CACHE the user set wins", probe({ NODE_COMPILE_CACHE: path.join(tmp, "mine") }).includes(`CC=${path.join(tmp, "mine")} `));
+    check("[cache] NODE_DISABLE_COMPILE_CACHE reaches the suite untouched (Node honours it)", /DIS=1$/m.test(probe({ NODE_DISABLE_COMPILE_CACHE: "1" })));
+  }
+
   // ---- the real list + the coverage guard
   console.log("\nrun-suites — coverage guard:");
   const testDir = import.meta.dirname;
@@ -205,6 +224,64 @@ console.log("CMD " + JSON.stringify({
     real.out.indexOf("verify-probe-e2e ") > real.out.indexOf("verify-probe ") && real.out.indexOf("verify-own-pixels") > real.out.indexOf("verify-probe-drive-e2e"));
   const pkg = JSON.parse(read(path.join(testDir, "..", "package.json")) || "{}") as { scripts?: Record<string, string> };
   check("[H-1] `npm test` is the runner (package.json scripts.test === \"node test/run-suites.ts\"); the lints stay scripts", pkg.scripts?.test === "node test/run-suites.ts" && typeof pkg.scripts.typecheck === "string" && typeof pkg.scripts["lint:any"] === "string" && typeof pkg.scripts["lint:types"] === "string");
+
+  // ---- --fast: skips exactly the three probe e2e suites, `not run` in the summary, exit unaffected, never looks like a full pass
+  console.log("\nrun-suites — --fast:");
+  const SLOW = ["verify-probe-e2e", "verify-probe-drive-e2e", "verify-probe-behaviour-e2e"];
+  // fakes named like the real slow suites (the skip applies by name); they would log `start <name>` if they ever ran
+  const named = (entries: { name: string; src: string }[], tag: string): string => {
+    const f = path.join(tmp, `list-fast-${tag}.json`);
+    fs.writeFileSync(f, JSON.stringify(entries.map((e) => ({ name: e.name, file: fake(e.name, e.src) }))));
+    return f;
+  };
+  const okSrc = (n: string): string => passSrc(n);
+  const fastList = named([{ name: "quick", src: okSrc("quick") }, ...SLOW.map((n) => ({ name: n, src: okSrc(n) })), { name: "quick2", src: okSrc("quick2") }], "ok");
+  fs.rmSync(LOG, { force: true });
+  const fastRun = runner(["--fast"], { DT_RUN_SUITES_LIST: fastList });
+  const fastSum = summaryOf(fastRun.out);
+  check("[fast] --fast skips the three slow suites (never started), runs the others, and exits 0 although they are `not run`",
+    fastRun.status === 0 && /^start quick$/m.test(read(LOG)) && /^start quick2$/m.test(read(LOG)) && SLOW.every((n) => !new RegExp(`start ${n}`).test(read(LOG))) && /2 passed, 0 FAILED, 0 skipped, 3 not run/.test(fastSum));
+  check("[fast] the SUMMARY lists each skipped suite as `not run` with the reason `--fast`", SLOW.every((n) => lines(fastSum).some((l) => l.startsWith(n + " ") && /\bnot run\b/.test(l) && /--fast\s*$/.test(l))));
+  check("[fast] the run ends with the loud line (3 of the probe e2e suites, names them, not the full suite, run `npm test`, CI's other matrix legs run them)",
+    /^--fast: skipped 3 of the probe e2e suites \(verify-probe-e2e, verify-probe-drive-e2e, verify-probe-behaviour-e2e\) .*NOT the full suite.*`npm test`.*CI's other matrix legs run them$/m.test(fastRun.out) && !/CI runs everything/.test(fastRun.out) && (lines(fastRun.out.trimEnd()).pop() ?? "").startsWith("--fast:"));
+  check("[fast] without --fast the same list runs all five suites", (() => { const r = runner([], { DT_RUN_SUITES_LIST: fastList }); return r.status === 0 && /5 suites: 5 passed/.test(r.out) && !/--fast/.test(r.out); })());
+  check("[fast] under CI=true --fast is allowed and still prints the warning", (() => { const r = runner(["--fast"], { DT_RUN_SUITES_LIST: fastList, CI: "true" }); return r.status === 0 && /^--fast: skipped/m.test(r.out); })());
+  const fastFail = runner(["--fast"], { DT_RUN_SUITES_LIST: named([{ name: "bad", src: traced("bad", `console.log("\\n0/1 checks passed"); process.exit(1);`) }, ...SLOW.map((n) => ({ name: n, src: okSrc(n) }))], "fail") });
+  check("[fast] a failing suite still exits 1 under --fast", fastFail.status === 1 && /^FAILED: bad$/m.test(fastFail.out));
+  const fastList2 = runner(["--fast", "--list"], { DT_RUN_SUITES_LIST: fastList });
+  check("[fast] --fast --list prints only what would run (quick, quick2), exit 0", fastList2.status === 0 && lines(fastList2.out).filter(Boolean).map((l) => l.split(/\s+/)[0]).join(",") === "quick,quick2");
+  fs.rmSync(LOG, { force: true });
+  const fastFilt = runner(["--fast", "quick", "quick2", "verify-probe-drive-e2e"], { DT_RUN_SUITES_LIST: fastList });
+  check("[fast] --fast with names: the names pick first, then the slow ones are dropped (quick, quick2 run; the drive e2e is `not run`)",
+    fastFilt.status === 0 && /^start quick$/m.test(read(LOG)) && /^start quick2$/m.test(read(LOG)) && !/start verify-probe-drive-e2e/.test(read(LOG)) && /^verify-probe-drive-e2e\s+not run\s.*--fast/m.test(fastFilt.out) && !/verify-probe-e2e\s+not run/.test(fastFilt.out));
+  const onlySlow = runner(["--fast", "verify-probe-drive-e2e"], { DT_RUN_SUITES_LIST: fastList });
+  check("[fast] --fast with only a slow suite named: nothing runs, so exit 2 (not a green 0) with the reason on stderr", onlySlow.status === 2 && /^run-suites: nothing to run — every picked suite is a --fast skip$/m.test(onlySlow.err) && !/^=== /m.test(onlySlow.out));
+  const staleList = runner(["--fast"], { DT_RUN_SUITES_LIST: named([{ name: "quick", src: okSrc("quick") }, { name: "verify-probe-e2e", src: okSrc("a") }, { name: "verify-probe-drive-e2e", src: okSrc("b") }], "stale") });
+  check("[fast] a FAST_SKIP name that is not in the suite list exits 1 and names it (a rename cannot silently drop a suite)",
+    staleList.status === 1 && /verify-probe-behaviour-e2e/.test(staleList.err) && !/^=== /m.test(staleList.out));
+  check("[fast] without --fast a custom list is not subject to that guard", runner([], { DT_RUN_SUITES_LIST: list(["pass"]) }).status === 0);
+  check("[fast] an unknown option is still a usage error, and the usage line names --fast", (() => { const r = runner(["--bogus"], { DT_RUN_SUITES_LIST: list(["pass"]) }); return r.status === 2 && /--fast/.test(r.err); })());
+  const realFast = runner(["--fast", "--list"], {});
+  check("[fast] the real `--fast --list` omits exactly verify-probe-e2e, verify-probe-drive-e2e, verify-probe-behaviour-e2e (nothing else) and keeps the rest",
+    realFast.status === 0 && (() => {
+      const all = new Set(lines(real.out).filter(Boolean).map((l) => l.split(/\s+/)[0]));
+      const got = new Set(lines(realFast.out).filter(Boolean).map((l) => l.split(/\s+/)[0]));
+      const missing = [...all].filter((n) => !got.has(n));
+      return missing.sort().join(",") === [...SLOW].sort().join(",") && [...got].every((n) => all.has(n)) && got.size === all.size - 3;
+    })());
+
+
+  check("[fast] `npm run test:fast` is the runner with --fast (package.json scripts[\"test:fast\"] === \"node test/run-suites.ts --fast\")", pkg.scripts?.["test:fast"] === "node test/run-suites.ts --fast");
+
+  // CI splits the run over a matrix (.github/workflows/test.yml): one leg `--fast`, the others name suites. Between them
+  // every suite runs exactly once — the named ones are exactly what --fast leaves out, none twice.
+  const wf = read(path.join(testDir, "..", ".github", "workflows", "test.yml"));
+  const legs = [...wf.matchAll(/^\s+suites: (.+)$/gm)].map((m) => (m[1] ?? "").trim().split(/\s+/));
+  const legNamed = legs.filter((l) => !l.includes("--fast")).flat();
+  check("[ci] the workflow's Test step runs the runner with the leg's suites (`node test/run-suites.ts ${{ matrix.suites }}`)", /^\s+run: node test\/run-suites\.ts \$\{\{ matrix\.suites \}\}$/m.test(wf));
+  check("[ci] exactly one matrix leg is `--fast` and it names no suites", legs.filter((l) => l.includes("--fast")).length === 1 && legs.some((l) => l.length === 1 && l[0] === "--fast"));
+  check("[ci] the other legs name exactly the suites --fast leaves out, each once (no suite dropped from CI, none run twice)",
+    legNamed.length === SLOW.length && new Set(legNamed).size === legNamed.length && [...legNamed].sort().join(",") === [...SLOW].sort().join(","));
 
   const mirror = path.join(tmp, "mirror");
   fs.mkdirSync(mirror);
@@ -220,6 +297,47 @@ console.log("CMD " + JSON.stringify({
   check("[H-1] a SUITES file that does not exist fails the runner (exit 1) and is named", missing.status === 1 && /lists mcp-smoke\.test\.ts but .* does not exist/.test(missing.err));
   const guardNoRun = runner(["zz-nothing"], guardEnv);
   check("[H-1] the guard also stops a real run (not only --list): exit 1 before any suite starts", guardNoRun.status === 1 && !/^=== /m.test(guardNoRun.out));
+
+  // ---- test/pool.ts: limit() and poolSize() (each async check is raced against 2 s so a regression fails instead of hanging)
+  console.log("\nrun-suites — test/pool.ts:");
+  const within = async <T, F>(p: Promise<T>, fallback: F): Promise<T | F> => { let t: NodeJS.Timeout | undefined; try { return await Promise.race([p, new Promise<F>((r) => { t = setTimeout(() => r(fallback), 2000); })]); } finally { clearTimeout(t); } };
+  const TIMED_OUT = Symbol("timed out");
+  {
+    const q = limit(1);
+    const thrown = q((): Promise<string> => { throw new Error("sync boom"); });
+    const next = q(async () => "second ran");
+    const t = await within(thrown.then(() => "resolved", (e: unknown) => (e instanceof Error ? e.message : "rejected")), "timed out");
+    const n = await within(next, "timed out");
+    check("[pool] a task that throws synchronously rejects its own promise (not an uncaught throw out of limit())", t === "sync boom");
+    check("[pool] …and releases its slot: the next queued task still runs", n === "second ran");
+  }
+  {
+    const N = 3;
+    const q = limit(N);
+    let live = 0, peak = 0;
+    const work = (): Promise<number> => q(async () => { live++; peak = Math.max(peak, live); await new Promise((r) => setTimeout(r, 15)); live--; return 1; });
+    const all = await within(Promise.all(Array.from({ length: 10 }, work)), TIMED_OUT);
+    check(`[pool] limit(${N}): ten tasks all finish and never more than ${N} run at once (peak ${peak})`, all !== TIMED_OUT && all.length === 10 && peak >= 2 && peak <= N);
+    const order: number[] = [];
+    const q1 = limit(1);
+    const o = await within(Promise.all([1, 2, 3, 4].map((i) => q1(async () => { order.push(i); }))), TIMED_OUT);
+    check("[pool] tasks start in the order they were queued", o !== TIMED_OUT && order.join(",") === "1,2,3,4");
+  }
+  {
+    const warned: string[] = [];
+    const ps = (env: NodeJS.ProcessEnv, cores = 8): number => poolSize(env, cores, (m) => { warned.push(m); });
+    check("[pool] poolSize: DT_E2E_POOL in 1-8 is used as given, no warning", ps({ DT_E2E_POOL: "1" }) === 1 && ps({ DT_E2E_POOL: "6", CI: "true" }) === 6 && ps({ DT_E2E_POOL: "8" }) === 8 && warned.length === 0);
+    check("[pool] poolSize: DT_E2E_POOL above 8 is clamped to 8 with a warning", (() => { const w = warned.length; return ps({ DT_E2E_POOL: "64" }) === 8 && warned.length === w + 1 && /DT_E2E_POOL=64/.test(warned[w] ?? ""); })());
+    check("[pool] poolSize: DT_E2E_POOL of 0 or below is clamped to 1 with a warning", (() => { const w = warned.length; return ps({ DT_E2E_POOL: "0" }) === 1 && ps({ DT_E2E_POOL: "-3" }) === 1 && warned.length === w + 2; })());
+    check("[pool] poolSize: a non-integer DT_E2E_POOL warns and falls back to the default (cores/2 clamped 2-4; 2 under CI)", (() => {
+      const w = warned.length;
+      const got = [ps({ DT_E2E_POOL: "abc" }), ps({ DT_E2E_POOL: "2.5" }), ps({ DT_E2E_POOL: "abc", CI: "true" })];
+      return got.join(",") === "4,4,2" && warned.length === w + 3 && /"abc"/.test(warned[w] ?? "");
+    })());
+    check("[pool] poolSize: an empty DT_E2E_POOL is unset (no warning)", (() => { const w = warned.length; return ps({ DT_E2E_POOL: "" }) === 4 && warned.length === w; })());
+    check("[pool] poolSize: CI counts as set for any value but \"\", \"0\" and \"false\" (CI=1 and CI=yes give 2)", ps({ CI: "true" }) === 2 && ps({ CI: "1" }) === 2 && ps({ CI: "yes" }) === 2 && ps({ CI: "" }) === 4 && ps({ CI: "0" }) === 4 && ps({ CI: "false" }) === 4);
+    check("[pool] poolSize: without CI it is half the cores clamped to 2-4", ps({}, 2) === 2 && ps({}, 6) === 3 && ps({}, 64) === 4 && ps({}, 1) === 2);
+  }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

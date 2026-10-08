@@ -160,8 +160,11 @@ that verb's flags and exits without starting a bridge. `outDir` is **positional*
 only by the `FIGMA_BRIDGE_PORT` environment variable (8787, 8788 or 8789; there is no `--port` flag, and
 `DTWIN_PORT` is not read — `dtwin` and `doctor` warn when it is set).
 
-A command is only recognised as the **first** argument, so `dtwin design` still means "pull into
-`./design`". For an output directory spelled like a command, write `dtwin pull list` or `dtwin ./list`.
+A command is only recognised as the **first** argument, so `dtwin my-dir` still means "pull into
+`./my-dir`". For an output directory spelled like a command, write `dtwin pull list` or `dtwin ./list`.
+With no outDir the export lands in `design/export` — the only place doctor, cross-check, audit and
+build-screen read. Never pull into bare `design`: that writes a second, parallel export tree beside
+`design/export/` (dtwin warns when it sees one).
 
 ## Seed the component map from Code Connect: `dtwin seed`
 
@@ -250,14 +253,14 @@ hand-authored, non-regenerable config maps.
 
 ```
 # from the repo root, with the Figma file open + plugin running:
-dtwin design                  # design-system.json + design-system/ + CURRENT-page frames + assets/
-dtwin design --all-pages      # like above, but frame trees from EVERY page
-dtwin design --selection      # just the current selection
-dtwin design --design-system  # ONLY design-system.json + design-system/ — no page
+dtwin pull                    # design-system.json + design-system/ + CURRENT-page frames + assets/
+dtwin pull --all-pages        # like above, but frame trees from EVERY page
+dtwin pull --selection        # just the current selection
+dtwin pull --design-system    # ONLY design-system.json + design-system/ — no page
                                                    # walk, no assets/ (the cheap "tokens only" pull)
-dtwin design --as-library "Acme UI"  # the COMPLETE catalog of a LIBRARY file — run this
+dtwin pull --as-library "Acme UI"    # the COMPLETE catalog of a LIBRARY file — run this
                                                    # with the LIBRARY open, not the file that uses it
-dtwin design --node <id>      # ONE node, fully exported (properties + assets) —
+dtwin pull --node <id>        # ONE node, fully exported (properties + assets) —
                                                    # see "--node <id>" below
 ```
 **Recommended workflow — discover, then scope.** Never open with a whole-file pull. Work down from
@@ -280,8 +283,8 @@ library owns a token, or before an `--as-library` pull.
 ### `--node <id>` — one node, fully exported
 
 ```
-dtwin design --node 123:456                          # -> design/export/pages/<Page>/<Name>__123_456.json
-dtwin design --node "https://figma.com/design/KEY/App?node-id=123-456" # a pasted link works too
+dtwin pull --node 123:456                            # -> design/export/pages/<Page>/<Name>__123_456.json
+dtwin pull --node "https://figma.com/design/KEY/App?node-id=123-456"   # a pasted link works too
 ```
 
 A REAL export scoped to exactly one node — the CLI twin of the MCP `figma_export_url` tool ("paste a
@@ -294,7 +297,10 @@ Don't confuse it with its two neighbors:
 - `--children <id>` peeks at one node's **direct children only** — no recursion, no assets, for
   deciding whether to pull further. Each row has `childCount`; rows sharing name + size also get a
   `title` (the first visible text), and the listing warns once per such group ("N children share name
-  … and size … — told apart by `title`/`childCount`").
+  … and size … — told apart by `title`/`childCount`"). When the titles match too, those rows also get
+  `distinctTexts` (up to 3 texts that row shows and its twins do not); the listing shares one budget of
+  node reads, and a group with a row it runs out on gets none, with one warning naming them. When a row has
+  no `distinctTexts`, screenshot each candidate.
 - `--screenshot <id>` renders a **PNG only** — skips `serialize()` and the asset walk entirely, for
   visual validation after you've already generated code.
 - `--node <id>` is the one that actually **exports** — real node tree + real assets, just scoped
@@ -515,7 +521,7 @@ Three honest limits, because they change what the numbers mean:
 
 ```
 # open the LIBRARY file in Figma (not the design file that consumes it), then:
-dtwin design --as-library "Acme UI"
+dtwin pull --as-library "Acme UI"     # -> design/export/libraries/<slug>-<fileKey8>/
 ```
 
 `--list-libraries` tells you a library exists and how many variables its collections hold.
@@ -680,6 +686,11 @@ Behaviour worth knowing:
   process you've forgotten. It is deliberately generous, the clock resets on every request, and a
   request in flight holds it off entirely — a 15-minute `--all-pages` export is never cut short by
   its own daemon. `--daemon-status` shows how much of the window is used.
+- **An MCP server that owns the bridge exits when its client goes away** (stdin closes, or stdout breaks),
+  at once, unless another process has used its shared socket; then it keeps serving and idles out on the
+  same `FIGMA_DAEMON_IDLE_MIN` window (default 120 min, `0` = never), since other sessions route through
+  it. This deliberately departs from the MCP stdio binding's "exit promptly when stdin closes". SIGINT,
+  SIGTERM and SIGHUP cancel in-flight reads, remove the socket and exit 0, even while serving others.
 
 ## Write / interactive: figma-mcp (MCP over stdio)
 **Not registered in this repo** — there is no `.mcp.json` here on purpose, so the MCP never starts
@@ -694,14 +705,16 @@ registration only if you deliberately want the MCP on a *different* token from t
 The server also hosts the bridge WebSocket the plugin connects to. Built on `@modelcontextprotocol/sdk`
 with the `McpServer` + `registerTool` + zod pattern (tool schemas are zod, validated per call).
 
-Tools: `figma_status`, `figma_get_selection`, `figma_list_libraries`, `figma_list_pages`, `figma_list_children`,
-`figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
+Tools (15): `figma_status`, `figma_list_clients`, `figma_whoami`, `figma_get_selection`, `figma_list_libraries`,
+`figma_list_pages`, `figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
 `figma_write` (batch of safe ops — createFrame / createText / setFill / setText; **no arbitrary code
 execution**, unlike some community servers; `dryRun: true` returns a preview of what each op would
 create or overwrite without touching the file — there is no undo from the MCP side, so preview anything
-that overwrites; refused outright when the file is in read-only Dev Mode). The frame-walking export tools accept opt-in read flags
+that overwrites; refused outright when the file is in read-only Dev Mode), and two that read the export already on disk and
+need no Figma connection — `design_get_component` (one component's variant node trees) and
+`design_drift_lint` (the component map vs the export; see below). The frame-walking export tools accept opt-in read flags
 `css` / `measurements` / `pluginData` / `motion` / `sharedData`; `figma_export_design_system` doesn't
 take them (it never walks a node — see below) but DOES take `variantVisuals`, since the component
 catalog it builds is exactly what that flag enriches.
@@ -723,10 +736,14 @@ Use it for anything past a quick look. Two things make it not optional:
   never a payload cut off mid-JSON.
 
 Every export result (written or inline) carries `sourceFile` (the Figma file it came from) and
-`durationMs {total, request, write}`. When an implicit spill replaces an existing screen file whose content
-differs (the export stamp `exportedAt` aside), the previous one is kept as `<screen>.json.prev` and the note names it. `figma_status` reports
+`durationMs {total, request, write}`. When an implicit spill replaces a file whose content differs (the stamps
+`exportedAt`/`generatedAt` aside), the previous one is kept one level as `<file>.prev` and the note names it. A screen
+spill (`figma_export_url`/`figma_export_selection`) keeps ONLY `<screen>.json.prev` (`wrote.prev`) — its `.vars.json`,
+`.assets.json`, `pages/index.json` and the merged `variables.json` are replaced with no copy, so a restored `.prev` is
+paired with the NEW siblings. A page/full/design-system spill keeps one per changed JSON file under `pages/` and
+`design-system/` plus `design-system.json`, listed in `wrote.prevKept`, with the count. `figma_status` reports
 `lastScreenExport` (the newest screen on disk: name, id, file, exportedAt, ageMs) and `lastWrite` (this server process's
-last export: tool, time, whether implicit, file, `prev`). `figma_whoami`'s `connection` is the addressed
+last export: tool, time, whether implicit, file, `prev`, `prevKept` count). `figma_whoami`'s `connection` is the addressed
 client's. `page` and `screens` arguments accept an array, a JSON-encoded array string or a bare string.
 `design_drift_lint` takes `screens: string[]` (screen files under the working directory) and returns
 `screenCoverage` with warnings, like the CLI's `--screen`. An interrupted tool call (Claude Code's cancel,
@@ -734,14 +751,20 @@ or the session ending) cancels the in-flight read in the plugin; `figma_write` i
 write cannot be un-applied.
 
 `outDir` resolves against **the directory the MCP server was started in** — i.e. the project you're
-building, not this repo. Default `FIGMA_EXPORT_DIR` or `design/`, the same var `figma_status` reads.
+building, not this repo. Default `FIGMA_EXPORT_DIR` or `design/export/`, the same var `figma_status` reads. The `design_*` tools'
+`exportDir` defaults the same way (`FIGMA_EXPORT_DIR`, else the project's export — `design/export/`, or `design/` on
+the older flat layout), and `design_drift_lint`'s `map` to `design/codeconnect.local.json` (or a root
+`codeconnect.local.json` an older project still has).
+With `writeToDisk: true` or an explicit `outDir` it is checked before the export (inside the project
+lexically or by real path), so a refused path never costs a read; a server started at the filesystem root accepts none.
 
 > **One bridge, shared.** Port 8787 has one owner at a time. The MCP server and `dtwin serve` both
 > publish the bridge they own on a local socket, and everything that starts later — a `dtwin` command,
 > a second Claude Code session's MCP server — routes through it instead of binding the port again.
 > When the owner exits, the next MCP call opens the bridge itself (the plugin reconnects on its own).
 > The one holder that does NOT share is a plain one-shot `dtwin pull` with no daemon: while it runs,
-> anything else that needs the port exits with `EADDRINUSE`. `writeToDisk` is still the simplest way
+> another `dtwin` command that needs the port exits with `EADDRINUSE`, while an MCP server stays up and
+> only that tool call errors — retry it once the pull is done. `writeToDisk` is still the simplest way
 > to get files from inside an MCP session.
 
 **Look before you pull.** `figma_list_pages` (and `figma_list_children` to drill into one frame) return
@@ -751,7 +774,7 @@ all of it: measured 12+ minutes and tens of MB straight into the context window 
 system. Use the index to pick a target, then `figma_export_full({ page: ["<id>"] })` — or
 `skipAssets: true`, which is close to free here since asset bytes are stripped from MCP results anyway.
 
-`figma_list_libraries` (no arguments) is a side step, not part of that order: it answers **which design
+`figma_list_libraries` (optional `client`, like every Figma tool) is a side step, not part of that order: it answers **which design
 libraries** the file draws on — which library owns a token, or what to name in an `--as-library` pull. Its result is deliberately
 compact — libraries, their variable collections, and usage-derived component counts — because a
 discovery call that costs context defeats its own purpose. The same three limits apply as for the CLI
@@ -771,7 +794,7 @@ library variables something in it references — never the library's catalog (th
 only, run with the library open).
 
 ### "Paste a link and ask about it" (`figma_export_url`)
-CLI twin: `dtwin design --node <id>` (see above) — same underlying `exportNode` op, so a pull from
+CLI twin: `dtwin pull --node <id>` (see above) — same underlying `exportNode` op, so a pull from
 either surface lands in the identical shape.
 
 Keep Claude Code and the MCP running for the whole session; the plugin stays connected to your
@@ -794,8 +817,9 @@ Pre-approve tools in `.claude/settings.json`:
 ## Notes / limits
 - The Figma file must be **open** with the plugin running for either path (never headless).
 - One process owns port 8787 at a time. `figma-mcp` and `dtwin serve` share the bridge they own
-  (later `dtwin` commands and MCP servers route through it); only a one-shot pull does not, and a
-  process that then finds the port taken exits immediately with a clear `EADDRINUSE` message.
+  (later `dtwin` commands and MCP servers route through it); only a one-shot pull does not. A `dtwin`
+  command that then finds the port taken exits immediately with a clear `EADDRINUSE` message; an MCP
+  server stays up and that one tool call errors — retry it after the pull.
 - Image assets travel as base64 (not JSON int-arrays) — ~3.5–4x smaller on the wire.
 - v1 sends each response as a single WebSocket frame. If you hit very large pages, add chunking
   (see ARCHITECTURE.md "chunk large payloads").
@@ -810,6 +834,7 @@ Pre-approve tools in `.claude/settings.json`:
   component version to check). Re-pull every screen in a sync.
 - `list children` titles a colliding row from its "Page Title" slot; when that search runs past its node
   cap (a very large frame), the row's `title` falls back to the first text — which can differ from the
-  title the pages index gives the same screen after a pull.
+  title the pages index gives the same screen after a pull. `distinctTexts` reads the same way, with a
+  budget of 20000 node reads for the whole listing (a group with a row it cuts off gets none — see the warning).
 - Write ops are a deliberately small, explicit set — extend `applyWrite()` in
   `../figma-plugin/src/writes.ts` (rebuild `code.js`) and add a matching `registerTool` here as needed.

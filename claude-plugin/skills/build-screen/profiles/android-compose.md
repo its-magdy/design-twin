@@ -105,6 +105,8 @@ Figma named text style, not raw `.sp`; map Figma weights to `FontWeight.*`. Flag
 Slider→`Slider`, Segmented→`SingleChoiceSegmentedButtonRow { SegmentedButton(...) }`, Menu→`DropdownMenu`/
 `ExposedDropdownMenuBox`, Spinner→`CircularProgressIndicator`, Progress→`LinearProgressIndicator`,
 TextField→`TextField`/`OutlinedTextField`.
+A picker (`ExposedDropdownMenuBox`'s field, `DatePicker`) draws its own text: set the picker's text colour explicitly
+to the drawn tokens (`TextFieldDefaults.colors(…TextColor, …PlaceholderColor)`, `DatePickerDefaults.colors(…)`).
 
 **Icons** — `Icon(Icons.Default.X)` (or `Icons.Outlined/Rounded`) / `painterResource(R.drawable.x)` from the
 exported vector drawable. Never redraw a vector; reuse a Material icon only if the glyph clearly matches.

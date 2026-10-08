@@ -253,7 +253,7 @@ function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -262,7 +262,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "waivers", "descopes"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -493,12 +493,12 @@ function fieldDiffs(key, before, after, category) {
 }
 function index(doc) {
   const out = /* @__PURE__ */ new Map();
-  const walk = (node, parentId, trail) => {
+  const walk = (node, parent, trail) => {
     if (!node || typeof node !== "object" || node.id === void 0) return;
     const here = [...trail, node.name || node.type || node.id];
     const kids = Array.isArray(node.children) ? node.children : [];
-    out.set(String(node.id), { node, parentId, path: here.join(" > "), childIds: kids.map((k) => String(k && k.id)) });
-    for (const k of kids) walk(k, String(node.id), here);
+    out.set(String(node.id), { node, parent, parentId: parent ? String(parent.id) : null, path: here.join(" > "), childIds: kids.map((k) => String(k && k.id)) });
+    for (const k of kids) walk(k, node, here);
   };
   for (const r of screenRoots(doc)) walk(r, null, []);
   return out;
@@ -509,7 +509,37 @@ var nameOf = (idx, id) => {
   return e ? e.node.name || e.node.type || id : id;
 };
 var describe = (e) => ({ id: String(e.node.id), name: e.node.name, type: e.node.type, path: e.path, parentId: e.parentId });
-function nodeFields(before, after) {
+var CONTAINERS = /* @__PURE__ */ new Set([
+  "FRAME",
+  "COMPONENT",
+  "COMPONENT_SET",
+  "INSTANCE",
+  "GROUP",
+  "BOOLEAN_OPERATION",
+  "SECTION",
+  "TRANSFORM_GROUP",
+  "SLOT",
+  "SLIDE",
+  "SLIDE_ROW",
+  "SLIDE_GRID",
+  "PAGE"
+]);
+var GRID_CHILD_KEYS = ["gridColumnStart", "gridRowStart", "gridColumnSpan", "gridRowSpan", "gridJustifySelf", "gridAlignSelf"];
+var ABSOLUTE_ONLY = /* @__PURE__ */ new Set(["mode", "width", "height"]);
+function formatNoise(n, parent) {
+  const lay = n.layout, isAssetLeaf = n.asset !== void 0 || n.geometry !== void 0 || n.assetSkipped !== void 0;
+  const gridItem = !!parent && !n.absolute && parent.layout?.display === "grid";
+  const dropGrid = GRID_CHILD_KEYS.filter((k) => n[k] !== void 0 && (!gridItem || (k === "gridColumnStart" || k === "gridRowStart") && n[k] === -1));
+  const dropLayout = !!lay && !n.children && (isAssetLeaf || !CONTAINERS.has(n.type) && lay.mode === "absolute" && Object.keys(lay).every((k) => ABSOLUTE_ONLY.has(k)));
+  if (!dropGrid.length && !dropLayout) return n;
+  const out = { ...n };
+  for (const k of dropGrid) delete out[k];
+  if (dropLayout) delete out.layout;
+  return out;
+}
+var hasNoise = (e) => formatNoise(e.node, e.parent) !== e.node;
+function nodeFields(old, neu, raw = false) {
+  const before = raw ? old.node : formatNoise(old.node, old.parent), after = raw ? neu.node : formatNoise(neu.node, neu.parent);
   const fields = [];
   for (const key of /* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])) {
     if (IGNORED.has(key) || same(bag(before)[key], bag(after)[key])) continue;
@@ -525,7 +555,7 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
   const redrawn = opts.redrawn || /* @__PURE__ */ new Set();
   const A = index(oldDoc), B = index(newDoc);
   const added = [], removed = [], changed = [], reordered = [];
-  let positionOnly = 0;
+  let positionOnly = 0, formatOnly = 0;
   const swapped = /* @__PURE__ */ new Map();
   for (const [id, b] of B) {
     const a = A.get(id);
@@ -551,12 +581,13 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
   for (const [id, b] of B) {
     const a = A.get(id);
     if (!a) continue;
-    const fields = nodeFields(a.node, b.node);
+    const fields = nodeFields(a, b);
     if (a.parentId !== b.parentId) fields.push({ field: "parent", category: "layout", before: a.path, after: b.path });
     if (typeof b.node.asset === "string" && b.node.asset === a.node.asset && redrawn.has(b.node.asset)) fields.push({ field: "asset bytes", category: "asset", before: "the previous render", after: `re-drawn \u2014 ${b.node.asset} has different contents under the same node id` });
     const sw = swapped.get(id);
     if (sw && (sw.gone || sw.came)) fields.push({ field: "sublayers", category: "component", before: `${sw.gone} from the old main component`, after: `${sw.came} from the new one (regenerated by the swap \u2014 not listed)` });
     if (fields.length) changed.push({ ...describe(b), categories: [...new Set(fields.map((f) => f.category))], fields });
+    else if (hasNoise(a) !== hasNoise(b) && nodeFields(a, b, true).length) formatOnly++;
     else if (!same(a.node.box, b.node.box)) positionOnly++;
     const keptBefore = a.childIds.filter((c) => b.childIds.includes(c)), keptAfter = b.childIds.filter((c) => a.childIds.includes(c));
     if (!same(keptBefore, keptAfter)) reordered.push({ ...describe(b), before: keptBefore.map((c) => nameOf(A, c)), after: keptAfter.map((c) => nameOf(B, c)) });
@@ -568,7 +599,8 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
   const warnings = [];
   const trunc = truncatedOf(manifestOf(newDoc));
   if (trunc) warnings.push(`the NEW export is truncated (${trunc === true ? "some" : trunc} subtree(s) past the depth limit) \u2014 anything under "Removed" may simply not have been exported. Re-pull a narrower scope before acting on removals.`);
-  return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly }, warnings, added, removed, reordered, changed, document };
+  if (formatOnly) warnings.push(`${formatOnly} node(s) differ only by the exporter's format (an export from an older plugin: grid-child fields off a grid, layout on text/shapes/leaves or asset leaves) \u2014 not listed. The export's content hash changed, so verification reopens once: re-run verify-screen --expect and --compare.`);
+  return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly, formatOnly }, warnings, added, removed, reordered, changed, document };
 }
 function diffTokens(oldDoc, newDoc) {
   const idOf = (v) => typeof v.key === "string" && v.key ? "k:" + v.key : "n:" + JSON.stringify([v.collection || "", v.name]);
@@ -695,7 +727,10 @@ function markdown(d, label) {
   const s = d.summary, L = [`# What changed \u2014 ${label}`, ""];
   for (const w of d.warnings || []) L.push(`> **Warning:** ${w}`, "");
   const total = s.added + s.removed + s.changed + (s.reordered || 0);
-  if (!total) return L.concat(d.kind === "screen" && s.positionOnly ? `Nothing changed (${s.positionOnly} node(s) only moved with their surroundings).` : "Nothing changed.").join("\n") + "\n";
+  if (!total) {
+    const why = d.kind === "screen" ? [s.positionOnly ? `${s.positionOnly} node(s) only moved with their surroundings` : "", s.formatOnly ? `${s.formatOnly} node(s) differ only by the exporter's format` : ""].filter(Boolean) : [];
+    return L.concat(why.length ? `Nothing changed (${why.join("; ")}).` : "Nothing changed.").join("\n") + "\n";
+  }
   const line = (f) => `  - \`${f.field}\`: ${f.before === void 0 ? "\u2014" : f.before} \u2192 ${f.after === void 0 ? "\u2014" : f.after}`;
   if (d.kind === "tokens") {
     if (d.changed.length) L.push("## Token values changed", ...d.changed.map((c) => `- \`${c.name}\` \u2014 ${c.modes.map((m) => `${m.mode}: ${m.before} \u2192 ${m.after}`).join("; ")}`), "");
@@ -734,6 +769,7 @@ function markdown(d, label) {
   if (d.removed.length) L.push("## Removed (each stands for its whole subtree)", ...d.removed.map((n) => `- **${n.path}** (\`${n.id}\`, ${n.type})`), "");
   if (d.reordered.length) L.push("## Reordered children", ...d.reordered.map((r) => `- **${r.path}**: ${r.before.join(", ")} \u2192 ${r.after.join(", ")}`), "");
   if (s.positionOnly) L.push(`_${s.positionOnly} other node(s) only moved with their surroundings \u2014 not listed._`, "");
+  if (s.formatOnly) L.push(`_${s.formatOnly} other node(s) differ only by the exporter's format \u2014 not listed._`, "");
   return L.join("\n") + "\n";
 }
 function snapshotPath(file, cwd = process.cwd()) {

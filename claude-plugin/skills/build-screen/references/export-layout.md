@@ -152,7 +152,8 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   `--node <id>` or a selection. Root keys are `exportedAt`, `screen` (the human label), `page`,
   `pageId`, `nodeId`, `nodes[]` (the trees, same shape as a layer file's `tree`) and `manifest`.
   It writes three siblings and one shared file:
-  - `…__<id>.vars.json` — exactly the variables THIS screen binds, verbatim, as this pull saw them.
+  - `…__<id>.vars.json` — exactly the variables THIS screen binds, verbatim, as this pull saw them; each row
+    names its `collection` and (newer exports) `collectionKey` — collection names repeat, the key does not.
   - `…__<id>.assets.json` — every asset the screen references, with a content hash per file, plus
     `duplicates` (the same artwork under different names — compared tolerantly: def ids and numbers
     within ±0.01 are ignored, colours are not; an embedded image's scale/offset/tile — a transform on

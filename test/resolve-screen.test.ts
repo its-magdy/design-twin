@@ -361,4 +361,39 @@ console.log("\nresolve-screen — DT-41: a non-root dir says so; <Layer>__<a>_<b
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+{
+  // F9/G18: a plan file's name ("SeedSwaps", "StaffRoles") finds the screen named "Seed Swaps" /
+  // "Staff Roles": no exact match -> compare with whitespace removed and case folded. Exact still wins; 2+ hits stay ambiguous.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rs-fold-"));
+  fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "plan"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [
+    { name: "Seed Swaps", id: "1:1", type: "FRAME", page: "P", file: "pages/P/Seed_Swaps__1_1.json" },
+    { name: "Frame 9", title: "Staff Roles", id: "2:1", type: "FRAME", page: "P", file: "pages/P/Frame_9__2_1.json" },
+    { name: "Staff roles", id: "2:2", type: "FRAME", page: "P", file: "pages/P/Staff_roles__2_2.json" },
+    { name: "Shift Rota", id: "3:1", type: "FRAME", page: "P", file: "pages/P/Shift_Rota__3_1.json" },
+    { name: "ShiftRota", id: "3:2", type: "FRAME", page: "P", file: "pages/P/ShiftRota__3_2.json" },
+    { name: "Rota Settings", id: "4:1", type: "FRAME", page: "P", file: "pages/P/Rota_Settings__4_1.json" },
+  ] }));
+  fs.writeFileSync(path.join(dir, "plan", "RotaSettings.json"), JSON.stringify({ file: "RotaSettings.json", screenName: "Rota Prefs", nodeId: "4:1" }));
+  const pub = resolveScreen(dir, "SeedSwaps");
+  ok(`[fold] 'SeedSwaps' finds the layer "Seed Swaps" (got ${pub.status})`, pub.status === "resolved" && pub.row.id === "1:1");
+  ok("[fold] a lower-case, spaced-differently query ('seed  SWAPS') exact-folds as before", (() => { const r = resolveScreen(dir, "seed swaps"); return r.status === "resolved" && r.stage === "exact layer name"; })());
+  const staff = resolveScreen(dir, "StaffRoles");
+  ok(`[fold] 'StaffRoles' matching a title AND a layer name of different rows is AMBIGUOUS, listing both node ids (got ${staff.status})`,
+    staff.status === "ambiguous" && staff.candidates.map((c) => c.id).sort().join() === "2:1,2:2");
+  const rota = resolveScreen(dir, "Shift Rota");
+  ok("[fold] exact beats fold: 'Shift Rota' resolves to the layer so named, not ambiguous with 'ShiftRota'", rota.status === "resolved" && rota.row.id === "3:1" && rota.stage === "exact layer name");
+  const rota2 = resolveScreen(dir, "SHIFTROTA");
+  ok("[fold] exact beats fold: 'SHIFTROTA' (case-fold exact) resolves to 3:2 alone", rota2.status === "resolved" && rota2.row.id === "3:2");
+  const rota3 = resolveScreen(dir, "shiftrota ");
+  ok("[fold] a trailing space does not change the exact match", rota3.status === "resolved" && rota3.row.id === "3:2");
+  const noPlan = resolveScreen(dir, "RotaPrefs");
+  ok("[fold] control: with no plan dir, 'RotaPrefs' matches nothing", noPlan.status === "not-found");
+  const planFold = resolveScreen(dir, "RotaPrefs", { planDir: path.join(dir, "plan") });
+  ok("[fold] the plan header's screenName is folded too ('RotaPrefs' -> 'Rota Prefs' -> 4:1)", planFold.status === "resolved" && planFold.row.id === "4:1");
+  ok("[fold] a fold never reaches into a substring: 'Swap' is still a text-search candidate list, not a resolve", resolveScreen(dir, "Swap").status === "needs-confirmation");
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 report();

@@ -9,6 +9,10 @@ it catches logic bugs cheaply — then B to confirm the real `figma.*` calls.
 ## Layer A — offline logic test (agent-runnable, no Figma)
 
 `npm test` runs every suite in order and ends with a summary; `node test/run-suites.ts <name>` runs a subset.
+`npm run test:fast` leaves out the three slow probe e2e suites (verify-probe-e2e, verify-probe-drive-e2e, verify-probe-behaviour-e2e; ~3 min instead of ~20) and
+ends with a line saying it was not the full run — use it while iterating, `npm test` before a commit; CI's other matrix legs run the three it leaves out (naming only those three with `--fast` exits 2: nothing would run).
+The run-suites summary is the authority for the check counts: the per-suite numbers below were true when written and drift as checks are added, so read the `N/N checks passed` row, not a figure in this file.
+The browser e2e suites run their probes through a small pool (`test/pool.ts`): `DT_E2E_POOL=<n>` sets its size (default: 2 under CI, else half the cores clamped to 2–4; an out-of-range value is clamped to 1–8 with a warning). Only the drive e2e (`verify-probe-drive-e2e`) has a serial tail: its wall-clock-timing cases run one at a time after the pool drains.
 Right after the two lints, `test/real-names.test.ts` fails if a real field-test file, company, layer or
 person name reaches the tree; it reports `file:line`, never the name. The list is stored as salted hashes, which
 keeps plain names out of the tree but is not secrecy: they are dictionary-reversible, and git history already holds
@@ -25,7 +29,7 @@ cd figma-plugin && npm install && npm run typecheck && npm run build && cd ..   
 node test/harness.ts
 ```
 
-Expected: **`414/414 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
+Expected: every check passes (the run-suites summary has the count; exit 0). Any `✗ FAIL` prints which transform regressed.
 `npm run typecheck` (`tsc --noEmit`) is the first gate — it catches property-name / `figma.mixed` /
 null-handling bugs before the harness even runs.
 
@@ -46,36 +50,36 @@ The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bo
 `design-to-code/README.md`) are plain Node modules with their own offline suite:
 
 ```
-node test/design-to-code.test.ts       # expect: 292/292 checks passed, exit 0
-node test/audit.test.ts                # expect: 101/101 checks passed, exit 0
-node test/verify-build.test.ts         # expect: 134/134 checks passed, exit 0 — the build-screen Stop-hook gate
+node test/design-to-code.test.ts       # expect: all checks pass, exit 0
+node test/audit.test.ts                # expect: all checks pass, exit 0
+node test/verify-build.test.ts         # expect: all checks pass, exit 0 — the build-screen Stop-hook gate
                                        # (stdin only when fd 0 is not a TTY, 1s silent-pipe / 60s hard cutoff,
                                        # computed --status never stored), and that claude-plugin/scripts/ is in
                                        # sync with design-to-code/ (stale? run: node claude-plugin/build-scripts.ts)
-node test/plan-skeleton.test.ts        # expect: 31/31 checks passed, exit 0 — the shared plan shape/visibility
+node test/plan-skeleton.test.ts        # expect: all checks pass, exit 0 — the shared plan shape/visibility
                                        # helpers (visibility, rootsOf) every skill and verify-build.js walk with
-node test/ui.test.ts                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
+node test/ui.test.ts                   # expect: all checks pass, exit 0 — the plugin window's script against a fake
                                        # DOM + WebSocket: connection states, theming, the ids/ports it depends on
-node test/cross-check.test.ts          # expect: 63/63 checks passed, exit 0 — the JOIN between a screen and the
+node test/cross-check.test.ts          # expect: all checks pass, exit 0 — the JOIN between a screen and the
                                        # design system: a duplicated file that re-keys every collection, a catalog
                                        # covering 0% of the screen, token names that collide on different values,
                                        # a text style one capital letter apart, a 1e9 radius, contrast in a mode
                                        # that was derived rather than drawn, and auto-discovery of
                                        # design/export/variables.json (never a stale design/variables.json sibling)
-node test/verify-screen.test.ts        # expect: 120/120 checks passed, exit 0 — the per-node comparison behind a
+node test/verify-screen.test.ts        # expect: all checks pass, exit 0 — the per-node comparison behind a
                                        # "pass": the expectation emitted as data, the tolerance table, component
                                        # coverage, reactions/--interactions-driven checks, and the rule that an
                                        # unmeasured expectation is not a passed one
-node test/design-diff.test.ts          # expect: 31/31 checks passed, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
+node test/design-diff.test.ts          # expect: all checks pass, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
                                        # token diffs, baseline choice, re-drawn assets, --snapshot/--force CLI)
-node test/identity.test.ts             # expect: 48/48 checks passed, exit 0 — token and component IDENTITY on livetest-3's
+node test/identity.test.ts             # expect: all checks pass, exit 0 — token and component IDENTITY on livetest-3's
                                        # real export (test/fixtures/livetest3/): two variables sharing a name are both
                                        # emitted, diffed and attributed by KEY; theme.css cannot shadow Tailwind's scale;
                                        # a re-keyed (duplicated) catalog yields name+prop-signature PROPOSALS, never auto-accepted
-node test/resolve-screen.test.ts       # expect: 27/27 checks passed, exit 0 — the shared node-id/layer-name/indexed-title
+node test/resolve-screen.test.ts       # expect: all checks pass, exit 0 — the shared node-id/layer-name/indexed-title
                                        # resolver every skill uses to turn "the Jet Roles screen" into one exact file
-node test/mcp-share.test.ts            # expect: 4/4 checks passed, exit 0 — two MCP servers on one port share the bridge
-node test/mcp-smoke.test.ts            # expect: 12/12 checks passed, exit 0 — boots the real MCP server over stdio
+node test/mcp-share.test.ts            # expect: all checks pass, exit 0 — two MCP servers on one port share the bridge
+node test/mcp-smoke.test.ts            # expect: all checks pass, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
 node --check design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/verify-screen.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts
 ```
@@ -113,7 +117,7 @@ subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the p
 and the run never binds a port, while proving doctor mints nothing.
 
 ```
-node test/bridge.test.ts        # expect: 584/584 checks passed, exit 0 — deterministic whether or not
+node test/bridge.test.ts        # expect: all checks pass, exit 0 — deterministic whether or not
                                  # a real dtwin daemon is running elsewhere on this machine: the two
                                  # doctor-cli "not checked" assertions pin FIGMA_BRIDGE_PORT=8789 (one
                                  # of the plugin manifest's other two allowed ports, see ALLOWED_PORTS
@@ -368,15 +372,15 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 
 | Command | What |
 |---|---|
-| `node test/harness.ts` | Offline exporter logic test (read + write planes) — expect `414/414` |
+| `node test/harness.ts` | Offline exporter logic test (read + write planes) — expect all checks to pass |
 | `cd figma-plugin && npm run typecheck` | Type-check the extractor (`tsc --noEmit`) after editing `src/` |
 | `cd figma-plugin && npm run build` | Rebuild `code.js` from `src/*.ts` |
-| `node test/design-to-code.test.ts` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component/tailwind) — expect `288/288` |
-| `node test/identity.test.ts` | Token + component identity on livetest-3's real export (key, not name; re-keyed catalogs) — expect `48/48` |
-| `node test/cross-check.test.ts` | Screen-vs-design-system join — expect `63/63` |
-| `node test/verify-screen.test.ts` | Per-node verification and its verdict — expect `44/44` |
+| `node test/design-to-code.test.ts` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component/tailwind) — expect all checks to pass |
+| `node test/identity.test.ts` | Token + component identity on livetest-3's real export (key, not name; re-keyed catalogs) — expect all checks to pass |
+| `node test/cross-check.test.ts` | Screen-vs-design-system join — expect all checks to pass |
+| `node test/verify-screen.test.ts` | Per-node verification and its verdict — expect all checks to pass |
 | `node test/bridge.test.ts` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
-and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect `529/529` |
+and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect all checks to pass |
 | `node bridge/src/figma-pull.ts --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
 | `node bridge/src/figma-pull.ts --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
 | `node bridge/src/figma-pull.ts --list-libraries` | Slowest discovery read (a few s to ~15 s): which design libraries this file draws on (prints a table to stdout) |
@@ -384,10 +388,10 @@ and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`
 | `node bridge/src/figma-pull.ts --list` | Cheap: pages + their top-level frames (prints to stdout) |
 | `node bridge/src/figma-pull.ts --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |
 | `node bridge/src/figma-pull.ts --screenshot <id> [--scale N]` | Cheap-ish: renders ONE node to `screenshots/<id>_ref.png` (writes a file, unlike the row above) |
-| `node bridge/src/figma-pull.ts design --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
-| `node bridge/src/figma-pull.ts design --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
-| `node bridge/src/figma-pull.ts design --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |
-| `node bridge/src/figma-pull.ts design --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/export/libraries/<slug>-<fileKey8>/` |
+| `node bridge/src/figma-pull.ts --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
+| `node bridge/src/figma-pull.ts --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
+| `node bridge/src/figma-pull.ts --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |
+| `node bridge/src/figma-pull.ts --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/export/libraries/<slug>-<fileKey8>/` |
 | `node --check figma-plugin/code.js` | Syntax check the exporter |
 | `node --check design-to-code/*.ts` | Syntax check the tooling scripts |
 | `dtwin seed . design` (or `node bridge/src/seed-components.ts . design`) | Seed components.json from Code Connect files (code side); `--dry-run` reports only |
