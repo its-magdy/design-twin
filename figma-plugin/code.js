@@ -3592,23 +3592,25 @@
     return { designSystem, layersDoc, assets: assets.slice() };
   }
 
-  // src/writes.ts
-  function parseHex(hex) {
-    let h = (hex || "#000000").replace(/^#/, "").trim();
-    if (h.length === 3 || h.length === 4) h = h.split("").map((c) => c + c).join("");
-    const chan = (s) => {
-      const v = parseInt(s, 16);
-      return Number.isFinite(v) ? v / 255 : 0;
-    };
-    return {
-      color: { r: chan(h.slice(0, 2)), g: chan(h.slice(2, 4)), b: chan(h.slice(4, 6)) },
-      ...ifDefined("opacity", h.length >= 8 ? chan(h.slice(6, 8)) : void 0)
-    };
+  // ../bridge/src/hex-color.ts
+  var HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+  var HEX_COLOR_HINT = "a hex colour like #1A2B3C (#rgb, #rgba, #rrggbb or #rrggbbaa)";
+  function parseHexColor(value) {
+    if (typeof value !== "string" || !HEX_COLOR_RE.test(value)) return null;
+    let h = value.slice(1);
+    if (h.length <= 4) h = h.split("").map((c2) => c2 + c2).join("");
+    const chan = (i) => parseInt(h.slice(i, i + 2), 16) / 255;
+    const c = { r: chan(0), g: chan(2), b: chan(4) };
+    if (h.length === 8) c.a = chan(6);
+    return c;
   }
-  function solidPaint(hex) {
-    const { color, opacity } = parseHex(hex);
-    const p = { type: "SOLID", color };
-    if (opacity !== void 0) p.opacity = opacity;
+
+  // src/writes.ts
+  function solidPaint(hex, what) {
+    const c = parseHexColor(hex);
+    if (!c) throw new Error(what + ": '" + String(hex) + "' is not a valid colour \u2014 expected " + HEX_COLOR_HINT);
+    const p = { type: "SOLID", color: { r: c.r, g: c.g, b: c.b } };
+    if (c.a !== void 0) p.opacity = c.a;
     return p;
   }
   async function loadNodeFonts(node) {
@@ -3628,6 +3630,7 @@
     switch (op.op) {
       case "createFrame": {
         const parent = await resolveParent(op.parentId);
+        const fill = op.fill ? solidPaint(op.fill, "createFrame fill") : null;
         const f = figma.createFrame();
         if (op.name) f.name = op.name;
         if (op.width && op.height) f.resize(op.width, op.height);
@@ -3639,17 +3642,18 @@
           f.paddingBottom = op.padding[2];
           f.paddingLeft = op.padding[3];
         }
-        if (op.fill) f.fills = [solidPaint(op.fill)];
+        if (fill) f.fills = [fill];
         parent.appendChild(f);
         return { id: f.id };
       }
       case "createText": {
         const parent = await resolveParent(op.parentId);
+        const fill = op.fill ? solidPaint(op.fill, "createText fill") : null;
         const t = figma.createText();
         await figma.loadFontAsync(t.fontName);
         t.characters = op.text || "";
         if (op.fontSize) t.fontSize = op.fontSize;
-        if (op.fill) t.fills = [solidPaint(op.fill)];
+        if (fill) t.fills = [fill];
         parent.appendChild(t);
         return { id: t.id };
       }
@@ -3661,7 +3665,7 @@
         const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
         if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
-        nd.fills = [solidPaint(op.color || "")];
+        nd.fills = [solidPaint(op.color, "setFill color")];
         return ifDefined("id", op.nodeId);
       }
       case "setText": {

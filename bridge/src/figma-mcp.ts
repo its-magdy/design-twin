@@ -46,6 +46,7 @@ import { READ_OPTS } from "./read-opts.ts";
 import { ifDefined, isStringArray } from "./json-util.ts";
 import type { ReadOptName } from "./read-opts.ts";
 import { parseNodeId, toNodeId } from "./node-id.ts";
+import { HEX_COLOR_RE, HEX_COLOR_HINT } from "./hex-color.ts";
 
 // WHO holds the bridge. Port 8787 has one owner at a time, and this server does not insist on being
 // it: with `dtwin serve` running, or a second Claude Code session open, createBridge() would hit
@@ -938,6 +939,11 @@ server.registerTool(
 // The op schema is the wire contract (commands.ts WriteOp) spelled in Zod: `op` is constrained to the
 // four ops the plugin implements — rejected at the boundary rather than round-tripped — and the fields
 // each op reads are typed. `.passthrough()` keeps a stray extra field flowing (the plugin ignores it).
+// A fill/color is a hex colour: "red" or "#12" is refused here rather than painted as a wrong colour.
+const hexColor = z.string().regex(HEX_COLOR_RE, `must be ${HEX_COLOR_HINT}`);
+// createFrame/createText `fill` also takes "" (the plugin reads it as "no fill"); one regex alternative, so the
+// published JSON schema keeps a single `pattern`. setFill's `color` stays strict: it has no "none".
+const hexColorOrEmpty = z.string().regex(new RegExp(`^(?:${HEX_COLOR_RE.source.slice(1, -1)}|)$`), `must be ${HEX_COLOR_HINT}, or "" for no fill`);
 const writeOpShape = z.object({
   op: z.enum(["createFrame", "createText", "setFill", "setText"]),
   parentId: z.string().optional(),
@@ -947,11 +953,11 @@ const writeOpShape = z.object({
   layoutMode: z.enum(["HORIZONTAL", "VERTICAL"]).optional(),
   itemSpacing: z.number().optional(),
   padding: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional(),
-  fill: z.string().optional(),
+  fill: hexColorOrEmpty.optional(),
   text: z.string().optional(),
   fontSize: z.number().optional(),
   nodeId: z.string().optional(),
-  color: z.string().optional(),
+  color: hexColor.optional(),
 }).passthrough();
 
 function previewWrites(ops: WriteOp[]) {

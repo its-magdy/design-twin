@@ -1,26 +1,17 @@
 // Writes (code -> design): minimal, EXPLICIT, safe command set (no eval).
 import { errMsg } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
+import { parseHexColor, HEX_COLOR_HINT } from "../../bridge/src/hex-color.ts";
 
-// Handle 3/4/6/8-digit hex (CSS Color L4). Shorthand expands by doubling each digit; the optional
-// 4th pair is alpha, which Figma carries as paint.opacity (not in .color).
-function parseHex(hex: string): { color: RGB; opacity?: number } {
-  let h = (hex || "#000000").replace(/^#/, "").trim();
-  if (h.length === 3 || h.length === 4) h = h.split("").map((c) => c + c).join("");
-  const chan = (s: string) => {
-    const v = parseInt(s, 16);
-    return Number.isFinite(v) ? v / 255 : 0;
-  };
-  return {
-    color: { r: chan(h.slice(0, 2)), g: chan(h.slice(2, 4)), b: chan(h.slice(4, 6)) },
-    ...ifDefined("opacity", h.length >= 8 ? chan(h.slice(6, 8)) : undefined),
-  };
-}
-
-function solidPaint(hex: string): SolidPaint {
-  const { color, opacity } = parseHex(hex);
-  const p: { type: "SOLID"; color: RGB; opacity?: number } = { type: "SOLID", color };
-  if (opacity !== undefined) p.opacity = opacity;
+// Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
+// which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
+// the failed op instead of painting a wrong colour: a write can arrive from any bridge client, not only
+// through the MCP schema.
+function solidPaint(hex: string | undefined, what: string): SolidPaint {
+  const c = parseHexColor(hex);
+  if (!c) throw new Error(what + ": '" + String(hex) + "' is not a valid colour — expected " + HEX_COLOR_HINT);
+  const p: { type: "SOLID"; color: RGB; opacity?: number } = { type: "SOLID", color: { r: c.r, g: c.g, b: c.b } };
+  if (c.a !== undefined) p.opacity = c.a;
   return p;
 }
 
@@ -76,6 +67,7 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
       const parent = await resolveParent(op.parentId); // before createFrame — no orphan on a bad parent
+      const fill = op.fill ? solidPaint(op.fill, "createFrame fill") : null; // likewise: a bad colour leaves no node
       const f = figma.createFrame();
       if (op.name) f.name = op.name;
       if (op.width && op.height) f.resize(op.width, op.height);
@@ -87,17 +79,18 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
         f.paddingBottom = op.padding[2];
         f.paddingLeft = op.padding[3];
       }
-      if (op.fill) f.fills = [solidPaint(op.fill)];
+      if (fill) f.fills = [fill];
       parent.appendChild(f);
       return { id: f.id };
     }
     case "createText": {
       const parent = await resolveParent(op.parentId); // before createText — no orphan on a bad parent
+      const fill = op.fill ? solidPaint(op.fill, "createText fill") : null; // likewise: a bad colour leaves no node
       const t = figma.createText();
       await figma.loadFontAsync(t.fontName as FontName);
       t.characters = op.text || "";
       if (op.fontSize) t.fontSize = op.fontSize;
-      if (op.fill) t.fills = [solidPaint(op.fill)];
+      if (fill) t.fills = [fill];
       parent.appendChild(t);
       return { id: t.id };
     }
@@ -109,7 +102,7 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
       const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
       if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
-      (nd as GeometryMixin).fills = [solidPaint(op.color || "")];
+      (nd as GeometryMixin).fills = [solidPaint(op.color, "setFill color")];
       return ifDefined("id", op.nodeId);
     }
     case "setText": {

@@ -376,7 +376,18 @@ function describe(row, matchedVia) {
   return out;
 }
 var fold = (s) => String(s || "").trim().toLowerCase();
-var foldCompact = (s) => String(s || "").replace(/\s+/g, "").toLowerCase();
+var foldCompact = (s) => String(s || "").replace(/[\s_-]+/g, "").toLowerCase();
+var FILE_TAIL_RE = /(?:\.(?:measured|expected|vars))?\.json$|\.png$/i;
+var PATH_DIR_RE = /^design[\\/]|[\\/](?:plan|verify|export)[\\/]/i;
+function compactKeys(q) {
+  const keys = [];
+  const asPath = FILE_TAIL_RE.test(q) || PATH_DIR_RE.test(q);
+  for (const cand of asPath ? [q, q.split(/[\\/]/).pop() ?? q] : [q]) {
+    const k = foldCompact(cand.trim().replace(FILE_TAIL_RE, ""));
+    if (k && !keys.includes(k)) keys.push(k);
+  }
+  return keys;
+}
 function resolveScreen(exportDir, query, opts) {
   const options = opts || {};
   const rows = allRows(exportDir);
@@ -393,7 +404,7 @@ function resolveScreen(exportDir, query, opts) {
   const typed = NODE_ID_RE2.test(q) ? byId(q) : void 0;
   if (typed) return { status: "resolved", row: typed, stage: "node id" };
   const plans = planRows(options.planDir);
-  const planHit = plans.filter((p) => p.screenName === q || p.route === q);
+  const planHit = qFold ? plans.filter((p) => fold(p.screenName) === qFold || fold(p.route) === qFold) : [];
   const planIds = new Set(planHit.map((p) => p.nodeId).filter((id) => !!id));
   const union = /* @__PURE__ */ new Map();
   const join = (row, via) => {
@@ -421,8 +432,7 @@ function resolveScreen(exportDir, query, opts) {
     const hit = byId(id);
     if (hit) return { status: "resolved", row: hit, stage: "node id" };
   }
-  const qCompact = foldCompact(q);
-  if (qCompact) {
+  for (const qCompact of compactKeys(q)) {
     const planCompactIds = new Set(
       plans.filter((p) => foldCompact(p.screenName) === qCompact || foldCompact(p.route) === qCompact).map((p) => p.nodeId).filter((id) => !!id)
     );
