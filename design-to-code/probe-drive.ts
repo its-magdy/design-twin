@@ -1242,21 +1242,46 @@ export const CLOSED = /Target closed|Target page, context or browser has been cl
 export const NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
 /** What a cut unit may still take to settle after its context is closed. */
 export const CUT_SETTLE_MS = 5_000;
+/** What raceBudget saw: work's value, or a cut — `settled` false when the settle window ran out before the context
+ *  closed and work wound down, i.e. the browser stopped answering. */
+export type Raced<T> = { cut: false; value: T } | { cut: true; settled: boolean };
+const CUT = Symbol("cut");
+const UNSETTLED = Symbol("unsettled");
+/** What a raced unit hands raceBudget: the context it opened (once it exists), and whether the cut has come. */
+export interface Held { ctx?: { close(): Promise<unknown> }; cut?: boolean }
+/** The onContext for a raced unit: store the context so a cut can close it — and when the cut came while the context
+ *  was still being created, close it at once, so whatever the unit goes on to wait on in it ends instead of running
+ *  past the settle window. */
+export function holdContext(held: Held): (c: { close(): Promise<unknown> }) => void {
+  return (c) => {
+    held.ctx = c;
+    if (held.cut) void c.close().catch(() => undefined);
+  };
+}
 /**
- * Race `work` against a `ms` deadline. Returns its result, or "cut" when the deadline came first — after
+ * Race `work` against a `ms` deadline. Returns its value, or a cut when the deadline came first — after
  * `onCut` (called at once, before anything is awaited), then closing the context `held` captured (that ends
- * whatever `work` is waiting on) and giving `work` at most CUT_SETTLE_MS to wind down. `work` must not reject.
+ * whatever `work` is waiting on; one still being created is closed as it arrives, see holdContext) and giving the
+ * close and `work` at most CUT_SETTLE_MS between them. A close that is slow but returns inside that window settles;
+ * one that never returns (a wedged browser) does not.
+ * `work` must not reject; if it does, the rejection propagates and the deadline timer is still cleared.
  */
-export async function raceBudget<T>(work: Promise<T>, ms: number, held: { ctx?: BrowserContext }, onCut?: () => void): Promise<T | "cut"> {
+export async function raceBudget<T>(work: Promise<T>, ms: number, held: Held, onCut?: () => void): Promise<Raced<T>> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const cutP = new Promise<"cut">((resolve) => { timer = setTimeout(() => resolve("cut"), ms); });
-  const r = await Promise.race([work, cutP]);
-  clearTimeout(timer);
-  if (r !== "cut") return r;
+  let r: T | typeof CUT;
+  try {
+    r = await Promise.race([work, new Promise<typeof CUT>((resolve) => { timer = setTimeout(() => resolve(CUT), ms); })]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (r !== CUT) return { cut: false, value: r };
   onCut?.();
+  // marked first: a context that arrives after this is closed by holdContext as it arrives
+  held.cut = true;
   const ctx = held.ctx;
-  await Promise.race([(async (): Promise<void> => { if (ctx) await ctx.close().catch(() => undefined); await work; })(), sleep(CUT_SETTLE_MS, undefined, { ref: false })]);
-  return "cut";
+  const wound = (async (): Promise<void> => { if (ctx) await ctx.close().catch(() => undefined); await work; })();
+  const s = await Promise.race([wound, sleep(CUT_SETTLE_MS, UNSETTLED, { ref: false })]);
+  return { cut: true, settled: s !== UNSETTLED };
 }
 const notRun = (row: VerifyInteraction, detail: string, extra?: Partial<InteractionEvidence>): InteractionEvidence => ({ nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `not-run: ${detail}`, ...extra });
 
@@ -1384,7 +1409,7 @@ async function restoreSettled(page: Page): Promise<void> {
 /** Seam for the behaviour checks: a fresh context + page (no hasTouch/isMobile) reached like the measurement pass. The caller
  *  closes the context. `loads` counts main-frame document loads from the moment the page exists. `onContext` gets the
  *  context BEFORE the screen is reached: a budget cut can then close it while reach is still waiting. */
-export async function openReached(browser: Browser, o: Pick<DriveOptions, "viewport" | "timeout" | "initScript" | "reach">, extra?: { dsf?: number; onContext?: (c: BrowserContext) => void }): Promise<{ context: BrowserContext; page: Page; loads: () => number }> {
+export async function openReached(browser: Pick<Browser, "newContext">, o: Pick<DriveOptions, "viewport" | "timeout" | "initScript" | "reach">, extra?: { dsf?: number; onContext?: (c: BrowserContext) => void }): Promise<{ context: BrowserContext; page: Page; loads: () => number }> {
   const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: extra?.dsf ?? 1, reducedMotion: "reduce" });
   if (extra && extra.onContext) extra.onContext(context);
   let loads = 0;
@@ -1401,7 +1426,7 @@ export async function openReached(browser: Browser, o: Pick<DriveOptions, "viewp
   }
 }
 
-async function driveRow(browser: Browser, o: DriveOptions, row: VerifyInteraction, hooks: DriveHooks | undefined, onContext: (c: BrowserContext) => void): Promise<InteractionEvidence> {
+async function driveRow(browser: Pick<Browser, "newContext">, o: DriveOptions, row: VerifyInteraction, hooks: DriveHooks | undefined, onContext: (c: BrowserContext) => void): Promise<InteractionEvidence> {
   const action = row.source === "plan" && row.expect === "dialog" ? "overlay" : String(row.action ?? "overlay").toLowerCase();
   const destId = row.destinationId ?? null;
   let opened: Awaited<ReturnType<typeof openReached>>;
@@ -1519,28 +1544,35 @@ async function driveRow(browser: Browser, o: DriveOptions, row: VerifyInteractio
   }
 }
 
+/** What driveInteractions returns: a row each, and whether the browser stopped answering (a cut row's context
+ *  close and the row did not wind down within CUT_SETTLE_MS) — then the rows after it are not driven. */
+export interface DriveResult { evidence: InteractionEvidence[]; wedged: boolean }
 /**
  * Drive every row (drivable()), each on a fresh page in a fresh context, within the sub-budget. A row the budget
  * does not reach is {ok:null, cut:"budget"}; a row that throws is ok:null with why. Never throws for a row.
+ * Returns by about budgetMs + CUT_SETTLE_MS even when the browser stops answering.
  */
-export async function driveInteractions(browser: Browser, o: DriveOptions, hooks?: DriveHooks): Promise<InteractionEvidence[]> {
+export async function driveInteractions(browser: Pick<Browser, "newContext">, o: DriveOptions, hooks?: DriveHooks): Promise<DriveResult> {
   const out: InteractionEvidence[] = [];
   const end = Date.now() + o.budgetMs;
+  let wedged = false;
   for (const row of o.rows) {
+    if (wedged) { out.push(notRun(row, "the browser stopped answering")); continue; }
     const left = end - Date.now();
     if (left <= 0) { out.push(notRun(row, "time budget", { cut: "budget" })); continue; }
-    const held: { ctx?: BrowserContext } = {};
-    const work = driveRow(browser, o, row, hooks, (c) => { held.ctx = c; }).catch((e: unknown): InteractionEvidence => {
+    const held: Held = {};
+    const work = driveRow(browser, o, row, hooks, holdContext(held)).catch((e: unknown): InteractionEvidence => {
       if (CLOSED.test(errMsg(e))) return notRun(row, `the browser closed while driving — ${firstLine(e)}`);
       return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
     });
     // the context exists from before the screen was reached: closing it ends whatever the row was waiting on
     const r = await raceBudget(work, left, held);
-    if (r === "cut") {
+    if (r.cut) {
       out.push(notRun(row, "time budget", { cut: "budget" }));
+      if (!r.settled) wedged = true;
       continue;
     }
-    out.push(r);
+    out.push(r.value);
   }
-  return out;
+  return { evidence: out, wedged };
 }

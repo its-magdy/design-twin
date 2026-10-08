@@ -25,8 +25,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Browser, BrowserContext, Page } from "playwright";
-import { StepError, openReached, raceBudget, raf2 } from "./probe-drive.ts";
+import type { Browser, Page } from "playwright";
+import { StepError, holdContext, openReached, raceBudget, raf2 } from "./probe-drive.ts";
+import type { Held } from "./probe-drive.ts";
 import { BEHAVIOUR_RESERVE_MS } from "./probe-behaviour.ts";
 import { PngError, decodePng, encodePng } from "./png.ts";
 import type { Rgba } from "./png.ts";
@@ -153,11 +154,11 @@ export interface CaptureOptions {
 /** One capped capture on a fresh page at the reference's scale. Never throws: a failure, a load or the budget is {why}. */
 export async function captureVisual(browser: Browser, o: CaptureOptions): Promise<VisualCapture | { why: string }> {
   if (o.budgetMs <= 0) return { why: "no time left within --max-time after measuring and driving" };
-  const held: { ctx?: BrowserContext } = {};
+  const held: Held = {};
   const work = (async (): Promise<VisualCapture | { why: string }> => {
     let reached: Awaited<ReturnType<typeof openReached>>;
     try {
-      reached = await openReached(browser, { viewport: o.viewport, timeout: o.timeout, initScript: o.initScript, reach: o.reach }, { dsf: o.ref.scale, onContext: (c) => { held.ctx = c; } });
+      reached = await openReached(browser, { viewport: o.viewport, timeout: o.timeout, initScript: o.initScript, reach: o.reach }, { dsf: o.ref.scale, onContext: holdContext(held) });
     } catch (e) {
       return { why: e instanceof StepError ? `the steps failed — ${e.message}` : `could not reach the screen — ${firstLine(e)}` };
     }
@@ -197,7 +198,7 @@ export async function captureVisual(browser: Browser, o: CaptureOptions): Promis
   })().catch((e: unknown): { why: string } => ({ why: /Execution context was destroyed|frame was detached|navigation/i.test(errMsg(e)) ? "the page loaded a new document during the visual capture" : `the visual capture failed — ${firstLine(e)}` }));
   // the context exists from before the screen was reached: closing it ends whatever the capture waits on — ≤ CUT_SETTLE_MS
   const r = await raceBudget(work, o.budgetMs, held);
-  if (r !== "cut") return r;
+  if (!r.cut) return r.value;
   return { why: `the visual capture did not finish within its budget (${Math.round(o.budgetMs / 1000)} s)` };
 }
 

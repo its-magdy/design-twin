@@ -38,8 +38,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { BehaviourAxe, BehaviourCheck, BehaviourCheckId, BehaviourLandmark, BehaviourStatus, BehaviourWidth, InteractionEvidence, JsonObject, MeasuredBehaviour, PageOverflow, VerifyExpectation, VerifyInteraction } from "./types.ts";
-import { CUT_SETTLE_MS, DIALOG_CONTRACT, NAVIGATED, StepError, armDetector, drivable, openerState, ownPixels, pollDetector, raceBudget, raf2, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
-import type { DetectorRead } from "./probe-drive.ts";
+import { CUT_SETTLE_MS, DIALOG_CONTRACT, NAVIGATED, StepError, armDetector, drivable, holdContext, openerState, ownPixels, pollDetector, raceBudget, raf2, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
+import type { DetectorRead, Held } from "./probe-drive.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { parseCssColor } from "./color.ts";
 
@@ -1779,7 +1779,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
     if (left <= 0) { cut = true; fill(checks, [], unit.declared, "time budget"); return; }
     const unitEnd = Date.now() + left;
     let closed = false;
-    const held: { ctx?: BrowserContext } = {};
+    const held: Held = {};
     let loadsAt = 0;
     let loadsNow: () => number = () => 0;
     // what the unit did, and the writes the block stopped (charged to checks once the unit is over)
@@ -1802,7 +1802,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
     const work = (async (): Promise<string | null> => {
       let reached: Awaited<ReturnType<typeof openUnitPage>>;
       try {
-        reached = await openUnitPage(browser, o, (c) => { held.ctx = c; }, net);
+        reached = await openUnitPage(browser, o, holdContext(held), net);
       } catch (e) {
         return e instanceof StepError ? `the steps failed — ${e.message}` : `could not reach the screen — ${firstLine(e)}`;
       }
@@ -1831,13 +1831,14 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       return `the check could not run — ${firstLine(e)}`;
     });
     // the context exists from before the screen was reached: closing it ends whatever the unit waits on — ≤ 5 s in all
-    const r = await raceBudget(work, left, held, () => { closed = true; cut = true; });
-    if (r === "cut") {
+    const raced = await raceBudget(work, left, held, () => { closed = true; cut = true; });
+    if (raced.cut) {
       block.unit(null);
       checks.push(...judgeWrites(produced, blocked()));
       fill(checks, produced, unit.declared, left < budgetLeft ? `time budget (this unit's share: ${Math.round(left / 1000)} s)` : "time budget");
       return;
     }
+    const r = raced.value;
     block.unit(null);
     closed = true;
     checks.push(...judgeWrites(produced, blocked()));

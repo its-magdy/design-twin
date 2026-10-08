@@ -2796,21 +2796,34 @@ var raf2 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() 
 var CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i;
 var NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
 var CUT_SETTLE_MS = 5e3;
+var CUT = /* @__PURE__ */ Symbol("cut");
+var UNSETTLED = /* @__PURE__ */ Symbol("unsettled");
+function holdContext(held) {
+  return (c) => {
+    held.ctx = c;
+    if (held.cut) void c.close().catch(() => void 0);
+  };
+}
 async function raceBudget(work, ms, held, onCut) {
   let timer;
-  const cutP = new Promise((resolve) => {
-    timer = setTimeout(() => resolve("cut"), ms);
-  });
-  const r = await Promise.race([work, cutP]);
-  clearTimeout(timer);
-  if (r !== "cut") return r;
+  let r;
+  try {
+    r = await Promise.race([work, new Promise((resolve) => {
+      timer = setTimeout(() => resolve(CUT), ms);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (r !== CUT) return { cut: false, value: r };
   onCut?.();
+  held.cut = true;
   const ctx = held.ctx;
-  await Promise.race([(async () => {
+  const wound = (async () => {
     if (ctx) await ctx.close().catch(() => void 0);
     await work;
-  })(), sleep(CUT_SETTLE_MS, void 0, { ref: false })]);
-  return "cut";
+  })();
+  const s = await Promise.race([wound, sleep(CUT_SETTLE_MS, UNSETTLED, { ref: false })]);
+  return { cut: true, settled: s !== UNSETTLED };
 }
 var notRun = (row, detail, extra) => ({ nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `not-run: ${detail}`, ...extra });
 function shapeDistance(q, px, py) {
@@ -3057,27 +3070,31 @@ async function driveRow(browser, o, row, hooks, onContext) {
 async function driveInteractions(browser, o, hooks) {
   const out = [];
   const end = Date.now() + o.budgetMs;
+  let wedged = false;
   for (const row of o.rows) {
+    if (wedged) {
+      out.push(notRun(row, "the browser stopped answering"));
+      continue;
+    }
     const left = end - Date.now();
     if (left <= 0) {
       out.push(notRun(row, "time budget", { cut: "budget" }));
       continue;
     }
     const held = {};
-    const work = driveRow(browser, o, row, hooks, (c) => {
-      held.ctx = c;
-    }).catch((e) => {
+    const work = driveRow(browser, o, row, hooks, holdContext(held)).catch((e) => {
       if (CLOSED.test(errMsg(e))) return notRun(row, `the browser closed while driving \u2014 ${firstLine(e)}`);
       return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
     });
     const r = await raceBudget(work, left, held);
-    if (r === "cut") {
+    if (r.cut) {
       out.push(notRun(row, "time budget", { cut: "budget" }));
+      if (!r.settled) wedged = true;
       continue;
     }
-    out.push(r);
+    out.push(r.value);
   }
-  return out;
+  return { evidence: out, wedged };
 }
 
 // design-to-code/probe-behaviour.ts
@@ -4511,9 +4528,7 @@ async function runUnits(browser, o, block, t0) {
     const work = (async () => {
       let reached;
       try {
-        reached = await openUnitPage(browser, o, (c) => {
-          held.ctx = c;
-        }, net);
+        reached = await openUnitPage(browser, o, holdContext(held), net);
       } catch (e) {
         return e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine(e)}`;
       }
@@ -4538,16 +4553,17 @@ async function runUnits(browser, o, block, t0) {
       if (e instanceof BatteryStop) return e.message;
       return `the check could not run \u2014 ${firstLine(e)}`;
     });
-    const r = await raceBudget(work, left, held, () => {
+    const raced = await raceBudget(work, left, held, () => {
       closed = true;
       cut = true;
     });
-    if (r === "cut") {
+    if (raced.cut) {
       block.unit(null);
       checks.push(...judgeWrites(produced, blocked()));
       fill(checks, produced, unit.declared, left < budgetLeft ? `time budget (this unit's share: ${Math.round(left / 1e3)} s)` : "time budget");
       return;
     }
+    const r = raced.value;
     block.unit(null);
     closed = true;
     checks.push(...judgeWrites(produced, blocked()));
@@ -5613,9 +5629,7 @@ async function captureVisual(browser, o) {
   const work = (async () => {
     let reached;
     try {
-      reached = await openReached(browser, { viewport: o.viewport, timeout: o.timeout, initScript: o.initScript, reach: o.reach }, { dsf: o.ref.scale, onContext: (c) => {
-        held.ctx = c;
-      } });
+      reached = await openReached(browser, { viewport: o.viewport, timeout: o.timeout, initScript: o.initScript, reach: o.reach }, { dsf: o.ref.scale, onContext: holdContext(held) });
     } catch (e) {
       return { why: e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine(e)}` };
     }
@@ -5658,7 +5672,7 @@ async function captureVisual(browser, o) {
     }
   })().catch((e) => ({ why: /Execution context was destroyed|frame was detached|navigation/i.test(errMsg(e)) ? "the page loaded a new document during the visual capture" : `the visual capture failed \u2014 ${firstLine(e)}` }));
   const r = await raceBudget(work, o.budgetMs, held);
-  if (r !== "cut") return r;
+  if (!r.cut) return r.value;
   return { why: `the visual capture did not finish within its budget (${Math.round(o.budgetMs / 1e3)} s)` };
 }
 var pct = (n, of) => of > 0 ? Math.round(n / of * 1e4) / 100 : 0;
@@ -6526,6 +6540,10 @@ async function runProbe(browser, o) {
     await context.close().catch(() => void 0);
   }
 }
+function driveOutcome(r) {
+  if (r.wedged) return { driven: null, driveNote: "driving the interactions did not finish within its budget (the browser stopped answering) \u2014 none recorded", wedged: true };
+  return { driven: r.evidence, driveNote: null, wedged: false };
+}
 function behaviourLine(b) {
   if (!b.ran) return `behaviour not run (${b.why})`;
   const n = (st) => b.checks.filter((c) => c.status === st).length;
@@ -6781,23 +6799,16 @@ ${USAGE}`);
     const rows = run2.kind === "ok" ? drivable(expectation) : [];
     if (rows.length) {
       try {
-        const driveMs = driveBudget(Date.now(), runDeadline);
-        const hung = /* @__PURE__ */ Symbol("drive hung");
-        const hungAt = Math.max(0, Math.min(driveMs + CUT_SETTLE_MS + 1e3, runDeadline - Date.now() - PS_CAP_MS - WRITE_MARGIN_MS));
-        const r2 = await Promise.race([driveInteractions(browser, {
+        ({ driven: driven2, driveNote: driveNote2, wedged } = driveOutcome(await driveInteractions(browser, {
           rows,
           viewport,
           timeout,
           initScript: INIT_SCRIPT,
-          budgetMs: driveMs,
+          budgetMs: driveBudget(Date.now(), runDeadline),
           reach: async (page) => {
             await reachPage(page, attachNavLog(page), probeOpts);
           }
-        }), sleep4(hungAt, hung, { ref: false })]);
-        if (r2 === hung) {
-          wedged = true;
-          driveNote2 = "driving the interactions did not finish within its budget (the browser stopped answering) \u2014 none recorded";
-        } else driven2 = r2;
+        })));
       } catch (e) {
         driveNote2 = `driving the interactions failed (${firstLine(e)}) \u2014 none recorded`;
       }
@@ -7012,6 +7023,7 @@ export {
   browserPathError,
   buildFrom,
   closeCapped,
+  driveOutcome,
   errorKind,
   foreignTags,
   installHint,
