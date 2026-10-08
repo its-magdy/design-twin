@@ -142,7 +142,7 @@ function isComposedColor(v: VariableValue): v is VariableComposedColor {
 // percentage — and the IR carried it as {composed: {color: {aliasOf}, opacity: 40}}. The expression form
 // was not seen (one variable, one mode, alias + literal opacity; a number-variable opacity and a literal
 // colour were not exercised). It stays readable: this normalises the expression form into the documented
-// one and every path below sees {color, opacity}. Anything else stays on the verbatim path, as before.
+// one and every path below sees {color, opacity}. Anything else stays on the verbatim path.
 function isRgb(x: unknown): x is RGB | RGBA {
   return !!x && typeof x === "object" && "r" in x && typeof x.r === "number" && "g" in x && typeof x.g === "number" && "b" in x && typeof x.b === "number";
 }
@@ -302,7 +302,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
     if (c) collById.set(c.id, c);
   }
   // Built AFTER the merge so remote modes are included; first collection to claim a modeId wins,
-  // which keeps local names ahead of library ones exactly as before.
+  // which keeps local names ahead of library ones.
   const allCollections = [...collById.values()];
   const modeName: { [modeId: string]: string } = {};
   for (const c of allCollections) for (const m of c.modes) if (!(m.modeId in modeName)) modeName[m.modeId] = m.name;
@@ -329,7 +329,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
       // A composed colour always holds at least one alias (Figma's own constraint), so it is an alias
       // for the tier and for the "raw value in a multi-mode collection" hygiene check below.
       if (isVariableAlias(raw) || toComposed(raw)) hasAlias = true;
-      // Top-level alias: its id as before (even an empty one); composed colour: each nested alias id.
+      // Top-level alias: its id (even an empty one); composed colour: each nested alias id.
       for (const id of isVariableAlias(raw) ? [raw.id] : aliasIds(raw)) {
         // Was `!localIds.has(raw.id)`, which fired on every LEGITIMATE library alias once remote
         // variables started being resolved above — so a library-consuming file's hygiene list filled

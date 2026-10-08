@@ -66,7 +66,7 @@ import type {
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
-import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule (L-7)
+import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
@@ -102,20 +102,20 @@ const CHROME_BOTTOM = /home ?indicator|gesture ?bar|navigation ?handle/i;
 const STATE_KEYS = ["loading", "empty", "error"] as const;
 const STATE_WORDS: Record<ScreenStateKey, RegExp> = {
   loading: /\b(loading|skeleton|spinner|shimmer|placeholder)\b/i,
-  // F-23: an empty state is usually a SENTENCE ("No items added yet.", "Add your first project"), not a
+  // An empty state is usually a SENTENCE ("No items added yet.", "Add your first project"), not a
   // layer called "Empty" — `no … yet/added/created/found/available` within one clause (a non-breaking
   // space counts: `\s`/`[^…]` both match U+00A0, which designers' copy often carries).
   empty: /\b(empty|no results?|no data|nothing (here|found|to show|yet)|zero ?state|(add|create) your first)\b|\bno\b[^.!?\n]{0,40}?\b(yet|added|created|found|available)\b/i,
   error: /\b(error|failed|failure|offline|retry|something went wrong|not found|404|500)\b/i,
 };
-// Form-validation copy (DT-14(4)): evidence that a validation state was drawn for a screen with inputs.
+// Form-validation copy: evidence that a validation state was drawn for a screen with inputs.
 const VALIDATION_WORDS = /\b((is|are) required|required field|invalid|is not valid|must (be|contain|include|match)|please (enter|select|provide|fill)|too (short|long)|already (exists|taken|in use))\b/i;
 // A root that is a dialog, not a page: it has no data LIST, so "what shows when there's no data" does not
-// apply, and "loading" means its action in flight (DT-14(4)). Read off the root's layer name.
+// apply, and "loading" means its action in flight. Read off the root's layer name.
 // "sheet"/"drawer"/"confirmation" alone are too common in page names ("Time Sheet", "Order confirmation").
 const DIALOG_NAME = /\b(dialog|modal|pop-?ups?|popover|bottom ?sheet|action ?sheet|side ?drawer)s?\b/i;
 // A text finding cites the layer's own words beside its name — the name is often a component default
-// ("Option 1") while the text is what a reader can find on screen (DT-14(2), F-25).
+// ("Option 1") while the text is what a reader can find on screen.
 function textOf(node: IrNode): string | null {
   const t = typeof node.text === "string" ? node.text.replace(/\s+/g, " ").trim() : "";
   if (!t || t === (node.name || "").trim()) return null;
@@ -139,7 +139,7 @@ function overlaps(a: Box | undefined, b: Box | undefined): boolean {
 // What a layer sits on: its ancestors' solid fills composited top-down, each followed by the earlier siblings
 // stacked under the next level (`__beneath`). A gradient/image/video layer makes it `complex` until an opaque
 // solid covers it again; `bg` null = nothing painted (the callers assume a white page). `token`: the variable
-// bound to the topmost opaque solid, when nothing translucent or complex lies over it (DT-63 names it).
+// bound to the topmost opaque solid, when nothing translucent or complex lies over it.
 const WHITE: Rgba = { r: 255, g: 255, b: 255, a: 1 };
 interface Backdrop { bg: Rgba | null; complex: boolean; token?: string }
 const paintToken = (p: Paint): string | undefined => { const t = p.tokens && p.tokens.color; return Array.isArray(t) ? t[0] : t; };
@@ -163,7 +163,7 @@ function backdropOf(ancestors: readonly Ancestor[]): Backdrop {
   }
   return { bg, complex, ...ifDefined("token", token) };
 }
-// F-48: what makes an input instance read like a select/picker — a visible "Select …"/"Choose …"/"Pick …" prompt
+// What makes an input instance read like a select/picker — a visible "Select …"/"Choose …"/"Pick …" prompt
 // (preferred: it is what a reader sees) or a visible chevron/caret/calendar layer. Null when neither.
 const PICKER_PROMPT = /^(select|choose|pick)\b/i;
 const PICKER_ICON = /chevron|arrow-?down|caret|angle-?down|calendar/i;
@@ -197,7 +197,7 @@ const STATE_SYNONYMS: Record<ControlState, RegExp> = {
   error: /^(error|invalid|has ?error|is ?invalid)$/,
   selected: /^(selected|checked|on|active|current|is ?selected)$/,
   loading: /^(loading|busy|in ?progress|is ?loading)$/,
-  // F-48: a select/picker's list (or calendar) drawn as a variant
+  // A select/picker's list (or calendar) drawn as a variant
   open: /^(open|opened|expanded|is ?open|show ?list|dropdown ?open)$/,
 };
 // Which states each kind of control needs. `hover` only matters where there is a pointer.
@@ -206,7 +206,7 @@ function requiredStates(kind: ControlKind, platform: AuditPlatform): ControlStat
   switch (kind) {
     case "button": return pointer ? ["hover", "pressed", "focus", "disabled"] : ["pressed", "disabled"];
     case "input": return ["focus", "error", "disabled"];
-    // F-48: a select/dropdown/picker also has its open list (or calendar) to design — and, in a form, its error
+    // A select/dropdown/picker also has its open list (or calendar) to design — and, in a form, its error
     case "select": return pointer ? ["hover", "focus", "disabled", "error", "open"] : ["focus", "disabled", "error", "open"];
     case "toggle": return ["selected", "disabled"];
     case "tab": return ["selected"];
@@ -216,7 +216,7 @@ function requiredStates(kind: ControlKind, platform: AuditPlatform): ControlStat
 }
 // A variant's option values, lower-cased ("Type=Primary, Status=Disabled" → ["primary", "disabled"]).
 const variantValuesOf = (mc: MainComponentRef | undefined): string[] => String((mc && mc.name) || "").split(",").map((p) => (p.split("=")[1] || "").trim().toLowerCase());
-// A form field: what a validation state applies to (a select had this kind of its own only since F-48).
+// A form field: what a validation state applies to (a select has this kind of its own).
 const isField = (k: ControlKind | null): boolean => k === "input" || k === "select";
 
 // ---------------------------------------------------------------- input normalisation
@@ -266,18 +266,18 @@ export interface AuditOptions {
   libraries?: LibraryExport[];
   variables?: TokensDoc | null;
   sliceSources?: SliceSources | null;
-  /** DT-22: the other frames in the export (pages/index.json) and orphan screenshots */
+  /** The other frames in the export (pages/index.json) and orphan screenshots */
   neighbours?: ExportNeighbours | null;
-  /** DT-21: the user's recorded severity decisions (<out>.overrides.json) */
+  /** The user's recorded severity decisions (<out>.overrides.json) */
   overrides?: AuditOverride[];
-  /** F-47, passed through to the embedded cross-check: the component map (labels proposals alreadyMapped) and
+  /** Passed through to the embedded cross-check: the component map (labels proposals alreadyMapped) and
    *  the other exported screens (sharedWith) — labels and ordering only */
   map?: CodeConnectMap | null;
   siblings?: (() => CrossCheckScreen[]) | null;
 }
 
 // What the walk carries about an ancestor: only what descendants read off it (`id`/`type`/`mainComponent`/`component`:
-// which instance a text or a stroked layer sits in — DT-37, DT-63).
+// which instance a text or a stroked layer sits in).
 interface Ancestor { name: string; id?: string; type?: string; mainComponent?: MainComponentRef; component?: string; props?: ComponentPropValues; hidden?: boolean; fills?: Paint[]; __tappable: boolean; __beneath: Paint[] }
 // An earlier sibling that may paint under a later one: its fills, and its page-space box when known.
 interface Layer { fills: Paint[]; box?: Box }
@@ -285,17 +285,17 @@ interface WalkCtx { label: string; rootBox?: Box }
 interface Here { label: string; path?: string }
 // `icon`: the instance exported as an asset (an SVG icon) — "search-normal" names an icon, not a search field.
 interface UsedComponent { name: string | undefined; key?: string; variantKey?: string; remote?: boolean; nodeId?: string; icon?: true }
-// One prototype destination of the screen (DT-14(5)): from how many layers, and the first of them.
+// One prototype destination of the screen: from how many layers, and the first of them.
 interface NavRow { destination: string | undefined; destinationId: string | undefined; navigation: string; count: number; node: IrNode; label: string }
 interface StateHit { nodeId: string; nodeName: string; screen: string; hidden: boolean }
 // A text run as the binding tally reads it: a real `runs[]` entry, or the node's own font/tokens/style.
 interface RunLike { font?: FontSpec; tokens?: TokenMap; textStyle?: string; fillStyle?: string }
 
-// F-16: the spacing step a design system's own tokens use — the gcd of every positive numeric value of a
+// The spacing step a design system's own tokens use — the gcd of every positive numeric value of a
 // FLOAT variable in a spacing collection or scoped to GAP. The real tokens.json shape is a flat
 // `variables[]` whose rows name their `collection` and carry `values: { <mode>: number | {aliasOf} }`
-// (aliases add no new value — they point at another row, which is counted itself). The old reader
-// looked for `collections[].variables`, a shape no export has, so the step was never found. Null when
+// (aliases add no new value — they point at another row, which is counted itself). The reader
+// does not look for `collections[].variables`, a shape no export has. Null when
 // fewer than two values, or when the gcd is below 2 (a 1px "grid" says nothing).
 function spacingStep(tokens: TokensDoc | null | undefined): number | null {
   const values: number[] = [];
@@ -315,18 +315,18 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   // Live run #10: with no --platform the audit quietly picked "web" and the assumption surfaced only
   // as one designer question buried in a list of thirteen. Every touch-target size, shadow-spread
   // note and blur warning below depends on this value, so a wrong guess silently mis-audits the
-  // whole screen. The guess still happens (refusing to run is worse), but it is now recorded as a
+  // whole screen. The guess still happens (refusing to run is worse), but it is recorded as a
   // guess and printed at the TOP of the report rather than left for the reader to notice.
   const givenPlatform = opts.platform;
   const platformAssumed = !isPlatform(givenPlatform);
   const platform: AuditPlatform = isPlatform(givenPlatform) ? givenPlatform : "web";
   const gridAssumed = !(opts.grid !== undefined && opts.grid > 0);
   const grid: number = gridAssumed || opts.grid === undefined ? 4 : opts.grid;
-  // P4 #43: the 4px default silently under-flags an 8px-grid system (77 → 124 off-grid violations on
+  // The 4px default silently under-flags an 8px-grid system (77 → 124 off-grid violations on
   // the live run) and nothing said the run used the weaker default. When the design system's own
   // tokens have a spacing scale whose step differs from the grid used, say so and name the real step —
   // never raise the default itself (a different wrong default is not an improvement; the fix is to
-  // PASS the real one). F-16: a GIVEN grid is checked too — the agent passed a frame's 8px layoutGrid
+  // PASS the real one). A GIVEN grid is checked too — the agent passed a frame's 8px layoutGrid
   // (column guides, not a spacing scale) for a 4-step system and got 61 false off-grid notes.
   const dsStep = spacingStep(opts.designSystem && opts.designSystem.tokens);
   const gridMismatch: number | null = dsStep !== null && dsStep !== grid ? dsStep : null;
@@ -337,7 +337,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   const findings: AuditFinding[] = [];
   // typed on its own: spread inline in the Object.assign below, oxlint-tsgolint reads the result as `any`
   const placeOf = (ctx: Here): Pick<AuditFinding, "screen" | "path"> => ({ screen: ctx.label, ...ifDefined("path", ctx.path) });
-  // D1: "blocker" only with a BlockerCode — the overloads make any other blocker a compile error.
+  // "blocker" only with a BlockerCode — the overloads make any other blocker a compile error.
   function add(severity: "blocker", code: BlockerCode & AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number;
   function add(severity: "warning" | "info", code: AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number;
   function add(severity: Severity, code: AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number {
@@ -359,17 +359,17 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   const annotations: AuditAnnotation[] = [];
   const hiddenIds = new Set<string>(); // every node skipped by the hidden predicate — cross-file findings are filtered by it too
   const nodesById = new Map<string, IrNode>(); // visible nodes, so a finding raised off-tree (a heavy asset) can cite one
-  // Prototype links out of this screen, one row per destination (DT-14(5)): the export has them, and a
+  // Prototype links out of this screen, one row per destination: the export has them, and a
   // link copied along with a layer ("every row opens the Details screen") is invisible until clicked.
   const navigations = new Map<string, NavRow>();
-  // DT-37: sublayer ids (I<inst>;<layer>) whose `characters` some instance overrides, the instances whose list hit
+  // Sublayer ids (I<inst>;<layer>) whose `characters` some instance overrides, the instances whose list hit
   // the plugin's cap (incomplete), and every visible instance text that is not driven by a TEXT property.
   const charOverridden = new Set<string>();
   const cappedInstances = new Set<string>();
   const instanceTexts: Array<{ node: IrNode; here: Here; inst: Ancestor }> = [];
-  // DT-63: failing control boundaries, one entry per screen + stroke + backdrop.
+  // Failing control boundaries, one entry per screen + stroke + backdrop.
   const boundaries = new Map<string, { nodes: IrNode[]; here: Here; stroke: string; backdrop: string; ratio: number; assumed: boolean; strokeToken?: string; backdropToken?: string; hasFill: boolean }>();
-  // F-48: input instances that read like a select/picker ("Select …", a chevron/calendar layer).
+  // Input instances that read like a select/picker ("Select …", a chevron/calendar layer).
   const pickers: Array<{ node: IrNode; here: Here; useKey: string; cue: string }> = [];
 
   for (const root of roots) {
@@ -395,8 +395,8 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
 
     // Drawn states (a layer called "Loading" or a hidden "Error toast") — evidence the state was designed.
     // Text is read only near the top for loading/error (a "Failed" status chip deep in a table row is data,
-    // not an error screen); an empty-state sentence is specific enough to count at any depth (F-23: the
-    // real one sat 7 levels down, inside the illustration's card).
+    // not an error screen); an empty-state sentence is specific enough to count at any depth (a real
+    // one sat 7 levels down, inside the illustration's card).
     for (const state of STATE_KEYS) {
       const re = STATE_WORDS[state];
       if (re.test(node.name || "") || (node.type === "TEXT" && (state === "empty" || ancestors.length <= 6) && re.test(node.text || ""))) {
@@ -410,7 +410,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       validationHits.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
     }
 
-    // DT-37: an instance's `overrides` name the sublayers it changed (the plugin keeps the first OVERRIDE_CAP = 100 — a
+    // An instance's `overrides` name the sublayers it changed (the plugin keeps the first OVERRIDE_CAP = 100 — a
     // full list may be cut short, so its instance's texts are not judged). Read before the hidden branch returns.
     if (Array.isArray(node.overrides)) {
       if (node.overrides.length >= 100) cappedInstances.add(node.id);
@@ -418,8 +418,8 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     }
 
     // A layer the designer switched off renders nothing, so nothing about it is a finding: the audit
-    // used to hand a builder "use paddingTop=2 EXACTLY" for a hidden selected-state icon (finding 74 —
-    // 44 of Jet Roles' 119 findings cited hidden nodes). It is still WALKED, only for the two
+    // would hand a builder "use paddingTop=2 EXACTLY" for a hidden selected-state icon (44 of one
+    // screen's 119 findings cited hidden nodes). It is still WALKED, only for the two
     // collections above: a hidden "Error toast" is evidence the error state was designed, and an
     // annotation is designer intent wherever it sits. Token-binding tallies, component usage and every
     // emitter below see visible layers only.
@@ -439,9 +439,9 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       // An icon exported as an asset ("search-normal") is not a control; an "Icon Button" asset still is.
       const icon = !!(node.asset || node.geometry || node.assetSkipped) && !CONTROL_WORD.test(String(name || ""));
       if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), ...ifDefined("variantKey", mc.key), remote: !!mc.remote, nodeId: node.id, ...(icon ? { icon: true as const } : {}) });
-      // A search box or a filter on a list page has no validation state to ask about (M1 of the review).
+      // A search box or a filter on a list page has no validation state to ask about.
       if (!icon && isField(controlKind(name)) && !/\b(search|filter)/i.test(String(name || ""))) inputsSeen++;
-      // F-48: real selects are generic input instances — the only tell is a "Select …" prompt or a chevron/calendar.
+      // Real selects are generic input instances — the only tell is a "Select …" prompt or a chevron/calendar.
       if (!icon && node.type === "INSTANCE" && key && controlKind(name) === "input" && !/\b(search|filter)/i.test(String(name || ""))
         && !ancestors.some((a) => a.id !== undefined && pickers.some((p) => p.node.id === a.id))) {
         const cue = pickerCue(node);
@@ -465,10 +465,10 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       add("info", "no-auto-layout", `'${node.name}' has no auto layout (${node.children.length} children placed by coordinates) — infer a flow layout and ask how it should resize`, node, here);
     }
 
-    // finding 172 (round 2 correction): the export can state a box.h that its own layout.padding +
+    // The export can state a box.h that its own layout.padding +
     // children's box.h cannot produce (the real case: header padding [16,32,16,32] with a 24-high
     // text child declares box.h=44, but 16+24+16=56 — content genuinely overflows a FIXED box).
-    // First cut over-fired on ordinary auto-layout: a FIXED-height row (heightMode absent/"fixed")
+    // The check must not fire on ordinary auto-layout: a FIXED-height row (heightMode absent/"fixed")
     // whose children are simply SHORTER than the box (e.g. a 40-high sidebar row, padding [0,4,0,12],
     // a 24-high icon centred in it) is normal — content fitting inside a fixed box is not a
     // contradiction. The export's own sizing-mode field (figma-plugin/src/serialize.ts:
@@ -476,9 +476,9 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     // cases apart: a FIXED/FILL box only contradicts itself when content OVERFLOWS it; a HUG box's
     // declared size is supposed to equal the content exactly, so any mismatch (over OR under) is a
     // contradiction (the table row 20173:142081 is heightMode:"hug", declares 48, computes 56).
-    // DT-13/DT-17/F-14: only children that take part in the flow add height. A hidden child renders
+    // Only children that take part in the flow add height. A hidden child renders
     // nothing and takes no space (Figma skips it in auto layout), and an `absolute: true` child
-    // (layoutPositioning ABSOLUTE) is placed over the flow, not in it — counting either made a hug row
+    // (layoutPositioning ABSOLUTE) is placed over the flow, not in it — counting either makes a hug row
     // with a hidden 24px child "compute 56, not 48" and a dialog with an absolute close icon "318, not 270".
     const flow = Array.isArray(node.children) ? node.children.filter((c) => c && !hiddenSelf(c) && !c.absolute) : [];
     if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && flow.length) {
@@ -552,7 +552,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         }
       }
       if (!hiddenBranch) textChecks(node, ancestors, here);
-      // DT-37: a text a TEXT property drives (`propRefs.characters`) is never reported as a `characters` override,
+      // A text a TEXT property drives (`propRefs.characters`) is never reported as a `characters` override,
       // so only the others can be judged; an instance whose override list was capped says nothing either way.
       const inst = [...ancestors].reverse().find((a) => a.type === "INSTANCE");
       if (inst && !(node.propRefs && node.propRefs.characters) && (node.text || "").trim() && !ancestors.some((a) => a.id !== undefined && cappedInstances.has(a.id))) {
@@ -561,7 +561,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     }
 
     // ---- spacing / radius
-    // DT-50: an asset leaf is one exported image; the padding/gap an old export inferred for it is the inset baked into
+    // An asset leaf is one exported image; the padding/gap an older export inferred for it is the inset baked into
     // the file, not spacing to build — never tallied, never off-grid (assetSkipped true|"hidden" are leaves too).
     if (node.layout && !isAssetLeaf && !node.assetSkipped) {
       const L = node.layout;
@@ -579,7 +579,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         if (v < 0) add("info", "negative-spacing", `'${node.name}' ${k} is ${v} (overlap) — Compose Arrangement.spacedBy rejects negatives; use offset/overlay`, node, here);
         else if (!bound && (v % grid !== 0 || !Number.isInteger(v))) offGrid.push(`${k}=${v}`);
       }
-      // "snap to the nearest token" was the old wording and it contradicted build-screen's rule 5,
+      // The wording is never "snap to the nearest token": that would contradict build-screen's rule 5,
       // which forbids resolving a value to an approximately-matching token (silent hardcoding by
       // proxy). The audit reports the DESIGN problem; fixing it is a change to the Figma file or a
       // new token, never a rounding the build performs on its own.
@@ -629,8 +629,8 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       for (const child of node.children) {
         self.__beneath = stacks || child.absolute ? earlier.filter((l) => overlaps(l.box, child.box)).flatMap((l) => l.fills) : [];
         walk(child, chain, ctx);
-        // F-15: a TEXT sibling's `fills` are its GLYPH colour and an icon's are its ink — neither paints a
-        // backdrop. Stacking three white header labels made the 2nd and 3rd "white on white, 1:1". A
+        // A TEXT sibling's `fills` are its GLYPH colour and an icon's are its ink — neither paints a
+        // backdrop. Counting them would make the 2nd and 3rd of three stacked white header labels "white on white, 1:1". A
         // SHAPE the plugin also exports as an asset (an ELLIPSE avatar disc, a photo RECTANGLE) still does.
         if (!hiddenSelf(child) && child.type !== "TEXT" && !isIconInk(child) && Array.isArray(child.fills) && child.fills.length) {
           earlier.push({ fills: child.fills, ...ifDefined("box", child.box) });
@@ -679,7 +679,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     }
   }
 
-  // DT-63: WCAG 1.4.11 asks 3:1 between a control's visual boundary and the colour ADJACENT to it — the colour
+  // WCAG 1.4.11 asks 3:1 between a control's visual boundary and the colour ADJACENT to it — the colour
   // around the control, not its own inside (W3C Understanding 1.4.11: a white-inside input with a dark border on
   // a white page is judged border vs page). So: a stroked layer that is (or sits within 3 levels of) an input,
   // select or toggle, its stroke over the backdrop vs the backdrop. The backdrop is what lies ABOVE the control's
@@ -732,7 +732,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     if (cluster.length > 1) add("info", "near-duplicate-colors", `unbound colors ${cluster.map((c) => `${c.hex}×${c.count}`).join(", ")} are visually indistinguishable (ΔE<3) — probably one token`, null, null, { colors: cluster.map((c) => c.hex) });
   }
 
-  // ---- F-83: an unbound colour a hair off a token's value — a typo of the token, or a deliberate value. Token values:
+  // ---- an unbound colour a hair off a token's value — a typo of the token, or a deliberate value. Token values:
   // every COLOR variable's raw hex in every mode, from the variables union, the design system's tokens and each
   // screen's own slice (an alias adds no value: its target is a row of its own). ΔE < 1 is below what an eye
   // tells apart; an EXACT match is a different question (unbound, but the token's value) and is not raised here.
@@ -759,7 +759,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     nearToken.push(`'${x.hex}' (e.g. '${x.nodeName}' ${x.nodeId}) vs token '${best.name}' ${best.hex}`);
   }
 
-  // ---- DT-63: one finding per stroke/backdrop pair per screen (the same input border repeats on every field)
+  // ---- one finding per stroke/backdrop pair per screen (the same input border repeats on every field)
   for (const b of boundaries.values()) {
     const [first, ...more] = b.nodes;
     if (!first) continue;
@@ -769,7 +769,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       first, b.here, { nodeIds: b.nodes.map((n) => n.id), stroke: b.stroke, backdrop: b.backdrop, ...ifDefined("strokeToken", b.strokeToken), ...ifDefined("backdropToken", b.backdropToken), ratio: r1(b.ratio), required: 3 });
   }
 
-  // ---- DT-37: one component's text layer, its own copy on some instances and the component's default on others. Same
+  // ---- one component's text layer, its own copy on some instances and the component's default on others. Same
   // component (variant key) + the same layer (the id's last segment); the default members must also differ from
   // every overridden copy (a default that equals one is a real value). Same-screen groups only.
   const copyGroups = new Map<string, { inst: Ancestor; overridden: Array<{ node: IrNode; here: Here }>; plain: Array<{ node: IrNode; here: Here }> }>();
@@ -795,7 +795,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     copyQuestions.push(`'${comp}' > '${first.node.name}' (${first.node.id}) still says "${dflt}" (the component's default) where other instances say "${eg}" — is "${dflt}" the intended copy, or a placeholder? → Default: build "${dflt}" as drawn.`);
   }
 
-  // ---- F-87: a stray copy laid over the frame — a visible `absolute` direct child of a root whose visible texts and
+  // ---- a stray copy laid over the frame — a visible `absolute` direct child of a root whose visible texts and
   // rounded size equal an IN-FLOW visible node of the same tree that is not inside it (the field case: a footer pasted
   // over a page that already ends in the same footer). Root-level copies only, and only a sizeable one — two texts
   // or more, or at least half the root's width: a pinned "Save" button beside the form's own is a deliberate copy.
@@ -834,10 +834,9 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   }
 
   // ---- component state coverage
-  // DT-80: the check read only `--catalog`, so with `--design-system` alone it had nothing to look states
-  // up in, marked every control "not in the catalog" in a table note, and raised no finding — a file
-  // whose whole library lacked a pressed state audited clean. Every catalog the run has is now a source,
-  // most authoritative first: --catalog, the design system's own catalog (components.local.json, or a
+  // The check reads every catalog the run has, not only `--catalog`: with `--design-system` alone it would have
+  // nothing to look states up in, mark every control "not in the catalog" in a table note, and raise no finding —
+  // a file whose whole library lacked a pressed state would audit clean. The sources, most authoritative first: --catalog, the design system's own catalog (components.local.json, or a
   // library dir's components.json), each --as-library export beside it (its FULL definitions), and last
   // components.library.json — sampled from instances, so it knows only the states some screen uses.
   // Name matching is the weak half: a library can hold several rows under one name (a bare COMPONENT
@@ -927,7 +926,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       add(sampled ? "info" : "warning", "missing-component-states", `${kind} '${def.name}' has no ${missing.join("/")} state${missing.length > 1 ? "s" : ""} in its variants (${where})${sampled ? " — sampled from instances, so this may be incomplete rather than missing" : ""} — ask the designer or derive from tokens, and say so`, null, null, { component: def.name, missing });
     }
   }
-  // A check that could not run says so (DT-80): the table note alone read as "fine".
+  // A check that could not run says so: the table note alone read as "fine".
   if (unchecked.length) {
     const tried = [...fullCatalogs.map((c) => c.label), ...(sampledCatalog.length ? ["components.library.json"] : [])];
     add("warning", "component-states-unchecked",
@@ -936,7 +935,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         `. Missing hover/pressed/focus/disabled designs are invisible here: pass the catalog that defines them (a library export: --design-system <export>/libraries/<dir>), or ask the designer`,
       null, null, { controls: unchecked });
   }
-  // F-48: an input instance that reads like a select/picker, unless its component's variants already draw it open.
+  // An input instance that reads like a select/picker, unless its component's variants already draw it open.
   // One finding per component + cue on a screen (three "Select date" fields are one question).
   const openStates = new Map<string, { node: IrNode; here: Here; cue: string; nodes: string[] }>();
   for (const p of pickers) {
@@ -959,7 +958,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   // designer forgot these" and needed a human to reinterpret (live run #9). The count of roots is
   // the missing context, so it ships with the verdict instead of being inferred from it.
   const stateOf = (s: ScreenStateKey): ScreenStateValue => stateHits[s].length ? "designed" : "not-found";
-  // DT-14(4): a dialog has no data list, so its "empty" question is noise; a screen with inputs has a
+  // A dialog has no data list, so its "empty" question is noise; a screen with inputs has a
   // validation state nobody asked about. Dialog = every audited root is named like one.
   const allDialogs = roots.length > 0 && roots.every((r) => DIALOG_NAME.test(r.tree.name || ""));
   const screenStates: AuditScreenStates = {
@@ -971,17 +970,17 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   const screenStatesScope = { rootsAudited: roots.length, singleFrame: roots.length === 1 };
 
   // ---- heavy assets (<Screen>.assets.json `heavy`) — the pull warns once on stderr; the audit is what
-  // the build reads (F-25: a 2.4 MB, 1523-path illustration never reached the report).
+  // the build reads (a 2.4 MB, 1523-path illustration must reach the report).
   for (const d of docs) {
     const a = d.assets;
     if (!a || !Array.isArray(a.heavy)) continue;
     const label = labelledRoots(d.doc, d.label)[0]?.label ?? d.label;
     for (const h of a.heavy) {
       const nodeId = (Array.isArray(a.files) ? a.files : []).find((f) => f.file === h.file)?.node;
-      if (nodeId && hiddenIds.has(nodeId)) continue; // a hidden layer's asset is not built (finding 74)
+      if (nodeId && hiddenIds.has(nodeId)) continue; // a hidden layer's asset is not built
       const node = nodeId ? nodesById.get(nodeId) : undefined;
-      // DT-09: a raster image inside an SVG shell is not "vector paths" — say what it is and what to ask for.
-      // The bridge's rule (an <image> AND under 50 paths), so the audit and the pull agree on one file (L-7).
+      // A raster image inside an SVG shell is not "vector paths" — say what it is and what to ask for.
+      // The bridge's rule (an <image> AND under 50 paths), so the audit and the pull agree on one file.
       const mb = (h.bytes / 1048576).toFixed(2);
       const msg = isRasterShell(h.embeddedRaster, h.paths)
         ? `'${h.file}' is ${mb} MB — a raster image embedded in an SVG shell; use it as an image (<img src>/URL import) or ask the designer for a PNG/JPG export of that layer. Do not inline it`
@@ -990,8 +989,8 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     }
   }
 
-  // ---- prototype links (DT-14(5)) — one info per destination, so a reader can spot one that doesn't belong
-  // F-55: with the export's index beside the screen, each destination is looked up: exported when a row of the root
+  // ---- prototype links — one info per destination, so a reader can spot one that doesn't belong
+  // With the export's index beside the screen, each destination is looked up: exported when a row of the root
   // index or of any page index names it, or it is drawn inside this tree. A dialog the screen OPENS (overlay/swap)
   // and nobody exported leaves the builder nothing to build it from — one warning per screen names them all.
   const nb = opts.neighbours;
@@ -1033,7 +1032,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     empty: "what shows when there's no data (first use vs no results vs cleared)?",
     error: "what shows when a request fails (inline vs full-screen, retry, offline)?",
   };
-  // DT-22 / F-18: "not found" in THIS frame is often "drawn in the frame beside it". The index carries every
+  // "not found" in THIS frame is often "drawn in the frame beside it". The index carries every
   // exported frame's visible texts, so a same-page frame whose copy reads like the missing state is named
   // (a candidate to confirm — never marked designed on a text match alone).
   const auditedIds = new Set(roots.map((r) => r.tree && r.tree.id).filter((id): id is string => !!id));
@@ -1093,10 +1092,10 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   if (nearToken.length) questions.push(`Unbound colour${nearToken.length === 1 ? "" : "s"} a hair off a token — ${nearToken.join("; ")}: a typo of the token, or deliberate? → Default: the literal exactly as drawn, flagged.`);
 
   // ---- the cross-FILE pass
-  // Everything above reasons inside one screen's own JSON, which is why the live run's audit reported
+  // Everything above reasons inside one screen's own JSON, which is how an audit once reported
   // "96% of colors bound" on a screen whose tokens came from an entirely different library than the
-  // design system beside it (finding 56). "Bound" meant "resolves to some variable in its own file",
-  // never "matches what you exported" — and a reader reasonably read it as the latter. The join lives
+  // design system beside it. "Bound" means "resolves to some variable in its own file",
+  // never "matches what you exported" — and a reader can reasonably read it as the latter. The join lives
   // in cross-check.ts; its findings are merged in here so one report answers both questions.
   let crossFile: AuditCrossFile;
   const crossOrigin = new Map<AuditFinding, AuditCrossFile["findings"][number]>(); // merged copy -> crossFile's own finding
@@ -1104,8 +1103,8 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   if (opts.designSystem || opts.variables) {
     crossFile = crossCheck({
       // Each screen's OWN variables (d.vars — its <Screen>.vars.json) travel with it: the collision
-      // check is about the variables THIS screen carries, not the merged union's (livetest-3 #311 —
-      // without them this gate raised another screen's `Space 4` blocker against Jet Roles).
+      // check is about the variables THIS screen carries, not the merged union's (without
+      // them this gate would raise another screen's `Space 4` blocker against this one).
       screens: docs,
       variables: opts.variables || null,
       sliceSources: opts.sliceSources || null,
@@ -1118,13 +1117,13 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       map: opts.map || null,
       siblings: opts.siblings || null,
     });
-    // F-44: every cross-check finding carries its id (cross-check.ts writes it; an older crossCheck result is
+    // Every cross-check finding carries its id (cross-check.ts writes it; an older crossCheck result is
     // filled here over the SAME list), and the merged copy keeps it — so one finding has one id in both files.
     const crossIds = findingIds(crossFile.findings);
     crossFile.findings.forEach((f, i) => { const id = crossIds[i]; if (!f.id && id) f.id = id; });
     for (const f of crossFile.findings) {
       if (f.severity === "info") continue; // the coverage table below carries the informational half
-      if (f.nodeId && hiddenIds.has(f.nodeId)) { hiddenFindingsOmitted++; continue; } // same rule as the walk (finding 74)
+      if (f.nodeId && hiddenIds.has(f.nodeId)) { hiddenFindingsOmitted++; continue; } // same rule as the walk
       const { severity, code, message, ...rest } = f; // key order kept: severity, code, message, crossFile, the rest
       const merged: AuditFinding = { severity, code, message, crossFile: true, ...rest };
       findings.push(merged);
@@ -1144,7 +1143,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     };
   }
 
-  // DT-11: a --as-library export beside the design system is where the screen's library tokens and full
+  // A --as-library export beside the design system is where the screen's library tokens and full
   // component definitions usually are, and nothing pointed at it. Its components already feed the state
   // check above; checking tokens against it changes what the cross-file pass compares, so that stays the
   // caller's choice — named here with the command, and with how much of this screen it covers by key.
@@ -1158,12 +1157,12 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     );
   }
 
-  // DT-21 / F-10: a severity the user changed after review is recorded in <out>.overrides.json and
+  // A severity the user changed after review is recorded in <out>.overrides.json and
   // applied HERE, so the .json (what plan-skeleton and the Stop hook gate on) and the .md say the same
-  // thing. It used to be a hand edit of the .md only — the dismissed blocker still gated the build.
-  // Rules (review of group 5): an entry must NAME its finding when the finding has a node/token/component
+  // thing (a hand edit of the .md alone would leave the dismissed blocker gating the build).
+  // Rules: an entry must NAME its finding when the finding has a node/token/component
   // (a bare `{code}` would also silence tomorrow's new finding of that code); only a BLOCKER_CODES code can
-  // be raised to a blocker (the closed list D1 promises); a blocker is downgraded only on a recorded
+  // be raised to a blocker (the closed list); a blocker is downgraded only on a recorded
   // decidedBy. A rule-breaking entry is not applied and is reported with why.
   const overridesUnmatched: Array<AuditOverride & { why: string }> = [];
   for (const o of opts.overrides || []) {
@@ -1180,7 +1179,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       if (f.overridden || f.severity === o.severity) continue; // decided by an earlier entry, or already that severity
       f.overridden = { from: f.severity, reason: o.reason, ...ifDefined("decidedBy", o.decidedBy), ...ifDefined("decidedAt", o.decidedAt) };
       f.severity = o.severity;
-      // H1 of the review: the cross-file section is rendered from crossFile's own findings — decide there too.
+      // The cross-file section is rendered from crossFile's own findings — decide there too.
       const orig = crossOrigin.get(f);
       if (orig) { orig.overridden = f.overridden; orig.severity = f.severity; }
     }
@@ -1189,10 +1188,10 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     const cf = crossFile.findings;
     crossFile.summary = { blockers: cf.filter((f) => f.severity === "blocker").length, warnings: cf.filter((f) => f.severity === "warning").length, info: cf.filter((f) => f.severity === "info").length };
   }
-  // D1: a cross-file warning with a default is a question to CONFIRM — unless the user already decided it.
+  // A cross-file warning with a default is a question to CONFIRM — unless the user already decided it.
   for (const f of findings) if (f.crossFile && f.confirm && !f.overridden) questions.push(`Confirm (${f.code}): ${f.confirm}`);
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
-  // F-44: an id on every finding, in report order (finding-id.ts) — `code` / `code@nodeId` (+`~n`), so a plan's
+  // An id on every finding, in report order (finding-id.ts) — `code` / `code@nodeId` (+`~n`), so a plan's
   // auditGate.overridden survives a re-run that adds an unrelated blocker. A merged cross-file finding already
   // has cross-check's id (audit's own codes and cross-check's never overlap, so the two id spaces cannot clash).
   const ownIds = findingIds(findings.filter((f) => !f.crossFile));
@@ -1212,8 +1211,8 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     gridMismatch,
     screenStatesScope,
     screens: roots.map((r) => r.label),
-    // The root node id(s) audited — additive, read only by the CLI's finding-315 duplicate-artefact
-    // check (P3 round 3): it lets a re-run find an EARLIER report for the same screen under a
+    // The root node id(s) audited — additive, read only by the CLI's duplicate-artefact
+    // check: it lets a re-run find an EARLIER report for the same screen under a
     // different name without re-parsing every screen export in the directory.
     nodeIds: roots.map((r) => r.tree && r.tree.id).filter((id): id is string => !!id),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
@@ -1229,7 +1228,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
 }
 
 // ---------------------------------------------------------------- markdown report
-// DT-58: where a finding sits, as the last three layers of its `path` — enough to find "Option 1" among forty
+// Where a finding sits, as the last three layers of its `path` — enough to find "Option 1" among forty
 // without the whole chain (the JSON keeps the full path).
 function pathTail(p: string): string {
   const parts = p.split(" > ");
@@ -1266,7 +1265,7 @@ function toMarkdown(res: AuditReport): string {
           (c.ambiguousName ? `; ${c.ambiguousName} share a name with several catalog entries and were left unmatched` : "") + ".",
         ""
       );
-      // 0% by key is ALSO what a duplicated file looks like (livetest-3 #226): say which case this is.
+      // 0% by key is ALSO what a duplicated file looks like: say which case this is.
       if (c.rekey && c.rekey.rekeyed) {
         L.push(
           `**This is the re-keyed-copy case, not a foreign library:** ${c.rekey.proposed} of the ${c.rekey.withCandidates} component(s) whose name is in the ` +
@@ -1277,7 +1276,7 @@ function toMarkdown(res: AuditReport): string {
       }
     }
     // The union's token collision that belongs to ANOTHER screen stays visible here as a note, so a
-    // reader does not "fix" this screen's correct value to match it (livetest-3 #40/#311).
+    // reader does not "fix" this screen's correct value to match it.
     const cfBlock = cf.findings.filter((f) => f.severity !== "info" || f.code === "token-name-collision-elsewhere");
     if (cfBlock.length) {
       for (const f of cfBlock) L.push(`- **${f.severity}** \`${f.code}\` ${f.message}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
@@ -1331,11 +1330,11 @@ function toMarkdown(res: AuditReport): string {
   return L.join("\n") + "\n";
 }
 
-// finding 136 / F-44: the id of each blocker finding, so a plan's `auditGate.overridden` can name exactly
-// which blocker(s) the user decided to build past. It is the finding's own `id` (written since F-44); a
-// report written before that has none, and gets the same rule (finding-id.ts findingIds) computed over ALL
+// The id of each blocker finding, so a plan's `auditGate.overridden` can name exactly
+// which blocker(s) the user decided to build past. It is the finding's own `id`; an
+// older report has none, and gets the same rule (finding-id.ts findingIds) computed over ALL
 // its findings in report order. What plan-skeleton.ts pre-fills and verify-build.ts checks against (which
-// also still accepts the pre-F-44 positional `<code>#<i>`, finding-id.ts legacyBlockerIds).
+// also still accepts the older positional `<code>#<i>`, finding-id.ts legacyBlockerIds).
 // Takes anything (an audit report, or whatever a caller read off disk): only `findings[]` is looked at.
 function blockerIds(auditDoc: unknown): string[] {
   const findings = reportFindings(auditDoc);
@@ -1349,7 +1348,7 @@ function reportFindings(auditDoc: unknown): Array<{ code?: string; nodeId?: stri
   return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
 
-// P3 round 3, finding 315's sibling in audit.ts: an explicit `--out <nickname>` still wrote a second
+// An explicit `--out <nickname>` would write a second
 // complete report pair for a screen that already has one under its default name. Scans a directory's
 // own `*.json` audit reports (never a subdirectory — one screen, one flat design/audit/) for one
 // whose `nodeIds` already includes this run's root node, at a DIFFERENT basename than the one about
@@ -1370,7 +1369,7 @@ function findExistingAuditFor(dir: string, nodeId: string | undefined, ownTarget
   return null;
 }
 
-// D1/D11: the ONLY codes that can be a blocker. The audit-design SKILL's "Blocker codes:" line must list
+// The ONLY codes that can be a blocker. The audit-design SKILL's "Blocker codes:" line must list
 // exactly these (test/audit.test.ts parses both, and scans audit.ts/cross-check.ts for "blocker" emits).
 // Everything else with a sensible default is a warning — cross-file ones carry a `confirm` question.
 // What an overrides entry can name its finding by — every per-finding key a finding of one code can vary in.
@@ -1399,7 +1398,7 @@ function main(argv: string[]): number {
     "  It takes design/export/design-system or a library export, design/export/libraries/<dir>.\n" +
     "  Without it every token-binding % below means \"binds SOME variable\", not \"matches your design system\".\n" +
     "  --out defaults to design/audit/<input file's own basename> — the same <LayerName>__<node-id>\n" +
-    "  name write-out.js gave the screen file, so re-auditing the same screen always lands on the same\n" +
+    "  name the export gave the screen file, so re-auditing the same screen always lands on the same\n" +
     "  report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same\n" +
     "  directory already covers this node under a DIFFERENT name — pass --force to write a second one.";
   const OPTIONS = {
@@ -1413,7 +1412,7 @@ function main(argv: string[]): number {
   const { platform, catalog: catalogFile, "design-system": dsDir, variables: varsFile, grid: gridArg, out } = flags;
   const jsonOnly = !!flags.json, gate = !!flags.gate, force = !!flags.force;
   if (platform && !PLATFORMS.includes(platform)) { console.error(`--platform must be one of ${PLATFORMS.join(", ")}`); return 2; }
-  // `--grid abc` used to become NaN and fall back to the 4px default without a word.
+  // A non-numeric `--grid` is refused, not turned into NaN and the 4px default without a word.
   const grid = gridArg === undefined ? undefined : Number(gridArg);
   if (grid !== undefined && !(Number.isFinite(grid) && grid > 0)) { console.error(`--grid must be a positive number of px, got ${JSON.stringify(gridArg)}`); return 2; }
   // Variables discovery is shared with cross-check.ts (slice-sources.ts variablesContext): the union
@@ -1435,7 +1434,7 @@ function main(argv: string[]): number {
   const designSystem: AuditDesignSystem | undefined = dsRead
     ? { tokens: dsRead.tokens, ...ifDefined("components", dsRead.components || catalog), componentsLibrary: dsRead.componentsLibrary, stylesText: dsRead.stylesText, componentsFile: dsRead.componentsFile, isLibrary: dsRead.isLibrary }
     : undefined;
-  // DT-11: the --as-library exports beside the export (libraries/index.json), found from the screen's own
+  // The --as-library exports beside the export (libraries/index.json), found from the screen's own
   // path or the design-system dir's — never a directory the user did not already pull into.
   const libraries = findLibraryExports(firstFile, dsDir);
   const neighbours = findExportNeighbours(firstFile);
@@ -1443,7 +1442,7 @@ function main(argv: string[]): number {
   // also carries its own slice (inputs[].vars), which is what token collisions are judged on.
   const variables = ctx.variablesDoc;
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
-  // DT-21: the user's severity decisions for this report pair, beside it (or --overrides). Present but
+  // The user's severity decisions for this report pair, beside it (or --overrides). Present but
   // malformed is a one-line exit 2 — a decision silently not applied would re-open a dismissed blocker.
   const outBase = out || path.join("design", "audit", path.basename(firstFile, ".json"));
   // A sidecar run (`--out design/audit/<report>.library`) reads its own overrides file, else its report's.
@@ -1452,7 +1451,7 @@ function main(argv: string[]): number {
   const parentOverrides = dot > 0 ? path.join(path.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
   const overridesFile = flags.overrides || (!fs.existsSync(ownOverrides) && parentOverrides && fs.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
   const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
-  // F-47: cross-check's default map discovery (design/codeconnect.local.json, else ./codeconnect.local.json) and
+  // Cross-check's default map discovery (design/codeconnect.local.json, else ./codeconnect.local.json) and
   // the export's other screens, so the embedded crossFile's proposals carry the same alreadyMapped/sharedWith
   // labels as a cross-check run. Labels only — a broken default map is a warning, never a failed audit.
   const mapFound = ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs.existsSync(f));
@@ -1465,13 +1464,13 @@ function main(argv: string[]): number {
     libraries, neighbours, variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid),
   });
   const md = jsonOnly ? "" : toMarkdown(res);
-  // P3 #72/#73: one screen ended up under FIVE different report basenames across runs because the
+  // Without a derived default, one screen ended up under FIVE different report basenames across runs because the
   // skill invented one each time (`positions`/`jet-roles`/`guided-policies`/`Studio_Configurations`
   // for the SAME node). `--out`'s default is derived from the input FILE, which is itself already
-  // named `<LayerName>__<node-id>` by write-out.js/pages-layout.js — the one artefact-naming rule —
+  // named `<LayerName>__<node-id>` by write-out.ts/pages-layout.ts — the one artefact-naming rule —
   // so two runs on the same screen land on the same report pair without either caller having to
   // agree on a name out of band. Only the first input names it when several are given at once.
-  // Finding 315's sibling / P3 c6: refuse an explicit --out under a different name than an existing
+  // Refuse an explicit --out under a different name than an existing
   // report already covering this node, unless --force.
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
     const dup = findExistingAuditFor(path.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");

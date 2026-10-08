@@ -1,10 +1,10 @@
 // variables-merge.ts — design/variables.json accumulates across single-screen pulls.
 //
 // A `--node`/`--selection` pull returns only the variables THAT node binds. Writing that slice
-// straight to design/variables.json (what this module replaced) meant every pull silently deleted
+// straight to design/variables.json would make every pull silently delete
 // the previous screen's tokens: pull screen A, pull screen B, and A's theme no longer resolves.
-// Nothing warned, because the screen JSON carries raw hex beside every binding — so the build still
-// renders, just unthemed. That is the worst shape a data-loss bug can take.
+// Nothing would warn, because the screen JSON carries raw hex beside every binding — so the build would still
+// render, just unthemed. That is the worst shape a data-loss bug can take.
 //
 // So: merge. A variable's identity is its Figma `key` (stable across files and across pulls); only
 // when a key is absent (never seen on a real export, but the field is optional in the IR) do we fall
@@ -24,16 +24,15 @@
 //
 // Two DIFFERENT variables (distinct keys) with the SAME collection and name are both kept — the key
 // is the identity — but they are a conflict for every consumer that looks a token up by name, which
-// is most of them (a theme generator, a slugged CSS variable, a designer reading a list). livetest-3
-// (finding 21) had two `Spacing / Space 4` (24 and 16) and two `Spacing / Space 2` in the union and
-// an EMPTY `_conflicts`, because only same-key value changes were ever recorded. Each such pair is
-// now a `_conflicts` entry of kind "same-name", naming every key, its values and the screens whose
+// is most of them (a theme generator, a slugged CSS variable, a designer reading a list). A real
+// pull had two `Spacing / Space 4` (24 and 16) and two `Spacing / Space 2` in the union and
+// an EMPTY `_conflicts`, because only same-key value changes were recorded. Each such pair is
+// a `_conflicts` entry of kind "same-name", naming every key, its values and the screens whose
 // slice carries it, and a CONFLICT line in `hygiene` — the two places the skills tell a reader to look.
 
-// Finding 323: this used to say the per-pull slices are kept "under variables/" — a directory that
-// has never existed. bridge/src/pages-layout.ts's own screenPaths() writes each slice BESIDE its screen,
-// as pages/<Page>/<Screen>__<id>.vars.json (see design/README.md's template), not into a
-// top-level variables/ directory. Point at the real thing instead of a plausible-sounding guess.
+// The per-pull slices are not under a "variables/" directory (none exists): bridge/src/pages-layout.ts's
+// screenPaths() writes each slice BESIDE its screen, as pages/<Page>/<Screen>__<id>.vars.json (see
+// design/README.md's template), not into a top-level variables/ directory.
 import type {
   VariableCollection, Variable, SliceEntry, ValueConflict, SameNameConflict, VariableConflict, VariablesDoc,
 } from "./doc-types.ts";
@@ -324,11 +323,11 @@ function sliceEntry(slice: SliceInput, doc: { variables?: Variable[]; collection
 
 // A top-level freshness stamp, derived from `_slices[].at` (never invented separately from it) so a
 // consumer that expects every export document to carry `exportedAt` (design-diff.ts's `previous()`,
-// `dtwin doctor`'s export-age check) has one to read (finding 218 — variables.json had none, so the
+// `dtwin doctor`'s export-age check) has one to read (without it the
 // stale-baseline check that works for tokens.json could never fire for it). This is a MAX over the
 // slice times, i.e. "when did the most recent contributing pull happen" — not a plain re-stamped
-// "now", which the prompt is explicit must be avoided: `_slices[].at` legitimately re-appends on every
-// re-pull of any ONE screen (finding 223), so `exportedAt` moves whenever slices do, same as they do,
+// "now", which must be avoided: `_slices[].at` legitimately re-appends on every
+// re-pull of any ONE screen, so `exportedAt` moves whenever slices do, same as they do,
 // and nothing here compares variable VALUES by exportedAt equality — that comparison stays keyed
 // (`varId`/`sameValue` above), so a moved `exportedAt` alone can never manufacture a fake "token
 // changed" the way a naive independent timestamp would.

@@ -1,13 +1,13 @@
 // read-opts.ts — THE registry of the extractor's opt-in read options.
 //
-// The same six names used to be written out by hand in four places: the plugin's `runOpts`
+// The same six names would otherwise be written out by hand in four places: the plugin's `runOpts`
 // (state.ts), the `CollectOpts` interface (collect.ts), the CLI's flag table (figma-pull.ts), and the
 // MCP tool schema (figma-mcp.ts). Every one of those is a place a new option can be forgotten, and
 // the failure is SILENT in both front-ends: the CLI just never sets the flag, and the MCP SDK's Zod
 // object mode STRIPS undeclared keys before the handler runs. That is not hypothetical — `skipAssets`
-// was declared on figma_export_full only, which made it dead on the other two export tools with
-// nothing to make the lists disagree loudly. Both front-ends had already noticed and each fixed it
-// *within its own file*, which left four consistent-by-luck lists instead of one.
+// was once declared on figma_export_full only, which made it dead on the other two export tools with
+// nothing to make the lists disagree loudly. Fixing that *within each file* would leave four
+// consistent-by-luck lists instead of one.
 //
 // So: one row here is the whole change. `name` is the wire/option key the plugin reads, `flag` is the
 // CLI spelling, `describe` is the MCP tool-schema help (the only consumer of prose, but it lives here

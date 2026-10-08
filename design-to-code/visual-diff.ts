@@ -21,11 +21,11 @@
  * transmission color space in mobile applications" (2010); the anti-aliasing detector from V. Vysniauskas,
  * "Anti-aliased Pixel and Intensity Slope Detector" (2009).
  */
-// The 12c visual diff (F-89, D40(3) informational — never the fidelity verdict, D4): the built frame captured at the reference's
+// The visual diff (informational — never the fidelity verdict): the built frame captured at the reference's
 // scale against the Figma reference, pixel by pixel. Pure (no I/O); the probe (probe-visual.ts) feeds it.
 //
-// What is pixelmatch's (v6.0.0, the classic YIQ algorithm — the published 7.x is the same metric; OKLab is unreleased main,
-// facts-12c §4): colorDelta (blend over white below alpha 255 — the 6.x rule, so transparent equals white), the threshold
+// What is pixelmatch's (v6.0.0, the classic YIQ algorithm — the published 7.x is the same metric; OKLab is unreleased main):
+// colorDelta (blend over white below alpha 255 — the 6.x rule, so transparent equals white), the threshold
 // (maxDelta = 35215·t²; t = 0.2, Playwright toHaveScreenshot's default), and the anti-aliasing test (only on a pixel already
 // over the threshold; a pixel that is AA in either image is not counted). Not ported: the identical-image Uint32Array fast path
 // (it throws on a Buffer whose byteOffset is not a multiple of 4), the options object and the drawing.
@@ -149,7 +149,7 @@ export interface PixelDiff {
 
 /** The diff options for k device px per CSS px (8-CSS-px cells, shift radius max(1, round(k)); at a fractional k the 1-px
  *  edge ring is not counted for regions — a frame at y 200 CSS starts at device row 284.42, so row 284 is part page). A cell is hot at
- *  max(4, 0.08 · cell²) shift-tolerant differing px (D59): the shift tolerance already removes 1-px jitter, so the cell rule
+ *  max(4, 0.08 · cell²) shift-tolerant differing px: the shift tolerance already removes 1-px jitter, so the cell rule
  *  only has to say where to look — a 1-CSS-px line (≤ 2 of 11 rows at 1.4222x) or a replaced string's strokes reach 8 %, they
  *  never reached the earlier 25 %. */
 export function diffOptionsFor(k: number): DiffOptions {
@@ -230,8 +230,8 @@ export function referenceCrop(png: { w: number; h: number }, scale: number, offs
   return { x, y, w: Math.max(0, Math.min(png.w - x, Math.round(frame.w * scale))), h: Math.max(0, Math.min(png.h - y, Math.round(frame.h * scale))) };
 }
 /** Capture vs reference crop: within ±tolPx per axis both are cropped to the common size (the reference's grid); a larger
- *  mismatch is the D40(4)/D48 1x fallback (both resampled to the design size) — but only when the two have the same shape
- *  (aspect ratios within 1 %): a non-uniform resample would stretch one image and misplace every region (F-3), so a
+ *  mismatch is the 1x fallback (both resampled to the design size) — but only when the two have the same shape
+ *  (aspect ratios within 1 %): a non-uniform resample would stretch one image and misplace every region, so a
  *  different shape is "none" (not compared, with why). */
 export function planGrid(refCrop: { w: number; h: number }, capture: { w: number; h: number }, tolPx = 2):
   { grid: "reference"; w: number; h: number; note: string | null } | { grid: "1x"; why: string } | { grid: "none"; why: string } {

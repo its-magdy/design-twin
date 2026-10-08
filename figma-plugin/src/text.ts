@@ -186,8 +186,8 @@ function inlineExtras(src: InlineExtrasSource, out: Pick<TextFields, "href" | "l
 }
 
 // Returns the text FRAGMENT to merge into the node record. Every other helper in the serializer
-// returns a value the caller assigns; this one used to be the lone exception that wrote into the
-// caller's object, which meant it could set any key without the serializer knowing.
+// returns a value the caller assigns; this one must not be the lone exception that writes into the
+// caller's object, which would let it set any key without the serializer knowing.
 // TableCellNode.text (collect from serialize.ts's table-cell branch) is a TextSublayerNode — it
 // carries the same BaseNonResizableTextMixin/NonResizableTextMixin typographic surface (fonts, runs,
 // decoration, paragraph/list spacing) but NONE of BaseNodeMixin's identity fields (no `name`/`id`/
@@ -255,7 +255,7 @@ export async function serializeText(node: TextNode | TextPathNode | TextSublayer
   if ("textAlignHorizontal" in node && node.textAlignHorizontal) font.align = lower(node.textAlignHorizontal);
   // paragraphSpacing/paragraphIndent/listSpacing/leadingTrim live on NonResizableTextMixin — TEXT and
   // the TABLE-cell TextSublayerNode both extend it; TEXT_PATH's mixin (NonResizableTextPathMixin) is
-  // the bare Base and genuinely lacks them, same no-op as before.
+  // the bare Base and genuinely lacks them, so this is a no-op there.
   if ("paragraphSpacing" in node && typeof node.paragraphSpacing === "number" && node.paragraphSpacing) font.paragraphSpacing = node.paragraphSpacing;
   if ("paragraphIndent" in node && typeof node.paragraphIndent === "number" && node.paragraphIndent) font.paragraphIndent = node.paragraphIndent;
   if ("listSpacing" in node && typeof node.listSpacing === "number" && node.listSpacing) font.listSpacing = node.listSpacing; // gap between list items
@@ -288,8 +288,8 @@ export async function serializeText(node: TextNode | TextPathNode | TextSublayer
   if (node.hasMissingFont === true) {
     out.missingFont = true;
     // Kinded: a real file has one of these per text node using the font — 80 identical sentences.
-    // `name`/`id` are BaseNodeMixin fields the TABLE-cell TextSublayerNode doesn't have — same
-    // "undefined (undefined)" the prior `cell.text as TextNode` cast produced there, now typed.
+    // `name`/`id` are BaseNodeMixin fields the TABLE-cell TextSublayerNode doesn't have — so a
+    // `cell.text as TextNode` cast would produce "undefined (undefined)" there; the type is explicit.
     const name = "name" in node ? node.name : undefined;
     const id = "id" in node ? node.id : undefined;
     warnKind("missing font — Figma is substituting a fallback; the recorded family may differ from the render", name + " (" + id + ")");

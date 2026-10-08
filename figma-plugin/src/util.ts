@@ -35,7 +35,7 @@ export const propName = (k: string): string => {
 export const propType = (t: ComponentPropertyType): ComponentPropType => t;
 
 // Thrown value -> message string. Same reasoning as `safe` above: one definition in a dependency-free
-// CJS module that esbuild inlines into this bundle, so the Node side and the plugin cannot drift.
+// module (bridge/src/errmsg.ts) that esbuild inlines into this bundle, so the Node side and the plugin cannot drift.
 export { errMsg } from "../../bridge/src/errmsg.ts";
 
 // "Same SVG, modulo Figma's own export noise" — the ONE definition shared with bridge/src/write-out.ts
@@ -47,8 +47,8 @@ export { normalizeSvgText } from "../../bridge/src/svg-normalize.ts";
 export const nonEmpty = <T extends object>(o: T): T | undefined => (Object.keys(o).length ? o : undefined);
 
 // The same compaction rule applied as an ASSIGNMENT rather than a return: set `key` only when the bag
-// has something in it. Callers used to inline `if (Object.keys(x).length) o.k = x`, which put the rule
-// in eight places and quietly diverged from `nonEmpty`; going through here keeps it at one. Assigning
+// has something in it. Inlining `if (Object.keys(x).length) o.k = x` at call sites would put the rule
+// in many places and let it quietly diverge from `nonEmpty`; going through here keeps it at one. Assigning
 // `nonEmpty(x)` directly is NOT equivalent — that leaves an undefined-valued key on the in-memory
 // object (invisible after JSON.stringify, visible to anything that walks Object.keys).
 export function putNonEmpty<T, K extends keyof T>(o: T, key: K, v: (T[K] & object) | null | undefined): void {

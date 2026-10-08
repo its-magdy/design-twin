@@ -39,8 +39,8 @@ const ALIASES: Record<string, string> = { export: "pull", get: "pull", fetch: "p
 
 const isFlag = (a: unknown): boolean => typeof a === "string" && a.startsWith("-");
 
-// Per-verb help. `dtwin screenshot --help` used to hit translate's "needs a node id" refusal, because
-// the verb's own argument check ran before the global --help handler (live finding 5) — a help probe
+// Per-verb help. `dtwin screenshot --help` must not hit translate's "needs a node id" refusal, which
+// the verb's own argument check would give if it ran before the global --help handler — a help probe
 // is the one thing that must never be answered with an error. Every verb has its own page here (or
 // answers through its own entry point, OWN_HELP_ROUTED); only `help` prints the full `dtwin --help`.
 // `dtwin seed` answers its own --help (it is routed before verbHelp runs), and so does
@@ -64,7 +64,7 @@ export const SEED_HELP =
 // test/cli-help.test.ts walks VERBS and requires every verb to be in HELP or in one of these two.
 export const OWN_HELP_ROUTED: readonly string[] = ["doctor", "init", "mcp"];
 
-// F-52: the only port override is FIGMA_BRIDGE_PORT; DTWIN_PORT was never read and was silently ignored.
+// The only port override is FIGMA_BRIDGE_PORT; DTWIN_PORT is not read, so setting it would be silently ignored.
 // One sentence for the CLI and doctor, or null when DTWIN_PORT is not set.
 export function dtwinPortWarning(env: Record<string, string | undefined>): string | null {
   return env.DTWIN_PORT === undefined ? null : "DTWIN_PORT is not read — use FIGMA_BRIDGE_PORT (8787/8788/8789)";
@@ -185,8 +185,8 @@ export function translate(argv: string[], exists: (p: string) => boolean = () =>
     // `dtwin screenshot <id> [outDir] [flags]` — the id is the flag's value, the rest passes through.
     return ["--screenshot", rest[0], ...rest.slice(1)];
   }
-  // Not a verb: a positional outDir, exactly as before — unless it is a near-miss of one. `dtwin whomai`
-  // used to start a full pull into ./whomai; a bare word one or two edits from a verb is far likelier
+  // Not a verb: a positional outDir — unless it is a near-miss of one. `dtwin whomai` would otherwise
+  // start a full pull into ./whomai; a bare word one or two edits from a verb is far likelier
   // a typo than a folder. A path (`./serv`), an existing folder (`exists`), or `dtwin pull serv` opts out.
   if (VERBS.includes(verb)) return argv; // doctor | init | mcp | seed: routed by figma-pull.ts, not translated here
   const alias = ALIASES[verb.toLowerCase()];

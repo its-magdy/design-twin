@@ -3745,7 +3745,7 @@
           page: figma.currentPage.name,
           pageId: figma.currentPage.id,
           editorType: figma.editorType,
-          // Finding 327: baked in at build time (build.ts's esbuild `define`) from
+          // Baked in at build time (build.ts's esbuild `define`) from
           // figma-plugin/package.json — the one way to tell a stale plugin in Figma apart from a
           // freshly reloaded one, since neither startedAt nor code.js's mtime can. Reused verbatim by
           // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,

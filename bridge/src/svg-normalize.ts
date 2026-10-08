@@ -2,7 +2,7 @@
 //
 // Figma's own SVG export is not bit-reproducible: re-exporting the SAME icon, with NOTHING changed in
 // the design, comes back with different floating-point path coordinates (measured ≤0.004px drift —
-// findings 25/222, e.g. `arrow-down-3ea6be.svg` d="…8.77734…4.97401…" vs `arrow-down-ccfd6b.svg`
+// e.g. `arrow-down-3ea6be.svg` d="…8.77734…4.97401…" vs `arrow-down-ccfd6b.svg`
 // d="…8.7793 …4.97596…", the same icon exported twice), and with def ids that embed the exporting
 // node's id (`clip0_22012_15691` vs `clip0_22012_24907` for one icon reached through two instances).
 //
@@ -11,11 +11,11 @@
 //      from figma-plugin/src/util.ts) and by the change diff (design-to-code/design-diff.ts
 //      hashAssetBytes(), via bridge/src/asset-compare.ts). It stays EXACTLY as it is: design-diff
 //      persists these hashes in snapshot sidecars, so any change to v1 would report every SVG with
-//      defs as "redrawn" against every snapshot already on disk (D61).
+//      defs as "redrawn" against every snapshot already on disk.
 //   2. `svgFingerprint` / `sameSvg` (below v1): a skeleton plus every number, compared within an
 //      absolute tolerance. Used by the bridge's shared assets/ directory — the content reuse in
 //      bridge/src/write-out.ts writeAssets() and its `duplicates` report, via asset-compare.ts
-//      ContentIndex. It closes the three gaps v1 has on real exports (DT-18): def ids, integer
+//      ContentIndex. It closes the three gaps v1 has on real exports: def ids, integer
 //      tokens (`12` vs `11.9999`, which v1's decimal-only regex never touches) and the rounding
 //      boundary (21.9485 → 21.9 but 21.9504 → 22.0: two exports 0.002 apart hash differently).
 //
@@ -34,17 +34,17 @@
 // small script before choosing this: 1 decimal place is the coarsest rounding that does NOT itself
 // introduce a boundary split on this data, and it correctly separates the THREE genuinely different
 // icons among those eight files. Still two orders of magnitude below anything a human would call
-// "moved" — accepted by the orchestrator as the tolerance to use, despite differing from the ~0.01px
-// originally suggested, specifically because 0.01px empirically fails on this real fixture data.
+// "moved" — chosen as the tolerance rather than ~0.01px, because 0.01px empirically fails on this real
+// fixture data.
 // Matches BOTH plain decimals (`-0.000406265`) and scientific notation (`2.09808e-05`) — Figma emits
 // both for a coordinate near zero, sometimes for the SAME logical value across two exports of what is
 // otherwise the identical icon (live evidence: a real `angle-left` chevron came back as
 // `2.09808e-05`/`-0.000406265`/`8.2016e-05` in three different pulls of the same shape). The regex
-// used to stop at the decimal mantissa (`-?\d+\.\d+`), so a scientific-notation coordinate like
-// `2.09808e-05` had only its `2.09808` replaced, leaving the exponent dangling as `2.1e-05` — a
+// must not stop at the decimal mantissa (`-?\d+\.\d+`): a scientific-notation coordinate like
+// `2.09808e-05` would have only its `2.09808` replaced, leaving the exponent dangling as `2.1e-05` — a
 // corrupted, un-normalised leftover that could never match the plain-decimal form's `0.0`, and the
-// icon failed to dedup even though every OTHER coordinate in the path matched exactly. Round 3 found
-// this live: five `angle-left*.svg` files for what should have been two (a real up/down pair).
+// icon would fail to dedup even though every OTHER coordinate in the path matched exactly. A real pull
+// showed this: five `angle-left*.svg` files for what should have been two (a real up/down pair).
 const NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
 export function normalizeSvgText(svg: string): string {
   return svg.replace(NUM_RE, (m) => {
@@ -79,13 +79,13 @@ export function isSvgName(fileName: unknown): boolean {
 // pair that is genuinely different is 0.3 apart (a stroke width, 1.5 vs 1.2). 0.01 is 2.5x the drift,
 // far below any visible change, and does not merge opacity steps (0.5 vs 0.54) the way 0.05 would.
 // "Within" is inclusive up to float noise (TOL_EPS): 0.11 vs 0.12 and 0.5 vs 0.51 are both exactly one
-// step apart, but their float differences land on either side of 0.01 (L-1).
+// step apart, but their float differences land on either side of 0.01.
 //
-// One exception, M-5: a number inside the `transform` of a `<use>` or `<image>` is in the space of the
+// One exception: a number inside the `transform` of a `<use>` or `<image>` is in the space of the
 // element it fills — for Figma's raster shells, `<pattern patternContentUnits="objectBoundingBox"><use
 // transform="matrix(0.00195312 0 0 0.00195312 0 0)">`, where the whole box is 1 unit. 0.01 there is a
 // 4.5x zoom of the same photo (scale 1/512 vs 1/113). The `<pattern>`'s own x/y/width/height (and
-// patternTransform) are box fractions too, unless patternUnits="userSpaceOnUse" (R2-4: a tile size).
+// patternTransform) are box fractions too, unless patternUnits="userSpaceOnUse" (a tile size).
 // Those numbers go to `rel` (a `%` in the skeleton)
 // and compare RELATIVELY: within SVG_TOL of the larger magnitude, never looser than the absolute rule.
 // Path and box coordinates keep the absolute tolerance — their near-zero drift (2.09808e-05 vs
@@ -131,8 +131,8 @@ function canonicalIds(svg: string): string {
   });
 }
 
-// The value spans compared relatively (M-5): `transform` on `<use>`/`<image>` tags, and a `<pattern>`'s own
-// x/y/width/height/patternTransform (R2-4). A tag's attributes never contain `>` (a base64 payload has none),
+// The value spans compared relatively: `transform` on `<use>`/`<image>` tags, and a `<pattern>`'s own
+// x/y/width/height/patternTransform. A tag's attributes never contain `>` (a base64 payload has none),
 // so `[^>]*` stays inside the tag.
 const REL_TAG_RE = /<(?:use|image|pattern)\b[^>]*>/g;
 const TRANSFORM_ATTR_RE = /(?<![\w:-])transform\s*=\s*(["'])([^"']*)\1/g;
@@ -181,7 +181,7 @@ export function numsWithin(a: Float64Array, b: Float64Array, tol: number = SVG_T
   return true;
 }
 
-/** The `rel` half (M-5): every number within `tol` × the larger magnitude of the pair, and never more than
+/** The `rel` half: every number within `tol` × the larger magnitude of the pair, and never more than
  *  `tol` apart — so a big number keeps the absolute rule and a tiny one is compared to its own scale. */
 export function relWithin(a: Float64Array, b: Float64Array, tol: number = SVG_TOL): boolean {
   if (a.length !== b.length) return false;
@@ -198,12 +198,12 @@ export function sameSvg(a: string, b: string, tol: number = SVG_TOL): boolean {
   return fa.skeleton === fb.skeleton && numsWithin(fa.nums, fb.nums, tol) && relWithin(fa.rel, fb.rel, tol);
 }
 
-// ---- DT-09: a raster image in an SVG shell
+// ---- a raster image in an SVG shell
 //
 // An SVG with an embedded `<image>` and almost no paths is a PHOTO in an SVG shell (an avatar exported as an
 // icon-like container: 2 paths and a 1.98 MB base64 JPEG). The "thousands of vector paths" advice is wrong
 // for it: there is nothing to simplify, and a PNG/JPG export of the layer is the fix. ONE rule for the
-// bridge's pull warning (write-out.ts) and the audit's heavy-asset finding (design-to-code/audit.ts), L-7:
+// bridge's pull warning (write-out.ts) and the audit's heavy-asset finding (design-to-code/audit.ts):
 // an illustration with 2000 paths and one `<image>` is still "too many paths", in both.
 export const RASTER_SHELL_MAX_PATHS = 50;
 export function isRasterShell(rasters: number | undefined, paths: number | undefined): boolean {

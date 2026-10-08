@@ -385,16 +385,16 @@ var MEASURED_EXTRAS = [
   ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
   ["matchedByCensus", isCountMap, "a {rule: count} map"],
   ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
-  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  // the run it belongs to and the build it was served
   ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
-  // group 11 (DT-47): the shipped probe's foreign tags
+  // the shipped probe's foreign tags
   ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
-  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
+  // the steps replayed, the page's overflow, the behaviour/a11y block
   ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
   ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
   ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
-  // 12c: the visual diff (informational, D40(3))
+  // the visual diff (informational)
   ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
 ];
 function isMeasuredCore(x) {
@@ -823,7 +823,7 @@ var RunCacheUnwritable = class extends Error {
   cacheDir;
   root;
   /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
-   *  permission: a directory on the way was removed while the run wrote there (L-4) */
+   *  permission: a directory on the way was removed while the run wrote there */
   constructor(cacheDir, root, code) {
     super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
     this.name = "RunCacheUnwritable";
@@ -1249,15 +1249,15 @@ var TOLERANCE = {
   padding: 1,
   gap: 1,
   // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
-  // measured 111.83×38 against 110×36 and the old inclusive 2px tolerance emitted nothing (finding 193).
+  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
   size: 1,
   // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
-  // a column 18.94px out of place (finding 192) or a bar 130px below the frame (164) cannot hide.
+  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
   position: 2,
   opacity: 0.02,
-  // DT-74 (D34): a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) let it pass
+  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
   stroke: 0.5,
-  // DT-75 (D29): a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
   // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
   // in the field runs. Known miss: heavy italics/overhang can exceed it.
   textInk: 3
@@ -1971,7 +1971,7 @@ function buildExpectation(docs, opts) {
     schema: EXPECTATION_SCHEMA,
     ...ifDefined("screen", screen),
     ...ifDefined("exportedAt", exportedAt),
-    // P2b round 2 (finding 314): the design's identity without the pull's timestamps, so a no-change
+    // the design's identity without the pull's timestamps, so a no-change
     // re-pull (only `exportedAt` differs) is recognised as the same design by content, not by clock.
     exportContentSha256: exportContentSha256(docs.map((d) => d.doc)),
     reference,
@@ -2112,10 +2112,10 @@ var KNOWN_STYLE_KEYS = /* @__PURE__ */ new Set([
   "transform",
   "rotate",
   "visible",
-  // D34: where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
+  // where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
   "strokeFrom",
   "strokeAlign",
-  // F-69 (D114): a TEXT's computed text-transform; F-74 (D111): who paints a transparent element (optional keys)
+  // a TEXT's computed text-transform; who paints a transparent element (optional keys)
   "textTransform",
   "paintedBy",
   // free text, never read for a judgement — tolerated on either level
@@ -2134,7 +2134,7 @@ var KEY_HINTS = {
   placeholder: "placeholderText",
   rowGap: "gapVisual",
   columnGap: "gap",
-  // F-67: a node-level key written INSIDE styles is not read there (a styles.fillSource "img" would not exempt the fill)
+  // a node-level key written INSIDE styles is not read there (a styles.fillSource "img" would not exempt the fill)
   ...Object.fromEntries([...KNOWN_NODE_KEYS].filter((k) => k !== "nodeId" && k !== "styles" && k !== "note" && k !== "notes").map((k) => [k, `nodes[].${k} (beside styles, not inside)`]))
 };
 var FIELDS = [
@@ -2170,7 +2170,7 @@ var STYLE_KEY_SHAPE = {
 };
 var MEASURED_KEYS_DOC = {
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (DT-23: `fill` was missing)
+  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
   "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
   "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
@@ -3205,7 +3205,7 @@ function compare(expectation, measured, opts) {
   const exportSha = expectation.exportContentSha256;
   const inputNotes = [...Array.isArray(opts.inputNotes) ? opts.inputNotes : []];
   inputNotes.push(...pageNotes);
-  if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === void 0) inputNotes.push("expectation written by an older verify-screen (before group 11: TEXT box widths, no aliases) \u2014 re-run --expect");
+  if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === void 0) inputNotes.push("expectation written by an older verify-screen (TEXT box widths, no aliases) \u2014 re-run --expect");
   const reopened = [];
   const unused = [];
   const descopeRows = [];
@@ -3379,7 +3379,7 @@ function compare(expectation, measured, opts) {
     const cands = deltas.filter((d2) => d2.nodeId === w.nodeId && d2.field === w.field && !d2.accepted);
     if (!cands.length) {
       const fieldGap = fieldsNotMeasured.some((g) => g.nodeId === w.nodeId && g.field === w.field) ? "that value was not measured this round \u2014 only a measured delta can be accepted" : void 0;
-      const inkNow = w.field === "width" && (deltas.some((d2) => d2.nodeId === w.nodeId && d2.field === "width (text ink)") || specs.some((sp) => sp.nodeId === w.nodeId && sp.widthFrom === "renderBox")) ? "the field is now 'width (text ink)' (group 11) \u2014 re-accept against the new report" : void 0;
+      const inkNow = w.field === "width" && (deltas.some((d2) => d2.nodeId === w.nodeId && d2.field === "width (text ink)") || specs.some((sp) => sp.nodeId === w.nodeId && sp.widthFrom === "renderBox")) ? "this TEXT's width is compared as 'width (text ink)' \u2014 re-accept against the new report" : void 0;
       unused.push({ nodeId: w.nodeId, field: w.field, why: notWaivable.get(w.nodeId) ?? fieldGap ?? inkNow ?? "no such delta this round \u2014 fixed? drop the waiver" });
       return;
     }
@@ -3476,15 +3476,15 @@ function compare(expectation, measured, opts) {
     ...ifDefined("expectationSha256", opts.expectationSha256),
     ...ifDefined("measuredSha256", opts.measuredSha256),
     ...ifDefined("measuredAgainst", measured.expectationSha256 || void 0),
-    // P2b round 2 (findings 314/317): WHAT was measured, by content — the design (timestamps stripped)
+    // WHAT was measured, by content — the design (timestamps stripped)
     // and the code (sha256 of each file in the plan's files[], the hashes the Stop hook records).
     ...ifDefined("exportContentSha256", expectation.exportContentSha256 || void 0),
     ...ifDefined("code", opts.code || void 0),
-    // Which probe produced these numbers (F-101): a hand-written probe is "unknown", and its numbers are not
+    // Which probe produced these numbers: a hand-written probe is "unknown", and its numbers are not
     // comparable round to round — a changed probe changes what "measured" means.
     probe: probeIdentity ?? "unknown",
     ...ifDefined("waivers", opts.waiversInput || void 0),
-    // DT-81: the build the probe was served — "unknown" when it records none (a hand-written probe, an older one)
+    // the build the probe was served — "unknown" when it records none (a hand-written probe, an older one)
     build: buildNow ?? "unknown",
     ...ifDefined("runId", runId),
     ...ifDefined("reach", reachInput)
@@ -3565,7 +3565,7 @@ function compare(expectation, measured, opts) {
         pageOverflow,
         sameMeasured: !!(opts.measuredSha256 && prev.inputs && prev.inputs.measuredSha256 === opts.measuredSha256)
       }) } : {},
-      // LOW a: unknown when either side's hash is partial (bodies left out) — never "the same build" on a partial hash
+      // unknown when either side's hash is partial (bodies left out) — never "the same build" on a partial hash
       sameBuild: prevBuild && buildNow && !prevBuild.unhashed && !buildNow.unhashed ? prevBuild.assetsSha256 === buildNow.assetsSha256 : null
     };
   }
@@ -3580,7 +3580,7 @@ function compare(expectation, measured, opts) {
   const mark = verdict.toUpperCase();
   const systemic = fieldsNeverMeasured.filter((f) => f.expectedOn >= NEVER_MEASURED_HEADLINE_MIN || f.probeSent || !keysSeen.has(f.field));
   const headline = `${mark} \u2014 ` + (systemic.length ? `NEVER MEASURED: ${systemic.map((f) => `'${f.field}' present on 0 of ${f.expectedOn} nodes that state it${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} \xB7 ` : "") + `nodes measured ${nodesMeasured}/${nodesExpected}${folded.length ? ` (${folded.length} folded)` : ""}${sharedShell ? ` (shared shell ${sharedShell.measured}/${sharedShell.expected})` : ""} \xB7 ${fieldsChecked} values compared \xB7 ${high} high${highCauses < high ? ` (${highCauses} cause${highCauses === 1 ? "" : "s"})` : ""}, ${medium} medium` + (lowConfidence ? ` (+${lowConfidence} capped on low-confidence matches)` : "") + (accepted ? ` \xB7 ${accepted} accepted` : "") + (reopened.length ? ` \xB7 ${reopened.length} waiver(s) REOPENED` : "") + " \xB7 " + // (not a verdict reason, like ::placeholder colour — but never silent: an <img> icon's fill is not a pass)
-  (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method \xB7 ` : "") + `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed` + (interactionsUndesigned.length ? `, ${interactionsUndesigned.length} undesigned` : "") + (interactionsDescoped.length ? `, ${interactionsDescoped.length} descoped` : "") + ` of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` + (against && fell ? ` \xB7 COVERAGE FELL ${against.nodesMeasured.before}\u2192${against.nodesMeasured.after} vs ${against.report}` : "") + (against && against.probeChanged === true ? " \xB7 probe changed" : "") + // group 10 — informational, never the verdict
+  (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method \xB7 ` : "") + `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed` + (interactionsUndesigned.length ? `, ${interactionsUndesigned.length} undesigned` : "") + (interactionsDescoped.length ? `, ${interactionsDescoped.length} descoped` : "") + ` of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` + (against && fell ? ` \xB7 COVERAGE FELL ${against.nodesMeasured.before}\u2192${against.nodesMeasured.after} vs ${against.report}` : "") + (against && against.probeChanged === true ? " \xB7 probe changed" : "") + // unmatched probe results — informational, never the verdict
   (unmatchedCount ? ` \xB7 ${unmatchedCount} probe result(s) matched no designed interaction` : "") + (inferredHead ? ` \xB7 ${inferredHead} inferred (not designed${inferredUndesigned ? `; the ${inferredUndesigned} undesigned interaction(s) are counted above` : ""})` : "") + (lost ? ` \xB7 LOST COVERAGE on ${lost} earlier delta(s)` : "") + (foreignTags ? ` \xB7 ${foreignTags.total} foreign tag(s) (${foreignTags.prefixDrift} prefix drift, ${foreignTags.alias} alias, ${foreignTags.unknown} unknown)` : "") + (sameBuildServed && against ? ` \xB7 SAME BUILD SERVED as ${against.report} although the code changed (stale preview/dist?)` : "");
   const visual = visualReport(measured.visual, opts.visualMalformed === true, { diff: opts.visualDiff ?? null, against: opts.against ?? null, noProbe: !isProbeIdentity(measured.probe) });
   const devs = planNow && Array.isArray(planNow.plan.deviations) ? planNow.plan.deviations : [];
@@ -3604,14 +3604,14 @@ function compare(expectation, measured, opts) {
     renderer: measured.renderer || "unknown",
     ...ifDefined("viewport", measured.viewport),
     artifacts: artifactCheck || (Array.isArray(measured.artifacts) ? measured.artifacts : []),
-    // M2 (s19): --record-plan records a static-only run as static-only, with its why
+    // --record-plan records a static-only run as static-only, with its why
     ...staticOnly ? { mode: "static-only", ...ifDefined("reason", measured.reason || void 0) } : {},
     inputs,
     verdict,
     headline,
-    // 12b (D4): copied and counted, read by nothing above
+    // copied and counted, read by nothing above
     behaviour: behaviourReport(measured.behaviour, opts.behaviourMalformed === true),
-    // 12c (D4, D40(3)): copied, read by nothing above
+    // copied, read by nothing above
     visual,
     why: reasons,
     integrity,
@@ -3670,7 +3670,7 @@ function probeLine(r) {
   const who = p && p !== "unknown" ? `probe ${p.name} ${p.version ?? "(no version)"} (sha ${p.sha256.slice(0, 12)}\u2026) \xB7 ${p.playwright.package} ${p.playwright.version} \xB7 ${p.browser.name} ${p.browser.version}` : "probe unknown (hand-written \u2014 not comparable round to round)";
   return `${who} \xB7 matched: ${matchedLine(r.coverage && r.coverage.matchedBy)}`;
 }
-var VISUAL_NO_BLOCK = "the measured file carries no visual diff (hand-written, or a probe older than 12c)";
+var VISUAL_NO_BLOCK = "the measured file carries no visual diff (hand-written, or a probe that predates the visual diff)";
 var VISUAL_NOT_APPLICABLE = "not applicable (no web probe)";
 var VISUAL_MALFORMED = "the measured file's visual block is malformed \u2014 ignored (see the input notes)";
 var VISUAL_PREFIX = "VISUAL (informational \u2014 never the verdict) \u2014 ";
@@ -3759,7 +3759,7 @@ function visualMarkdown(v) {
   return L;
 }
 var BEHAVIOUR_ORDER = { fail: 0, warn: 1, "not-run": 2, unsupported: 3, pass: 4 };
-var BEHAVIOUR_NO_BLOCK = "the measured file carries no behaviour checks (hand-written, or a probe older than 12b)";
+var BEHAVIOUR_NO_BLOCK = "the measured file carries no behaviour checks (hand-written, or a probe that predates the behaviour checks)";
 var BEHAVIOUR_MALFORMED = "the measured file's behaviour block is malformed \u2014 ignored (see the input notes)";
 var NAMES_LABEL = "names computed by Playwright (Chromium), not screen-reader verified";
 var BEHAVIOUR_PREFIX = "BEHAVIOUR/A11Y (not the fidelity verdict) \u2014 ";

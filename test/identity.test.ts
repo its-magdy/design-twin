@@ -48,7 +48,7 @@ const GP = "pages/__Optimization_management_/Studio_Configurations__1359_21337";
 const CAT = "pages/In_progress/Create_Assembly_Type__18411_84111";
 const K24 = "e26d506ea43ae0582896add59d9e04156fb3f6d5", K16 = "64928e3a5f094c0d9a2c916f50b98ff37c789882";
 
-// ------------------------------------------------------------------ tokens.js (44, 94, 95, 96, 137, 183)
+// ------------------------------------------------------------------ tokens.ts
 console.log("tokens.js on the merged variables.json:");
 {
   const out = tmp();
@@ -105,7 +105,7 @@ console.log("tokens.js on the merged variables.json:");
   ok("[96] …and SwiftUI gets `.infinity`, not 1000000000", /full: CGFloat = \.infinity/.test(swift) && !/1000000000/.test(swift));
 }
 
-// ------------------------------------------------------------------ design-diff.js (211)
+// ------------------------------------------------------------------ design-diff.ts
 console.log("design-diff.js — tokens are keyed by Figma key:");
 {
   const dd = await tryImport<DesignDiffModule>(path.join(D2C, "design-diff.ts"));
@@ -130,7 +130,7 @@ console.log("design-diff.js — tokens are keyed by Figma key:");
   ok("[211] re-ordering the rows reports NOTHING (it used to report a false 24 → 16)", !!d3 && d3.summary.added + d3.summary.removed + d3.summary.changed === 0);
 }
 
-// ------------------------------------------------------------------ variables-merge.js (21)
+// ------------------------------------------------------------------ variables-merge.ts
 console.log("variables-merge.js — same name, different key, is a conflict:");
 {
   const vm = await tryImport<VariablesMergeModule>(path.join(SRC, "bridge", "src", "variables-merge.ts"));
@@ -154,7 +154,7 @@ console.log("variables-merge.js — same name, different key, is a conflict:");
   ok("[21] the two `Space 2` (8 under Desktop/Tablet/Mobile, 8 under Mode 1) are recorded as the same VALUE", !!space2 && space2.sameValue === true);
 }
 
-// ------------------------------------------------------------------ cross-check.js (40, 106, 137, 226)
+// ------------------------------------------------------------------ cross-check.ts
 console.log("cross-check.js — attribution and the re-keyed catalog:");
 /** cross-check --json output, or the empty stand-in for a run whose stdout did not parse (every check
  *  then fails) — that stand-in carries `coverage: {}`, hence the Partial coverage. */

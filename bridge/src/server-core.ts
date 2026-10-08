@@ -23,13 +23,13 @@ import { ALLOWED_PORTS } from "./ports.ts";
 import { replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
 
-// Finding 327 (BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote) lives in staleness.ts so
+// Version reporting (BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote) lives in staleness.ts so
 // the CLI's pure helpers and doctor.ts can use it without loading this module; re-exported below so
 // this module's surface is unchanged.
 import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
 
 // The handshake check keeps ws's async (two-argument) verifyClient CALLBACK shape — done(ok, code,
-// message) — even though ws no longer calls it (the check runs in the HTTP server's 'upgrade'
+// message) — even though ws does not call it (the check runs in the HTTP server's 'upgrade'
 // listener; see createBridge). Its unit tests drive it through exactly that shape.
 type VerifyClientCallback = Parameters<VerifyClientCallbackAsync>[1];
 
@@ -106,7 +106,7 @@ function safeEqual(a: string, b: string): boolean {
 // Failed-handshake accounting. Two jobs, one counter:
 //
 //  1. DIAGNOSIS. The plugin caches its token in figma.clientStorage and retries every 3s, so a token
-//     that no longer matches (usually: someone ran --rotate-token and didn't re-paste) becomes a
+//     that does not match any more (usually: someone ran --rotate-token and didn't re-paste) becomes a
 //     silent 3-second reconnect loop. The bridge is the only side that can see WHY, so it says so —
 //     once, not sixty times a minute.
 //  2. THROTTLE. Nothing here is a serious brute-force defence (the token is 192 bits; a local
@@ -375,11 +375,11 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // FIGMA_BRIDGE_MAX_PAYLOAD_MB.
   //
   // The HTTP server is ours and ws runs in noServer mode, because ws's own docs discourage the
-  // verifyClient hook this used to authenticate with: "Use of verifyClient is discouraged. Rather
+  // verifyClient hook: "Use of verifyClient is discouraged. Rather
   // handle client authentication in the 'upgrade' event of the HTTP server" (ws/doc/ws.md). So the
   // 'upgrade' listener below runs the SAME admission (Origin + Host + shared token, fail-closed, and
   // the plugin's null-origin bad-token admit-then-4401) and either hands the socket to ws or refuses it
-  // with the 401/403 ws used to write. A plain (non-upgrade) request is answered 426, as ws's internal
+  // with the 401/403 ws would write. A plain (non-upgrade) request is answered 426, as ws's internal
   // server did — `dtwin doctor` reads that 426 as "a websocket server holds this port".
   // Bound to 127.0.0.1: strictly loopback.
   const maxPayloadMb = Number(process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB) || 128;
@@ -452,13 +452,13 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // restarted at r1 in every bridge, so a plugin still finishing a run for a bridge that has since
   // gone (a one-shot CLI that stalled out and exited) posted ITS r1 to whatever socket was current —
   // and the next bridge's own r1 (a daemon's first forwarded request) settled with that stale run's
-  // reply: "export cancelled: … abandoned" for a request nobody had abandoned (live, session 14), or
+  // reply: "export cancelled: … abandoned" for a request nobody had abandoned (seen live), or
   // another node's tree had the old run succeeded. With the nonce such a reply names an id nobody here
   // knows, and is dropped. Opaque to the plugin, which only ever echoes it back.
   const nonce = crypto.randomBytes(3).toString("hex");
   let seq = 0;
   let connSeq = 0;
-  let takeovers = 0; // kept ONLY for the historical whoami field; nothing displaces anything now.
+  let takeovers = 0; // kept ONLY for the historical whoami field; nothing displaces anything.
   let lastTakeoverAt = 0;
 
   wss.on("connection", (ws, req) => {
@@ -501,8 +501,8 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       // type-specific handling below, so request()'s stall detector (see below) can tell "the plugin
       // is genuinely walking a big file and periodically reporting progress" from "nothing has been
       // heard from this socket since the command was sent", which a plain reply-or-timeout wait
-      // cannot: findings 202/213 measured a 300s/908s silent wait, on a bridge that WAS connected, for
-      // work that took 7.5-8.8s once a daemon kept the connection warm (finding 220).
+      // cannot: a real pull measured a 300s/908s silent wait, on a bridge that WAS connected, for
+      // work that took 7.5-8.8s once a daemon kept the connection warm.
       entry.frames++;
       // An unsolicited progress frame relayed from the plugin's own UI (figma-plugin/src/progress.ts
       // posts these to the iframe DOM; ui.html forwards a bridge-triggered run's frames over this
@@ -531,7 +531,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
         entry.file = msg.file;
         entry.fileKey = msg.fileKey;
         entry.page = msg.page;
-        // Finding 327: the plugin's own build version (figma-plugin/package.json, baked in at build
+        // The plugin's own build version (figma-plugin/package.json, baked in at build
         // time — see figma-plugin/build.ts). `null` for a plugin bundle old enough to predate this
         // field entirely, which is itself a useful signal (definitely stale).
         entry.pluginVersion = msg.pluginVersion;
@@ -559,13 +559,13 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     });
     // A socket error is the ONLY place the real cause of a mid-export disconnect shows up (most
     // importantly 1009 / "max payload size exceeded" when an export outgrows maxPayload). Swallowing
-    // it — as this used to — left the close handler reporting a bare "disconnected", which is a
+    // it would leave the close handler reporting a bare "disconnected", which is a
     // symptom, not a diagnosis. Keep the last error so close() can name the cause.
     let lastError: Error | null = null;
     ws.on("error", (e) => { lastError = e; });
     ws.on("close", (code, reasonBuf) => {
-      // Only forget THIS connection. Under the old single-socket rule the guard was `socket === ws`,
-      // which did the same job by accident; with a registry it has to be explicit, or one file closing
+      // Only forget THIS connection. A single-socket guard (`socket === ws`)
+      // would do the same job by accident; with a registry it has to be explicit, or one file closing
       // its plugin window would drop the entry a different file is actively using.
       if (clients.get(connId) === entry) clients.delete(connId);
       const label = entry.file ? ` (${entry.file})` : "";
@@ -585,8 +585,8 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
                ` window was closed). Check Plugins → Development → Open Console in Figma.`;
       }
       // Fail in-flight requests fast instead of hanging until their timeout — but ONLY the ones sent to
-      // the socket that just died. Rejecting the whole map (as the single-client version did, when the
-      // whole map could only ever belong to one socket) would now abort a long export running happily
+      // the socket that just died. Rejecting the whole map (as a single-client bridge could, when the
+      // whole map could only ever belong to one socket) would abort a long export running happily
       // in ANOTHER file because an unrelated one closed its plugin window.
       for (const [id, p] of pending) {
         if (p.connId !== connId) continue;
@@ -635,7 +635,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       process.exit(1);
     }
     // Any other failure to BIND (EACCES, …) is the same "no bridge" for such a caller; after the bind,
-    // a server error is only logged, as before.
+    // a server error is only logged.
     if (opts.onListenError && !bound) return opts.onListenError(e);
     console.error("[bridge] server error:", e.message);
   });
@@ -733,11 +733,11 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   }
 
   // Server-side half of the whoami probe. The plugin reports who IT is (instanceId, file, fileKey);
-  // this reports what the SOCKETS did. `takeovers` is retained and always 0 now that connections
+  // this reports what the SOCKETS did. `takeovers` is retained and always 0 since connections
   // coexist — kept rather than removed so an older reader of this field sees "no displacement is
   // happening" instead of the key vanishing.
-  // `connId` (DT-03): describe THAT connection (the one a request was addressed to) instead of the
-  // first live one; see connectionFor. Omitted = the first live connection, as before.
+  // `connId`: describe THAT connection (the one a request was addressed to) instead of the
+  // first live one; see connectionFor. Omitted = the first live connection.
   function connectionInfo(connId?: string): ConnectionInfo {
     const live = liveClients();
     const first = live[0];
@@ -756,19 +756,19 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   }
 
   // `target` is optional and LAST so every existing three-argument call site keeps working unchanged:
-  // with one file connected it resolves to that file, which is exactly what it did before.
+  // with one file connected it resolves to that file, which is the single-file behaviour.
   // `stallMs` (opt-in — undefined leaves today's behaviour untouched for every existing caller,
   // including the daemon and MCP paths) is a SEPARATE, SHORTER wait for any sign of life from this
-  // specific client, checked independently of the real per-command timeout: findings 202/213 measured
-  // a 300s/908s silent wait — on a connected, identified bridge — for work finding 220 proved takes
-  // 7.5-8.8s once a daemon keeps the plugin warm. A stalled one-shot connection (the shape those two
-  // findings share: no `dtwin serve` running) shows NO activity at all on the socket — not even a
+  // specific client, checked independently of the real per-command timeout: a real pull measured
+  // a 300s/908s silent wait — on a connected, identified bridge — for work that takes
+  // 7.5-8.8s once a daemon keeps the plugin warm. A stalled one-shot connection (the shape of both
+  // measurements: no `dtwin serve` running) shows NO activity at all on the socket — not even a
   // progress frame — for the whole wait, where a genuinely large/slow export shows life through the
   // progress relay (see the `ws.on("message")` handler above). The check is armed only until that
   // first sign of life: a working export can go quiet for minutes (see the loop below). Only
   // figma-pull.ts's own one-shot bridge (no daemon) opts into this, and only for export-class
   // commands — a cheap `whoami`/`list` finishing in under a second never needs it, and the daemon path
-  // deliberately does NOT pass it: a persistent connection is exactly the case finding 220 shows is
+  // deliberately does NOT pass it: a persistent connection is exactly the case that is
   // already fast, so there is nothing here worth protecting against on that path.
   // The clock starts at SEND, after the caller's connect + identify waits, so a stall never measures
   // the plugin's reconnect. A current plugin answers within moments of the send even when it cannot
@@ -787,7 +787,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     return requestWithClient(cmd, args, timeoutMs, target, stallMs, onProgress, signal).then((o) => o.reply);
   }
 
-  // CANCEL (live finding 2026-09-25). Whenever this side gives up on a request it has already sent —
+  // CANCEL. Whenever this side gives up on a request it has already sent —
   // the per-command timeout, the stall check, close(), or the caller's `signal` — the plugin is told,
   // or it keeps walking the export for nobody and queues every later command behind it. The frame is
   // `{ type: "cancel", id }` (no `cmd`): best-effort, sent only on an OPEN socket, and nothing is ever
@@ -802,7 +802,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
 
   // The same, also answering WHICH connected file the command went to — the client resolveClient
   // picked for `target`, described exactly as listClients() would. figma-pull.ts stamps that onto a
-  // screen export as `sourceFile` (P4 #33); it used to re-implement the matching rules to find out.
+  // screen export as `sourceFile` without re-implementing the matching rules.
   //
   // `signal` (optional, last — every existing call site is unchanged): already aborted → rejects at once
   // and nothing is sent; aborted while pending → the cancel frame goes to the plugin, the request is
@@ -850,7 +850,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
           // counted and measured before the next tick) and 116–135 s between the last page tick and
           // the reply (catalog build, then a 120 MB reply serialised and sent) — so "quiet for stallMs
           // at ANY point" aborted a working export and left the plugin walking for nobody. The stall
-          // this exists to catch (findings 202/213) is a connection that never shows life for the
+          // this exists to catch is a connection that never shows life for the
           // request at all; so the check disarms itself on the FIRST frame after the send — by COUNT
           // (`frames`), not by clock: a timestamp compare read a client that connected in the same
           // millisecond as the send as life since the send — and the real per-command timeout bounds
@@ -920,7 +920,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // A socket being open is not the same as it being IDENTIFIED: the plugin's `hello` (which carries
   // `file`, used by --client <name>) arrives a beat after the WebSocket handshake, not in the same
   // tick. Resolving a name-based --client the instant waitForConnection settles was a coin flip
-  // (finding 216: "one run in four failed ... the plugin's identified message has not arrived yet"),
+  // ("one run in four failed ... the plugin's identified message has not arrived yet"),
   // because `resolveClient` can only match `file` on entries that already have it. This waits (briefly
   // — plugin identification is sub-second once connected) for at least one live client to be
   // identified, OR for `timeoutMs` to elapse, whichever comes first; it never rejects — callers still
@@ -953,7 +953,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     }
     for (const p of pending.values()) p.reject(new Error("bridge closed"));
     pending.clear();
-    // Close EVERY client, not just the one that used to be `socket` — otherwise a second connected
+    // Close EVERY client, not just one — otherwise a second connected
     // file would hold the event loop open and the process would never exit on its own, which is the
     // whole reason this function exists.
     // close() starts a closing handshake and ws then waits up to 30s for the peer to answer it; a
@@ -964,21 +964,21 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       setTimeout(() => { try { e.ws.terminate(); } catch { /* already gone */ } }, 2000).unref();
     }
     clients.clear();
-    // noServer mode: wss.close() no longer closes an HTTP server of its own, so the listener goes too.
+    // noServer mode: wss.close() does not close an HTTP server of its own, so the listener goes too.
     try { wss.close(); } catch { /* already closing */ }
     try { server.close(); } catch { /* not listening */ }
   }
 
   return {
     request, requestWithClient, isConnected, waitForConnection, waitForIdentified, waitForClient, connectionInfo, listClients, resolveClient, close, port, listening,
-    /** test seam (D108): one heartbeat round, run by hand — with `heartbeatMs: 0` it is the only one. */
+    /** test seam: one heartbeat round, run by hand — with `heartbeatMs: 0` it is the only one. */
     heartbeatTick,
   };
 }
 
 // The object createBridge() returns — what both front-ends (and the daemon) drive.
 /**
- * DT-03: `info` re-described for the connection `connId` — the `clients[]` row with that connId supplies
+ * `info` re-described for the connection `connId` — the `clients[]` row with that connId supplies
  * `connId`, `connectedAt` and `connectionUptimeMs` (its `uptimeMs`); every other field (`connected`,
  * `clientsConnected`, `clients`, `connectionsThisRun`, `takeovers`, `lastTakeoverAt`) is kept. A null/absent
  * connId, or one not among `clients`, returns `info` unchanged. Pure — works on a daemon's relayed

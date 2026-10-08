@@ -1,14 +1,13 @@
 // audit-gate.ts — shared "which audit file belongs to this screen, and what does it block" logic for
 // plan-skeleton.ts (pre-fills auditGate) and verify-build.ts (warns when a Blocked audit is not
-// covered by one). Finding 136 (livetest-3): there was nowhere in the plan schema to record "audit
-// blocker acknowledged and overridden, here is why" — a build that reads an existing Blocked audit and
-// proceeds looked, on disk, identical to one that never read it.
+// covered by one). Without it the plan schema has nowhere to record "audit blocker acknowledged and
+// overridden, here is why" — a build that reads an existing Blocked audit and proceeds would look, on
+// disk, identical to one that never read it.
 //
 // audit.ts's own CLI names its default output `design/audit/<input file's own basename>.json` — the
-// same `<LayerName>__<node-id>` name write-out.js gave the screen file — so that is tried first. Older
-// runs (this repo's own livetest fixtures included) wrote a plain slug (`positions.json`,
-// `Studio_Configurations.json`) instead; those are found by a case/punctuation-insensitive match
-// against the screen's own name.
+// same `<LayerName>__<node-id>` name write-out.ts gave the screen file — so that is tried first. Older
+// runs wrote a plain slug (`positions.json`, `Studio_Configurations.json`) instead; those are found by a
+// case/punctuation-insensitive match against the screen's own name.
 import fs from "node:fs";
 import path from "node:path";
 import { blockerIds, reportFindings } from "./audit.ts";
@@ -51,9 +50,9 @@ function locateAuditFile(cwd: string, screenFile: string | null | undefined, scr
 /** What auditGateStatus knows about a screen's audit file. */
 export interface AuditGateStatus {
   auditFile: string | null;
-  /** F-44 ids (finding-id.ts) of the report's blockers, in report order */
+  /** the ids (finding-id.ts) of the report's blockers, in report order */
   blockers: string[];
-  /** the same blockers' pre-F-44 positional ids (`<code>#<i>`), index for index — a plan written against
+  /** the same blockers' older positional ids (`<code>#<i>`), index for index — a plan written against
    *  them still covers its blockers */
   legacyBlockers: string[];
   unreadable?: true;

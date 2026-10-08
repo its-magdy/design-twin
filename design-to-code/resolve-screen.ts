@@ -1,10 +1,10 @@
 // resolve-screen.ts — the ONE screen-name resolution procedure, called by every skill instead of each
-// re-inventing (or half-implementing) it. P3 #16/#17/#19/#70/#71/#72/#73/#90/#120/#150/#151/#152/#200.
+// re-inventing (or half-implementing) it.
 //
 // The defect this closes: the export indexes only the Figma LAYER name, which in a real file is
 // wrong ("positions " really shows "Jet Roles"), duplicated (four "Studio Configurations" frames) or
 // a near-match to a DIFFERENT screen ("Jet Role Details" for a query of "Jet Roles"). Different
-// skills used to pick different fallbacks for the same situation — silently auditing the wrong frame
+// skills would pick different fallbacks for the same situation — silently auditing the wrong frame
 // in one, finding nothing in another, listing candidates in a third. This module is the one place
 // that decision gets made, so it is made the same way everywhere.
 //
@@ -28,16 +28,16 @@
 //   5. text search        — query is a case-insensitive substring of row.name, row.title, or any of
 //                            row.texts (the first N deduped text strings on the frame).
 //
-// Round 3 (finding 310): evaluating exact layer name -> title -> plan header as a SEQUENCE, each
-// tried only if the previous stage matched nothing, is itself a fuzziness bug — pull the empty-state
+// Evaluating exact layer name -> title -> plan header as a SEQUENCE, each tried only if the previous
+// stage matched nothing, is itself a fuzziness bug — pull the empty-state
 // sibling of "Jet Roles" (layer `Jet roles`, node 7314:83742) next to the real one (layer
 // `positions `, node 7314:87192) and the case-insensitive layer-name stage matches exactly the ONE
 // row named `Jet roles`, resolves, and never even LOOKS at the title stage — where the OTHER row
 // (`positions `, title "Jet Roles") would also have matched. Two rows visibly titled "Jet Roles" is
-// exactly the ambiguity Prompt 3 exists to catch, and a sequence of independent exact stages hid it.
+// exactly the ambiguity this module exists to catch, and a sequence of independent exact stages hid it.
 // Collecting the union first is what makes "evaluated together" true in code, not just in comment.
 //
-// Text search (stage 5) still NEVER resolves, even on exactly one hit (round 2's fix, finding 70):
+// Text search (stage 5) NEVER resolves, even on exactly one hit:
 // a text-search hit is always reported as `needs-confirmation` — a candidate list the caller must
 // resolve by node id — never as `resolved`. This is what "never take a near-match" / "do not make
 // name matching fuzzy" means in code: fuzziness may narrow the list, it may never pick from it.
@@ -92,7 +92,7 @@ function findExportRoot(dir: string): string | null {
 }
 
 // Every screen row this export knows about, wherever it is indexed. Prefers the root index's
-// flattened `layers` (P3 #16 — the file every skill is told to read); falls back to walking each
+// flattened `layers` (the file every skill is told to read); falls back to walking each
 // page's own index.json for an export written before that field existed.
 function allRows(exportDir: string): IndexRow[] {
   const rootFile = path.join(exportDir, "pages", "index.json");
@@ -111,8 +111,8 @@ function allRows(exportDir: string): IndexRow[] {
 export interface PlanRow { file: string; screenName?: string | null; nodeId?: string | null; route?: string | null }
 
 // design/plan/*.json's schema'd header (screenName, nodeId, route, file — see verify-build.ts) is a
-// secondary lookup, never primary (finding 151/180): it only works when a human wrote a good
-// screenName, and finding 151's sibling plan for the SAME run had nothing useful in it. Used here only
+// secondary lookup, never primary: it only works when a human wrote a good
+// screenName, and a sibling plan for the SAME run can have nothing useful in it. Used here only
 // to map a query to a nodeId, which is then resolved through the same row list as everything else.
 function planRows(planDir: string | null | undefined): PlanRow[] {
   if (!planDir || !fs.existsSync(planDir)) return [];
@@ -126,9 +126,9 @@ function planRows(planDir: string | null | undefined): PlanRow[] {
 }
 
 // One candidate line for the "stop and list" report: enough to tell same-named frames apart without
-// opening any file (finding 19 — node count / id / reference PNG are the only discriminators between
+// opening any file (node count / id / reference PNG are the only discriminators between
 // two `Create Assembly Type` frames of identical name/type/w/h). `matchedVia`, when passed, is which
-// field(s) in the exact union this particular row matched on (finding 310 — the report must say
+// field(s) in the exact union this particular row matched on (the report must say
 // WHICH field, not just that it matched, since two rows can carry the same title under different
 // layer names).
 function describe(row: IndexRow, matchedVia?: string[]): ScreenCandidate {
@@ -184,7 +184,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   const typed = NODE_ID_RE.test(q) ? byId(q) : undefined;
   if (typed) return { status: "resolved", row: typed, stage: "node id" };
 
-  // Stages 2–4, evaluated TOGETHER as one union (finding 310): a row joins the pool if it matches on
+  // Stages 2–4, evaluated TOGETHER as one union: a row joins the pool if it matches on
   // ANY of exact layer name / indexed title / plan screenName-route, and every field it matched on
   // is recorded so the candidate list (if the union has >1 row) says which.
   const plans = planRows(options.planDir);
@@ -224,7 +224,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
 
   // Stage 4c: the same three fields, whitespace-insensitive. Nothing exact matched (or carried an id), so a
   // query such as a plan file's name (`CropPlans.json` -> "CropPlans") can still find "Crop Plans". One row
-  // resolves; two or more stop and list (G18: two frames named "Crop Plans").
+  // resolves; two or more stop and list (e.g. two frames named "Crop Plans").
   const qCompact = foldCompact(q);
   if (qCompact) {
     const planCompactIds = new Set(
@@ -252,8 +252,8 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
     }
   }
 
-  // Stage 5: text search. A hit here is a CANDIDATE, never a result — see the file header. This is
-  // what closes finding 70 for real: the pre-fix version resolved a single substring hit outright.
+  // Stage 5: text search. A hit here is a CANDIDATE, never a result — see the file header (a single
+  // substring hit is not resolved outright).
   const textMatches = rows.filter(
     (r) =>
       (r.name && fold(r.name).includes(qFold)) ||

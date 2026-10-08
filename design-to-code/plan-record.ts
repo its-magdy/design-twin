@@ -1,19 +1,19 @@
-// plan-record.ts — F-100 (D115): `verify-screen --compare --record-plan` writes the tool-owned keys of
+// plan-record.ts — `verify-screen --compare --record-plan` writes the tool-owned keys of
 // plan.verification from the report it just wrote, so no agent copies a report into the plan by hand.
 //
-// Tool-owned (replaced every run): mode "rendered" + renderer — or, for a static-only measured file (M2, s19),
+// Tool-owned (replaced every run): mode "rendered" + renderer — or, for a static-only measured file,
 // mode "static-only" + the report's reason and no renderer —, artifacts (the report .json/.md and the report's own
 // artifacts that exist on disk), deltas (the OPEN high + medium deltas, compact — lows and accepted ones are only
-// counted; rows it did not write are replaced with a note, M1 s19: a builder's residual belongs in deviations[]),
+// counted; rows it did not write are replaced with a note: a builder's residual belongs in deviations[]),
 // a11y (report.behaviour.summary, when the behaviour checks ran) and `recorded` {by, at, report,
 // reportSha256, verdict, headline, behaviourHeadline, counts}. Everything else in verification (coverage, notes, the
 // hook record) and in the plan is left exactly as it was — never deviations[] (a deviation needs a person's why),
 // waivers[], descopes[] or status. The file keeps its indentation, key order and line endings (writePlan, below — the
-// one plan writer, also used by --accept and the verify-build hook, L5 s19); it is written only when its bytes
+// one plan writer, also used by --accept and the verify-build hook); it is written only when its bytes
 // change, and a re-record of the same report keeps the old `recorded.at`. verify-build's planHash leaves `verification` out, so recording never reopens a plan — and a hook
-// record still holding the pre-F-100 formula (which DID cover verification) is re-stamped with the current one in the
-// same write (M1), only when it matched the plan as it was: what the hook checked is exactly what the new hash covers.
-// Paths are written project-relative only (L7): a report outside the project is refused (throws — the plan could not
+// record still holding the older formula (which DID cover verification) is re-stamped with the current one in the
+// same write, only when it matched the plan as it was: what the hook checked is exactly what the new hash covers.
+// Paths are written project-relative only: a report outside the project is refused (throws — the plan could not
 // name it), an artifact outside it is left out with a note.
 // Known miss: a read-modify-write — a Stop hook writing the same plan between the read and the rename is lost.
 import fs from "node:fs";
@@ -32,7 +32,7 @@ const slash = (p: string): string => p.split(path.sep).join("/").split("\\").joi
 // in the plan file's own format (BOM, indentation, line endings), written only when its bytes change. True when written.
 const formatPlan = formatJsonLike, writePlan = writeJsonLike;
 
-// M1 (s19): a verification.deltas row --record-plan writes — {nodeId, field, severity high|medium, expected, actual}
+// A verification.deltas row --record-plan writes — {nodeId, field, severity high|medium, expected, actual}
 // and nothing else. Anything else there was written by hand (a residual, a copied report row).
 const RECORDED_DELTA_KEYS = new Set(["nodeId", "field", "severity", "expected", "actual"]);
 const isRecordedDelta = (d: JsonValue): boolean => isJsonObject(d) && typeof d.nodeId === "string" && typeof d.field === "string"
@@ -53,7 +53,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
   // project-relative, normalised, `/`-separated — or null when the path leaves the project (another drive, `..`)
   const inside = (r: string): boolean => !(r === ".." || r.startsWith("../") || path.isAbsolute(r) || /^[A-Za-z]:/.test(r));
   const realOf = (p: string): string => { try { return fs.realpathSync(p); } catch { return p; } };
-  // D129: lexically inside, else inside by REAL paths (an absolute path through a symlink, macOS /tmp → /private/tmp)
+  // Lexically inside, else inside by REAL paths (an absolute path through a symlink, macOS /tmp → /private/tmp)
   const rel = (p: string): string | null => {
     const lex = slash(path.relative(cwd, path.resolve(cwd, p)));
     if (inside(lex)) return lex;
@@ -102,7 +102,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
   };
 
   const v: PlanVerification = plan.verification ?? {}; // (parsePlan refuses a non-object verification)
-  // M1: a hook record under the pre-F-100 formula matches only while verification is unchanged — re-stamp it (computed on
+  // A hook record under the older formula matches only while verification is unchanged — re-stamp it (computed on
   // the plan BEFORE this record touches verification) so this write does not send the plan back to pending
   const hook = v.hook;
   if (hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan)) {
@@ -112,7 +112,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
   const prev = v.recorded;
   // the same report recorded again: keep its time, so an unchanged plan is not rewritten
   if (prev && typeof prev.at === "string" && JSON.stringify({ ...prev, at: "" }) === JSON.stringify({ ...recorded, at: "" })) recorded.at = prev.at;
-  // M2 (s19): a static-only measured file is recorded as such — no render happened, so no renderer is claimed
+  // A static-only measured file is recorded as such — no render happened, so no renderer is claimed
   if (report.mode === "static-only") {
     v.mode = "static-only";
     if (report.reason) v.reason = report.reason;
@@ -123,13 +123,13 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
     if (typeof report.renderer === "string" && report.renderer) v.renderer = report.renderer;
   }
   v.artifacts = artifacts;
-  // M1 (s19): D115 — this field is the report's; a row it did not write is replaced, never silently
+  // This field is the report's; a row it did not write is replaced, never silently
   const hand = Array.isArray(v.deltas) ? v.deltas.filter((d) => !isRecordedDelta(d)) : [];
   if (hand.length) notes.push(`${hand.length} row(s) in verification.deltas were not written by --record-plan and are replaced by the report's open deltas (${hand.map((d) => isJsonObject(d) && typeof d.nodeId === "string" ? `${d.nodeId}${typeof d.field === "string" ? ` ${d.field}` : ""}` : JSON.stringify(d).slice(0, 40)).join(", ")}) — put builder-chosen residuals in deviations[] (with the why), never in verification.deltas`);
-  // F1: a hand-written non-array (counts copied from a report, live) is replaced too — never silently
+  // A hand-written non-array (counts copied from a report, live) is replaced too — never silently
   else if (v.deltas !== undefined && !Array.isArray(v.deltas)) notes.push(`verification.deltas was a hand-written ${v.deltas === null ? "null" : typeof v.deltas} (${JSON.stringify(v.deltas).slice(0, 60)}), replaced by the report's open deltas (an array) — the counts are in verification.recorded.counts; put builder-chosen residuals in deviations[] (with the why)`);
   v.deltas = compact;
-  // F2: hand-written headline / verdict keys are left alone, but one that disagrees with this record is stale — say so
+  // Hand-written headline / verdict keys are left alone, but one that disagrees with this record is stale — say so
   const handText = (x: unknown): string | null => typeof x === "string" ? x.trim() : isJsonObject(x) && typeof x.verdict === "string" ? x.verdict.trim() : null;
   const stale: string[] = [];
   const handHeadline = "headline" in v ? handText(v.headline) : null;

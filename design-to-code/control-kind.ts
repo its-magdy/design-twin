@@ -7,7 +7,7 @@ const TOGGLE_WORD = /\b(checkbox|check box|radio|switch|toggle)\b/i;
 function controlKind(name: unknown): ControlKind | null {
   const s = String(name || "");
   const toggle = TOGGLE_WORD.test(s);
-  // F-48: a select is not a text input — its open list is a state of its own. Checked before inputs: "Select Field"
+  // a select is not a text input — its open list is a state of its own. Checked before inputs: "Select Field"
   // is one. A toggle word wins ("Select All Checkbox", "Dropdown Switch"), and "Select All" names an action, not a list.
   if (!toggle && /\b(select|dropdown|drop ?down|combo ?box|multi-?select|picker)\b/i.test(s.replace(/\bselect ?all\b/gi, ""))) return "select";
   if (/\b(input|text ?field|textfield|search|textarea)\b/i.test(s)) return "input";
@@ -23,7 +23,7 @@ export interface NamedLayer { name?: string; type?: string; mainComponent?: Main
 const isBoundaryKind = (a: NamedLayer): boolean =>
   [a.name, a.mainComponent && a.mainComponent.setName, a.component].some((l) => { const k = controlKind(l); return k === "input" || k === "select" || k === "toggle"; });
 /**
- * DT-63 / WCAG 1.4.11: a stroke is a control's visual BOUNDARY when the layer or one of its nearest 3 ancestors
+ * WCAG 1.4.11: a stroke is a control's visual BOUNDARY when the layer or one of its nearest 3 ancestors
  * is named an input, select or toggle (by name, instance set name or component name). `near` = [the layer,
  * then its ancestors nearest-first], at most 4 entries.
  */
@@ -47,7 +47,7 @@ function outermostControl(near: readonly NamedLayer[]): number {
 const DISABLED_WORD = /^(disabled|inactive|is ?disabled)$/i;
 const ON_VALUE = /^(true|yes|on)$/i;
 /**
- * An instance drawn in its disabled variant (DT-63's exemption: WCAG exempts inactive components). A variant option
+ * An instance drawn in its disabled variant (exempt: WCAG exempts inactive components). A variant option
  * VALUE that says disabled ("State=Disabled"), or a variant / BOOLEAN property NAMED disabled that is on
  * ("Disabled=True", props `{ Disabled: true }`). With no `mainComponent` to read the variant from, a prop whose
  * string VALUE is exactly "Disabled" counts too; with one, prop values are never read — a TEXT property's value is

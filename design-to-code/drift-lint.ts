@@ -37,7 +37,7 @@ const stripSuffix = (k: string): string => String(k).split("#")[0] ?? ""; // "Si
 
 /** A catalog read beside the named one (components.library.json, libraries/<dir>/components.json, a --catalog). */
 export interface ExtraCatalog { file: string; catalog: ComponentsCatalog }
-/** What driftLint accepts as `opts`. `extraCatalogs`: map entries also resolve against these (DT-26) —
+/** What driftLint accepts as `opts`. `extraCatalogs`: map entries also resolve against these —
  *  coverage (unmapped-component) and the freshness banner stay about the named catalog. */
 export interface DriftLintOptions { maxAgeMs?: number; now?: number; extraCatalogs?: readonly ExtraCatalog[] }
 
@@ -261,7 +261,7 @@ async function checkLiveFreshness(fileKey: string | undefined, token: string | u
 //
 // driftLint's own coverage number is the catalog measured against the map — which on the live run
 // printed "318/318 components mapped · 0 error(s)" for a map that covered 0% of the screen about to be
-// built (finding 65). Both numbers were true and neither answered the question a builder is asking.
+// built. Both numbers were true and neither answered the question a builder is asking.
 //
 // This one does: of the components actually placed on the screen, how many can you reuse? It keys on
 // the instance's mainComponent set key (a screen using six Button variants is ONE component to map),
@@ -280,10 +280,10 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
   }
   const catKeys = new Set(((catalog && catalog.components) || []).map((c) => c.key).filter((k): k is string => !!k));
 
-  // Counted over EVERY instance in the export, as before — but each set also records how many of its
+  // Counted over EVERY instance in the export — and each set also records how many of its
   // instances sit on layers the designer switched off (hidden.ts's predicate), so the headline can say
-  // how many of "the components on this screen" will never be built at all (livetest-3: 45 of Guided
-  // Policies' 87 instances are hidden).
+  // how many of "the components on this screen" will never be built at all (a real pull: 45 of 87
+  // instances were hidden).
   const used = new Map<string, UsedSet>(); // set key -> { setName, instances, hiddenInstances }
   for (const doc of screenDocs || []) {
     for (const r of screenRoots(doc)) walkWithHidden(r, (n, c) => {
@@ -333,10 +333,10 @@ export interface ScreenCoverageInput {
   /** The union to look instances up in; built from catalog + extraCatalogs when omitted. */
   union?: ComponentsCatalog;
 }
-/** The coverage of the given screens plus the D13 warnings, with the catalogs read. */
+/** The coverage of the given screens plus the 0%-coverage warnings, with the catalogs read. */
 export interface ScreenCoverageReport { coverage: ScreenCoverage; warnings: CoverageWarning[]; catalogsRead: string[] }
 
-// F-30: the CLI's --screen coverage block as a value — never prints, never exits — so the MCP tool
+// the CLI's --screen coverage block as a value — never prints, never exits — so the MCP tool
 // (design_drift_lint `screens`) returns the same numbers and the same two warnings the CLI prints.
 function screenCoverageReport(input: ScreenCoverageInput): ScreenCoverageReport {
   const { map, catalogFile, catalog, screens, extraCatalogs } = input;
@@ -347,10 +347,10 @@ function screenCoverageReport(input: ScreenCoverageInput): ScreenCoverageReport 
   const catalogsRead = [catalogFile, ...extraCatalogs.map((x) => x.file)];
   if (!cov.distinct) return { coverage: cov, warnings, catalogsRead };
   // 0% by key is also exactly what a DUPLICATED design-system file looks like — every key re-minted,
-  // every name and prop signature intact (livetest-3 #226). Tell the two cases apart before
+  // every name and prop signature intact. Tell the two cases apart before
   // pointing the user at "the wrong library".
   const none: VisibleInstance[] = [];
-  // D13: both 0% cases are a WARNING with a question to confirm (as cross-check's catalog-rekeyed /
+  // both 0% cases are a WARNING with a question to confirm (as cross-check's catalog-rekeyed /
   // catalog-covers-nothing are) — "you exported the wrong library" has a default (build every
   // instance as new) and is the user's call, not a failed lint. Exit stays 0 for them.
   // Re-key is a question about the NAMED catalog (cross-check asks it the same way): the other catalogs
@@ -396,8 +396,8 @@ function screenCoverageReport(input: ScreenCoverageInput): ScreenCoverageReport 
 export { driftLint, discoverExtraCatalogs, validateMap, isScreenDoc, screenCoverage, screenCoverageReport, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
 
 // The CLI's inputs are files the user named. The MAP goes through map-validate.ts's full validator
-// (below): the old "is it an object" guard let {"components":{"X":null}} through to driftLint, which
-// died on it with a TypeError and a stack. The catalog and the screens are checked by their
+// (below): an "is it an object" guard would let {"components":{"X":null}} through to driftLint, which
+// would die on it with a TypeError and a stack. The catalog and the screens are checked by their
 // doc-guards.ts / export-shape.ts guards as they are read — a wrong file is a one-line error, exit 2.
 
 // CLI: node design-to-code/drift-lint.ts <codeconnect.local.json> <design-system/components.local.json>
@@ -405,9 +405,9 @@ export { driftLint, discoverExtraCatalogs, validateMap, isScreenDoc, screenCover
 // Beside the named catalog it also reads components.library.json in the same dir and every
 // libraries/<dir>/components.json of the export (design-system-dir.ts readCatalogSet), and names them all.
 // Exit: 1 for a lint error (map-invalid, orphaned-entry, …); 0% screen coverage and catalog-rekeyed are
-// warnings with a question to confirm (owner decision D13) — they do not fail the run.
+// warnings with a question to confirm — they do not fail the run.
 // The catalog argument is the SPLIT component file — design-system.json is a slim pointer manifest
-// since the split and has no `components` array (see bridge/design-system-layout.js).
+// with no `components` array (see bridge/src/design-system-layout.ts).
 async function main(argv: string[]): Promise<number> {
   const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--catalog <components.json>]... [--max-age <hours>]`;
   // --screen is repeatable: a build usually spans a screen plus its modals, and the question

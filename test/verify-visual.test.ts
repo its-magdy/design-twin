@@ -285,10 +285,10 @@ console.log("[13] --compare: report.visual from measured.visual, always written:
   safe("[13] the third headline: 'VISUAL (informational — never the verdict) — 0.9% of pixels differ (2.4% before 1-px shift tolerance) · 2 hot regions · at the reference's 1.4222x (index) · <diff> (missing)'", () =>
     v?.headline === "VISUAL (informational — never the verdict) — 0.9% of pixels differ (2.4% before 1-px shift tolerance) · 2 hot regions · at the reference's 1.4222x (index) · design/verify/Firings__90_1.diff.png (missing)");
   const none = visualOf(compare(exp, base()));
-  safe("[13] no visual block → ran:false, why 'carries no visual diff (… older than 12c)', headline 'not run (…)'", () =>
-    !!none && none.ran === false && none.why === "the measured file carries no visual diff (hand-written, or a probe older than 12c)" && none.regions.length === 0
-    && none.headline === "VISUAL (informational — never the verdict) — not run (the measured file carries no visual diff (hand-written, or a probe older than 12c))");
-  // F-12: a measured file with no probe block (hand-written, a non-web stack) — not applicable, never "older than 12c"
+  safe("[13] no visual block → ran:false, why 'carries no visual diff (… predates the visual diff)', headline 'not run (…)'", () =>
+    !!none && none.ran === false && none.why === "the measured file carries no visual diff (hand-written, or a probe that predates the visual diff)" && none.regions.length === 0
+    && none.headline === "VISUAL (informational — never the verdict) — not run (the measured file carries no visual diff (hand-written, or a probe that predates the visual diff))");
+  // a measured file with no probe block (hand-written, a non-web stack) — not applicable, never "predates the visual diff"
   const { probe: _probe, ...handBase } = base();
   const hand = compare(exp, handBase);
   const handV = visualOf(hand);
@@ -304,7 +304,7 @@ console.log("[13] --compare: report.visual from measured.visual, always written:
   const oneX = visualOf(compare(exp, base({ visual: ranVisual({ grid: "1x", colorProfile: "display_p3" }) })));
   safe("[13] grid 1x says resampled (resampling can hide a difference — F-6: not downscaling, s < 1 upsamples); a colour profile is named", () =>
     !!oneX && /resampled to 1x \(reference 1\.4222x \(index\)\) — resampling can hide a difference/.test(oneX.headline) && /display_p3: colours not colour-managed/.test(oneX.headline));
-  // malformed: readableMeasured drops it with a note; compare says malformed (never "older than 12c")
+  // malformed: readableMeasured drops it with a note; compare says malformed (never "predates the visual diff")
   const bad = { ...base(), visual: { version: 1, ran: true, differingPct: "lots" } };
   safe("[13] isMeasuredVisual: ran and ran:false blocks pass, a block without numbers does not", () =>
     has("isMeasuredVisual") && guards.isMeasuredVisual(ranVisual()) && guards.isMeasuredVisual({ version: 1, ran: false, why: "x" }) && !guards.isMeasuredVisual(bad.visual) && !isVerifyMeasured(bad));
@@ -329,7 +329,7 @@ console.log("[13] --compare: report.visual from measured.visual, always written:
   const evil = reportToMarkdown(compare(exp, base({ visual: ranVisual({ notes: ["frame <main> | a `tick`"] }) })));
   safe("[13] md: probe text is escaped (mdText)", () => evil.includes("- frame &lt;main&gt; \\| a \\`tick\\`"));
   const noneMd = reportToMarkdown(compare(exp, base()));
-  safe("[13] md: no block → 'Not run (…older than 12c).'", () => /## Visual diff — informational, not part of the verdict[\s\S]*Not run \(the measured file carries no visual diff \(hand-written, or a probe older than 12c\)\)\./.test(noneMd));
+  safe("[13] md: no block → 'Not run (…predates the visual diff).'", () => /## Visual diff — informational, not part of the verdict[\s\S]*Not run \(the measured file carries no visual diff \(hand-written, or a probe that predates the visual diff\)\)\./.test(noneMd));
   // against: only on the same reference sha and grid
   const prev = compare(exp, base({ visual: ranVisual({ shiftTolerantPct: 3.2 }) }));
   const now = visualOf(compare(exp, base({ visual: ranVisual() }), { against: { file: "design/verify/Firings__90_1.report.json", report: readBack(prev) } }));

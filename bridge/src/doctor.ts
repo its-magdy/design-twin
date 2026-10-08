@@ -102,7 +102,7 @@ function checkNode(version: string, range: string | null | undefined): Check {
   return fail("node", "Node.js", `${version} is too old — this package needs ${range}`, "install a newer Node.js (nodejs.org, or your version manager)");
 }
 
-// `s` is tokenStore.status(). `pluginCheck` (P4 livetest-4 #328) is the ALREADY-COMPUTED plugin check
+// `s` is tokenStore.status(). `pluginCheck` is the ALREADY-COMPUTED plugin check
 // from later in run() — passed in only when `s.shadowed` is true, so the shadowed-token note can say
 // what actually happened instead of a blanket "make sure the plugin has it": a connection succeeding
 // under the overriding token IS the evidence it was accepted; a connection that never happened means
@@ -110,7 +110,7 @@ function checkNode(version: string, range: string | null | undefined): Check {
 // `viaDaemon` matters because a connection routed THROUGH an already-running daemon proves nothing
 // about THIS process's token: the daemon authenticated the plugin once, at its own start, and every
 // later command's socket auth is skipped — a bogus FIGMA_BRIDGE_TOKEN still shows "connected" there
-// (livetest-4 #328's exact repro: `list clients` works and `doctor` says ok:true with a bogus token).
+// (`list clients` works and `doctor` says ok:true with a bogus token).
 // Only a connection THIS process itself negotiated (no daemon in front) is real evidence either way.
 function checkToken(s: TokenStatus, pluginCheck?: Check, viaDaemon?: boolean): Check {
   if (s.activeSource === "ephemeral") {
@@ -137,11 +137,11 @@ const fileNames = (clients: ClientRowLike[] | null | undefined) => (clients || [
 
 // One bridge serves several Figma files at once (one client per open plugin window). With more than
 // one connected, resolveClient() refuses any plugin-reaching command that doesn't say WHICH file —
-// correct, but doctor used to report both connections as a plain ✓, so the next command's refusal
-// came as a surprise (live run #2). A connected-and-ambiguous bridge is healthy AND needs a flag;
+// correct, but reporting both connections as a plain ✓ would let the next command's refusal
+// come as a surprise. A connected-and-ambiguous bridge is healthy AND needs a flag;
 // say both.
 //
-// Finding 327: also surfaces a stale plugin bundle here — the ONE place doctor already reports which
+// Also surfaces a stale plugin bundle here — the ONE place doctor already reports which
 // files are connected, so a version mismatch is seen in the same breath rather than needing a second
 // command. `pluginStale` is computed server-side (server-core.ts's `describe()`), so doctor doesn't
 // duplicate the version-compare logic; it just relays whichever client(s) are behind.
@@ -149,7 +149,7 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
   // daemonRowStalenessNote comes from staleness.ts, NOT server-core: this file's header rule is that
   // server-core is never loaded until the port is already known to be valid, because loading it can
   // exit the process on a bad FIGMA_BRIDGE_PORT. staleness.ts has no such load-time effect, so it is a
-  // plain static import (it used to be a lazy require of server-core at this site).
+  // plain static import.
   const detail = `${prefix}: ${fileNames(clients)}`;
   const stale = (clients || []).map((c) => c.pluginStale).filter((n): n is string => Boolean(n));
   // A row with no `pluginVersion` KEY at all (not merely a `null` value) means it came from a
@@ -174,8 +174,8 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
 
 // `st` is daemon.status(port): null when none is running. Without a daemon, every `dtwin pull` starts
 // its own throwaway bridge and waits out the plugin's full reconnect window — the difference between
-// an 8s pull and a 300s+ timeout (findings 202/213/220), and `--client c1` becomes reconnect-order
-// roulette (finding 209) instead of a stable id across a daemon's lifetime. That is a real cost, not a
+// an 8s pull and a 300s+ timeout, and `--client c1` becomes reconnect-order
+// roulette instead of a stable id across a daemon's lifetime. That is a real cost, not a
 // cosmetic one, so a missing daemon is reported `warn`, never `ok` — "optional" undersold it.
 // `st` is read as DaemonStatusView: a daemon from an OLDER bridge may omit fields, which print as "?".
 function checkDaemon(st: DaemonStatusView | null | undefined, port: number): Check {
@@ -199,7 +199,7 @@ function resolvePort(raw: string | undefined): { port: number; problem?: undefin
 }
 
 // `probe` is probePort()'s result; `st` the daemon status for the same port; `envPort` the value of
-// FIGMA_BRIDGE_PORT (a seam, so the wording is testable without touching process.env). F-52: the free line
+// FIGMA_BRIDGE_PORT (a seam, so the wording is testable without touching process.env). The free line
 // says how the port was chosen, because the override is otherwise undiscoverable.
 function checkPort(port: number, probe: PortProbe, st: DaemonStatusView | null | undefined, envPort?: string | undefined): Check {
   if (probe.free) {
@@ -222,7 +222,7 @@ function checkPlugin(r: PluginProbe, waitSec?: number): Check {
     const c = connectedDetail(r.clients, "connected");
     // A stale plugin bundle IS a problem worth a warn, unlike the multi-client case (still `ok` — being
     // connected to several files at once is healthy, it just needs `--client`). Only staleness demotes
-    // the status; an ambiguous-but-current multi-client connection stays `ok` exactly as before.
+    // the status; an ambiguous-but-current multi-client connection stays `ok`.
     const stale = r.clients.some((cl) => cl.pluginStale);
     return { id: "plugin", title, status: stale ? "warn" as const : "ok" as const, detail: c.detail, ...(c.next ? { next: c.next } : {}) };
   }
@@ -235,12 +235,12 @@ function checkPlugin(r: PluginProbe, waitSec?: number): Check {
 
 const ageStr = (ms: number) => { const h = ms / 3600000; return h < 1 ? `${Math.max(0, Math.round(ms / 60000))} min` : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)} days`; };
 
-// P4 #33: the root pages/index.json's `layers[]` already carries every screen's `sourceFile` and
+// The root pages/index.json's `layers[]` already carries every screen's `sourceFile` and
 // `exportedAt` (write-out.ts stamps both; a screen pulled before that field existed simply has no
 // `sourceFile`, which is told apart from a real value rather than defaulting to the design system's).
 // Reading it directly means this never has to guess by opening each screen file, or fall back to
-// whichever document snapshot-meta happened to pick first — the exact bug this replaces (finding 33:
-// "attributes the whole export to the wrong Figma file").
+// whichever document snapshot-meta happened to pick first — which would
+// attribute the whole export to the wrong Figma file.
 // The fields read off pages/index.json, each page's index.json, and the design-system manifest —
 // JSON from disk that an older bridge or a hand edit may have written, so each is checked before it
 // is read. Loose: only the fields read here are checked. A row may be null (an older index could hold
@@ -302,7 +302,7 @@ function exportSourceCounts(exportDir: string, now: number): { parts: string[]; 
 
   const parts: string[] = [];
   let newestOverall: number | null = null;
-  // String(): Date.parse coerces its argument exactly so — an absent stamp parses as NaN, as before.
+  // String(): Date.parse coerces its argument exactly so — an absent stamp parses as NaN.
   const noteNewest = (iso: string | undefined) => { const t = Date.parse(String(iso)); if (!Number.isNaN(t) && (newestOverall === null || t > newestOverall)) newestOverall = t; };
   for (const [file, ats] of screensByFile) {
     if (!file) continue;
@@ -337,10 +337,10 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
       out.push(warn("layout", "Layout", "this project uses the older flat layout — exports live directly in design/, beside your hand-owned target.json / plan / audit",
         "it keeps working as is. To adopt the current split, move the export into design/export/ (pages/, design-system/, assets/, variables.json, libraries/) so `rm -rf design/export` can never take your decisions with it"));
     } else if (ex.layout === "export-subdir" && ex.parallelLegacy) {
-      // P4 #14/#33/#203: a stray `dtwin pull design ...` wrote a SECOND export tree directly under
+      // A stray `dtwin pull design ...` wrote a SECOND export tree directly under
       // design/ (design/pages/, design/assets/, design/variables.json, design/design-system/) beside
       // the real one at design/export/. Doctor reads only design/export/ below, so say so out loud —
-      // silently picking one, as before, is exactly the trap this project is in.
+      // silently picking one is exactly the trap this project is in.
       out.push(warn("layout", "Layout", `found BOTH layouts: reading ${ex.rel}/ (the current one), but design/pages/, design/assets/, design/variables.json and/or design/design-system/ ALSO exist beside it — a stray pull wrote a second, parallel export tree`,
         "the two trees can disagree (e.g. two different variables.json). Move anything real out of the stray design/pages, design/assets, design/variables.json, design/design-system into design/export/, then remove them — never `dtwin pull design ...` (that outDir already contains export/); use `dtwin pull --node <id>` etc."));
     }
@@ -355,11 +355,11 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
     else if (snap.warning) out.push(warn("export", "Export", snap.warning, "re-run the pull"));
     else {
       const ageMs = now - Date.parse(String(snap.exportedAt));
-      // P4 #33: build the headline from the per-source counts (screens grouped by their OWN stamped
+      // Build the headline from the per-source counts (screens grouped by their OWN stamped
       // source file, plus the design system's), rather than the single file snapshot-meta happened to
-      // pick — the exact bug that reported "exported 12h ago from 'Acme Kit (Copy)'" on a project
+      // pick — which reported "exported 12h ago from 'Acme Kit (Copy)'" on a project
       // with 5 Sample App screens and 1 Acme Kit design system, attributing every screen to the
-      // wrong file. Falls back to the old single-file line when nothing has per-source data yet (an
+      // wrong file. Falls back to the single-file line when nothing has per-source data yet (an
       // export entirely from before this field existed, or a bare design-system-only pull).
       const counts = exportSourceCounts(ex.dir, now);
       if (counts.parts.length) {
@@ -482,12 +482,12 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
   add(checkNode(process.version, engines));
 
   const tok = tokenStore.status();
-  // A shadowed token's real answer depends on the plugin check below (P4 livetest-4 #328) — emit it
+  // A shadowed token's real answer depends on the plugin check below — emit it
   // once that is known, rather than a static "make sure" note before anything has actually been
   // checked. Every other case is unaffected and keeps its original position, right after Node.js.
   if (!tok.shadowed) add(checkToken(tok));
 
-  // F-52: DTWIN_PORT is not read anywhere; a person who set it believes the bridge moved.
+  // DTWIN_PORT is not read anywhere; a person who set it believes the bridge moved.
   const portWarning = dtwinPortWarning(process.env);
   if (portWarning) add(warn("port", "Port", portWarning));
   const { port, problem } = resolvePort(process.env.FIGMA_BRIDGE_PORT);
@@ -506,9 +506,9 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
     if (st) {
       viaDaemon = true;
       // The daemon owns the bridge, so its view IS the answer — no second bridge needed (or possible).
-      // Status is `ok` unless a connected client is running a stale plugin bundle (finding 327) — that
-      // demotion is independent of, and composes with, the shadowed-token classification below (P4
-      // #328), which reads `pluginCheck.status` to decide whether the token warning is real.
+      // Status is `ok` unless a connected client is running a stale plugin bundle — that
+      // demotion is independent of, and composes with, the shadowed-token classification below,
+      // which reads `pluginCheck.status` to decide whether the token warning is real.
       pluginCheck = st.pluginConnected
         ? ((): Check => {
             // daemonRowStalenessNote: staleness.ts, not server-core — see connectedDetail's comment
@@ -537,7 +537,7 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
   if (tok.shadowed) add(checkToken(tok, pluginCheck, viaDaemon));
 
   add(...checkProject(cwd));
-  // P4 #203: a "not checked" warn (the plugin probe skipped, a port held by something else, etc.) is
+  // A "not checked" warn (the plugin probe skipped, a port held by something else, etc.) is
   // not advice like an ordinary warn — it means a check that was supposed to answer "can this project
   // actually pull anything" never ran. `ok: true` beside one of those is worse than `ok: false`: it
   // tells an automated caller (or a human skimming --json) that everything was verified when in fact

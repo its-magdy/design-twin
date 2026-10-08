@@ -6,8 +6,8 @@
 // the deterministic half of the alternative: keep the previous export, diff the two by node id, and
 // hand the agent a short list of what actually moved so it can patch only that.
 //
-//   node design-diff.js --snapshot <file.json>...        keep a copy BEFORE re-pulling (design/.sync/)
-//   node design-diff.js <file.json> [--against <old>]    diff against the snapshot (else git HEAD)
+//   node design-diff.ts --snapshot <file.json>...        keep a copy BEFORE re-pulling (design/.sync/)
+//   node design-diff.ts <file.json> [--against <old>]    diff against the snapshot (else git HEAD)
 //        [--json] [--out <file>]
 //
 // Nodes are matched by `id` — stable across exports of one Figma file; a name is not (renaming a layer
@@ -135,7 +135,7 @@ const CONTAINERS = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "
   "SLOT", "SLIDE", "SLIDE_ROW", "SLIDE_GRID", "PAGE"]);
 const GRID_CHILD_KEYS = ["gridColumnStart", "gridRowStart", "gridColumnSpan", "gridRowSpan", "gridJustifySelf", "gridAlignSelf"] as const;
 const ABSOLUTE_ONLY = new Set(["mode", "width", "height"]);
-// What an older plugin wrote and a newer one does not (D141), decided exactly as the plugin now decides it:
+// What an older plugin wrote and a newer one does not, decided exactly as the plugin decides it:
 //   - the six grid-child keys on a node that is NOT an in-flow child of a grid: a root (its parent is not
 //     exported), an `absolute` child, or a child of a parent whose layout is not `display:"grid"` (the old
 //     plugin wrote anchors -1 on every node and `gridAlignSelf/gridJustifySelf:"start"` off a grid). On an
@@ -172,8 +172,8 @@ function nodeFields(old: IndexEntry, neu: IndexEntry, raw = false): FieldDiff[] 
 }
 
 interface SwapCount { gone: number; came: number }
-// ts-port: legacy/producer-mismatch read kept as-is — the producer (state.ts) writes `truncated` as a
-// count; an older export wrote `true`, and the message below still spells that case out.
+// Older export spelling, still read: the producer (state.ts) writes `truncated` as a count; an older
+// export wrote `true`, and the message below still spells that case out.
 interface LegacyManifest { truncated?: number | boolean }
 const truncatedOf = (m: LegacyManifest | undefined): number | boolean | undefined => m && m.truncated;
 function diffScreens(oldDoc: ScreenDoc, newDoc: ScreenDoc, opts: { redrawn?: Set<string> } = {}): ScreenDiff {
@@ -221,10 +221,10 @@ function diffScreens(oldDoc: ScreenDoc, newDoc: ScreenDoc, opts: { redrawn?: Set
 }
 
 // Tokens are keyed by their Figma KEY — the one thing that identifies a variable. Names are not
-// unique: livetest-3's merged variables.json held two `Spacing / Space 4` (24 and 16, distinct keys)
-// in the SAME collection, and the old `[collection, name]` key let a Map keep the last of them, so a
-// real change to the other was invisible and merely re-ordering the rows reported a false `24 → 16`
-// (livetest-3 #211). `[collection, name]` is only the fallback for a row with no key (hand-written
+// unique: a merged variables.json can hold two `Spacing / Space 4` (24 and 16, distinct keys)
+// in the SAME collection, and a `[collection, name]` key would let a Map keep the last of them, so a
+// real change to the other would be invisible and merely re-ordering the rows would report a false `24 → 16`.
+// `[collection, name]` is only the fallback for a row with no key (hand-written
 // or very old files), and the human LABEL: a name shared by several variables is labelled with its
 // collection and its key, so the report says WHICH one changed.
 function diffTokens(oldDoc: TokensDoc, newDoc: TokensDoc): TokensDiff {
@@ -271,7 +271,7 @@ function diffTokens(oldDoc: TokensDoc, newDoc: TokensDoc): TokensDiff {
   const colLabel = (c: VariableCollection): string => ((collNames.get(c.name)?.size ?? 0) > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}…)` : c.name);
   const cols = (doc: TokensDoc) => new Map((doc.collections || []).map((c): [string, { label: string; v: { modes: string[]; default?: string } }] => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, ...ifDefined("default", c.default) } }]));
   const CA = cols(oldDoc), CB = cols(newDoc), collections: FieldDiff[] = [];
-  // new Map([...CA, ...CB]): CA's ids then CB's new ones (the old Set order), each holding CB's entry else CA's.
+  // new Map([...CA, ...CB]): CA's ids then CB's new ones (Set insertion order), each holding CB's entry else CA's.
   for (const [id, e] of new Map([...CA, ...CB])) collections.push(...fieldDiffs(e.label, CA.get(id)?.v, CB.get(id)?.v, "collection"));
   return { kind: "tokens", summary: { added: added.length, removed: removed.length, changed: changed.length + (collections.length ? 1 : 0) }, warnings: [], added, removed, changed, collections };
 }
@@ -295,11 +295,11 @@ function diffCatalog(oldDoc: ComponentsCatalog, newDoc: ComponentsCatalog): Cata
 }
 const CATALOG_IGNORED = new Set(["page", "pageId", "box", "renderBox"]);
 
-// The four style files (styles.paint/text/effect/grid.json — bridge/design-system-layout.js) share one
-// shape: `{ exportedAt, file, colorProfile, styles: [{ name, key, id, ...fields }] }`. Finding 312:
-// sync-design's own step 4 lists a diff command for each of these (and for hygiene.json below), and
-// all five used to exit 2 with "nothing here can be diffed" — so a typography-only or effect-only
-// design-system change was exactly as undetectable as the skill warns it would be without them. Keyed
+// The four style files (styles.paint/text/effect/grid.json — bridge/src/design-system-layout.ts) share one
+// shape: `{ exportedAt, file, colorProfile, styles: [{ name, key, id, ...fields }] }`.
+// sync-design lists a diff command for each of these (and for hygiene.json below), so all five
+// must be diffable rather than exit 2 with "nothing here can be diffed" — otherwise a typography-only or
+// effect-only design-system change would be undetectable. Keyed
 // by `key` (Figma's style key — stable across pulls; PaintStyle/TextStyle/EffectStyle/GridStyle all
 // have one), falling back to `name` for a style that somehow has none.
 type AnyStyle = PaintStyle | TextStyle | EffectStyle | GridStyle;
@@ -334,10 +334,10 @@ function diffHygiene(oldDoc: HygieneDoc, newDoc: HygieneDoc): HygieneDiff {
   return { kind: "hygiene", summary: { added: added.length, removed: removed.length, changed: 0 }, warnings: [], added, removed, changed: [] };
 }
 
-// The design-system MANIFEST (design-system.json — bridge/design-system-layout.js's MANIFEST file):
+// The design-system MANIFEST (design-system.json — bridge/src/design-system-layout.ts's MANIFEST file):
 // `{ exportedAt, file, colorProfile, files: {<key>: <path>}, counts: {<key>: <number>} }`. Not an
 // array of records like every other design-system file, so it gets a flat field diff rather than a
-// keyed one — the addendum to finding 312: sync-design step 4 lists this file among the nine, so
+// keyed one. sync-design lists this file among the nine, so
 // `--snapshot design/export/design-system.json` followed by a diff must not be the one command left
 // exiting 2 with "nothing here can be diffed". `exportedAt` is ignored (a timestamp, not a design
 // fact); everything else — `file` (which Figma file this design system came from), `colorProfile`,
@@ -448,13 +448,13 @@ function snapshotPath(file: string, cwd: string = process.cwd()): string {
 // path and the JSON is identical — only the file on disk differs. The snapshot records a hash per
 // asset beside it; against git HEAD the committed blob is hashed instead.
 //
-// Figma's SVG export is not bit-reproducible (findings 25/222): re-exporting the SAME icon with
+// Figma's SVG export is not bit-reproducible: re-exporting the SAME icon with
 // NOTHING changed in the design comes back with different floating-point path coordinates, ≤0.002px
 // apart. Hashing the raw bytes reported 27 "changed" assets on a byte-identical re-pull.
 // `normalizeForCompare`/`sha1Hex` (bridge/src/asset-compare.ts, built on bridge/src/svg-normalize.ts) are the
-// SAME shared implementation figma-plugin/src/assets.ts's content-hash and bridge/write-out.js's
+// SAME shared implementation figma-plugin/src/assets.ts's content-hash and bridge/src/write-out.ts's
 // clobber-avoidance both use — one definition of "same SVG, modulo export noise", not three that could
-// silently disagree. See svg-normalize.js for why the tolerance is 1 decimal place (~0.1px), not 2:
+// silently disagree. See svg-normalize.ts for why the tolerance is 1 decimal place (~0.1px), not 2:
 // two legitimately identical re-exports can straddle a 2-decimal rounding boundary (4.97401 -> 4.97 vs
 // 4.97596 -> 4.98, only 0.00195 apart) and split into different hashes anyway — verified against the
 // real eight arrow-down*.svg variants in test/fixtures/livetest3/arrow-down/, which are the fixture
@@ -518,14 +518,14 @@ function previous(file: string, against: string | undefined, cwd: string = proce
     if (!("doc" in r)) throw new Error(`the snapshot ${path.relative(cwd, snap)} ${r.error} — re-take it with --snapshot --force, or pass --against <an older copy>`);
     found.push({ doc: r.doc, source: path.relative(cwd, snap), kind: "snapshot", assets });
   }
-  // Finding 322: `--snapshot --force` keeps the baseline it is about to replace as `<name>.prev`
+  // `--snapshot --force` keeps the baseline it is about to replace as `<name>.prev`
   // (design-to-code/design-diff.ts's own --snapshot handler) specifically so it stays available as a
-  // diff baseline — but `previous()` never looked for it. The exact shape this closes: snapshot taken
+  // diff baseline; `previous()` looks for it. The shape this covers: snapshot taken
   // (B0) -> re-pull (E1) -> a MISTAKEN second `--snapshot` refused (dest still B0) -> `--force` (dest
   // becomes E1, B0 saved as dest.prev) -> the current export IS E1, so the primary snapshot is now the
   // SAME export as the file on disk and gets filtered out below exactly like any other same-export
-  // baseline — leaving `.prev` (B0) as the only genuinely older copy, which used to go unmentioned and
-  // unused ("There is no OLDER export to compare against" while it sat right there).
+  // baseline — leaving `.prev` (B0) as the only genuinely older copy; without it the diff would say
+  // "There is no OLDER export to compare against" while it sat right there.
   if (fs.existsSync(snap + ".prev")) {
     const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord); // null: no assets sidecar was kept
     const r = readJson(snap + ".prev", anyJson);
@@ -540,16 +540,16 @@ function previous(file: string, against: string | undefined, cwd: string = proce
   const firstFound = found[0];
   if (firstFound === undefined) return null;
   // The freshness signal for a screen export is `exportedAt`, stamped once by the plugin. A merged
-  // `variables.json` (bridge/variables-merge.js) has no single `exportedAt` that means anything — it is
-  // the union of every screen ever pulled into this project — so `at()` used to fall through to `null`
+  // `variables.json` (bridge/src/variables-merge.ts) has no single `exportedAt` that means anything — it is
+  // the union of every screen ever pulled into this project — so without a fallback `at()` would be `null`
   // for it, `previous()`'s "this baseline is the SAME export, don't use it" check could never fire, and
   // a diff against a stale variables.json baseline that has since been re-pulled with a genuinely
-  // identical export reported nothing wrong to warn about... but also could never tell "same" from
-  // "different" this way (finding 218). `_slices[]` (one per pulled screen) each carry their own `at`
+  // identical export would report nothing wrong to warn about... but also could never tell "same" from
+  // "different" this way. `_slices[]` (one per pulled screen) each carry their own `at`
   // timestamp that DOES change meaningfully — this reads the MAX of them as the document's freshness,
   // falling back to `exportedAt` for every other doc kind. This is a freshness signal only: the actual
-  // value comparison in diffTokens() is still by variable key (Prompt 1's `keyed()`/`diffTokens`), so a
-  // `_slices[].at` that re-appends on every re-pull (finding 223) does not, by itself, manufacture a
+  // value comparison in diffTokens() is still by variable key (`keyed()`/`diffTokens`), so a
+  // `_slices[].at` that re-appends on every re-pull does not, by itself, manufacture a
   // fake "changed" token — it only lets `previous()` recognise which baseline is newer.
   const at = (d: unknown): string | null => {
     if (!d || typeof d !== "object") return null;
@@ -570,7 +570,7 @@ function previous(file: string, against: string | undefined, cwd: string = proce
   return { ...newest, notes };
 }
 
-// Which OTHER files belong to the same export as `f` (finding 206). Best-effort and read-only: a file
+// Which OTHER files belong to the same export as `f`. Best-effort and read-only: a file
 // this returns that doesn't exist is simply skipped by the --snapshot loop (`fs.existsSync` check
 // already there), the same as a caller-requested file that isn't there yet.
 const DS_FILE_NAMES = Object.values<string>(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
@@ -583,11 +583,11 @@ function siblingFilesOf(f: string): string[] {
     // 8 of the 9 design-system files (tokens/styles.*/components.*/hygiene) live flat in the
     // design-system/ SUBDIRECTORY together — but the 9th, the MANIFEST (`design-system.json`), lives
     // ONE LEVEL UP, at the export ROOT beside `design-system/` and `pages/`, not inside it (see
-    // bridge/design-system-layout.js's own header: "design-system.json stays [at the root]... The
-    // parts live in a design-system/ SUBDIRECTORY, not next to design-system.json"). Finding 320: this
-    // function used to look for EVERY sibling — including the manifest — inside `dir` (design-system/),
-    // so a snapshot of `tokens.json` always printed a spurious "design-system/design-system.json not
-    // found" for a file that both exists and was never at that path to begin with.
+    // bridge/src/design-system-layout.ts's own header: "design-system.json stays [at the root]... The
+    // parts live in a design-system/ SUBDIRECTORY, not next to design-system.json"). Looking for EVERY
+    // sibling — including the manifest — inside `dir` (design-system/) would make a snapshot of
+    // `tokens.json` print a spurious "design-system/design-system.json not found" for a file that both
+    // exists and was never at that path to begin with.
     const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path.dirname(dir);
     for (const name of DS_FILE_NAMES) {
       if (name === base) continue;
@@ -597,7 +597,7 @@ function siblingFilesOf(f: string): string[] {
     return out;
   }
   // A screen export: pages/<Page>/<Screen>__<id>.json, with .vars.json / .assets.json siblings of the
-  // exact same stem (bridge/pages-layout.js's naming — see design/README.md's template).
+  // exact same stem (bridge/src/pages-layout.ts's naming — see design/README.md's template).
   const m = /\.json$/i.test(base) ? base.slice(0, -5) : null;
   if (m) {
     for (const suf of [".vars.json", ".assets.json"]) {
@@ -607,7 +607,7 @@ function siblingFilesOf(f: string): string[] {
   }
   // pages/index.json — the root index one level above the <Page> directory a screen file lives in.
   // Read-only evidence for the diff to consult, never a diff TARGET on its own, but worth having a
-  // baseline for so a future consumer can tell "this screen used to be indexed differently".
+  // baseline for so a future consumer can tell whether this screen is indexed differently than in the baseline.
   const pageDir = dir;
   const pagesDir = path.dirname(pageDir);
   if (path.basename(pagesDir) === "pages") {
@@ -626,21 +626,21 @@ function main(argv: string[]): number {
     const force = !!flags.force;
     const requested = positionals;
     if (!requested.length) { console.error(USAGE); return 2; }
-    // Finding 206: a snapshot of ONE file (e.g. design-system/tokens.json, or a screen's own
+    // A snapshot of ONE file (e.g. design-system/tokens.json, or a screen's own
     // <Screen>__<id>.json) is not a copy of the export it belongs to — no .vars.json, no
     // .assets.json, no pages/index.json, and for a design-system snapshot none of its other 8
     // sibling files, so a diff run later against it can't see a change that landed in a sibling (a
     // token that moved collection, an asset that changed) and the asset sidecar covered "36 of 39
     // entries" on a real run because assetPaths() only walks the tree, missing anything a sibling
-    // file alone would have recorded. Snapshotting a file now also snapshots its whole sibling set:
+    // file alone would have recorded. Snapshotting a file therefore also snapshots its whole sibling set:
     //   - a screen export -> its .vars.json, its OWN .assets.json (the real per-screen manifest,
     //     not the synthetic asset-hash sidecar this function writes below), and the pages/index.json
     //     it is indexed under (read-only evidence, never a diff target itself).
-    //   - any of the 9 design-system/ files -> the other 8 (bridge/design-system-layout.js is the
+    //   - any of the 9 design-system/ files -> the other 8 (bridge/src/design-system-layout.ts is the
     //     one definition of that set, so this can never drift from what a --design-system pull
     //     actually writes).
     const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
-    // Finding 322: a refusal used to exit 0 — indistinguishable, to a script, from every file being
+    // A refusal must not exit 0 — indistinguishable, to a script, from every file being
     // snapshotted successfully. sync-design's own step 2 is meant to run unattended before a re-pull;
     // a refusal it can't see means the user finds out only later, when the diff is wrong.
     let refused = 0;
@@ -648,11 +648,10 @@ function main(argv: string[]): number {
       if (!fs.existsSync(f)) { console.error(`design-diff: ${f} not found — nothing to snapshot (first pull?)`); continue; }
       const dest = snapshotPath(f);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      // Non-destructive: `--snapshot` used to be `fs.copyFileSync(f, dest)`, an unconditional overwrite
-      // with no existence check — run step 2 of sync-design twice (once per re-pull, as the skill
-      // instructs) and the SECOND call replaced the first baseline with what was, by then, already the
-      // POST-first-re-pull export, so the diff against the true original baseline was gone for good
-      // (finding 205). A snapshot identical to what's already there is a genuine no-op (re-running the
+      // Non-destructive: an unconditional overwrite with no existence check would, when step 2 of
+      // sync-design runs twice (once per re-pull, as the skill instructs), replace the first baseline with
+      // what was, by then, already the POST-first-re-pull export, so the diff against the true original
+      // baseline would be gone for good. A snapshot identical to what's already there is a genuine no-op (re-running the
       // same step twice in a row must not complain); a snapshot that would actually CHANGE an existing
       // baseline is refused unless the caller says --force, in which case the old one is kept as
       // `<name>.prev` (one level — this is a working snapshot, not a version history) so `--force` can
@@ -708,8 +707,7 @@ function main(argv: string[]): number {
   diff.warnings = [...prev.notes, ...(diff.warnings || [])];
   // `warned`/`baseline` let a script decide "should I trust this diff" without re-parsing the markdown
   // or counting `warnings.length` itself — the same two facts `tokens.json`'s human-readable warnings
-  // already convey (finding 218's "zero warnings" complaint was specifically that variables.json had
-  // no equivalent of this at all).
+  // already convey (so a variables.json diff has the same, not a bare "zero warnings").
   const result: DiffResult = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) { fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true }); fs.writeFileSync(out, text); console.log(`wrote ${out} — ${JSON.stringify(result.summary)}${result.warnings.length ? ` — ${result.warnings.length} warning(s), read them` : ""}`); }

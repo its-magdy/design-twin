@@ -4,8 +4,8 @@
 //   - the plugin dispatches on `Cmd` (an exhaustive switch — a command added here without a handler
 //     fails to compile there);
 //   - server-core.ts / daemon.ts / figma-mcp.ts / figma-pull.ts type `request()` per command, so a
-//     caller can no longer name a reply type the plugin never sends (the `IndexReply`/`WhoamiReply`
-//     hand-mirrors this replaces were stale once already: an `r.frames` the plugin never produced);
+//     caller cannot name a reply type the plugin never sends (a hand-mirror of `IndexReply`/`WhoamiReply`
+//     was stale once already: an `r.frames` the plugin never produced);
 //   - `replyShapeError` is the ONE structural check a reply passes at the point it enters the Node
 //     process (server-core.ts), so a plugin answering the wrong shape is a named error, not a
 //     TypeError three modules later;
@@ -132,7 +132,7 @@ export interface NodeSummary {
   childCount?: number;
   /** first-visible-text title, only on rows that share name + size with another row of the same listing */
   title?: string;
-  /** K-6 (D145): colliding rows whose titles do not tell them apart — ≤ 3 texts this row shows and its twins do not */
+  /** colliding rows whose titles do not tell them apart — ≤ 3 texts this row shows and its twins do not */
   distinctTexts?: string[];
 }
 /** One page of a listPages reply. `frames` is present at depth 2 only, and absent on an `unreadable` page. */
@@ -211,7 +211,7 @@ export interface ScreenshotReply {
   reference: string;
   manifest: Manifest;
   assets: Asset[];
-  /** DT-06: the node's width/height and the render scale the plugin used — absent from an older plugin. */
+  /** the node's width/height and the render scale the plugin used — absent from an older plugin. */
   w?: number;
   h?: number;
   scale?: number;

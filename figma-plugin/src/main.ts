@@ -11,7 +11,7 @@
 // figma.mixed guards, defensive `in` checks). See ARCHITECTURE.md "Verified extraction API surface".
 import { errMsg } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
-// The pages/ layout is defined ONCE, in a dependency-free CJS module the Node CLI requires and
+// The pages/ layout is defined ONCE, in a dependency-free module the Node CLI imports and
 // esbuild inlines here — see bridge/src/pages-layout.ts.
 import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
 import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";

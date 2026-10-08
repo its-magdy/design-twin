@@ -1,8 +1,8 @@
 // get-component.ts — resolve ONE entry in components.local.json and print its full detail: variants
 // with their real serialized node trees, from the sibling file its `variantsFile` pointer names.
 //
-// Since the components.local.json / design-system/components/*.json split (bridge/design-system-
-// layout.js), the catalog is deliberately slim — every COMPONENT_SET's variants[].node (the heavy
+// Because of the components.local.json / design-system/components/*.json split (bridge/src/design-system-
+// layout.ts), the catalog is deliberately slim — every COMPONENT_SET's variants[].node (the heavy
 // per-variant node tree) lives in its own detail file so an agent that only wants the prop table for
 // 143 components doesn't load 4MB of node trees to get it. This is the other half of that trade: the
 // tool an agent reaches for when it DOES want one component's variant visuals.

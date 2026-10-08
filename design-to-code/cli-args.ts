@@ -1,7 +1,7 @@
 // cli-args.ts — node:util parseArgs for the design-to-code CLIs, with this repo's error wording.
 //
-// The CLIs used to pull flags out of argv by hand (`take("--out")` = indexOf + splice), which took the
-// NEXT word as a flag's value whatever it was: `--out --json` wrote to a file called "--json" and ran
+// Pulling flags out of argv by hand (`take("--out")` = indexOf + splice) takes the
+// NEXT word as a flag's value whatever it is: `--out --json` would write to a file called "--json" and run
 // without --json. parseArgs (strict) refuses a value that looks like a flag, knows `--out=x`, and still
 // leaves positionals in order. What it does not do is say it the way these tools always have, so the
 // parse runs inside cliParse(), which turns its errors into the one-line messages below:
@@ -20,8 +20,8 @@ import type { ParseArgsOptionsConfig } from "node:util";
 /**
  * The command a usage line or a printed hint gives for another script: its REAL path, so the model can copy
  * it into Bash as-is. Not `${CLAUDE_PLUGIN_ROOT}`: that is substituted in skill/agent Markdown only — it is
- * not an environment variable in the Bash tool, so a usage line quoting it handed the model a command with an
- * empty path (field findings DT-15/F-28). In a bundle this module is inlined, so import.meta.url is the bundle
+ * not an environment variable in the Bash tool, so a usage line quoting it would hand the model a command with an
+ * empty path. In a bundle this module is inlined, so import.meta.url is the bundle
  * itself (claude-plugin/scripts/<entry>.js) and its folder holds every sibling script; run from a clone, it is
  * design-to-code/cli-args.ts and the siblings are the .ts sources Node runs directly. Printed output only —
  * never put it in a file the tools write (an absolute, per-install path would change the file's hash).

@@ -11,12 +11,12 @@
 //   node verify-build.js --status [<plan>…]  print each plan's COMPUTED status; never writes
 //
 // ---------------------------------------------------------------- what BLOCKS (exit 2)
-// Two things (livetest-3 §2.9 b), plus a third on web profiles only:
+// Two things, plus a third on web profiles only:
 //   1. an UNEXPLAINED colour literal: a colour the plan resolved to a real code token, written as a raw
 //      literal (`#5B5FC7`, `0xFF5B5FC7`, `rgb(91, 95, 199)`) in a SOURCE file listed in `files[]`.
 //      Only code is scanned: comments, prose string literals (provenance notes) and every non-source
-//      file (`.svg`, `.json`, `.md`, images …) are skipped — a hex in a doc comment (finding 100) or in
-//      the baked-in stroke of an exported SVG the skill forbids editing (132) never reaches a painted
+//      file (`.svg`, `.json`, `.md`, images …) are skipped — a hex in a doc comment or in
+//      the baked-in stroke of an exported SVG the skill forbids editing never reaches a painted
 //      element as a literal. A value the plan did NOT resolve to a token is not a violation (the
 //      profiles prescribe one-off literals where no token exists), and neither is the line that
 //      DEFINES the token (`--color-figma-brand-600: #5B5FC7`). This is a source check, not a DOM
@@ -26,23 +26,23 @@
 //      map from design to code; a visible subtree missing from it is a piece of the screen nobody
 //      accounted for. `plan-skeleton.ts` lists every visible node, so this is only ever a fill-in.
 //   3. (web profile: the plan's `target`, else design/target.json) NO `data-dt-node` attribute in any
-//      plan's files[] (F-58): the verify step then measures nothing by id. Below 50% of anchored visible
+//      plan's files[]: the verify step then measures nothing by id. Below 50% of anchored visible
 //      nodes tagged is a warning; `"tagging": {"off": true, "reason": …}` opts out.
-// Everything else — token identity merges (finding 130, right), a11y/coverage evidence (101, right),
-// arbitrary px, file existence, `mapModule` imports (131), MISSING rows with no decision, the plan
-// header (P3), the verification block's self-consistency (156), `deviations[]` shape (196) — is a
+// Everything else — token identity merges, a11y/coverage evidence, arbitrary px, file existence,
+// `mapModule` imports, MISSING rows with no decision, the plan header, the verification block's
+// self-consistency, `deviations[]` shape — is a
 // WARNING: printed, exit 0. A gate that blocks on correct reuse teaches users to lie to it.
 //
 // ---------------------------------------------------------------- status is COMPUTED, never stored
-// The hook never writes `plan.status` (§2.9 c, findings 155/189: two plans said "verified" beside
-// reports that said "fail"). It writes `plan.verification.hook`:
+// The hook never writes `plan.status` (a stored status can say "verified" beside a report that says
+// "fail"). It writes `plan.verification.hook`:
 //   { result: "pass"|"blocked", checkedAt, blocking:[…], warnings:N, planHash, files:{<path>: <sha256/16>|null} }
 // and `computeStatus()` derives the status at read time from THREE facts that must all hold:
-//   hook result "pass"  AND  every file in files[] (and every mapped module, D117) still hashes the same  AND  the verify report
+//   hook result "pass"  AND  every file in files[] (and every mapped module) still hashes the same  AND  the verify report
 //   (design/verify/<…>.report.json, schema @2) says "pass" (or "pass-with-deviations") and measured THIS
 //   design and THIS code — by content: its inputs.exportContentSha256 equals the export's (timestamps
 //   stripped), its inputs.code.files equal the files' hashes now, and its inputs.waivers.sha256 equals the
-//   hash of the plan's waivers[]/descopes[] now (absent = none). No clock is consulted (livetest-4 314/317).
+//   hash of the plan's waivers[]/descopes[] now (absent = none). No clock is consulted.
 // A stored "verified"/"static-only" (written by an older hook) is ignored by computeStatus and
 // deleted the next time the hook checks that plan. `status` keeps only the states a PERSON sets:
 // "pending" (default) · "awaiting-user" (paused on a question — skipped, never closed) ·
@@ -54,7 +54,7 @@
 // unverified (no report; a report that is "incomplete", older than schema @2, or that measured a
 // different design, different code or different waivers) · static-only · verified ·
 // verified-with-deviations (every report passes and ≥1 says "pass-with-deviations": accepted deltas or
-// descoped interactions, D5/D20).
+// descoped interactions).
 //
 // ---------------------------------------------------------------- when it runs
 // Fast path: a plan is OPEN when its status is "pending" (or absent/legacy), it was touched within
@@ -63,7 +63,7 @@
 // A plan nobody has touched for STALE_HOURS is a leftover from an earlier session and is left alone
 // (DTWIN_PLAN_STALE_HOURS overrides; 0 disables the cutoff).
 //
-// stdin (findings 99/133): read ONLY when fd 0 is not a TTY; a pipe that delivers nothing within
+// stdin: read ONLY when fd 0 is not a TTY; a pipe that delivers nothing within
 // DTWIN_HOOK_STDIN_WAIT_MS (1 s) is treated as "no payload"; a payload with no EOF, or the whole run,
 // is cut off at DTWIN_HOOK_TIMEOUT_MS (60 s) with a message naming what it was waiting on (exit 1 —
 // a non-blocking error, because a stall of ours is not the agent's defect).
@@ -108,7 +108,7 @@ export interface HookRead { payload?: HookPayload; source?: string; error?: stri
 
 // The hook JSON, read only when stdin is not a terminal. A regular file or /dev/null reads to EOF at
 // once; a pipe/socket is read asynchronously with two deadlines, so an inherited pipe that never
-// closes (finding 133: "same command, two different outcomes") cannot stall the build.
+// closes ("same command, two different outcomes") cannot stall the build.
 function readHookInput(): Promise<HookRead> {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st: fs.Stats;
@@ -169,7 +169,7 @@ function readPlan(file: string): PlanFile | BadPlan {
 const isPlanFile = (p: PlanFile | BadPlan): p is PlanFile => "plan" in p;
 
 // Every plan under design/plan/, and — separately — the ones that could not be read: those are reported,
-// never silently skipped (a hand-broken plan used to vanish from the hook's view, so it was never checked).
+// never silently skipped (a hand-broken plan would otherwise vanish from the hook's view, so it would never be checked).
 function findPlans(cwd: string): { plans: PlanFile[]; bad: BadPlan[] } {
   const dir = path.join(cwd, "design", "plan");
   if (!fs.existsSync(dir)) return { plans: [], bad: [] };
@@ -198,7 +198,7 @@ const lifecycleOf = (plan: Plan | null | undefined): PlanLifecycle => {
 
 // ================================================================ hashing
 
-// D117 (FU-shared-shell): files[] AND every anchors/components mapModule (contentHash.planCodeFiles) — a shared
+// files[] AND every anchors/components mapModule (contentHash.planCodeFiles) — a shared
 // shell the plan maps but another plan lists is code this screen renders. The same list verify-screen --compare hashes.
 function fileHashes(plan: Plan | null | undefined, cwd: string): Record<string, string | null> {
   return contentHash.fileHashes(contentHash.planCodeFiles(plan || {}, cwd), cwd); // the same hashes verify-screen --compare records
@@ -206,16 +206,16 @@ function fileHashes(plan: Plan | null | undefined, cwd: string): Record<string, 
 
 // The plan's own content, minus what the hook writes and what is not the plan's substance: status, the owner's
 // waivers[]/descopes[] (accepting a delta must not send the hook back to pending; a report records their hash instead,
-// inputs.waivers.sha256, and reportVerdict() compares that) and — F-100 (D115) — all of `verification` (every
+// inputs.waivers.sha256, and reportVerdict() compares that) and all of `verification` (every
 // verification check is a warning, so the hook result never depends on it; --compare --record-plan writes it).
 const planHash = (plan: Plan | null | undefined): string => contentHash.planHash(plan);
-// D115: a hook record written before F-100 holds the old formula (verification minus hook) — still accepted, so no
-// plan reopens on upgrade. The hook's next write records the new one.
+// A hook record written under the older formula (verification minus hook) is still accepted, so no plan
+// reopens on upgrade. The hook's next write records the new one.
 const hookHashMatches = (hook: PlanHookRecord, plan: Plan): boolean => hook.planHash === planHash(plan) || hook.planHash === contentHash.legacyPlanHash(plan);
 
 // The hook record against the files now: `changed` reopens the plan (stale); `unhashed` does not. A key the record never
-// hashed is a change when it is a files[] entry ("added to files[]"); a MAPPED module the record never hashed (M2: a hook
-// record written before D117 hashed files[] only) is only noted — the upgrade must not reopen a plan the hook closed with
+// hashed is a change when it is a files[] entry ("added to files[]"); a MAPPED module the record never hashed (a hook
+// record that hashed files[] only) is only noted — the upgrade must not reopen a plan the hook closed with
 // no file changed. The hook's next write records it, and from then on a change to it is a change.
 interface HookFileDiff { changed: string[]; unhashed: string[] }
 function hookFileDiff(plan: Plan, cwd: string): HookFileDiff | null {
@@ -227,7 +227,7 @@ function hookFileDiff(plan: Plan, cwd: string): HookFileDiff | null {
   const all = new Set([...Object.keys(hook.files), ...Object.keys(now)]);
   for (const f of all) {
     if (hook.files[f] === now[f]) continue;
-    // L9: gone from planCodeFiles — dropped from files[] or the anchors, or an extensionless mapModule no longer resolves
+    // Gone from planCodeFiles — dropped from files[] or the anchors, or an extensionless mapModule no longer resolves
     if (now[f] === undefined) changed.push(`${f} (no longer hashed: not in files[] nor a mapped module that resolves)`);
     else if (hook.files[f] === undefined) { if (listed.has(f)) changed.push(`${f} (added to files[])`); else unhashed.push(`${f} (now hashed: mapped module)`); }
     else changed.push(now[f] === null ? `${f} (missing)` : f);
@@ -322,7 +322,7 @@ function alphaHex(a: string | undefined): string {
   return Math.round(Math.min(1, Math.max(0, n)) * 255).toString(16).padStart(2, "0");
 }
 
-// Tailwind arbitrary dimensions: the utility PREFIX says which kind the number is (live finding 88:
+// Tailwind arbitrary dimensions: the utility PREFIX says which kind the number is (seen in a live run:
 // `rounded-[20px]` is not the 20px a fontSize token resolves to).
 const UTILITY_KIND: Array<[RegExp, string]> = [
   [/^rounded(-[a-z]+)?$/, "radius"],
@@ -373,7 +373,7 @@ function arbitraryPx(source: string): Map<number, PxHit[]> {
   return found;
 }
 
-// ================================================================ imports (finding 131)
+// ================================================================ imports
 
 // Module specifiers a source file imports: ES `import … from`, bare `import "x"`, `export … from`,
 // dynamic `import("x")`, CommonJS `require("x")`, CSS `@import`.
@@ -405,8 +405,8 @@ export interface FileText { rel: string; text: string }
 // Does any built file import the module a plan row says it reuses? Relative specifiers are resolved
 // against the importing file, then compared with mapModule by path SUFFIX; alias / bare specifiers are
 // compared by suffix directly. A `mapModule` written as a repo path (`app/src/components/PageTitle.tsx`)
-// therefore matches `'../../../components/PageTitle'` and `'@/components/PageTitle'` alike — the
-// unsatisfiable substring test of finding 131 is gone. Non-JS stacks (Swift/Kotlin/Dart import
+// therefore matches `'../../../components/PageTitle'` and `'@/components/PageTitle'` alike (a plain substring
+// test would be unsatisfiable). Non-JS stacks (Swift/Kotlin/Dart import
 // modules, not files): the component's own name used as an identifier counts.
 // importsOf per file text, memoised: the import graph below asks the same file about every other file.
 const importCache = new Map<string, string[]>();
@@ -553,7 +553,7 @@ const hasToken = (row: PlanTokenRow): row is PlanTokenRow & { codeToken: string 
 
 function loadMapKeys(cwd: string): Map<string, { name: string; module: string }> {
   for (const f of [path.join(cwd, "design", "codeconnect.local.json"), path.join(cwd, "codeconnect.local.json")]) {
-    // An invalid map is treated as no map (these are warnings about reuse; map-validate.js names the fault).
+    // An invalid map is treated as no map (these are warnings about reuse; map-validate names the fault).
     const map = readJsonOrNull(f, isCodeConnectMap);
     if (!map) continue;
     const keys = new Map<string, { name: string; module: string }>();
@@ -571,9 +571,9 @@ function checkVerification(plan: Plan, cwd: string): string[] {
     return ["no `verification.mode` in the plan — record how the build was checked: {mode:\"rendered\", renderer, artifacts:[…], deltas:[…]} after rendering and comparing (references/verify.md), or {mode:\"static-only\", reason} if the project genuinely has no way to render"];
   }
   if (v.mode === "rendered") {
-    // live L-2: an agent wrote artifacts/deltas as OBJECTS ({screenshot: "…"}, {high: 33, …}) — say the shape is wrong, not "empty"/"missing"
+    // An agent may write artifacts/deltas as OBJECTS ({screenshot: "…"}, {high: 33, …}) — say the shape is wrong, not "empty"/"missing"
     const shape = (x: unknown): string => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
-    // (both shape errors in one round: the field-test plans had both as objects, and this is only a warning — review LOW-1)
+    // (both shape errors in one round: a plan can have both as objects, and this is only a warning)
     const wrongShape: string[] = [];
     if (v.artifacts !== undefined && !Array.isArray(v.artifacts)) wrongShape.push(`verification.artifacts must be an array of paths, got ${shape(v.artifacts)} — e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
     if (v.deltas !== undefined && !Array.isArray(v.deltas)) wrongShape.push(`verification.deltas must be an array of the residual differences, got ${shape(v.deltas)} — the counts live in the report; list each difference ([] if none were found)`);
@@ -602,7 +602,7 @@ function verificationWarnings(plan: Plan): string[] {
   return out;
 }
 
-// F-100 (D115): plan.verification.recorded is what `--compare --record-plan` copied from ONE report. When that report
+// plan.verification.recorded is what `--compare --record-plan` copied from ONE report. When that report
 // has since been rewritten (another --compare without --record-plan, a hand edit), the plan's copy is older than the
 // verdict it summarises. A warning — the report is the verdict either way; computeStatus never reads `recorded`.
 function recordedReportWarnings(plan: Plan, cwd: string): string[] {
@@ -623,15 +623,15 @@ export interface ReportRef {
   expectationChanged: boolean; expectationRel: string | null;
   /** inputs.waivers.sha256: the plan waivers/descopes the compare applied (null = recorded none — an older report). */
   waiversSha256: string | null;
-  /** 12b report.behaviour, summarised (null = none or unreadable — a report older than 12b). Warnings only (D40(9)). */
+  /** report.behaviour, summarised (null = none or unreadable — a report without a behaviour section). Warnings only. */
   behaviour: { ran: boolean; why: string | null; fail: number; warn: number; failed: string[] } | null;
   /** report.inputs.probe is the shipped probe's identity (not "unknown" / absent: a hand-written or non-web measured file) */
   shippedProbe: boolean;
 }
 
-// 12b, D40(9): what the report's behaviour/a11y section says — WARNINGS only, never a block (D4: not the fidelity verdict).
+// What the report's behaviour/a11y section says — WARNINGS only, never a block (not the fidelity verdict).
 // (a) a failed check; (b) plan.verification.a11y disagreeing with the report's fail count; (c) the checks did not run.
-// L6: (b) compares the plan's ONE a11y number with the ONE report it was copied from — verification.a11y.report when set
+// (b) compares the plan's ONE a11y number with the ONE report it was copied from — verification.a11y.report when set
 // (report.json or its .md), else the report for the plan's own screen (matched by name, as locateReports ranks), newest first.
 // The name is read as written: project-relative, absolute, relative to the plan file, or a bare file name — the last two
 // fall back to the basename when exactly one located report has it. Several with that basename → the own-screen rule among
@@ -657,9 +657,9 @@ function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cw
   if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
   return { ref: null, missing: want };
 }
-// L-5: ONE report speaks for the run — the one verification.a11y.report names, else the plan's own newest; its fail count is of
+// ONE report speaks for the run — the one verification.a11y.report names, else the plan's own newest; its fail count is of
 // failed elements ("+N more" rows count N), so it says "failures". A re-run with the same --out overwrites its report, so a run's
-// older rounds are gone. Review 4 L-4 / review 5 L-3: every OTHER report file locateReports matched (design/verify/ is flat, so
+// older rounds are gone. Every OTHER report file locateReports matched (design/verify/ is flat, so
 // another file is another --out — a narrow-width or dark-theme variant, a nodeId-named run, or one left from an earlier name)
 // warns on its own failures: one warning per other report file, so no FAIL is silenced; the disagreement and "did not run"
 // warnings stay with the one report above.
@@ -676,13 +676,13 @@ function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, 
     const ids = [...new Set(failed)];
     return `${ref.rel}: behaviour/a11y — ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) — not the fidelity verdict, but a measurable accessibility failure is never waived: fix it or raise a designer question`;
   };
-  // review 4 L-4 / review 5 L-3: every other report file (not the one speaking for the run)
+  // Every other report file (not the one speaking for the run)
   const others = all.filter((x) => x !== r);
   const otherFails = others.flatMap((x) => (x.behaviour && x.behaviour.ran && x.behaviour.fail > 0 ? [failWarning(x, x.behaviour.fail, x.behaviour.failed)] : []));
   const b = r ? r.behaviour : null;
   if (!r || !b) return [...out, ...otherFails];
   if (!b.ran) {
-    // a measured file the shipped probe did not write (hand-written, non-web — D2: the probe is web only) never has a
+    // a measured file the shipped probe did not write (hand-written, non-web — the probe is web only) never has a
     // block: no warning every Stop. "--behaviour off" is the probe's own switch, so it always warns.
     if (b.why !== "--behaviour off" && !r.shippedProbe) return out;
     out.push(b.why === "--behaviour off"
@@ -695,7 +695,7 @@ function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, 
   return [...out, ...otherFails];
 }
 
-// Finding 156: the verification block contradicting itself in adjacent keys.
+// The verification block contradicting itself in adjacent keys.
 const A11Y = /\b(a11y|axe|accessib)/i;
 function verificationContradictions(plan: Plan, reports: ReportRef[] | null | undefined): string[] {
   const v = plan.verification;
@@ -710,7 +710,7 @@ function verificationContradictions(plan: Plan, reports: ReportRef[] | null | un
   }
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
   for (const r of reports || []) {
-    // F-100: --record-plan writes only the OPEN high/medium deltas — [] beside a report of lows is that record, not a gap
+    // --record-plan writes only the OPEN high/medium deltas — [] beside a report of lows is that record, not a gap
     const recordedHere = !!(v.recorded && typeof v.recorded === "object" && v.recorded.report === r.rel);
     if (!recordedHere && Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — copy them (or the ones you judged real, with why) into the plan`);
     for (const k of ["verifyScreenVerdict", "verdict"] as const) {
@@ -724,7 +724,7 @@ function verificationContradictions(plan: Plan, reports: ReportRef[] | null | un
   return out;
 }
 
-// Finding 196: a deviation is only reviewable when it says WHICH node, WHICH field, what was designed,
+// A deviation is only reviewable when it says WHICH node, WHICH field, what was designed,
 // what was built, and why.
 const DEVIATION_FIELDS = ["nodeId", "field", "designed", "built", "reason"] as const;
 function deviationWarnings(plan: Plan): string[] {
@@ -740,7 +740,7 @@ function deviationWarnings(plan: Plan): string[] {
   return bad.length ? [`${bad.length} deviation(s) are missing fields — each needs {nodeId, field, designed, built, reason} so a reviewer can check it against the export: ${bad.slice(0, 6).join("; ")}${bad.length > 6 ? `; +${bad.length - 6} more` : ""}`] : [];
 }
 
-// P3 #150/#151/#180: the header every other skill resolves a plan by. A warning — plan-skeleton.ts
+// The header every other skill resolves a plan by. A warning — plan-skeleton.ts
 // writes it, so a plan without it was hand-written.
 function validatePlanHeader(plan: Plan): string[] {
   const missing = (["screenName", "nodeId", "route", "file"] as const).filter((k) => plan[k] === undefined || plan[k] === null || plan[k] === "");
@@ -772,8 +772,8 @@ function tokenCore(x: unknown): string {
 const STYLESHEET_EXT = new Set(["css", "scss", "sass", "less", "styl"]);
 const isStylesheet = (rel: string): boolean => STYLESHEET_EXT.has(extOf(rel));
 // A free-text codeToken ("bg-primary / text-primary/80", "hover:bg-x", "var(--x)", "brand-600") split into
-// the names it stands for — ONE reading, shared by the definition check (F-31) and the undeclared-token
-// check (F-124): split on whitespace, " / " and commas; strip variants (`hover:`), `!` and an opacity
+// the names it stands for — ONE reading, shared by the definition check and the undeclared-token
+// check: split on whitespace, " / " and commas; strip variants (`hover:`), `!` and an opacity
 // modifier (`/80`); `var(--x)` and `--x` name the custom property; a colour utility names `--color-<name>`
 // (`builtin` when <name> is a Tailwind built-in colour, a width or an arbitrary value).
 const COLOUR_UTILITY = /^(bg|text|border|ring|fill|stroke|outline|divide|placeholder|decoration|accent|caret|from|via|to|shadow)-(.+)$/;
@@ -811,7 +811,7 @@ function declaresTokenAt(line: string, at: number, codeToken: string, stylesheet
   const m = DECLARATION.exec(line.slice(0, at));
   return !!m && namesToken(m[2] ?? "", codeToken, stylesheet); // group 2 is not optional: set whenever the regex matched
 }
-// F-31: a line is a DEFINITION line for `literal` when EVERY occurrence of it on the line is the value of
+// A line is a DEFINITION line for `literal` when EVERY occurrence of it on the line is the value of
 // a declaration of one of `codeTokens` — every plan token that resolves to this literal, not only the
 // row being checked: `--color-surface: #1d1d1f; --color-canvas: #1d1d1f;` defines two tokens that share
 // a value, and neither definition is a "usage" of the other.
@@ -842,7 +842,7 @@ function readFiles(rels: readonly string[], cwd: string): FileText[] {
   return out;
 }
 
-// ---------------------------------------------------------------- the project graph (F-43, F-58, F-124)
+// ---------------------------------------------------------------- the project graph
 // Every plan's files[] under design/plan/, read once per hook run: their texts, how many plans list each
 // file, and the import graph between the script files (each file's imports parsed once, then resolved
 // through a path-suffix index — linear in files + imports, not files²).
@@ -895,7 +895,7 @@ function buildGraph(cwd: string, extra: readonly string[] = []): ProjectGraph {
   return { files, listCount, kids, parents, byRel, scan };
 }
 
-// F-43: the files whose imports count for a plan whose files are `own`: its own files; the files they
+// The files whose imports count for a plan whose files are `own`: its own files; the files they
 // import (one hop — the shell a screen renders in); every ANCESTOR (a file that transitively imports one of
 // them: App → router → routes → this page); and the files an ancestor imports — except another screen's
 // own file (listed by exactly one plan, not this one): App → Page → {ScreenA, ScreenB} must not let plan A
@@ -915,7 +915,7 @@ function reachableFor(g: ProjectGraph, own: readonly string[]): FileText[] {
   return [...out].map((r) => g.byRel.get(r)).filter((f): f is FileText => !!f);
 }
 
-// ---------------------------------------------------------------- F-58: profile and tag coverage
+// ---------------------------------------------------------------- profile and tag coverage
 // The plan's `target` ("web-tailwind", or {profile: "web-tailwind", …}), else design/target.json's `profile`.
 function profileOf(plan: Plan, cwd: string): string | null {
   const t = plan.target;
@@ -940,7 +940,7 @@ function tagCoverageOf(plan: Plan, exp: ExportHit | null, files: FileText[]): { 
   return { tagged: ids.length - untagged.length, anchored: ids.length, attribute, untagged };
 }
 
-// ---------------------------------------------------------------- F-124: colour tokens nothing declares
+// ---------------------------------------------------------------- colour tokens nothing declares
 const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".git", "design", ".next", "out", "coverage", ".turbo", ".svelte-kit", ".nuxt", ".output",
   "Pods", ".venv", "venv", "vendor", "target", "tmp"]);
 const TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
@@ -986,7 +986,7 @@ function declaredCustomProps(files: FileText[]): Set<string> {
 // What a codeToken needs declared (tokenParts): a custom property for `--x` / `var(--x)`, `--color-<name>`
 // for a colour utility that is not a Tailwind built-in. Anything else (a bare name, `Color.brand`) is not checked.
 const requiredCustomProps = (codeToken: string): string[] => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
-// F-124: a colour row's codeToken whose custom property no file declares — the utility or variable it
+// A colour row's codeToken whose custom property no file declares — the utility or variable it
 // names renders nothing (a hand-written @theme without the alias). Not checked in a project with a
 // tailwind.config.* (Tailwind v3: colours are configured there, not declared as CSS variables).
 function undeclaredColourTokens(live: PlanTokenRow[], g: ProjectGraph): string[] {
@@ -1002,7 +1002,7 @@ function undeclaredColourTokens(live: PlanTokenRow[], g: ProjectGraph): string[]
   return [`${missing.length} colour code token(s) are declared nowhere — not in any plan's files[] nor in a .css file of the project: ${show}${missing.length > 8 ? `, +${missing.length - 8} more` : ""} — a utility or variable with no definition renders nothing; add the alias to the theme (e.g. in the @theme block the tokens script writes)`];
 }
 
-// ---------------------------------------------------------------- F-54: a deviation that contradicts the plan
+// ---------------------------------------------------------------- a deviation that contradicts the plan
 const STYLE_FIELDS = new Set(["effects", "shadow", "fill", "fills", "stroke", "strokes", "radius", "cornerradius", "opacity", "padding", "gap", "font",
   "typography", "color", "background", "border", "blur", "size", "width", "height", "fontsize", "fontweight", "lineheight", "letterspacing",
   "borderradius", "borderwidth", "textalign", "textcase"]);
@@ -1051,7 +1051,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== undefined).map((a) => String(a.value).toLowerCase()));
   const allowedFiles = (plan.allowedLiterals || []).filter((a) => a && a.reason && a.file).map((a) => String(a.file));
   const isAllowed = (row: PlanTokenRow, literal: string): boolean => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
-  // `codeTokens`: every plan token that resolves to this literal's value (F-31) — a line defining any of them is a definition.
+  // `codeTokens`: every plan token that resolves to this literal's value — a line defining any of them is a definition.
   function definedOnlyInTokenSource(literal: string, codeTokens: readonly string[]): boolean {
     if (!literal) return false;
     let seen = false;
@@ -1079,8 +1079,8 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     warnings.push(`${undecided.length} token row(s) have no token and no recorded decision: ${show}${undecided.length > 8 ? `, +${undecided.length - 8} more` : ""} — fill codeToken, or say what you did about it in \`decision\` (a one-off literal is a legitimate answer; say so)`);
   }
 
-  // Token IDENTITY: two DIFFERENT Figma tokens on one code token (finding 130 — right, and kept).
-  // F-43: a row carrying `"acknowledged": "<why>"` is a merge a person decided on — it is left out.
+  // Token IDENTITY: two DIFFERENT Figma tokens on one code token.
+  // A row carrying `"acknowledged": "<why>"` is a merge a person decided on — it is left out.
   for (const row of live) if (row.acknowledged !== undefined && !isAcknowledged(row)) warnings.push(`token row '${row.figmaName || String(row.value)}' has an empty \`acknowledged\` — say why the shared code token is right, or remove the field`);
   const byCodeToken = new Map<string, Map<string, PlanTokenRow["value"]>>();
   for (const row of live) {
@@ -1097,7 +1097,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   }
 
   // BLOCK 1: an unexplained colour literal. One message per LITERAL, however many plan rows resolve it
-  // (finding 100 raised two problems for one comment).
+  // (a doc comment naming one literal would otherwise raise two problems).
   const colors = colorLiterals(source);
   const colourHits = new Map<string, { value: PlanTokenRow["value"]; tokens: string[]; defs: string[] }>();
   for (const row of live) {
@@ -1110,11 +1110,11 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     }
   }
   for (const [lit, e] of colourHits) {
-    // Finding 325: name only files that USE the literal — not an allow-listed token file, not a file
+    // Name only files that USE the literal — not an allow-listed token file, not a file
     // where every occurrence is a token's own definition line.
     const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel)
       && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => definesAny(l, lit, e.defs, isStylesheet(f.rel)))).map((f) => f.rel);
-    // F-31: a block must name where the literal is used. No such file means every occurrence is a
+    // A block must name where the literal is used. No such file means every occurrence is a
     // definition or allow-listed — nothing to fix, so nothing to block on.
     if (!where.length) continue;
     blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${String(e.value)} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} — use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "…"}, matched on the exact value string, or name the file that defines the tokens: {"file": "…", "reason": "…"}`);
@@ -1130,7 +1130,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   }
 
   // Every plan's files[] under design/plan/ (this one's included): a shared shell lives in another plan's
-  // files, and the import check (F-43), the tag count (F-58) and the declared-token check (F-124) see it.
+  // files, and the import check, the tag count and the declared-token check see it.
   let built: ProjectGraph | null = null;
   const graph = (): ProjectGraph => built || (built = o.graph ? o.graph() : buildGraph(cwd, listed));
   const sharedByFile = (): FileText[] => graph().files.filter((f) => !listed.includes(f.rel));
@@ -1143,7 +1143,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     const verdict = verdictOf(row);
     if (verdict === "reused" && row.mapModule && !seenModule.has(row.mapModule)) {
       seenModule.add(row.mapModule);
-      // F-43: see reachableFor — this plan's files, what they import, and the app shell that renders them.
+      // See reachableFor — this plan's files, what they import, and the app shell that renders them.
       if (!moduleImported(row.mapModule, byFile, cwd) && !moduleImported(row.mapModule, reachable(), cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (neither this plan's files, nor a plan file they import, nor one that renders them — an app shell — or its direct imports; compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) — was it regenerated instead of reused? If it is rendered by a shared layout above this screen (e.g. an app shell), list that layout file in this plan's files[] too`);
     }
     const mappedTo = verdict === "new" && row.key ? mapped.get(row.key) : undefined;
@@ -1168,7 +1168,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     if (cov.unknown.length) warnings.push(`${cov.unknown.length} anchor(s) name node ids that are not on this frame (${cov.unknown.slice(0, 4).join(", ")}${cov.unknown.length > 4 ? ", …" : ""}) — e.g. a shared shell tagged with another frame's instance ids; anchor THIS frame's ids`);
   }
 
-  // F-58: web tag coverage. F-124: colour code tokens nothing declares.
+  // Web tag coverage; colour code tokens nothing declares.
   let tagCoverage: TagCoverage | undefined;
   if (isWebProfile(profileOf(plan, cwd))) {
     const optOut = plan.tagging;
@@ -1197,15 +1197,14 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
   warnings.push(...auditGateWarnings(plan, cwd, exp));
-  // One line per distinct message (F-45: the same sentence repeated is noise that buries the real ones).
+  // One line per distinct message (the same sentence repeated is noise that buries the real ones).
   return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...(tagCoverage ? { tagCoverage } : {}) };
 }
 
-// Finding 136: only a WARNING (this file blocks on a raw colour, an unanchored node and — web — no tags at all). When design/audit/<screen>.json (or a legacy-named audit) has blocker(s) and the
+// Only a WARNING (this file blocks on a raw colour, an unanchored node and — web — no tags at all). When design/audit/<screen>.json (or a legacy-named audit) has blocker(s) and the
 // plan has no auditGate covering them, a build reading a Blocked audit and proceeding would otherwise
 // be indistinguishable, on disk, from one that never read it.
-// (audit-gate.ts is a static import now; the CJS version's lazy require — and its "could not load →
-// no warnings" fallback — is gone, since a static import cannot fail at this point.)
+// (audit-gate.ts is a static import, which cannot fail at this point.)
 function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | undefined): string[] {
   const screenFile = plan.file ? path.resolve(cwd, plan.file) : null;
   const screenName = plan.screenName || (exp && exp.layerName) || null;
@@ -1219,14 +1218,14 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
     return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` — either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
   }
   const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
-  // F-44: a blocker is covered by its id (`code` / `code@nodeId`, + `~n`) — which is also the bare code a
-  // person writes for a node-less finding — or by its pre-F-44 positional id (`code#i`), so an older plan's
+  // A blocker is covered by its id (`code` / `code@nodeId`, + `~n`) — which is also the bare code a
+  // person writes for a node-less finding — or by its older positional id (`code#i`), so an older plan's
   // decision still stands. The warning lists the new ids.
   const out: string[] = [];
   const uncovered = g.blockers.filter((id, i) => !overridden.has(id) && !overridden.has(g.legacyBlockers[i] ?? id));
   if (uncovered.length) out.push(`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} — either resolve them or add them with a reason`);
   else if (!gate.reason) out.push(`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` — say why it is safe to build past ${g.auditFile}`);
-  // D134 (FU-legacy-id): the positional id is still accepted, but it is not stable — it is the blocker's
+  // The positional id is still accepted, but it is not stable — it is the blocker's
   // position among ALL blockers, so fixing an earlier one shifts it onto a different blocker and the old
   // entry silently covers that one. ONE non-blocking warning maps every entry that covers a blocker only
   // through its positional id to the stable id, and names a positional entry that matches no current blocker.
@@ -1246,10 +1245,10 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
 
 // ================================================================ the verify report behind a plan
 
-// Reports are found by name first — `<Layer>__<id>` (verify-screen's default --out since P3), the plan's
+// Reports are found by name first — `<Layer>__<id>` (verify-screen's default --out), the plan's
 // own name, its `screen` — then by content: a report whose `nodeId` is the plan's, whose sibling
 // `<stem>.expected.json` is this frame's (`frame.nodeId`, verify-expectation@2), or whose `screen` is
-// the frame's layer name when that name is unique in the export (the pre-P3 `JetRoles.report.json`
+// the frame's layer name when that name is unique in the export (the older `JetRoles.report.json`
 // naming carries only the layer name). Every match counts; ONE failing report is enough to fail.
 // Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|pass-with-deviations|fail|
 // incomplete, `headline`, `inputs.expectationSha256` — the expectation it was computed against,
@@ -1279,7 +1278,7 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     const stem = f.replace(/\.report\.json$/, "");
     let by: ReportMatch | null = null;
     const expFile = path.join(dir, stem + ".expected.json");
-    // DT-34: a set retired by the guard's printed migration (`<old>.expected.json.retired`) is history, not this screen's report
+    // A set retired by the guard's printed migration (`<old>.expected.json.retired`) is history, not this screen's report
     if (!fs.existsSync(expFile) && fs.existsSync(expFile + ".retired")) continue;
     // Only the expectation's frame.nodeId is read here, so only that is required of the file.
     const expFrame = (): string | null => { const x = readJsonOrNull(expFile, isJsonObject); return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null; };
@@ -1310,7 +1309,7 @@ interface Verdict { status: PlanComputedStatus; reasons: string[] }
 
 // What the verify report(s) say about this plan, on their own: { status, reasons }. status is one of
 // failed | unverified | static-only | verified | verified-with-deviations. Never empty reasons.
-// A report that recorded no inputs.waivers (older than group 9) applied none: it stays fresh while the
+// A report that recorded no inputs.waivers (an older report) applied none: it stays fresh while the
 // plan has none, and goes stale once the owner accepts one.
 const NO_WAIVERS = waiversHash(null);
 const waiversChanged = (r: ReportRef, now: string): boolean => (r.waiversSha256 || NO_WAIVERS) !== now;
@@ -1321,7 +1320,7 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
     if (v && v.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically — not rendered (${v.reason || "no reason recorded"})`] };
     return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ — run ${scriptCmd("verify-screen")} --expect/--compare (the report's verdict is what grants "verified")`] };
   }
-  // Finding 316: a report older than verify-report@2 counted hidden layers as "never built" / "failed"
+  // A report older than verify-report@2 counted hidden layers as "never built" / "failed"
   // (0-for-83 wrong on the live run). Its figures are not repeated as fact — only its verdict, labelled.
   const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
   if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
@@ -1334,7 +1333,7 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
   // not a pass — and not a failure the build caused either.
   const notPass = reports.filter((r) => !isPassingVerdict(r.verdict));
   if (notPass.length) return { status: "unverified", reasons: notPass.map(said) };
-  // Freshness is decided by CONTENT, never by a clock (findings 314/317): not exportedAt (a no-change
+  // Freshness is decided by CONTENT, never by a clock: not exportedAt (a no-change
   // re-pull rewrites it), not mtimes (a `touch` or a fresh clone reorders them).
   const expSha = exp && exp.doc ? contentHash.exportContentSha256(exp.doc) : null;
   for (const r of reports) {
@@ -1347,7 +1346,7 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
     if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
     const now = fileHashes(plan, cwd);
-    // D117: a mapped module an older report never hashed reads "(not recorded)" — one re-compare records it
+    // A mapped module an older report never hashed reads "(not recorded)" — one re-compare records it
     const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => (measured[f] === undefined ? `${f} (not recorded)` : f));
     if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — re-run --compare`] };
     if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
@@ -1406,13 +1405,13 @@ function computeStatus(plan: Plan, opts?: StatusOptions): StatusResult {
 // Several screens build in parallel (one screen-builder each), and every one lands here when it
 // stops. Narrow to the plans the stopping agent's own transcript mentions (a subagent's own transcript
 // when the payload names one, else the session's). A transcript that mentions NO plan file checks
-// NOTHING (F-45): build-screen's Stop hook is skill-scoped, so it also fires in an orchestrator session
+// NOTHING: build-screen's Stop hook is skill-scoped, so it also fires in an orchestrator session
 // that loaded the skill and built nothing itself — it must not block that session on a plan another
 // agent is still filling. A transcript that mentions only plans the hook already closed narrows to
 // nothing too: agent A, finished, is not blocked on agent B's half-built plan. `scope: "unscoped"` means
 // the payload carried no readable transcript at all (a hand-piped `{"cwd": …}`): every open plan is checked.
 export type PlanScope = "unscoped" | "none-named" | "named";
-// OWNERSHIP (F-45). A plan is this session's when the session's OWN tool calls (message.content[] tool_use
+// OWNERSHIP. A plan is this session's when the session's OWN tool calls (message.content[] tool_use
 // items; for the session transcript, not a subagent's sidechain entries) either
 //   (a) WRITE the plan; or
 //   (b) WRITE a file that exactly ONE open plan lists in files[] — a builder or fixer editing that
@@ -1615,7 +1614,7 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
   // write must not reset it, or a blocked leftover plan would stay "fresh" (and nag) forever.
   let times: [Date, Date] | null = null;
   try { const s = fs.statSync(p.file); times = [s.atime, s.mtime]; } catch { /* new file */ }
-  writePlan(p.file, plan); // L5: atomic, in the plan file's own format (BOM, indentation, line endings)
+  writePlan(p.file, plan); // atomic, in the plan file's own format (BOM, indentation, line endings)
   if (times) try { fs.utimesSync(p.file, times[0], times[1]); } catch { /* ignore */ }
   const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports });
   return { blocking, warnings, cleared, status: st };
@@ -1636,7 +1635,7 @@ async function main(argv: string[]): Promise<number> {
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p): p is BadPlan => !isPlanFile(p)) } : findPlans(process.cwd());
     for (const b of bad) console.error(`verify-build: cannot read plan ${b.file}: ${b.error}`);
     const show = (f: string): string => { const r = path.relative(process.cwd(), f); return r.startsWith("..") ? f : r; };
-    // L12 (D119 addendum): the mapModules the code hash cannot follow — one note per plan, here only (the Stop hook stays quiet)
+    // The mapModules the code hash cannot follow — one note per plan, here only (the Stop hook stays quiet)
     const rows = plans.map((p) => {
       const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });
       const skipped = contentHash.planCodeSkippedNote(p.plan, rootOfPlan(p.file));

@@ -1,5 +1,5 @@
-// Motion / animation reads (Plugin API Update 130, 2026-06). Keyframe/timeline VALUES are now
-// readable FREE via the Plugin API — this is a new plane the paid get_motion_context used to own.
+// Motion / animation reads (Plugin API Update 130, 2026-06). Keyframe/timeline VALUES are
+// readable FREE via the Plugin API — a plane the paid get_motion_context tool otherwise covers.
 // Opt-in (runOpts.motion) because it's niche and can be verbose.
 import type {
   JsonValue, MotionKeyframe, MotionTrack, MotionAnimation, MotionIndexedTracks, MotionPaintTrack, MotionEffectTracks, NodeMotion,

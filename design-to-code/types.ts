@@ -11,17 +11,17 @@
 // Derived from FOUR sources, reconciled in this order of authority:
 //   1. The PRODUCER: figma-plugin/src/serialize.ts (+ paint.ts, text.ts, layout.ts, effects.ts,
 //      prototype.ts, variables.ts, components.ts, libraries.ts, assets.ts, collect.ts, state.ts) and the
-//      bridge writers that put those documents on disk (bridge/pages-layout.js, design-system-layout.js,
-//      variables-merge.js, write-out.js). The plugin types its output as a loose string-keyed bag
+//      bridge writers that put those documents on disk (bridge/src/pages-layout.ts, design-system-layout.ts,
+//      variables-merge.ts, write-out.ts). The plugin types its output as a loose string-keyed bag
 //      (util.ts `Obj`), so what it ASSIGNS is what is declared here.
 //      RULE: the producer (serialize.ts) is authoritative for IR field names. A field a consumer reads
-//      that the producer never writes is either marked `// TODO(ts-port): unverified field` below (when
-//      the port brief asked for it) or deliberately left out and listed in the phase-3a report.
+//      that the producer never writes is declared only when an older export spelling still has to be read
+//      (and says so on the field), and is otherwise left out.
 //   2. The real exports under test/fixtures/livetest3/ (pages/**, design-system/*.json, variables.json,
 //      plan/**, verify/**, mapping.reference.json), test/fixtures/audit/*.json and test/fixtures/livetest4/
 //      (a key/kind census over every node of every fixture tree was run for the IR).
 //   3. TESTING.md "What the agent verifies in the exported JSON" and docs/design-to-code-spec.md.
-//   4. Every property access in design-to-code/*.js (the consumers), which decided which fields are
+//   4. Every property access in design-to-code/*.ts (the consumers), which decided which fields are
 //      `?:` and which string values are literal unions (finding codes, kinds, verdicts, platforms).
 //
 // Conventions: `?:` on every field that a fixture or the producer treats as optional (the producer
@@ -33,9 +33,8 @@
 
 // ================================================================ re-exported from bridge/src/doc-types.ts
 // raw JSON, the IR, the documents a pull writes, the design-system split files (and the collector
-// documents the bridge's layout modules split) — moved to the bridge in step 4 of the TS port (the
-// bridge's tsc program must stay inside its rootDir). Explicit list on purpose: a name added there is a
-// deliberate addition here.
+// documents the bridge's layout modules split) — declared in the bridge because the bridge's tsc program
+// must stay inside its rootDir. Explicit list on purpose: a name added there is a deliberate addition here.
 
 import type {
   JsonValue, JsonObject, IrNodeType, TokenMap, ComponentPropValues, IndexRow, IrNode, LayerFile, ScreenExport,
@@ -69,9 +68,9 @@ export type {
  */
 export type ScreenDoc = ScreenExport | LayerFile | IrNode;
 
-// ================================================================ codeconnect.local.json (map-validate.js is THE source of truth)
+// ================================================================ codeconnect.local.json (map-validate.ts is THE source of truth)
 
-/** kinds.js TYPE_TO_KIND values — the transform vocabulary. Note TEXT → "string" (not "text"). */
+/** kinds.ts TYPE_TO_KIND values — the transform vocabulary. Note TEXT → "string" (not "text"). */
 export type MapPropKind = "enum" | "boolean" | "string" | "instance";
 export type MapStatus = "active" | "deprecated" | "needs-review";
 export interface EnumPropMap { kind: "enum"; codeProp: string; values?: Record<string, string | number | boolean | null>; default?: string | number | boolean; omitDefault?: boolean }
@@ -96,10 +95,10 @@ export interface CodeConnectMap {
   /** keyed by publish key (or node id when unpublished, or the SCREEN's instance key for a confirmed re-key proposal) */
   components: Record<string, MapEntry>;
 }
-/** map-validate.js validateMap() */
+/** map-validate.ts validateMap() */
 export interface MapValidationResult { ok: boolean; errors: Array<{ path: string; message: string }> }
 
-// ================================================================ component-match.js
+// ================================================================ component-match.ts
 
 /** What matchByNameAndSignature() reads per instance: plan-skeleton's rows (keys `null`, no screen label) or visibleInstances()' output. */
 export interface MatchInstance {
@@ -117,7 +116,7 @@ export interface MatchInstance {
   variant: Record<string, string> | null;
   props: ComponentPropValues;
 }
-/** component-match.js visibleInstances(): always labelled; a missing key is absent, never null. */
+/** component-match.ts visibleInstances(): always labelled; a missing key is absent, never null. */
 export interface VisibleInstance extends MatchInstance { screen: string; key?: string; setKey?: string }
 export interface MatchTarget { id?: string; key?: string; name: string; type: "COMPONENT" | "COMPONENT_SET"; page?: string }
 export interface MatchAlternative { id?: string; key?: string; page?: string; score: number }
@@ -137,11 +136,11 @@ export interface MatchRow {
   reasons: string[];
   evidence?: MatchEvidence;
   tie?: MatchTie;
-  /** every catalog entry sharing this name, in catalog order — set only when there are 2 or more (DT-27:
+  /** every catalog entry sharing this name, in catalog order — set only when there are 2 or more;
    *  nameVerdict's "ambiguous" when none verified; plan-skeleton's `catalog.by:"ambiguous"` lists them) */
   candidates?: MatchCandidate[];
 }
-/** component-match.ts nameVerdict(): the one name rule (DT-27) cross-check and plan-skeleton share. */
+/** component-match.ts nameVerdict(): the one name rule cross-check and plan-skeleton share. */
 export interface NameVerdict { status: "matched" | "ambiguous" | "unmatched"; reason: string }
 /** A same-named catalog entry (MatchRow.candidates, PlanComponentMatch `by:"ambiguous"`). */
 export interface MatchCandidate { id?: string; key?: string; name: string }
@@ -151,21 +150,21 @@ export interface MatchSummary {
 /** A row matchByNameAndSignature proposes: it has a catalog match (and none by key). */
 export type ProposedMatchRow = MatchRow & { match: MatchTarget };
 export interface MatchResult { rows: MatchRow[]; proposals: ProposedMatchRow[]; summary: MatchSummary }
-/** cross-check.js componentProposals[] — a MatchRow reshaped for a person to confirm. */
+/** cross-check.ts componentProposals[] — a MatchRow reshaped for a person to confirm. */
 export interface ComponentProposal {
   name: string; instances: number; screens: string[]; instanceKeys: string[]; remote: boolean;
   catalog: MatchTarget | null; evidence?: MatchEvidence; tie: MatchTie | null; alternatives: MatchAlternative[]; reasons: string[];
   confirmed: boolean;
-  /** F-47: a label only — this name is already mapped in the project's code-connect map */
+  /** a label only — this name is already mapped in the project's code-connect map */
   alreadyMapped?: true;
-  /** F-47: how many OTHER exported screens use the same instance or set key (shared chrome); ordering only */
+  /** how many OTHER exported screens use the same instance or set key (shared chrome); ordering only */
   sharedWith?: number;
 }
 
-// ================================================================ findings (audit.js / cross-check.js / drift-lint.js)
+// ================================================================ findings (audit.ts / cross-check.ts / drift-lint.ts)
 
 export type Severity = "blocker" | "warning" | "info";
-/** D1/D11: the ONLY codes that may be emitted as a blocker (audit.ts `add` / cross-check.ts `push` accept
+/** the ONLY codes that may be emitted as a blocker (audit.ts `add` / cross-check.ts `push` accept
  *  "blocker" with these codes only — a compile error otherwise). audit.ts BLOCKER_CODES lists them at runtime. */
 export type BlockerCode = "export-truncated" | "assets-failed" | "missing-font" | "token-name-collision";
 export interface SeverityCounts { blockers: number; warnings: number; info: number }
@@ -238,14 +237,14 @@ export interface FindingExtras {
   stroke?: string; backdrop?: string; strokeToken?: string; backdropToken?: string;
   /** duplicate-root-subtree: the in-flow node the stray absolute copy duplicates */
   twinId?: string;
-  /** D1/D11: a cross-file warning to CONFIRM with the user before building on its default — the question */
+  /** a cross-file warning to CONFIRM with the user before building on its default — the question */
   confirm?: string;
   // ---- cross-check.ts
   /** foreign-token-library: the screen's collections the design system does not have */
   collections?: Array<{ name: string; key?: string; twinKey?: string; twinName?: string }>;
-  /** foreign-token-library (DT-07): the screen's variables in those collections, classified by NAME against the design system */
+  /** foreign-token-library: the screen's variables in those collections, classified by NAME against the design system */
   nameMap?: { agree: number; differ: number; undecidable: number; absent: number;
-    /** FU-namemap: rows of an export without `collectionKey` whose collection NAME a design-system collection also has — counted by name, so they may belong to either; absent when 0 */
+    /** rows of an export without `collectionKey` whose collection NAME a design-system collection also has — counted by name, so they may belong to either; absent when 0 */
     ambiguous?: number };
   /** token-name-collision */
   token?: string; key?: string; alsoKnownAs?: string; screenValue?: Record<string, string>; designSystemValue?: Record<string, string>;
@@ -280,19 +279,19 @@ export interface Finding<Code extends string = string> extends FindingExtras {
   severity: Severity;
   code: Code;
   message: string;
-  /** F-44: `code`, or `code@nodeId`, plus `~n` for the n-th repeat of that pair in one report
+  /** `code`, or `code@nodeId`, plus `~n` for the n-th repeat of that pair in one report
    *  (finding-id.ts findingIds) — the same id in audit and cross-check reports */
   id?: string;
   nodeId?: string;
   nodeName?: string;
   screen?: string;
   path?: string;
-  /** set when a <out>.overrides.json entry changed this finding's severity (DT-21) */
+  /** set when a <out>.overrides.json entry changed this finding's severity */
   overridden?: { from: Severity; reason: string; decidedBy?: string; decidedAt?: string };
 }
 export type CrossCheckFinding = Finding<CrossCheckFindingCode>;
-/** audit.js findings: its own codes, plus cross-check's (merged in with `crossFile: true`); `overridden`
- *  when a <out>.overrides.json entry changed its severity (DT-21). */
+/** audit.ts findings: its own codes, plus cross-check's (merged in with `crossFile: true`); `overridden`
+ *  when a <out>.overrides.json entry changed its severity. */
 export type AuditFinding = Finding<AuditFindingCode | CrossCheckFindingCode> & { crossFile?: true };
 /** One entry of design/audit/<screen>.overrides.json: which finding(s) (code, narrowed by nodeId / token /
  *  component when given), the severity the user decided, and why. */
@@ -316,9 +315,9 @@ export interface CoverageEntry {
   ambiguous?: true;
   candidates?: number;
   bucket?: CoverageBucket;
-  /** DT-27: why a name-stage entry is unmatched/ambiguous (component-match nameVerdict's reason) */
+  /** why a name-stage entry is unmatched/ambiguous (component-match nameVerdict's reason) */
   reason?: string;
-  /** DT-27: how much a name match proved (component-match's evidence) */
+  /** how much a name match proved (component-match's evidence) */
   evidence?: MatchEvidence;
 }
 export interface CrossCheckCoverage {
@@ -331,7 +330,7 @@ export interface CrossCheckCoverage {
 }
 /** Which inputs crossCheck() was given. `screens` = the screen LABELS (file stems), not paths. */
 export interface CrossCheckInputs { screens: string[]; variables: boolean; tokens: boolean; components: boolean; stylesText: boolean }
-/** cross-check.js crossCheck(). audit.js embeds the same shape (or a stub — see AuditCrossFile) under `crossFile`. */
+/** cross-check.ts crossCheck(). audit.ts embeds the same shape (or a stub — see AuditCrossFile) under `crossFile`. */
 export interface CrossCheckReport {
   summary: SeverityCounts;
   coverage: CrossCheckCoverage | null;
@@ -341,7 +340,7 @@ export interface CrossCheckReport {
   notChecked: string[];
   inputs: CrossCheckInputs;
 }
-/** audit.js report.crossFile: the cross-check report, or — no design system given — a stub with coverage:null and `inputs: {}`. */
+/** audit.ts report.crossFile: the cross-check report, or — no design system given — a stub with coverage:null and `inputs: {}`. */
 export type AuditCrossFile = CrossCheckReport | (Omit<CrossCheckReport, "inputs"> & { inputs: Partial<CrossCheckInputs> });
 
 export type ControlKind = "button" | "input" | "select" | "toggle" | "tab" | "link";
@@ -360,7 +359,7 @@ export interface ScreenAssetsDoc {
   heavy?: Array<{ file: string; bytes: number; paths?: number; embeddedRaster?: number }>;
   files?: Array<{ file: string; node?: string }>;
 }
-/** audit.js audit() — also what --out writes to <out>.json. */
+/** audit.ts audit() — also what --out writes to <out>.json. */
 export interface AuditReport {
   platform: AuditPlatform;
   platformAssumed: boolean;
@@ -370,7 +369,7 @@ export interface AuditReport {
   gridMismatch?: number | null;
   screenStatesScope: { rootsAudited: number; singleFrame: boolean };
   screens: string[];
-  /** the root node id(s) audited (P3 round 3) — absent on older reports */
+  /** the root node id(s) audited — absent on older reports */
   nodeIds?: string[];
   summary: SeverityCounts;
   hiddenLayers?: { nodesSkipped: number; crossFileFindingsOmitted: number };
@@ -395,7 +394,7 @@ export interface DriftFinding {
   from?: string; to?: string; exportedAt?: string; ageMs?: number; maxAgeMs?: number;
 }
 export interface FreshnessWarning { code: "unknown-freshness" | "stale-snapshot"; message: string }
-/** drift-lint.js driftLint(). (There is no `ok`: the CLI exits 1 on `errors.length`.) */
+/** drift-lint.ts driftLint(). (There is no `ok`: the CLI exits 1 on `errors.length`.) */
 export interface DriftLintResult {
   errors: DriftFinding[];
   warnings: DriftFinding[];
@@ -403,19 +402,19 @@ export interface DriftLintResult {
   /** mapped: components of the NAMED catalog with an entry; mappedElsewhere: entries resolved in another catalog read beside it */
   summary: { entries: number; catalogComponents: number; mapped: number; mappedElsewhere: number; errorCount: number; warningCount: number };
 }
-/** drift-lint.js screenCoverage() */
+/** drift-lint.ts screenCoverage() */
 export interface ScreenCoverage {
   distinct: number; instances: number; hiddenInstances: number; hiddenOnly: number; inCatalog: number; inMap: number;
   catalogPct: number | null; mapPct: number | null;
   unmapped: Array<{ setName?: string; key: string; instances: number }>;
 }
 
-// ================================================================ design/plan/<screen>.json (plan-skeleton.js skeleton())
+// ================================================================ design/plan/<screen>.json (plan-skeleton.ts skeleton())
 
 export type PlanLifecycle = "pending" | "awaiting-user" | "abandoned";
-/** What a PERSON sets; "verified"/"static-only" were written by an older hook and are ignored by verify-build.js. */
+/** What a PERSON sets; "verified"/"static-only" were written by an older hook and are ignored by verify-build.ts. */
 export type PlanStoredStatus = PlanLifecycle | "verified" | "static-only" | (string & {});
-/** verify-build.js computeStatus() */
+/** verify-build.ts computeStatus() */
 export type PlanComputedStatus = PlanLifecycle | "failed" | "blocked" | "stale" | "unverified" | "static-only" | "verified" | "verified-with-deviations";
 export type TokenKind =
   | "color" | "fontStyle" | "string" | "boolean" | "radius" | "fontSize" | "fontWeight" | "lineHeight" | "letterSpacing"
@@ -445,10 +444,10 @@ export interface PlanTokenRow {
   /** a person's reason for deliberately sharing this row's codeToken with another Figma name (silences
    *  verify-build's merged-token warning for this row) */
   acknowledged?: string;
-  /** DT-33: the sibling plan (`--seed-from`) this row's person-owned answer was copied from */
+  /** the sibling plan (`--seed-from`) this row's person-owned answer was copied from */
   seededFrom?: string;
 }
-/** A component row's catalog entry. `by:"ambiguous"` (DT-27) names the same-named candidates a person must
+/** A component row's catalog entry. `by:"ambiguous"` names the same-named candidates a person must
  *  choose between — it is NEVER a match (no id/key/name of its own); narrow on `by` before reading `name`. */
 export type PlanComponentMatch =
   | { by: "key" | MatchEvidence; id?: string; key?: string; name: string; confirmed?: false }
@@ -473,18 +472,18 @@ export interface PlanComponentRow {
   figmaName?: string;
   note?: string;
   repoPath?: string;
-  /** DT-33: the sibling plan (`--seed-from`) this row's person-owned answer was copied from */
+  /** the sibling plan (`--seed-from`) this row's person-owned answer was copied from */
   seededFrom?: string;
 }
 /** anchors{}[nodeId]. A node is ANCHORED when one of mapModule/file/symbol/omitted is a non-blank string. */
 export interface PlanAnchor { name?: string; type?: IrNodeType; parent?: string | null; mapModule?: string; file?: string; symbol?: string; omitted?: string;
-  /** F-77: a layout-only wrapper (no paint) the build folded into this ancestor id; --compare checks the claim */
+  /** a layout-only wrapper (no paint) the build folded into this ancestor id; --compare checks the claim */
   foldedInto?: string;
-  /** D33: this (outermost instance) node is a shared shell — its subtree is counted apart in coverage.sharedShell */
+  /** this (outermost instance) node is a shared shell — its subtree is counted apart in coverage.sharedShell */
   shared?: boolean }
 export interface PlanHiddenRoot { id: string; name: string; type: IrNodeType; nodes: number }
 export interface PlanDeviation { id?: string; nodeId?: string; nodeIds?: string[]; field?: string; designed?: JsonValue; built?: JsonValue; reason?: string; what?: string }
-/** D5: a person's acceptance of ONE report delta (node + field), bound to the export content and the built value.
+/** a person's acceptance of ONE report delta (node + field), bound to the export content and the built value.
  *  Written by `verify-screen --accept`; --compare re-checks every field and reopens it when any moved. */
 export interface PlanWaiver {
   nodeId: string;
@@ -496,7 +495,7 @@ export interface PlanWaiver {
   built: JsonValue;
   /** numeric slack on `built`; default = the field's own tolerance */
   tolerance?: number;
-  /** D21: the whole-export content hash at accept time */
+  /** the whole-export content hash at accept time */
   exportContentSha256: string;
   reason: string;
   decidedBy: string;
@@ -505,7 +504,7 @@ export interface PlanWaiver {
   /** the report group id when accepted with --group */
   cause?: string;
 }
-/** D20: an interaction the owner deliberately left unwired (removed from the graded set before grading). */
+/** an interaction the owner deliberately left unwired (removed from the graded set before grading). */
 export interface PlanDescope {
   nodeId: string;
   trigger: string;
@@ -517,10 +516,10 @@ export interface PlanDescope {
 }
 /** A person's exemption. Only one WITH a reason counts (verify-build.ts ignores a reasonless entry — so it may lack one). */
 export interface AllowedLiteral { value?: string; file?: string; reason?: string }
-/** Pre-filled from an audit with blockers (finding 136); overridden/reason/decidedBy/decidedAt are a person's. */
+/** Pre-filled from an audit with blockers; overridden/reason/decidedBy/decidedAt are a person's. */
 export interface PlanAuditGate {
   auditFile: string | null;
-  /** F-44: `design/audit/<base>.cross.json` when plan-skeleton found it, else null (absent on older plans) */
+  /** `design/audit/<base>.cross.json` when plan-skeleton found it, else null (absent on older plans) */
   crossCheckFile?: string | null;
   verdict: "blocked" | (string & {});
   /** plan-skeleton writes every field below; a person edits them, so any may be missing (verify-build reads them defensively) */
@@ -530,7 +529,7 @@ export interface PlanAuditGate {
   decidedBy?: string | null;
   decidedAt?: string | null;
 }
-/** verify-build.js writes this; never `plan.status`. */
+/** verify-build.ts writes this; never `plan.status`. */
 export interface PlanHookRecord {
   result: "pass" | "blocked";
   checkedAt: string;
@@ -542,13 +541,13 @@ export interface PlanHookRecord {
   /** web profiles: anchored visible nodes whose id appears in a listed file, of how many */
   tagCoverage?: { tagged: number; anchored: number };
 }
-/** F-100 (D115): the tool-owned record of one --compare run, written by plan-record.ts recordPlan(). */
+/** the tool-owned record of one --compare run, written by plan-record.ts recordPlan(). */
 export interface PlanVerificationRecord {
   by: "verify-screen --record-plan"; at: string; report: string; reportSha256: string; verdict: string; headline: string;
   behaviourHeadline?: string;
   counts: { high: number; medium: number; low: number; accepted: number; notMeasured: number; inferred: number };
 }
-/** F-121 (D113): one thing the build does that the design never drew — judged against best practice, never "matched",
+/** one thing the build does that the design never drew — judged against best practice, never "matched",
  *  never the verdict. kind: plan-declared interaction, an interaction whose destination was never exported, a state
  *  measured on a node whose design draws none, or an agent-written row (measured.json / evidence `inferred[]`). */
 export interface InferredRow {
@@ -559,28 +558,28 @@ export interface PlanVerification {
   mode?: "rendered" | "static-only" | (string & {});
   reason?: string;
   renderer?: string;
-  /** Documented as arrays; a plan read from disk may hold anything (the guard does not check them — live L-2: objects). */
+  /** Documented as arrays; a plan read from disk may hold anything (the guard does not check them — a plan was seen holding objects there). */
   artifacts?: string[] | JsonValue;
   deltas?: JsonValue[] | JsonValue;
   coverage?: { rendered?: string[]; notChecked?: Array<string | { what?: string; why?: string }> };
-  /** 12b: the skill copies report.behaviour.summary here — violations = summary.fail, warnings = summary.warn */
+  /** the skill copies report.behaviour.summary here — violations = summary.fail, warnings = summary.warn */
   a11y?: { tool?: string; violations?: number; warnings?: number; report?: string };
   verifyScreenVerdict?: string | { verdict?: string };
   verdict?: string | { verdict?: string };
   hook?: PlanHookRecord;
-  /** F-100 (D115): what `verify-screen --compare --record-plan` recorded (tool-owned; the report is the verdict) */
+  /** what `verify-screen --compare --record-plan` recorded (tool-owned; the report is the verdict) */
   recorded?: PlanVerificationRecord;
   // A model-written verification block often carries more (interactionScript, typecheck, dataDtNode,
   // interactions, …): nothing reads those, and the hook's rewrite carries them through untouched.
 }
-/** L-1 (D40(7)): one step of plan.navigate / probe --steps. `goto` is a same-origin path ("/x?y"). Never fill/press:
+/** one step of plan.navigate / probe --steps. `goto` is a same-origin path ("/x?y"). Never fill/press:
  *  steps are replayed in many contexts, so they must be idempotent and must never submit anything. */
 export type ProbeStep = { click: string } | { waitFor: string } | { goto: string };
-/** F-95: what a plan interaction's activation should produce; `selector:<css>` = that selector appears. */
+/** what a plan interaction's activation should produce; `selector:<css>` = that selector appears. */
 export type PlanInteractionExpect = "dialog" | "url" | `selector:${string}`;
-/** F-95 (D40(7)): a plan.interactions[] row — keyed nodeId + trigger like an export reaction. */
+/** a plan.interactions[] row — keyed nodeId + trigger like an export reaction. */
 export interface PlanInteraction { nodeId: string; trigger: string; expect: PlanInteractionExpect; destinationId?: string; name?: string }
-/** F-34: one anchor worth filling `mapModule` on first (plan-skeleton.ts suggestAnchors); `covers` = the visible
+/** one anchor worth filling `mapModule` on first (plan-skeleton.ts suggestAnchors); `covers` = the visible
  *  nodes it stands for (itself + descendants). "screen" is the screen frame itself, listed first. */
 export interface AnchorSuggestion { id: string; name: string; why: "screen" | "section" | "instance" | "repeat"; covers: number }
 export interface Plan {
@@ -604,28 +603,28 @@ export interface Plan {
   components?: PlanComponentRow[];
   anchors?: Record<string, PlanAnchor>;
   hidden?: PlanHiddenRoot[];
-  /** F-34: skeleton-owned, refreshed on every merge, not in counts */
+  /** skeleton-owned, refreshed on every merge, not in counts */
   anchorsSuggested?: AnchorSuggestion[];
   deviations?: PlanDeviation[];
-  /** D5: accepted report deltas (verify-screen --accept); excluded from verify-build's planHash */
+  /** accepted report deltas (verify-screen --accept); excluded from verify-build's planHash */
   waivers?: PlanWaiver[];
-  /** D20: interactions deliberately not wired (owner-only); excluded from verify-build's planHash */
+  /** interactions deliberately not wired (owner-only); excluded from verify-build's planHash */
   descopes?: PlanDescope[];
   auditGate?: PlanAuditGate | null;
   counts?: { tokens: number; tokensVisible: number; instances: number; anchors: number; hiddenNodes: number };
   allowedLiterals?: AllowedLiteral[];
   verification?: PlanVerification;
-  /** L-1 (D40(7)): the steps that take a freshly loaded page to this screen (a section behind a click). Closed,
+  /** the steps that take a freshly loaded page to this screen (a section behind a click). Closed,
    *  navigation-only vocabulary (probe-steps.ts parseSteps); rows are validated where used, not by the plan guard. */
   navigate?: Array<ProbeStep | JsonValue>;
-  /** F-95 (D40(7)): interactions the export does not carry (no prototype reaction) — merged at --expect when valid
+  /** interactions the export does not carry (no prototype reaction) — merged at --expect when valid
    *  (probe-steps.ts / verify-screen.ts); only this list's hash binds the expectation (planInteractions.sha256). */
   interactions?: Array<PlanInteraction | JsonValue>;
   // A filled plan often carries more (layout, states, assets, openQuestions, componentCatalog, …): no
   // reader looks at those, and merge() / the hook's rewrite carry them through untouched.
 }
 
-// ================================================================ verify-screen.js
+// ================================================================ verify-screen.ts
 
 export type DrawnState = "hover" | "pressed" | "focus";
 /** One expectation row: ONLY values the export states (a field the export does not define is absent). */
@@ -649,9 +648,9 @@ export interface VerifySpec {
   placeholder?: true;
   placeholderText?: string;
   placeholderColor?: string | null;
-  /** F-69 (D114): Figma's text case on a TEXT node (font.case); `text` keeps the stored string — compare the rendered one */
+  /** Figma's text case on a TEXT node (font.case); `text` keeps the stored string — compare the rendered one */
   textCase?: "upper" | "lower" | "title";
-  /** F-74 (D111): the node whose drawn state this spec inherits (the owner — hover the owner, not this node); absent = itself */
+  /** the node whose drawn state this spec inherits (the owner — hover the owner, not this node); absent = itself */
   drawnStateFrom?: string;
   borderColor?: string | null;
   borderWidth?: number;
@@ -673,48 +672,48 @@ export interface VerifySpec {
   tokens?: TokenMap;
   frameId?: string;
   /** node ids of every ancestor, nearest first, the frame root excluded (a probe scopes a text match to a
-   *  tagged ancestor with it; --compare does not read it). Absent on expectations written before group 7. */
+   *  tagged ancestor with it; --compare does not read it). Absent on older expectations. */
   ancestorIds?: string[];
-  /** the node is absolutely positioned in its auto-layout parent (IrNode.absolute) — never "below the fold" (F-61) */
+  /** the node is absolutely positioned in its auto-layout parent (IrNode.absolute) — never "below the fold" */
   absolute?: true;
-  /** the node or an ancestor is one of a frame's fixed children (pinned while scrolling) — never "below the fold" (F-61) */
+  /** the node or an ancestor is one of a frame's fixed children (pinned while scrolling) — never "below the fold" */
   fixed?: true;
-  /** F-104: a TEXT whose identical string repeats in >=3 sibling rows (placeholder copy); compare may demote its text delta */
+  /** a TEXT whose identical string repeats in >=3 sibling rows (placeholder copy); compare may demote its text delta */
   repeatedText?: true;
-  /** F-104: the rows' group — every spec sharing it is the same text slot in a sibling row */
+  /** the rows' group — every spec sharing it is the same text slot in a sibling row */
   repeatedTextGroup?: string;
-  /** D32/D35: the ids of the SAME node (component key + visible name path under the outermost instance) in sibling
+  /** the ids of the SAME node (component key + visible name path under the outermost instance) in sibling
    *  exports of the same Figma file — a probe may match an element tagged with one of them ("tag-alias") */
   aliases?: string[];
-  /** D29: `width` is the text's INK width (renderBox.w), compared with tolerance textInk */
+  /** `width` is the text's INK width (renderBox.w), compared with tolerance textInk */
   widthFrom?: "renderBox";
-  /** F-79: padding sides that cannot be compared (a fixed axis that is overfull or centres its content) */
+  /** padding sides that cannot be compared (a fixed axis that is overfull or centres its content) */
   paddingSkip?: Array<"top" | "right" | "bottom" | "left">;
-  /** D31: how each axis is sized in auto layout (absent = fixed) — a growing hug axis alone is no size suspect */
+  /** how each axis is sized in auto layout (absent = fixed) — a growing hug axis alone is no size suspect */
   sizing?: { w?: "hug" | "fill"; h?: "hug" | "fill" };
-  /** D34: the design's stroke alignment (strokes.align) — a ring read on the other side of the box is noted, not a delta */
+  /** the design's stroke alignment (strokes.align) — a ring read on the other side of the box is noted, not a delta */
   strokeAlign?: "inside" | "outside" | "center";
 }
 export interface VerifyFrame { nodeId: string; name: string; w?: number; h?: number; x?: number; y?: number; clip?: boolean;
-  /** D43: the frame root's prototype scroll direction (IrNode.scroll) — a frame designed to scroll sideways is no overflowX delta */
+  /** the frame root's prototype scroll direction (IrNode.scroll) — a frame designed to scroll sideways is no overflowX delta */
   scroll?: "horizontal" | "vertical" | "both" }
 /** A root frame as an expectation lists it (no position). */
 export type VerifyRootFrame = Omit<VerifyFrame, "x" | "y">;
 export interface VerifyInstance { nodeId: string; name: string; setName?: string; setKey?: string; variant?: string; props?: ComponentPropValues }
 export interface VerifyInteraction { nodeId: string; name: string; trigger: string; action?: string; destinationId?: string; destination?: string;
-  /** F-60/D22: false when destinationId is no node of the export for the SAME Figma file (only false is written) */
+  /** false when destinationId is no node of the export for the SAME Figma file (only false is written) */
   destinationExported?: boolean;
-  /** F-95: the row came from plan.interactions[] (absent = the export's reactions) */
+  /** the row came from plan.interactions[] (absent = the export's reactions) */
   source?: "plan";
-  /** F-95: the plan row's `expect` (dialog | url | selector:<css>) — `action` is derived from it */
+  /** the plan row's `expect` (dialog | url | selector:<css>) — `action` is derived from it */
   expect?: string;
-  /** F-117: the destination frame's overlay settings (an overlay/swap whose destination root is exported); `from:
+  /** the destination frame's overlay settings (an overlay/swap whose destination root is exported); `from:
    *  "default"` = the export emits no overlay block for it, i.e. Figma's defaults (centred, no scrim, no click-outside) */
   overlay?: VerifyOverlay }
-/** F-117: serialize.ts emits a destination root's overlay block only when it differs from the default. */
+/** serialize.ts emits a destination root's overlay block only when it differs from the default. */
 export interface VerifyOverlay { position: string; closeOnClickOutside: boolean; background: string | null; from: "export" | "default" }
 export interface NotComparable { nodeId: string; name: string; field: string; value: JsonValue; why: string }
-/** <Screen>.expected.json (verify-screen.js buildExpectation) */
+/** <Screen>.expected.json (verify-screen.ts buildExpectation) */
 export interface VerifyExpectation {
   schema: "designtwin/verify-expectation@2" | (string & {});
   screen?: string;
@@ -734,9 +733,9 @@ export interface VerifyExpectation {
   interactions?: VerifyInteraction[];
   notComparable?: NotComparable[];
   hidden?: { roots: Array<{ nodeId: string; name: string; path?: string }>; ids: string[] };
-  /** F-95: the plan whose interactions[] were merged (D40(7): only their hash binds — a change makes --compare incomplete) */
+  /** the plan whose interactions[] were merged (only their hash binds — a change makes --compare incomplete) */
   planInteractions?: PlanInteractionsInput;
-  /** 12c: the reference PNG's geometry over the first frame (absent: an expectation older than 12c, or no reference) */
+  /** the reference PNG's geometry over the first frame (absent: an older expectation, or no reference) */
   referenceImage?: VerifyReferenceImage | VerifyReferenceUnusable;
 }
 /** expectation.planInteractions: which plan, the hash of its interactions[] (plan-waivers.ts planInteractionsSha256),
@@ -746,7 +745,7 @@ export interface PlanInteractionsInput { plan: string; sha256: string; merged: n
 /** What a probe measures for one element. Keys beyond the canonical ones are reported as unknown, so the bag is open.
  *  `null` = the probe could not read the value (the shipped probe gives the reason in MeasuredNode.unmeasured[key]);
  *  --compare lists it as not measured, never as checked. */
-/** F-74 / DT-48 (D111): who paints an element whose own background-color is transparent. */
+/** who paints an element whose own background-color is transparent. */
 export interface PaintedBy { backgroundColor: string; via: "ancestor" | "child"; tag: string; depth: number; dt?: string }
 export interface MeasuredStyles {
   fontFamily?: string | null;
@@ -771,17 +770,17 @@ export interface MeasuredStyles {
   text?: string | null;
   placeholderText?: string | null;
   placeholderColor?: string | null;
-  /** F-69 (D114): computed `text-transform` (inherited) of a TEXT item — optional, not a required style key */
+  /** computed `text-transform` (inherited) of a TEXT item — optional, not a required style key */
   textTransform?: string | null;
-  /** F-74 (D111): when the element's own background is transparent, the ancestor (or same-box child) that paints it */
+  /** when the element's own background is transparent, the ancestor (or same-box child) that paints it */
   paintedBy?: PaintedBy | null;
   tag?: string | null;
   textBox?: { x?: number | null; w?: number | null } | null;
-  /** F-78: getComputedStyle(el).display */
+  /** getComputedStyle(el).display */
   display?: string | null;
-  /** D34: where borderWidth/borderColor were read when the element draws no real border (a ring) */
+  /** where borderWidth/borderColor were read when the element draws no real border (a ring) */
   strokeFrom?: "border" | "box-shadow" | "outline";
-  /** D34: the ring's side of the box — only when strokeFrom is not "border" */
+  /** the ring's side of the box — only when strokeFrom is not "border" */
   strokeAlign?: "inside" | "outside";
   transform?: string | null;
   rotate?: string | null;
@@ -811,34 +810,34 @@ export interface MeasuredNode extends MeasuredStyles {
   fillSource?: "svg" | "background" | "img" | "css";
 }
 export interface MeasuredComponent { setName?: string; name?: string; nodeId?: string; present?: boolean; detail?: string; note?: string }
-/** What an interaction visibly did (F-102) — recorded by whoever drove it, never inferred from `detail`. */
+/** What an interaction visibly did — recorded by whoever drove it, never inferred from `detail`. */
 export type InteractionOutcome = "url-changed" | "dialog-opened" | "selector-appeared" | "state-changed" | "none";
 export interface InteractionEvidence { nodeId: string; trigger?: string; ok?: boolean | null; result?: "not-probed"; selector?: string; selectorCount?: number; detail?: string;
-  /** F-102: what the interaction did — a free-text value is read as "no outcome recorded" */
+  /** what the interaction did — a free-text value is read as "no outcome recorded" */
   outcome?: InteractionOutcome | (string & {});
-  /** F-102 (D24): documents LOADED in the main frame during the interaction — a reload or a cross-document navigation
+  /** documents LOADED in the main frame during the interaction — a reload or a cross-document navigation
    *  (page 'load' events, or a window marker set before and gone after). An in-page URL change (pushState, a hash)
    *  loads none: it is 0. A reload is not an outcome. */
   navEvents?: number;
-  /** F-70: how the shipped probe activated the control — "synthetic" (el.click()) is never a user activation (ok:null) */
+  /** how the shipped probe activated the control — "synthetic" (el.click()) is never a user activation (ok:null) */
   activation?: ProbeActivation;
-  /** F-70: the first dialog-contract selector the opened element matched (":modal", "dialog[open]", …), or "destination-tag" */
+  /** the first dialog-contract selector the opened element matched (":modal", "dialog[open]", …), or "destination-tag" */
   detectedBy?: string;
-  /** the hover target that revealed a hover-hidden opener (D16 path) */
+  /** the hover target that revealed a hover-hidden opener */
   revealedBy?: string;
-  /** D41: the destination frame's tag — inside = within (or equal to, or an ancestor of) the opened element */
+  /** the destination frame's tag — inside = within (or equal to, or an ancestor of) the opened element */
   destination?: { nodeId: string; inside: boolean; count: number };
-  /** 12b seam: what opened, recorded raw — never graded in 12a */
+  /** what opened, recorded raw — never graded */
   opened?: { selector: string; modal: boolean; position: string; rect: { x: number; y: number; w: number; h: number }; scrollY: number };
-  /** the probe's driving budget ran out before this row: no evidence (D41: never overrides anything) */
+  /** the probe's driving budget ran out before this row: no evidence (never overrides anything) */
   cut?: "budget";
-  /** L-1: replaying the steps failed in the driving page (the row is not-run) */
+  /** replaying the steps failed in the driving page (the row is not-run) */
   stepsFailed?: string }
-/** F-70: how the probe clicked an opener. */
+/** how the probe clicked an opener. */
 export type ProbeActivation = "mouse" | "synthetic";
-/** measured.reach (L-1): the steps the probe replayed to reach the screen. */
+/** measured.reach: the steps the probe replayed to reach the screen. */
 export interface ProbeReach { steps: ProbeStep[]; sha256: string; source: string; url: string }
-/** measured.page (D43): the document's horizontal overflow at the measured viewport, read in the measurement pass. */
+/** measured.page: the document's horizontal overflow at the measured viewport, read in the measurement pass. */
 export interface PageOverflow {
   viewport: { w: number; h: number };
   /** documentElement.scrollWidth / clientWidth */
@@ -852,8 +851,8 @@ export interface PageOverflow {
   /** document.compatMode when not "CSS1Compat" (quirks mode measures the viewport off body) — informational */
   compatMode?: string;
 }
-// ---------------------------------------------------------------- 12b behaviour / a11y (D4, D40, D42, D45, D46)
-// Never part of the fidelity verdict (D4): compare copies and counts these, nothing else reads them.
+// ---------------------------------------------------------------- behaviour / a11y
+// Never part of the fidelity verdict: compare copies and counts these, nothing else reads them.
 export type BehaviourStatus = "pass" | "fail" | "warn" | "not-run" | "unsupported";
 export type BehaviourCheckId =
   | "dialog.focus-on-open" | "dialog.focus-trap" | "dialog.escape-closes" | "dialog.focus-return" | "dialog.nested-escape"
@@ -874,7 +873,7 @@ export interface BehaviourCheck {
   /** element path when untagged */
   target?: string;
   detail: string;
-  /** F-122: a synthetic (headless) observation, not a real-browser one */
+  /** a synthetic (headless) observation, not a real-browser one */
   synthetic?: true;
   evidence?: JsonObject;
 }
@@ -891,7 +890,7 @@ export interface BehaviourWidth {
 export type MeasuredBehaviour =
   | { version: 1; ran: true; browser: { name: string; version: string }; namesComputedBy: string; budgetMs: number; elapsedMs: number;
       cut: boolean; checks: BehaviourCheck[]; landmarks: BehaviourLandmark[] | null; axe: BehaviourAxe; widths: BehaviourWidth[]; artifacts: string[];
-      /** L-6: the write block's scope, one line — what the battery's pages cannot send and what it does not see */
+      /** the write block's scope, one line — what the battery's pages cannot send and what it does not see */
       writeBlock?: string }
   | { version: 1; ran: false; why: string };
 export interface BehaviourSummary { pass: number; fail: number; warn: number; notRun: number; unsupported: number }
@@ -906,13 +905,13 @@ export interface ReportBehaviour {
   /** sorted fail > warn > not-run > unsupported > pass */
   checks: BehaviourCheck[];
   artifacts?: string[];
-  /** L-6: measured.behaviour.writeBlock, copied (the write block's scope in one line) */
+  /** measured.behaviour.writeBlock, copied (the write block's scope in one line) */
   writeBlock?: string;
 }
-// ---------------------------------------------------------------- 12c visual diff (D40(3) informational, D40(4) reference DPR, D48, D49)
-// Never read for the verdict (D4): compare copies it into report.visual, nothing else reads it.
+// ---------------------------------------------------------------- visual diff
+// Never read for the verdict: compare copies it into report.visual, nothing else reads it.
 export interface Rect4 { x: number; y: number; w: number; h: number }
-/** expectation.referenceImage — the export reference PNG and how it sits over the first frame (--expect, 12c). */
+/** expectation.referenceImage — the export reference PNG and how it sits over the first frame (--expect). */
 export interface VerifyReferenceImage {
   usable: true;
   /** project-relative posix path: "design/export/" + expectation.reference */
@@ -928,7 +927,7 @@ export interface VerifyReferenceImage {
   /** "display_p3" (design-system stamp) and/or "iCCP:<name>" — colours not colour-managed */
   colorProfile?: string;
 }
-/** expectation.referenceImage when the reference cannot be diffed (missing, not a PNG, a discovery thumbnail — F-08) */
+/** expectation.referenceImage when the reference cannot be diffed (missing, not a PNG, a discovery thumbnail) */
 export interface VerifyReferenceUnusable { usable: false; path: string | null; why: string }
 export interface VisualRegion {
   /** frame-relative CSS px */
@@ -951,8 +950,8 @@ export type MeasuredVisual =
       /** device px; k = device px per CSS px */
       compared: { w: number; h: number; k: number };
       notCompared?: { pct: number; why: string };
-      /** a cell (cellPx², device px) is hot at ≥ max(hotMinPx, hotFraction · cellPx²) shift-tolerant differing px (D59: 0.08
-       *  and 4; hotMinPx absent = a file written before that rule, when a cell was hot above 0.25 of it) */
+      /** a cell (cellPx², device px) is hot at ≥ max(hotMinPx, hotFraction · cellPx²) shift-tolerant differing px (0.08
+       *  and 4; hotMinPx absent = a file written before that rule, where a cell was hot above 0.25 of it) */
       threshold: number; shiftPx: number; cellPx: number; hotFraction: number; hotMinPx?: number;
       /** YIQ + AA excluded (pixelmatch ≤7.2 count) */
       differingPct: number;
@@ -963,7 +962,7 @@ export type MeasuredVisual =
 /** report.visual — always written by --compare (ran:false + why when the measured file has no visual block). */
 export interface ReportVisual {
   ran: boolean; why?: string; headline: string;
-  /** DT-55 (D116): plan deviations with field "reference" — the PNG is illustrative there; never waives a delta */
+  /** plan deviations with field "reference" — the PNG is illustrative there; never waives a delta */
   illustrative?: Array<{ nodeId: string; reason: string }>;
   differingPct?: number; shiftTolerantPct?: number; grid?: "reference" | "1x"; scale?: number;
   /** sha256: the reference PNG's (measured.visual.reference.sha256) — the next round's `against` needs the same one */
@@ -972,10 +971,10 @@ export interface ReportVisual {
   diff?: { path: string; exists: boolean };
   notes: string[];
   /** the previous round's shiftTolerantPct beside this one's — only when both rounds diffed the same reference (sha256)
-   *  on the same grid; never verdict-changing (D18) */
+   *  on the same grid; never verdict-changing */
   against?: { report: string; before: number; after: number };
 }
-/** measured.build (DT-81): what the probe was served — so a stale preview/dist is visible. */
+/** measured.build: what the probe was served — so a stale preview/dist is visible. */
 export interface BuildIdentity {
   url: string;
   /** vite-dev when /@vite/client was served; static when same-origin assets were and it was not */
@@ -992,7 +991,7 @@ export interface BuildIdentity {
 }
 /** The shipped probe's identity (measured.probe; copied to report.inputs.probe). */
 export interface ProbeIdentity { name: string; version: string | null; sha256: string; playwright: { package: string; version: string };
-  /** DT-30 (D112): executable "custom" when --browser-path named it (the path itself is never written) */
+  /** executable "custom" when --browser-path named it (the path itself is never written) */
   browser: { name: string; version: string; executable?: "custom" } }
 /** The element the probe took as a frame root, and how it found it. */
 export interface ProbeFrame { nodeId: string; selector: string; via: "tag" | "size-and-fill" | "viewport"; rect: { x: number; y: number; w: number; h: number } }
@@ -1025,19 +1024,19 @@ export interface VerifyMeasured {
   matchedByCensus?: Record<string, number>;
   /** the shipped probe's run notes (settling, frame fallbacks, state measurement) — informational */
   notes?: string[];
-  /** F-72: the verify run (status v2) this measurement belongs to */
+  /** the verify run (status v2) this measurement belongs to */
   runId?: string;
-  /** DT-81: the build the probe was served */
+  /** the build the probe was served */
   build?: BuildIdentity;
-  /** DT-47: data-dt-node values on visible elements that are no expected/hidden/instance/frame id ({id, elements}: first 50, sorted) */
+  /** data-dt-node values on visible elements that are no expected/hidden/instance/frame id ({id, elements}: first 50, sorted) */
   tagsNotInExpectation?: { count: number; ids: Array<{ id: string; elements: number }> };
-  /** L-1: the steps replayed before measuring */
+  /** the steps replayed before measuring */
   reach?: ProbeReach;
-  /** D43: page overflow at the measured viewport */
+  /** page overflow at the measured viewport */
   page?: PageOverflow;
-  /** 12b: behaviour/a11y checks (D4: never read for the verdict) */
+  /** behaviour/a11y checks (never read for the verdict) */
   behaviour?: MeasuredBehaviour;
-  /** 12c: the visual diff against the reference PNG (D4: never read for the verdict) */
+  /** the visual diff against the reference PNG (never read for the verdict) */
   visual?: MeasuredVisual;
 }
 export type DeltaSeverity = "high" | "medium" | "low";
@@ -1055,30 +1054,30 @@ export interface VerifyDelta {
   measuredIn?: string;
   matchedBy?: string;
   note?: string;
-  /** D5: a plan waiver matched this delta — it stays listed, but leaves the counts and the verdict */
+  /** a plan waiver matched this delta — it stays listed, but leaves the counts and the verdict */
   accepted?: { reason: string; decidedBy: string; decidedAt: string; cause?: string };
-  /** F-76: presentational group id (one cause) — counts and verdict stay per delta */
+  /** presentational group id (one cause) — counts and verdict stay per delta */
   group?: string;
-  /** D30/D31: the severity before a match-confidence cap lowered it */
+  /** the severity before a match-confidence cap lowered it */
   cappedFrom?: DeltaSeverity;
-  /** D39: which caps bound it — "size" (D31, lifted by a waiver on match (size)) and/or "match" (D30, stays) */
+  /** which caps bound it — "size" (lifted by a waiver on match (size)) and/or "match" (stays) */
   cappedBy?: Array<"size" | "match">;
 }
-/** D43: coverage.pageOverflow. */
+/** coverage.pageOverflow. */
 export type PageOverflowCoverage = "ok" | "overflows" | "clipped" | "not measured" | "not at design width" | "designed to scroll";
-/** "undesigned" (D22): the destination was never exported; "descoped" (D20): the owner removed it from the graded set. */
+/** "undesigned": the destination was never exported; "descoped": the owner removed it from the graded set. */
 export type InteractionResult = "pass" | "fail" | "not-probed" | "undesigned" | "descoped";
 export interface VerifyInteractionResult extends VerifyInteraction { result: InteractionResult; detail?: string; selector?: string; selectorCount?: number; note?: string; outcome?: string; navEvents?: number;
-  /** D41: whose row was graded — the run-bound shipped probe's, or the agent's (--interactions / an unbound measured row) */
+  /** whose row was graded — the run-bound shipped probe's, or the agent's (--interactions / an unbound measured row) */
   evidenceFrom?: "probe" | "agent";
   activation?: string; detectedBy?: string; revealedBy?: string;
-  /** D41: the other side's disagreeing claim that this result overrides */
+  /** the other side's disagreeing claim that this result overrides */
   overridden?: string }
 export interface ArtifactCheck { path?: string; exists: boolean; image: boolean; sha256?: string }
-/** report.inputs.code (finding 317): which code was measured, by content. */
+/** report.inputs.code: which code was measured, by content. */
 export interface CodeInputs { plan?: string; files: Record<string, string | null>; gitHead?: string | null }
 export type VerifyVerdict = "pass" | "pass-with-deviations" | "fail" | "incomplete";
-/** report.waivers (D5): how the plan's waivers fared against this round's deltas. */
+/** report.waivers: how the plan's waivers fared against this round's deltas. */
 export interface VerifyWaiverResult {
   /** waivers that matched a delta (the delta carries `accepted`) */
   applied: number;
@@ -1087,7 +1086,7 @@ export interface VerifyWaiverResult {
   /** waivers (and descopes) that match nothing this round (fixed? drop them) */
   unused: Array<{ nodeId: string; field: string; why?: string }>;
 }
-/** <Screen>.report.json (verify-screen.js compare(), schema @2). An @1 report carries only screen/exportedAt/
+/** <Screen>.report.json (verify-screen.ts compare(), schema @2). An @1 report carries only screen/exportedAt/
  *  measuredAt/renderer/viewport/artifacts/verdict/why/coverage/summary/deltas/missingComponents/interactions/notMeasured. */
 export interface VerifyReport {
   schema?: "designtwin/verify-report@2" | "designtwin/verify-report@1" | (string & {});
@@ -1098,26 +1097,26 @@ export interface VerifyReport {
   viewport?: string | JsonObject;
   artifacts?: Array<string | ArtifactCheck>;
   inputs?: { expectationSchema?: string; expectationSha256?: string; measuredSha256?: string; measuredAgainst?: string; exportContentSha256?: string; code?: CodeInputs;
-    /** the shipped probe's identity, or "unknown" for a hand-written measured.json (group 7) */
+    /** the shipped probe's identity, or "unknown" for a hand-written measured.json */
     probe?: ProbeIdentity | "unknown";
     /** the plan whose waivers/descopes were applied, and waiversHash() of them (verify-build: stale when it differs) */
     waivers?: { plan: string; sha256: string };
-    /** DT-81: the build the probe was served (measured.build), or "unknown" */
+    /** the build the probe was served (measured.build), or "unknown" */
     build?: BuildIdentity | "unknown";
-    /** F-72: the verify run the measured file belongs to */
+    /** the verify run the measured file belongs to */
     runId?: string;
-    /** L-1: the steps the probe replayed (measured.reach); matchesPlan = their sha equals the plan's navigate (null: no plan navigate) */
+    /** the steps the probe replayed (measured.reach); matchesPlan = their sha equals the plan's navigate (null: no plan navigate) */
     reach?: { sha256: string; steps: number; source: string; matchesPlan: boolean | null } };
   verdict?: VerifyVerdict | (string & {});
   headline?: string;
-  /** 12b: the behaviour/a11y section — a second headline, never the verdict (D4) */
+  /** the behaviour/a11y section — a second headline, never the verdict */
   behaviour?: ReportBehaviour;
-  /** 12c: the visual diff — a third headline, informational, never the verdict (D4, D40(3)) */
+  /** the visual diff — a third headline, informational, never the verdict */
   visual?: ReportVisual;
-  /** F-121 (D113): "Inferred, not designed" — never the verdict (D4 style) */
+  /** "Inferred, not designed" — never the verdict */
   inferred?: InferredRow[];
   why?: string[];
-  /** L-1: the why[] entries that say the run itself is unverified (D26) — what --accept refuses on. Absent in reports
+  /** the why[] entries that say the run itself is unverified — what --accept refuses on. Absent in reports
    *  written before it was recorded (--accept then matches why[] by wording). */
   integrity?: string[];
   coverage?: {
@@ -1129,29 +1128,29 @@ export interface VerifyReport {
     interactionsUndesigned?: number; interactionsDescoped?: number; deltasAccepted?: number; nodesFolded?: number;
     /** measured specs per matching rule (tag, tagSharedPath, text, textOrdinal, position, frame, sharedComponentPath, other, unstated) */
     matchedBy?: Record<string, number>;
-    /** D33 (informational): outermost instances that are a shared shell, and their specs expected/measured */
+    /** informational: outermost instances that are a shared shell, and their specs expected/measured */
     sharedShell?: { instances: Array<{ nodeId: string; name: string; setName?: string; expected: number; measured: number }>; expected: number; measured: number };
-    /** D41: interaction results graded on the run-bound shipped probe's rows */
+    /** interaction results graded on the run-bound shipped probe's rows */
     interactionsByProbe?: number;
-    /** D43: the page's horizontal overflow at the design width */
+    /** the page's horizontal overflow at the design width */
     pageOverflow?: PageOverflowCoverage;
   };
   /** high/medium/low count OPEN deltas only; `accepted` = deltas a plan waiver matched */
   summary?: { high: number; medium: number; low: number; componentsAbsent?: number; interactionsFailed?: number; interactionsNotProbed?: number; missingComponents?: number;
     accepted?: number; descoped?: number; undesigned?: number;
-    /** F-121 (D113): rows of report.inferred — never the verdict */
+    /** rows of report.inferred — never the verdict */
     inferred?: number;
-    /** distinct causes among the open high deltas (F-76: a group counts once) */
+    /** distinct causes among the open high deltas (a group counts once) */
     highCauses?: number;
-    /** D39: open deltas whose severity a match cap lowered (cappedFrom) — any blocks a plain pass */
+    /** open deltas whose severity a match cap lowered (cappedFrom) — any blocks a plain pass */
     lowConfidence?: number };
   waivers?: VerifyWaiverResult;
-  /** F-77: specs a plan anchor folded into a measured ancestor — out of the denominator */
+  /** specs a plan anchor folded into a measured ancestor — out of the denominator */
   folded?: Array<{ nodeId: string; name?: string; into: string; why: string }>;
   deltas?: VerifyDelta[];
   componentsAbsent?: Array<{ setName: string; nodeIds: string[]; detail?: string }>;
   untaggedInstanceSets?: Array<{ setName: string; setKey?: string; nodeIds: string[]; instances: number }>;
-  /** F-96 (D33): untagged instance sets that live inside a shared shell — not this screen's work */
+  /** untagged instance sets that live inside a shared shell — not this screen's work */
   untaggedInstanceSetsInShell?: Array<{ setName: string; setKey?: string; nodeIds: string[]; instances: number }>;
   /** @1 only */
   missingComponents?: Array<{ setName: string; setKey?: string; nodeIds: string[]; instances: number }>;
@@ -1161,24 +1160,24 @@ export interface VerifyReport {
   unverifiable?: Array<{ nodeId: string; name?: string; field: string; expected: JsonValue; why: string }>;
   notComparable?: NotComparable[];
   probe?: { unknownKeys: Array<{ key: string; count: number; canonical?: string }>;
-    /** top-level keys of the measured file verify-screen does not read (F-94: `notFound`, `extra`) — listed, never used */
+    /** top-level keys of the measured file verify-screen does not read (e.g. `notFound`, `extra`) — listed, never used */
     unknownTopLevelKeys?: Array<{ key: string; canonical?: string }>; duplicateNodeIds: number; interactionEvidenceOnHiddenLayers: number; interactionEvidenceNotInExpectation: number; measuredIdsOnHiddenLayers: number;
     /** measured node ids that match no spec, instance or hidden layer of the expectation (and no shared path) */
     measuredIdsNotInExpectation?: number; measuredIdsNotInExpectationSample?: string[];
     /** malformed optional extras of the measured file that were ignored (a hand-written `probe`, a non-list notMeasured) */
     inputNotes?: string[];
-    /** DT-29: interaction results whose nodeId + trigger match no designed interaction, with a hint when one is near */
+    /** interaction results whose nodeId + trigger match no designed interaction, with a hint when one is near */
     unmatchedInteractionEvidence?: Array<{ nodeId: string; trigger: string; hint?: string }>;
-    /** DT-47: measured tags/ids not in the expectation, classified — prefixDrift: the `;` suffix equals an expected id's;
+    /** measured tags/ids not in the expectation, classified — prefixDrift: the `;` suffix equals an expected id's;
      *  alias: some spec's alias; unknown: neither */
     foreignTags?: { total: number; prefixDrift: number; alias: number; unknown: number; sample: string[] } };
-  /** D18: coverage against the previous report (the one this run overwrote, or --against) */
+  /** coverage against the previous report (the one this run overwrote, or --against) */
   against?: VerifyAgainst;
   limits?: string[];
-  /** read by verify-build.js locateReports (a report written under a nickname) */
+  /** read by verify-build.ts locateReports (a report written under a nickname) */
   nodeId?: string;
 }
-/** report.against (D18): the previous round's coverage beside this one's. Never changes the verdict. */
+/** report.against: the previous round's coverage beside this one's. Never changes the verdict. */
 export interface VerifyAgainst {
   report: string;
   nodesMeasured: { before: number | null; after: number };
@@ -1187,9 +1186,9 @@ export interface VerifyAgainst {
   probeChanged: boolean | null;
   /** null when either report lacks inputs.expectationSha256 */
   expectationChanged: boolean | null;
-  /** F-92: the previous round's deltas (nodeId + field) against this round's; lostCoverage = a previous delta whose
+  /** the previous round's deltas (nodeId + field) against this round's; lostCoverage = a previous delta whose
    *  node is not measured now, or whose measured node lacks the value (key absent or null) — neither fixed nor still
-   *  open. H2: nowUnverifiable = a previous delta whose value WAS measured but the compare now declines it (an
+   *  open. nowUnverifiable = a previous delta whose value WAS measured but the compare now declines it (an
    *  impossible value, an <img> fill, a method gap) — not lost coverage; reclassified = every difference when the
    *  measured file is the SAME as last round's (inputs.measuredSha256): the compare (or the expectation) changed, not
    *  the build, so nothing is fixed, new or lost. */
@@ -1197,7 +1196,7 @@ export interface VerifyAgainst {
     nowUnverifiable?: Array<{ nodeId: string; field: string; was: JsonValue; why: string }>;
     sameMeasured?: boolean;
     reclassified?: Array<{ nodeId: string; field: string; change: "gone" | "new"; was: JsonValue }> };
-  /** DT-81: both rounds served the same build (assetsSha256); null when either round records none */
+  /** both rounds served the same build (assetsSha256); null when either round records none */
   sameBuild?: boolean | null;
 }
 type VerifyCoverage = NonNullable<VerifyReport["coverage"]>;
@@ -1211,19 +1210,19 @@ export interface VerifyCoverageV2 extends VerifyCoverage {
   matchedBy: Record<string, number>;
 }
 /**
- * What verify-screen.js compare() returns (schema @2): every @2 field present. `artifacts` is the CLI's
+ * What verify-screen.ts compare() returns (schema @2): every @2 field present. `artifacts` is the CLI's
  * on-disk check when it ran, else the probe's own list passed through as-is (the one field wider than VerifyReport's).
  */
 export interface VerifyReportV2 extends Omit<VerifyReport, "artifacts"> {
   artifacts: Array<string | ArtifactCheck | { path?: string }>;
-  /** M2 (s19): the measured file was static-only (nothing rendered) — absent for a rendered one; `reason` is its why */
+  /** the measured file was static-only (nothing rendered) — absent for a rendered one; `reason` is its why */
   mode?: "static-only";
   reason?: string;
   verdict: VerifyVerdict;
   headline: string;
-  /** 12b: always written (ran:false + why when the measured file has none) — never the verdict (D4) */
+  /** always written (ran:false + why when the measured file has none) — never the verdict */
   behaviour: ReportBehaviour;
-  /** 12c: always written (ran:false + why when the measured file has none) — never the verdict (D4) */
+  /** always written (ran:false + why when the measured file has none) — never the verdict */
   visual: ReportVisual;
   why: string[];
   integrity: string[];
@@ -1243,7 +1242,7 @@ export interface VerifyReportV2 extends Omit<VerifyReport, "artifacts"> {
   limits: string[];
 }
 
-// ================================================================ design-diff.js
+// ================================================================ design-diff.ts
 
 export type DiffCategory =
   | "text" | "typography" | "paint" | "layout" | "shape" | "tokens" | "component" | "visibility" | "asset" | "interaction" | "handoff"
@@ -1251,7 +1250,7 @@ export type DiffCategory =
 export interface FieldDiff { field: string; category: DiffCategory; before: string | undefined; after: string | undefined }
 export interface DiffNodeRef { id: string; name: string; type: IrNodeType; path: string; parentId: string | null }
 export interface DiffSummary { added: number; removed: number; changed: number; reordered?: number; positionOnly?: number;
-  /** D141: nodes whose only differences are the old plugin's format noise (−1 grid anchors, `layout` on childless types) */
+  /** nodes whose only differences are the old plugin's format noise (−1 grid anchors, `layout` on childless types) */
   formatOnly?: number }
 export interface ScreenDiff {
   kind: "screen";
@@ -1284,7 +1283,7 @@ export type DiffReport = ScreenDiff | TokensDiff | CatalogDiff | StylesDiff | Hy
 /** The CLI's --json result: the diff plus which baseline it was computed against. */
 export type DiffResult = DiffReport & { file: string; against: string; baseline: "file" | "snapshot" | "git"; warned: boolean };
 
-// ================================================================ resolve-screen.js
+// ================================================================ resolve-screen.ts
 
 export interface ScreenCandidate {
   name: string; id: string; title: string | null; w?: number; h?: number; nodes?: number; reference: string | null; screenshot: string | null;

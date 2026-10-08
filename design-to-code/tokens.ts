@@ -158,14 +158,14 @@ const cssVarName = (tokenName: string): string => {
 };
 
 // --- identity: a Figma variable IS its key, never its name -------------------------------------
-// Names are not unique. The livetest-3 export held 96 variables with 96 distinct keys and only 94
+// Names are not unique. One real export held 96 variables with 96 distinct keys and only 94
 // distinct names: two variables called `Spacing/Space 4` (24 in the design system's library, 16 in a
-// screen-local one) and two called `Spacing/Space 2`. Every emitter here used to key its output on
-// the NAME, so the second definition silently overwrote the first — theme.css shipped
+// screen-local one) and two called `Spacing/Space 2`. An emitter keyed on the NAME would let the
+// second definition silently overwrite the first — theme.css would ship
 // `--spacing-space-4: 16px` for two screens whose own Figma says 24, under a "later definition wins"
 // warning that described nothing useful. Worse, `Space 3` (16) and `(Space 3)` (12) are two
-// different names that only collide AFTER slugging, so that pair was overwritten with no warning at
-// all (livetest-3 findings 44, 94, 95).
+// different names that only collide AFTER slugging, so that pair would be overwritten with no warning at
+// all.
 //
 // So every emitter plans its identifiers here, on the EMITTED identifier (the DTCG path, the CSS
 // custom property, the Tailwind variable), and never picks a winner:
@@ -253,7 +253,7 @@ function planIds(vars: readonly Variable[], idOf: (v: Variable) => string | null
       memberIds.push({ v, id: nid });
     }
     // Every record in `list` shares its identity with one member (byIdent above), so every lookup hits;
-    // a miss would only leave id(v) undefined, which is what the old `ids.set(v, undefined)` gave too.
+    // a miss would only leave id(v) undefined, which is what `ids.set(v, undefined)` would give too.
     for (const v of list) { const got = assigned.get(identityOf(v)); if (got !== undefined) ids.set(v, got); }
     notes.push({ output, id, differ: true, members: memberIds });
   }
@@ -335,7 +335,7 @@ function collisionMessages(notes: readonly CollisionNote[], opts?: EmitOpts): st
 
 // --- Figma's "fully rounded" sentinel ------------------------------------------------------------
 // A pill corner exports as a literal 1e9 (cross-check.ts reports it as `sentinel-token-value`). It is
-// an idiom, not a measurement, and `1000000000px` must never reach a stylesheet (livetest-3 #96).
+// an idiom, not a measurement, and `1000000000px` must never reach a stylesheet.
 // Every emitter writes the platform's own idiom instead: 9999px on the web (and in DTCG, with the
 // original kept under $extensions), `.infinity` in SwiftUI, `double.infinity` in Flutter, 9999 in
 // React Native, and 9999.dp with a CircleShape note in Compose.
@@ -448,7 +448,7 @@ function hexToColorValue(hex: unknown, colorProfile?: string): DtcgColor | null 
   return value;
 }
 
-// DTCG 2025.10 $type mapping. `string` became a primitive type in 2025.10 (so STRING is no longer
+// DTCG 2025.10 $type mapping. `string` is a primitive type from 2025.10 on (so STRING is not
 // typeless). BOOLEAN has NO DTCG type — handled separately (a typeless token is INVALID per spec).
 const DTCG_TYPE: Partial<Record<VariableType, DtcgType>> = { COLOR: "color", FLOAT: "number", STRING: "string" };
 // The variable types every emitter here writes. Anything else — EASING / TIMING variables, whose
@@ -793,7 +793,7 @@ function cssPlan(designSystem: TokensDoc | null | undefined): IdPlan {
 
 // --- non-default modes: one block per (collection, mode) -----------------------------------------
 // Figma selects a mode PER COLLECTION. Keying the blocks by mode NAME alone flipped every collection that
-// has a "Dark" at once (DT-24 / D15). So lines are grouped by (collection, mode). A mode name only one
+// has a "Dark" at once. So lines are grouped by (collection, mode). A mode name only one
 // collection has a block for keeps the plain `[data-theme="<mode>"]` (the usual single-theme file is
 // unchanged); when two or more collections have a block for the same name, each gets
 // `[data-theme-<collection slug>="<mode>"]`, a slug two collections share gets `-<first 8 of its key>`,
@@ -907,7 +907,7 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
   // variables that resolve identically in every mode (seen live: three "Schemes/On Primary" with
   // distinct keys, 22 copies of one declaration), emit ONE declaration. Two variables that fold onto
   // one property and DIFFER each get their own property (planIds) — the browser's "last one wins"
-  // is exactly the silent overwrite that shipped `--spacing-space-4: 16px` (livetest-3 #44).
+  // is exactly the silent overwrite that once shipped `--spacing-space-4: 16px`.
   const plan = cssPlan(designSystem);
   if (notes) notes.push(...plan.notes);
   const ref = (referrer: Variable) => (name: string): string => { const t = aliasTargetId(plan, name, referrer); return t ? t.id : cssVarName(name); };
@@ -946,10 +946,10 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
 
 // --- Tailwind v4 theme ------------------------------------------------------------------------
 //
-// Why this exists (live run #18): `--native <profile>` gives a native project ONE checked-in token
-// file every screen imports. A web project had no equivalent — tokens.css is plain custom properties,
-// which Tailwind does not turn into utilities, so the builder hand-wrote an `@theme` block from the
-// bound token names and pasted the hexes into the plan's allowedLiterals. Two screens built in
+// Why this exists: `--native <profile>` gives a native project ONE checked-in token
+// file every screen imports. A web project needs the equivalent — tokens.css is plain custom properties,
+// which Tailwind does not turn into utilities, so a builder would hand-write an `@theme` block from the
+// bound token names and paste the hexes into the plan's allowedLiterals. Two screens built in
 // separate sessions would then disagree about what `--color-primary` is called. Same fix as native:
 // generate it once.
 //
@@ -963,9 +963,9 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
 // Every generated variable sits under a `figma-` sub-namespace (`--radius-figma-xl`, `--spacing-
 // figma-space-4`, `--color-figma-primary-primary`), because Tailwind v4's own scale lives in the SAME
 // namespaces and an `@theme` variable of the same name REPLACES it. Figma's `XL` radius emitted as
-// `--radius-xl: 16px` silently redefined the framework's `rounded-xl` (12px) in every project pulled
-// through this tool, and `--radius-l`/`--radius-s` minted `rounded-l`/`rounded-s`, which Tailwind
-// already defines as the LEFT/START-corner shorthands (livetest-3 #183). Figma names are free-form, so
+// `--radius-xl: 16px` would silently redefine the framework's `rounded-xl` (12px) in every project pulled
+// through this tool, and `--radius-l`/`--radius-s` would mint `rounded-l`/`rounded-s`, which Tailwind
+// already defines as the LEFT/START-corner shorthands. Figma names are free-form, so
 // no finite list of Tailwind's defaults (`xl`, `4`, `full`, `red-500`, `sans`, a bare `--spacing`)
 // can be relied on; one prefix makes a collision impossible and every design-system utility greppable.
 //
@@ -993,7 +993,7 @@ function twKind(v: Variable, opts?: EmitOpts): TwKind | null {
   if (v.type === "COLOR") return "color";
   const scopes = v.scopes || [];
   const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
-  // DT-24: the scope is the designer's own statement — a FONT_FAMILY-scoped STRING is a font family
+  // the scope is the designer's own statement — a FONT_FAMILY-scoped STRING is a font family
   // whatever it is called ("Heading" in a "Type" collection). The name is only a fallback when the scopes
   // say nothing (ALL_SCOPES / none); a STRING narrowed to anything else (FONT_STYLE: "Semi Bold") is not one.
   if (v.type === "STRING") {
@@ -1036,7 +1036,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
   const scopes = planModeScopes(designSystem);
   const perMode = modeBlocks(scopes); // the same (collection, mode) selectors as tokens.css
   warnings.push(...scopes.warnings);
-  // DT-24: a STRING that is not a font family ("Semi Bold", a label) is not a usable value in @theme and
+  // a STRING that is not a font family ("Semi Bold", a label) is not a usable value in @theme and
   // earns no utility, so it is left out — unless a font-family token aliases it (then the var() must resolve).
   const aliasedByFont = new Set<Variable>();
   // The whole alias chain: a kept STRING that itself aliases another STRING keeps that one too.
@@ -1287,7 +1287,7 @@ const dedupe = <T>(list: readonly T[]): T[] => [...new Set(list)];
 
 // The half of the lint that does NOT come from toDTCG. Split out so emitTokens can lint off the
 // warnings toDTCG already collected instead of building the whole DTCG tree a second time.
-// DT-24: the CSS file(s) the caller writes, as a warning names them — theme.css alone under `--web
+// the CSS file(s) the caller writes, as a warning names them — theme.css alone under `--web
 // tailwind` (tokens.css is not written then), tokens.css by default, both with --also-generic.
 function cssFilesOf(opts: EmitOpts | undefined): string[] {
   return opts && opts.cssFiles ? [...opts.cssFiles] : opts && opts.tailwind ? ["tokens.css", "theme.css"] : ["tokens.css"];
@@ -1365,7 +1365,7 @@ function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | 
   //    is still this file rewriting output off a pattern match, and every other such rewrite announces
   //    itself. Say which tokens it touched so a wrong guess is visible; the fix is to narrow the
   //    variable's scopes in Figma (or pass opts.unitless).
-  //  - CSS var-name collisions are NOT here any more: they are planned (and reported, naming every
+  //  - CSS var-name collisions are NOT here: they are planned (and reported, naming every
   //    key) by planIds, the same function that decides the emitted names — see cssPlan.
   for (const v of vars) {
     if (v.type === "FLOAT" && unitDecision(v, opts) === "name") {
@@ -1410,7 +1410,7 @@ export { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToCol
 const { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity });
 export { toNative, platformOf, PLATFORMS };
 
-// --- provenance (DT-71): which catalog a generated file came from, and whether it is still current ---
+// --- provenance: which catalog a generated file came from, and whether it is still current ---
 // main() puts ONE comment line at the top of every CSS / native file it writes:
 //   designtwin-source: <input's parent dir>/<input basename> · <n> variables · sha256 <first 12>
 // (the parent dir tells a design-system tokens.json from a library's; an earlier run's basename-only line is still read)
@@ -1449,7 +1449,7 @@ function provenanceLine(input: string, ds: TokensDoc, comment: "css" | "line"): 
   return comment === "css" ? `/* ${body} */\n` : `// ${body}\n`;
 }
 
-// --- --lookup (DT-73): which COLOR variables resolve to a hex, in which mode, directly or through an alias ---
+// --- --lookup: which COLOR variables resolve to a hex, in which mode, directly or through an alias ---
 export interface ColorHit { name: string; collection: string; mode: string; hex: string; via: string[] }
 function lookupColor(ds: TokensDoc, query: string): ColorHit[] | null {
   const q = normHex(query);
@@ -1483,7 +1483,7 @@ function lookupColor(ds: TokensDoc, query: string): ColorHit[] | null {
   return hits;
 }
 
-// F-126 (D121): `:root` holds every collection's DEFAULT-mode value. When two multi-mode COLOR collections
+// `:root` holds every collection's DEFAULT-mode value. When two multi-mode COLOR collections
 // share a mode name (both have Dark and Light) but default to different modes, :root is a mix — on a Dark
 // screen, the tokens of the Light-default collection render their Light values until the element sets that
 // collection's mode. The default is the export's `default` (Figma's defaultModeId — never modes[0] by
@@ -1548,8 +1548,8 @@ function checkGenerated(ds: TokensDoc, input: string, generated: string, cmd: st
 // --native swiftui | compose | flutter | react-native (a build-screen profile name works too) also
 // writes ONE native token file next to the others — move it into the app's source tree and import it
 // from every screen (see tokens-native.ts for why and for the shape of each file).
-// The input is the SPLIT token file — design-system.json is a slim pointer manifest since the split
-// and has no `variables` array (see bridge/design-system-layout.js).
+// The input is the SPLIT token file — design-system.json is a slim pointer manifest
+// with no `variables` array (see bridge/src/design-system-layout.ts).
 function main(args: string[]): number {
   const USAGE = `usage: ${scriptCmd("tokens")} <design-system/tokens.json | design/variables.json> [outDir]\n` +
     "       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n" +
@@ -1597,13 +1597,13 @@ function main(args: string[]): number {
     return status;
   }
   fs.mkdirSync(outDir, { recursive: true }); // documented usage is `… ./out`; don't die on a raw ENOENT
-  // finding 225: a --web/--native target used to get the generic set (dtcg/css/resolver/tokens/)
-  // written on top of it unconditionally, with no indication of which file the app actually
-  // consumes. Now: a target selected -> ONLY that target's file(s) are written to outDir, unless
-  // --also-generic is passed. No target -> unchanged (generic set only).
+  // a --web/--native target would otherwise get the generic set (dtcg/css/resolver/tokens/)
+  // written on top of it, with no indication of which file the app actually
+  // consumes. So: a target selected -> ONLY that target's file(s) are written to outDir, unless
+  // --also-generic is passed. No target -> the generic set only.
   const hasTarget = web !== undefined || native !== undefined;
   const writeGeneric = !hasTarget || alsoGeneric;
-  // The CSS files actually written, so a warning names those (DT-24) — not tokens.css when only theme.css is.
+  // The CSS files actually written, so a warning names those — not tokens.css when only theme.css is.
   const cssFiles = [...(writeGeneric ? ["tokens.css"] : []), ...(webFile !== undefined ? [webFile] : [])];
   // one pass: emit + lint share the same opts and traversal, and a name collision is reported once
   // across every output it touches, naming the screen(s) each colliding variable came from.
@@ -1640,7 +1640,7 @@ function main(args: string[]): number {
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }
-  // DT-08: a catalog whose variables are ALL library (remote) ones is a consuming file's design-system pull — the
+  // a catalog whose variables are ALL library (remote) ones is a consuming file's design-system pull — the
   // library variables something in that file references, not the library's catalog. Mixed → nothing to say.
   // A screen's own slice (<Screen>.vars.json) or the merged variables.json of a consuming file is ALL
   // remote by nature and is the documented theme input there, so only a catalog file warns.
@@ -1652,7 +1652,7 @@ function main(args: string[]): number {
   const mixedRoot = mixedRootModes(ds);
   if (mixedRoot) warnings.push(mixedRoot);
   warnings.forEach((w) => console.error("warn  " + w));
-  // DT-79 (D9): a suggestion only, printed — not written into theme.css, which the user moves into the app.
+  // a suggestion only, printed — not written into theme.css, which the user moves into the app.
   if (webFile !== undefined) console.error("note  " + TAILWIND_SOURCE_NOT_NOTE);
   if (hasTarget) {
     const genericNote = writeGeneric

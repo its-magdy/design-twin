@@ -1273,7 +1273,7 @@ console.log("map — SLOT props:");
   fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
-// ---------- native token files (tokens-native.js) ----------
+// ---------- native token files (tokens-native.ts) ----------
 (() => {
   // until step 3: tokens.js adds these via Object.assign, not visible as named CJS exports
   const nds = tokens({

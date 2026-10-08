@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// lint:any — the "no `any` in hand-written TypeScript" gate (owner rule, docs/ts-port-handoff.md
-// "Decisions taken").
+// lint:any — the "no `any` in hand-written TypeScript" gate (owner rule).
 //
 // Scans test/, design-to-code/, bridge/src/ and figma-plugin/src/ (recursively, node_modules skipped), plus the
 // hand-written TypeScript outside them (the two build scripts, figma-augment.d.ts), and exits 1 with

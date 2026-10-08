@@ -9,15 +9,15 @@ import { checkCancelled, progress } from "./progress";
 // tree, and stores the identical basename on the asset record — so figma-pull / the UI download write
 // exactly the name the tree points at instead of each re-deriving the convention.
 //
-// It used to be `safe(node.id) + "." + format`, which produced two problems a real build could not
+// It is not `safe(node.id) + "." + format`, which produces two problems a real build cannot
 // work around:
 //
-//   * Every file was named after a node-id PATH. A layer named `icons/linear/arrow-down` landed as
-//     `I10970_111374_1910_23337_1902_19173.svg`, and an app importing 41 icons imported 41 of those
-//     (live finding 96). The layer name was sitting right beside it in the tree, unused.
-//   * The id path includes the whole INSTANCE chain, so one shared sidebar icon was re-exported under
-//     a different name for every screen and every instance that used it — five identical avatar
-//     placeholders on one frame became five files (finding 97).
+//   * Every file is named after a node-id PATH. A layer named `icons/linear/arrow-down` lands as
+//     `I10970_111374_1910_23337_1902_19173.svg`, and an app importing 41 icons imports 41 of those.
+//     The layer name sits right beside it in the tree, unused.
+//   * The id path includes the whole INSTANCE chain, so one shared sidebar icon is re-exported under
+//     a different name for every screen and every instance that uses it — five identical avatar
+//     placeholders on one frame become five files.
 //
 // So: name from the LAYER, dedupe on CONTENT. Two registrations whose bytes are identical return the
 // same path and produce one file; the second one records its node id on the first's `from` list, so
@@ -29,9 +29,9 @@ import { checkCancelled, progress } from "./progress";
 const ASSET_DIR = "assets/";
 
 // Figma's own SVG export is not bit-reproducible: re-exporting the SAME icon, with NOTHING changed in
-// the design, comes back with different floating-point path coordinates (measured ≤0.002px drift —
-// findings 25/222). Hashing the raw SVG text made every re-pull with zero design changes report a
-// fresh batch of "changed" assets, and made two genuinely identical icons dedupe-fail (finding 24).
+// the design, comes back with different floating-point path coordinates (measured ≤0.002px drift).
+// Hashing the raw SVG text would make every re-pull with zero design changes report a
+// fresh batch of "changed" assets, and make two genuinely identical icons dedupe-fail.
 // `normalizeSvgText` (bridge/src/svg-normalize.ts, re-exported via ./util — see its header for why 1
 // decimal place, not 2) is the ONE shared definition of "same SVG, modulo export noise", used here AND
 // by bridge/src/write-out.ts AND design-to-code/design-diff.ts so the three cannot silently disagree.
@@ -103,7 +103,7 @@ function register(a: { id: string; name: string; format: AssetFormat; base64?: s
   // Fold case for the UNIQUENESS check, not for the name written to disk: `angle-left.svg` and
   // `Angle-left.svg` are two different Figma layers that collide into ONE path on a case-insensitive
   // filesystem (macOS default) — write-out.ts writes both into the same shared assets/ dir, so
-  // whichever pull ran second silently clobbered the first (finding 124). Comparing case-folded keys
+  // whichever pull ran second silently clobbered the first. Comparing case-folded keys
   // here means the SECOND name is treated as "taken" even though it differs only in case, so it gets
   // the same content-hash suffix a same-name-different-content collision gets — both files end up with
   // distinct, filesystem-safe names.
@@ -141,8 +141,8 @@ function imageFormat(b: Uint8Array): AssetFormat {
 }
 
 // figma.getImageByHash / Image.getSizeAsync / Image.getBytesAsync are all real, non-optional members
-// (plugin-api.d.ts: PluginAPI.getImageByHash ~1705, Image ~12667) — the `typeof === "function"` guards
-// this replaced predate that and are now unreachable; kept as try/catch instead.
+// (plugin-api.d.ts: PluginAPI.getImageByHash ~1705, Image ~12667) — `typeof === "function"` guards
+// would be unreachable; try/catch is used instead.
 export function collectSourceImage(hash: string | undefined | null): Promise<{ w: number; h: number } | undefined> {
   if (!hash) return Promise.resolve(undefined);
   let p = imageSizeCache.get(hash);
@@ -204,7 +204,7 @@ function hasArea(node: SceneNode): boolean {
   return node.width > 0 && node.height > 0;
 }
 // The pre-check: VECTOR-ish leaves need area AND a visible paint; an icon CONTAINER only area (it paints
-// nothing itself — its children do). One definition for the hidden and the visible path (L-11).
+// nothing itself — its children do). One definition for the hidden and the visible path.
 function paintsNothing(node: SceneNode, isVector: boolean, fills: ReadonlyArray<Paint> | null): boolean {
   return !hasArea(node) || (isVector && !hasVisiblePaint(node, fills));
 }
@@ -286,7 +286,7 @@ export async function collectAsset(node: SceneNode, hidden?: boolean): Promise<A
   // layer is shown or not. Asking exportAsync anyway came back without an `<svg`, and the geometry
   // fallback then shipped a hidden icon's paths (or a container's background square) as if they
   // were a degraded VISIBLE vector — "N % fell back to raw geometry" on every screen.
-  // The nothing-to-paint pre-check (below) runs FIRST, hidden or not (L-11): a layer with no area or no
+  // The nothing-to-paint pre-check (below) runs FIRST, hidden or not: a layer with no area or no
   // visible paint draws nothing either way, so it stays `assetsSkippedInvisible` with no marker (a
   // zero-area container still recurses) — never a "hidden graphic" the bridge could hand a twin's file.
   if (hidden && (isVector || iconLike || hasImage)) {
@@ -361,8 +361,8 @@ export async function collectAsset(node: SceneNode, hidden?: boolean): Promise<A
 }
 
 // The scale a reference render uses: the caller's own (a positive number), else 2x capped so the
-// longer side is at most 2048 px. ONE rule for the render and for what collectScreenshot reports
-// (DT-06), so the reported scale is the one the PNG was actually made at.
+// longer side is at most 2048 px. ONE rule for the render and for what collectScreenshot reports,
+// so the reported scale is the one the PNG was actually made at.
 export function referenceScale(node: SceneNode, opts?: { scale?: number }): number {
   if (opts && typeof opts.scale === "number" && opts.scale > 0) return opts.scale;
   const w = "width" in node ? node.width || 0 : 0;
@@ -394,8 +394,8 @@ export async function collectReference(node: SceneNode, opts?: { scale?: number 
 // Dev-Mode resource links (Jira / GitHub / Storybook URLs pinned to nodes). Node-level + async, so
 // call ONCE per exported root with includeChildren (never per-node — that would be O(nodes) round-trips).
 // getDevResourcesAsync is declared on DevResourcesMixin, which BaseNodeMixin extends (plugin-api.d.ts
-// ~6220/~6444) — every BaseNode has it for real, so the old `typeof === "function"` probe is
-// unreachable; kept as a try/catch instead. See developers.figma.com/docs/plugins/api/properties/nodes-getdevresourcesasync/.
+// ~6220/~6444) — every BaseNode has it for real, so a `typeof === "function"` probe would be
+// unreachable; a try/catch is used instead. See developers.figma.com/docs/plugins/api/properties/nodes-getdevresourcesasync/.
 export async function devResources(node: BaseNode): Promise<IrDevResource[] | undefined> {
   if (!node) return undefined;
   try {

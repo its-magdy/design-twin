@@ -1,17 +1,15 @@
 // color.ts — the ONE hex-colour parser of the design-to-code layer, and the WCAG contrast arithmetic.
 //
-// There used to be five, and they disagreed: audit.ts's parseHex required the `#`, cross-check.ts's
-// hexToRgb made it optional, tokens.ts's normHex also took 3/4-digit shorthand, verify-build.ts's
-// hex6/colorKey took shorthand but dropped or kept alpha, and verify-screen.ts's normColor took 3- but
-// not 4-digit shorthand. The same export value could therefore be a colour to one tool and junk to the
-// next. The rule, decided once:
+// Separate parsers would disagree (one requiring the `#`, one making it optional, one taking 3/4-digit
+// shorthand, one taking shorthand but dropping or keeping alpha, one taking 3- but not 4-digit shorthand),
+// so the same export value could be a colour to one tool and junk to the next. The rule, decided once:
 //
 //   ACCEPT  an optional `#`, then 3, 4, 6 or 8 hex digits (#rgb, #rgba, #rrggbb, #rrggbbaa), any case,
 //           surrounding whitespace ignored.
 //   EMIT    lowercase, WITH the `#`: "#rrggbb" or "#rrggbbaa" (shorthand expanded).
 //
-// Nothing here is imported from another design-to-code module, so every module may import it (the old
-// "local copy to avoid an import cycle" reasoning never applied: esbuild inlines the modules into each
+// Nothing here is imported from another design-to-code module, so every module may import it (a
+// "local copy to avoid an import cycle" is never needed: esbuild inlines the modules into each
 // bundle, and color.ts imports nothing back).
 
 /** 0–255 channels plus alpha 0–1. */
