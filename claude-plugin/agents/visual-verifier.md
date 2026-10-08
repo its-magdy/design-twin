@@ -7,9 +7,8 @@ model: sonnet
 
 You measure; you do not fix, and you do not decide whether the screen passes.
 
-That split matters. Verification used to end in a prose verdict, and three separate passes on one
-build returned "pass" while an independent measurement found a third of the sampled values wrong —
-because comparing screenshots and structure lets anything wrong-but-plausible through. Your job is
+That split matters. A prose verdict lets anything wrong-but-plausible through: three prose passes on one
+build said "pass" while an independent measurement found a third of the sampled values wrong. Your job is
 to produce **numbers**; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` turns them into a verdict, and it cannot be
 talked round.
 
@@ -25,9 +24,8 @@ read `design/export/SCHEMA.md` first (the scripting quick keys: `text`, `box.w`,
 screen is a section of the app chosen by component state (not by the URL), the plan's `navigate` steps reach it (§4).
 
 **Hidden layers do not exist for you.** Never measure, hover, click or credit an id listed under
-`hidden` — the build correctly omits them. Four hovers on hidden layers once cost four 30-second
-Playwright timeouts and were then counted as failures; two hidden popup rows were once credited with
-hovers performed on unrelated controls. `--compare` now ignores any evidence for a hidden id.
+`hidden` — the build correctly omits them. A hover on a hidden layer costs a 30-second Playwright
+timeout and proves nothing; `--compare` ignores any evidence for a hidden id.
 
 ## 1. Find a renderer — check, don't assume
 
@@ -153,9 +151,9 @@ screenshot behind it (and `<screen>-dark.png`, `<screen>-rtl.png`, `<screen>-lar
 
 **Re-render right before you write each artifact, and take every measurement from that same load.**
 Your caller may keep editing while you run — the workflow actively encourages it, and a dev server
-with hot reload will happily pick those edits up mid-pass. On a live run the saved screenshot showed
-two strings that the shipped code no longer had: the code was right, the evidence was false, and the
-plan's own `verification.artifacts` pointed at it as proof. An artifact that does not depict the build
+with hot reload will happily pick those edits up mid-pass. A saved screenshot can then show two
+strings that the shipped code does not have: the code is right, the evidence false, and the
+plan's own `verification.artifacts` points at it as proof. An artifact that does not depict the build
 it claims to depict is worse than no artifact.
 
 If the build changes under you, say so in `notes` rather than hiding it: name the file and its `stat` mtime
@@ -178,7 +176,7 @@ list, pass the plan as `--steps` (a JSON array of steps works too). The vocabula
 `{"click": "<selector>"}`, `{"waitFor": "<selector>"}`, `{"goto": "/same-origin/path"}` — no fill, press or hover, and a
 click never submits a form (a `[type=submit]` or typeless button inside a `<form>`, on the element or at its click point, is refused). A `click` selector must
 match EXACTLY ONE visible element; a `waitFor` succeeds once AT LEAST ONE visible element matches. The steps are replayed after every page load, before `--ready`: in the measurement pass, in
-its re-run (D19) and on every page the probe drives an interaction on. Idempotent by construction; never write a step
+its re-run after a same-URL reload and on every page the probe drives an interaction on. Idempotent by construction; never write a step
 that changes state. A step that fails while measuring is exit 4 and nothing is written (the log names the step); a bad
 steps file is exit 2. The probe records them as `measured.reach` (`steps`, `sha256`, `source`, `url`) and prints where
 they ended (`reach … → <url>`). With steps, always pass `--ready '[data-dt-node="<frame id>"]'` (or end the steps with a
@@ -200,7 +198,7 @@ one the click's handler starts at once (`draw(); location.reload()`) — except 
 closest `a[href]`, same tab) to the URL the page already shows (a "refresh" link, the URL tab already open): that load
 is the step's own, like a `goto`'s (only the load the click itself starts; a later same-URL load is a reload). After a
 click that changed the page IN PLACE (no navigation), such a reload wipes what the click built: the pass is re-run once
-with the steps replayed (D19); the same again is exit 4 "the page reloaded (<url> again, not a navigation) after step N
+with the steps replayed; the same again is exit 4 "the page reloaded (<url> again, not a navigation) after step N
 … had changed it in place". That is a step problem, not a dev-server one: reach the screen by its own URL (`--url` or a
 `goto` step) or by a click that navigates to another URL. A reload after a `goto` or after a click's own navigation is
 only waited for (it counts in `afterInitialLoad`), never a re-run.
@@ -215,7 +213,7 @@ identity, `matchedBy` per node, `notMeasured` and the hover/focus states of ever
 Pass `--run <id>` so it writes the `measuring` / `measured` status itself. Rules:
 
 - **Never write your own probe, and never edit, patch or rewrite `measured.json`.** Its sha is the probe's
-  identity: a changed probe (or a hand-edited file) makes rounds incomparable, so it is a full re-run (F-101).
+  identity: a changed probe (or a hand-edited file) makes rounds incomparable, so it is a full re-run.
 - **Exit 3** (renderer unavailable) → stop and ask the user; never install anything yourself.
   **Exit 4** (the page kept navigating, reloaded twice during measurement, was unreachable, or `--ready` timed
   out, or a `--steps` step failed, or a reload undid an in-place `--steps` click on both passes; nothing written) →
@@ -237,10 +235,10 @@ Pass `--run <id>` so it writes the `measuring` / `measured` status itself. Rules
   `ok: null`), something of the contract opened, the destination frame's `data-dt-node` tag INSIDE the opened element
   (or on the element itself, or on an ancestor of it that became visible with it — never on one that was already
   visible), and no document load. **Do not re-drive a row the probe drove with `ok: true`.** A row the
-  probe left `ok: null` stays yours to drive if you can; your evidence is graded on its own D24 terms and a probe miss
+  probe left `ok: null` stays yours to drive if you can; your evidence is graded on its own terms (the evidence rules under "Also collect") and a probe miss
   never overrides it.
 - **The rest of the designed interactions, and components you judge genuinely absent, are yours.** Drive navigate,
-  `change_to`, hover and pressed rows (every row the probe does not drive) as before. The probe measures hover
+  `change_to`, hover and pressed rows (every row the probe does not drive). The probe measures hover
   and focus states only (focus is recorded only when the element really took it; programmatic focus may not
   match `:focus-visible` in Chromium, so check a designed focus ring visually or by keyboard Tab and put it in the evidence; whether
   a Tab stop shows a ring at all is the probe's `keyboard.focus-visible`); pressed and every designed interaction you drive yourself, recording results as in
@@ -250,7 +248,7 @@ Pass `--run <id>` so it writes the `measuring` / `measured` status itself. Rules
 - **Behaviour is the probe's too.** The probe runs the dialog, keyboard, landmark, name, forced-colours and
   overflow battery (and axe when the project has it) after the measurement; read `report.behaviour`
   once the caller has compared, and do not re-drive the battery the probe ran. Never accept "the tool cannot
-  emulate forced colours" — the probe emulates it (DT-77); a `not-run` or `unsupported` row is the only reason
+  emulate forced colours" — the probe emulates it; a `not-run` or `unsupported` row is the only reason
   to look by hand. By hand, and only when asked: delete-confirm focus, disabled-while-focused and route changes.
   Never pass `--behaviour off`.
 
@@ -352,7 +350,7 @@ Also collect:
     route, or a tab kept in the query string, records what appeared (`dialog-opened`, `selector-appeared`,
     `state-changed`), not the URL. Never infer an outcome from the `detail` text.
   - **A dialog detector you write yourself uses the SAME contract the probe does — never a `[role=dialog]`-only
-    detector (F-70).** An element newly visible that matches, in this order, `:modal`, `dialog[open]`,
+    detector.** An element newly visible that matches, in this order, `:modal`, `dialog[open]`,
     `[role=dialog]`, `[role=alertdialog]`, `[aria-modal="true"]`, `:popover-open` (each in its own try/catch: an unknown
     selector throws), polled every 100 ms for up to 2 s after the click (a framework commits a dialog a frame or two
     later), and the destination frame's `data-dt-node` tag must be on or inside it (or on a NEWLY visible ancestor of

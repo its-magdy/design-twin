@@ -26,7 +26,7 @@ Not imported yet? That's one-time setup — send them to `/designtwin:help`.
 human or a later step owns, and no pull touches them.
 
 That boundary is the point: `rm -rf design/export && re-pull` is the natural way to recover from a
-bad export, and it used to take a hand-mapped component map with it. `design/README.md` (written by
+bad export, and it does not take the hand-mapped component map with it. `design/README.md` (written by
 `dtwin init`) says the same thing where someone deleting files will actually see it.
 
 A project created before this split keeps its export directly in `design/`; every tool still finds
@@ -233,8 +233,8 @@ hiding a second row that is ALSO titled the same thing — the empty-state sibli
 layered `members`, is exactly this case.) If the pool is empty, a final, looser stage — a
 case-insensitive substring over `name`/`title`/`texts[]` — runs, but **a hit there is never a result,
 only a candidate list**, even when there is exactly one hit: print the candidate(s) and ask the user
-to confirm by node id rather than building/auditing/verifying it. (This is what closed finding 70 for
-real — a single substring hit auto-resolving is the bug, not just multiple hits.) If NOT ONE row in
+to confirm by node id rather than building/auditing/verifying it. (Even a single substring hit never auto-resolves,
+not only multiple hits.) If NOT ONE row in
 the index carries a `title` at all, say so explicitly: the export predates title indexing, and a
 re-pull of the screen (`dtwin pull --node <id>`) — not a cleverer query — is what fixes it. **A screen
 that has never been pulled at all cannot be named by its title yet** — `dtwin list`/`dtwin
@@ -249,7 +249,7 @@ variables this file merely *references* from a published library, flagged `remot
 questions.
 
 **`design/export/variables.json` accumulates — it is not per-pull state.** Each single-screen pull
-merges its slice in, keyed on each variable's Figma key, so pulling screen B no longer deletes screen
+merges its slice in, keyed on each variable's Figma key, so pulling screen B keeps screen
 A's tokens. The raw per-pull slice is also kept verbatim as the screen's `.vars.json` (every variable
 in the collections that screen references — more than the ones its nodes actually bind). Names are
 not unique across the union: two different variables (two keys) can both be called `Space 4` with
@@ -375,7 +375,7 @@ Modules or vanilla CSS; `--web tailwind` writes a Tailwind v4 `theme.css`; `--na
 writes one native token file. Import the result as the app's theme. Do not hand-write a theme from
 bound token names: that is the per-screen re-mapping this step exists to stop.
 
-**Read the warnings it prints.** Nothing is dropped any more, but one warning changes names: `N
+**Read the warnings it prints.** Nothing is dropped, but one warning changes names: `N
 different Figma variables share the name 'X' … resolve DIFFERENTLY` means both were emitted, each
 suffixed with the first 8 characters of its key, and the warning lists each key's values and the
 screens it came from. Pick the one the screen binds (by key, via the screen's `.vars.json`) — or
