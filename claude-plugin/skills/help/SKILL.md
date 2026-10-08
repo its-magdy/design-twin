@@ -30,8 +30,8 @@ Twin" plugin running** (Figma desktop → Plugins → Development → Design Twi
 
 | | Manual export | `dtwin` CLI | `figma-mcp` server |
 |---|---|---|---|
-| What it is | Clicking the plugin's own export buttons, saving downloads into `design/` | A one-shot (or `--serve` daemon) local process that pulls data and writes it to `design/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
-| Setup | **None** — no bridge, no token | `npm install` once; the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration — same token, nothing extra |
+| What it is | Clicking the plugin's own export buttons, saving downloads into `design/export/` | A one-shot (or `--serve` daemon) local process that pulls data and writes it to `design/export/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
+| Setup | **None** — no bridge, no token | Once, from a clone: `npm install`, `npm run build --workspace bridge`, `npm link --workspace bridge`; the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration — same token, nothing extra |
 | Direction | Read only | Read only | Read **and** a small set of safe writes (create a frame/text, set a fill, set text) |
 | Best for | One screen, or a first try before setting anything up | Bulk/repeated pulls, CI-style extraction | Interactive back-and-forth, "check this, now pull that", code → design writes |
 
@@ -114,9 +114,10 @@ manual version:
    manifest…** → pick `figma-plugin/manifest.json` from a clone of the Design Twin repo.
 2. **Pick a lane:**
    - **Just one screen, nothing installed** → click the plugin's export buttons and save the downloads
-     into `design/`. Done.
-   - **The CLI** → `which dtwin`; if it isn't there, install the `designtwin` package, or in a clone
-     of this repo `cd bridge && npm install`. There is no token to make by hand: the first bridge start generates one, saves it per-user
+     into `design/export/`. Done.
+   - **The CLI** → `which dtwin`; if it isn't there, in a clone of this repo run `npm install`,
+     `npm run build --workspace bridge` and `npm link --workspace bridge` (it is not on npm), or use
+     `node bridge/src/figma-pull.ts` in place of `dtwin`. There is no token to make by hand: the first bridge start generates one, saves it per-user
      (`~/.config/design-twin/bridge-token`, `0600`; `%APPDATA%` on Windows) and prints it once — paste
      it into the plugin's **Bridge token** field (Save) and neither side asks again.
      `dtwin token show` reprints it, `dtwin token rotate` replaces it, `dtwin token` says which token
@@ -130,7 +131,7 @@ manual version:
      file name is the form to reach for: `figma.fileKey` is gated to private plugins, so on a
      self-imported plugin it is `null` and cannot address anything.
    - **Live MCP tools in the project being built** → same install as the CLI, plus a `.mcp.json` *in
-     that project* pointing at the absolute path of `bridge/dist/figma-mcp.js` (npm install) or
+     that project* pointing at the absolute path of `bridge/dist/figma-mcp.js` (built and linked) or
      `bridge/src/figma-mcp.ts` (repo checkout) (`dtwin init --mcp` writes it); enable it via `/mcp` and
      restart. No token goes in that file — the MCP server reads the same per-user stored token.
 3. **(Optional) config maps** so the agent reuses your components/tokens instead of regenerating —
@@ -178,7 +179,7 @@ plugin and is always readable. The repository docs are a different thing: `READM
 config-map shapes), `bridge/README.md` (full CLI + MCP surface, token, daemon, limits),
 `figma-plugin/README.md` (the plugin's UI and outputs), `ARCHITECTURE.md` (CLI vs MCP front-ends,
 security). Point a user at those only if they actually have a clone — the one-time setup step that
-imports the Figma plugin does need one, since the npm package ships no `manifest.json`.
+imports the Figma plugin does need one, since `figma-plugin/manifest.json` exists only there.
 
 ## Subagents this plugin ships
 

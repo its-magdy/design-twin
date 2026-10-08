@@ -75,7 +75,7 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   when the export ran. Enable it in Figma, re-pull; there is no API to enable it.
 - **MCP `designtwin` not showing up** → **this repo registers no MCP server** (there is no `.mcp.json`
   here, by choice — see `bridge/README.md`). Path C is for the project you are *building*: add a
-  `.mcp.json` there pointing at an absolute path to `bridge/dist/figma-mcp.js` (npm install) or
+  `.mcp.json` there pointing at an absolute path to `bridge/dist/figma-mcp.js` (built and linked) or
   `bridge/src/figma-mcp.ts` (repo checkout) — no token needed in it,
   since the MCP server reads the same per-user stored token the CLI does. Then enable it via `/mcp`
   and restart.

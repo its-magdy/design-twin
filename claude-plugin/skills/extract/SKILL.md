@@ -34,8 +34,8 @@ it, and `dtwin doctor` says which layout it found.
 
 ## Pick a path
 
-Four ways to get data out: click the plugin's export buttons (manual), run the `dtwin` CLI, hold it
-open as a daemon (`dtwin serve`) for several pulls in a row, or go through a registered MCP server.
+Three ways to get data out: click the plugin's export buttons (manual), run the `dtwin` CLI (one-shot,
+or held open as a daemon with `dtwin serve` for several pulls in a row), or go through a registered MCP server.
 What each is, when to reach for it, and how a connection actually gets opened is the **help**
 skill's job, not this one — use it if the user hasn't got a connection working yet.
 
@@ -46,8 +46,8 @@ works; walking a user through CLI/token setup mid-task is worse than just clicki
 server is already running, use its own export tools with `writeToDisk: true` instead of also trying
 the CLI.
 
-**Where `dtwin` comes from.** Check `which dtwin` first — it is usually already on PATH, installed
-globally from the `designtwin` npm package (and it can be on PATH by other means; don't assume npm).
+**Where `dtwin` comes from.** Check `which dtwin` first — it is on PATH when it was linked from a clone
+(`npm link --workspace bridge`; the package is not on npm).
 Only if it is missing are you inside a clone of the Design Twin repo, where every `dtwin` below is
 `node bridge/src/figma-pull.ts`. If neither works, the CLI isn't installed: fall back to the plugin's own
 export buttons, which need nothing.

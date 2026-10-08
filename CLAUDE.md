@@ -13,7 +13,7 @@ CLI/MCP surface, read these directly rather than guessing:
   flag, `--list-clients`/`--whoami`/`--list-libraries`/`--as-library`, the `--serve` daemon, MCP tools,
   `writeToDisk`, limits.
 - `claude-plugin/skills/help/SKILL.md` — orientation, one-time setup, the three export paths
-  (manual / CLI / daemon / MCP), troubleshooting (port 8787, bridge token, 401, stale snapshot, etc).
+  (manual / CLI, one-shot or `serve` daemon / MCP), troubleshooting (port 8787, bridge token, 401, stale snapshot, etc).
 - `claude-plugin/skills/extract/SKILL.md` — how to actually run an export (discover-then-scope order).
 - `ARCHITECTURE.md` — the two front-ends over one bridge (CLI = batch reads to disk; MCP = the same
   reads as live tools + the only write path, `figma_write`), plugin two-context model, security.

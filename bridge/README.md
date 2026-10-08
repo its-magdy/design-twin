@@ -7,29 +7,34 @@ The plugin's hidden UI iframe is a WebSocket **client**; these processes are the
 (`127.0.0.1:8787`). Nothing touches the internet. See `../ARCHITECTURE.md` for the full design.
 
 ## Install (once)
+The `designtwin` package is not on npm; install it from a clone:
 ```
-cd bridge
-npm install        # ws + @modelcontextprotocol/sdk (+ zod)
+git clone https://github.com/its-magdy/design-twin.git && cd design-twin
+npm install                     # ws + @modelcontextprotocol/sdk (+ zod), for every workspace
+npm run build --workspace bridge  # dtwin's bin is dist/figma-pull.js (gitignored, so build it once)
+npm link --workspace bridge     # puts `dtwin` on your PATH
 ```
+Or skip the link and run `node bridge/src/figma-pull.ts` wherever this README says `dtwin`.
+
 The plugin manifest allows the bridge in **both** dev and published builds
-(`allowedDomains: ws://localhost:{8787,8788,8789}`), so re-import the plugin in Figma after pulling
-these changes. Those three ports are the only ones the plugin can dial — `FIGMA_BRIDGE_PORT` is
+(`allowedDomains: ws://localhost:{8787,8788,8789}`). Those three ports are the only ones the plugin can dial — `FIGMA_BRIDGE_PORT` is
 validated against them and exits rather than binding a port nothing could ever reach.
 
-> **Re-import the plugin — required for library reads.** The manifest now declares
+> **Re-import the plugin after its manifest changes — required for library reads.** The manifest declares
 > `"permissions": ["teamlibrary"]`, without which Figma denies the team-library APIs. A plugin
-> imported before this change keeps running happily and simply returns **no libraries** — a silent
+> imported from an older manifest keeps running happily and simply returns **no libraries** — a silent
 > empty result, not an error. If `--list-libraries` / `figma_list_libraries` shows nothing, re-import
 > `figma-plugin/manifest.json` (Plugins → Development → Import plugin from manifest…) first.
 
 **Languages:** the whole bridge is **TypeScript** (ESM) under `src/` — `figma-pull.ts` (read CLI),
 `server-core.ts` (WS core), `figma-mcp.ts` (MCP server), and the modules they share. From a checkout,
 Node ≥ 24.2 runs it directly with **zero build** (`node bridge/src/figma-pull.ts …`,
-`node bridge/src/figma-mcp.ts`). The npm package ships compiled JavaScript instead: `npm run build`
-emits `dist/` (gitignored; also run on `prepack`), and the package's `dtwin` bin is `dist/figma-pull.js`.
+`node bridge/src/figma-mcp.ts`). The package runs compiled JavaScript instead: `npm run build`
+emits `dist/` (gitignored; also run on `prepack`), and the package's `dtwin` bin — what `npm link` puts on
+your PATH — is `dist/figma-pull.js`.
 ```
 npm run typecheck   # tsc --noEmit
-npm run build       # tsc: src/*.ts -> dist/*.js (what the npm package ships)
+npm run build       # tsc: src/*.ts -> dist/*.js (what the package and a linked dtwin run)
 ```
 
 ### Bridge token (required)
@@ -70,8 +75,7 @@ There is deliberately **no `--token <value>` flag**. Process arguments are world
 `ps` and `/proc/<pid>/cmdline`, so a value flag would hand the secret to every other user on the
 machine for as long as the command runs. A *path* is not a secret; the file it points at is.
 
-`FIGMA_BRIDGE_TOKEN` still works and still wins over the file, so nothing that already exports it
-changes. It is no longer the recommended setup, for two reasons: exported environment variables
+`FIGMA_BRIDGE_TOKEN` works and wins over the file. It is not the recommended setup, for two reasons: exported environment variables
 propagate to every child process and leak into logs, and it has to be re-exported in every shell.
 When both are present `--token-status` says so explicitly — a saved token silently shadowed by an
 env var is otherwise a genuinely confusing state to debug.
@@ -115,8 +119,8 @@ design/
   plan/ audit/ verify/     decisions and evidence from the skills
 ```
 
-`design/` used to hold both halves, so "delete design/ and re-pull" — the obvious way to recover from
-a bad export — silently destroyed a hand-mapped component map. Projects created before the split keep
+The two halves live apart so that "delete design/export/ and re-pull" — the obvious way to recover from
+a bad export — never touches a hand-mapped component map. Projects created before the split keep
 their export directly in `design/`; every command still finds it and `dtwin doctor` says which layout
 it found.
 
@@ -212,8 +216,8 @@ dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next }] }
 
    The "which Figma files" line exists because the freshness line describes exactly one file — the
    snapshot doctor happened to pick — and on a project whose screens came from a different Figma file
-   than its design system it confidently named the wrong one. When an export mixes sources, doctor
-   now lists all of them and points at `/designtwin:audit-design`, whose cross-file check proves
+   than its design system it would name the wrong one. When an export mixes sources, doctor
+   lists all of them and points at `/designtwin:audit-design`, whose cross-file check proves
    whether the screens and the design system really are the same system.
 
 It changes nothing: no token is created, no file written. Check 5 opens a bridge for a few seconds,
@@ -234,7 +238,7 @@ connected, so every later command skips that wait.
 `dtwin help` (or `--help` / `-h`) prints the quick start, the command table and every flag below, and
 exits — no bridge is started, no token minted.
 An unknown or mistyped flag is an error with a suggestion (`--lst` → "did you mean --list?"), never
-silently ignored: a typo used to fall through to a full pull.
+silently ignored — a typo must never fall through to a full pull.
 
 A full pull writes `design/export/design-system.json` as a slim MANIFEST (`exportedAt`/`file`/`colorProfile`,
 `files` pointers, `counts`) over the catalog split under `design/export/design-system/`, one file per Figma
@@ -341,13 +345,13 @@ is one file.
 
 Three consequences worth knowing:
 
-- **The node id is in the filename**, because a frame NAME does not identify a frame. Two frames both
-  called `Popup` used to overwrite each other; a frame whose name ends in a space filed as `Name_.json`,
-  which looks like a typo. Read `pages/index.json` — it carries each screen's real
+- **The node id is in the filename**, because a frame NAME does not identify a frame: two frames both
+  called `Popup` would otherwise overwrite each other, and a frame whose name ends in a space files as
+  `Name___<id>.json`, which looks like a typo. Read `pages/index.json` — it carries each screen's real
   name, page, node id, size and the paths to all three files — rather than reconstructing a filename.
 - **`variables.json` MERGES.** Each pull's slice is unioned in, keyed on each variable's Figma key, so
-  pulling screen B no longer deletes screen A's tokens — which it used to do silently, leaving A's
-  theme unresolvable while the build still rendered from the raw hex beside every binding. The raw
+  pulling screen B never deletes screen A's tokens — replacing the file would leave A's theme
+  unresolvable, silently, while the build still rendered from the raw hex beside every binding. The raw
   per-pull slice is kept verbatim as the screen's `.vars.json`. When two screens resolve one variable
   differently the newest wins and the disagreement is recorded under `_conflicts` and in `hygiene`.
   It holds only the variables bound by the pulled nodes — to find the variable behind a library colour,
@@ -468,7 +472,7 @@ Use `--list-clients` to see *which* files are connected; use `--whoami` to inter
 | --- | --- |
 | `instanceId` **changed** between two calls addressing the *same* file | Figma tore down and re-ran the plugin runtime. The socket survived and the `connId` is unchanged — only the runtime restarted (see the note below) |
 | `fileKeyAvailable: false` | `figma.fileKey` is gated to private plugins, so this file is addressed by `connId` or name instead. Normal for a locally-imported plugin |
-| `takeovers` > 0 | Should never happen now — connections coexist. Retained so an older reader of this field sees `0` rather than the key vanishing |
+| `takeovers` > 0 | Never happens — connections coexist, so the field is always `0`. It stays so a reader of this field sees `0` rather than the key vanishing |
 
 > **Runtime teardown.** At least one comparable project ([`southleft/figma-console-mcp#67`](https://github.com/southleft/figma-console-mcp/issues/67))
 > reports Figma destroying the plugin's JS execution context every 1–3 minutes regardless of focus.
@@ -633,7 +637,7 @@ reason to gate them the way `--design-system` gates a page walk. **Two honest li
 
 **Duplicate component names.** The catalog build already flags a component name reused elsewhere in
 the file (e.g. two unrelated "Action Buttons" component sets) as `duplicate component name: '<name>'`
-in `hygiene`. `--design-system`/full pulls now echo `hygiene` to stderr as soon as the write completes
+in `hygiene`. `--design-system`/full pulls echo `hygiene` to stderr as soon as the write completes
 (prefixed `hygiene (N):`), so this shows up in the run itself instead of requiring a manual
 `hygiene.json` diff.
 
@@ -663,7 +667,7 @@ Behaviour worth knowing:
   per-run state (`serializeRun` in `bridge.ts`), so the daemon runs one at a time, in arrival order —
   exactly like a sequence of one-shot runs.
 - Every request id is unique per bridge (`r<nonce>-<seq>`) and a reply only settles the request on the
-  connection it was sent to, so a late reply from an abandoned earlier request can no longer answer the
+  connection it was sent to, so a late reply from an abandoned earlier request cannot answer the
   next one. When the plugin is connected but sends nothing the stall message says so ("the plugin is
   connected but sent nothing for '<cmd>' … it is busy"): an earlier export is still running in that file,
   or a long cold first read of a large page. Retry, or use a warm plugin (`dtwin serve`).
@@ -695,8 +699,8 @@ Behaviour worth knowing:
 ## Write / interactive: figma-mcp (MCP over stdio)
 **Not registered in this repo** — there is no `.mcp.json` here on purpose, so the MCP never starts
 while you are working *on* the bridge. Register it in the project you are *building*: a `.mcp.json`
-there with an absolute path to the server entry — `bridge/dist/figma-mcp.js` for an npm install,
-`bridge/src/figma-mcp.ts` for a repo checkout — under the key `designtwin` (`dtwin init --mcp` picks
+there with an absolute path to the server entry — `bridge/dist/figma-mcp.js` for a built, linked install,
+`bridge/src/figma-mcp.ts` for running from source — under the key `designtwin` (`dtwin init --mcp` picks
 whichever one is running and writes exactly that). Claude Code then launches it over stdio, and its tools surface as
 `mcp__designtwin__<tool>` (e.g. `mcp__designtwin__figma_status`).
 No token needs to go in that `.mcp.json`: the MCP server reads the same per-user stored token the CLI

@@ -1,6 +1,6 @@
 ---
 name: visual-verifier
-description: Independently measures a BUILT screen against its Figma export — renders it, reads every visible node's computed style under the canonical keys verify-screen.js compares, drives every designed interaction and records the selector it drove, and writes a machine-readable measurement file plus the screenshot it measured. Use after build-screen (or screen-builder) has produced code and before reporting a screen as done, or whenever the user asks "does this match the design?". It never edits app code; a builder that grades its own work misses what fresh eyes catch.
+description: Independently measures a BUILT screen against its Figma export — renders it, reads every visible node's computed style under the canonical keys verify-screen.js compares, drives every designed interaction and records the selector it drove, and writes a machine-readable measurement file plus the screenshot it measured. Invoked by the verify and build-screen skills (and screen-builder) with a prepared expectation file, after code is built and before a screen is reported done; for a user asking "does this match the design?", use the verify skill, which prepares that file first. It never edits app code; a builder that grades its own work misses what fresh eyes catch.
 tools: Read, Glob, Grep, Bash, Write
 model: sonnet
 ---
