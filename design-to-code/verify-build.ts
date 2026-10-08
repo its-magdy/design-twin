@@ -170,8 +170,10 @@ const lifecycleOf = (plan: Plan | null | undefined): PlanLifecycle => {
 
 // files[] AND every anchors/components mapModule (contentHash.planCodeFiles) — a shared
 // shell the plan maps but another plan lists is code this screen renders. The same list verify-screen --compare hashes.
-function fileHashes(plan: Plan | null | undefined, cwd: string): Record<string, string | null> {
-  return contentHash.fileHashes(contentHash.planCodeFiles(plan || {}, cwd), cwd); // the same hashes verify-screen --compare records
+// `cached`: bytes this run already read (see ProjectGraph.cached); absent, every file is read from disk.
+type CachedBytes = (rel: string) => Uint8Array | undefined;
+function fileHashes(plan: Plan | null | undefined, cwd: string, cached?: CachedBytes): Record<string, string | null> {
+  return contentHash.fileHashes(contentHash.planCodeFiles(plan || {}, cwd), cwd, cached); // the same hashes verify-screen --compare records
 }
 
 // The plan's own content, minus what the hook writes and what is not the plan's substance: status, the owner's
@@ -188,10 +190,10 @@ const hookHashMatches = (hook: PlanHookRecord, plan: Plan): boolean => hook.plan
 // record that hashed files[] only) is only noted — the upgrade must not reopen a plan the hook closed with
 // no file changed. The hook's next write records it, and from then on a change to it is a change.
 interface HookFileDiff { changed: string[]; unhashed: string[] }
-function hookFileDiff(plan: Plan, cwd: string): HookFileDiff | null {
+function hookFileDiff(plan: Plan, cwd: string, cached?: CachedBytes): HookFileDiff | null {
   const hook = plan.verification && plan.verification.hook;
   if (!hook || !hook.files) return null;
-  const now = fileHashes(plan, cwd);
+  const now = fileHashes(plan, cwd, cached);
   const listed = new Set(Array.isArray(plan.files) ? plan.files.map(String) : []);
   const changed: string[] = [], unhashed: string[] = [];
   const all = new Set([...Object.keys(hook.files), ...Object.keys(now)]);
@@ -803,11 +805,17 @@ export interface CheckPlanResult { blocking: string[]; warnings: string[]; tagCo
 
 const isAcknowledged = (row: PlanTokenRow): boolean => typeof row.acknowledged === "string" && !!row.acknowledged.trim();
 
-function readFiles(rels: readonly string[], cwd: string): FileText[] {
+// `bytes` (when given) receives each file's raw bytes, which the text is decoded from.
+function readFiles(rels: readonly string[], cwd: string, bytes?: Map<string, Buffer>): FileText[] {
   const out: FileText[] = [];
   for (const rel of rels) {
     const abs = path.join(cwd, rel);
-    try { if (fs.statSync(abs).isFile()) out.push({ rel, text: fs.readFileSync(abs, "utf8") }); } catch { /* absent: reported for its own plan */ }
+    try {
+      if (!fs.statSync(abs).isFile()) continue;
+      const buf = fs.readFileSync(abs);
+      out.push({ rel, text: buf.toString("utf8") });
+      bytes?.set(rel, buf);
+    } catch { /* absent: reported for its own plan */ }
   }
   return out;
 }
@@ -826,12 +834,21 @@ export interface ProjectGraph {
   byRel: Map<string, FileText>;
   /** the project's .css files and whether it has a tailwind.config.* (walked on first use) */
   scan: () => { css: FileText[]; tailwindConfig: boolean };
+  /** the bytes the graph read for `rel` — undefined when it did not read it, or the run has since rewritten it */
+  cached: (rel: string) => Buffer | undefined;
+  /** records that the run wrote `file` (a plan), so cached() no longer answers for it */
+  rewrote: (file: string) => void;
 }
-function buildGraph(cwd: string, extra: readonly string[] = []): ProjectGraph {
+// `plans`: design/plan/'s readable plans when the caller has already parsed them (else they are found here).
+function buildGraph(cwd: string, extra: readonly string[] = [], plans?: readonly PlanFile[]): ProjectGraph {
   const listCount = new Map<string, number>();
-  for (const p of findPlans(cwd).plans) for (const f of new Set(p.plan.files || [])) listCount.set(f, (listCount.get(f) || 0) + 1);
-  const files = readFiles([...new Set([...listCount.keys(), ...extra])], cwd);
+  for (const p of plans ?? findPlans(cwd).plans) for (const f of new Set(p.plan.files || [])) listCount.set(f, (listCount.get(f) || 0) + 1);
+  const bytes = new Map<string, Buffer>();
+  const files = readFiles([...new Set([...listCount.keys(), ...extra])], cwd, bytes);
   const byRel = new Map(files.map((f): [string, FileText] => [f.rel, f]));
+  const rewritten = new Set<string>();
+  const cached = (rel: string): Buffer | undefined => (rewritten.has(path.resolve(cwd, rel)) ? undefined : bytes.get(rel));
+  const rewrote = (file: string): void => { rewritten.add(path.resolve(cwd, file)); };
   const scripts = files.filter((f) => SCRIPT_RE.test(f.rel));
   const lower = (segs: string[]): string => segs.map((x) => x.toLowerCase()).join("/");
   const bySuffix = new Map<string, string[]>(), byFull = new Map<string, string[]>();
@@ -862,7 +879,7 @@ function buildGraph(cwd: string, extra: readonly string[] = []): ProjectGraph {
     const dirs = new Set([path.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
     return (scanned = { css: walked.css, tailwindConfig: walked.tailwindConfig || [...dirs].some(hasTwConfig) });
   };
-  return { files, listCount, kids, parents, byRel, scan };
+  return { files, listCount, kids, parents, byRel, scan, cached, rewrote };
 }
 
 // The files whose imports count for a plan whose files are `own`: its own files; the files they
@@ -1013,8 +1030,15 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   if (!listed.length) warnings.push("`files` is empty — list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} — fix the path(s) (relative to the project root) or remove entries for files that were not written`);
 
-  const byFile: FileText[] = listed.filter((rel) => fs.existsSync(path.join(cwd, rel)) && fs.statSync(path.join(cwd, rel)).isFile())
-    .map((rel) => ({ rel, text: fs.readFileSync(path.join(cwd, rel), "utf8") }));
+  // Every plan's files[] under design/plan/ (this one's included): a shared shell lives in another plan's
+  // files, and the import check, the tag count and the declared-token check see it. The graph has read
+  // this plan's files too, so their text is taken from it rather than read again.
+  let built: ProjectGraph | null = null;
+  const graph = (): ProjectGraph => built || (built = o.graph ? o.graph() : buildGraph(cwd, listed));
+  const g = graph();
+  const isFileNow = (rel: string): boolean => { try { return fs.statSync(path.join(cwd, rel)).isFile(); } catch { return false; } };
+  const byFile: FileText[] = listed.filter(isFileNow)
+    .map((rel) => (g.cached(rel) !== undefined && g.byRel.get(rel)) || { rel, text: fs.readFileSync(path.join(cwd, rel), "utf8") });
   const code: FileText[] = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
   const source = code.map((f) => f.text).join("\n");
 
@@ -1099,10 +1123,6 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${String(row.value)} (${row.kind}) to token '${String(row.codeToken)}' — use the token (or add it to allowedLiterals with a reason)`);
   }
 
-  // Every plan's files[] under design/plan/ (this one's included): a shared shell lives in another plan's
-  // files, and the import check, the tag count and the declared-token check see it.
-  let built: ProjectGraph | null = null;
-  const graph = (): ProjectGraph => built || (built = o.graph ? o.graph() : buildGraph(cwd, listed));
   const sharedByFile = (): FileText[] => graph().files.filter((f) => !listed.includes(f.rel));
   let reach: FileText[] | null = null;
   const reachable = (): FileText[] => reach || (reach = reachableFor(graph(), listed));
@@ -1284,7 +1304,7 @@ interface Verdict { status: PlanComputedStatus; reasons: string[] }
 const NO_WAIVERS = waiversHash(null);
 const waiversChanged = (r: ReportRef, now: string): boolean => (r.waiversSha256 || NO_WAIVERS) !== now;
 const WAIVERS_CHANGED = "waivers changed since the last compare — re-run --compare (with --plan <plan.json> when several plans describe the frame)";
-function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: ReportRef[]): Verdict {
+function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: ReportRef[], cached?: CachedBytes): Verdict {
   const v = plan.verification;
   if (!reports.length) {
     if (v && v.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically — not rendered (${v.reason || "no reason recorded"})`] };
@@ -1315,7 +1335,7 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
     if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}… → ${expSha.slice(0, 12)}…, timestamps ignored) — re-run --expect and --compare`] };
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
     if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
-    const now = fileHashes(plan, cwd);
+    const now = fileHashes(plan, cwd, cached);
     // A mapped module an older report never hashed reads "(not recorded)" — one re-compare records it
     const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => (measured[f] === undefined ? `${f} (not recorded)` : f));
     if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — re-run --compare`] };
@@ -1328,7 +1348,7 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
 }
 
 /** computeStatus()'s options: where the plan lives (for locating its export/reports), or those pre-located. */
-export interface StatusOptions { cwd?: string; planFile?: string; export?: ExportHit | null; reports?: ReportRef[] }
+export interface StatusOptions { cwd?: string; planFile?: string; export?: ExportHit | null; reports?: ReportRef[]; cached?: CachedBytes }
 export interface StatusResult { status: PlanComputedStatus; reasons: string[]; reports: ReportRef[] }
 
 // The computed status. PRECEDENCE (first match wins; also in --status --help):
@@ -1352,14 +1372,14 @@ function computeStatus(plan: Plan, opts?: StatusOptions): StatusResult {
   if (life !== "pending") return { status: life, reasons: [life === "abandoned" ? "retired by hand (\"status\": \"abandoned\")" : "paused on a question for the user (\"status\": \"awaiting-user\")"], reports: [] };
   const exp = o.export === undefined ? locateExport(plan, o.planFile, cwd) : o.export;
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
-  const rv = reportVerdict(plan, cwd, exp, reports);
+  const rv = reportVerdict(plan, cwd, exp, reports, o.cached);
   const hook = plan.verification && plan.verification.hook;
   let hookState: PlanComputedStatus | null = null, hookWhy: string[] = [], unhashedWhy: string[] = [];
   if (!hook || !hook.result) { hookState = "pending"; hookWhy = ["the build-screen Stop hook has not checked this plan"]; }
   else if (hook.planHash && !hookHashMatches(hook, plan)) { hookState = "pending"; hookWhy = ["the plan changed after the hook's last check"]; }
   else if (hook.result !== "pass") { hookState = "blocked"; hookWhy = hook.blocking && hook.blocking.length ? hook.blocking : ["the hook's last check blocked"]; }
   else {
-    const d = hookFileDiff(plan, cwd);
+    const d = hookFileDiff(plan, cwd, o.cached);
     const ch = d ? d.changed : [];
     if (ch.length) { hookState = "stale"; hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`]; }
     if (d && d.unhashed.length) unhashedWhy = [`hook: not hashed by the hook's last check (its record predates hashing of mapped modules), so not a change: ${d.unhashed.slice(0, 6).join(", ")}${d.unhashed.length > 6 ? `, +${d.unhashed.length - 6} more` : ""} — the hook's next check of this plan records it; until then an edit to it does not reopen the plan (\`verify-build <plan>\` re-checks now)`];
@@ -1396,21 +1416,54 @@ export type PlanScope = "unscoped" | "none-named" | "named";
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 /** A path the session wrote, and the directory it was relative to (the entry's `cwd`, when recorded). */
 export interface WrittenPath { path: string; base: string | null }
-function transcriptActions(text: string, ownOnly: boolean): WrittenPath[] {
-  const out: WrittenPath[] = [];
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    let v: unknown = null;
-    try { const parsed: unknown = JSON.parse(line); v = parsed; } catch { continue; }
-    if (!isJsonObject(v) || (ownOnly && v.isSidechain === true) || !isJsonObject(v.message) || !Array.isArray(v.message.content)) continue;
-    for (const item of v.message.content) {
-      if (!isJsonObject(item) || item.type !== "tool_use" || typeof item.name !== "string" || !isJsonObject(item.input)) continue;
-      const inp = item.input;
-      const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
-      if (WRITE_TOOLS.has(item.name)) { for (const k of ["file_path", "notebook_path"]) { const f = inp[k]; if (typeof f === "string") out.push({ path: f, base }); } }
-      else if (item.name === "Bash" && typeof inp.command === "string") for (const f of bashWriteTargets(inp.command)) out.push({ path: f, base });
-    }
+// The paths one transcript line's tool_use items write, appended to `out`.
+function lineActions(line: string, ownOnly: boolean, out: WrittenPath[]): void {
+  if (!line.trim()) return;
+  let v: unknown = null;
+  try { const parsed: unknown = JSON.parse(line); v = parsed; } catch { return; }
+  if (!isJsonObject(v) || (ownOnly && v.isSidechain === true) || !isJsonObject(v.message) || !Array.isArray(v.message.content)) return;
+  for (const item of v.message.content) {
+    if (!isJsonObject(item) || item.type !== "tool_use" || typeof item.name !== "string" || !isJsonObject(item.input)) continue;
+    const inp = item.input;
+    const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
+    if (WRITE_TOOLS.has(item.name)) { for (const k of ["file_path", "notebook_path"]) { const f = inp[k]; if (typeof f === "string") out.push({ path: f, base }); } }
+    else if (item.name === "Bash" && typeof inp.command === "string") for (const f of bashWriteTargets(inp.command)) out.push({ path: f, base });
   }
+}
+
+// A transcript is tens of MB, mostly tool_result text, and only a line holding a tool_use item can claim a
+// plan. Such a line holds the JSON string "tool_use": written plainly by Claude Code, or (by another JSON
+// writer) with some of its letters as \uXXXX escapes, which the second test admits. A line passing neither
+// cannot hold `type: "tool_use"`, so it is skipped without JSON.parse.
+const TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:_|\\u005f)(?:u|\\u0075)(?:s|\\u0073)(?:e|\\u0065)"/i;
+const mayHoldToolUse = (line: string): boolean => line.includes('"tool_use"') || (line.includes("\\u") && TOOL_USE_ESCAPED.test(line));
+
+// The file's lines exactly as readFileSync(file, "utf8").split("\n") gives them, read `chunk` bytes at a time
+// so a large transcript is never held whole. A chunk is decoded only up to its last newline byte (0x0A never
+// occurs inside a multi-byte UTF-8 sequence), so every decoded piece starts and ends on a character boundary.
+const LINE_CHUNK = 1 << 20;
+function forEachLine(file: string, onLine: (line: string) => void, chunk = LINE_CHUNK): void {
+  const fd = fs.openSync(file, "r");
+  try {
+    const buf = Buffer.allocUnsafe(chunk);
+    let carry: Buffer[] = [];
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, chunk, null);
+      if (n === 0) break;
+      const cut = buf.subarray(0, n).lastIndexOf(0x0a);
+      if (cut < 0) { carry.push(Buffer.from(buf.subarray(0, n))); continue; }
+      const head = buf.subarray(0, cut);
+      const text = (carry.length ? Buffer.concat([...carry, head]) : head).toString("utf8");
+      for (const line of text.split("\n")) onLine(line);
+      carry = cut + 1 < n ? [Buffer.from(buf.subarray(cut + 1, n))] : [];
+    }
+    onLine(Buffer.concat(carry).toString("utf8"));
+  } finally { fs.closeSync(fd); }
+}
+
+function transcriptActions(file: string, ownOnly: boolean): WrittenPath[] {
+  const out: WrittenPath[] = [];
+  forEachLine(file, (line) => { if (mayHoldToolUse(line)) lineActions(line, ownOnly, out); });
   return out;
 }
 
@@ -1512,11 +1565,11 @@ function sameFile(w: WrittenPath, rel: string, cwd: string): boolean {
 function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null | undefined, cwd: string): { plans: PlanFile[]; scope: PlanScope } {
   const agent = typeof input.agent_transcript_path === "string" && !!input.agent_transcript_path;
   const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
-  // (a non-string path would have thrown in readFileSync and been caught the same way)
+  // (a non-string path would have thrown in openSync and been caught the same way)
   if (!file || typeof file !== "string") return { plans: open, scope: "unscoped" };
   let writes: WrittenPath[];
   // the session transcript may carry a subagent's sidechain entries: those are not this session's actions
-  try { writes = transcriptActions(fs.readFileSync(file, "utf8"), !agent); } catch { return { plans: open, scope: "unscoped" }; }
+  try { writes = transcriptActions(file, !agent); } catch { return { plans: open, scope: "unscoped" }; }
   // rule (b): a written file claims the ONE open plan that lists it; a file two or more open plans list claims none
   const listers = new Map<string, number>();
   for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
@@ -1571,13 +1624,15 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
   if (cleared) delete plan.status;
   if (!plan.verification) plan.verification = {};
   setPhase(`hashing files[] of ${path.basename(p.file)}`);
+  // checkPlan has built the graph by now: the files it read are hashed from those bytes, not read again
+  const cached = graph ? graph().cached : undefined;
   plan.verification.hook = {
     result: blocking.length ? "blocked" : "pass",
     checkedAt: new Date().toISOString(),
     blocking,
     warnings: warnings.length,
     planHash: planHash(plan),
-    files: fileHashes(plan, cwd),
+    files: fileHashes(plan, cwd, cached),
     ...(tagCoverage ? { tagCoverage } : {}),
   };
   // The plan's mtime is the staleness clock — it measures the BUILDER's last edit. The hook's own
@@ -1586,7 +1641,8 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
   try { const s = fs.statSync(p.file); times = [s.atime, s.mtime]; } catch { /* new file */ }
   writePlan(p.file, plan); // atomic, in the plan file's own format (BOM, indentation, line endings)
   if (times) try { fs.utimesSync(p.file, times[0], times[1]); } catch { /* ignore */ }
-  const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports });
+  if (graph) graph().rewrote(p.file); // a later plan that lists this one reads it from disk
+  const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports, ...(cached ? { cached } : {}) });
   return { blocking, warnings, cleared, status: st };
 }
 
@@ -1633,6 +1689,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const all: Array<{ p: PlanFile; cwd: string }> = [];
+  let hookCwd: string | null = null, hookPlans: PlanFile[] | undefined;
   if (targets) {
     for (const p of targets) {
       const cwd = rootOfPlan(p.file);
@@ -1645,6 +1702,7 @@ async function main(argv: string[]): Promise<number> {
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
     setPhase("finding open plans in design/plan/");
     const { plans, bad } = findPlans(cwd);
+    hookCwd = cwd; hookPlans = plans;
     // A plan the hook cannot read is not checked — say so on every stop rather than skip it silently.
     for (const b of bad) console.error(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
     const open = plans.filter((p) => isOpen(p, cwd));
@@ -1662,7 +1720,8 @@ async function main(argv: string[]): Promise<number> {
   const warned = new Map<string, string[]>();
   const graphs = new Map<string, ProjectGraph>(); // built once per project root per run, on first use
   for (const { p, cwd } of all) {
-    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd)));
+    // the hook's own cwd has its plans parsed already (findPlans above); a plan named on the command line is found again
+    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : undefined)));
     const name = path.basename(p.file);
     if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" — status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
@@ -1685,6 +1744,7 @@ export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
   verificationWarnings, recordedReportWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
   colorLiterals, arbitraryPx, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
+  forEachLine, mayHoldToolUse, transcriptActions, buildGraph,
 };
 
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
