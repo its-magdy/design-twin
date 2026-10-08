@@ -55,12 +55,12 @@ writes the real path here, not there).
    a good string into it, and its sibling plan from the very same build may not have one. Once
    resolved, `design/plan/<screen>.json` is the
    record of the first build: `files[]` is where the code lives, `anchors{}` maps node ids to the
-   file and symbol each became (present on plans built since it was added), `tokens[]` and
+   file and symbol each became (absent on plans written before anchors were recorded), `tokens[]` and
    `components[]` are the decisions already made (keep them — a re-sync must not quietly re-decide
    which token `#5B5FC7` is). The export's screen files are `pages/<Page>/<Screen>__<node-id>.json`
    whichever pull produced them, so there is one shape to look for.
    **Resolved to a real screen with no plan/code yet found** → look harder before concluding it was
-   never built (finding 200): a screen a user names in their own vocabulary can still resolve to a
+   never built: a screen a user names in their own vocabulary can still resolve to a
    node id that IS covered by an existing plan/build under a different `screenName`. Only when
    resolution AND a plan/code search both come up empty is it new; hand off to
    `/designtwin:build-screen`.

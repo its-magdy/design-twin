@@ -148,9 +148,8 @@ report the pair once, not once per screen.
    **Don't pass `--out`.** It defaults to `design/audit/<Screen>__<id>` — the exact basename of the
    screen file you just gave it, which write-out.ts already named `<LayerName>__<node-id>` — so this
    skill never has to invent a name, and re-auditing the same screen always overwrites the same
-   report pair instead of adding a new one under whatever string was typed that time (findings 72/73:
-   one node ended up with `people.md`/`members.md` byte-identical, and the same node twice as
-   `team-rules.md`/`Team_Settings.md`). Pass `--out` explicitly only if the user asks for
+   report pair instead of adding a new one under whatever string was typed that time (which leaves one node
+   with two byte-identical reports under different names). Pass `--out` explicitly only if the user asks for
    a specific filename.
 
    **If it refuses** ("node … already has an audit report at <file> — refusing to also write …"), a report
@@ -172,7 +171,7 @@ report the pair once, not once per screen.
 
    Every finding in `<Screen>.json` (and the `.cross.json`) carries an `id`: its `code`, or `code@nodeId`
    when it names a node (a repeat of the same one gets `~2`). Quote those ids when you list blockers — a
-   plan's `auditGate.overridden` uses them (the old `code#i` is still accepted, with a warning that maps it to the stable id), and its `crossCheckFile`
+   plan's `auditGate.overridden` uses them (the legacy positional `code#i` is still accepted, with a warning that maps it to the stable id), and its `crossCheckFile`
    points at the cross-check report beside the audit (`<Screen>.cross.json`), when there is one. Component-name matching follows the plan's
    rule (name + prop signature; several same-name entries are *ambiguous*, not matched), and
    `catalog-rekeyed` proposals are labelled `alreadyMapped` / `sharedWith` from the component map and the

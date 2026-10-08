@@ -45,7 +45,7 @@ it in step 1, don't read its files.
 decisions and evidence that a re-pull must never destroy. (A project created before that split has
 its export directly in `design/` — every path below works either way, just drop the `export/`.)
 
-- **The screen JSON** — `design/export/pages/index.json` (the root — it now carries a row per
+- **The screen JSON** — `design/export/pages/index.json` (the root — it carries a row per
   screen: `name`, `title`, `texts[]`, `page`, `pageId`, `id`, size and every sibling file's path) →
   the layer's `file`. Screen files are `pages/<Page>/<Screen>__<node-id>.json`; the node id is in the
   name because a frame name does not identify a frame (two `Popup`s on one page are two screens, and
@@ -283,7 +283,7 @@ Copy this checklist into your notes and keep it updated:
      the user has decided to build past it, record that decision in the plan's
      `auditGate: {auditFile, crossCheckFile, verdict, overridden: [<blocker ids>], reason, decidedBy, decidedAt}` —
      a blocker id is the finding's `id`: its `code`, or `code@nodeId` when it carries a node (a repeat gets
-     `~2`); the old positional `code#i` is still accepted (with a warning mapping it to the stable id and naming stale ones "(drop it)"), and so, for a finding with no node, is its bare
+     `~2`); the legacy positional `code#i` is still accepted (with a warning mapping it to the stable id and naming stale ones "(drop it)"), and so, for a finding with no node, is its bare
      code (which is its id). `crossCheckFile` is the cross-check report beside the audit
      (`<audit>.cross.json`), when there is one. `plan-skeleton.js` pre-fills it from the audit; the Stop hook warns (never blocks) if a current
      blocker id is missing from `overridden` or `reason` is empty.
@@ -396,12 +396,12 @@ Copy this checklist into your notes and keep it updated:
    carried in the export — use it. Derive the code identifier from it mechanically (`Schemes/On
    Primary` → `on-primary` / `onPrimary`, in whatever form the profile gives) so anyone
    can read the name in either direction and land on the same token. The same goes for component names
-   (the Figma component / `figma.name` in `design/codeconnect.local.json`). Assets follow the same rule and
-   now make it easy: an exported file is named after its own Figma layer (`icons/linear/arrow-down` →
+   (the Figma component / `figma.name` in `design/codeconnect.local.json`). Assets follow the same rule, and the
+   export makes it easy: an exported file is named after its own Figma layer (`icons/linear/arrow-down` →
    `arrow-down.svg`), and the same artwork reached through several instance paths is ONE file with
    every node id recorded on it. That name is the producer's — never rename it inside
    `design/export/assets/`, because it is how a re-pull knows which icon changed — but keeping it in
-   the app too now costs nothing and keeps `sync-design`'s change list followable. If you must rename
+   the app too costs nothing and keeps `sync-design`'s change list followable. If you must rename
    a copy, note the mapping in the plan. Read the screen's `.assets.json` for the duplicate groups
    rather than diffing bytes yourself.
 
@@ -499,7 +499,7 @@ Copy this checklist into your notes and keep it updated:
    - **Interactions** — `reactions` become real navigation/state, not dead buttons; `overlay` →
      the stack's modal/sheet; transitions use the given duration (seconds → ms) and easing. The export
      hands over the whole interaction graph keyed by node id, and step 5 drives every edge of it — so
-     a button wired to nothing now fails verification instead of passing as a nice-looking mockup.
+     a button wired to nothing fails verification instead of passing as a nice-looking mockup.
    - **Tag a dialog or overlay's root element with its destination frame id.** The shipped probe clicks the
      opener and accepts the dialog only when the destination frame's `data-dt-node` is on or inside the element that
      opened (`:modal`, `dialog[open]`, `[role=dialog]`, `[role=alertdialog]`, `[aria-modal="true"]`,
@@ -616,9 +616,8 @@ Copy this checklist into your notes and keep it updated:
      and **pixels** against the `.png` — clipped/overlapping text first, then spacing, alignment,
      colour. The numbers are the script's job; your eyes catch what numbers can't express.
    - **Re-render immediately before saving any screenshot you will cite as evidence.** A dev server
-     with hot reload picks up edits mid-pass, and on the live run a saved screenshot showed two
-     strings the shipped code no longer had — while the same plan block cited it as proof they were
-     fixed. An artifact that does not depict the build it claims to depict is worse than none.
+     with hot reload picks up edits mid-pass, so a saved screenshot can show strings the shipped
+     code does not have — while the same plan block cites it as proof they were fixed. An artifact that does not depict the build it claims to depict is worse than none.
    - Re-render key states, a large font scale, the other theme, and RTL when supported.
    - Fix the largest discrepancy first; log each round. Stop after **5 rounds** per component, or
      sooner when a round fixes nothing — measured gains flatten by then, and if it oscillates the

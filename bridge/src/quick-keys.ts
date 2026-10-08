@@ -63,6 +63,6 @@ Read these before writing ANY script against an export JSON (field names guessed
   (single-screen pulls) lists every file.
 - **Older exports.** A file pulled with an older plugin also has \`gridColumnStart:-1\` / \`gridRowStart:-1\` on every node,
   \`gridAlignSelf\` / \`gridJustifySelf\` on a node whose parent is not a grid, and \`layout.mode:"absolute"\` on every
-  TEXT, shape, SLICE, STICKY and other leaf type (a node TYPE that cannot hold children has no \`layout\` now) — ignore all of it
+  TEXT, shape, SLICE, STICKY and other leaf type (a node TYPE that cannot hold children has no \`layout\`) — ignore all of it
   (design-diff does).
 `;
