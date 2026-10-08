@@ -17,7 +17,14 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   `dtwin --daemon-status` first — if a daemon is up, ordinary commands route
   through it and nothing needs stopping, so this means something *else* holds the port: a one-shot
   `dtwin pull` still running, a stale `node`, or an MCP server from an older install (current ones
-  share the bridge and show up in `dtwin status`). Wait for the pull, or stop the stale process.
+  share the bridge and show up in `dtwin status`). Wait for the pull, or stop the stale process. If the
+  error names a socket from an earlier dtwin version, `dtwin --stop` stops that daemon.
+- **"refusing to use … for the dtwin daemon socket"**, or `dtwin status` says no daemon while one is
+  running → the daemon socket lives in `$XDG_RUNTIME_DIR`, else `$TMPDIR/designtwin-<uid>/`, so two
+  processes with different `XDG_RUNTIME_DIR` / `TMPDIR` see different daemons — start them from the same
+  environment. The refusal means that directory is a symlink, someone else's, or not `0700`: commands
+  still work, one-shot, but no daemon can run there. Remove the directory (its owner, or an admin, if it
+  is not yours), or point `XDG_RUNTIME_DIR` or `TMPDIR` at a directory only you can access.
 - **The plugin isn't connecting** → open its **Connect to Claude Code (optional)** section (collapsed by
   default; the pill in its header always shows the state) and read which of these it says:
   - `not set up` — no token pasted. It won't dial until you paste one into **Bridge token** + Save.

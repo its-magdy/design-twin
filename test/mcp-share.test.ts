@@ -8,6 +8,7 @@ import path from "node:path";
 import net from "node:net";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import * as daemon from "../bridge/src/daemon.ts";
 import { check, report } from "./assert.ts";
 
 const MCP = path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
@@ -27,8 +28,8 @@ interface McpProc {
   reply(id: number): string | undefined;
 }
 
-function start(): McpProc {
-  const proc = spawn(process.execPath, [MCP], { env, stdio: ["pipe", "pipe", "pipe"] });
+function start(procEnv: NodeJS.ProcessEnv = env): McpProc {
+  const proc = spawn(process.execPath, [MCP], { env: procEnv, stdio: ["pipe", "pipe", "pipe"] });
   const p: McpProc = {
     proc, err: "", out: "", code: undefined,
     send: (o) => { proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...o }) + "\n"); },
@@ -67,7 +68,7 @@ void (async () => {
   // the daemon socket path: it accepts and never answers, so every daemon probe waits out its 1.5s
   // timeout — long enough for all three resolutions to be in flight at once. createBridge prints its
   // "auth: using FIGMA_BRIDGE_TOKEN" line once per call — that line is the count of bridges opened.
-  const sock = path.join(os.tmpdir(), "designtwin-8789.sock"); // daemon.ts sockPath(8789)
+  const sock = daemon.sockPath(8789); // the spawned servers inherit this env, so they resolve the same path
   try { fs.unlinkSync(sock); } catch { /* none left over */ }
   const mute = net.createServer(() => { /* accept, never reply */ });
   await new Promise<void>((r) => mute.listen(sock, () => r()));
@@ -87,6 +88,34 @@ void (async () => {
   try { fs.unlinkSync(sock); } catch { /* the MCP server's own daemon may have replaced/removed it */ }
   await wait(300);
 
+  // A socket directory that is not private to this user (here: 0777, under the server's own TMPDIR)
+  // is no daemon: the server holds the bridge itself, its tools work, and the refusal reaches stderr
+  // once — never stdout, which is the JSON-RPC channel.
+  const uid = process.getuid?.();
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-share-"));
+  if (uid !== undefined) {
+    const squatted = path.join(tmpBase, "squatted");
+    fs.mkdirSync(path.join(squatted, `designtwin-${uid}`), { recursive: true });
+    fs.chmodSync(path.join(squatted, `designtwin-${uid}`), 0o777);
+    const rEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: squatted };
+    delete rEnv.XDG_RUNTIME_DIR;
+    const r = start(rEnv);
+    r.send(init);
+    await until(() => r.reply(1));
+    r.send({ method: "notifications/initialized" });
+    r.send({ id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } });
+    r.send({ id: 3, method: "tools/call", params: { name: "figma_status", arguments: {} } });
+    const answered = await until(() => r.reply(2) && r.reply(3));
+    check("a refused socket directory: the MCP tools still answer, not as errors",
+      answered && !/"isError":true/.test((r.reply(2) ?? "") + (r.reply(3) ?? "")) && r.code === undefined);
+    check("…the refusal is on stderr once, and stdout carries only JSON-RPC",
+      (r.err.match(/Going on without a daemon/g) ?? []).length === 1 &&
+      r.out.split("\n").filter((l) => l.trim()).every((l) => { try { JSON.parse(l) as unknown; return true; } catch { return false; } }));
+    r.proc.kill();
+    await until(() => r.code !== undefined);
+    await wait(300);
+  }
+
   // A port held by something that is NOT a dtwin daemon (no socket to share through): the MCP server
   // used to process.exit(1) inside createBridge. It must stay up and report the held port per call.
   const squatter = net.createServer();
@@ -100,6 +129,27 @@ void (async () => {
     await until(() => d.reply(2)) && /"isError":true/.test(d.reply(2) ?? "") && /already in use/.test(d.reply(2) ?? "") && d.code === undefined);
   d.proc.kill();
   await until(() => d.code !== undefined);
+  // The same held port with a socket of ours at the location an earlier build's daemon used
+  // (<tmpdir>/designtwin-<port>.sock): the error names it and how to stop it.
+  if (uid !== undefined) {
+    const oldBase = path.join(tmpBase, "old");
+    fs.mkdirSync(oldBase);
+    const oldDaemon = net.createServer(() => { /* accept, never reply */ });
+    await new Promise<void>((r) => oldDaemon.listen(path.join(oldBase, "designtwin-8789.sock"), () => r()));
+    const oEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: oldBase };
+    delete oEnv.XDG_RUNTIME_DIR;
+    const o = start(oEnv);
+    o.send(init);
+    await until(() => o.reply(1));
+    o.send({ method: "notifications/initialized" });
+    o.send({ id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } });
+    check("a held port with an earlier build's daemon socket names it and `dtwin --stop`",
+      await until(() => o.reply(2)) && /earlier version may be holding it \(socket [^)]*designtwin-8789\.sock\)/.test(o.reply(2) ?? "") && /dtwin --stop/.test(o.reply(2) ?? ""));
+    o.proc.kill();
+    await until(() => o.code !== undefined);
+    oldDaemon.close();
+  }
+  fs.rmSync(tmpBase, { recursive: true, force: true });
   // Not awaited: close() waits for every connection to end, and a regression must fail, not hang.
   // report() exits the process.
   squatter.close();

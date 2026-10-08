@@ -191,10 +191,157 @@ export interface DaemonConnection {
   requestWithClient<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }>;
 }
 
-// Keyed by PORT so two bridges on different ports get two daemons rather than fighting over one
-// socket. Under the user's own tmpdir, which is already 0700 on the platforms this runs on.
-export function sockPath(port?: number): string {
-  return path.join(os.tmpdir(), `designtwin-${port || process.env.FIGMA_BRIDGE_PORT || 8787}.sock`);
+// ---- where the socket lives
+//
+// The socket answers without a token, so its DIRECTORY is the access control: only a directory that
+// this user owns and nobody else can enter is safe. os.tmpdir() alone is not — on macOS it is a
+// per-user 0700 directory, but on Linux it is usually /tmp (mode 1777, shared), where another local
+// user could bind the socket name first: our CLI would then take forged replies from their process,
+// and our `serve` could not remove their file (sticky bit).
+//
+// So, on POSIX: $XDG_RUNTIME_DIR when it is an absolute path to a directory that passes the check
+// below (the XDG Base Directory spec requires it to be owned by the user with mode 0700); otherwise
+// `<tmpdir>/designtwin-<uid>`, created 0700. An existing directory is used only if it is a real
+// directory (not a symlink), owned by this uid, with no group/other permission bits. One that fails is
+// REFUSED, never chmod-ed: we never create it looser than 0700, so a looser one was opened by someone,
+// and whatever it already holds cannot be trusted. Inside a directory that passes, no other user can
+// create, replace or remove an entry, so the socket file in it is ours; it is still checked (owner)
+// before use, as a second line.
+//
+// Windows (no process.getuid) keeps os.tmpdir() unchanged: a per-user directory there, and POSIX
+// mode bits do not apply.
+//
+// Length: a Unix socket path is limited by sockaddr_un.sun_path (Node: "107 bytes on Linux and 103
+// bytes on macOS"; longer throws). A macOS tmpdir is ~48 bytes, so
+// `<tmpdir>/designtwin-<uid>/designtwin-<port>.sock` is ~84 bytes there; /run/user/<uid>/designtwin-<port>.sock ~36.
+
+/** Why `dir` is not safe to hold this user's socket, or null when it is. */
+export function privateDirProblem(dir: string, uid: number): string | null {
+  let st: fs.Stats;
+  try { st = fs.lstatSync(dir); } catch (e) { return "cannot stat it (" + errMsg(e) + ")"; }
+  if (st.isSymbolicLink()) return "it is a symlink";
+  if (!st.isDirectory()) return "it is not a directory";
+  if (st.uid !== uid) return `it is owned by uid ${st.uid}, not ${uid}`;
+  if ((st.mode & 0o077) !== 0) return `its mode is ${(st.mode & 0o777).toString(8).padStart(4, "0")} (group/other may access it; it must be 0700)`;
+  return null;
+}
+
+export interface SockPlace {
+  env?: NodeJS.ProcessEnv;
+  /** The base for the fallback directory (defaults to os.tmpdir()). */
+  tmpdir?: string;
+  /** The owner to require (defaults to process.getuid(); an explicit undefined = no POSIX uids, as on Windows). */
+  uid?: number | undefined;
+}
+
+function placeUid(place: SockPlace): number | undefined {
+  return "uid" in place ? place.uid : process.getuid?.();
+}
+
+/** The directory the daemon socket lives in — created if needed, and checked. Throws when the
+ *  directory exists but is not private to this user. */
+export function sockDir(place: SockPlace = {}): string {
+  return findSockDir(place, true);
+}
+
+// `create` false (a lookup): a directory that does not exist yet is null — no daemon can be listening
+// in it, and nothing is created or connected to (a directory someone makes after this look is never
+// trusted unchecked).
+function findSockDir(place: SockPlace, create: true): string;
+function findSockDir(place: SockPlace, create: boolean): string | null;
+function findSockDir(place: SockPlace, create: boolean): string | null {
+  const tmpdir = place.tmpdir ?? os.tmpdir();
+  const uid = placeUid(place);
+  if (uid === undefined) return tmpdir;
+  const xdg = (place.env ?? process.env).XDG_RUNTIME_DIR;
+  if (xdg && path.isAbsolute(xdg) && privateDirProblem(xdg, uid) === null) return xdg;
+  const dir = path.join(tmpdir, `designtwin-${uid}`);
+  if (!create) {
+    try { fs.lstatSync(dir); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return null; }
+  } else {
+    // mode is narrowed further by the umask, never widened; an existing directory is left as it is and
+    // judged by the check below.
+    try { fs.mkdirSync(dir, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
+  }
+  const bad = privateDirProblem(dir, uid);
+  if (bad) throw new Error(`refusing to use ${dir} for the dtwin daemon socket: ${bad}. ${SOCK_FIX}`);
+  return dir;
+}
+
+/** What to do about a refused socket location — quoted by every refusal, and by `dtwin doctor`. */
+export const SOCK_FIX = "Remove it (or have its owner remove it), or point XDG_RUNTIME_DIR or TMPDIR at a directory only you can access.";
+
+/** Why the existing file at `sock` must not be used (connected to, or removed), or null — also null
+ *  when there is no file yet. */
+export function sockFileProblem(sock: string, uid: number): string | null {
+  let st: fs.Stats;
+  try { st = fs.lstatSync(sock); } catch { return null; }
+  return st.uid === uid ? null : `it is owned by uid ${st.uid}, not ${uid}`;
+}
+
+function sockName(port: number | undefined, place: SockPlace): string {
+  return `designtwin-${port || (place.env ?? process.env).FIGMA_BRIDGE_PORT || 8787}.sock`;
+}
+
+// Keyed by PORT so two bridges on different ports get two daemons rather than fighting over one socket.
+// Throws when the location is refused (sockDir, or a socket file that is not ours): that is final for
+// the commands that create or stop a daemon (serve, assertNoDaemon, stop). A lookup that only asks "is
+// a daemon running?" goes through lookupSock instead.
+export function sockPath(port?: number, place: SockPlace = {}): string {
+  const dir = sockDir(place);
+  return path.join(dir, checkedSockName(port, place, dir));
+}
+
+function checkedSockName(port: number | undefined, place: SockPlace, dir: string): string {
+  const name = sockName(port, place);
+  const uid = placeUid(place);
+  const sock = path.join(dir, name);
+  const bad = uid === undefined ? null : sockFileProblem(sock, uid);
+  if (bad) throw new Error(`refusing to use ${sock} as the dtwin daemon socket: ${bad}. ${SOCK_FIX}`);
+  return name;
+}
+
+// sockPath for a lookup: null when the directory does not exist (nothing created); throws a refusal.
+function findSock(port: number | undefined, place: SockPlace): string | null {
+  const dir = findSockDir(place, false);
+  return dir === null ? null : path.join(dir, checkedSockName(port, place, dir));
+}
+
+/** Why the socket for `port` cannot be used, or null when it can — the refusal as a value, without
+ *  creating anything. */
+export function sockProblem(port?: number, place: SockPlace = {}): string | null {
+  try { findSock(port, place); return null; } catch (e) { return errMsg(e); }
+}
+
+// A refused location must not take every command down with it. Anyone able to create
+// <tmpdir>/designtwin-<uid> first (a shared /tmp) could otherwise lock this user out of dtwin
+// entirely. So the "is a daemon running?" lookups (connect, status) read a refusal as "no daemon" —
+// the one-shot path then runs exactly as it does without a daemon — and say so ONCE per process, on
+// stderr (stdout is the MCP server's protocol channel, and a CLI's data).
+let refusalWarned = false;
+function lookupSock(port: number | undefined, place: SockPlace): string | null {
+  try { return findSock(port, place); } catch (e) {
+    if (!refusalWarned) {
+      refusalWarned = true;
+      console.error("[dtwin] " + errMsg(e) + " Going on without a daemon.");
+    }
+    return null;
+  }
+}
+
+/** The socket of a daemon started by an earlier dtwin build, which listened directly in the tmpdir
+ *  (<tmpdir>/designtwin-<port>.sock) — when a socket owned by this user is there and it is not the
+ *  current location; otherwise null. Only ever used to stop that daemon or to name it in an error. */
+export function legacySock(port?: number, place: SockPlace = {}): string | null {
+  const uid = placeUid(place);
+  if (uid === undefined) return null; // no uids: the current location IS the tmpdir
+  const sock = path.join(place.tmpdir ?? os.tmpdir(), sockName(port, place));
+  let st: fs.Stats;
+  try { st = fs.lstatSync(sock); } catch { return null; }
+  if (!st.isSocket() || st.uid !== uid) return null;
+  let current: string | null = null;
+  try { const dir = findSockDir(place, false); current = dir && path.join(dir, sockName(port, place)); } catch { /* refused: not the current one */ }
+  return sock === current ? null : sock;
 }
 
 // Newline-delimited JSON. JSON.stringify escapes literal newlines, so a bare "\n" is an unambiguous
@@ -222,8 +369,8 @@ export function alreadyRunning(sock: string): Error {
 }
 
 /** The socket path for `port` — or a throw if a LIVE daemon already answers on it. */
-export async function assertNoDaemon(port?: number): Promise<string> {
-  const sock = sockPath(port);
+export async function assertNoDaemon(port?: number, place: SockPlace = {}): Promise<string> {
+  const sock = sockPath(port, place);
   // A socket file left by a crashed daemon is NOT a running daemon. Probing it first (rather than
   // unlinking unconditionally) is what keeps `--serve` from silently stealing a live daemon's socket.
   if (await probe(sock)) throw alreadyRunning(sock);
@@ -637,9 +784,9 @@ function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | Dae
 
 // The routing decision every CLI command makes: use the daemon if one is live, otherwise report that
 // there isn't one and let the caller open its own bridge exactly as it does without a daemon.
-export async function connect(port?: number): Promise<DaemonConnection | null> {
-  const sock = sockPath(port);
-  if (!(await probe(sock))) return null;
+export async function connect(port?: number, place: SockPlace = {}): Promise<DaemonConnection | null> {
+  const sock = lookupSock(port, place);
+  if (!sock || !(await probe(sock))) return null;
   // The daemon's reply to a forwarded command is the plugin's own reply. The daemon's bridge already
   // checked it against commands.ts on arrival, but that was another process (and possibly an older
   // build), so it is checked again here — which is what makes the typed reply below honest rather
@@ -657,16 +804,25 @@ export async function connect(port?: number): Promise<DaemonConnection | null> {
   };
 }
 
-export async function stop(port?: number): Promise<boolean> {
-  const sock = sockPath(port);
+export async function stop(port?: number, place: SockPlace = {}): Promise<boolean> {
+  const sock = sockPath(port, place);
   if (!(await probe(sock))) return false;
   await request(sock, { cmd: "__shutdown" }, 5000);
   return true;
 }
 
-export async function status(port?: number): Promise<DaemonStatusView | null> {
-  const sock = sockPath(port);
-  if (!(await probe(sock))) return null;
+/** Stops a live daemon from an earlier build (legacySock); returns its socket, or null when there is
+ *  none. For `--stop` after stop() found nothing at the current location. */
+export async function stopLegacy(port?: number, place: SockPlace = {}): Promise<string | null> {
+  const sock = legacySock(port, place);
+  if (!sock || !(await probe(sock))) return null;
+  await request(sock, { cmd: "__shutdown" }, 5000);
+  return sock;
+}
+
+export async function status(port?: number, place: SockPlace = {}): Promise<DaemonStatusView | null> {
+  const sock = lookupSock(port, place);
+  if (!sock || !(await probe(sock))) return null;
   // The daemon's own __status reply: `daemon: true` is checked, the rest is read as optional (a daemon
   // from an OLDER bridge may omit newer fields — see staleness.ts daemonRowStalenessNote).
   const { result } = await request(sock, { cmd: "__status" }, 5000);
