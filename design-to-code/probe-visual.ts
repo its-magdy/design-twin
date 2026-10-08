@@ -1,25 +1,25 @@
-// probe-visual.ts — the 12c visual diff's probe side (F-89, D40(3)/(4), D48, D49): capture the built frame at the reference's
+// probe-visual.ts — the visual diff's probe side: capture the built frame at the reference's
 // scale, then — after the browser is closed — diff it against the Figma reference in Node (visual-diff.ts) and draw the diff
-// image. Informational only: never the fidelity verdict (D4), never an exit 4, never a reason to lose measured.json — every
+// image. Informational only: never the fidelity verdict, never an exit 4, never a reason to lose measured.json — every
 // failure is measured.visual = {ran:false, why}.
 //
-// Order in verify-probe (plan-12c §2): measurement → the 12a drive → THIS capture → the 12b behaviour checks → closeCapped →
-// finishVisual. After the drive so it can never cut verdict-affecting rows (D41/D24); before behaviour so a big screen does not
+// Order in verify-probe: measurement → the interaction drive → THIS capture → the behaviour checks → closeCapped →
+// finishVisual. After the drive so it can never cut verdict-affecting rows; before behaviour so a big screen does not
 // starve it (it is one load, capped at VISUAL_CAP_MS; behaviour's budget is computed afterwards from what is left). It never
-// touches the measurement page (D19), and it acts on nothing: no click, no key, the mouse never moves (no hover state).
+// touches the measurement page, and it acts on nothing: no click, no key, the mouse never moves (no hover state).
 //
 // The capture (captureVisual): a fresh context at deviceScaleFactor = the reference's scale (PNG px per design px — the index's
-// referenceScale, else recomputed from the export's renderBox at --expect). Chromium accepts a factor below 1 too (facts-12c
-// "B verification": 0.1–0.5 render exactly), so the build is always rendered on the reference's own pixel grid. The screen is
+// referenceScale, else recomputed from the export's renderBox at --expect). Chromium accepts a factor below 1 too
+// (0.1–0.5 render exactly), so the build is always rendered on the reference's own pixel grid. The screen is
 // reached like the measurement pass (--steps / plan.navigate replayed, --ready). The clip is the DESIGN-size window at the built
-// frame's top-left, in whole CSS px (D48: a taller or shorter built frame is compared only within the design window, with a
-// note — its size is already a numeric delta); fullPage:true so a clip below the viewport is not trimmed to it (facts-12c §1).
+// frame's top-left, in whole CSS px (a taller or shorter built frame is compared only within the design window, with a
+// note — its size is already a numeric delta); fullPage:true so a clip below the viewport is not trimmed to it.
 //
 // The reference (prepareVisual): expectation.referenceImage (--expect wrote it, bound by the expectation's sha256). The probe
 // re-hashes the PNG and refuses one that changed since --expect. It never reads the export index itself. Its path
-// (design/export/…) is resolved from the project that OWNS the expectation (referenceRoot, F-2): the directory above
+// (design/export/…) is resolved from the project that OWNS the expectation (referenceRoot): the directory above
 // design/verify/ when --expected sits in one — a monorepo whose design/ is at the repo root while the probe runs from the web
-// app's package (--project apps/web) — else --project. It must stay inside <that root>/design/export (F-7). --project is
+// app's package (--project apps/web) — else --project. It must stay inside <that root>/design/export. --project is
 // still the Playwright / project root for everything else.
 import fs from "node:fs";
 import path from "node:path";
@@ -51,7 +51,7 @@ const BUILT_CAP = 2_000;
 export type VisualPrep =
   | { ok: true; ref: VerifyReferenceImage; bytes: Buffer; frameSize: { w: number; h: number }; notes: string[] }
   | { ok: false; why: string };
-/** The project root whose design/export the expectation's reference path is relative to (F-2): the directory above
+/** The project root whose design/export the expectation's reference path is relative to: the directory above
  *  design/verify/ when the expectation file sits in one, else `project` (--project / cwd). */
 export function referenceRoot(expected: string, project: string): string {
   const dir = path.resolve(path.dirname(expected));
@@ -59,11 +59,11 @@ export function referenceRoot(expected: string, project: string): string {
 }
 export const REFERENCE_MALFORMED = "the expectation's referenceImage is malformed — re-run --expect";
 /** Is there a usable, unchanged reference for the expectation's first frame? Reads the PNG under `root` (referenceRoot; no
- *  write). Never throws: a malformed referenceImage (null, a string, a field missing — F-1) is {ok:false}. */
+ *  write). Never throws: a malformed referenceImage (null, a string, a field missing) is {ok:false}. */
 export function prepareVisual(exp: Partial<Pick<VerifyExpectation, "referenceImage" | "reference" | "frame" | "frames">>, root: string): VisualPrep {
   const ri: unknown = exp.referenceImage;
   if (ri === undefined) {
-    return { ok: false, why: typeof exp.reference === "string" && exp.reference ? "the expectation is older than 12c (no referenceImage) — re-run --expect" : "the export has no reference image for this screen" };
+    return { ok: false, why: typeof exp.reference === "string" && exp.reference ? "the expectation predates the visual diff (no referenceImage) — re-run --expect" : "the export has no reference image for this screen" };
   }
   if (!isVerifyReferenceImage(ri)) return { ok: false, why: REFERENCE_MALFORMED };
   if (!ri.usable) return { ok: false, why: ri.why };
@@ -180,7 +180,7 @@ export async function captureVisual(browser: Browser, o: CaptureOptions): Promis
         notes.push(`the built frame is ${Math.round(built0.w)}×${Math.round(built0.h)} CSS px and the design ${o.frameSize.w}×${o.frameSize.h} — only the design-size window at the built frame's top-left is compared`);
       }
       const clip: Rect4 = { x: Math.round(origin.x), y: Math.round(origin.y), w: Math.floor(o.frameSize.w), h: Math.floor(o.frameSize.h) };
-      // fullPage: the clip is trimmed to the DOCUMENT (not the viewport, facts-12c §1); what lies outside it is not compared
+      // fullPage: the clip is trimmed to the DOCUMENT (not the viewport); what lies outside it is not compared
       const x0 = Math.max(0, clip.x), y0 = Math.max(0, clip.y);
       const shot: Rect4 = { x: x0, y: y0, w: Math.max(0, Math.min(clip.x + clip.w, read.doc.w) - x0), h: Math.max(0, Math.min(clip.y + clip.h, read.doc.h) - y0) };
       if (shot.w < 1 || shot.h < 1) return { why: `the frame's window (${clip.w}×${clip.h} at ${clip.x},${clip.y}) lies outside the ${read.doc.w}×${read.doc.h} document` };
@@ -233,7 +233,7 @@ export function finishVisual(o: { expectation: Partial<Pick<VerifyExpectation, "
   try {
     const { ref } = o.prep, s = ref.scale;
     const notes = [...o.prep.notes, ...cap.notes];
-    // F-8 (not fixed): a positive offset — the render bounds inside the frame box (a fill-less root?) — is clamped to 0, so the
+    // Not handled: a positive offset — the render bounds inside the frame box (a fill-less root?) — is clamped to 0, so the
     // reference is placed at the frame's top-left; whether Figma exports such a root at its render bounds is unverified
     if (ref.offset.x > 0 || ref.offset.y > 0) notes.push(`the reference's render bounds lie inside the frame box (offset ${ref.offset.x},${ref.offset.y}) — alignment unverified`);
     const refImg = decodePng(o.prep.bytes);
@@ -280,8 +280,8 @@ export function finishVisual(o: { expectation: Partial<Pick<VerifyExpectation, "
   }
 }
 
-/** The probe's one stderr line — never the verdict (D40(3)). It leads with the number the report's VISUAL headline leads with
- *  (the shift-tolerant one, F-5), in the same words. */
+/** The probe's one stderr line — never the verdict. It leads with the number the report's VISUAL headline leads with
+ *  (the shift-tolerant one), in the same words. */
 export function visualLine(v: MeasuredVisual): string {
   if (!v.ran) return `visual not run (${v.why})`;
   return `visual (informational — never the verdict) ${pctText(v.shiftTolerantPct)}% of pixels differ (${pctText(v.differingPct)}% before ${v.shiftPx}-px shift tolerance) · ${v.regionsTotal} hot region(s)` +

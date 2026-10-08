@@ -9,7 +9,7 @@
 // the plugin-shared modules (pages-layout, design-system-layout, library-layout) import it, so it is
 // type-checked under figma-plugin/tsconfig.json (lib es2019, no @types/node) as well as the bridge's.
 // The conventions (optional fields, open `(string & {})` vocabularies) are those described in the
-// header of the design-to-code layer's types.ts, where these sections lived until step 4 of the TS port.
+// header of the design-to-code layer's types.ts.
 
 // ================================================================ raw JSON
 
@@ -98,7 +98,7 @@ export interface PaintBase {
   opacity?: number;
   /** Paint-level variable bindings (e.g. `{ color: "Primary/Primary" }`). */
   tokens?: TokenMap;
-  /** Never emitted (invisible paints are filtered out); verify-screen.js still tests `!== false`. */
+  /** Never emitted (invisible paints are filtered out); verify-screen.ts still tests `!== false`. */
   visible?: boolean;
 }
 export interface SolidPaint extends PaintBase { type: "solid"; color: string }
@@ -431,7 +431,7 @@ export interface IrNode extends Partial<TextFields> {
   type: IrNodeType;
   name: string;
   id: string;
-  /** The ONE visibility flag (hidden.js): the designer switched this layer off. Descendants inherit it. */
+  /** The ONE visibility flag (hidden.ts): the designer switched this layer off. Descendants inherit it. */
   hidden?: true;
   children?: IrNode[];
 
@@ -589,7 +589,7 @@ export interface Measurement {
   offset?: { type: "INNER"; relative: number } | { type: "OUTER"; fixed: number };
 }
 
-/** A `--node` / `--selection` pull: pages/<Page>/<Screen>__<id>.json (collect.ts screenResult → write-out.js writeScreen). */
+/** A `--node` / `--selection` pull: pages/<Page>/<Screen>__<id>.json (collect.ts screenResult → write-out.ts writeScreen). */
 export interface ScreenExport {
   exportedAt?: string;
   /** the human screen label (the layer name, or "selection") */
@@ -600,12 +600,12 @@ export interface ScreenExport {
   pageId?: string;
   nodeId?: string;
   measurements?: Measurement[];
-  /** which Figma file the pull talked to (write-out.js, P4 #33) */
+  /** which Figma file the pull talked to (write-out.ts) */
   sourceFile?: string;
   sourceFileKey?: string;
 }
 
-/** A page-walk layer file: pages/<Page>/<Layer>__<id>.json (pages-layout.js buildPageLayout). */
+/** A page-walk layer file: pages/<Page>/<Layer>__<id>.json (pages-layout.ts buildPageLayout). */
 export interface LayerFile {
   name: string;
   id: string;
@@ -645,7 +645,7 @@ export interface ScreenDoc {
 }
 
 /** One row of pages/index.json `layers[]` / pages/<Page>/index.json `layers[]` — a page-walk row
- *  (name/id/type/page/pageId/nodes/bytes/title/texts/file) or a single-screen row (write-out.js
+ *  (name/id/type/page/pageId/nodes/bytes/title/texts/file) or a single-screen row (write-out.ts
  *  writeScreen `entry`: + exportedAt/variables/assets/reference/w/h). */
 export interface IndexRow {
   name: string;
@@ -657,7 +657,7 @@ export interface IndexRow {
   file: string;
   nodes?: number;
   bytes?: number;
-  /** the visible on-screen title (pages-layout.js deriveTitle), absent when none could be derived.
+  /** the visible on-screen title (pages-layout.ts deriveTitle), absent when none could be derived.
    *  `| undefined` (also on texts): buildPageLayout writes both after spreading the collector's row, so a
    *  layer with no tree must be able to mask a title/texts that row carried — undefined, not absent. */
   title?: string | undefined;
@@ -670,10 +670,10 @@ export interface IndexRow {
   /** sibling <Screen>.assets.json */
   assets?: string;
   reference?: string;
-  /** reference PNG px per design px (write-out.js writeScreen; F-118). */
+  /** reference PNG px per design px (write-out.ts writeScreen). */
   referenceScale?: number;
   /** where the reference PNG's top-left sits relative to the node's `box` top-left, in design px — the
-   *  render bounds include shadows/outside strokes, so it is usually <= 0 (F-118). */
+   *  render bounds include shadows/outside strokes, so it is usually <= 0. */
   referenceOffset?: { x: number; y: number };
   w?: number;
   h?: number;
@@ -682,7 +682,7 @@ export interface PageDirEntry { page: string; pageId?: string; dir: string; inde
 export interface PageIndex { page: string; pageId?: string; layers: IndexRow[] }
 export interface PrototypeFlow { page: string; pageId: string; nodeId: string; name: string }
 export interface PageSettings { page: string; pageId: string; background?: Paint[]; prototypeBackground?: Paint[] }
-/** pages/index.json (pages-layout.js meta + mergeRootIndex). `layers` is absent on the oldest exports. */
+/** pages/index.json (pages-layout.ts meta + mergeRootIndex). `layers` is absent on the oldest exports. */
 export interface PagesRootIndex {
   pageDirs: PageDirEntry[];
   layers?: IndexRow[];
@@ -700,7 +700,7 @@ export interface PagesRootIndex {
 
 // ================================================================ the design system (split files)
 
-/** The stamp every design-system file repeats (design-system-layout.js). */
+/** The stamp every design-system file repeats (design-system-layout.ts). */
 export interface DesignSystemStamp {
   exportedAt?: string;
   file?: string;
@@ -708,7 +708,7 @@ export interface DesignSystemStamp {
   colorProfile?: "legacy" | "srgb" | "display_p3" | (string & {});
 }
 
-/** design-system.json — the slim POINTER manifest (never a payload; catalog-input.js refuses it). */
+/** design-system.json — the slim POINTER manifest (never a payload; catalog-input.ts refuses it). */
 export interface DesignSystemManifest extends DesignSystemStamp {
   files: {
     tokens: string; stylesPaint: string; stylesText: string; stylesEffect: string; stylesGrid: string;
@@ -760,7 +760,7 @@ export interface Variable {
   type: VariableType;
   /** Absent when the plugin could not resolve the variable's collection (variables.ts writes `collOf(id)?.name`). */
   collection?: string;
-  /** FU-namemap (D146): the collection's Figma key — collection NAMES repeat ("Spacing" ×2); absent on old exports */
+  /** The collection's Figma key — collection NAMES repeat ("Spacing" ×2); absent on old exports */
   collectionKey?: string;
   tier: "primitive" | "semantic";
   /** keyed by MODE NAME */
@@ -774,7 +774,7 @@ export interface Variable {
   key?: string;
   publish?: string;
 }
-/** One contributing pull recorded in a merged variables.json (variables-merge.js sliceEntry). */
+/** One contributing pull recorded in a merged variables.json (variables-merge.ts sliceEntry). */
 export interface SliceEntry {
   screen: string;
   file?: string;
@@ -799,7 +799,7 @@ export type VariableConflict = ValueConflict | SameNameConflict;
 /**
  * design-system/tokens.json ({stamp, collections, variables}) AND the merged design/export/variables.json
  * / per-screen <Screen>.vars.json ({collections, variables, hygiene, _slices, _conflicts, _note,
- * exportedAt}) — the same token catalog shape, read by the same emitters (tokens.js). A merged union has
+ * exportedAt}) — the same token catalog shape, read by the same emitters (tokens.ts). A merged union has
  * `exportedAt: null` until a slice carries an `at`.
  */
 export interface TokensDoc extends Omit<DesignSystemStamp, "exportedAt"> {
@@ -924,7 +924,7 @@ export type LayersDocIndexRow = Omit<IndexRow, "file" | "title" | "texts">;
 /**
  * The collector's layersDoc: the run-wide manifest fields that become pages/index.json, plus the two
  * parallel arrays pages-layout.ts splits into per-page files. write-out.ts's writeExport also stamps
- * `sourceFile` on it (P4 #33).
+ * `sourceFile` on it.
  */
 export interface LayersDoc extends Omit<PagesRootIndex, "pageDirs" | "layers"> {
   layers?: LayersDocLayer[];

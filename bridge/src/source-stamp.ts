@@ -1,4 +1,4 @@
-// source-stamp.ts — which connected Figma file answered a read, stamped onto its reply (P4 #33, L-5).
+// source-stamp.ts — which connected Figma file answered a read, stamped onto its reply.
 //
 // A screen export result has no field of its own naming its source file (unlike design-system.json / a
 // library catalog, which the plugin itself stamps), so the caller that knows WHICH client answered — the

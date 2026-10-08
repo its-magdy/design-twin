@@ -1,9 +1,9 @@
 // slice-sources.ts — which screen(s) each Figma variable KEY came from.
 //
 // design/export/variables.json is the UNION of every single-screen pull, keyed on the variable's
-// Figma key. Names are not unique in it (livetest-3: two `Spacing / Space 4`, 24 and 16), so any
+// Figma key. Names are not unique in it (a real pull had two `Spacing / Space 4`, 24 and 16), so any
 // message about a collision has to say which screen each of the colliding variables belongs to —
-// otherwise it gets attributed to screens that are not involved (finding 40). The union lists its
+// otherwise it gets attributed to screens that are not involved. The union lists its
 // contributing pulls under `_slices`, and every pull keeps its raw slice beside the screen as
 // <Screen>.vars.json, so the answer is on disk. Read those first (ground truth); then the per-slice
 // `keys` a newer merge records; then the per-variant `screens` of its `_conflicts`.
@@ -63,9 +63,8 @@ function sourcesOf(doc: TokensDoc | null | undefined, docPath: string | null | u
 }
 
 // The variables context of a set of screen files — ONE implementation for cross-check.ts and audit.ts
-// (livetest-3 #311: the audit embedded cross-check but fed it only the merged union, so its build gate
-// raised Create Assembly Type's `Space 4` blocker against Jet Roles, while cross-check on the same
-// screen did not).
+// (the audit embeds cross-check; feeding it only the merged union would make its build gate raise one
+// screen's `Space 4` blocker against another screen, while cross-check on the same screen would not).
 //   own[i]        the screen's own slice, <Screen>.vars.json beside it (null if absent)
 //   variablesPath the file used as `variables`: --variables if given, else the export root's merged
 //                 variables.json (screen at design/export/pages/<Page>/<Screen>.json → two levels up),

@@ -423,7 +423,7 @@ console.log("review — D39, overfull padding sides, per-side strokes, dropped s
   const eT = expect1([{ type: "TEXT", id: "2:1", name: "Date", text: "Date", font: TXT, autoResize: "height", box: { w: 121, h: 20 }, renderBox: { x: 116.62, y: 74, w: 32.14, h: 11 } }]);
   const oldW: PlanWaiver = { nodeId: "2:1", field: "width", designed: 121, built: 33.9, exportContentSha256: eT.exportContentSha256, reason: "box", decidedBy: "Sam Doe", decidedAt: "2026-09-30T00:00:00Z" };
   const rc = compare(eT, measured([node("2:1", { fontFamily: "Inter", fontSize: 14, color: "rgb(51, 51, 51)", text: "Date", textBox: { x: 16, w: 20 }, opacity: 1 })]), { waivers: [oldW] });
-  safe("[review LOW c] a 'width' waiver on a TEXT now compared by ink: unused 'the field is now width (text ink)'", () => rc.waivers.unused.some((u) => u.nodeId === "2:1" && /now 'width \(text ink\)'/.test(u.why ?? "")));
+  safe("a 'width' waiver on a TEXT compared by ink: unused 'compared as width (text ink)'", () => rc.waivers.unused.some((u) => u.nodeId === "2:1" && /compared as 'width \(text ink\)'/.test(u.why ?? "")));
   const { textInk: _ink, ...oldTol } = eT.tolerance ?? {};
   const rd = compare({ ...eT, tolerance: oldTol }, measured([]));
   safe("[review LOW d] an expectation whose tolerance has no textInk (pre-group-11): a note 're-run --expect'", () => (rd.probe.inputNotes || []).some((n) => /older verify-screen.*re-run --expect/.test(n)) && !(compare(eT, measured([])).probe.inputNotes || []).some((n) => /older verify-screen/.test(n)));

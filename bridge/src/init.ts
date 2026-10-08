@@ -12,7 +12,7 @@
 //   - Needs no bridge, no plugin, no port: it only touches the project directory and the per-user
 //     token file, so it works while a daemon or the MCP server holds 8787.
 //   - The MCP registration is opt-in (--mcp): the MCP server binds the same port as the CLI, so a
-//     project that registers it can no longer run one-shot `dtwin` pulls while Claude Code is open —
+//     project that registers it cannot run one-shot `dtwin` pulls while Claude Code is open —
 //     a trade-off the user should choose, not inherit from a setup command.
 //
 //   dtwin init            # design/, design/target.json (detected stack), bridge token, next steps
@@ -33,7 +33,7 @@ export interface McpEntry {
 }
 
 /** The part of .mcp.json init (and doctor) reads: `mcpServers`, when present, must be an object. A
- *  `null`, array or string there used to crash init or be spread character-by-character into the
+ *  `null`, array or string there would crash init or be spread character-by-character into the
  *  rewritten file. Loose: every other key passes the check and is carried through untouched. */
 // A JSON value's kind, for a message a person reads ("not a string", not zod's "received string").
 const jsonKind = (x: unknown): string => (x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : "a " + typeof x);
@@ -153,9 +153,9 @@ function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions): InitA
 
   // target.json is written ALWAYS, even when no stack could be detected.
   //
-  // It used to be skipped in that case, which made `dtwin init --help`'s own promise ("Creates design/
-  // and design/target.json") false, and left every later step reading a file that was simply not there
-  // — the verify skill's step 1 `cat`s it and moved on in silence (live findings 8/90). A file that
+  // Skipping it in that case would make `dtwin init --help`'s own promise ("Creates design/
+  // and design/target.json") false, and leave every later step reading a file that is simply not there
+  // — the verify skill's step 1 `cat`s it and would move on in silence. A file that
   // says "nobody has decided yet" is a far better artifact than an absent one: build-screen can fill
   // it in, and everything downstream has one place to look.
   const targetFile = path.join(cwd, LAYOUT.TARGET_FILE);
@@ -179,11 +179,11 @@ function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions): InitA
   const ignored = fs.existsSync(gi) && /^\/?design\/?\s*$/m.test(fs.readFileSync(gi, "utf8"));
   if (ignored) actions.push({ kind: "note", note: ".gitignore ignores design/ — target.json, codeconnect.local.json, plan/ and audit/ under it are hand-authored and are NOT regenerable. Ignore only the export: replace `design/` with `design/export/`" });
 
-  // DT-79 (D9: suggest only): a Tailwind project would otherwise compile class names quoted in design/.
+  // Suggest only: a Tailwind project would otherwise compile class names quoted in design/.
   const tailwind = usesTailwind(cwd);
   if (tailwind) actions.push({ kind: "note", note: LAYOUT.TAILWIND_SOURCE_NOT_NOTE });
 
-  // F-91 (D9: suggest only): with Tailwind v4 scanning design/, a rewrite there makes Vite reload the open page
+  // Suggest only: with Tailwind v4 scanning design/, a rewrite there makes Vite reload the open page
   // (proven only for vite + Tailwind v4 — see VITE_WATCH_IGNORED_NOTE for why vite alone gets no note).
   if (tailwind && usesVite(cwd)) actions.push({ kind: "note", note: LAYOUT.VITE_WATCH_IGNORED_NOTE });
   // design/verify/ already ignored — any spelling: design/verify, /design/verify/, design/verify/**, design/verify/*
@@ -307,7 +307,7 @@ function main(argv: string[]): void {
   console.log("\nNext — the steps only you can do:\n" + steps.map((s, i) => `  ${i + 1}. ${s}`).join("\n"));
   // The one refusal a first command reliably hits. doctor names it after the fact; saying it here, in
   // the output whose whole job is "the steps left", is what stops `dtwin list` failing on step 4
-  // for anyone with two Figma files open (live finding 9).
+  // for anyone with two Figma files open.
   console.log(
     "\n  If more than one Figma file is connected, every command needs to say which:\n" +
     "    dtwin list clients                 # the address book\n" +

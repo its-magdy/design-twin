@@ -1,31 +1,31 @@
 // probe-match.ts — which element is a spec's, decided in plain code (no DOM, no browser).
 //
 // probe-page.ts only reports what the page holds (paths, rects, visibility flags); this file picks, for
-// each expectation row, the ONE element that is its — or says why there is none. Field test F-57: an
+// each expectation row, the ONE element that is its — or says why there is none. A field test showed that an
 // ad-hoc probe that took "the first element with this text" measured a sidebar label on its <li>, a page
 // title on the <h1> instead of the sidebar item with the same words, and a button label on the <h2> inside
-// a CLOSED <dialog>: 18 of 25 high deltas were artefacts. So the order is fixed (D17 — no structural
+// a CLOSED <dialog>: 18 of 25 high deltas were artefacts. So the order is fixed (no structural
 // matching), every rule must yield exactly one element, and nothing is ever first-wins on text:
 //
 //   1. tag              [data-dt-node="<id>"], the first visible hit (selectorCount says how many)
 //   2. tag-shared-path  one element tagged with ANOTHER instance's id for the same component-internal node
 //                       (`I<a>;<suffix>` vs `I<b>;<suffix>`: a shared component built once, tagged once)
-//   2b. tag-alias       one element tagged with one of the spec's aliases (D32: the same node of the same
-//                       component, found by name path in a sibling screen's export at --expect) — still a tag (D17);
-//                       two such elements → not measured. Lower confidence than a tag: compare caps it (D30).
+//   2b. tag-alias       one element tagged with one of the spec's aliases (the same node of the same
+//                       component, found by name path in a sibling screen's export at --expect) — still a tag;
+//                       two such elements → not measured. Lower confidence than a tag: compare caps it.
 //   3. text             the innermost visible owner of the spec's exact text (then case-insensitive), scoped
 //                       to a tagged ancestor, tie-broken by the spec's x (≥ 8px clearer), then
 //      text-ordinal     k specs sharing the text and exactly k visible owners → paired in document order
 //   4. position         (--position only) the innermost element at the spec's frame-relative box, ±2px
 //   5. otherwise        not measured, with the reason ("tag it")
 //
-// The frame root (F-63) is its own rule: [data-dt-node=<frame id>], else the outermost element of the
+// The frame root is its own rule: [data-dt-node=<frame id>], else the outermost element of the
 // frame's size that paints (a transparent <body> is not the frame), else the viewport.
 import type { Candidate, CollectOutput, MeasureResult, Rect, SizedCandidate } from "./probe-page.ts";
 import type { MeasuredNode, MeasuredStyles, PaintedBy, ProbeFrame, VerifySpec } from "./types.ts";
 
 export type MatchedBy = "tag" | "tag-shared-path" | "tag-alias" | "text" | "text-ordinal" | "position" | "frame";
-/** Every matchedBy the shipped probe writes, in rule order — the canonical list (D30's caps, the visual-verifier doc). */
+/** Every matchedBy the shipped probe writes, in rule order — the canonical list (compare's caps, the visual-verifier doc). */
 export const CANONICAL_MATCHED_BY: readonly MatchedBy[] = ["tag", "tag-shared-path", "tag-alias", "text", "text-ordinal", "position", "frame"];
 export interface Match {
   nodeId: string; matchedBy: MatchedBy; selector: string; selectorCount?: number; path: string; cand: Candidate | null;
@@ -58,7 +58,7 @@ const PAINT_TYPES = new Set<string>(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POL
 /** A spec whose colour is an SVG-style paint (verify-screen.ts writes `fill` only for those). */
 export const isPaintSpec = (spec: VerifySpec): boolean => spec.fill !== undefined || PAINT_TYPES.has(spec.type);
 
-// ---------------------------------------------------------------- the frame root (F-63)
+// ---------------------------------------------------------------- the frame root
 const ALPHA_ZERO = /^transparent$|^rgba\([^)]*,\s*0(?:\.0+)?\)$/;
 /** Whether a size-matched candidate paints: probe-page computes `paints`; a hand-built candidate may carry only the colour. */
 const paints = (c: SizedCandidate): boolean => c.paints || (!ALPHA_ZERO.test(c.background.trim()) && c.background.trim() !== "") || (c.backgroundImage !== "" && c.backgroundImage !== "none");
@@ -181,7 +181,7 @@ export function chooseMatch(spec: VerifySpec, pool: MatchPool, opts: MatchOption
     if (only && only.dt !== null) return { nodeId: id, matchedBy: "tag-shared-path", selector: attrSelector(only.dt), selectorCount: 1, path: only.path, cand: only };
   }
 
-  // 2b. tag-alias (D32): an element tagged with the id this node has in a sibling screen's export (a shared
+  // 2b. tag-alias: an element tagged with the id this node has in a sibling screen's export (a shared
   // shell built once, tagged with that screen's ids). An alias that is itself one of this expectation's ids is
   // that node's, never this one's. Exactly one visible element; several → not measured (no guess).
   const aliases = [...new Set(spec.aliases || [])].filter((a) => a !== id && !pool.expectedIds.has(a));
@@ -296,12 +296,12 @@ export function claimOnce(results: Array<Match | NoMatch>): Array<Match | NoMatc
 }
 
 /**
- * F-74 (D111): what to hover for a spec whose drawn state is ANOTHER node's (`drawnStateFrom`: a control inside a row
+ * What to hover for a spec whose drawn state is ANOTHER node's (`drawnStateFrom`: a control inside a row
  * drawn hovered) — the owner's visible tagged element, else the nearest visible tagged ancestor below the owner (its
  * :hover reaches the owner's element too). Hovering the control itself would turn on the control's OWN :hover, which the
- * design never drew. `none`: an own state or an old expectation (no drawnStateFrom) — hover as before; `untagged`: no
+ * design never drew. `none`: an own state or an old expectation (no drawnStateFrom) — hover the measured element itself; `untagged`: no
  * tagged element of the owner, or below it, is visible. (verify-probe then hovers it at a free point, freeHoverPoint.)
- * L1: `next` — the other visible tagged candidates below the owner, in the same order (nearest the measured element
+ * `next` — the other visible tagged candidates below the owner, in the same order (nearest the measured element
  * first): verify-probe tries them when `path` has no free point (a same-box wrapper around the control).
  */
 export type OwnerHover = { kind: "none" } | { kind: "owner"; id: string; path: string; next: Array<{ id: string; path: string }> } | { kind: "untagged"; owner: string };
@@ -317,7 +317,7 @@ export function ownerHover(spec: VerifySpec, m: Pick<Match, "path">, byTag: Read
   for (const id of [owner, ...(at === -1 ? anc : anc.slice(0, at))]) {
     const c = visible(id);
     if (!c || found.some((f) => f.path === c.path)) continue;
-    // the measured element IS the hovered one (a label written into the owner's tagged element): its own hover, as before
+    // the measured element IS the hovered one (a label written into the owner's tagged element): its own hover
     if (c.path === m.path) { if (!found.length) return { kind: "none" }; continue; }
     found.push({ id, path: c.path });
   }
@@ -336,7 +336,7 @@ export function positionBoxes(specs: VerifySpec[], pool: Pick<MatchPool, "frames
   return out;
 }
 
-// ---------------------------------------------------------------- the output contract (DT-23)
+// ---------------------------------------------------------------- the output contract
 /**
  * One measured.json node: EVERY key in `keys` present in styles; a null always has its reason in
  * `unmeasured` (a probe that silently leaves a key out is how `fill` went unmeasured for a whole run).
@@ -351,13 +351,13 @@ export function shapeNode(spec: VerifySpec, match: Match, raw: MeasureResult, ke
       unmeasured[k] = raw.unmeasured[k] || (raw.found ? "the page reported no value" : "the element was gone when measured");
     } else styles[k] = v;
   }
-  // D34: where a stroke was read — only on a node whose page result names it (never a null to explain)
+  // where a stroke was read — only on a node whose page result names it (never a null to explain)
   const from = raw.styles.strokeFrom, align = raw.styles.strokeAlign;
   if (from === "border" || from === "box-shadow" || from === "outline") {
     styles.strokeFrom = from;
     if (from !== "border" && (align === "inside" || align === "outside")) styles.strokeAlign = align;
   }
-  // F-74 (D111) / F-69 (D114): optional keys — only when the page read them
+  // optional keys — only when the page read them
   const pb = raw.styles.paintedBy;
   if (isPaintedBy(pb)) styles.paintedBy = pb;
   const tt = raw.styles.textTransform;

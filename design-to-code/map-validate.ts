@@ -4,10 +4,9 @@
 // map shape: the KEYS/PROP tables below encode additionalProperties:false, the per-kind prop field
 // sets and the required/type rules, and `design-to-code/README.md` documents that shape in prose for humans.
 //
-// There used to be a parallel map-schema.json that hand-mirrored these tables and that nothing read —
-// two representations kept in sync by hand, which is the exact drift this directory builds tools to
-// catch. It was deleted rather than wired up: the map's only consumers are this validator, drift-lint
-// and an agent reading JSON, none of which want a JSON Schema document. If a published schema is ever
+// There is deliberately no parallel map-schema.json hand-mirroring these tables — two representations
+// kept in sync by hand are the exact drift this directory builds tools to catch. The map's only consumers
+// are this validator, drift-lint and an agent reading JSON, none of which want a JSON Schema document. If a published schema is ever
 // needed, GENERATE it from these tables so there is still one source.
 //
 // Returns { ok, errors:[{path,message}] }; never throws on bad data.
@@ -102,7 +101,7 @@ function validateMap(map: unknown): MapValidationResult {
     // A non-string status is "not one of the statuses" (Array.prototype.includes never matches it).
     if (e.status !== undefined && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
     // A free-text note a person (or build-screen) leaves on an entry — "props mapped by hand", "why it is
-    // deprecated". No tool reads it; it only has to be a string (F-32).
+    // deprecated". No tool reads it; it only has to be a string.
     optStrings(e, ["note"], at, err);
 
     if (e.props !== undefined) {

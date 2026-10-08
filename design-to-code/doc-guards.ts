@@ -1,8 +1,8 @@
 // doc-guards.ts — one runtime guard per JSON document kind the design-to-code layer reads off disk.
 //
-// Every tool used to parse a file and assert its type (`JSON.parse(…) as TokensDoc`), trusting that the
+// A tool must not parse a file and merely assert its type (`JSON.parse(…) as TokensDoc`), trusting that the
 // file was this repo's own output. It usually is — but a hand-edited plan, a truncated write, the wrong
-// file passed on the command line, or an older export all reach the same code, which then died with a
+// file passed on the command line, or an older export all reach the same code, which would die with a
 // TypeError and a stack deep inside a walker, or (worse) quietly read nothing. Each guard here checks the
 // TOP-LEVEL fields its readers actually use (the arrays they iterate, the objects they index), plus the
 // identifying fields of the entries in those arrays, and nothing more: a guard is a boundary check, not a
@@ -85,7 +85,7 @@ export function isLibrariesIndex(x: unknown): x is { libraries: LibrariesIndexEn
 }
 isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
 
-// ---------------------------------------------------------------- design/audit/<screen>.overrides.json (DT-21)
+// ---------------------------------------------------------------- design/audit/<screen>.overrides.json
 const SEVERITIES = ["blocker", "warning", "info"];
 export function isAuditOverridesDoc(x: unknown): x is AuditOverridesDoc {
   return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity)
@@ -136,7 +136,7 @@ export function isProbeIdentity(x: unknown): x is ProbeIdentity {
   return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string"
     && isNameVersion(x.playwright) && isNameVersion(x.browser);
 }
-/** measured.build — what the probe was served (DT-81). */
+/** measured.build — what the probe was served. */
 export function isBuildIdentity(x: unknown): x is BuildIdentity {
   return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number"
     && typeof x.assetsSha256 === "string" && (x.unhashed === undefined || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
@@ -148,18 +148,18 @@ const isTagsNotInExpectation = (x: unknown): boolean => isObj(x) && typeof x.cou
   && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
 const isReasonMap = (x: unknown): boolean => isObj(x) && Object.values(x).every((v) => typeof v === "string");
 const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
-/** measured.reach (L-1): the steps the probe replayed. */
+/** measured.reach: the steps the probe replayed. */
 export function isProbeReach(x: unknown): x is ProbeReach {
   return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
 }
-/** measured.page (D43): the document's horizontal overflow at the measured viewport. */
+/** measured.page: the document's horizontal overflow at the measured viewport. */
 export function isPageOverflow(x: unknown): x is PageOverflow {
   return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth)
     && typeof x.overflowX === "string" && typeof x.scrollable === "boolean"
     && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right))
     && optStr(x.compatMode);
 }
-// 12b: measured.behaviour — lenient (D4: it never reaches the verdict, so a reader keeps what it can show): version 1 and a
+// measured.behaviour — lenient (it never reaches the verdict, so a reader keeps what it can show): version 1 and a
 // boolean `ran`; ran:false names why; ran:true has checks[] rows {id, status, detail} — an id this reader does not know is
 // kept (an older or newer probe). Everything else in the block is read field by field by verify-screen (behaviourReport).
 const BEHAVIOUR_STATUSES: readonly BehaviourStatus[] = ["pass", "fail", "warn", "not-run", "unsupported"];
@@ -167,16 +167,16 @@ export const isBehaviourStatus = (x: unknown): x is BehaviourStatus => typeof x 
 export function isBehaviourCheck(x: unknown): x is BehaviourCheck {
   return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
 }
-/** measured.behaviour (12b): {version: 1, ran: false, why} or {version: 1, ran: true, checks: [{id, status, detail}, …], …}. */
+/** measured.behaviour: {version: 1, ran: false, why} or {version: 1, ran: true, checks: [{id, status, detail}, …], …}. */
 export function isMeasuredBehaviour(x: unknown): x is MeasuredBehaviour {
   return isObj(x) && x.version === 1 && typeof x.ran === "boolean"
     && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
 }
-// 12c: the visual diff. measured.visual is lenient like measured.behaviour (D4: it never reaches the verdict): version 1
+// The visual diff. measured.visual is lenient like measured.behaviour (it never reaches the verdict): version 1
 // and a boolean `ran`; ran:false names why; ran:true carries the two percentages and a regions list. Every other field is
 // read one by one by verify-screen (visualReport), so an older/newer probe still reports what it can.
 const isRect4 = (x: unknown): x is Rect4 => isObj(x) && isNum(x.x) && isNum(x.y) && isNum(x.w) && isNum(x.h);
-/** measured.visual (12c): {version: 1, ran: false, why} or {version: 1, ran: true, differingPct, shiftTolerantPct, regions: […], …}. */
+/** measured.visual: {version: 1, ran: false, why} or {version: 1, ran: true, differingPct, shiftTolerantPct, regions: […], …}. */
 export function isMeasuredVisual(x: unknown): x is MeasuredVisual {
   return isObj(x) && x.version === 1 && typeof x.ran === "boolean"
     && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
@@ -185,7 +185,7 @@ export function isMeasuredVisual(x: unknown): x is MeasuredVisual {
 export function isVisualRegion(x: unknown): x is VisualRegion {
   return isObj(x) && isRect4(x.rect) && isNum(x.pixels) && isNum(x.pct) && isStringArray(x.built) && isStringArray(x.designed);
 }
-/** expectation.referenceImage (12c, --expect): usable with its geometry, or unusable with why. */
+/** expectation.referenceImage (--expect): usable with its geometry, or unusable with why. */
 export function isVerifyReferenceImage(x: unknown): x is VerifyReferenceImage | VerifyReferenceUnusable {
   if (!isObj(x)) return false;
   if (x.usable === false) return (x.path === null || typeof x.path === "string") && typeof x.why === "string";
@@ -193,7 +193,7 @@ export function isVerifyReferenceImage(x: unknown): x is VerifyReferenceImage | 
     && isNum(x.scale) && x.scale > 0 && isObj(x.offset) && isNum(x.offset.x) && isNum(x.offset.y) && (x.from === "index" || x.from === "export")
     && isRect4(x.crop) && optStr(x.colorProfile);
 }
-/** report.behaviour (12b), as verify-build reads it: ran, the status counts, and the check rows. */
+/** report.behaviour, as verify-build reads it: ran, the status counts, and the check rows. */
 export function isReportBehaviour(x: unknown): x is ReportBehaviour {
   return isObj(x) && typeof x.ran === "boolean" && isObj(x.summary)
     && (["pass", "fail", "warn", "notRun", "unsupported"] as const).every((k) => isObj(x.summary) && isNum(x.summary[k]))
@@ -210,16 +210,16 @@ const MEASURED_EXTRAS: ReadonlyArray<readonly [key: string, ok: (x: unknown) => 
   ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
   ["matchedByCensus", isCountMap, "a {rule: count} map"],
   ["notMeasured", Array.isArray, "a list — the probe's reasons for unmatched nodes are not used"],
-  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  // the run it belongs to and the build it was served
   ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) — the measurement is tied to no verify run"],
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} — read as build: unknown"],
-  // group 11 (DT-47): the shipped probe's foreign tags
+  // the shipped probe's foreign tags
   ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
-  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
+  // the steps replayed, the page's overflow, the behaviour/a11y block
   ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
   ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} — page overflow not measured"],
   ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], …} or {version: 1, ran: false, why} — behaviour/a11y not reported"],
-  // 12c: the visual diff (informational, D40(3))
+  // the visual diff (informational)
   ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: […], …} or {version: 1, ran: false, why} — the visual diff not reported"],
 ];
 /** What a compare cannot do without: nodes (each with a nodeId), and list-shaped components/interactions/artifacts. */
@@ -286,7 +286,7 @@ export function isVerifyReport(x: unknown): x is VerifyReport {
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 
 // ---------------------------------------------------------------- design/plan/<screen>.json
-// A plan is written by plan-skeleton.js and then FILLED by a model or a person, so it is the one document
+// A plan is written by plan-skeleton.ts and then FILLED by a model or a person, so it is the one document
 // here whose shape is genuinely in doubt. parsePlan names the first field that is the wrong kind of value
 // rather than answering a bare yes/no.
 const PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"] as const;
@@ -312,7 +312,7 @@ function planProblem(x: unknown): string | null {
   if (x.tagging !== undefined && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === undefined || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return "is not a valid plan: `tagging` must be {\"off\": true, \"reason\": \"…\"}";
   if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isObj(x.verification) && x.verification.hook !== undefined && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
-  // group 12a: only the lists' kind — rows are validated where used (probe-steps.ts parseSteps; --expect drops a bad interaction row with why)
+  // navigate / interactions: only the lists' kind — rows are validated where used (probe-steps.ts parseSteps; --expect drops a bad interaction row with why)
   for (const k of ["navigate", "interactions"] as const) if (x[k] !== undefined && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
@@ -326,7 +326,7 @@ export function parsePlan(x: unknown): { plan: Plan } | { error: string } {
   return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
 }
 
-// plan.waivers[] / plan.descopes[] rows (D5/D20). The plan guard only asks for objects (a hand-edited row must
+// plan.waivers[] / plan.descopes[] rows. The plan guard only asks for objects (a hand-edited row must
 // not make the whole plan unreadable); --compare applies the rows these accept and lists the others.
 const reqStr = (v: unknown): boolean => typeof v === "string" && v.trim() !== "";
 /** One plan.waivers[] row a --compare can apply: every binding field present. */
@@ -341,7 +341,7 @@ export function isPlanDescope(x: unknown): x is PlanDescope {
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
 
-/** One plan.interactions[] row --expect can merge (F-95): nodeId, trigger, a known `expect`, optional destinationId/name.
+/** One plan.interactions[] row --expect can merge: nodeId, trigger, a known `expect`, optional destinationId/name.
  *  (dialog without a destinationId, an unknown nodeId or a duplicate of an export row are refused by --expect, with why.) */
 export function isPlanInteraction(x: unknown): x is PlanInteraction {
   return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === undefined || reqStr(x.destinationId)) && optStr(x.name);

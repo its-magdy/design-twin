@@ -1,20 +1,16 @@
 // Where the bridge token LIVES between runs — the one place that knows the path, the precedence,
 // and the file's permissions.
 //
-// Before this file the token was env-var-or-nothing: `server-core.ts` read FIGMA_BRIDGE_TOKEN and
-// otherwise minted a fresh random one PER RUN and printed it, so the plugin's saved token was wrong
-// on the very next `dtwin` and the user re-pasted forever. The fix is not a better banner, it's
-// persistence: generate once, store it, reuse it.
+// The token is not env-var-or-nothing: `server-core.ts` reads FIGMA_BRIDGE_TOKEN, and minting a fresh
+// random one PER RUN and printing it would leave the plugin's saved token wrong on the very next `dtwin`,
+// so the user would re-paste forever. The fix is not a better banner, it's persistence: generate once,
+// store it, reuse it.
 //
-// Deliberately dependency-free. `env-paths` is the usual answer for per-OS config dirs, but v4 is
-// ESM-only and needs Node >= 20 while this package is `"type": "module"` with `engines: >=24`;
-// v2 is CJS but stale. The logic is ~15 lines, so it lives here rather than costing a dependency
-// (and an ESM/CJS interop problem) to import.
+// Deliberately dependency-free. `env-paths` is the usual answer for per-OS config dirs, but the logic is
+// ~15 lines, so it lives here rather than costing a dependency.
 //
-// Not a `.env` file, for the same reason plus one more: `--env-file` is Node >= 20.6 and
-// `--env-file-if-exists` >= 22.9, both below this package's Node >= 24 floor now, but a project-local `.env` would also
-// be the wrong CONVENTION — `.env` is for the secrets of the app you are building, not for a tool's
-// own credential, and putting it in the repo makes "did we gitignore it" a permanent live footgun.
+// Not a `.env` file either: a project-local `.env` would be the wrong CONVENTION — `.env` is for the
+// secrets of the app you are building, not for a tool's own credential, and putting it in the repo makes "did we gitignore it" a permanent live footgun.
 // Real CLIs (gh, wrangler, vercel) keep their own auth in a user config dir. So do we.
 //
 // Not the OS keychain either: keytar is archived, and its live replacements (@napi-rs/keyring,
@@ -184,7 +180,7 @@ export function resolve({ tokenFile = null, persist = true }: ResolveOptions = {
     return { token, source: "file", path: file, created: true };
   } catch (e) {
     // Read-only filesystem, no HOME, a locked-down container. Falling back to a per-run token keeps
-    // the bridge USABLE (the old behaviour) instead of failing to start over a convenience feature —
+    // the bridge USABLE instead of failing to start over a convenience feature —
     // the caller reports why so it isn't a silent downgrade.
     return { token, source: "ephemeral", path: null, created: false, persistError: e };
   }
@@ -211,8 +207,7 @@ export function status(): TokenStatus {
     loosePerms: stored ? loosePerms(file) : false,
     // A stored token that is being SHADOWED by a DIFFERENT env var value is the confusing case worth
     // naming — a project that always exports FIGMA_BRIDGE_TOKEN set to the SAME value as the saved
-    // file has nothing to fix, and warning on every run just trains the user to ignore the note
-    // (livetest-4 finding 328).
+    // file has nothing to fix, and warning on every run just trains the user to ignore the note.
     shadowed: !!stored && !!envTok && stored !== envTok,
   };
 }

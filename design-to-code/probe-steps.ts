@@ -1,10 +1,10 @@
-// probe-steps.ts — the closed step vocabulary that takes a freshly loaded page to a screen (L-1 / F-90, D40(7)),
-// and the plan-interaction `expect` → designed action map (F-95). Pure: no browser, no file system.
+// probe-steps.ts — the closed step vocabulary that takes a freshly loaded page to a screen,
+// and the plan-interaction `expect` → designed action map. Pure: no browser, no file system.
 //
 // A screen that is a section of a single-page app (picked by component state, not by the URL) cannot be reached
-// with --url alone: the probe measured the default section and every spec read as "not measured" (live L-1). The
-// fix is a short list of steps replayed after every page load — in the measurement pass, its D19 re-run and every
-// interaction-driving page. Because they are replayed many times, a step must be IDEMPOTENT and NAVIGATION-ONLY:
+// with --url alone: the probe would measure the default section and every spec would read as "not measured", so a
+// screen is reached by a short list of steps replayed after every page load — in the measurement pass, its re-run
+// and every interaction-driving page. Because they are replayed many times, a step must be IDEMPOTENT and NAVIGATION-ONLY:
 // click (a link, a tab, a sidebar button), waitFor (a selector to be visible), goto (a same-origin path). No fill,
 // press or hover: a typed value or a key press may submit a form, and a replay would submit it again.
 import crypto from "node:crypto";
@@ -35,7 +35,7 @@ export function describeStep(s: ProbeStep, i: number): string {
 
 /** A goto value that can only resolve on the page's own origin: starts with "/", not "//" or "/\\" (browsers read
  *  both as a scheme-relative URL to another host), and holds no backslash (read as "/"), whitespace or control
- *  character (a URL parser strips tabs/newlines, so "/\t/host" becomes "//host") — review L4. */
+ *  character (a URL parser strips tabs/newlines, so "/\t/host" becomes "//host"). */
 function isSameOriginPath(v: string): boolean {
   return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
 }
@@ -59,7 +59,7 @@ export function parseSteps(x: unknown): { steps: ProbeStep[] } | { error: string
     if (keys.length !== 1 || k === undefined) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} — exactly one of ${STEP_KINDS.join(" / ")}` };
     const v = raw[k];
     if (!isStepKind(k)) {
-      // review L5: own keys only — "__proto__" / "constructor" must not read Object.prototype
+      // own keys only — "__proto__" / "constructor" must not read Object.prototype
       const lk = k.toLowerCase();
       const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : undefined;
       return { error: `${at} {${k}: …} is not a step — the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
@@ -76,7 +76,7 @@ export function stepsSha256(steps: readonly ProbeStep[]): string {
   return crypto.createHash("sha256").update(canonical(steps)).digest("hex");
 }
 
-/** The plan `expect` values (F-95). */
+/** The plan `expect` values. */
 export function isPlanExpect(x: unknown): x is PlanInteractionExpect {
   return x === "dialog" || x === "url" || (typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length);
 }

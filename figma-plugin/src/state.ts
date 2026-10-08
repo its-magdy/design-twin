@@ -56,8 +56,8 @@ export function warn(msg: string): void {
   warnings.push(msg);
 }
 
-// PER-NODE warnings that recur — one per failed asset export, one per missing font — used to be pushed
-// individually. A real export produced 896 entries, ~800 of them the same two sentences with a
+// PER-NODE warnings that recur — one per failed asset export, one per missing font — are not pushed
+// individually: a real export that did so produced 896 entries, ~800 of them the same two sentences with a
 // different node name, which is not a diagnostics list an agent can read: the handful of one-off
 // warnings that actually needed attention were buried in it. Kinded warnings are COUNTED instead, and
 // manifest() emits ONE line per kind carrying the count plus a few examples. The manifest's shape is
@@ -114,7 +114,7 @@ export function manifest(): Manifest {
   // an annotation" from "annotations were not exported" — and on a real export `codeSyntax`,
   // `annotations`, `devStatusNote` and `measurements` were all absent, which silently killed two of
   // build-screen's six hint tiers with nothing to say so. `reads` names exactly what was asked for,
-  // so an absent field is now an answerable question rather than an ambiguous one.
+  // so an absent field is an answerable question rather than an ambiguous one.
   const reads = Object.keys(runOpts).filter((k) => (runOpts as Record<string, boolean>)[k]);
   return { ...stats, skipped: stats.truncated, reads, warnings: note ? all.concat(note) : all };
 }
@@ -138,7 +138,7 @@ function memoName<T extends Named>(fetch: NamedFetch<T>): MemoName<T> {
   // Cache the PROMISE, not the resolved value. The extractor fans these lookups out concurrently
   // (Promise.all over text runs, paints, styles), and a value-cache is only written after `await`
   // resolves — so every duplicate reference issued while the first fetch was in flight missed the
-  // cache and made its own round trip. One paragraph sharing a text style used to cost one call
+  // cache and made its own round trip. One paragraph sharing a text style would cost one call
   // per run; a design system where 40 styles reference color/primary cost 40.
   const cache = new Map<string, Promise<T | null>>();
   const get = (id: string): Promise<T | null> => {
@@ -286,9 +286,9 @@ export function releaseAssets(): void {
 }
 
 // The blanket document load, with its one guard. Two callers need it (the all-pages export walk and
-// the component catalog, which spans every page by definition) and both used to carry a byte-similar
-// feature-check + try/catch, differing only in the consequence they name. That made the dynamic-page
-// loading POLICY two edits rather than one — which matters because collect.ts argues for replacing
+// the component catalog, which spans every page by definition); sharing one
+// feature-check + try/catch, which differs only in the consequence named, keeps the dynamic-page
+// loading POLICY one edit rather than two — which matters because collect.ts argues for replacing
 // this blanket load with per-page loadAsync, a change that would otherwise land on one caller only.
 export async function loadAllPages(consequence: string): Promise<void> {
   if (!figma.loadAllPagesAsync) return;

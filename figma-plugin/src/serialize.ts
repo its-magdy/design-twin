@@ -34,9 +34,9 @@ const CORNER_KEYS: Array<[string, keyof RadiusCorners]> = [
 //
 // Two things reach this field that must not land verbatim in generated code. Figma's "fully rounded"
 // corner exports as a literal 1000000000 — a sentinel, not a measurement, and `border-radius:
-// 1000000000px` is nobody's intent (live finding 30). And an unrounded float arrives as
+// 1000000000px` is nobody's intent. And an unrounded float arrives as
 // 60.00000762939453 / 34.000003814697266, float dust from a resize that a builder then copies into
-// CSS (finding 45).
+// CSS.
 //
 // So: round to 2dp like every other number this serializer emits, and replace the sentinel with what
 // Figma ACTUALLY renders — half the shorter side — while setting `radiusFull` so the builder can emit

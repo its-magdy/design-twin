@@ -1,9 +1,9 @@
 // catalog-input.ts — the ONE guard that stops these CLIs from being handed the wrong catalog file.
 //
-// Since the design-system split (bridge/design-system-layout.js), `design/design-system.json` is a
-// slim pointer manifest: stamp + `files` map + `counts`, and NO `variables`/`components` payload.
-// Every one of these tools used to take that file, so the muscle memory (and every older README, blog
-// note or shell history line) points at it. Handing it over now would not crash — the tools would
+// `design/design-system.json` (bridge/src/design-system-layout.ts) is a slim pointer manifest:
+// stamp + `files` map + `counts`, and NO `variables`/`components` payload.
+// These tools once took that file, so the muscle memory (and every older README, blog
+// note or shell history line) still points at it. Handing it over would not crash — the tools would
 // happily emit an empty token file or report "0/0 components mapped", which reads like a clean run.
 // That is the exact silent-wrong-answer failure this repo refuses to ship, so we fail loud instead.
 //

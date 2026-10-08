@@ -253,7 +253,7 @@ export interface MeasureItem {
   nodeId: string; path: string; isText: boolean; isPaint: boolean; isPlaceholder: boolean;
   /** a TEXT spec read on its tagged ancestor's element (`<button data-dt-node=X>label</button>`): that id — the box is X's, not the text's */
   sharesWith: string | null;
-  /** F-74 / DT-48 (D111): the spec states a backgroundColor — a transparent element then says who paints it (styles.paintedBy) */
+  /** the spec states a backgroundColor — a transparent element then says who paints it (styles.paintedBy) */
   backgroundSpec?: boolean;
 }
 export interface MeasureInput {
@@ -309,7 +309,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     walk(el);
     return out;
   };
-  // The element that owns a TEXT spec's characters (F-71/F-120): descend single-child chains from the matched
+  // The element that owns a TEXT spec's characters: descend single-child chains from the matched
   // element to the first one whose OWN text nodes hold text; when the text is split over several elements,
   // the first run's owner (textFromMixed).
   const textOwner = (el: PElement): { owner: PElement; mixed: boolean } | null => {
@@ -365,7 +365,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     }
 
     const sides = (prop: (side: string) => string): Array<number | null> => ["top", "right", "bottom", "left"].map((s) => px(cs.getPropertyValue(prop(s))));
-    // D34: a stroke drawn without a border — a ring (`box-shadow: 0 0 0 Npx <colour>`, Tailwind ring / inset-ring)
+    // a stroke drawn without a border — a ring (`box-shadow: 0 0 0 Npx <colour>`, Tailwind ring / inset-ring)
     // or an outline at offset 0 / -width — read only when every border side is 0. Parsed by CONTENT, never by
     // position: Tailwind v4 always computes FIVE comma-separated shadows, the unused ones "rgba(0, 0, 0, 0) 0px 0px
     // 0px 0px", and the ring may be any of them; Chromium writes the colour first and `inset` last. A shadow with a
@@ -419,12 +419,12 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
       if (oo === 0) return (strokeMemo = { width: ow, color: oc, from: "outline", align: "outside" });
       return strokeMemo;
     };
-    // F-74 / DT-48 (D111): who paints an element whose own background-color is transparent — a <td> under a `tr:hover`
+    // who paints an element whose own background-color is transparent — a <td> under a `tr:hover`
     // row, a wrapper whose only child carries the fill. First a chain of only-children with the element's box (±1px): the
     // first that paints lies ON TOP of the element (an ancestor's paint would be hidden under it); else the nearest ancestor
     // that paints, up to and including the frame root, when its border box holds the element's (±1px). A background-image
     // (a gradient, a picture) on the way, or a painting ancestor that does not hold the element, ends the search with no
-    // answer: its colour is not one value. L5: when the element's own children paint all of it (its 4 corners, inset 2px,
+    // answer: its colour is not one value. When the element's own children paint all of it (its 4 corners, inset 2px,
     // and its centre each lie on a painting child — a transparent row whose cells carry the hover), no ancestor's colour
     // shows on it: no answer either. Ancestor opacity/filter, ::before painters and a sibling/overlay painting over the
     // element are not looked at (known misses: an overlay may make it pass — LIMITS).
@@ -557,20 +557,20 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
           if (!flexish) { put(k, null, `display: ${display} — gap does not apply; spacing comes from margins`); break; }
           const column = /column/.test(cs.getPropertyValue("flex-direction")) && /flex/.test(display);
           const v = cs.getPropertyValue(column ? "row-gap" : "column-gap").trim();
-          // `normal` computes to 0 in flex and grid; a percentage gap stays a percentage in the computed style (F-93)
+          // `normal` computes to 0 in flex and grid; a percentage gap stays a percentage in the computed style
           put(k, v === "normal" ? 0 : v.endsWith("%") ? null : px(v), v.endsWith("%") ? `a percentage gap (${v}) — its px value depends on the container` : "unreadable gap");
           break;
         }
         case "gapVisual": {
           if (!/^(table|thead|tbody|tfoot)$/.test(tag)) { put(k, null, "measured only for a table (row spacing is border-spacing, not gap)"); break; }
-          // this table's own rows — a nested table's rows sit inside one of them and read as negative distances (F-93)
+          // this table's own rows — a nested table's rows sit inside one of them and read as negative distances
           const own = tag === "table" ? el : el.closest("table");
           const rows = Array.from(el.querySelectorAll("tr")).filter((r) => r.closest("table") === own).map((r) => r.getBoundingClientRect()).filter((r) => r.height > 0);
           const gaps: number[] = [];
           for (let i = 1; i < rows.length; i++) { const a = rows[i - 1], b = rows[i]; if (a && b) gaps.push(r2(b.y - (a.y + a.height))); }
           const median = gaps.length ? (gaps.sort((x, y) => x - y)[Math.floor(gaps.length / 2)] ?? null) : null;
           // A negative distance is rows that are not stacked top to bottom (a nested table, rows side by side) —
-          // a measuring artefact, not a gap (F-93).
+          // a measuring artefact, not a gap.
           put(k, median !== null && median < 0 ? null : median, median === null ? "fewer than two rendered rows" : `the rows are not stacked top to bottom (median distance ${median}px) — not a row gap`);
           break;
         }
@@ -586,21 +586,21 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
         default: put(k, null, `verify-probe does not know how to read '${k}'`);
       }
     }
-    // F-69 (D114): the computed text-transform of the text's owner (inherited) — the rendered string is `text` under it.
+    // the computed text-transform of the text's owner (inherited) — the rendered string is `text` under it.
     // Optional (not a STYLE_KEY): absent when unreadable, never a null to explain.
     if (item.isText && !item.isPlaceholder) { const tt = typoCs.getPropertyValue("text-transform").trim(); if (tt) styles.textTransform = tt; }
     return res;
   });
 }
 
-// ---------------------------------------------------------------- owner hover (F-74)
+// ---------------------------------------------------------------- owner hover
 /** Where to hover the owner of a drawn state (`owner`, e.g. the row) so that IT is hovered and the measured element
  *  (`avoid`, a control inside it) is not: the first of the owner's 4 corners (inset 3px), 4 edge midpoints (inset 3px),
  *  centre that lies outside the measured element's box, whose document.elementFromPoint is the owner or inside it, and
  *  that is not over an interactive descendant (a control with its own :hover). Relative to the owner's PADDING box
  *  (Playwright's `position`); viewport points only (call it after scrolling the owner into view). SELF-CONTAINED. */
 export function freeHoverPoint(arg: { owner: string; avoid: string }): { x: number; y: number } | null {
-  // L2: tabindex="-1" is not a control — ARIA-grid cells carry it (roving focus); hovering one is a free point
+  // tabindex="-1" is not a control — ARIA-grid cells carry it (roving focus); hovering one is a free point
   const INTERACTIVE = "a, button, input, select, textarea, [role=button], [role=link], [role=checkbox], [tabindex]:not([tabindex='-1'])";
   const owner = document.querySelector(arg.owner);
   if (!owner) return null;
@@ -621,7 +621,7 @@ export function freeHoverPoint(arg: { owner: string; avoid: string }): { x: numb
   return null;
 }
 
-// ---------------------------------------------------------------- focus (D16)
+// ---------------------------------------------------------------- focus
 /** Where focus can land for the element at `path`: itself or its closest focusable ancestor (path), or null.
  *  SELF-CONTAINED — see the file header. */
 export function focusablePath(path: string): string | null {

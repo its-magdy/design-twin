@@ -1,7 +1,7 @@
 // tokens-native.ts — Figma variables → ONE checked-in native token file per platform.
 //
-// Why this exists: tokens.ts emits DTCG + CSS, which is all a web build needs. A native build had
-// nothing — so the agent hand-mapped "color/primary" to a Swift/Kotlin/Dart symbol per screen, and two
+// Why this exists: tokens.ts emits DTCG + CSS, which is all a web build needs. A native build has
+// nothing else — so the agent would hand-map "color/primary" to a Swift/Kotlin/Dart symbol per screen, and two
 // screens built in separate sessions could disagree about what that symbol is. One generated file that
 // every screen imports turns "map every time" into "map once".
 //
@@ -81,7 +81,7 @@ type Emit = (cols: NativeCollection[], opts?: NativeOpts) => string;
 export interface NativeFile { file: string; text: string; warnings: string[] }
 
 // Figma's "fully rounded" corner exports as 1e9 (see isSentinel in tokens.ts). A field holding it is
-// written as each platform's own idiom — never as the literal (livetest-3 #96).
+// written as each platform's own idiom — never as the literal.
 const FULL = Object.freeze({ fullyRounded: true });
 
 export default function nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity }: NativeHelpers) {
@@ -215,7 +215,7 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
       if (!ok) { warnings.push(`${v.name}: skipped — its value could not be resolved inside this file (an alias to a library variable that was not exported?)`); continue; }
       cands.push({ v, kind, values, id: camel(segs(v.name)) });
     }
-    // Two variables on one identifier (livetest-3 #44: two `Space 4`, 24 and 16, distinct keys).
+    // Two variables on one identifier (e.g. two `Space 4`, 24 and 16, distinct keys).
     // Identical in every mode → one field, nothing lost. Otherwise BOTH are real, and neither may win by
     // arriving first: every one of them carries its key (`space4_e26d506e`), so the identifier says which
     // Figma variable it is. A bare counter (`space42`) said nothing and read as a number.
@@ -229,7 +229,7 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
       if (list.length > distinct.length) warnings.push(`${list.map(label).join(" and ")}: identical in every mode, so "${id}" in ${type} is emitted once`);
       if (distinct.length === 1) { distinct[0].final = id; continue; }
       // Different NAMES on one identifier (`Space 3` vs `(Space 3)`): the name that spells the identifier
-      // with nothing folded away keeps it (else the first, as before); the SAME name twice has no
+      // with nothing folded away keeps it (else the first); the SAME name twice has no
       // rightful owner, so every copy carries its key.
       const sameName = distinct.every((x) => x.v.name === distinct[0].v.name);
       const lossless = distinct.filter((x) => /^[A-Za-z0-9 /_-]+$/.test(String(x.v.name)));
@@ -306,7 +306,7 @@ function compose(cols: NativeCollection[], opts?: NativeOpts): string {
     for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
     // The first mode whose NAME is not the default's (the hint names a theme the way a designer would). If
     // every mode shares the default's name — a shape doc-guards.ts does not reject — fall back to the
-    // second mode by id (ids are unique, modeIds above) instead of the TypeError this used to be.
+    // second mode by id (ids are unique, modeIds above) instead of throwing a TypeError.
     const active = c.modes.find((m) => m.name !== c.default) ?? m1;
     L.push("", `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([active.id])}) { … }`,
       `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`);

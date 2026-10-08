@@ -152,7 +152,7 @@ function bootstrap(catalog: ComponentsCatalog | null | undefined, existing?: Cod
       if (!Object.keys(props).length) delete entry.props;
       // An entry filed under a key that is NOT one of this component's own identifiers was put there on
       // purpose — a confirmed re-key proposal is filed under the SCREEN's instance key (the catalog's
-      // key was re-minted by a file duplication, livetest-3 #226) so an instance lookup finds it. Keep it
+      // key was re-minted by a file duplication) so an instance lookup finds it. Keep it
       // there; moving it to the catalog key would silently unmap every instance again.
       out.components[prevKey !== c.key && prevKey !== c.id ? prevKey : id] = entry;
     } else {
@@ -171,7 +171,7 @@ export interface ProposalsReport { confirmed: number; added: number; kept: numbe
 // Stubs for CONFIRMED name+prop-signature matches only (cross-check.ts `componentProposals`, see
 // component-match.ts). Why a separate path: when a file was duplicated, 0 of the screen's instance
 // keys are in the catalog, and a full bootstrap wrote 318 stubs of which none was on the screen
-// (livetest-3 #103) — a list nobody can evaluate. Here every stub is one the user already said yes
+// — a list nobody can evaluate. Here every stub is one the user already said yes
 // to, filed under the screen's OWN instance key (what build-screen looks an instance up by), with
 // figma.key/id pointing at the catalog component whose props it was matched on.
 // Never auto-accepts: an entry without `confirmed: true` is skipped. Never overwrites: an existing
@@ -264,10 +264,10 @@ function main(argv: string[]): number {
   if (!catalogFile) { console.error(usage); return 1; }
   const catalog = readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json",
     NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
-  // DT-26: a screen's components often live in a library — the sampled components.library.json beside
+  // A screen's components often live in a library — the sampled components.library.json beside
   // the catalog, a pulled libraries/<dir>/components.json, a --catalog. --screen and --from-proposals take
   // components from all of them; a FULL bootstrap (neither flag) stays the named catalog alone, since
-  // stubbing a whole library is finding 103's unreviewable list again.
+  // stubbing a whole library is again an unreviewable list.
   // The set is read ONLY for those two flags: a full bootstrap must not start failing (exit 2) on a
   // broken components.library.json it never uses.
   const sources = screenFile || proposalsFile ? readCatalogSet(catalogFile, catalog, extraCatalogFiles, screenFile ?? undefined,
@@ -308,7 +308,7 @@ function main(argv: string[]): number {
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) → ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` — wrote ${outFile}` : ""}`);
     return 0;
   }
-  // Finding 103: a full bootstrap on a real catalog stubs EVERY component in the file (318 on the
+  // A full bootstrap on a real catalog stubs EVERY component in the file (318 on the
   // live run) — a list nobody can evaluate, and none of them may even be on the screen the user is
   // about to build. When --screen is given, scope the catalog to the keys/ids that screen's own
   // VISIBLE instances actually reference first, so the "confirm the stubs" step is small and every

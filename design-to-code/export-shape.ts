@@ -4,9 +4,9 @@
 //   ScreenExport  a `--node`/`--selection` pull          { exportedAt, screen, nodes: [IrNode…], manifest, … }
 //   LayerFile     a page-walk layer file                  { name, id, page, tree: IrNode, … }
 //   IrNode        a bare node tree (a tree saved on its own, a catalog variant's node, a test fixture)
-// Seven modules used to re-derive the roots with seven slightly different rules (one required `type &&
-// id`, four took `id || type`, one took ANY object as a node, one refused bare trees). They all call
-// screenRoots() now; `ScreenDoc` in types.ts is the union of the three shapes.
+// Every module calls screenRoots() rather than re-deriving the roots with its own slightly different rule (one
+// requiring `type && id`, another `id || type`, another taking ANY object as a node, another refusing bare trees);
+// `ScreenDoc` in types.ts is the union of the three shapes.
 import { isJsonObject } from "./types.ts";
 import type { IrNode, LayerFile, Manifest, ScreenDoc, ScreenExport } from "./types.ts";
 

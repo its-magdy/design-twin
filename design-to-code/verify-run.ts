@@ -1,7 +1,7 @@
 // verify-run.ts — one verification run, as files on disk the tools (not the agent) write: status v2, atomic
 // writes, publishing a staged run into design/verify/, and waiting for a run to finish.
 //
-// Why it exists (field tests F-72, F-91, F-107): the verifier's status file was hand-written prose
+// Why it exists: the verifier's status file was hand-written prose
 // ({screen, phase, detail, at}) with a hand-typed timestamp, two docs disagreed on its phases, nothing tied it
 // to the measured file it described, and an orchestrator waited on it with a hand-rolled shell loop (one
 // zsh loop never saw the file change). Files were written in place, so a reader could see half a JSON, and the
@@ -23,7 +23,7 @@
 //     fall back to the published one (or an older v1 file there);
 //   - writeFileAtomic: a tmp file BESIDE the target, then rename (same directory → same filesystem → atomic);
 //   - publish: the agent stages its artefacts in the run cache (`stage/<runId>/`), and `--status … --publish
-//     <dir>` copies them in only after every page is closed (D9) — copy to a tmp name in the target dir, then
+//     <dir>` copies them in only after every page is closed — copy to a tmp name in the target dir, then
 //     rename, so a stage dir on another filesystem (EXDEV) works too;
 //   - wait: poll the status until THIS run is done and the measured file is the one the status names.
 //
@@ -46,7 +46,7 @@ export const STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-
 export type StatusPhase = (typeof STATUS_PHASES)[number];
 /** Phases after which nothing more happens in this run. */
 export const TERMINAL_PHASES: readonly StatusPhase[] = ["done", "failed", "blocked"];
-/** Phases at which the measured file is complete — a --compare may read it (D26). */
+/** Phases at which the measured file is complete — a --compare may read it. */
 export const MEASURED_PHASES: readonly StatusPhase[] = ["measured", "done"];
 export type StatusWriter = "verify-probe" | "agent" | "orchestrator";
 
@@ -88,7 +88,7 @@ export function sha256File(file: string): string | null {
   try { return sha256Of(fs.readFileSync(file)); } catch { return null; }
 }
 
-// ---- H1: where a run's live files go — never under the tree a dev server watches
+// ---- where a run's live files go — never under the tree a dev server watches
 const CACHE_NAME = "designtwin-verify";
 const shortSha = (s: string): string => sha256Of(s).slice(0, 16);
 const isDir = (p: string): boolean => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
@@ -175,7 +175,7 @@ export class RunCacheUnwritable extends Error {
   readonly cacheDir: string;
   readonly root: string;
   /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
-   *  permission: a directory on the way was removed while the run wrote there (L-4) */
+   *  permission: a directory on the way was removed while the run wrote there */
   constructor(cacheDir: string, root: string, code: string) {
     super(code === "ENOENT"
       ? `run cache ${cacheDir} disappeared — was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) — start a new run once it is back`
@@ -197,7 +197,7 @@ export function inRunCache<T>(verifyDir: string, fn: () => T): T {
 export const EXIT_RUN_CACHE = 6;
 /** The LIVE status of `<base>` (design/verify/<S>): `<run cache>/<S>.status.json`. */
 export const liveStatusFile = (base: string): string => path.join(runCacheDir(path.dirname(base)), path.basename(base) + ".status.json");
-/** Where a run stages its evidence and state screenshots until `--publish` (D9): `<run cache>/stage/<runId>/`. */
+/** Where a run stages its evidence and state screenshots until `--publish`: `<run cache>/stage/<runId>/`. */
 export const stageDirOf = (base: string, runId: string): string => path.join(runCacheDir(path.dirname(base)), "stage", runId);
 
 /**
@@ -271,7 +271,7 @@ export class RunEnded extends Error {
 export function writeStatus(base: string, p: StatusWrite): VerifyStatusV2 {
   const prev = readStatus(base);
   const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
-  // an ended run stays ended (live F4): checked HERE, at the write, not only by the caller at its start
+  // an ended run stays ended: checked HERE, at the write, not only by the caller at its start
   if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
   const pick = (k: "expectationSha256" | "measuredSha256" | "evidenceSha256"): { [K in typeof k]?: string } => {
     const v = p[k] ?? (same ? same[k] : undefined);
@@ -293,7 +293,7 @@ export function publishStatus(base: string, doc: VerifyStatusV2): void {
 }
 
 // Files the verify tools own: a staged copy must never replace them (--expect / --compare / --status write these;
-// L13: --expect keeps a replaced expectation as <S>.expected.prev.json — `*.prev.json` is tool-written too).
+// --expect keeps a replaced expectation as <S>.expected.prev.json — `*.prev.json` is tool-written too).
 const TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\.json)$/;
 /**
  * --publish in two steps. `prepareStaged` copies every regular file of `stageDir` (top level only) to `<dest>.tmp-<pid>`
@@ -306,7 +306,7 @@ export interface PreparedPublish { files: string[]; tmpOf(name: string): string;
 export function prepareStaged(stageDir: string, destDir: string): PreparedPublish | { error: string } {
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(stageDir, { withFileTypes: true }); } catch (e) { return { error: `--publish ${stageDir}: ${errMsg(e).split("\n")[0]}` }; }
-  // realpaths: a symlinked or ../ spelling of the verify dir is still the verify dir (L-10)
+  // realpaths: a symlinked or ../ spelling of the verify dir is still the verify dir
   if (canonical(stageDir) === canonical(destDir)) return { error: `--publish ${stageDir} is the verify directory itself — stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
   const owned = files.filter((f) => TOOL_OWNED.test(f));
@@ -346,7 +346,7 @@ function measuredExpectation(file: string): { sha: string; runId?: string } | { 
   return typeof v === "string" && v ? { sha: v, ...(typeof run === "string" && run ? { runId: run } : {}) } : { error: `${file} names no expectation (expectationSha256)` };
 }
 
-/** The checks `done` and `measured` apply before recording a measured file as this run's (M3, M-1): the current
+/** The checks `done` and `measured` apply before recording a measured file as this run's: the current
  *  expectation exists, the file exists and names it, names no other run, and is the file the probe recorded in
  *  this run (when it recorded one). Returns the two shas to record, or the refusal (one line, exit 1). */
 function checkMeasured(base: string, measFile: string, runId: string, sameRun: VerifyStatusV2 | null, prev: VerifyStatusV2 | null): { expectationSha256: string; measuredSha256: string } | { refused: string } {
@@ -373,7 +373,7 @@ export interface StatusFlags { phase?: string | undefined; run?: string | undefi
  * one sentence naming the cache and the project root — never a stack). Prints `run <id> rev <n>` on stdout and the
  * live status file + the run's stage dir on stderr. Writes only the live status (outside the watched tree); `done`
  * checks first, then writes the live status, then publishes (--publish) and writes its durable copy <dir>/<S>.status.json.
- * `measured` applies done's checks and records the measured file's sha too (the probe's recovery command, M-1).
+ * `measured` applies done's checks and records the measured file's sha too (the probe's recovery command).
  */
 export function statusMain(screen: string | undefined, f: StatusFlags, usage: string): number {
   try { return statusRun(screen, f, usage); } catch (e) {
@@ -393,7 +393,7 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   const phase = f.phase;
   const prev = readStatus(base);
   const prevV2 = prev && prev !== "v1" ? prev : null;
-  // no --run: continue the run in progress — only a v2 run that has not ended (M5); anything else is ambiguous
+  // no --run: continue the run in progress — only a v2 run that has not ended; anything else is ambiguous
   let runId: string;
   if (f.run !== undefined) runId = f.run;
   else if (f["new-run"]) runId = newRunId();
@@ -412,7 +412,7 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   const S = path.basename(base), dir = path.dirname(base);
   // the run cache must take a write BEFORE anything is checked or published (a `done` that publishes, then cannot
   // record itself, would leave design/verify changed and the run unfinished)
-  // M-2: a real write, not access(W_OK) — a sandbox can refuse creating a file in a directory access() calls writable
+  // A real write, not access(W_OK) — a sandbox can refuse creating a file in a directory access() calls writable
   const cache = runCacheDir(dir);
   inRunCache(dir, () => {
     fs.mkdirSync(cache, { recursive: true });
@@ -423,9 +423,9 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
 
   const shas: Pick<StatusWrite, "expectationSha256" | "measuredSha256" | "evidenceSha256"> = {};
   if (phase === "done" || phase === "measured") {
-    // done (and measured — the recovery the probe prints when its own write was refused, M-1) names the exact files
-    // it is about — checked BEFORE anything is published (M3): a measured file taken against another expectation,
-    // in another run, or not the one the probe measured in this run is not done (F-72). measured reads the run's
+    // done (and measured — the recovery the probe prints when its own write was refused) names the exact files
+    // it is about — checked BEFORE anything is published: a measured file taken against another expectation,
+    // in another run, or not the one the probe measured in this run is not done. measured reads the run's
     // stage dir first (a probe --out there), done the --publish dir; else the verify dir.
     const staged = phase === "done" ? (f.publish !== undefined ? path.join(f.publish, S + ".measured.json") : null) : path.join(stageDirOf(base, runId), S + ".measured.json");
     const measFile = staged !== null && fs.existsSync(staged) ? staged : base + ".measured.json";
@@ -441,7 +441,7 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
     prep = r;
   }
   if (phase === "done") {
-    // the evidence file is this run's only when this run publishes it (LOW: an older run's evidence is not hashed)
+    // the evidence file is this run's only when this run publishes it (an older run's evidence is not hashed)
     const evName = S + ".evidence.json";
     const ev = prep?.files.includes(evName) ? sha256File(prep.tmpOf(evName))
       : sameRun?.published?.includes(evName) ? sha256File(base + ".evidence.json") : null;

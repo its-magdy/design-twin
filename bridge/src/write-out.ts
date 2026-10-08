@@ -1,10 +1,10 @@
 // write-out.ts — the ONE place an export lands on disk.
 //
-// Both read clients write through this module: the figma-pull CLI (which has always written to disk)
-// and the MCP export tools (which used to have no disk path at all — they stripped asset bytes to
-// keep megabytes out of the agent's context, which also meant an MCP-only session could never
-// produce assets/, and the CLI could not be run to fill the gap because both bind port 8787 and the
-// second one to start exits on EADDRINUSE). Writing here and returning a compact INDEX is what makes
+// Both read clients write through this module: the figma-pull CLI (which writes to disk)
+// and the MCP export tools (which strip asset bytes from their replies to keep megabytes out of the
+// agent's context — without a disk path an MCP-only session could never produce assets/, and the CLI
+// could not be run to fill the gap because both bind port 8787 and the second one to start exits on
+// EADDRINUSE). Writing here and returning a compact INDEX is what makes
 // the MCP path complete on its own.
 //
 // The freshness stamp (`exportedAt`/`file`) is stamped by the PLUGIN (collect.ts/components.ts).
@@ -33,7 +33,7 @@ import type { DesignSystemReply, ExportReply, FullExportReply, ScreenReply, Scre
 // commands.ts. writeAny tells them apart by the field only that reply carries (`screen`, `reference`),
 // which is a real narrowing of the union, not a guess over one optional bag.
 
-/** `sourceFile`/`sourceFileKey` are stamped by figma-pull.ts (P4 #33) onto the reply before it reaches a
+/** `sourceFile`/`sourceFileKey` are stamped by figma-pull.ts onto the reply before it reaches a
  *  writer — never by the plugin. */
 export type Stamped<R> = R & { sourceFile?: string; sourceFileKey?: string };
 
@@ -63,7 +63,7 @@ function resolveOutDir(outDir?: string | null): string {
 // `what` names the ARGUMENT in the message: this guards exportDir and map too, and telling a model its
 // `outDir` is wrong when it never passed one sends it looking for the wrong thing.
 //
-// D132: inside LEXICALLY, or inside once both sides are resolved through symlinks. On macOS /tmp, /var and
+// Inside LEXICALLY, or inside once both sides are resolved through symlinks. On macOS /tmp, /var and
 // /etc are symlinks into /private, and process.cwd() is getcwd() (already resolved) while a path the model
 // builds from PWD or os.tmpdir() is not — so `/tmp/proj/design` was refused for a server started in
 // /tmp/proj. The returned path stays the lexical one (path.resolve has already folded every `..`, so a
@@ -117,7 +117,7 @@ function assertInsideCwd(outDir?: string | null, what = "outDir"): string {
 // fails on. Same directory, so the rename never crosses a filesystem. The pid keeps two concurrent
 // writers from sharing a temp file; a failed write removes its own temp file.
 //
-// `keep` (D133): when passed, the file this write replaces is first copied to `<file>.prev` if its content
+// `keep`: when passed, the file this write replaces is first copied to `<file>.prev` if its content
 // differs (keepPrevCopy's rule: one level, stamps ignored) and the .prev path is pushed onto `keep`.
 function writeJson(dir: string, name: string, obj: unknown, quiet?: boolean, log?: Log, keep?: string[]): void {
   const file = path.join(dir, name);
@@ -244,17 +244,17 @@ function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefi
 
 // A flattened illustration arrives as one SVG with thousands of <path> elements. The live run hit a
 // 2.47 MB empty-state graphic that inlined into a 2.71 MB JS bundle — moving that ONE file to a URL
-// import cut the bundle 11x (finding 72). The export is faithful; the problem is that nothing said so
+// import cut the bundle 11x. The export is faithful; the problem is that nothing said so
 // until a bundler did, hours later. Flag it here, where the bytes are in hand and the answer is still
 // "ask the designer to re-export it as a PNG", not "redraw it".
 const BIG_ASSET_BYTES = 250 * 1024;
 const BUSY_SVG_PATHS = 400;
 
-// assets/ is SHARED and CUMULATIVE across pulls (design/README.md; finding 20 — accumulate, don't
-// replace, is deliberate and stays). What is NOT acceptable is a later pull silently overwriting an
-// earlier screen's file under the same name (finding 23/104/125) — including a same-name collision
-// that differs only in CASE, which is one path on macOS's default case-insensitive filesystem (finding
-// 124: `angle-left.svg` vs `Angle-left.svg`). So every write here is refuse-or-version, never clobber:
+// assets/ is SHARED and CUMULATIVE across pulls (design/README.md — accumulate, don't
+// replace, is deliberate). What is NOT acceptable is a later pull silently overwriting an
+// earlier screen's file under the same name — including a same-name collision
+// that differs only in CASE, which is one path on macOS's default case-insensitive filesystem
+// (`angle-left.svg` vs `Angle-left.svg`). So every write here is refuse-or-version, never clobber:
 // if a file already on disk (matched case-INSENSITIVELY, since that is the filesystem's own rule)
 // has different bytes than what this pull is about to write, the NEW one gets a content-hash suffix
 // instead of overwriting — mirroring exactly the suffixing the plugin's own `register()` does for a
@@ -263,8 +263,8 @@ const BUSY_SVG_PATHS = 400;
 //
 // `a.file` is mutated in place to the name ACTUALLY written. That alone does NOT move the node tree's
 // pointers (`asset` on each node, `reference` on the root), which the plugin built from its own names:
-// callers run writeAssets BEFORE writing the tree and then rewireAssetPointers() (field findings DT-25,
-// F-35, F-08 — nodes pointed at names never written, and on a case-insensitive disk at the wrong file).
+// callers run writeAssets BEFORE writing the tree and then rewireAssetPointers() (otherwise
+// nodes point at names never written, and on a case-insensitive disk at the wrong file).
 function readExistingDirCaseFold(adir: string): Map<string, string> {
   const map = new Map<string, string>(); // lowercased basename -> real basename on disk
   let names: string[] = [];
@@ -276,15 +276,15 @@ function readExistingDirCaseFold(adir: string): Map<string, string> {
 // The CONTENT half of dedup, keyed independent of name — the gap the name-only check above cannot
 // close. A name-only check reuses `angle-left.svg` only when the NEW asset is ALSO named
 // `angle-left.svg` (mod case); it writes a second copy of the exact same icon under a name the plugin
-// (or a different screen's pull) happened to pick instead, which is finding 24/live evidence: a real
-// three-screen pull with this fix already live still produced `Ellipse_2327.svg`,
+// (or a different screen's pull) happened to pick instead: a real
+// three-screen pull showed that, with the name check in place, it still produced `Ellipse_2327.svg`,
 // `Ellipse_2327-e9af26.svg`, `Ellipse_2327-51bd18.svg` AND `Ellipse_2327-51bd18_1.svg` — four files,
 // one icon — because each pull's own suffix (assigned by the PLUGIN's per-run `byName`, or by an
 // earlier version of this file) was a different, equally-valid-looking name, and writeAssets only ever
 // asked "is anything ALREADY WRITTEN under THIS exact name" instead of "does this content already
 // exist ANYWHERE in the shared directory".
 //
-// "The same content" is asset-compare.ts ContentIndex (DT-18, D61): an SVG fingerprint — def ids
+// "The same content" is asset-compare.ts ContentIndex: an SVG fingerprint — def ids
 // canonical, every number within SVG_TOL — or the exact bytes for anything else. A hash of v1's rounded
 // text split real re-exports on three gaps (ids that embed the node id, `12` vs `11.9999`, a value either
 // side of a 0.1 rounding boundary), so 11 copies of one icon stayed 11 files. Built ONCE per writeScreen /
@@ -329,7 +329,7 @@ function shortHashOf(a: Asset, bytes: Buffer): string {
 // Reuse `existingName`'s bytes for `a`: point `a.file` at it, and replace `a.text`/`a.base64` with the
 // ACTUAL on-disk bytes so the manifest (writeScreenAssets, called right after this on the same array)
 // hashes what is really there — a normalised-equal-but-byte-different re-pull must never record a hash
-// for content that was never written (findings 23/104's "recorded hash matches nothing on disk", just
+// for content that was never written (a "recorded hash matches nothing on disk", just
 // introduced by a naive fix instead of closed by one).
 function reuseExisting(a: Asset, dirPrefix: string, existingName: string, priorBytes: Buffer): void {
   a.file = dirPrefix + "/" + existingName;
@@ -388,9 +388,9 @@ function pngSize(bytes: Buffer): { w: number; h: number } | null {
 }
 
 // Every `asset`/`reference` pointer in `tree` that names no file under `dir` — checked by EXACT name (a
-// case-insensitive disk would otherwise "find" a different-case file, which is how F-35 shipped the wrong
+// case-insensitive disk would otherwise "find" a different-case file, which would ship the wrong
 // chevron). A pull should never produce one; if it does, say so instead of leaving a silent hole.
-// `exactExists(dir)` is that check on its own — also the hidden-reuse guard's (L-3: `fs.existsSync` said
+// `exactExists(dir)` is that check on its own — also the hidden-reuse guard's (`fs.existsSync` would say
 // yes to `assets/Angle-left.svg` when only `angle-left.svg`, a different icon, was on disk). One listing
 // per directory, read on first use: call it after the pull's assets are written.
 function exactExists(dir: string): (rel: string) => boolean {
@@ -418,8 +418,8 @@ function danglingPointers(dir: string, tree: unknown): string[] {
   return [...out];
 }
 
-// An SVG with an embedded `<image>` and almost no paths is a PHOTO in an SVG shell (DT-09) — the rule is
-// svg-normalize.ts isRasterShell, shared with the audit so both say the same thing about one file (L-7).
+// An SVG with an embedded `<image>` and almost no paths is a PHOTO in an SVG shell — the rule is
+// svg-normalize.ts isRasterShell, shared with the audit so both say the same thing about one file.
 const countTag = (text: string, re: RegExp): number => (text.match(re) || []).length;
 const PATH_TAG_RE = /<path\b/g;
 const IMAGE_TAG_RE = /<image\b/g;
@@ -448,7 +448,7 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
     let baseName = path.basename(a.file);
     const dirPrefix = path.dirname(a.file); // usually "assets"
 
-    // CONTENT check FIRST, independent of what name this asset arrived under (finding 24/25/27): a
+    // CONTENT check FIRST, independent of what name this asset arrived under: a
     // name-only check only ever catches "this pull picked the SAME name as something already there".
     // It has no way to see that `Ellipse_2327-e9af26.svg`'s bytes are already on disk as
     // `Ellipse_2327.svg`, or that a drifted `arrow-down-<hash>.svg` is already there under a different
@@ -478,14 +478,13 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
     if (priorName !== undefined) {
       // Reaching here means the CONTENT check above already ruled out "this is the same asset under
       // any name" — so a name collision at this point is a same-name (mod case) DIFFERENT asset, full
-      // stop. It never fires for a content-duplicate any more, which is also the fix for the `_1` guard
-      // bug: `Ellipse_2327-51bd18_1.svg` used to happen because a genuinely identical asset reached this
-      // branch (the content check didn't exist yet) with a hash-suffixed name that ALSO already existed
-      // (both suffix attempts were the exact same 6 hex chars, since both were hashes of the SAME
-      // content) — the guard's `_N` was masking a content-dedup failure, not resolving a real 6-hex
-      // collision. With content checked first, the guard can now only ever fire on a genuine collision
-      // between two DIFFERENT assets' hash suffixes, which is the vanishingly-unlikely case its comment
-      // always claimed it was.
+      // stop. It never fires for a content-duplicate, which is also what keeps the `_1` guard from
+      // producing `Ellipse_2327-51bd18_1.svg`: a genuinely identical asset reaching this branch with a
+      // hash-suffixed name that ALSO already existed (both suffix attempts being the exact same 6 hex
+      // chars, since both were hashes of the SAME content) would make the guard's `_N` mask a
+      // content-dedup failure instead of resolving a real 6-hex collision. With content checked first,
+      // the guard can only fire on a genuine collision between two DIFFERENT assets' hash suffixes,
+      // which is the vanishingly-unlikely case it is for.
       const ext = path.extname(baseName);
       const stem = baseName.slice(0, baseName.length - ext.length);
       baseName = stem + "-" + shortHashOf(a, bytes) + ext;
@@ -500,9 +499,9 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
     a.file = dirPrefix + "/" + baseName; // downstream (writeScreenAssets, index entries) reads this
     const paths = a.text != null ? countTag(a.text, PATH_TAG_RE) : 0;
     const rasters = a.text != null ? countTag(a.text, IMAGE_TAG_RE) : 0;
-    // Finding 324: the whole-frame reference PNG (a.kind === "reference") is never inlined or shipped
+    // The whole-frame reference PNG (a.kind === "reference") is never inlined or shipped
     // — writeScreenAssets already excludes it from `count`/`totalBytes` and its own `heavy` list for
-    // exactly this reason (finding 28's comment). This pull-time warning must agree: a "20174_143363_
+    // exactly this reason (see there). This pull-time warning must agree: a "20174_143363_
     // ref.png 0.25 MB is too heavy to inline" is pure noise about a file the app never inlines.
     if (a.kind !== "reference" && (bytes.length >= BIG_ASSET_BYTES || paths >= BUSY_SVG_PATHS)) heavy.push({ file: baseName, node: a.id, bytes: bytes.length, paths, rasters });
     n++;
@@ -533,11 +532,11 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
 
 // `assetsGeometry` counts graphics Figma's exporter returned no SVG for, recovered as raw path data
 // instead (figma-plugin/src/assets.ts geometryOf) — usable, but a strictly worse asset than a real export.
-// Finding 30: 40% of a screen's nodes fell back this way with `manifest.warnings: []` and no pull-time
-// signal at all. It used to warn only at >= 10 % of nodes and blamed "unusual paint/blend"; on the real
-// exports every one of those fallbacks was a HIDDEN node (DT-10), which the plugin no longer exports at
-// all (`assetSkipped:"hidden"`), and an icon container's own background rectangle, which is now a
-// failure instead. What is left is a real degraded vector, so ANY fallback warns (D63), and the line
+// A real pull had 40% of a screen's nodes fall back this way with `manifest.warnings: []` and no pull-time
+// signal at all. Warning only at a share of nodes, or blaming "unusual paint/blend", misses the cause: on
+// the real exports every one of those fallbacks was a HIDDEN node, which the plugin does not export at
+// all (`assetSkipped:"hidden"`), or an icon container's own background rectangle, which is a
+// failure instead. What is left is a real degraded vector, so ANY fallback warns, and the line
 // names up to five of them, `name (id)`, read from the tree as written. Exported for writeScreen and tests.
 const GEOMETRY_WARN_LIST = 5;
 function assetsGeometryWarning(manifest: Partial<Manifest> | null | undefined, tree?: unknown): string | null {
@@ -562,7 +561,7 @@ function assetsGeometryWarning(manifest: Partial<Manifest> | null | undefined, t
     (named.length ? ": " + named.join(", ") + (found > named.length || geo > named.length ? ", …" : "") : "");
 }
 
-// D67/D64: the hidden graphics the plugin did not export, and how many the bridge pointed at a visible
+// The hidden graphics the plugin did not export, and how many the bridge pointed at a visible
 // twin's file. One info line, only when the manifest counted any (an older export has no counter).
 function assetsHiddenLine(manifest: Partial<Manifest> | null | undefined, reuse?: ReuseResult): string | null {
   const n = manifest && typeof manifest.assetsHidden === "number" ? manifest.assetsHidden : 0;
@@ -572,8 +571,8 @@ function assetsHiddenLine(manifest: Partial<Manifest> | null | undefined, reuse?
     (reuse && reuse.crossScreen ? ` (${reuse.crossScreen} from another screen)` : "");
 }
 
-// D67: the hidden nodes the tree keeps — hidden themselves (`hidden:true`) or under a hidden ancestor (no flag
-// of their own; the plugin counts both, R2-6) — designed states a builder wires up, not noise to drop. One
+// The hidden nodes the tree keeps — hidden themselves (`hidden:true`) or under a hidden ancestor (no flag
+// of their own; the plugin counts both) — designed states a builder wires up, not noise to drop. One
 // info line, only when the manifest counted any (an older export has no counter).
 function hiddenNodesLine(manifest: Partial<Manifest> | null | undefined): string | null {
   const n = manifest && typeof manifest.hiddenNodes === "number" ? manifest.hiddenNodes : 0;
@@ -582,8 +581,8 @@ function hiddenNodesLine(manifest: Partial<Manifest> | null | undefined): string
 
 // Reference PNGs land in assets/, the same place a --node pull puts the frame's own reference.
 //
-// They used to get their own screenshots/ subdir on the theory that a discovery screenshot is not a
-// shipped asset. In practice (live-test findings 20/31/34) that produced three different answers to
+// They do not get a screenshots/ subdir of their own. The case for one — a discovery screenshot is not a
+// shipped asset — does not survive practice: a separate subdir produced three different answers to
 // "where is the PNG?" — the skill said screenshots/, `dtwin help` said assets/, the success message
 // and the `reference` field both printed assets/ while the byte landed in screenshots/ — and when
 // the node was later pulled, the pull wrote a byte-identical copy into assets/ anyway. One
@@ -593,11 +592,11 @@ const REF_DIR = "assets";
 //
 // An explicit `scale` (a discovery thumbnail, e.g. 0.25) is NOT the frame's reference: it gets its own
 // name, `<id>_shot@<scale>x.png`, so it never takes the `<id>_ref.png` slot a later pull's full-size
-// reference is written to (F-08: a 360 px thumbnail held the slot, the 2048 px export was suffixed, and
-// the index pointed at the thumbnail). The default scale renders exactly what a pull would, so it keeps
+// reference is written to (otherwise a 360 px thumbnail holds the slot, the 2048 px export is suffixed, and
+// the index points at the thumbnail). The default scale renders exactly what a pull would, so it keeps
 // the shared name and a later pull reuses the same file.
 //
-// `png` (DT-06): the reference PNG's own pixel size, read from its bytes — absent when no reference asset
+// `png`: the reference PNG's own pixel size, read from its bytes — absent when no reference asset
 // carried PNG bytes.
 function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, log?: Log, opts?: { scale?: number | undefined }): { outDir: string; reference: string; png?: { w: number; h: number }; wrote: { screenshot: true; assets: number; reference: string } } {
   const dir = resolveOutDir(outDir);
@@ -621,10 +620,10 @@ function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, 
 // an MCP tool should hand back in place of the export itself: the agent then Reads/Greps the files
 // at whatever granularity it actually needs, instead of paying for the whole tree in context.
 // `r` is a full/page pull (designSystem + layersDoc + assets) or a catalog-only one (designSystem alone).
-// `opts.keepPrev` (D133, the MCP server's implicit spill only): every JSON under pages/, design-system/ or
+// `opts.keepPrev` (the MCP server's implicit spill only): every JSON under pages/, design-system/ or
 // libraries/ this write replaces with DIFFERENT content (exportedAt/generatedAt ignored) is first copied to
 // `<file>.prev` — one level, the next such spill replaces it — and `wrote.prevKept` lists those .prev
-// paths (absolute), present only when non-empty. The CLI and an explicit writeToDisk keep nothing (D80).
+// paths (absolute), present only when non-empty. The CLI and an explicit writeToDisk keep nothing.
 // Assets need nothing: writeAssets never overwrites a file with different bytes.
 function writeExport(outDir: string | null | undefined, r: Stamped<FullExportReply | DesignSystemReply>, log?: Log, opts?: { keepPrev?: boolean | undefined }) {
   const dir = resolveOutDir(outDir);
@@ -641,14 +640,14 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
     return { outDir: dir, wrote: { library: lib.dir, libraryCounts: lib.counts, publish: lib.publish, orphans: lib.orphans, ...kept() } };
   }
   const ds = writeDesignSystem(dir, r.designSystem, log, keep);
-  // DT-08: on a file that CONSUMES a library, the variables flagged `remote` are only the library ones something
+  // On a file that CONSUMES a library, the variables flagged `remote` are only the library ones something
   // here references — not that library's catalog. Say so while the pull's log is being read.
   const vars = r.designSystem.variables || [];
   const remoteVars = vars.filter((v) => v && v.remote === true).length;
   if (log && remoteVars) log(`info  ${remoteVars} of ${vars.length} variables come from a library this file consumes — not that library's catalog: open the library file and run \`dtwin pull --as-library "<name>"\` (CLI) to pull the catalog itself`);
   // The page walk half, present on a full pull only — narrowed on the field that IS the walk.
   const full: Stamped<FullExportReply> | null = "layersDoc" in r ? r : null;
-  // P4 #33: figma-pull.ts resolves which connected Figma file this pull talked to and stamps it as
+  // figma-pull.ts resolves which connected Figma file this pull talked to and stamps it as
   // `r.sourceFile`/`r.sourceFileKey` (the plugin itself has no reason to know its own bridge-side
   // connection id). Forward it onto layersDoc so buildPageLayout can carry it onto every per-page
   // layer file/index row — the same field writeScreen below stamps for a single-screen pull.
@@ -657,13 +656,13 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
     if (full.sourceFileKey) full.layersDoc.sourceFileKey = full.sourceFileKey;
   }
   // Assets FIRST, then the layer files: writeAssets may reuse or rename a file, and the trees must name
-  // what it actually wrote (DT-25).
+  // what it actually wrote.
   const before = full ? full.assets.map((a) => a.file) : [];
   const assets = full ? writeAssets(dir, full.assets, log) : 0;
   if (full) {
     const moved = rewireAssetPointers(full.layersDoc, renamedAssets(full.assets, before));
     if (log && moved) log(`rewired ${moved} asset pointer(s) to the names written (content-reused or collision-renamed files)`);
-    // D64: a page walk reuses a visible twin within its own walk only (no per-screen .assets.json to read).
+    // A page walk reuses a visible twin within its own walk only (no per-screen .assets.json to read).
     const roots = (full.layersDoc.layers || []).map((l) => l.tree).filter((t): t is IrNode => !!t && typeof t === "object");
     const reuse = reuseHiddenAssets(roots, { pointerExists: exactExists(dir) });
     if (log && reuse.hidden) log(`info  ${reuse.hidden} hidden graphic(s) not exported (\`assetSkipped:"hidden"\`); ${reuse.reused} reuse a visible twin's file`);
@@ -691,7 +690,7 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
 // in this export (except this screen's own) with a row whose `reuseKey` is wanted and whose owner carries no
 // paint override, then its sibling <base>.json — read only for those, and re-checked there by
 // reuseHiddenAssets (size, transform, overrides), since one row's key says nothing about the rest. A sibling
-// whose roots include one of `ownRoots` (this pull's root ids) is this frame's own stale JSON — skipped (R2-3b).
+// whose roots include one of `ownRoots` (this pull's root ids) is this frame's own stale JSON — skipped.
 function otherScreenTrees(dir: string, ownAssets: string, keys: ReadonlySet<string>, ownRoots: ReadonlySet<string> = new Set()): IrNode[][] {
   const out: IrNode[][] = [];
   const own = path.join(dir, ownAssets);
@@ -732,15 +731,15 @@ function otherScreenTrees(dir: string, ownAssets: string, keys: ReadonlySet<stri
 // writeExport.
 //
 // It files into the SAME pages/ tree a --page pull writes: pages/<Page>/<Name>__<id>.json, with the
-// pull's token slice and its asset index as siblings. Flat design/<Screen>.json is gone — it named
-// files from the layer alone, so two frames called "Popup" overwrote each other, and it left a
+// pull's token slice and its asset index as siblings. There is no flat design/<Screen>.json: naming
+// files from the layer alone makes two frames called "Popup" overwrite each other, and leaves a
 // --node project with no index, no page context and nothing sync-design or verify could address
-// (live findings 47/50/63). Screens ARRIVE one pull at a time, so both indexes merge with what is
+// Screens ARRIVE one pull at a time, so both indexes merge with what is
 // already on disk rather than being recomputed in one pass like buildPageLayout's.
 //
 // Asset filenames are still NOT sanitised here: the plugin owns them (see writeAssets).
 //
-// `opts.keepPrev` (F-06): when set and the screen JSON already exists with a DIFFERENT design (the top-level
+// `opts.keepPrev`: when set and the screen JSON already exists with a DIFFERENT design (the top-level
 // `exportedAt` stamp aside), the old file is
 // kept as `<screen>.json.prev` (one level, replaced by the next one) and `wrote.prev` names it. The MCP server
 // sets it only on an implicit spill — an explicit pull overwriting its own file is the point of the pull.
@@ -750,7 +749,7 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   fs.mkdirSync(path.join(dir, "pages", paths.dir), { recursive: true });
   writeSchemaDoc(dir, log);
 
-  // P4 #33: stamp which Figma file this pull actually talked to, straight onto the screen doc's own
+  // Stamp which Figma file this pull actually talked to, straight onto the screen doc's own
   // top level — the ONE thing doctor.ts's exportSourceCounts() can read without opening a second file, and
   // the reason a project pulled before this field existed is told apart from one whose source is
   // simply unknown (undefined, never a guess). figma-pull.ts resolves it; this is just where it lands.
@@ -758,13 +757,13 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   // version-suffixes a same-name (or same-name-but-case) different file. The plugin built every node's
   // `asset` and the root's `reference` from ITS names, so they are rewired to the names written before the
   // screen JSON is — otherwise nodes point at files that were never written, or (case-insensitive disk) at
-  // a different icon, and the index's `reference` at whatever thumbnail held the plain name (DT-25/F-35/F-08).
+  // a different icon, and the index's `reference` at whatever thumbnail held the plain name.
   const before = (r.assets || []).map((a) => a.file);
   const contentIndex = buildContentIndex(path.join(dir, "assets"));
   const assets = writeAssets(dir, r.assets, log, undefined, contentIndex);
   const moved = rewireAssetPointers(r.screen.nodes, renamedAssets(r.assets, before));
   if (log && moved) log(`rewired ${moved} asset pointer(s) to the names written (content-reused or collision-renamed files)`);
-  // D64: a hidden graphic the plugin did not export points at a visible twin's file — this pull's tree
+  // A hidden graphic the plugin did not export points at a visible twin's file — this pull's tree
   // first, then the screens already on disk (their .assets.json `reuseKey`, re-checked on their tree).
   const reuse = reuseHiddenAssets(r.screen.nodes, {
     otherTrees: (keys) => otherScreenTrees(dir, paths.assets, keys, new Set((r.screen.nodes || []).map((n) => n.id))),
@@ -780,7 +779,7 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   // `variables` is always on a real screen reply; a hand-built one (the tests) may omit it.
   const variables = r.variables ? writeScreenVariables(dir, paths, r.variables, log) : null;
   const assetIndex = writeScreenAssets(dir, paths, r.assets, r.screen.nodes, contentIndex);
-  // Finding 30 / acceptance criterion 10: a screen whose icons largely fell back to raw geometry
+  // A screen whose icons largely fell back to raw geometry
   // (figma-plugin/src/assets.ts geometryOf) instead of a real SVG export gets a warning AT PULL TIME,
   // not only if someone happens to go looking in manifest.assetsGeometry later.
   if (log) {
@@ -796,10 +795,10 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   // POINTER here, for the same reason buildPageLayout emits real relative paths: a consumer that
   // reassembles `pages/<dir>/<base>.vars.json` from parts is right until the day one part changes.
   const root: Partial<IrNode> = (Array.isArray(r.screen.nodes) && r.screen.nodes[0]) || {};
-  // title/texts: findings 16/17/70/90/120 — the visible title a user types is a TEXT node inside the
+  // title/texts: the visible title a user types is a TEXT node inside the
   // frame, not the Figma layer name (`root.name`/`entry.name` below); see pages-layout.ts deriveTitle.
   const title = deriveTitle(root);
-  // F-118: how the reference PNG maps onto the design's coordinates. The plugin renders it at an auto scale
+  // How the reference PNG maps onto the design's coordinates. The plugin renders it at an auto scale
   // over the node's RENDER bounds (shadows, outside strokes), so a popup with a 21 px shadow is cropped
   // differently from its box. referenceScale = PNG px per design px; referenceOffset = where the PNG's
   // top-left sits relative to the box's top-left (design px, usually <= 0).
@@ -857,7 +856,7 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   };
 }
 
-// F-06: copy `file` to `<file>.prev` before it is replaced, when it exists and differs from `next` (the
+// Copy `file` to `<file>.prev` before it is replaced, when it exists and differs from `next` (the
 // bytes about to be written). The `.prev` suffix is not `*.json`, so no screen glob, index or snapshot reader
 // picks it up. A copy, not a rename: the target stays intact until writeJson's own atomic rename replaces it.
 // Returns the .prev path, or undefined when nothing was kept (no file, identical, or unreadable).
@@ -902,7 +901,7 @@ function unstampedJson(s: string): string | null {
 // Which colours an exported SVG hard-codes.
 //
 // Figma exports the frame as it LOOKS, so a Dark-mode icon arrives with `stroke="#D4D4D4"` baked in
-// and the same file cannot serve a Light theme (live finding 73). Editing the asset is the wrong fix
+// and the same file cannot serve a Light theme. Editing the asset is the wrong fix
 // — the producer owns these files and a re-pull overwrites them — so the right move is to swap the
 // colour for `currentColor` at RENDER time. But that is only safe for a glyph whose colour is purely
 // thematic: a red trash icon and a green tick carry meaning, and recolouring those is a bug.
@@ -919,7 +918,7 @@ function svgPalette(text: unknown): { colors: string[]; monochrome: boolean; pat
     colors.add(v);
   }
   const paths = countTag(String(text), PATH_TAG_RE);
-  // DT-09: an `<image>` inside the SVG (a photo in a vector shell) — only written when there is one.
+  // An `<image>` inside the SVG (a photo in a vector shell) — only written when there is one.
   const rasters = countTag(String(text), IMAGE_TAG_RE);
   return rasters ? { colors: [...colors], monochrome: colors.size === 1, paths, embeddedRaster: rasters } : { colors: [...colors], monochrome: colors.size === 1, paths };
 }
@@ -934,24 +933,24 @@ function readJsonOr(file: string, fallback: unknown): unknown {
 
 // Which assets belong to THIS screen, and which of them are byte-identical to each other.
 //
-// design/assets/ is flat, shared and cumulative: after three pulls it held 98 files and the only way
-// to answer "which of these does THIS screen use" was to walk the screen JSON (live findings 50/97).
+// design/assets/ is flat, shared and cumulative: after three pulls it held 98 files, and the only way
+// to answer "which of these does THIS screen use" is to walk the screen JSON.
 // This index answers it directly, and the content hash makes the duplication visible — the same
 // sidebar icon exported once per instance path shows up as several names under one hash, so a
 // consumer can import one file instead of five without diffing bytes itself.
 // `duplicates` is computed over the WHOLE shared assets/ directory — not just this pull's own array.
 // `assets/` is explicitly shared and cumulative (see writeAssets' header), so a duplicate between this
 // screen's icon and one a DIFFERENT screen's pull wrote is exactly as real as one within this pull, and
-// finding 27 is precisely that a per-pull-array computation could never see it. The clobber-avoidance in
-// writeAssets means a NEW duplicate of this shape mostly can't be created going forward (a re-pull of an
-// unchanged icon now reuses the existing file), but files already on disk from before that fix — or two
+// a per-pull-array computation could never see that. The clobber-avoidance in
+// writeAssets means a NEW duplicate of this shape mostly can't be created (a re-pull of an
+// unchanged icon reuses the existing file), but files already on disk from an earlier export — or two
 // independently-named layers that just happen to render the same icon — still need catching, hence the
 // directory's ContentIndex (the same one writeAssets reused with) rather than trusting the write history.
-// Files are never deleted or merged (K-1): a re-pull points at the representative, the rest stay listed.
+// Files are never deleted or merged: a re-pull points at the representative, the rest stay listed.
 
 export type { AssetOwner, AssetContext } from "./asset-owners.ts";
 /** One row of <Screen>.assets.json `files[]` / `reference[]`. The palette fields are present on SVGs only;
- *  the owner fields (DT-54, D62) on rows the screen's tree points at. */
+ *  the owner fields on rows the screen's tree points at. */
 export interface AssetIndexEntry {
   file: string;
   node: string | undefined;
@@ -976,10 +975,10 @@ export interface AssetIndexEntry {
   /** the hidden-reuse key of the use `owner` describes (asset-owners.ts reuseKeyOf) — what another screen's
    *  hidden graphic matches on; absent when that use is hidden */
   reuseKey?: string;
-  /** DT-09: how many `<image>` elements the SVG embeds; absent when none */
+  /** how many `<image>` elements the SVG embeds; absent when none */
   embeddedRaster?: number;
   /** a file this pull did not export: a hidden node here reuses it from a visible twin in ANOTHER screen
-   *  (D64) — the twin's node id (`assetFrom` of the row's `node`); absent on every file this pull wrote */
+   *  — the twin's node id (`assetFrom` of the row's `node`); absent on every file this pull wrote */
   reusedFrom?: string;
 }
 const USED_BY_CAP = 50;
@@ -1003,7 +1002,7 @@ function ownerFields(entry: AssetIndexEntry, uses: readonly Graphic[] | undefine
 // `index` the directory's ContentIndex writeAssets already used (built here when absent).
 function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | null | undefined, tree?: readonly IrNode[] | null, index?: ContentIndex): { count: number; duplicates: number; totalBytes: number } | null {
   const uses = usesByPointer(collectGraphics(tree));
-  // No index for a pull that exported nothing — unless a hidden node reuses another screen's file (M-3).
+  // No index for a pull that exported nothing — unless a hidden node reuses another screen's file.
   const reusesAny = [...uses.values()].some((list) => list.some((u) => typeof u.node.assetFrom === "string"));
   if (!Array.isArray(assets) || (!assets.length && !reusesAny)) return null;
   const groups = (index || buildContentIndex(path.join(dir, "assets"))).groups().filter((g) => g.files.length > 1);
@@ -1024,7 +1023,7 @@ function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | nu
     if (a.kind !== "reference") ownerFields(entry, uses.get(file));
     // The whole-frame reference PNG (a.kind === "reference", <id>_ref.png — see figma-plugin/src/assets.ts)
     // is a discovery/self-check aid, not a shippable UI asset: on one real screen it was 196,049 of
-    // 312,234 total bytes (63%) and headed the `heavy` list purely because of its own size (finding 28).
+    // 312,234 total bytes (63%) and headed the `heavy` list purely because of its own size.
     // It still gets a manifest ROW (build-screen looks it up), just not counted into `count`/`totalBytes`,
     // which exist to answer "how much of this do I actually ship".
     if (a.kind === "reference") { reference.push(entry); continue; }
@@ -1032,7 +1031,7 @@ function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | nu
     const g = groupOf.get(path.basename(a.file));
     if (g) dupHashes.add(g.hash);
   }
-  // M-3: a hidden node that reuses a file from ANOTHER screen's pull (reuseHiddenAssets' cross-screen step)
+  // A hidden node that reuses a file from ANOTHER screen's pull (reuseHiddenAssets' cross-screen step)
   // points at a file this pull never exported — still one this screen references, so it gets a row too,
   // its bytes read from disk, `reusedFrom` naming the twin. A pointer that names no file on disk (by exact
   // name) gets no row: danglingPointers already warned about it.
@@ -1059,7 +1058,7 @@ function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | nu
     return { hash: g.hash, bytes: first ? first.bytes : undefined, files: group };
   });
   const monochrome = files.filter((f) => f.monochrome).map((f) => f.file);
-  // ts-port: `f.paths` is undefined on a non-SVG row, and `undefined >= n` is false — same as before.
+  // `f.paths` is undefined on a non-SVG row, and `undefined >= n` is false.
   const heavy = files.filter((f) => f.bytes >= BIG_ASSET_BYTES || (f.paths !== undefined && f.paths >= BUSY_SVG_PATHS)).map((f) => ({ file: f.file, bytes: f.bytes, paths: f.paths, ...ifDefined("embeddedRaster", f.embeddedRaster) }));
   const doc = {
     screen: paths.base,
@@ -1091,8 +1090,8 @@ function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | nu
   return { count: files.length, duplicates: duplicates.length, totalBytes: doc.totalBytes };
 }
 
-// variables.json is the ONE file two single-screen pulls share, and it used to be replaced wholesale
-// — so pulling screen B deleted screen A's tokens (live-test findings 35/64). It now accumulates:
+// variables.json is the ONE file two single-screen pulls share, and it must not be replaced wholesale
+// — pulling screen B would delete screen A's tokens. It accumulates:
 // the raw per-pull slice is kept verbatim under variables/<Screen>.json, and variables.json is the
 // union of every slice, keyed on each variable's Figma key. See variables-merge.ts for the rules.
 function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesDoc, log?: Log): { total: number; fromThisScreen: number; added: number; conflicts: number; screens: number } {
@@ -1121,7 +1120,7 @@ function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesD
       );
     }
     log(`wrote ${path.join(dir, paths.variables)} — this screen's slice on its own`);
-    // DT-71: a token/theme file generated from variables.json before this pull no longer covers it. Bridge
+    // A token/theme file generated from variables.json before this pull does not cover it. Bridge
     // text only (no design-to-code import); the tokens script's --check is what compares the two.
     if (!stats.first && stats.added > 0) {
       log(`info  ${stats.added} new variable(s) merged into variables.json — a token/theme file generated from it is now behind (the tokens script's --check says)`);
@@ -1142,7 +1141,7 @@ function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, lo
 
 // How many characters an INLINE tool result may be before the MCP client truncates it. Claude Code caps
 // tool output at MAX_MCP_OUTPUT_TOKENS (default 25,000); ~4 characters per token, and 20% headroom
-// because that ratio is an estimate and indented JSON tokenizes worse than prose. Capped at 48,000 (O-1):
+// because that ratio is an estimate and indented JSON tokenizes worse than prose. Capped at 48,000:
 // Claude Code also saves any text result longer than 50,000 characters to a file instead of showing it,
 // whatever MAX_MCP_OUTPUT_TOKENS says — so past that the inline result is not inline anyway, and our own
 // spill (files + a compact index) is the better answer. MAX_MCP_OUTPUT_TOKENS can still LOWER the limit.

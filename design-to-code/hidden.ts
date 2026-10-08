@@ -5,11 +5,9 @@
 // The export marks a layer the designer switched off with `"hidden": true` on that node, and Figma
 // does not render any of its descendants either. It does NOT use `visible: false` — and `"visible"`
 // also appears in the export as a component PROPERTY name (`"visible": "Show Breadcrumb"`), so a
-// grep for "visible" gives a confidently wrong answer (livetest-3 finding 34). verify-screen.js used
-// to test `n.visible === false`, which never matched a single real node, and so emitted 83 of 272
-// Jet Roles specs, 61 of 112 instances and 22 of 28 interactions for layers nobody draws (findings
-// 97/126/157/159/181/185). audit.js had the right predicate and then emitted findings for hidden
-// nodes anyway (finding 74).
+// grep for "visible" gives a confidently wrong answer. Testing `n.visible === false` never matches a real
+// node; a reader that tested it emitted, on one real screen, 83 of 272 specs, 61 of 112 instances and 22 of 28
+// interactions for layers nobody draws; and even with the right predicate, no finding may be emitted for a hidden node.
 //
 // So: a node is hidden iff it, or any ancestor, carries a truthy `hidden`. Nothing else.
 import type { IrNode } from "./types.ts";

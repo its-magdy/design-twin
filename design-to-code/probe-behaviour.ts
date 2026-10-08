@@ -1,39 +1,38 @@
-// probe-behaviour.ts — the shipped probe's behaviour/accessibility checks (group 12b: DT-60, DT-66, DT-76, DT-77, F-98,
-// F-110, F-115, F-116, F-117, F-122, axe). They run AFTER the measurement pass and the 12a drive, each unit on a fresh page
-// in a fresh browser context (as openReached, plus the write block below), on their own time budget (a battery unit: its
-// own share of it, L-4) — and they never change the fidelity verdict (D4):
+// probe-behaviour.ts — the shipped probe's behaviour/accessibility checks. They run AFTER the measurement pass and the drive,
+// each unit on a fresh page in a fresh browser context (as openReached, plus the write block below), on their own time budget
+// (a battery unit: its own share of it) — and they never change the fidelity verdict:
 // what they find goes to measured.behaviour, which verify-screen --compare copies into a second headline.
 //
 // Why: the verifier agents drove keyboard, focus and forced-colour checks by hand, differently every round (or not at all),
-// and focus that fell to <body> after closing a dialog opened from a hover-revealed row action (DT-60), a listbox whose
-// Escape also closed its dialog (DT-66), focus rings removed by a utility class (DT-76) and mask icons that vanish under
-// forced colours (DT-77) shipped as "verified". These are measurable; this module measures them the same way every run.
+// and focus that fell to <body> after closing a dialog opened from a hover-revealed row action, a listbox whose
+// Escape also closed its dialog, focus rings removed by a utility class and mask icons that vanish under
+// forced colours shipped as "verified". These are measurable; this module measures them the same way every run.
 //
 // Run shape (verify-probe.ts calls runBehaviour after driving the overlays):
-//   P1 (a11y): landmarks (ariaSnapshot), axe-core (when the PROJECT has it, D40(5)), one Tab walk from a focused sentinel →
+//   P1 (a11y): landmarks (ariaSnapshot), axe-core (when the PROJECT has it), one Tab walk from a focused sentinel →
 //      keyboard.reachable, keyboard.focus-visible, a11y.name.
 //   P2 (render): forced colours (mask icons), then design / 1024 / 320 widths by a live viewport change → layout.subpixel,
 //      overflow.mid, overflow.narrow.
-//   per battery row (a driven overlay whose 12a evidence opened a modal by a real mouse click, D40(1)):
+//   per battery row (a driven overlay whose drive evidence opened a modal by a real mouse click):
 //      R-key: keyboard.activation, dialog.focus-on-open, dialog.focus-trap, dialog.escape-closes, dialog.focus-return
-//      (escape, close), dialog.nested-escape — one Escape per open (facts-12b §8: a second Escape on the same open is not
+//      (escape, close), dialog.nested-escape — one Escape per open (a second Escape on the same open is not
 //      independent);
 //      R-scroll: dialog.scroll-open (y = 0 / 150 / max), dialog.scrim, dialog.click-outside.
 //   A unit the budget does not reach (or cuts) reports its checks `not-run: time budget` and sets behaviour.cut; a document
 //   load inside a unit makes its remaining checks `not-run: the page loaded a new document`; a unit whose page, once reached,
-//   shows materially other tagged elements than the measured page (an error / empty state) reports them all not-run (H-2).
+//   shows materially other tagged elements than the measured page (an error / empty state) reports them all not-run.
 //
-// Never destructive (D40(8)): nothing that submits is clicked (submitGuard), a dialog is closed only by Escape, a click
+// Never destructive: nothing that submits is clicked (submitGuard), a dialog is closed only by Escape, a click
 // outside it on a non-control point, or a visible control named Cancel / Close / Dismiss / No / Not now / × (safe close);
-// nothing is typed. The safety net under all of it is the write block (openWriteBlock / openUnitPage, D50): from a unit's first
+// nothing is typed. The safety net under all of it is the write block (openWriteBlock / openUnitPage): from a unit's first
 // key press / click / scroll / hover / resize on, no request but GET/HEAD/OPTIONS leaves the browser, no WebSocket message
-// leaves the page and no WebSocket opened then reaches the server; the checks the write is charged to (M-1) are not-run. A write
-// the page defers past the unit's end is never sent and never seen (WRITE_BLOCK_SCOPE). The 12a drive has no write block. The 12a afterOpen hook is NOT used: battery time inside driveRow's cut
-// timer could cut a 12a row and change interaction evidence, i.e. the verdict (D4).
+// leaves the page and no WebSocket opened then reaches the server; the checks the write is charged to are not-run. A write
+// the page defers past the unit's end is never sent and never seen (WRITE_BLOCK_SCOPE). The drive has no write block. The drive's afterOpen hook is NOT used: battery time inside driveRow's cut
+// timer could cut a drive row and change interaction evidence, i.e. the verdict.
 //
 // The page-side functions below are handed to page.evaluate, so — as in probe-page.ts / probe-drive.ts — each one is
 // SELF-CONTAINED (no outer reference; plain JSON in and out), typed by the module-local DOM declarations; the e2e test runs
-// the BUILT bundle in a real browser. Platform facts (Chromium 153 / Playwright 1.63, group 12b fact check "facts-12b"):
+// the BUILT bundle in a real browser. Platform facts (Chromium 153 / Playwright 1.63, verified):
 // a focused sentinel is required for a Tab walk (Chromium starts sequential focus at the last click) and the walk stops at the
 // sentinel OR body; :hover matching is unreliable (computed style only); ::backdrop is read only while :modal; clip
 // screenshots with animations:"disabled" are byte-stable; Chromium forces every background colour to Canvas under forced
@@ -57,9 +56,9 @@ interface BElement {
   children: ArrayLike<BElement>;
   childNodes: ArrayLike<BNode>;
   parentElement: BElement | null;
-  /** the slot a slotted element is shown in (the flat tree; D51's own-content check) */
+  /** the slot a slotted element is shown in (the flat tree, for the own-content check) */
   assignedSlot?: BElement | null;
-  /** review 7 L-1: an ancestor's scroll moves D51's start edge */
+  /** an ancestor's scroll moves the own-content check's start edge */
   scrollLeft?: number;
   scrollTop?: number;
   textContent: string | null;
@@ -100,16 +99,16 @@ interface BDocument {
 /** What the page-side functions keep between calls (window.__dtBeh): element references, never paths (a path shifts when
  *  the sentinel is inserted or the app re-renders). */
 interface BehState {
-  /** the modal root (for "inside": focus, tabbables, controls) and the element whose box IS the dialog on screen (M3: a
+  /** the modal root (for "inside": focus, tabbables, controls) and the element whose box IS the dialog on screen (a
    *  Headless UI root has a 0-px box — its panel is the box) */
   box?: BElement | null;
   stops: BElement[];
   stopVisible: boolean[];
   sentinel: BElement | null;
   opener: BElement | null;
-  /** L-3: the opener's own control (markOpener, D47) — the one element a key is pressed on, focused, or counted as reaching it */
+  /** the opener's own control (markOpener) — the one element a key is pressed on, focused, or counted as reaching it */
   control?: BElement | null;
-  /** D52: the container / sole-control pairs this page's pixel check already judged (own = the container shows content of its
+  /** the container / sole-control pairs this page's pixel check already judged (own = the container shows content of its
    *  own: the control is not the opener's) — each pair is shot once per unit page */
   ownSeen?: Array<{ box: BElement; ctl: BElement; own: boolean; why?: string | null }>;
   dialog: BElement | null;
@@ -120,7 +119,7 @@ interface BehState {
 }
 declare const document: BDocument;
 declare const window: { __dtBeh?: BehState; __dtDrive?: { before: BElement[]; roots?: BElement[] }; __dtOwn?: { box: BElement; ctl: BElement } | null;
-  /** D56: tipPreMark's set (probe-drive.ts) — what was shown before the probe acted on the page */
+  /** tipPreMark's set (probe-drive.ts) — what was shown before the probe acted on the page */
   __dtTipPre?: WeakSet<BElement> | null; scrollTo(opts: { top: number; left: number; behavior: string }): void };
 declare const scrollX: number;
 declare const scrollY: number;
@@ -130,24 +129,24 @@ declare function getComputedStyle(el: BElement, pseudo?: string | null): BStyle;
 declare function requestAnimationFrame(cb: () => void): number;
 
 // ---------------------------------------------------------------- pure helpers (unit-tested in test/verify-probe.test.ts)
-/** M7: what the probe may still need after the behaviour budget ends — a cut unit's settle (CUT_SETTLE_MS), the capped close
+/** what the probe may still need after the behaviour budget ends — a cut unit's settle (CUT_SETTLE_MS), the capped close
  *  of a wedged browser (two CLOSE_STEP_CAP_MS steps, then a SIGKILL after a `ps` capped at PS_CAP_MS) and writing the files
  *  (WRITE_MARGIN_MS) — all inside
- *  --max-time, so a measurement that finished is never lost to the watchdog (D4). */
+ *  --max-time, so a measurement that finished is never lost to the watchdog. */
 export const CUT_SETTLE_MS = 5_000, CLOSE_STEP_CAP_MS = 5_000, PS_CAP_MS = 3_000, WRITE_MARGIN_MS = 2_000;
 export const BEHAVIOUR_CAP_MS = 90_000, BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS + 2 * CLOSE_STEP_CAP_MS + PS_CAP_MS + WRITE_MARGIN_MS;
 /** The behaviour sub-budget: min(90 s, what is left of --max-time less the reserve for settling, closing and writing) — never < 0. */
 export function behaviourBudget(now: number, deadline: number, capMs = BEHAVIOUR_CAP_MS, reserveMs = BEHAVIOUR_RESERVE_MS): number {
   return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
 }
-/** L-4: a battery unit's own time: an even share of what is left (`unitsLeft` battery units, this one included), never less than
+/** a battery unit's own time: an even share of what is left (`unitsLeft` battery units, this one included), never less than
  *  15 s and never more than what is left — one page that freezes (a hang on Enter) cannot eat the rows after it. */
 export const UNIT_FLOOR_MS = 15_000;
 export function unitCap(leftMs: number, unitsLeft: number, floorMs = UNIT_FLOOR_MS): number {
   return Math.max(0, Math.min(leftMs, Math.max(floorMs, leftMs / Math.max(1, unitsLeft))));
 }
 
-/** The write block's scope (L-6), one line: measured.behaviour.writeBlock → report.behaviour.writeBlock and its md. */
+/** The write block's scope, one line: measured.behaviour.writeBlock → report.behaviour.writeBlock and its md. */
 export const WRITE_BLOCK_SCOPE = "per unit, from its first key press, click, scroll, hover or resize on, no request but GET/HEAD/OPTIONS leaves the browser " +
   "(the page, its frames, workers, shared workers and service workers alike), no WebSocket message leaves the page and a WebSocket the page " +
   "opens then never reaches the server — a blocked write makes every check of that unit from its first action on not-run; not blocked: " +
@@ -191,14 +190,14 @@ export const WRITE_BLOCK_SCOPE = "per unit, from its first key press, click, scr
   "it does not see a control in a closed shadow root or one that is only a click listener with no role (a bare svg onclick), and clicks those); not seen: a write the " +
   "page defers past the unit's end (an undo window over about 1 s) — it never leaves (the unit's context is closed first), but the check " +
   "that caused it is judged as if nothing was written and the scroll unit may press that key again";
-/** M-1: a unit's page stays open WRITE_SETTLE_MS after its last action, so a write deferred that long (an undo window) is still
- *  seen and charged; a later one never leaves — the context is closed first — and is never seen (review 4 M-1: a known miss,
+/** a unit's page stays open WRITE_SETTLE_MS after its last action, so a write deferred that long (an undo window) is still
+ *  seen and charged; a later one never leaves — the context is closed first — and is never seen (a known miss,
  *  stated in WRITE_BLOCK_SCOPE and the verify SKILL's Limits). */
 export const WRITE_SETTLE_MS = 500;
 /** What a unit did, in order: the checks it entered (seq increasing) and its actions (each in the check then in progress). */
 export interface UnitTrace { phases: Array<{ seq: number; keys: string[] }>; actions: Array<{ at: number; seq: number }> }
-/** M-1 / review 4 M-2: the phase keys ("id|variant") a blocked write taints — every check of the unit from its FIRST action on.
- *  A write is only blocked once the unit has acted (D50), and the action that caused it can be any of them: a commit deferred
+/** the phase keys ("id|variant") a blocked write taints — every check of the unit from its FIRST action on.
+ *  A write is only blocked once the unit has acted, and the action that caused it can be any of them: a commit deferred
  *  by an undo window lands while a later check runs, and how late is the page's choice (a unit is one opener's battery, so one
  *  more not-run row per write is the price of never leaving the cause judged). */
 export function taintedPhases(trace: UnitTrace): string[] {
@@ -206,11 +205,11 @@ export function taintedPhases(trace: UnitTrace): string[] {
   const from = first ? first.seq : 0;
   return [...new Set(trace.phases.filter((p) => p.seq >= from).flatMap((p) => p.keys))];
 }
-/** H-2 (D50): does a unit's page differ MATERIALLY from the measured one? Both sides are the data-dt-node ids on a visible
+/** does a unit's page differ MATERIALLY from the measured one? Both sides are the data-dt-node ids on a visible
  *  element with a box, outside closed dialogs, once the screen is reached and settled (verify-probe's pass, visibleTags here).
  *  Material: the unit's page shows none of the measured tags, or more than max(5, 20 % of every tag seen on either page) are on
  *  one side only — a handful of hover-only, animated or late nodes never trips it; an error, empty or signed-out screen
- *  does. Review 4 L-1: also material when a tag the unit is about to use (`uses`: a battery row's opener and destination) was
+ *  does. Also material when a tag the unit is about to use (`uses`: a battery row's opener and destination) was
  *  visible on the measured page and is not now — on a real-size screen an empty table or a missing row stays under the
  *  threshold, and its opener would be judged missing ("matched 0 element(s)"). null = the same page (or nothing measured to
  *  compare); else what differs, for the not-run reason. */
@@ -232,7 +231,7 @@ const LANDMARK_ROLES = new Set(["banner", "main", "navigation", "complementary",
 const unescapeQuoted = (s: string): string => s.replace(/\\(.)/g, "$1");
 
 /** Landmarks of a locator("body").ariaSnapshot() YAML, with the index of each one's nearest enclosing landmark (null at
- *  the top). Lenient (the format is unversioned, facts §1): a line is `<indent>- role "name"…`, depth = indent / 2; lines that
+ *  the top). Lenient (the format is unversioned): a line is `<indent>- role "name"…`, depth = indent / 2; lines that
  *  are not list items are skipped. null = unparseable (non-empty text with no list item at all). */
 export function parseAriaLandmarkTree(yaml: string): { landmarks: BehaviourLandmark[]; parent: Array<number | null> } | null {
   if (typeof yaml !== "string") return null;
@@ -262,7 +261,7 @@ export function parseAriaLandmarks(yaml: string): BehaviourLandmark[] | null {
   return t ? t.landmarks : null;
 }
 const lmName = (l: BehaviourLandmark): string => `${l.role}${l.name !== null ? ` "${l.name}"` : ""}`;
-/** a11y.landmarks rows (F-115): >1 main fail; 0 main, >6 regions, a nested region repeating its parent's name, duplicate
+/** a11y.landmarks rows: >1 main fail; 0 main, >6 regions, a nested region repeating its parent's name, duplicate
  *  role+name, >1 navigation with an unnamed one, an unnamed explicit [role=region] → warn; nothing → one pass row. */
 export function landmarkFindings(tree: { landmarks: BehaviourLandmark[]; parent: Array<number | null> } | null, unnamedRegions: string[] = []): BehaviourCheck[] {
   const id: BehaviourCheckId = "a11y.landmarks";
@@ -302,7 +301,7 @@ export function landmarkFindings(tree: { landmarks: BehaviourLandmark[]; parent:
   return rows;
 }
 
-/** The role and accessible name on the FIRST line of locator(el).ariaSnapshot() (facts-12b §3): `- button "Save"`,
+/** The role and accessible name on the FIRST line of locator(el).ariaSnapshot() `- button "Save"`,
  *  `- button` (no name), `- link "x":`, `- text: …` and "" (no role). Escaped quotes/backslashes are unescaped. */
 export function parseAriaName(snapshot: string): { role: string | null; name: string | null } {
   const line = (typeof snapshot === "string" ? snapshot.split("\n")[0] : "") ?? "";
@@ -313,10 +312,10 @@ export function parseAriaName(snapshot: string): { role: string | null; name: st
 }
 
 /** Roles whose accessible name is REQUIRED (ARIA 1.2 "name required" / interactive widgets): a stop with one of these and no
- *  name fails. Others (group, region, list, row, …) pass unnamed — their name is optional (M2). */
+ *  name fails. Others (group, region, list, row, …) pass unnamed — their name is optional. */
 const NAME_REQUIRED = new Set(["button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch", "slider", "spinbutton", "listbox",
   "menuitem", "menuitemcheckbox", "menuitemradio", "option", "tab", "treeitem", "img", "dialog", "alertdialog", "iframe", "tree", "grid", "menu", "tablist", "radiogroup", "scrollbar", "meter", "progressbar"]);
-/** a11y.name for one Tab stop (F-110, M2): its snapshot's first line, plus what the snapshot does not show — an iframe's name
+/** a11y.name for one Tab stop: its snapshot's first line, plus what the snapshot does not show — an iframe's name
  *  (title / aria-label / aria-labelledby, read from the DOM: `- iframe` never carries it) and a <summary>'s role (its line is
  *  `- text: …`; it is a disclosure named by its text). */
 export function nameStatus(snapshot: string, stop: { tag: string; domName: string | null }): { status: BehaviourStatus; role: string | null; name: string | null } {
@@ -361,7 +360,7 @@ export function parseColor(s: string | null | undefined): { r: number; g: number
   if (srgb) return { r: Math.round(Number(srgb[1]) * 255), g: Math.round(Number(srgb[2]) * 255), b: Math.round(Number(srgb[3]) * 255), a: alpha(srgb[4]) };
   return null;
 }
-/** dialog.scrim (F-117): the built scrim vs the overlay's designed background (null = no scrim). Channels ±8, alpha ±0.05;
+/** dialog.scrim: the built scrim vs the overlay's designed background (null = no scrim). Channels ±8, alpha ±0.05;
  *  a (near-)transparent colour is "no scrim" on either side. */
 export function scrimMatches(expected: string | null, actual: string | null): boolean {
   const e = expected === null ? null : parseColor(expected);
@@ -384,7 +383,7 @@ export function centredIn(rect: { x: number; y: number; w: number; h: number }, 
 export function overlayCentred(ov: { position: string; from: string } | undefined): boolean {
   return !!ov && (ov.from === "default" || String(ov.position).toLowerCase() === "center");
 }
-/** A control that closes a dialog without doing anything (D40(8)): its accessible name is Cancel / Close / Dismiss / No /
+/** A control that closes a dialog without doing anything: its accessible name is Cancel / Close / Dismiss / No /
  *  Not now / × / x / ✕, or its aria-label is a close label — "Close", or "Close … dialog/modal/panel/…" (tighter than "contains
  *  close": aria-label="Close account" is an action, never clicked). Never Save / Delete / Submit. */
 export function safeCloseName(name: string, ariaLabel: string | null): boolean {
@@ -392,7 +391,7 @@ export function safeCloseName(name: string, ariaLabel: string | null): boolean {
   const l = (ariaLabel ?? "").trim();
   return /^(close|dismiss)$/i.test(l) || /^(close|dismiss)\b.*\b(dialog|modal|panel|popup|pop-up|window|drawer|sheet|overlay|form)$/i.test(l);
 }
-/** D46: critical/serious → fail, moderate/minor only → warn, none → pass. */
+/** critical/serious → fail, moderate/minor only → warn, none → pass. */
 export function axeStatus(violations: ReadonlyArray<{ impact: string | null }>): BehaviourStatus {
   if (violations.some((v) => v.impact === "critical" || v.impact === "serious")) return "fail";
   return violations.length ? "warn" : "pass";
@@ -411,7 +410,7 @@ export interface FocusReturnRead {
   activeVisible: boolean;
   activeDesc: string;
 }
-/** dialog.focus-return (DT-60): back on a visible opener → pass; on it while it is invisible by opacity → warn; opener gone →
+/** dialog.focus-return: back on a visible opener → pass; on it while it is invisible by opacity → warn; opener gone →
  *  pass only when focus is on a visible non-body element; anything else (BODY, a hidden opener) → fail. */
 export function focusReturnStatus(r: FocusReturnRead): { status: BehaviourStatus; detail: string } {
   if (!r.connected) {
@@ -441,7 +440,7 @@ export function perElement(id: BehaviourCheckId, nonPass: BehaviourCheck[], pass
   return rows;
 }
 
-/** The overlay rows the battery runs on (D40(1)): drivable rows whose 12a evidence opened something by a REAL mouse click
+/** The overlay rows the battery runs on: drivable rows whose drive evidence opened something by a REAL mouse click
  *  without a document load; the rest get every dialog.* check not-run with the reason. The modality itself (:modal /
  *  dialog[open] / aria-modal) is checked on the page when the battery opens it again. */
 export function batteryRows(exp: Pick<VerifyExpectation, "interactions" | "hidden">, driven: readonly InteractionEvidence[] | null): { battery: VerifyInteraction[]; skipped: Array<{ row: VerifyInteraction; why: string }> } {
@@ -454,7 +453,7 @@ export function batteryRows(exp: Pick<VerifyExpectation, "interactions" | "hidde
     else if (ev.activation === "synthetic") why = "the opener opened only on a synthetic click (headless) — never used for the battery";
     else if (!ev.opened) why = `the drive opened nothing (${(ev.detail ?? "").replace(/^not-run: /, "") || "no detail"})`;
     else if ((ev.navEvents ?? 0) !== 0) why = "the drive saw a document load";
-    // M3: a destination-tag detection is NOT skipped — the tagged panel may sit inside a 0-px modal root (Headless UI); the
+    // a destination-tag detection is NOT skipped — the tagged panel may sit inside a 0-px modal root (Headless UI); the
     // battery's own modality check (markDialog, through ancestors) decides. A popover is never a modal dialog.
     else if (ev.detectedBy === ":popover-open") why = `the drive opened a popover, not a modal dialog — ${NOT_MODAL}`;
     if (why === null) battery.push(row); else skipped.push({ row, why });
@@ -465,7 +464,7 @@ const NOT_MODAL = "the battery runs only on a modal dialog (:modal / dialog[open
 export const DIALOG_IDS: readonly BehaviourCheckId[] = ["dialog.focus-on-open", "dialog.focus-trap", "dialog.escape-closes", "dialog.focus-return", "dialog.nested-escape", "dialog.scroll-open", "dialog.scrim", "dialog.click-outside"];
 
 // ---------------------------------------------------------------- page-side functions (SELF-CONTAINED)
-/** P1/R-key: insert a 1px focusable sentinel at the start of body and focus it (facts-12b §2: the sequential focus starting
+/** P1/R-key: insert a 1px focusable sentinel at the start of body and focus it (the sequential focus starting
  *  point must be known — after a click Chromium starts at the click point). SELF-CONTAINED. */
 export function sentinelInsert(_arg: null): boolean {
   const prev = window.__dtBeh;
@@ -491,10 +490,10 @@ export function sentinelRemove(_arg: null): boolean {
   return true;
 }
 /** After a Tab press: where focus is — the DEEP active element (through open shadow roots; an iframe is one stop: focus inside
- *  it leaves the iframe active). end = back on the sentinel, or on body after at least one stop (M1: a repeated element —
+ *  it leaves the iframe active). end = back on the sentinel, or on body after at least one stop (a repeated element —
  *  the fields of a date input, a shadow host, an iframe — is a duplicate, skipped, never a loop: the walk goes on to the cap).
- *  `opener` = it is the marked opener's control (markOpener); `ancestor` = it holds the opener (a focusable row/card, never pressed:
- *  H1). Otherwise the stop is recorded (element reference + visible while focused). SELF-CONTAINED. */
+ *  `opener` = it is the marked opener's control (markOpener); `ancestor` = it holds the opener (a focusable row/card, never pressed).
+ *  Otherwise the stop is recorded (element reference + visible while focused). SELF-CONTAINED. */
 export function walkStep(arg: { record: boolean }): { end: "sentinel" | "body" | null; opener: boolean; ancestor: string | null; inside: string | null; dup: boolean } {
   const st = window.__dtBeh;
   let a = document.activeElement;
@@ -503,7 +502,7 @@ export function walkStep(arg: { record: boolean }): { end: "sentinel" | "body" |
   if (a !== null && a === st.sentinel) return { end: "sentinel", opener: false, ancestor: null, inside: null, dup: false };
   if (a === null || a === document.body || a === document.documentElement) return st.stops.length ? { end: "body", opener: false, ancestor: null, inside: null, dup: false } : { end: null, opener: false, ancestor: null, inside: null, dup: true };
   const o = st.opener;
-  // L-3: "the opener" as a control is markOpener's (D47, computed once) — never another control inside a container opener,
+  // "the opener" as a control is markOpener's (computed once) — never another control inside a container opener,
   // never a row/card around it
   const ctrl = st.control && st.control.isConnected ? st.control : null;
   const descOf = (e: BElement): string => `<${e.tagName.toLowerCase()}${e.getAttribute("tabindex") !== null ? ` tabindex="${e.getAttribute("tabindex") ?? ""}"` : ""}${e.getAttribute("role") ? ` role="${e.getAttribute("role") ?? ""}"` : ""}${e.getAttribute("aria-label") ? ` aria-label="${e.getAttribute("aria-label") ?? ""}"` : ""}>`;
@@ -518,7 +517,7 @@ export function walkStep(arg: { record: boolean }): { end: "sentinel" | "body" |
   }
   return { end: null, opener, ancestor, inside, dup: false };
 }
-/** H1 (D40(8)): may Enter/Space be pressed now? Only when the DEEP active element IS the marked opener's control (markOpener, D47),
+/** may Enter/Space be pressed now? Only when the DEEP active element IS the marked opener's control (markOpener),
  *  and is a button-like control (button, a[href], summary, role=button|link|menuitem|tab) — never a text field (even readonly:
  *  Enter submits its form), a select, or an ancestor row/card. (The caller runs submitGuard on it too.) SELF-CONTAINED. */
 export function keyTarget(_arg: null): { ok: boolean; desc: string; why: string } {
@@ -529,7 +528,7 @@ export function keyTarget(_arg: null): { ok: boolean; desc: string; why: string 
   if (!a || a === document.body || a === document.documentElement) return { ok: false, desc: "<body>", why: "focus is on <body>" };
   const desc = `<${a.tagName.toLowerCase()}${a.getAttribute("type") ? ` type="${a.getAttribute("type") ?? ""}"` : ""}${a.hasAttribute("readonly") ? " readonly" : ""}${a.getAttribute("tabindex") !== null ? ` tabindex="${a.getAttribute("tabindex") ?? ""}"` : ""}${a.getAttribute("role") ? ` role="${a.getAttribute("role") ?? ""}"` : ""}>`;
   if (!o) return { ok: false, desc, why: "the opener is gone" };
-  // H-1/L-3: the opener's control as markOpener found it (D47) — re-checked to be still in the document
+  // the opener's control as markOpener found it — re-checked to be still in the document
   const ctrl = st && st.control && st.control.isConnected ? st.control : null;
   if (a !== ctrl) return { ok: false, desc, why: o.contains(a) ? "the opener is a container; its focusable child is not pressed" : a.contains(o) ? "an ancestor of the opener" : "not the opener" };
   const tag = a.tagName.toLowerCase();
@@ -565,7 +564,7 @@ export function stopsInfo(_arg: null): Array<{ path: string; dt: string | null; 
     }
     return `html > ${segs.join("")}`;
   };
-  // M2: an iframe's name is not in its aria snapshot (`- iframe`): read title / aria-label / aria-labelledby from the DOM
+  // an iframe's name is not in its aria snapshot (`- iframe`): read title / aria-label / aria-labelledby from the DOM
   const domName = (el: BElement): string | null => {
     const label = (el.getAttribute("aria-label") || "").trim();
     if (label) return label;
@@ -579,7 +578,7 @@ export function stopsInfo(_arg: null): Array<{ path: string; dt: string | null; 
 }
 export interface SubjectRead {
   id: string;
-  /** M5: inside a closed disclosure — an ancestor with display:none, a closed <details>, [hidden], or a region an
+  /** inside a closed disclosure — an ancestor with display:none, a closed <details>, [hidden], or a region an
    *  [aria-expanded=false] control names in aria-controls (its description), else null */
   closedIn: string | null;
   /** tagged elements outside a closed <dialog> (several → those with a layout box) */
@@ -588,14 +587,14 @@ export interface SubjectRead {
   disabled: boolean;
   /** index of the stop that reaches it (the element, its control — markOpener's — or its closest focusable ancestor), or -1 */
   stop: number;
-  /** L-3: when no stop reaches it, the first stop INSIDE it (a container's focusable that is not its control), described */
+  /** when no stop reaches it, the first stop INSIDE it (a container's focusable that is not its control), described */
   inside: string | null;
   visibility: string;
   tabindex: string | null;
   tag: string;
 }
 /** keyboard.reachable: one subject (a tagged opener, marked by markOpener just before) against the recorded stops. A stop
- *  inside a container opener reaches it only when it is the opener's control (L-3, D47) — a card's own Delete reaches the
+ *  inside a container opener reaches it only when it is the opener's control — a card's own Delete reaches the
  *  Delete, not the card. SELF-CONTAINED. */
 export function subjectRead(arg: { id: string }): SubjectRead {
   const st = window.__dtBeh;
@@ -690,7 +689,7 @@ export function unnamedRegions(_arg: null): string[] {
   }
   return out;
 }
-/** D42: visible td/th and elements with their own non-blank text, rendered under 1 px wide (and > 0 tall). SELF-CONTAINED. */
+/** visible td/th and elements with their own non-blank text, rendered under 1 px wide (and > 0 tall). SELF-CONTAINED. */
 export function subpixelRead(_arg: null): Array<{ path: string; dt: string | null; tag: string; width: number; text: string }> {
   const pathOf = (el: BElement): string => {
     const parts: string[] = [];
@@ -732,7 +731,7 @@ export function offendersAre2D(arg: { paths: string[] }): boolean {
     return !!el && el.closest("table, pre, figure, img, canvas, svg, video, [role=grid], [role=table]") !== null;
   });
 }
-/** H-2 (D50): the data-dt-node ids on a visible element with a box, outside closed dialogs — the same rule as the measurement
+/** the data-dt-node ids on a visible element with a box, outside closed dialogs — the same rule as the measurement
  *  pass's tagged candidates (box && checkVisibility, not in a closed <dialog>): the unit's page fingerprint. SELF-CONTAINED. */
 export function visibleTags(_arg: null): string[] {
   const out: string[] = [];
@@ -800,12 +799,12 @@ export interface OpenerRead {
   visible: boolean;
   /** the click point (viewport) and whether it is on screen and lands on the opener (or inside it) */
   x: number; y: number; inViewport: boolean; hits: boolean;
-  /** when not visible: the nearest visible ancestor's centre (the D16 reveal), viewport */
+  /** when not visible: the nearest visible ancestor's centre (the reveal), viewport */
   hover: { x: number; y: number; inViewport: boolean } | null;
-  /** D52: the control is a container's sole one the DOM check let through, not judged by pixels in this page yet — the pair is in
+  /** the control is a container's sole one the DOM check let through, not judged by pixels in this page yet — the pair is in
    *  window.__dtOwn for ownPixels (markOpenerSeen runs it, then ownDecide) */
   sole: boolean;
-  /** review 10 L-5: why a container's sole control is not the opener's own (its own content, by the DOM or the pixels), or null */
+  /** why a container's sole control is not the opener's own (its own content, by the DOM or the pixels), or null */
   why: string | null;
 }
 /** Find the opener by its tag (outside a closed dialog; several → the ones with a box), remember it and its control
@@ -832,59 +831,59 @@ export function markOpener(arg: { id: string }): OpenerRead {
   const x = r.x + r.width / 2, y = r.y + r.height / 2;
   const inViewport = x >= 0 && y >= 0 && x < vw && y < vh;
   const hit = inViewport ? document.elementFromPoint(x, y) : null;
-  // L-3 (H-1, D47 — computed ONCE, here; walkStep / keyTarget / focusOpener / subjectRead use it): the opener's own control —
+  // computed ONCE, here (walkStep / keyTarget / focusOpener / subjectRead use it): the opener's own control —
   // the tagged element when it is focusable; else the closest button-like ancestor of a non-focusable tag (a label inside its
   // <button>) holding no other focusable; else a container's ONLY focusable when it is button-like, not a field, and under the
   // container's centre — the point the mouse open clicks (elementFromPoint there when it is on screen, else that control's
-  // box holding it) — and (D51) the container shows nothing of its own outside it: a cell around its icon button (D52: by its DOM
-  // here, by its pixels in markOpenerSeen — the 12a drive's ownPixels — once per pair per page). Never another
+  // box holding it) — and the container shows nothing of its own outside it: a cell around its icon button (judged by its DOM
+  // here, by its pixels in markOpenerSeen — the drive's ownPixels — once per pair per page). Never another
   // control inside a container (a card's Delete off to the side, or a 2nd focusable, or a card with its own text around a
   // centred Delete), never a row/card around it.
   const FOC = "a[href], area[href], button, input, select, textarea, summary, iframe, [tabindex], [contenteditable]";
   const BTN = "button, a[href], summary, [role=button i], [role=link i], [role=menuitem i], [role=tab i]";
-  // D51 — the same check as clickPointControl's in probe-drive.ts (keep the two in step: test/verify-probe.test.ts runs both on the
+  // The same check as clickPointControl's in probe-drive.ts (keep the two in step: test/verify-probe.test.ts runs both on the
   // same fake DOMs, the e2e tests on real pages): what the container shows of its OWN outside its one control, walked through the
-  // flat tree (open shadow roots and their slots) with an explicit stack, each ancestor test memoised per element (review 6 L-1:
-  // an 8000-deep DOM is linear work, never a stack overflow). An element is SHOWN when the nearest box at or above it (a
+  // flat tree (open shadow roots and their slots) with an explicit stack, each ancestor test memoised per element (an 8000-deep DOM is linear work,
+  // never a stack overflow). An element is SHOWN when the nearest box at or above it (a
   // display:contents wrapper has none) passes checkVisibility with visibility and content-visibility (hidden, and auto while
   // skipped), it is not visibility:hidden itself, and no OUT-OF-FLOW box (position absolute / fixed) from that box up to the
   // container has opacity 0 — a hover tooltip or popover shows nothing; an in-flow opacity-0 box keeps its place and is about to
-  // show (a reveal-on-scroll or staggered entrance: the drive has just scrolled it in), so it counts (review 6 H-1). The
+  // show (a reveal-on-scroll or staggered entrance: the drive has just scrolled it in), so it counts. The
   // container's own opacity is the opener's visibility, judged before this. An AREA counts after the clipping on the element's
-  // containing-block chain up to the container (CSS 2.1 §11.1.1; review 6 H-3): each box's overflow on that axis — an absolute
+  // containing-block chain up to the container (CSS 2.1 §11.1.1): each box's overflow on that axis — an absolute
   // box skips the static ancestors that make no containing block, a fixed one every ancestor without a transform / translate /
   // rotate / scale / perspective / filter / backdrop-filter / preserve-3d / will-change of those / contain layout|paint|strict|
   // content / content-visibility auto|hidden — and, on every ancestor, a clip-path inset() and an absolute box's clip rect()
-  // (another clip-path shape is not read: what it covers counts), overflow:clip on both axes widened by its overflow-clip-margin
-  // (review 7 L-2); what lies past the document's top edge, or its left edge in a left-to-right document (an sr-only label at
-  // left:-9999px), is never on screen nor scrolled to (review 6 L-2) — that edge moved out by the scroll of the container and
-  // every box above it (review 7 L-1: an app shell's scroller reaches what lies above its top). SHOWN CONTENT:
+  // (another clip-path shape is not read: what it covers counts), overflow:clip on both axes widened by its overflow-clip-margin;
+  // what lies past the document's top edge, or its left edge in a left-to-right document (an sr-only label at
+  // left:-9999px), is never on screen nor scrolled to — that edge moved out by the scroll of the container and
+  // every box above it (an app shell's scroller reaches what lies above its top). SHOWN CONTENT:
   // a non-blank text node whose clipped Range rects cover more than 1 px² (an sr-only label — 1 × 1 px overflow:hidden, clip
   // rect(0,0,0,0), clip-path inset(50%), off the document's start edge — and whitespace show nothing); an img / svg / canvas /
-  // video / audio / picture / object / embed / iframe / input / progress / meter (review 8 H-1) with a clipped box over 1 px²; a list
-  // item's marker — a list-style type or image, or ::marker content (the container's own too: review 8 M-3); a ::before / ::after (not display:none, not
+  // video / audio / picture / object / embed / iframe / input / progress / meter with a clipped box over 1 px²; a list
+  // item's marker — a list-style type or image, or ::marker content (the container's own too); a ::before / ::after (not display:none, not
   // hidden, not an out-of-flow opacity 0) whose content is not none / normal and that paints — a non-blank string (an icon font's
   // glyph, a generated label), an image, counter or attr(), a background-image or mask-image under any content, "" included (a
   // CSS logo or icon), a background colour under a blank string, or under "" unless its element holds the control or lies over
   // the control's centre — with its element's clipped box over 1 px²; on a DESCENDANT with a clipped box over 1 px²: a
   // background-image (an avatar, a logo), a mask-image (a CSS-mask icon) unless it holds the control, a non-transparent
-  // background colour (a swatch, a status dot: D51's "other visible content") unless it holds the control or lies over the
+  // background colour (a swatch, a status dot: "other visible content") unless it holds the control or lies over the
   // control's centre (a filled wrapper, a hover tint: the cell's own chrome). The container's own background colour, a border in
-  // one colour (a 1-px divider on one side too) and padding are decoration, as is a clearfix's empty content — D54(a): its own
+  // one colour (a 1-px divider on one side too) and padding are decoration, as is a clearfix's empty content — its own
   // background image (a gradient, a url), border image, border sides in different colours or widths 2 px or more apart (a stripe)
-  // are content; D55 (review 10 M-3): so are its own inset box-shadow offset 2 px or more or blurred, sharp box-shadow rings in
+  // are content; so are its own inset box-shadow offset 2 px or more or blurred, sharp box-shadow rings in
   // more than one colour (its border's included), and its own paint under a mask or a clip-path other than a rounded inset(0).
-  // Review 9 L-1: a scroll container's ::scroll-button (focusable, pressed like a button) and a scroll-marker group
-  // are a second control: content. D54(b): a label laid over the container from outside its subtree (see the walk at the end).
+  // A scroll container's ::scroll-button (focusable, pressed like a button) and a scroll-marker group
+  // are a second control: content. A label laid over the container from outside its subtree (see the walk at the end).
   // Not seen: a closed shadow root, the inside of an iframe
-  // (the iframe itself counts). Bounded (review 7 L-4): past 20000 steps (elements walked, ancestor steps of the areas) it
-  // answers "content". null = nothing of its own as far as the DOM shows — D52: the caller's pixel check (probe-drive.ts
+  // (the iframe itself counts). Bounded: past 20000 steps (elements walked, ancestor steps of the areas) it
+  // answers "content". null = nothing of its own as far as the DOM shows — the caller's pixel check (probe-drive.ts
   // ownPixels) has the last word, content when EITHER says so; else what shows.
   const ownContent = (box: BElement, ctl: BElement): string | null => {
     const up = (n: BElement): BElement | null => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
     const css = (e: BElement, prop: string, pseudo: string | null = null): string => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
     const set = (e: BElement, prop: string, pseudo: string | null = null): boolean => { const v = css(e, prop, pseudo); return v !== "" && v !== "none"; };
-    // does `test` hold for the element or an ancestor below the container? memoised per element (review 6 L-1)
+    // does `test` hold for the element or an ancestor below the container? memoised per element
     const chain = (test: (p: BElement) => boolean): ((e: BElement | null) => boolean) => {
       const memo = new Map<BElement, boolean>();
       return (e: BElement | null): boolean => {
@@ -900,7 +899,7 @@ export function markOpener(arg: { id: string }): OpenerRead {
         return hit;
       };
     };
-    // review 7 L-4: bounded — every element walked and every ancestor step of an area counts; past OWN_WORK_CAP the check answers
+    // bounded — every element walked and every ancestor step of an area counts; past OWN_WORK_CAP the check answers
     // "content" (the control is not the opener's: the safe side) instead of spending seconds on a huge or deep container
     let work = 0;
     const OWN_WORK_CAP = 20_000;
@@ -919,7 +918,7 @@ export function markOpener(arg: { id: string }): OpenerRead {
       || /\b(layout|paint|strict|content)\b/.test(css(p, "contain")) || /^(auto|hidden)$/.test(css(p, "content-visibility"));
     const de = document.documentElement;
     const horizontal = !/^(vertical|sideways)/.test(css(de, "writing-mode"));
-    // review 7 L-1: the start edge moves out by the scroll of the container and every box above it — in an app shell (a fixed
+    // the start edge moves out by the scroll of the container and every box above it — in an app shell (a fixed
     // inset:0 scroller) what lies above the shell's top is reached by scrolling the shell, not the window
     let sx = scrollX, sy = scrollY;
     for (let p: BElement | null = box; p && p !== de; p = up(p)) { sx += Math.abs(p.scrollLeft || 0); sy += Math.abs(p.scrollTop || 0); }
@@ -937,7 +936,7 @@ export function markOpener(arg: { id: string }): OpenerRead {
         const skip = p !== e && (flow === "fixed" ? !holdsFixed(p) : flow === "absolute" && !/^(relative|absolute|fixed|sticky)$/.test(pos) && !holdsFixed(p));
         if (!skip) {
           const ox = css(p, "overflow-x"), oy = css(p, "overflow-y");
-          // review 7 L-2: overflow:clip on both axes paints overflow-clip-margin past the box (from the border box here: an upper bound)
+          // overflow:clip on both axes paints overflow-clip-margin past the box (from the border box here: an upper bound)
           const cm = ox === "clip" && oy === "clip" ? parseFloat(/(-?[\d.]+)px/.exec(css(p, "overflow-clip-margin"))?.[1] ?? "0") || 0 : 0;
           if (ox !== "visible") { x0 = Math.max(x0, pr.x - cm); x1 = Math.min(x1, pr.right + cm); }
           if (oy !== "visible") { y0 = Math.max(y0, pr.y - cm); y1 = Math.min(y1, pr.bottom + cm); }
@@ -963,7 +962,7 @@ export function markOpener(arg: { id: string }): OpenerRead {
     const area = (e: BElement, q: BRect): number => { const c = clipped(e, q); return c ? Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0) : Infinity; };
     const els: BElement[] = [];
     const texts: Array<{ t: BNode; e: BElement }> = [];
-    // review 6 L-1: an explicit stack, the same order as the recursion it replaces (an element, its text, its shadow root's
+    // an explicit stack, the same order as the recursion it replaces (an element, its text, its shadow root's
     // text and elements, then its light children)
     const todo: BElement[] = [box];
     for (let e = todo.pop(); e; e = todo.pop()) {
@@ -995,16 +994,16 @@ export function markOpener(arg: { id: string }): OpenerRead {
         const paints = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || (fill && (s !== "" || !chrome(host)));
         if (paints && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
       }
-      // review 8 M-3: a list item's marker (the container's own too) — a list-style type or image, or a ::marker content
+      // a list item's marker (the container's own too) — a list-style type or image, or a ::marker content
       if (/list-item/.test(css(e, "display")) && (!/^(none)?$/.test(css(e, "list-style-type")) || set(e, "list-style-image") || !/^(normal|none)?$/.test(css(e, "content", "::marker")))
         && area(e, e.getBoundingClientRect()) > 1) return "a list marker";
-      // review 9 L-1: a scroll container's ::scroll-button (generated when its content is set — focusable and pressed like a
+      // a scroll container's ::scroll-button (generated when its content is set — focusable and pressed like a
       // button: a second control) and a scroll-marker group (its markers are focusable too), the container's own included
       if ((!/^(visible|clip)$/.test(css(e, "overflow-x")) || !/^(visible|clip)$/.test(css(e, "overflow-y"))) && !/^(none|normal)?$/.test(css(e, "content", "::scroll-button(*)"))
         && area(e, e.getBoundingClientRect()) > 1) return "a scroll button";
       if (!/^(none)?$/.test(css(e, "scroll-marker-group")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll-marker group";
       if (e === box) {
-        // D54(a): the container's OWN paint is decoration only when plain — a background image (a gradient, a url: a progress fill),
+        // the container's OWN paint is decoration only when plain — a background image (a gradient, a url: a progress fill),
         // a border image, border sides in different colours or widths 2 px or more apart (a status stripe) are content; one colour
         // all round, or a 1-px divider on one side, stays decoration
         if (/\b(url|image|image-set|cross-fade|element|paint|[a-z-]*gradient)\(/i.test(css(e, "background-image"))) return "its own background image";
@@ -1014,10 +1013,10 @@ export function markOpener(arg: { id: string }): OpenerRead {
         if (new Set(painted.map((d) => d.c)).size > 1) return "its own border in more than one colour";
         const ws = sides.map((d) => (d.w > 0 && !clear(d.c) ? d.w : 0));
         if (painted.length > 0 && Math.max(...ws) - Math.min(...ws) >= 2) return "its own border stripe";
-        // D55 (review 10 M-3): its own box-shadow and mask paint too — an inset layer offset 2 px or more (a stripe, a progress
-        // fill) or blurred (an inner glow), sharp ring layers (blur 0) in more than one colour (D56: the ring layers only — not its
+        // its own box-shadow and mask paint too — an inset layer offset 2 px or more (a stripe, a progress
+        // fill) or blurred (an inner glow), sharp ring layers (blur 0) in more than one colour (the ring layers only — not its
         // border; a layer in its own background colour where that cannot show — an outer one (a ring-offset), or an inset one over
-        // its own opaque border-box / padding-box background (D57) — and a transparent one do not count), and a mask or a
+        // its own opaque border-box / padding-box background — and a transparent one do not count), and a mask or a
         // clip-path other than a rounded inset(0) over its own paint (a progress band) are content; one sharp ring colour (a
         // focus / hover ring, a ring-inset frame, a Tailwind ring-offset + ring) stays decoration, as a uniform border does
         const layers: Array<{ c: string; n: number[]; inset: boolean }> = [];
@@ -1053,17 +1052,17 @@ export function markOpener(arg: { id: string }): OpenerRead {
       range.selectNodeContents(t);
       for (const q of Array.from(range.getClientRects())) if (area(e, q) > 1) return `text "${text.slice(0, 40)}"`;
     }
-    // D54(b): a label laid over the container from OUTSIDE its subtree — a positioned sibling, an ancestor's ::before / ::after —
+    // a label laid over the container from OUTSIDE its subtree — a positioned sibling, an ancestor's ::before / ::after —
     // is its content too when it is in the page's flow or absolute (an element with a fixed or sticky box between it and the root
-    // that does not also hold the container — a toast, a banner, a sticky header — is foreign, D4). Read: text (its clipped Range
+    // that does not also hold the container — a toast, a banner, a sticky header — is foreign). Read: text (its clipped Range
     // rects; bare text in its open shadow root too), an img / svg / canvas / video / audio / picture / object / embed / iframe /
     // input / progress / meter, a background image, and a ::before / ::after that paints a label or an image (its box: the
     // element's, or for an absolute one its offsets in its containing block) — over the container when the part of it left after
     // clipping is over 1 px² and at least HALF of it lies inside the container's box, and it is not proven to lie under it
     // (proven: it is hit-testable — pointer-events not none — and at the middle of that overlap the container's subtree is hit
     // first, and the container's own background colour is opaque rgb() / rgba(…, 1) with no opacity below 1 or blend mode on it
-    // or above it). D55: never foreign content — the sole control's own tooltip ([role=tooltip], or what its aria-describedby
-    // names; a role-less one still counts), D56: only when the probe's hover revealed it (not shown before: tipPreMark), and a
+    // or above it). Never foreign content — the sole control's own tooltip ([role=tooltip], or what its aria-describedby
+    // names; a role-less one still counts), only when the probe's hover revealed it (not shown before: tipPreMark), and a
     // label at effective opacity 0. Not seen: an element whose box does not meet the
     // container's (a relative ::before shifted over it from a sibling lying elsewhere), an in-flow box under a parent that does not
     // meet it (text overflowing a 0-height wrapper). Bounded: past FOREIGN_CAP elements it answers "content".
@@ -1071,7 +1070,7 @@ export function markOpener(arg: { id: string }): OpenerRead {
     const anc = new Set<BElement>();
     for (let p = up(box); p; p = up(p)) anc.add(p);
     const bg = css(box, "background-color");
-    // review 10 M-4: "under it" is proven only when nothing of it shows through — its background opaque, and no opacity below 1
+    // "under it" is proven only when nothing of it shows through — its background opaque, and no opacity below 1
     // or blend mode on it or above it
     let opaque = /^rgb\(/.test(bg) || /^rgba\(.*,\s*1\)$/.test(bg);
     for (let p: BElement | null = box; p && opaque; p = up(p)) {
@@ -1090,22 +1089,22 @@ export function markOpener(arg: { id: string }): OpenerRead {
       return iF < 0 || iB < 0 || iF < iB;
     };
     const pinned = chain((p) => !anc.has(p) && /^(fixed|sticky)$/.test(css(p, "position")));
-    // D55 (review 10 H-2): the sole control's own tooltip — [role=tooltip] (MUI, Radix, Tippy, Bootstrap, Floating UI set it) or
-    // what its aria-describedby names, shown by the drive's hover — is never foreign content (its subtree is skipped). D56
-    // (review 11 H-1): only one the probe's hover revealed — not shown before the probe acted on the page (tipPreMark); a label
+    // the sole control's own tooltip — [role=tooltip] (MUI, Radix, Tippy, Bootstrap, Floating UI set it) or
+    // what its aria-describedby names, shown by the drive's hover — is never foreign content (its subtree is skipped).
+    // Only one the probe's hover revealed — not shown before the probe acted on the page (tipPreMark); a label
     // already on screen with role=tooltip, or that the control's aria-describedby names, is the card's own; no set, no exemption
     const tipIds = new Set((ctl.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean));
     const tipPre = window.__dtTipPre;
     const tip = (f: BElement): boolean => !!tipPre && !tipPre.has(f) && !anc.has(f) && ((f.getAttribute("role") ?? "").trim().split(/\s+/)[0]?.toLowerCase() === "tooltip" || tipIds.has(f.getAttribute("id") ?? ""));
-    // D55 (review 10 L-1): a foreign label at effective opacity 0 (itself or an ancestor) shows nothing — never foreign content
+    // a foreign label at effective opacity 0 (itself or an ancestor) shows nothing — never foreign content
     const gone = chain((p) => css(p, "opacity") === "0");
-    // review 10 M-1: bounded at 500000 elements (a 150000-element table: about 0.3 s per check) — past it, "content" (refused)
+    // bounded at 500000 elements (a 150000-element table: about 0.3 s per check) — past it, "content" (refused)
     const FOREIGN_CAP = 500_000;
     let walked = 0;
     // a box is measured only when its parent's box meets the container, it holds the container, or it is moved out of its
     // parent's flow (positioned or transformed) — an in-flow box under a parent that does not meet the container is taken not to
     // meet it either (nested inline boxes make every getBoundingClientRect walk all below it: 8000 of them cost seconds)
-    // (one computed style read per element: the walk visits every element of the page — review 10 M-2)
+    // (one computed style read per element: the walk visits every element of the page)
     const moved = (f: BElement): boolean => { const s = getComputedStyle(f); return s.getPropertyValue("position") !== "static" || ["transform", "translate", "rotate", "scale"].some((k) => { const v = s.getPropertyValue(k); return v !== "" && v !== "none"; }); };
     const ftodo: Array<{ f: BElement; near: boolean }> = [{ f: de, near: true }];
     for (let t = ftodo.pop(); t; t = ftodo.pop()) {
@@ -1120,7 +1119,7 @@ export function markOpener(arg: { id: string }): OpenerRead {
       if (sr) for (const k of Array.from(sr.children)) ftodo.push({ f: k, near });
       if (!fr || !near || pinned(f) || !shown(f) || gone(f)) continue;
       const events = css(f, "pointer-events");
-      // review 10 M-4: its text, and bare text in its open shadow root
+      // its text, and bare text in its open shadow root
       for (const t of [...Array.from(f.childNodes), ...(sr ? Array.from(sr.childNodes) : [])]) {
         const text = t.nodeType === 3 ? (t.nodeValue || "").trim() : "";
         if (!text) continue;
@@ -1166,12 +1165,12 @@ export function markOpener(arg: { id: string }): OpenerRead {
         const b = one.getBoundingClientRect();
         const own = (inViewport ? !!hit && (hit === one || one.contains(hit)) : x >= b.x && x <= b.right && y >= b.y && y <= b.bottom) ? ownContent(el, one) : undefined;
         if (own === null) {
-          // D52: the pixels have the last word (markOpenerSeen → ownPixels → ownDecide); a pair this page already judged is not
+          // the pixels have the last word (markOpenerSeen → ownPixels → ownDecide); a pair this page already judged is not
           // shot again
           const seen = (st.ownSeen ?? []).find((p) => p.box === el && p.ctl === one);
           if (seen) { control = seen.own ? null : one; why = seen.why ?? null; }
           else { control = one; sole = true; window.__dtOwn = { box: el, ctl: one }; }
-        } else if (own !== undefined) why = `its own content: ${own}`; // review 10 L-5
+        } else if (own !== undefined) why = `its own content: ${own}`;
       }
     }
   }
@@ -1189,7 +1188,7 @@ export function markOpener(arg: { id: string }): OpenerRead {
   }
   return { found: true, visible, x, y, inViewport, hits: !!hit && (hit === el || el.contains(hit)), hover, sole, why };
 }
-/** D52, after markOpener's sole control was judged by pixels (markOpenerSeen): remember the verdict for this page and drop the
+/** After markOpener's sole control was judged by pixels (markOpenerSeen): remember the verdict for this page and drop the
  *  control when the container shows content of its own (no key is pressed on it, Tab reaching it does not reach the opener).
  *  SELF-CONTAINED. */
 export function ownDecide(arg: { own: boolean; why?: string | null }): boolean {
@@ -1201,7 +1200,7 @@ export function ownDecide(arg: { own: boolean; why?: string | null }): boolean {
   if (arg.own) st.control = null;
   return true;
 }
-/** Focus the marked opener's control (markOpener: L-3, D47) without scrolling; false when it has none (or it left the
+/** Focus the marked opener's control (markOpener) without scrolling; false when it has none (or it left the
  *  document). SELF-CONTAINED. */
 export function focusOpener(arg: { preventScroll: boolean }): boolean {
   const st = window.__dtBeh;
@@ -1218,9 +1217,9 @@ export function markDialog(arg: { path: string }): DialogRead {
   const st = window.__dtBeh;
   const el = document.querySelector(arg.path);
   if (!st || !el) return { found: false, modal: false, dialogOpen: false, ariaModal: false, native: false };
-  // M3: the modal root may be an ANCESTOR of what opened (Headless UI: <div role=dialog aria-modal=true> with a 0-px box holding
-  // a fixed backdrop and the panel — 12a's detector sees the panel); the root decides modality and "inside", the panel is the box.
-  // M-3: only when the opened element has no dialog role of its own, and never an ancestor that was already open before the
+  // the modal root may be an ANCESTOR of what opened (Headless UI: <div role=dialog aria-modal=true> with a 0-px box holding
+  // a fixed backdrop and the panel — the drive's detector sees the panel); the root decides modality and "inside", the panel is the box.
+  // only when the opened element has no dialog role of its own, and never an ancestor that was already open before the
   // click (armDetector's snapshot — its visible dialog-likes, and every rendered open modal root whatever its box: Headless UI's
   // root is 0 px): a non-modal picker opened inside an open modal sheet is the picker — non-modal
   const before = window.__dtDrive ? [...window.__dtDrive.before, ...(window.__dtDrive.roots ?? [])] : [];
@@ -1245,7 +1244,7 @@ export function dialogOpenNow(_arg: null): boolean {
   const st = window.__dtBeh;
   const root = st ? st.dialog : null;
   if (!root || !root.isConnected) return false;
-  // M3: a 0-px modal root is open while its box (the panel) shows
+  // a 0-px modal root is open while its box (the panel) shows
   const el = st && st.box ? st.box : root;
   if (!el.isConnected || el.getClientRects().length === 0) return false;
   const r = el.getBoundingClientRect();
@@ -1284,7 +1283,7 @@ export function dialogTabbables(_arg: null): number {
   const d = st ? st.dialog : null;
   if (!d) return 0;
   const FOCUSABLE = "a[href], area[href], button, input, select, textarea, summary, iframe, [tabindex], [contenteditable]";
-  // L1: counts to 31 — more than 30 is "too many to prove a trap" (the caller reports not-run, never a pass)
+  // counts to 31 — more than 30 is "too many to prove a trap" (the caller reports not-run, never a pass)
   let n = 0;
   for (const el of Array.from(d.querySelectorAll(FOCUSABLE))) {
     if (n > 30) break;
@@ -1345,8 +1344,8 @@ export function closeCandidates(_arg: null): Array<{ path: string; name: string;
     return parts.join(" > ");
   };
   const out: Array<{ path: string; name: string; ariaLabel: string | null; button: boolean }> = [];
-  // M8: a button or [role=button] only — a link only when it goes nowhere (href "#", "" or javascript:): a router link
-  // navigates, which the probe never does (D40(8))
+  // a button or [role=button] only — a link only when it goes nowhere (href "#", "" or javascript:): a router link
+  // navigates, which the probe never does
   for (const el of Array.from(d.querySelectorAll("button, [role=button i], a[href]"))) {
     if (out.length >= 50) break;
     if (el.tagName.toLowerCase() === "a") {
@@ -1402,7 +1401,7 @@ export function dialogGeometry(arg: { destId: string | null }): { rect: { x: num
   }
   const de = document.documentElement;
   const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
-  // M6: the effective scroll — a position:fixed body/html (a scroll lock) keeps the page where it was at top:-y
+  // the effective scroll — a position:fixed body/html (a scroll lock) keeps the page where it was at top:-y
   let eff = scrollY;
   for (const e of [document.body, document.documentElement]) {
     if (!e || getComputedStyle(e).getPropertyValue("position") !== "fixed") continue;
@@ -1413,7 +1412,7 @@ export function dialogGeometry(arg: { destId: string | null }): { rect: { x: num
   const r = el.getBoundingClientRect();
   return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, vw, vh, position: getComputedStyle(st && st.box ? st.box : el).getPropertyValue("position"), scrollY: eff, via };
 }
-/** M6: the page's effective scroll — window.scrollY, or −top of a position:fixed body/html (a scroll lock). SELF-CONTAINED. */
+/** the page's effective scroll — window.scrollY, or −top of a position:fixed body/html (a scroll lock). SELF-CONTAINED. */
 export function effScroll(_arg: null): number {
   for (const e of [document.body, document.documentElement]) {
     if (!e || getComputedStyle(e).getPropertyValue("position") !== "fixed") continue;
@@ -1422,7 +1421,7 @@ export function effScroll(_arg: null): number {
   }
   return scrollY;
 }
-/** H2: wait until the remembered dialog has settled — every running animation on its subtree finished (Web Animations keep
+/** wait until the remembered dialog has settled — every running animation on its subtree finished (Web Animations keep
  *  running under the probe's CSS animation:none; cap 1 s), then its box unchanged over 2 consecutive frames (cap 1 s).
  *  SELF-CONTAINED. */
 export async function settleDialog(_arg: null): Promise<{ animations: number; stable: boolean }> {
@@ -1446,31 +1445,31 @@ export async function settleDialog(_arg: null): Promise<{ animations: number; st
   }
   return { animations: running.length, stable: false };
 }
-/** dialog.scrim / click-outside: the scrim colour (a native modal's ::backdrop — read only while :modal, facts §7 — else the
+/** dialog.scrim / click-outside: the scrim colour (a native modal's ::backdrop — read only while :modal — else the
  *  background of a fixed element covering the viewport at the point), and what a click at (x, y) would hit. SELF-CONTAINED. */
 export interface BackdropRead {
-  /** a native modal's ::backdrop colour (read only while :modal, facts §7) */
+  /** a native modal's ::backdrop colour (read only while :modal) */
   backdrop: string | null;
   /** the background colour of the scrim found (a fixed element covering ≥ 90% of the viewport) */
   cover: string | null;
-  /** M4: where a click outside lands on the backdrop itself (the native dialog, or the scrim with no control under it) —
+  /** where a click outside lands on the backdrop itself (the native dialog, or the scrim with no control under it) —
    *  the point furthest from the dialog's box; null: no such point ("no backdrop to click") */
   point: { x: number; y: number } | null;
   /** what the furthest candidate hit when no point qualified */
   hitDesc: string;
-  /** L-1: a covering layer's background whose alpha the probe cannot read (an unknown colour space) — then no point is taken
+  /** a covering layer's background whose alpha the probe cannot read (an unknown colour space) — then no point is taken
    *  and the scrim is not judged (never a guess) */
   unreadable: string | null;
 }
-/** dialog.scrim / click-outside (F-117, M4, M-2): the scrim colour and a SAFE point outside the dialog. Each candidate point's
+/** dialog.scrim / click-outside: the scrim colour and a SAFE point outside the dialog. Each candidate point's
  *  whole hit stack (document.elementsFromPoint — pointer-events:none layers are not in it) is read top down: near-transparent
  *  (alpha ≤ 0.05) LAYERS covering ≥ 90% of the viewport — fixed, or absolute inside a fixed container (a Headless UI centring
  *  wrapper, a CDK overlay wrapper) — are passed through; the first covering layer with a background (alpha > 0.05) is the scrim
  *  — or the native <dialog> itself is hit (its ::backdrop). The point is safe only when nothing above that is interactive (a,
  *  button, input, [role=button], [onclick], [tabindex], …) and every element above it is such a layer: page content that
- *  covers the viewport (a static app container, a transparent <body>), a toast, anything not layered makes it unsafe (M-2);
+ *  covers the viewport (a static app container, a transparent <body>), a toast, anything not layered makes it unsafe;
  *  never inside the dialog's box. Alpha is read from rgb()/rgba() and the `/ a` of oklab() / oklch() / lab() / lch() / color()
- *  (L-1: Tailwind v4's bg-black/0 computes to oklab(0 0 0 / 0)); another colour space is unreadable — no point, and the caller
+ *  (Tailwind v4's bg-black/0 computes to oklab(0 0 0 / 0)); another colour space is unreadable — no point, and the caller
  *  reports not-run. No such point: null ("no backdrop to click"). SELF-CONTAINED. */
 export function scrimRead(_arg: null): BackdropRead {
   const st = window.__dtBeh;
@@ -1500,7 +1499,7 @@ export function scrimRead(_arg: null): BackdropRead {
     for (let p = e.parentElement; p && p !== de; p = p.parentElement) if (getComputedStyle(p).getPropertyValue("position") === "fixed") return true;
     return false;
   };
-  // the computed background's alpha, or null when the probe cannot read it (never a guess, L-1)
+  // the computed background's alpha, or null when the probe cannot read it (never a guess)
   const alpha = (c: string): number | null => {
     const t = c.trim().toLowerCase();
     if (t === "transparent") return 0;
@@ -1528,7 +1527,7 @@ export function scrimRead(_arg: null): BackdropRead {
       if (native && e === d) { found = true; break; }
       if (box && (e === box || box.contains(e))) { safe = false; break; }
       if (e.matches(CONTROL) || e.closest(CONTROL) !== null) { safe = false; break; }
-      // M-2: only a covering LAYER is passed through or taken as the scrim — page content that happens to cover the viewport
+      // only a covering LAYER is passed through or taken as the scrim — page content that happens to cover the viewport
       // (a static app container, a transparent body) and a toast are never "outside the dialog"
       if (!covers(e) || !layered(e)) { safe = false; break; }
       const bg = getComputedStyle(e).getPropertyValue("background-color");
@@ -1545,7 +1544,7 @@ export function scrimRead(_arg: null): BackdropRead {
 // ---------------------------------------------------------------- running units on their own budget
 export interface BehaviourOptions {
   expectation: Pick<VerifyExpectation, "interactions" | "hidden">;
-  /** the 12a evidence (measured.interactions) — which rows opened a modal by a real click */
+  /** the drive's evidence (measured.interactions) — which rows opened a modal by a real click */
   driven: readonly InteractionEvidence[] | null;
   viewport: { w: number; h: number };
   timeout: number;
@@ -1553,9 +1552,9 @@ export interface BehaviourOptions {
   /** goto → settle → steps → settle(--ready) on a fresh page (the measurement pass's reach) */
   reach(page: Page): Promise<void>;
   budgetMs: number;
-  /** H-2: the measurement pass's visible tags (its fingerprint) — a unit whose page differs materially is not-run; absent = no check */
+  /** the measurement pass's visible tags (its fingerprint) — a unit whose page differs materially is not-run; absent = no check */
   measuredTags?: readonly string[];
-  /** the PROJECT's axe-core (D40(5)), or why there is none */
+  /** the PROJECT's axe-core, or why there is none */
   axe: { source: string; version: string } | { why: string };
   /** where verify-probe writes the forced-colours screenshot (listed in behaviour.artifacts when one is taken) */
   forcedPng: string;
@@ -1575,12 +1574,12 @@ const AXE_TIMED_OUT = Symbol("axe timed out");
 class BatteryStop extends Error {}
 const raf2 = (page: Page): Promise<unknown> => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 const park = async (page: Page): Promise<void> => { await page.mouse.move(0, 0); await raf2(page); };
-/** D52 (D47-wide): markOpener, then — when it took a container's sole control that this page has not judged yet — the SAME
- *  pixel check as the 12a drive's (probe-drive.ts ownPixels): content of the container's own drops the control (no key is
+/** markOpener, then — when it took a container's sole control that this page has not judged yet — the SAME
+ *  pixel check as the drive's (probe-drive.ts ownPixels): content of the container's own drops the control (no key is
  *  pressed on it). The pointer stays where it is (a hover-revealed opener stays revealed); the check may scroll the container
  *  into view and back, so `act` (the unit's first action arms the write block) runs before it. An error refuses. */
 async function markOpenerSeen(page: Page, id: string, act: () => void): Promise<OpenerRead> {
-  // D56: the unit runner took it before the unit's first action; again only after a reload (what is shown then counts as before)
+  // the unit runner took it before the unit's first action; again only after a reload (what is shown then counts as before)
   await page.evaluate(tipPreMark, null).catch(() => false);
   const r = await page.evaluate(markOpener, { id });
   if (!r.sole) return r;
@@ -1591,8 +1590,8 @@ async function markOpenerSeen(page: Page, id: string, act: () => void): Promise<
   await page.evaluate(ownDecide, { own, why });
   return { ...r, why };
 }
-/** Close the open dialog with its SAFE close control (D40(8): a button / [role=button] named Cancel, Close, ×…, never a
- *  navigating link (M8), never a submit) — by a mouse click (H-2: an Enter on it would also fire a dialog's own "Enter =
+/** Close the open dialog with its SAFE close control (a button / [role=button] named Cancel, Close, ×…, never a
+ *  navigating link, never a submit) — by a mouse click (an Enter on it would also fire a dialog's own "Enter =
  *  confirm" handler; known miss: an opener revealed only on its own :focus-visible then reads as invisible after this close).
  *  A close that changed the URL is reported as navigated, never as closed. */
 async function safeCloseOn(page: Page, closedAfter: () => Promise<boolean>, act: () => void): Promise<{ closed: boolean; name: string; why: string }> {
@@ -1610,7 +1609,7 @@ async function safeCloseOn(page: Page, closedAfter: () => Promise<boolean>, act:
   }
   return { closed: false, name: "", why: "no visible Cancel / Close / Dismiss / No / Not now / × button in the dialog (the probe never clicks Save, Delete, a submit or a link)" };
 }
-/** H1 (D40(8)): press Enter/Space on the opener — only when focus is the opener's control (keyTarget, markOpener's) and that
+/** press Enter/Space on the opener — only when focus is the opener's control (keyTarget, markOpener's) and that
  *  control would not submit a form (submitGuard). Returns why it was NOT pressed, or null when pressed. */
 async function pressOnOpener(page: Page, key: "Enter" | " ", act: () => void): Promise<string | null> {
   const k = await page.evaluate(keyTarget, null);
@@ -1624,11 +1623,11 @@ async function pressOnOpener(page: Page, key: "Enter" | " ", act: () => void): P
   return null;
 }
 
-// ---------------------------------------------------------------- the write block (D40(8) safety net)
+// ---------------------------------------------------------------- the write block (the safety net)
 /** A write the page tried during a behaviour unit: method ("WebSocket" for a message), origin + path (no query), and the checks
  *  it is charged to (taintedPhases); `more`: the attempts after the unit's first TRIED_CAP that were blocked but not kept. */
 export interface BlockedWrite { method: string; url: string; phases: string[]; more?: number }
-/** Review 5 L-1: a unit keeps its first TRIED_CAP write attempts and counts the rest (a page that reopens its WebSocket on every
+/** A unit keeps its first TRIED_CAP write attempts and counts the rest (a page that reopens its WebSocket on every
  *  close tries again at once, without end) — and from then on leaves a new WebSocket unclosed (never connected to the server
  *  either), so such a page stops looping. */
 export const TRIED_CAP = 20;
@@ -1646,7 +1645,7 @@ export function blockedOf(log: TriedLog, phases: string[]): BlockedWrite[] {
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /** The phase key of a row: its id, and its variant when it has one. */
 const phaseOf = (c: Pick<BehaviourCheck, "id" | "variant">): string => `${c.id}|${c.variant ?? ""}`;
-/** A check charged with a write the page tried is never judged (D40(8)): pass and fail both become not-run, naming the write.
+/** A check charged with a write the page tried is never judged: pass and fail both become not-run, naming the write.
  *  A write charged to a variant-less phase of the same id counts for every variant of it. */
 export function judgeWrites(rows: BehaviourCheck[], blocked: readonly BlockedWrite[]): BehaviourCheck[] {
   return rows.map((c) => {
@@ -1658,21 +1657,21 @@ export function judgeWrites(rows: BehaviourCheck[], blocked: readonly BlockedWri
       evidence: { ...(c.evidence ?? {}), blockedWrites: hits.slice(0, 5).map((b) => ({ method: b.method, url: b.url })), was: c.status } };
   });
 }
-/** The unit the write block reports to: whether it has acted yet (D50: nothing is blocked before), and where a blocked write goes
- *  (false: the unit's log is full — review 5 L-1). */
+/** The unit the write block reports to: whether it has acted yet (nothing is blocked before), and where a blocked write goes
+ *  (false: the unit's log is full). */
 interface UnitNet { armed: boolean; write(method: string, url: string): boolean }
 const originPath = (url: string): string => { try { const u = new URL(url); return `${u.origin}${u.pathname}`; } catch { return url; } };
 /**
- * H-1: the write block, browser-wide — one CDP session on the BROWSER target with Fetch.enable for every URL at the request stage
+ * the write block, browser-wide — one CDP session on the BROWSER target with Fetch.enable for every URL at the request stage
  * (https://chromedevtools.github.io/devtools-protocol/tot/Fetch/#method-enable; Playwright's Browser.newBrowserCDPSession). It
  * sees what a context's route never does: a SharedWorker's requests, and a service worker's — also one registered through
  * ServiceWorkerContainer.prototype.register, which Playwright's serviceWorkers:"block" (an init script replacing the instance's
  * register) lets through. Verified (Chromium 153, Playwright 1.63): fetch / XHR / sendBeacon / keepalive / PUT / DELETE /
  * PATCH / a custom method / form POSTs (self, _blank, an iframe target) / <a ping> / a popup / dedicated, blob and shared
  * workers / same- and cross-origin iframes / a service worker's install, message and pass-through fetches — none reaches the
- * server; GETs go on. So service workers are NOT blocked any more (an MSW-style app renders as measured, H-2). Every request
- * not GET/HEAD/OPTIONS is failed (BlockedByClient) and reported once the unit has acted; before (its load and --steps, D50) it
- * goes on. Opened only after the measurement pass and the 12a drive (verify-probe runs them first; none of their contexts is
+ * server; GETs go on. Service workers are NOT blocked (an MSW-style app renders as measured). Every request
+ * not GET/HEAD/OPTIONS is failed (BlockedByClient) and reported once the unit has acted; before (its load and --steps) it
+ * goes on. Opened only after the measurement pass and the drive (verify-probe runs them first; none of their contexts is
  * open then), and detached when the units end — on a cut or a throw too (runBehaviour's finally).
  */
 async function openWriteBlock(browser: Browser): Promise<{ unit(n: UnitNet | null): void; close(): void }> {
@@ -1698,8 +1697,8 @@ async function openWriteBlock(browser: Browser): Promise<{ unit(n: UnitNet | nul
  * through Playwright's routeWebSocket (https://playwright.dev/docs/api/class-browsercontext#browser-context-route-web-socket:
  * "only WebSockets created after this method was called will be routed" — it is set before the page exists): server → page
  * messages always pass; page → server ones pass until the unit acts, then each is dropped and reported as a write (verified:
- * the server gets none, the page still receives); a socket opened once the unit has acted never reaches the server (review 4
- * M-3: reported as a write, closed). Known miss: a WebSocket opened inside a worker is not routed. `failed`:
+ * the server gets none, the page still receives); a socket opened once the unit has acted never reaches the server
+ * (reported as a write, closed). Known miss: a WebSocket opened inside a worker is not routed. `failed`:
  * the requests that failed while the screen was reached (named when the page differs from the measured one).
  */
 async function openUnitPage(browser: Browser, o: Pick<BehaviourOptions, "viewport" | "timeout" | "initScript" | "reach">, onContext: (c: BrowserContext) => void,
@@ -1711,11 +1710,11 @@ async function openUnitPage(browser: Browser, o: Pick<BehaviourOptions, "viewpor
   try {
     await context.routeWebSocket(/.*/, (ws) => {
       const url = originPath(ws.url());
-      // review 4 M-3: a socket the page opens once the unit has acted is never connected — its handshake (a URL like
+      // a socket the page opens once the unit has acted is never connected — its handshake (a URL like
       // ?op=delete) is itself the action's side effect. A route that does not call connectToServer is a mock with no server
       // (https://playwright.dev/docs/api/class-websocketroute: "By default, routed WebSocket does not connect to the server");
       // it is reported as a write and closed (its messages, if any, are recorded too)
-      // review 5 L-1: once the unit's log is full the socket is left open as an unconnected mock (not closed), so a page that
+      // once the unit's log is full the socket is left open as an unconnected mock (not closed), so a page that
       // reopens on close stops looping
       if (net.armed) {
         const kept = net.write("WebSocket", url);
@@ -1744,16 +1743,16 @@ type Declared = Pick<BehaviourCheck, "id" | "nodeId" | "trigger" | "variant">;
 interface UnitApi {
   page: Page;
   add(c: BehaviourCheck): void;
-  /** the check(s) now in progress ("id" or "id|variant") — M-1: a blocked write is charged to every check from the unit's first
+  /** the check(s) now in progress ("id" or "id|variant") — a blocked write is charged to every check from the unit's first
    *  action on (taintedPhases) */
   phase(...keys: string[]): void;
-  /** a key press / click / scroll / hover / resize is about to happen: from the first one on the unit's page cannot write (D50) */
+  /** a key press / click / scroll / hover / resize is about to happen: from the first one on the unit's page cannot write */
   act(): void;
   /** throws when a document loaded since the screen was reached */
   guard(): void;
 }
-/** `battery`: a battery unit — its own share of the budget (L-4); `uses`: the tags it acts on (its row's opener and destination) —
- *  one shown on the measured page and missing from the unit's makes the unit not-run (review 4 L-1) */
+/** `battery`: a battery unit — its own share of the budget; `uses`: the tags it acts on (its row's opener and destination) —
+ *  one shown on the measured page and missing from the unit's makes the unit not-run */
 interface Unit { name: string; declared: Declared[]; battery?: boolean; uses?: string[]; run(u: UnitApi): Promise<void> }
 
 /** a produced row answers a declared check: same id, and the same row / variant where the declaration names one */
@@ -1800,9 +1799,9 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
   let forced: Buffer | null = null;
   /** keyboard.activation per battery row (R-scroll opens by keyboard only when it passed) */
   const keyOpens = new Map<string, "Enter" | " " | null>();
-  /** rows whose opened element R-key found not modal: R-scroll does not run on them (D40(1)) */
+  /** rows whose opened element R-key found not modal: R-scroll does not run on them */
   const nonModal = new Set<string>();
-  /** L-4: battery units not yet run (each gets unitCap of what is left) */
+  /** battery units not yet run (each gets unitCap of what is left) */
   let batteryLeft = 0;
 
   const runUnit = async (unit: Unit): Promise<void> => {
@@ -1820,7 +1819,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
     const held: { ctx?: BrowserContext } = {};
     let loadsAt = 0;
     let loadsNow: () => number = () => 0;
-    // D50 + M-1: what the unit did, and the writes the block stopped (charged to checks once the unit is over)
+    // what the unit did, and the writes the block stopped (charged to checks once the unit is over)
     const trace: UnitTrace = { phases: [{ seq: 0, keys: ["reach|"] }], actions: [] };
     const tried: TriedLog = { list: [], more: 0 };
     const net: UnitNet = { armed: false, write: (method, url) => {
@@ -1848,17 +1847,17 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       }
       try {
         loadsAt = reached.loads(); loadsNow = reached.loads;
-        // H-2 (D50): the screen this unit reached must be the measured one — never judge an error / empty state instead
+        // the screen this unit reached must be the measured one — never judge an error / empty state instead
         if (o.measuredTags && o.measuredTags.length) {
           const diff = fingerprintDiff(o.measuredTags, await reached.page.evaluate(visibleTags, null), unit.uses);
           if (diff !== null) throw new BatteryStop(`the page reached for this check differs from the measured page (${diff}${reached.failed.length ? `; failed while loading: ${reached.failed.slice(0, 3).join(", ")}` : ""})`);
         }
-        // D56 (review 11 H-1): what is on screen before the unit's first action — a tooltip shown before it is not the control's
+        // what is on screen before the unit's first action — a tooltip shown before it is not the control's
         await reached.page.evaluate(tipPreMark, null).catch(() => false);
         await unit.run(api(reached.page));
         return null;
       } finally {
-        // M-1: a write deferred a little after the unit's last action (an undo window) is still seen and charged — bounded by
+        // a write deferred a little after the unit's last action (an undo window) is still seen and charged — bounded by
         // the unit's own time
         const last = trace.actions.at(-1);
         const wait = last ? Math.min(WRITE_SETTLE_MS - (Date.now() - last.at), unitEnd - Date.now()) : 0;
@@ -1908,13 +1907,13 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       landmarks = tree ? tree.landmarks : null;
       for (const c of landmarkFindings(tree, tree ? await page.evaluate(unnamedRegions, null) : [])) u.add(c);
       u.guard();
-      // axe (D40(5), D46)
+      // axe
       u.phase("a11y.axe");
       if ("why" in o.axe) u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${o.axe.why}` });
       else {
         try {
           await page.evaluate(o.axe.source);
-          // L8: its own bound — min(20 s, what is left of the budget): a huge DOM or an app's own axe run must not take the unit
+          // its own bound — min(20 s, what is left of the budget): a huge DOM or an app's own axe run must not take the unit
           const axeCap = Math.max(1000, Math.min(AXE_CAP_MS, end - Date.now()));
           const res: unknown = await Promise.race([page.evaluate(`(async () => { const r = await axe.run(document, { resultTypes: ["violations"], iframes: false }); return { version: axe.version, violations: r.violations.map((v) => ({ id: v.id, impact: v.impact == null ? null : String(v.impact), nodes: v.nodes.length, help: v.help, targets: v.nodes.slice(0, 3).map((n) => Array.isArray(n.target) ? n.target.map(String).join(" ") : String(n.target)) })) }; })()`),
             sleep(axeCap, AXE_TIMED_OUT, { ref: false })]);
@@ -1933,8 +1932,8 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         }
       }
       u.guard();
-      // the Tab walk from a focused sentinel (facts-12b §2): it ends back on the sentinel, on body after a stop, or at 150 Tab
-      // presses (M1: a repeated element — a date input's fields, a shadow host, an iframe's content — is skipped, never a loop)
+      // the Tab walk from a focused sentinel: it ends back on the sentinel, on body after a stop, or at 150 Tab
+      // presses (a repeated element — a date input's fields, a shadow host, an iframe's content — is skipped, never a loop)
       await park(page);
       u.phase("keyboard.reachable", "keyboard.focus-visible", "a11y.name");
       await page.evaluate(sentinelInsert, null);
@@ -1949,7 +1948,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       const { n: nStops, visible: stopVisible } = await page.evaluate(stopsCount, null);
       const visibleAt = (i: number): boolean => stopVisible[i] === true;
       // keyboard.reachable
-      // L-3: each subject marked (markOpener: its control, D47) and read against the recorded stops
+      // each subject marked (markOpener: its control) and read against the recorded stops
       const subs: Array<SubjectRead & { why: string | null }> = [];
       for (const id of subjectIds) { const mo = await markOpenerSeen(page, id, u.act); subs.push({ ...(await page.evaluate(subjectRead, { id })), why: mo.why }); }
       const reachRows: BehaviourCheck[] = [];
@@ -1963,7 +1962,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         if (s.stop < 0) {
           if (s.closedIn !== null) { reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: `not-run: inside a closed container (${s.closedIn}) — reachable once it is opened`, evidence: ev }); continue; }
           if (walkEnd === "cap") { reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: `not-run: the Tab walk stopped at ${WALK_CAP} Tab presses (${nStops} stops) before reaching it`, evidence: ev }); continue; }
-          // L-3 (D47): Tab reaches a control INSIDE a container opener that is not the opener's own control (a card's Delete,
+          // Tab reaches a control INSIDE a container opener that is not the opener's own control (a card's Delete,
           // one of two buttons in a cell) — that control is reached, the opener is not known to be (never a fail on a guess)
           if (s.inside !== null) { reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: `not-run: the opener is a container; Tab reaches ${s.inside} inside it, which is not the opener's own control${s.why !== null ? ` — ${s.why}` : ""} (keyboard.activation reports it)`, evidence: ev }); continue; }
           reachRows.push({ id: "keyboard.reachable", status: "fail", nodeId: s.id, detail: `not reached by Tab (computed visibility ${s.visibility || "?"}, tabindex ${s.tabindex ?? "none"}, <${s.tag}>) — a keyboard user cannot reach this control; hover-only actions must stay focusable (opacity + :focus-within, never visibility:hidden), and a clickable non-button needs tabindex="0" or a <button>`, evidence: ev });
@@ -1974,7 +1973,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       }
       for (const c of perElement("keyboard.reachable", reachRows, reachedOk, reachTotal, "interactive element(s) reached by Tab and visible while focused")) u.add(c);
       if (reachTotal === 0) u.add({ id: "keyboard.reachable", status: "not-run", detail: "not-run: the expectation lists no click/press interaction tagged exactly once on the screen" });
-      // keyboard.focus-visible (DT-76): the first 60 stops
+      // keyboard.focus-visible: the first 60 stops
       const fvRows: BehaviourCheck[] = [];
       let fvOk = 0;
       const fvN = Math.min(nStops, 60);
@@ -1988,7 +1987,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         await page.keyboard.press("Tab");
         await raf2(page);
         let f = await page.evaluate(focusedStop, { i });
-        // M1: a stop Tab moves INSIDE (a date input's fields, an iframe's content) keeps focus: Tab on until it leaves (≤ 10)
+        // a stop Tab moves INSIDE (a date input's fields, an iframe's content) keeps focus: Tab on until it leaves (≤ 10)
         for (let k = 0; k < 10 && !f.ok && f.onPrev; k++) { u.act(); await page.keyboard.press("Tab"); await raf2(page); f = await page.evaluate(focusedStop, { i }); }
         if (!f.ok) { fvRes.push({ i, status: "not-run", detail: "not-run: a Tab from the previous stop did not land on it again" }); continue; }
         if (!f.visible) { fvRes.push({ i, status: "not-run", detail: "not-run: invisible while focused (keyboard.reachable reports it when it is an interaction)" }); continue; }
@@ -2015,7 +2014,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       if (nStops > 60) fvRows.push({ id: "keyboard.focus-visible", status: "not-run", detail: `not-run: ${nStops - 60} Tab stop(s) after the first 60`, evidence: { count: nStops - 60 } });
       for (const c of perElement("keyboard.focus-visible", fvRows, fvOk, fvN, "Tab stop(s) show a visible focus indicator")) u.add(c);
       if (nStops === 0) u.add({ id: "keyboard.focus-visible", status: "not-run", detail: "not-run: Tab reached no focusable element" });
-      // a11y.name (F-110): the first line of each stop's aria snapshot
+      // a11y.name: the first line of each stop's aria snapshot
       u.phase("a11y.name");
       const nameRows: BehaviourCheck[] = [];
       let nameOk = 0;
@@ -2049,7 +2048,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
     run: async (u) => {
       const { page } = u;
       await park(page);
-      // forced-colors.visible (DT-77)
+      // forced-colors.visible
       u.phase("forced-colors.visible");
       if ((o.browserName ?? "chromium") !== "chromium") u.add({ id: "forced-colors.visible", status: "unsupported", detail: "forced colours are emulated in Chromium only" });
       else {
@@ -2118,7 +2117,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         await raf2(page);
         const t = Date.now();
         let last = "", stable = 0;
-        // facts-12b §9: poll until the size is unchanged twice 100 ms apart (min 300 ms, max 1.5 s)
+        // poll until the size is unchanged twice 100 ms apart (min 300 ms, max 1.5 s)
         for (;;) {
           await sleep(100);
           const s = await page.evaluate(docSize, null);
@@ -2153,7 +2152,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
     },
   });
 
-  // ---- the battery (D40(1)): overlay rows opened as a modal by a real click in 12a
+  // ---- the battery: overlay rows opened as a modal by a real click in the drive
   const { battery, skipped } = batteryRows(exp, o.driven);
   for (const { row, why } of skipped) for (const id of DIALOG_IDS) checks.push({ id, status: "not-run", nodeId: row.nodeId, trigger: row.trigger, detail: `not-run: ${why}` });
   batteryLeft = battery.length * 2;
@@ -2181,13 +2180,13 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
             await sleep(100);
           }
         };
-        /** null opened + blocked: the key was never pressed (H1) */
+        /** null opened + blocked: the key was never pressed */
         const keyOpen = async (key: "Enter" | " "): Promise<{ opened: DetectorRead["opened"]; blocked: string | null }> => {
           await page.evaluate(armDetector, { destId, contract });
           const blocked = await pressOnOpener(page, key, u.act);
           return blocked !== null ? { opened: null, blocked } : { opened: await detect(), blocked: null };
         };
-        /** the 12a mouse path: reveal a hover-hidden opener (pointer parked, hover its nearest visible ancestor), real click */
+        /** the drive's mouse path: reveal a hover-hidden opener (pointer parked, hover its nearest visible ancestor), real click */
         const mouseOpen = async (): Promise<{ opened: DetectorRead["opened"]; why?: string }> => {
           let st = await page.evaluate(openerState, { id: row.nodeId });
           if (st.count !== 1 || st.path === null) return { opened: null, why: `the opener matched ${st.count} element(s)` };
@@ -2240,7 +2239,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
             if (opened) via = "Enter";
             else {
               u.guard();
-              // nothing opened (detect waited 2 s): Space only on the opener again (H1 re-checks where focus is)
+              // nothing opened (detect waited 2 s): Space only on the opener again (keyTarget re-checks where focus is)
               const e2 = await keyOpen(" ");
               spaceBlocked = e2.blocked;
               opened = e2.opened;
@@ -2341,7 +2340,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
           closeDone = true;
         }
         u.guard();
-        // dialog.nested-escape on its own open (facts-12b §8)
+        // dialog.nested-escape on its own open
         u.phase("dialog.nested-escape");
         const o2 = await open();
         if (!o2.opened) throw new BatteryStop(`the dialog did not open again (${o2.why ?? "nothing opened within 2 s"})`);
@@ -2390,7 +2389,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         await focusReturn("close");
       },
     });
-    // a key that opened the dialog but was charged with a write (M-1) is not pressed again to open it without scrolling
+    // a key that opened the dialog but was charged with a write is not pressed again to open it without scrolling
     if (keyOpens.get(key) !== null && checks.some((c) => c.id === "keyboard.activation" && c.nodeId === row.nodeId && c.trigger === row.trigger && c.status === "not-run")) keyOpens.set(key, null);
     await runUnit({
       name: `scroll ${key}`, battery: true, uses,
@@ -2451,7 +2450,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
           }
         };
         const closeAny = async (): Promise<boolean> => (await safeCloseOn(page, closedAfter, u.act)).closed;
-        // dialog.scroll-open (F-116)
+        // dialog.scroll-open
         const size = await page.evaluate(docSize, null);
         const max = Math.max(0, size.sh - size.vh);
         const ys: Array<{ y: number; variant: string }> = max > 1 ? (max > 150 ? [{ y: 150, variant: "y=150" }, { y: max, variant: "y=max" }] : [{ y: max, variant: "y=max" }]) : [{ y: 0, variant: "y=0" }];
@@ -2469,7 +2468,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
           if (!op.opened) { add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: nothing opened after ${op.how}` }); continue; }
           const k = await page.evaluate(markDialog, { path: op.opened.selector });
           if (k.found && !(k.modal || k.dialogOpen || k.ariaModal)) throw new BatteryStop(`the opened element is not a modal dialog — ${NOT_MODAL}`);
-          // H2: an entrance animation (Web Animations run under the probe's CSS animation:none) ends before the rect is read
+          // an entrance animation (Web Animations run under the probe's CSS animation:none) ends before the rect is read
           const settled = await page.evaluate(settleDialog, null);
           const g = await page.evaluate(dialogGeometry, { destId });
           const problems: string[] = [];
@@ -2492,7 +2491,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
             : { id: "dialog.scroll-open", status: "pass", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op.how}: the page did not move${centre ? ", the dialog is centred" : ", the dialog is inside the viewport"}`, evidence });
         }
         u.guard();
-        // dialog.scrim + dialog.click-outside (F-117), at y=0
+        // dialog.scrim + dialog.click-outside, at y=0
         u.phase("dialog.scrim", "dialog.click-outside");
         if (!ov) {
           add({ id: "dialog.scrim", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row (a plan row, or the destination was not exported)" });
@@ -2510,7 +2509,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         const sr = await page.evaluate(scrimRead, null);
         const built = sr.backdrop ?? sr.cover;
         const want = ov.background;
-        // L8 / L-1: a colour the probe cannot read (a colour space it does not convert) is not-run, never a false warn
+        // a colour the probe cannot read (a colour space it does not convert) is not-run, never a false warn
         const unread = sr.backdrop === null && sr.unreadable !== null ? sr.unreadable : built !== null && parseColor(built) === null ? built : want !== null && parseColor(want) === null ? want : null;
         if (unread !== null) {
           add({ id: "dialog.scrim", status: "not-run", detail: `not-run: the scrim colour ${unread} is in a colour space the probe does not read`, evidence: { built, designed: want } });
@@ -2519,7 +2518,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
           add({ id: "dialog.scrim", status: match ? "pass" : "warn", detail: match ? `the scrim matches the design (${want ?? "no scrim"} vs ${built ?? "none"})` : `the scrim is ${built ?? "none"}${sr.backdrop !== null ? " (::backdrop)" : ""}, the design's overlay background is ${want ?? "none (no scrim)"}${ov.from === "default" ? " (Figma's default)" : ""}`, evidence: { built: built ?? null, designed: want, via: sr.backdrop !== null ? "::backdrop" : sr.cover !== null ? "fixed cover" : "none" } });
         }
         const pt = sr.point;
-        // M4 (D40(8)): only the backdrop itself is clicked — the native dialog's ::backdrop, or a scrim with no control under the point
+        // only the backdrop itself is clicked — the native dialog's ::backdrop, or a scrim with no control under the point
         if (pt === null) add({ id: "dialog.click-outside", status: "not-run", detail: sr.unreadable !== null ? `not-run: a layer over the page has a colour the probe does not read (${sr.unreadable}) — no point is known to be the backdrop`
           : `not-run: no backdrop to click — nothing covers the page outside the dialog (the furthest point hits ${sr.hitDesc}); a click there would land on the page` });
         else {

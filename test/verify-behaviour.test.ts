@@ -99,9 +99,9 @@ console.log("report.behaviour — always written, counted by row, sorted:");
   const none = compare(exp, base());
   const b0 = behaviourOf(none);
   safe("[R1] no behaviour block → report.behaviour {ran:false, why 'carries no behaviour checks', zero summary, no checks}", () =>
-    !!b0 && b0.ran === false && /the measured file carries no behaviour checks \(hand-written, or a probe older than 12b\)/.test(b0.why ?? "")
+    !!b0 && b0.ran === false && /the measured file carries no behaviour checks \(hand-written, or a probe that predates the behaviour checks\)/.test(b0.why ?? "")
     && JSON.stringify(b0.summary) === JSON.stringify({ pass: 0, fail: 0, warn: 0, notRun: 0, unsupported: 0 }) && b0.checks.length === 0);
-  safe("[R1] …its headline says 'not run (…)'", () => !!b0 && b0.headline === "BEHAVIOUR/A11Y (not the fidelity verdict) — not run (the measured file carries no behaviour checks (hand-written, or a probe older than 12b))");
+  safe("[R1] …its headline says 'not run (…)'", () => !!b0 && b0.headline === "BEHAVIOUR/A11Y (not the fidelity verdict) — not run (the measured file carries no behaviour checks (hand-written, or a probe that predates the behaviour checks))");
   const off = behaviourOf(compare(exp, base({ behaviour: { version: 1, ran: false, why: "--behaviour off" } })));
   safe("[R2] D45 --behaviour off → ran:false, why '--behaviour off', headline 'not run (--behaviour off)'", () =>
     !!off && off.ran === false && off.why === "--behaviour off" && off.headline.endsWith("— not run (--behaviour off)"));
@@ -209,7 +209,7 @@ console.log("measured.behaviour guard — lenient, a malformed block is dropped 
   safe("[16] …and compare still runs: the note in probe.inputNotes, the verdict that of a file without the block", () =>
     !!r && behaviourOf(r)?.ran === false && (r.probe.inputNotes || []).some((n) => /measured\.behaviour is not/.test(n)) && r.verdict === compare(exp, base()).verdict);
   safe("[L3] …report.behaviour says the block is MALFORMED (readableMeasured lists it in dropped) — never 'no behaviour checks / older probe'", () =>
-    !!rm && rm.dropped.includes("behaviour") && !!r && /the measured file's behaviour block is malformed/.test(behaviourOf(r)?.why ?? "") && !/older than 12b/.test(behaviourOf(r)?.why ?? ""));
+    !!rm && rm.dropped.includes("behaviour") && !!r && /the measured file's behaviour block is malformed/.test(behaviourOf(r)?.why ?? "") && !/predates the behaviour checks/.test(behaviourOf(r)?.why ?? ""));
   const direct = compare(exp, malformed<VerifyMeasured>({ ...base(), behaviour: { version: 1, ran: true, checks: "none" } }));
   safe("[16] compare handed a malformed block directly (no readableMeasured) → ran:false 'malformed', never a throw", () =>
     behaviourOf(direct)?.ran === false && /behaviour block is malformed/.test(behaviourOf(direct)?.why ?? ""));

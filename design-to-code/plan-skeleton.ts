@@ -1,8 +1,8 @@
 // plan-skeleton.ts — generate design/plan/<screen>.json's skeleton FROM THE EXPORT, so the model fills
-// in only what is genuinely a decision. P2b (livetest-3 §2.9 f; findings 79, 151, 155, 156, 196).
+// in only what is genuinely a decision.
 //
-// Why: build-screen used to have the model hand-transcribe the whole plan — the token table, the
-// component inventory, the anchors. That is how hidden nodes, mis-typed token names and wrong values
+// Why: a model that hand-transcribes the whole plan — the token table, the component inventory, the
+// anchors — is how hidden nodes, mis-typed token names and wrong values
 // entered the plan and then passed the Stop hook, because code and plan agreed with each other. Every
 // fact below is DERIVED from the export; the model fills only `codeToken`, `mapModule`, `verdict`,
 // `decision`, `route` and `deviations[]` (plus `files[]`, `architecture` and `verification` as it
@@ -16,15 +16,15 @@
 //                 bind it. A token bound only by hidden layers is pre-marked `verdict:"hidden-only"`.
 //   components[]  every VISIBLE instance (hidden layers are not built, so they are not planned), with
 //                 key/setKey/name/variant/props and its identity: the design-system catalog entry it
-//                 matches — by key, or by P1's name+prop-signature matcher (component-match.ts) when a
+//                 matches — by key, or by the name+prop-signature matcher (component-match.ts) when a
 //                 duplicated file re-keyed everything — and the codeconnect.local.json mapping when one
 //                 exists. Component identity comes from here, never from a hand-placed attribute. A name
-//                 that component-match calls ambiguous (nameVerdict — the rule cross-check uses too, DT-27)
+//                 that component-match calls ambiguous (nameVerdict — the rule cross-check uses too)
 //                 gets `catalog: {by:"ambiguous", candidates}`: never a match, the entries to choose from.
 //   anchors{}     every VISIBLE node id → {name, type, parent, mapModule:""}. Fill `mapModule` on
 //                 sections and instances; a node whose own mapModule is empty is covered by its nearest
 //                 mapped ancestor, so a 12-row `.map()` or a reused shell needs one entry, not twelve.
-//   anchorsSuggested[]  where to put those entries (F-34): the screen frame itself first ("screen"; when it is an
+//   anchorsSuggested[]  where to put those entries: the screen frame itself first ("screen"; when it is an
 //                 INSTANCE, that is all), the root's direct children ("section"), every outermost INSTANCE
 //                 ("instance"), and each container whose children are mostly rows of one shape, >= 3 (a list:
 //                 "repeat", its rows and the dividers between them are covered by it; its other children are still
@@ -35,13 +35,13 @@
 // Hidden predicate — the ONE rule (design-to-code/hidden.ts, shared with verify-screen/audit/drift-lint
 // and, through visibility() below, verify-build.ts): a node is hidden when it or any ancestor carries
 // `"hidden": true`. Never `visible === false`: `"visible"` is also a component PROPERTY
-// name in this export (`"visible": "Show Breadcrumb"`), finding 34.
+// name in this export (`"visible": "Show Breadcrumb"`).
 //
 // Output is deterministic (no timestamps of its own), so a re-run diffs cleanly. With --out on an
 // existing plan it MERGES: every model-filled field (codeToken, mapModule, verdict, decision, …) and
 // every top-level field the skeleton does not own (files, architecture, verification, deviations,
 // status, …) is kept; rows that no longer exist in the export are dropped and counted on stderr.
-// --seed-from <sibling plan> (DT-33) then fills what is still empty from another screen's plan — only a
+// --seed-from <sibling plan> then fills what is still empty from another screen's plan — only a
 // row with the same identity (and, for a token, the same value), marked `seededFrom` for review.
 
 import fs from "node:fs";
@@ -216,7 +216,7 @@ function resolver(sources: ReadonlyArray<TokensDoc | null | undefined>, resolved
     }
     // A composed colour (doc-types ComposedColor): the colour half (alias -> resolved, hex as is) and
     // the opacity half (a number, or an alias -> that FLOAT's resolved number) folded into ONE hex.
-    // Either half unresolvable -> null, as before.
+    // Either half unresolvable -> null.
     if (raw && typeof raw === "object" && "composed" in raw) {
       const { color, opacity } = raw.composed;
       const c = typeof color === "string" ? color : resolve(byName.get(color.aliasOf), depth + 1).value;
@@ -239,7 +239,7 @@ function composedHex(color: JsonValue | null, opacity: JsonValue | null): string
   return formatHex({ ...c, a: composeAlpha(c.a, opacity) });
 }
 
-// ts-port: legacy/producer-mismatch read kept as-is — a COLOR value spelled as {r,g,b,a} (the producer
+// A producer-mismatch read, kept as-is — a COLOR value spelled as {r,g,b,a} (the producer
 // writes a hex string; variables.ts). Declared as a JSON object so it stays a JsonValue on the way out.
 type LegacyRgba = JsonObject & { r: number; g: number; b: number };
 const isLegacyRgba = (v: object): v is LegacyRgba => "r" in v;
@@ -382,7 +382,7 @@ function buildComponents(doc: ScreenDoc | null | undefined, catalog: ComponentsC
     // the first of key / setKey the catalog has (catalog entries are objects, so `??` = first hit)
     const c = (i.key ? catKeys.get(i.key) : undefined) ?? (i.setKey ? catKeys.get(i.setKey) : undefined);
     const r = byName.get(i.name);
-    // DT-27: a name match is component-match's nameVerdict — the one rule cross-check uses too. A tie
+    // A name match is component-match's nameVerdict — the one rule cross-check uses too. A tie
     // between different signatures, or several same-named entries none of which agrees, is `ambiguous`:
     // never a match, but the candidates are listed so the builder sees why and what to choose from.
     const verdict = !c && r ? nameVerdict(r).status : null;
@@ -426,7 +426,7 @@ export interface SkeletonPlan extends Plan {
   auditGate: Required<PlanAuditGate> | null;
 }
 
-// F-34: the boundaries a builder should name, so 12-291 anchor slots need not be filled one by one. Tree order.
+// The boundaries a builder should name, so 12-291 anchor slots need not be filled one by one. Tree order.
 // The screen frame comes first (it has no ancestor to cover it; a frame that is an INSTANCE is the whole
 // suggestion, its internals belong to the component). Each suggestion covers its subtree: a root section, an outermost instance (its internals belong to the component),
 // or a list — a `.map()`: a container whose most frequent child shape occurs >= 3 times, when those rows are the
@@ -500,11 +500,11 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   const title = indexRow && indexRow.title;
   const rel = screenFile ? path.relative(cwd || process.cwd(), path.resolve(screenFile)).split(path.sep).join("/") : null;
   const screenName = String(title || (exp && exp.screen) || (root && root.name) || "").trim() || null;
-  // finding 136: pre-fill a first-class auditGate from an existing audit with blockers, so the model
+  // Pre-fill a first-class auditGate from an existing audit with blockers, so the model
   // (or a person) has somewhere to record "acknowledged and overridden, here is why" instead of the
   // build silently proceeding past a Blocked verdict. overridden/reason/decidedBy/decidedAt are left
   // for a person to fill; a re-run of this script never clears what was already decided (see merge()).
-  // F-44: blockers are the audit's finding ids (`code` / `code@nodeId`), and crossCheckFile points at the
+  // Blockers are the audit's finding ids (`code` / `code@nodeId`), and crossCheckFile points at the
   // cross-check report beside it (`<audit stem>.cross.json`, where cross-file findings carry the same ids).
   let auditGate: Required<PlanAuditGate> | null = null;
   try {
@@ -516,9 +516,8 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
       auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
   } catch { /* the auditGate pre-fill is best-effort: plan-skeleton must never fail on reading an audit */ }
-  // (audit-gate.ts is a static import now; the CJS version's lazy require — and its "could not load →
-  // skip" fallback — is gone, since a static import cannot fail at this point. The try/catch stays
-  // around the CALL: a malformed audit file must not fail the skeleton.)
+  // (audit-gate.ts is a static import, which cannot fail at this point. The try/catch is around the CALL:
+  // a malformed audit file must not fail the skeleton.)
   return {
     schema: "designtwin/plan@2",
     screen: screenFile ? path.basename(screenFile).replace(/\.json$/, "") : null,
@@ -554,9 +553,9 @@ export interface MergeResult { plan: Plan; dropped: { tokens: number; components
 const FILLED_TOKEN = ["codeToken", "verdict", "decision", "acknowledged", "seededFrom"] as const;
 const FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName", "seededFrom"] as const;
 
-// F-44: the skeleton owns what it READ — auditFile, crossCheckFile, blockers (the audit's current ids) — and a
-// person owns the decision: overridden / reason / decidedBy / decidedAt / verdict are never touched. (It used
-// to keep the whole old gate, so its blockers froze at the ids of the first run.) With no fresh gate (no audit
+// The skeleton owns what it READ — auditFile, crossCheckFile, blockers (the audit's current ids) — and a
+// person owns the decision: overridden / reason / decidedBy / decidedAt / verdict are never touched. (Keeping
+// the whole old gate would freeze its blockers at the ids of the first run.) With no fresh gate (no audit
 // file now, or no blockers left in it) the old one stays as it was: a decision is never cleared.
 function mergeAuditGate(prev: PlanAuditGate | null | undefined, fresh: Required<PlanAuditGate> | null): PlanAuditGate | null {
   if (!prev || typeof prev !== "object") return fresh;
@@ -607,7 +606,7 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
   return { plan: out, dropped };
 }
 
-// ---------------------------------------------------------------- --seed-from (DT-33)
+// ---------------------------------------------------------------- --seed-from
 
 /** What seed() copied from one sibling plan. */
 export interface SeedCount { tokens: number; components: number }

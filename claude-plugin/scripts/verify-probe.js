@@ -1024,16 +1024,16 @@ var MEASURED_EXTRAS = [
   ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
   ["matchedByCensus", isCountMap, "a {rule: count} map"],
   ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
-  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  // the run it belongs to and the build it was served
   ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
-  // group 11 (DT-47): the shipped probe's foreign tags
+  // the shipped probe's foreign tags
   ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
-  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
+  // the steps replayed, the page's overflow, the behaviour/a11y block
   ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
   ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
   ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
-  // 12c: the visual diff (informational, D40(3))
+  // the visual diff (informational)
   ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
 ];
 function isMeasuredCore(x) {
@@ -1291,7 +1291,7 @@ var RunCacheUnwritable = class extends Error {
   cacheDir;
   root;
   /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
-   *  permission: a directory on the way was removed while the run wrote there (L-4) */
+   *  permission: a directory on the way was removed while the run wrote there */
   constructor(cacheDir, root, code) {
     super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
     this.name = "RunCacheUnwritable";
@@ -1433,15 +1433,15 @@ var TOLERANCE = {
   padding: 1,
   gap: 1,
   // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
-  // measured 111.83×38 against 110×36 and the old inclusive 2px tolerance emitted nothing (finding 193).
+  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
   size: 1,
   // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
-  // a column 18.94px out of place (finding 192) or a bar 130px below the frame (164) cannot hide.
+  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
   position: 2,
   opacity: 0.02,
-  // DT-74 (D34): a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) let it pass
+  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
   stroke: 0.5,
-  // DT-75 (D29): a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
   // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
   // in the field runs. Known miss: heavy italics/overhang can exceed it.
   textInk: 3
@@ -1540,10 +1540,10 @@ var KNOWN_STYLE_KEYS = /* @__PURE__ */ new Set([
   "transform",
   "rotate",
   "visible",
-  // D34: where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
+  // where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
   "strokeFrom",
   "strokeAlign",
-  // F-69 (D114): a TEXT's computed text-transform; F-74 (D111): who paints a transparent element (optional keys)
+  // a TEXT's computed text-transform; who paints a transparent element (optional keys)
   "textTransform",
   "paintedBy",
   // free text, never read for a judgement — tolerated on either level
@@ -1562,7 +1562,7 @@ var KEY_HINTS = {
   placeholder: "placeholderText",
   rowGap: "gapVisual",
   columnGap: "gap",
-  // F-67: a node-level key written INSIDE styles is not read there (a styles.fillSource "img" would not exempt the fill)
+  // a node-level key written INSIDE styles is not read there (a styles.fillSource "img" would not exempt the fill)
   ...Object.fromEntries([...KNOWN_NODE_KEYS].filter((k) => k !== "nodeId" && k !== "styles" && k !== "note" && k !== "notes").map((k) => [k, `nodes[].${k} (beside styles, not inside)`]))
 };
 var FIELDS = [
@@ -1598,7 +1598,7 @@ var STYLE_KEY_SHAPE = {
 };
 var MEASURED_KEYS_DOC = {
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (DT-23: `fill` was missing)
+  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
   "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
   "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
@@ -5523,7 +5523,7 @@ var REFERENCE_MALFORMED = "the expectation's referenceImage is malformed \u2014 
 function prepareVisual(exp, root) {
   const ri = exp.referenceImage;
   if (ri === void 0) {
-    return { ok: false, why: typeof exp.reference === "string" && exp.reference ? "the expectation is older than 12c (no referenceImage) \u2014 re-run --expect" : "the export has no reference image for this screen" };
+    return { ok: false, why: typeof exp.reference === "string" && exp.reference ? "the expectation predates the visual diff (no referenceImage) \u2014 re-run --expect" : "the export has no reference image for this screen" };
   }
   if (!isVerifyReferenceImage(ri)) return { ok: false, why: REFERENCE_MALFORMED };
   if (!ri.usable) return { ok: false, why: ri.why };

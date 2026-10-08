@@ -1,8 +1,8 @@
 // component-match.ts — which design-system component is this instance, when the KEYS cannot say?
 //
 // A component's identity is its publish `key`, and every tool here resolves by key first. But
-// duplicating a Figma file re-mints every key in the copy (livetest-3 finding 226: `TideStack (Copy)`
-// and `Design System - NIMA (Copy)`), so a screen's instances then match the pulled catalog by key
+// duplicating a Figma file re-mints every key in the copy (a pull of a duplicated file, "… (Copy)", showed it),
+// so a screen's instances then match the pulled catalog by key
 // 0 times out of 51 — while 26 of its 41 distinct components are plainly the catalog's own `Button`,
 // `Header`, `Pagination`… by name AND by prop signature. Three tools concluded "the catalog is not
 // this screen's library", the build made every component `verdict:"new"`, and none of the design
@@ -20,9 +20,6 @@
 //     catalog order; candidates with identical signatures are reported as harmless ties;
 //   * NOTHING here is ever auto-accepted. The result is a confirmation list: cross-check.ts reports
 //     it (`catalog-rekeyed`), and map-bootstrap.ts stubs only the entries a person marked confirmed.
-//
-// The reference this was checked against is livetest-3's hand-written scripts-test/map-components.mjs:
-// same visible-instance walk, same name rule, same variant/prop evidence and tie-breaks.
 import type {
   CatalogComponent, ComponentPropDef, ComponentsCatalog, IrNode, MatchAlternative, MatchInstance, MatchResult, MatchRow, NameVerdict, ProposedMatchRow, ScreenDoc, VisibleInstance,
 } from "./types.ts";
@@ -167,7 +164,7 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
       rows.push(row);
       continue;
     }
-    // DT-27: the same-named entries, so nameVerdict can tell "several candidates, none verified" (ambiguous)
+    // the same-named entries, so nameVerdict can tell "several candidates, none verified" (ambiguous)
     // from "the one candidate disagrees" (unmatched), and plan-skeleton can list them.
     if (cands.length > 1) row.candidates = cands.map((c) => ({ ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name }));
     // Every instance of the name must agree with the winner — one mismatching variant is enough to
@@ -226,7 +223,7 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
   };
 }
 
-// DT-27: the ONE name rule cross-check's coverage and plan-skeleton's catalog column both read, so they
+// the ONE name rule cross-check's coverage and plan-skeleton's catalog column both read, so they
 // cannot disagree on a component:
 //   * matched   — a verified match that is not a tie between DIFFERENT signatures (a duplicate-definitions
 //                 tie is harmless: the entries are one definition);

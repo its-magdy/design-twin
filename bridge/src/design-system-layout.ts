@@ -1,10 +1,10 @@
 // The ONE definition of how the design-system catalog is split across files — the sibling of
 // pages-layout.ts, and it exists for the same two reasons.
 //
-// 1) SIZE. design-system.json used to be a single flat object holding every variable, every style,
-//    every component and a lint report. On a real design-system file that is the biggest document in
-//    the export after the layer tree, and an agent that only wants the token table had to load the
-//    component catalog with it.
+// 1) SIZE. A single flat design-system.json holding every variable, every style, every component and a
+//    lint report would be, on a real design-system file, the biggest document in the export after the
+//    layer tree, and an agent that only wants the token table would have to load the component
+//    catalog with it.
 // 2) TAXONOMY. Those keys are not one thing. Figma's own model has three separate systems, verified
 //    against developers.figma.com:
 //      - Variables live in VariableCollections; a collection owns `modes` and `variableIds`, and every
@@ -15,7 +15,7 @@
 //        fields (`boundVariables`), which is a reference between the two systems, not a merger.
 //        -> styles.paint.json / styles.text.json / styles.effect.json / styles.grid.json (see below —
 //        split the same way tokens/components/hygiene are, and for the same reason: a caller after only
-//        typography no longer has to load every gradient and shadow in the file to get it)
+//        typography does not have to load every gradient and shadow in the file to get it)
 //      - Components/ComponentSets are a third concept, with variant properties of their own.
 //        -> components.local.json / components.library.json
 //    The component split is a correctness fix, not just tidiness: entries flagged `remote: true` are
@@ -200,7 +200,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
   };
   // componentsDir is a POINTER, and a pointer that resolves to nothing is worse than an absent key:
   // a tool walking `files` verbatim got ENOENT on the one entry of nine that had never been written
-  // (live finding 27). The directory only exists when a COMPONENT_SET actually produced a detail file
+  // in a live pull. The directory only exists when a COMPONENT_SET actually produced a detail file
   // (variantVisuals is opt-in), so the key only exists then too.
   // Note the trailing separator: without it `design-system/components.local.json` — which is ALWAYS
   // written — matches the prefix `design-system/components` and the key never gets omitted.

@@ -3,14 +3,14 @@
 // Pure: plain IR trees in, plain answers out (no fs) — write-out.ts does the reading and writing, so every
 // rule here is testable offline on hand-built trees.
 //
-// 1. Owners (DT-54/F-36, D62). An asset file is named after its layer, and a layer is very often called
+// 1. Owners. An asset file is named after its layer, and a layer is very often called
 //    `Vector`, `Icon` or `Group_N`. What it IS lives on the nearest component instance above it (or on the
 //    node itself): `Checkbox / Status=Checked`. One walk gives every `asset` pointer its uses — node id,
 //    layer name, hidden or not, owner, the instance above the owner (`context`, which names a self-owned
 //    icon component such as `Glyph 12` inside `Nav item / Type=Settings`) — and the `.assets.json`
 //    row carries them, so a builder searches by component instead of by file name. File names never change.
 //
-// 2. Hidden reuse (D10, D64). The plugin does not export a hidden graphic (`assetSkipped:"hidden"`): its
+// 2. Hidden reuse. The plugin does not export a hidden graphic (`assetSkipped:"hidden"`): its
 //    exporter has nothing to render. When a VISIBLE node in the same pull (or in another screen already
 //    pulled) is the same graphic — the same main component, the same source node inside it, the same
 //    chain of components and variants above the owner, the same non-boolean props, the same effective
@@ -18,11 +18,11 @@
 //    on a sublayer of the graphic) on either side — the hidden
 //    node points at that file instead (`asset` + `assetFrom`). An owner's booleans are left out of the key
 //    because they are the visibility toggles that hid the node; a SELF-owned icon's own booleans are its
-//    internal toggles (`Show badge`), so they stay in (R2-2). Variant props are covered by the main
-//    component id. The modes are in because a bound colour renders per mode (R2-1).
+//    internal toggles (`Show badge`), so they stay in. Variant props are covered by the main
+//    component id. The modes are in because a bound colour renders per mode.
 //    The chain is in the key because a parent variant may recolour a nested icon in its own DEFINITION
 //    (`Button / Type=Danger` drawing its icon red), and Figma's `overrides` list only what is overridden
-//    directly on an instance, never what it inherits — so no override would block that twin (M-1).
+//    directly on an instance, never what it inherits — so no override would block that twin.
 import type { InstanceOverride, IrNode } from "./doc-types.ts";
 
 /** The nearest INSTANCE ancestor-or-self that names its main component. */
@@ -74,10 +74,10 @@ const paintEntry = (o: InstanceOverride): boolean => !!o && Array.isArray(o.fiel
 // (iii) of the reuse guard. On every instance from the root down to the graphic, a paint entry ABOUT the
 // graphic or one of its sublayers counts (a sublayer id is `<id>;…`, or `I<id>;…` under a top-level
 // instance): an outer instance records a recolour of a nested vector on ITS own `overrides`, not on the
-// vector's owner (M-2). For a graphic that is not itself an instance, each paint entry on its owner counts
+// vector's owner. For a graphic that is not itself an instance, each paint entry on its owner counts
 // as well — the override's target cannot always be tied to the node more precisely than that from the tree.
 // On a STRICT sublayer (`<id>;…`, inside the exported file) any field but an inert one blocks: a `visible`
-// override drops a layer, a size/corner one reshapes it (R2-2). The graphic's own `visible` is what hid it.
+// override drops a layer, a size/corner one reshapes it. The graphic's own `visible` is what hid it.
 // A truncated list on any of those instances blocks too: what was cut is unknown.
 function hasPaintOverride(node: IrNode, instances: readonly IrNode[], owner: IrNode | undefined): boolean {
   const id = typeof node.id === "string" ? node.id : "";
@@ -157,7 +157,7 @@ export function collectGraphics(roots: readonly IrNode[] | null | undefined): Gr
       if (key !== undefined) g.reuseKey = key;
       out.push(g);
     }
-    // An unrelated screen's JSON on disk may be malformed (`children: {}`): skipped, never a throw (L-4).
+    // An unrelated screen's JSON on disk may be malformed (`children: {}`): skipped, never a throw.
     if (Array.isArray(n.children)) for (const c of n.children) visit(c, insts, owns, hidden, modes);
   };
   for (const r of roots || []) visit(r, [], [], false, new Map());
@@ -177,8 +177,8 @@ export function usesByPointer(graphics: readonly Graphic[]): Map<string, Graphic
   return map;
 }
 
-// (ii): the transform Figma drew into the file. A visible asset leaf carries it as `sourceTransform`
-// (D66); an older export, and the hidden node before reuse, carry it bare.
+// (ii): the transform Figma drew into the file. A visible asset leaf carries it as `sourceTransform`; an older
+// export, and the hidden node before reuse, carry it bare.
 function transformOf(n: IrNode): { rotation: number; flipped: boolean; skew: number } {
   const t = n.sourceTransform;
   return t
@@ -197,7 +197,7 @@ function sameLook(hidden: IrNode, twin: IrNode): boolean {
 
 // A twin's pointer must be the plugin's own shape, `assets/<name>`: a hand-edited or foreign sibling JSON
 // naming `../x.svg` or another dir would hand that path on, and the reusing screen's `.assets.json` would
-// read the file's bytes (R2-5).
+// read the file's bytes.
 const ASSET_POINTER_RE = /^assets\/(?!\.\.?$)[^/\\]+$/;
 const twinOk = (g: Graphic): boolean => !g.hidden && !g.blocked && typeof g.node.asset === "string" && ASSET_POINTER_RE.test(g.node.asset) && g.node.assetFrom === undefined && g.reuseKey !== undefined;
 
@@ -217,7 +217,7 @@ export interface ReuseResult {
   crossScreen: number;
 }
 
-// The DT-72 move: the reused file already has the twin's transform drawn in, so the bare fields go under
+// The transform move: the reused file already has the twin's transform drawn in, so the bare fields go under
 // `sourceTransform` — a builder that applies `rotation` would otherwise rotate it twice.
 function moveTransform(n: IrNode): void {
   const t: NonNullable<IrNode["sourceTransform"]> = {};
@@ -268,7 +268,7 @@ export function reuseHiddenAssets(roots: readonly IrNode[] | null | undefined, o
     for (const c of left) if (c.reuseKey !== undefined) keys.add(c.reuseKey);
     const other: Graphic[] = [];
     for (const tree of opts.otherTrees(keys)) {
-      try { other.push(...collectGraphics(tree)); } catch { /* a malformed other screen holds no twin (L-4) */ }
+      try { other.push(...collectGraphics(tree)); } catch { /* a malformed other screen holds no twin */ }
     }
     const far = pool(other);
     for (const c of left) {

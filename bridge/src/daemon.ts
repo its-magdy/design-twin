@@ -76,8 +76,8 @@ function isClientRow(x: unknown): x is ClientRow {
   return isRecord(x) && typeof x.connId === "string";
 }
 
-/** Why `x` is not a well-formed request frame, or null when it is one. A `{}` frame used to be forwarded
- *  with `cmd: undefined`; `timeoutMs: "x"` reached setTimeout as NaN. Both are refused here instead. */
+/** Why `x` is not a well-formed request frame, or null when it is one. A `{}` frame would be forwarded
+ *  with `cmd: undefined`, and `timeoutMs: "x"` would reach setTimeout as NaN. Both are refused here. */
 export function daemonRequestError(x: unknown): string | null {
   if (!isRecord(x)) return "not an object";
   if (typeof x.cmd !== "string") return "`cmd` is missing";
@@ -348,7 +348,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     armIdle(idleMs);
 
     let queue: Promise<void> = Promise.resolve();
-    // CANCEL (live finding 2026-09-25): every forwarded request, queued or in flight, has an
+    // CANCEL: every forwarded request, queued or in flight, has an
     // AbortController here AND in its connection's own set. A client that goes away before its reply
     // (Ctrl-C on a CLI, an MCP session ending) aborts its own requests: an in-flight one makes
     // server-core send the plugin `{ type: "cancel", id }` — the daemon's socket to the plugin stays
@@ -374,8 +374,8 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
         frames++; // …and is counted: every frame here comes from ANOTHER process (activity() above)
         let parsed: unknown;
         try { parsed = JSON.parse(line) as unknown; } catch (e) { return reply(conn, { ok: false, error: "bad request frame: " + errMsg(e) }); }
-        // The frame is checked BEFORE anything reads it: a `{}` used to forward `cmd: undefined` to
-        // the bridge, and a `timeoutMs: "x"` reached setTimeout as NaN.
+        // The frame is checked BEFORE anything reads it: a `{}` would forward `cmd: undefined` to
+        // the bridge, and a `timeoutMs: "x"` would reach setTimeout as NaN.
         const bad = daemonRequestError(parsed);
         if (bad !== null || !isDaemonRequest(parsed)) return reply(conn, { ok: false, error: "bad request frame: " + (bad ?? "malformed") });
         const msg = parsed;
@@ -456,9 +456,9 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
           // passes a minimal fake): a status call must never be the thing that kills the daemon.
           clients: typeof bridge.listClients === "function" ? bridge.listClients() : [],
           // The socket stats too. `dtwin whoami` documents "socket uptime, and how many times a
-          // new connection displaced an earlier one" and then told the reader to go and run a
-          // different command, because with a daemon in front the CLI has no bridge of its own
-          // (live finding 14). The daemon does. One extra field and the documented output is real.
+          // new connection displaced an earlier one", but with a daemon in front the CLI has no
+          // bridge of its own to read it from, so it could only tell the reader to run a different
+          // command. The daemon has it. One extra field and the documented output is real.
           connection: typeof bridge.connectionInfo === "function" ? bridge.connectionInfo() : null,
           // Reported in ms, not rounded minutes: a sub-minute window (used by the tests, and a
           // legitimate choice) rounded to "0" reads as "disabled", which is the opposite of true.
@@ -636,7 +636,7 @@ function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | Dae
 }
 
 // The routing decision every CLI command makes: use the daemon if one is live, otherwise report that
-// there isn't one and let the caller open its own bridge exactly as before.
+// there isn't one and let the caller open its own bridge exactly as it does without a daemon.
 export async function connect(port?: number): Promise<DaemonConnection | null> {
   const sock = sockPath(port);
   if (!(await probe(sock))) return null;

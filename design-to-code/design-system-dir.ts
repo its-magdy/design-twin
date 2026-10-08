@@ -1,6 +1,6 @@
 // design-system-dir.ts — what a `--design-system <dir>` holds, and the --as-library exports beside it.
-// Shared by audit.ts and cross-check.ts (their CLIs used to read the split files each on their own, and
-// both read only components.local.json). Kept out of catalog-input.ts so the other CLIs that inline
+// Shared by audit.ts and cross-check.ts, so the split files are read in one place (and a library dir's
+// components.json is not missed). Kept out of catalog-input.ts so the other CLIs that inline
 // that module do not also pull in these guards.
 import fs from "node:fs";
 import path from "node:path";
@@ -13,8 +13,8 @@ import { isComponentsCatalog, isLibrariesIndex, isPageIndex, isPagesRootIndex, i
 // `--design-system <dir>` names one of TWO layouts (bridge/src/design-system-layout.ts and
 // library-layout.ts): a design file's design-system/ (components.local.json + the sampled
 // components.library.json) or a --as-library export's libraries/<dir>/, whose catalog is
-// components.json — the library's own full definitions. Reading only components.local.json made a
-// library dir silently lose its whole component catalog (DT-11).
+// components.json — the library's own full definitions. Reading only components.local.json would make a
+// library dir silently lose its whole component catalog.
 /** What a design-system directory holds, whichever layout it is. Absent files are null. */
 export interface DesignSystemDir {
   tokens: TokensDoc | null;
@@ -79,7 +79,7 @@ function findLibraryExports(screenFile: string | undefined, dsDir: string | unde
     });
 }
 
-// ---------------------------------------------------------------- every catalog a map may point into (DT-26)
+// ---------------------------------------------------------------- every catalog a map may point into
 /** One component catalog read for drift-lint / map-bootstrap, and where it came from. */
 export interface CatalogSource {
   file: string;
@@ -149,7 +149,7 @@ function unionCatalog(sources: readonly CatalogSource[]): ComponentsCatalog {
 const catalogSetLine = (sources: readonly CatalogSource[]): string =>
   `catalogs read (${sources.length}): ` + sources.map((s) => `${s.file} [${s.role}, ${s.catalog.components.length} component(s)]`).join(", ");
 
-// ---------------------------------------------------------------- the frames beside a screen (DT-22 / F-18)
+// ---------------------------------------------------------------- the frames beside a screen
 /** A frame's texts read from its own export: `all` (hidden layers included — an empty-state sentence can
  *  sit anywhere) and `shallow` (within 6 levels of the root: loading/error words deeper are data). */
 export interface FrameTexts { all: string[]; shallow: string[] }
@@ -161,11 +161,11 @@ export interface ExportNeighbours {
   textsOf?: (row: IndexRow) => FrameTexts | null;
   /** node ids of frames screenshotted into assets/ (<id>_ref.png / <id>_shot@Nx.png) with no index row */
   unexportedShots: string[];
-  /** F-55: the id of every exported frame — the root index's rows and every page index's (pages/<dir>/index.json),
+  /** the id of every exported frame — the root index's rows and every page index's (pages/<dir>/index.json),
    *  which can list frames the root's `layers` does not. Absent: read `layers` alone. */
   exportedIds?: Set<string>;
 }
-// Disk only — the audit-design skill runs without Figma by default (D12), and "is this state drawn
+// Disk only — the audit-design skill runs without Figma by default, and "is this state drawn
 // somewhere else?" is mostly answerable from the index's titles/texts and the orphan screenshots.
 // The index's own `texts` are the first 8 strings in reading order — on a real screen, the sidebar —
 // so an empty-state sentence is never among them. For frames on the audited frame's page, read their
@@ -204,7 +204,7 @@ function findExportNeighbours(screenFile: string): ExportNeighbours | null {
     const m = /^(\d+_\d+)(?:_ref(?:-[0-9A-Za-z]+(?:_\d+)?)?|_shot@[\d.]+x)\.png$/.exec(f);
     if (m && m[1] && !known.has(m[1])) shots.add(m[1].replace("_", ":"));
   }
-  // F-55: a prototype target is "exported" when ANY index lists it. Page rows are not added to `layers` (the
+  // a prototype target is "exported" when ANY index lists it. Page rows are not added to `layers` (the
   // same-page state sweep above reads those, and a page index's rows would change what it offers).
   const exportedIds = new Set(layers.map((l) => l.id));
   for (const pd of index.pageDirs) {

@@ -2,7 +2,7 @@
 // a button in ui.html, and a CLI/MCP request arriving over the bridge — because the designer needs the
 // same two things either way: to see that their file is being walked (and by whom), and to be able to
 // stop it. A whole-file `allPages` pull measured 10+ minutes on a real design system (see the note on
-// collect.ts's cheap structural index) and until now the UI showed a static "Exporting…" for all of it.
+// collect.ts's cheap structural index) and a static "Exporting…" for all of it would leave the designer guessing.
 //
 // Why a module rather than fields on state.ts: this is the only extractor state that is written from
 // OUTSIDE the run (the UI's Cancel click lands on the main thread while the walk is mid-await), and

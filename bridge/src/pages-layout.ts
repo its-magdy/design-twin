@@ -1,7 +1,7 @@
 // The ONE definition of the pages/ layout an export lands in — shared by both writers.
 //
-// layers.json used to bundle EVERY exported top-level node into one file — measured 24MB on a real
-// design-system export, unworkable for an agent that only wants to load one at a time. Split further:
+// layers.json bundling EVERY exported top-level node into one file was measured at 24MB on a real
+// design-system export, unworkable for an agent that only wants to load one at a time. So it is split further:
 // one directory per Figma PAGE (mirroring Figma's own Page > Frame containment — a page can hold many
 // layers, never the reverse; "layer" is Figma's OWN term for any object in the file, per its Layers
 // panel — "screen" stays reserved for a hand-picked single selection, not this indiscriminate sweep),
@@ -53,7 +53,7 @@ export interface TextWalkNode {
   type?: string;
   text?: string;
   /** a hidden DESCENDANT and its subtree are skipped by every walker; the walk's own root is read even
-   *  when hidden (a hidden frame pulled on its own keeps its title and texts — M-4) */
+   *  when hidden (a hidden frame pulled on its own keeps its title and texts) */
   hidden?: boolean;
   /** any iterable: an IR node's array, or the plugin's lazy live-node adapter (collect.ts titleOf) */
   children?: Iterable<TextWalkNode>;
@@ -66,13 +66,13 @@ export function safe(id: unknown): string {
   return String(id).replace(/[^a-zA-Z0-9]/g, "_");
 }
 
-// --------------------------------------------------------- title / texts (findings 16, 17, 70, 90, 120)
+// --------------------------------------------------------- title / texts
 //
 // The Figma LAYER name is not the name a user reads on screen: `positions ` (trailing space) IS "Jet
 // Roles"; `Studio Configurations` IS "Guided Policies". A user who types the name they see gets
 // nothing from the index unless the index also carries that visible title. It must come from the
-// frame's OWN title slot, never from a sidebar/nav label drawn on every sibling screen (finding 120:
-// "Guided Policies" also appears as a `Sub titles` nav item on all three Optimization-management
+// frame's OWN title slot, never from a sidebar/nav label drawn on every sibling screen ("Guided Policies"
+// also appears as a `Sub titles` nav item on all three Optimization-management
 // screens) — so the rule is: the first TEXT node inside a descendant literally named "Page Title",
 // and ONLY that; anywhere else and we would rather carry no title than a wrong one.
 // Every walker below skips a hidden CHILD (and so its subtree), never the node it was called on: `shown`.
@@ -124,7 +124,7 @@ function firstNamedText(node: TextWalkNode | null | undefined, name: string): st
   return null;
 }
 
-// The frame's own `Page Title`-shaped instance's text first (finding 120's fix: a value that is
+// The frame's own `Page Title`-shaped instance's text first (a value that is
 // scoped to THIS frame, not repeated on every sibling), else the first TEXT node in the whole tree
 // in reading order (placeholder text excluded either way). If nothing yields a non-empty string,
 // return undefined — JSON.stringify drops an undefined value, so the row simply carries no `title`
@@ -222,7 +222,7 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
       pages.push(bucket);
     }
     const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
-    // P4 #33: layersDoc.sourceFile is stamped by write-out.ts's writeExport (from what figma-pull.ts
+    // layersDoc.sourceFile is stamped by write-out.ts's writeExport (from what figma-pull.ts
     // resolved the connected client to be) — carry it onto every per-layer file too, same field a
     // single-screen pull's writeScreen stamps, so doctor's exportSourceCounts() reads one field regardless
     // of which pull shape produced the screen.
@@ -231,7 +231,7 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
       path: join(bucket.dir, base),
       data: { name: l.name, id: l.id, ...ifDefined("page", l.page), ...ifDefined("pageId", l.pageId), ...src, tree: l.tree, ...ifDefined("reference", l.reference), ...ifDefined("devResources", l.devResources) },
     });
-    // title/texts come from THIS layer's own tree (findings 16/17/70/90/120) — computed here, once,
+    // title/texts come from THIS layer's own tree — computed here, once,
     // so both the per-page index and the root index (below) carry the same values for the same layer.
     const title = l.tree ? deriveTitle(l.tree) : undefined;
     const texts = l.tree ? collectTexts(l.tree) : undefined;
@@ -248,14 +248,14 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
   // an undefined value, so the field's ABSENCE means "this export predates page ids", not "no page".
   const pageDirs: PageDirEntry[] = pages.map((b) => ({ page: b.page, ...ifDefined("pageId", b.pageId), dir: b.dir, index: b.index, layers: b.entries.length }));
   // A consumer is told to read the ROOT index (extract/SKILL.md), not walk every pageDirs.index one
-  // hop down (finding 16) — so the root carries the same per-screen rows the per-page index does,
+  // hop down — so the root carries the same per-screen rows the per-page index does,
   // flattened across every page. Additive: pageDirs keeps its own shape/consumers (doctor.ts et al).
-  // Object.assign onto the rest-copy (not a fresh literal) keeps the key order the JS wrote: the
+  // Object.assign onto the rest-copy (not a fresh literal) keeps the established key order: the
   // manifest fields first, then pageDirs, then layers.
   const meta: PagesRootIndex = Object.assign(rest, { pageDirs, layers: pages.flatMap((b) => b.entries) });
-  // The per-page index CONTENTS, not just its path — same reasoning as layerFiles. Both writers used
-  // to spell `{ page, layers: entries }` out themselves, which put the one shape this module exists to
-  // single-source back into two files; now they only stringify and write.
+  // The per-page index CONTENTS, not just its path — same reasoning as layerFiles. Both writers would
+  // otherwise spell `{ page, layers: entries }` out themselves, which would put the one shape this module exists to
+  // single-source back into two files; they only stringify and write.
   const indexFiles: Array<PageLayoutFile<PageIndex>> = pages.map((b) => ({ path: b.index, data: { page: b.page, ...ifDefined("pageId", b.pageId), layers: b.entries } }));
   // `pages`/`byPage` stay BUILD STATE, deliberately not returned: the same page list is already public
   // as meta.pageDirs (dir + index + layer count), and returning a second view of it invited each writer
@@ -266,12 +266,12 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
 
 // ---------------------------------------------------------------- the single-screen twin
 //
-// A --node/--selection pull used to land FLAT: design/<Screen>.json, named from the layer alone. That
-// gave a frame whose name ends in a space a file ending in `_`, let a second frame called `Popup`
-// silently overwrite the first, and left the pull's variable slice and its assets with nowhere
-// per-screen to live — while a --page pull of the very same frame wrote the nested layout above
-// (live findings 47/50/63). Two layouts for one kind of content, and every downstream skill had to
-// know which one it was looking at.
+// A --node/--selection pull does not land FLAT as design/<Screen>.json, named from the layer alone. That
+// would give a frame whose name ends in a space a file ending in `_`, let a second frame called `Popup`
+// silently overwrite the first, and leave the pull's variable slice and its assets with nowhere
+// per-screen to live — while a --page pull of the very same frame writes the nested layout above.
+// Two layouts for one kind of content, and every downstream skill would have to know which one it was
+// looking at.
 //
 // So a screen files into the SAME tree: pages/<PageDir>/<Name>__<id>.json, with its token slice and
 // its asset index as siblings. The difference from buildPageLayout is arrival, not shape — a page
@@ -389,7 +389,7 @@ export function mergeScreenIndex(prev: unknown, entry: ScreenIndexRow): MergedPa
 // or as single screens pulled one at a time.
 // `entry` is the SAME row shape a full-page pull puts in meta.layers (name, id, title, texts, file,
 // …) — so the root index looks identical to a consumer regardless of which pull shape produced it
-// (finding 16: the root is the ONE file every skill is told to read).
+// (the root is the ONE file every skill is told to read).
 export function mergeRootIndex(prev: unknown, paths: ScreenPaths, layerCount: number, entry?: ScreenIndexRow): MergedRootIndex {
   const base: Record<string, unknown> = isRecord(prev) ? prev : {};
   const pageDirs: unknown[] = Array.isArray(base.pageDirs)

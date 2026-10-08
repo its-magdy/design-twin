@@ -2,7 +2,7 @@
 //
 // The live run shipped three verification passes totalling ~42 minutes, all of which returned
 // "pass"/"verified", against a build where an independent measurement pass then found ~35% of sampled
-// values wrong (finding 102). Not rounding — real errors: a heading rendered at the page-title style
+// values wrong. Not rounding — real errors: a heading rendered at the page-title style
 // instead of its own, an empty-state body at 16px/#d4d4d4 where the export says 14px/#a0a0a0, a status
 // chip with its fill token never applied, a modal at radius 20 against a spec of 12, and two toolbar
 // components never built at all. The verifiers compared screenshots and structure; nothing compared
@@ -16,9 +16,9 @@
 //       tree. Nobody retypes a number that a file already holds.
 //   (b) There was no per-node comparison at all. `--compare` diffs measured computed styles against
 //       that spec, field by field, with an explicit tolerance per field.
-//   (c) Verdicts were prose in a chat hand-back, so nothing could be audited or re-run (findings
-//       85/92). Every run writes <screen>.report.json, and `pass` is computed from it, never asserted.
-//   (d) Coverage and interactions were never checked (findings 80/101). A screen can match every
+//   (c) Verdicts were prose in a chat hand-back, so nothing could be audited or re-run.
+//       Every run writes <screen>.report.json, and `pass` is computed from it, never asserted.
+//   (d) Coverage and interactions were never checked. A screen can match every
 //       pixel and still be a dead mockup with two components missing.
 //
 // Two commands, one file, because the expectation format and the comparison must never drift:
@@ -28,7 +28,7 @@
 // There is NO browser in this file. `--compare` diffs two JSON files; the rendering, measuring and
 // interaction-driving are the probe's job (the visual-verifier agent, or any script), and what it did
 // arrives as measured.json (+ an optional --interactions file). Anything the probe did not measure is
-// reported as not measured / not probed — never as passed, and never as failed (findings 127/158).
+// reported as not measured / not probed — never as passed, and never as failed.
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -73,15 +73,15 @@ const TOLERANCE = {
   padding: 1,
   gap: 1,
   // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
-  // measured 111.83×38 against 110×36 and the old inclusive 2px tolerance emitted nothing (finding 193).
+  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
   size: 1,
   // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
-  // a column 18.94px out of place (finding 192) or a bar 130px below the frame (164) cannot hide.
+  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
   position: 2,
   opacity: 0.02,
-  // DT-74 (D34): a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) let it pass
+  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
   stroke: 0.5,
-  // DT-75 (D29): a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
   // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
   // in the field runs. Known miss: heavy italics/overhang can exceed it.
   textInk: 3,
@@ -132,9 +132,8 @@ function normFamily(v: unknown): string | null {
   return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
 
-// ts-port: legacy/producer-mismatch read kept as-is (item 4). The producer writes a LengthSpec
-// ({value, unit: "px"|"percent"|"auto"}); this also accepts a measured number/string and the older
-// upper-case units, so its input is declared wide here rather than in types.ts.
+// The producer writes a LengthSpec ({value, unit: "px"|"percent"|"auto"}); this also accepts a measured number/string
+// and the older upper-case units, so its input is declared wide here rather than in types.ts.
 type LineHeightInput = number | string | { unit?: string; value?: number } | null | undefined;
 
 function lineHeightPx(lh: LineHeightInput, fontSize: number | string | undefined): number | null {
@@ -164,10 +163,9 @@ function lineHeightPx(lh: LineHeightInput, fontSize: number | string | undefined
 // the node didn't say produces exactly the confident-and-wrong comparison this file exists to stop.
 //
 // Only layers that RENDER get a row. The rule is hidden.ts's one predicate (`hidden: true` on the
-// node or any ancestor — never `visible === false`, which the export does not use). Before it,
-// 83 of 272 Jet Roles specs, 61 of 112 instances and 22 of 28 designed interactions were for layers
-// the designer switched off (findings 97/126/181), and a build that correctly omitted them was graded
-// on them (157/159/185/188).
+// node or any ancestor — never `visible === false`, which the export does not use). Without it, a real
+// pull had 83 of 272 specs, 61 of 112 instances and 22 of 28 designed interactions for layers the
+// designer switched off, and a build that correctly omitted them was graded on them.
 const EXPECTATION_SCHEMA = "designtwin/verify-expectation@2";
 const REPORT_SCHEMA = "designtwin/verify-report@2";
 
@@ -175,9 +173,9 @@ const REPORT_SCHEMA = "designtwin/verify-report@2";
 const firstSolid = (fills: Paint[] | null | undefined): SolidPaint | undefined => (fills || []).find((f): f is SolidPaint => !!f && f.type === "solid" && f.visible !== false);
 const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const r2 = (v: number): number => Math.round(v * 100) / 100;
-// A measured length as a probe hands it over (DT-42): a number, or getComputedStyle's own resolved string —
+// A measured length as a probe hands it over: a number, or getComputedStyle's own resolved string —
 // "20px", "0.15px", "3.35544e+07px" (a pill radius). A percentage, another unit, a keyword or an object is
-// not a px value (null): `Number("20px")` used to be NaN, and the string then "differed" from 20.
+// not a px value (null): `Number("20px")` is NaN, which would make the string "differ" from 20.
 const PX_RE = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?(?:px)?\s*$/i;
 function cssPx(v: unknown): number | null {
   if (num(v)) return v;
@@ -198,7 +196,7 @@ function fourSides(v: unknown): [number, number, number, number] | null {
 // A layer drawn IN an interaction state. The designer drew one table row hovered (its fill is bound
 // to `Backgrounds/Row Hover`, and only that row carries the hover-only edit button); measuring the
 // build at rest and calling #121319-vs-#46464f a high-severity colour bug was 1 of 4 false highs on
-// BOTH screens (findings 98/128/161/194). The export says which state it drew, through the fill's
+// BOTH screens. The export says which state it drew, through the fill's
 // token name or a variant property, so the spec carries it and the probe measures that state.
 const STATE_WORD = /(?:^|[^a-z])(hover(?:ed)?|pressed|focus(?:ed)?)(?:[^a-z]|$)/i;
 const normState = (w: string): DrawnState => (/^hover/i.test(w) ? "hover" : /^press/i.test(w) ? "pressed" : "focus");
@@ -220,14 +218,13 @@ function drawnStateOf(n: IrNode): DrawnStateOf | null {
 }
 
 // An inline SVG's colour is its `fill`, not a CSS background. Comparing a vector's fills against
-// `background-color` produced the other recurring false high (the moon glyph, the Union icon —
-// findings 98/128/161/194).
+// `background-color` produced the other recurring false high (the moon glyph, the Union icon).
 const PAINT_TYPES = new Set<string>(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
 const isPaintNode = (n: IrNode): boolean => PAINT_TYPES.has(n.type) || (typeof n.asset === "string" && /\.svg$/i.test(n.asset));
 
 // A text layer that IS an input's placeholder. Its colour lives on `::placeholder`, which
 // getComputedStyle(el) cannot see, and an empty <input> has no textContent — so comparing it as
-// ordinary text/colour was two guaranteed high deltas per placeholder (findings 128/177/194).
+// ordinary text/colour would be two guaranteed high deltas per placeholder.
 function isPlaceholder(n: IrNode): boolean {
   if (n.type !== "TEXT") return false;
   const toks = [n.tokens && n.tokens.fills, ...(Array.isArray(n.fills) ? n.fills.map((f) => f && f.tokens && f.tokens.color) : [])];
@@ -237,15 +234,14 @@ function isPlaceholder(n: IrNode): boolean {
 // Position, FRAME-RELATIVE. The export's `box.x/y` are page-space and only present where the parent
 // does not auto-position the node (absolute children, non-auto-layout parents); `renderBox` is the
 // render bounds (for TEXT: the glyph ink). Subtracting the frame's own `box.x/y` gives the same
-// coordinates a probe gets from `el.getBoundingClientRect()` minus the frame element's rect. No
-// position was compared at all before (findings 164/192): a pagination bar 130px below the frame and
-// an 18.94px column drift scored zero deltas.
+// coordinates a probe gets from `el.getBoundingClientRect()` minus the frame element's rect. Without a position
+// check, a pagination bar 130px below the frame and an 18.94px column drift score zero deltas.
 interface FramePos { x: number; y?: number; source: "box" | "renderBox" }
 function framePosition(n: IrNode, frame: Partial<VerifyFrame> | null | undefined): FramePos | null {
   if (!frame || !num(frame.x) || !num(frame.y)) return null;
   const b: Partial<Box> = n.box || {}, rb = n.renderBox;
   if (n.type === "TEXT") {
-    // A Range's getBoundingClientRect().x is the text's LAYOUT start (side bearings included, not ink). F-80: for hug
+    // A Range's getBoundingClientRect().x is the text's LAYOUT start (side bearings included, not ink). For hug
     // text and left-aligned text that is the text box's own left edge (box.x, when the export states it); for
     // centred/right-aligned text in a wider box only the ink start (renderBox.x) is near it, within a side-bearing.
     // Vertical ink depends on font metrics, so a TEXT node carries no `y`.
@@ -265,18 +261,17 @@ function framePosition(n: IrNode, frame: Partial<VerifyFrame> | null | undefined
 
 // Children that take part in the parent's flow: visible and not absolutely positioned.
 const inFlowChildren = (n: IrNode): IrNode[] => (Array.isArray(n.children) ? n.children : []).filter((c) => c && !c.hidden && !c.absolute);
-// ts-port: legacy/producer-mismatch read kept as-is (item 1) — `grow` is a number in the producer; `=== true` is an older export's spelling.
+// `grow` is a number in the producer; `=== true` is an older export's spelling, still read.
 interface LegacyGrow { grow?: number | boolean; heightMode?: IrNode["heightMode"]; widthMode?: IrNode["widthMode"] }
 const growsAlong = (c: IrNode, dir: string): boolean => { const lc: LegacyGrow = c; return lc.grow === 1 || lc.grow === true || (dir === "column" ? lc.heightMode === "fill" : lc.widthMode === "fill"); };
 
-// ts-port: legacy/producer-mismatch read kept as-is (item 2) — the older layout spelling
-// (itemSpacing, paddingTop/Right/Bottom/Left) beside the producer's gap/padding[].
+// the older layout spelling (itemSpacing, paddingTop/Right/Bottom/Left) is still read beside the producer's gap/padding[].
 interface LegacyLayout extends LayoutSpec { itemSpacing?: number; paddingTop?: number; paddingRight?: number; paddingBottom?: number; paddingLeft?: number }
 const PAD_KEYS = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"] as const;
 const PAD_SIDES = ["top", "right", "bottom", "left"] as const;
 type PadSide = (typeof PAD_SIDES)[number];
 
-// F-79: per FIXED axis (no widthMode/heightMode for it), padding the design cannot show: padding + in-flow content
+// per FIXED axis (no widthMode/heightMode for it), padding the design cannot show: padding + in-flow content
 // (sum + gaps on the main axis — the largest child when the list wraps — the largest child on the counter axis, or
 // for a wrapping list the stacked lines, see wrapLines) larger than the box (+1) skips the side the overflow runs out
 // at (the end for start alignment, the start for end alignment, both when centred); or content CENTRED on that axis
@@ -334,7 +329,7 @@ function paddingNotShown(n: IrNode, L: LegacyLayout, pad: readonly number[]): Ar
         content = wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, typeof L.rowGap === "number" ? L.rowGap : 0) ?? Math.max(...sizes);
       } else content = Math.max(...sizes);
       if (a + z + content > size + 1) {
-        // review H3: Figma still insets the first child by the START padding of a start-aligned box whose content
+        // Figma still insets the first child by the START padding of a start-aligned box whose content
         // overflows (the overflow runs out at the end) — only the end side cannot show; mirrored for end alignment;
         // both only when the content is centred (space-around/space-evenly centre under negative free space in CSS
         // flexbox; space-between starts at the start).
@@ -355,14 +350,14 @@ function paddingNotShown(n: IrNode, L: LegacyLayout, pad: readonly number[]): Ar
   return out;
 }
 
-// F-119 (D112): the notComparable field a line box taller than its fixed text box is listed under; --compare hangs the
+// the notComparable field a line box taller than its fixed text box is listed under; --compare hangs the
 // same why on a line-height delta of that node.
 const TEXT_BOX_HEIGHT = "text box height";
 const lineBoxWhy = (lh: number, h: number): string =>
   `the line box (${r2(lh)}px) is taller than the fixed text box (${r2(h)}px): Figma lets the line overflow the box — the build chooses: line-height ${r2(lh)} (the text overflows its box, as in Figma) or ${r2(h)} (the glyphs sit about ${r2((lh - h) / 2)}px higher); the TEXT height is not compared`;
 
 /** The drawn state a node inherits from an ancestor that was drawn in one. `from` = the owner's name (for the why),
- *  `fromId` = its id (F-74, D111: the probe hovers the OWNER, not this node — spec.drawnStateFrom). */
+ *  `fromId` = its id (the probe hovers the OWNER, not this node — spec.drawnStateFrom). */
 export interface InheritedState { state: DrawnState; why: string; from: string; fromId: string }
 /** expectNode()'s context: the node's path, its frame (for positions), and any inherited drawn state. */
 export interface ExpectContext { path?: string; frame?: Partial<VerifyFrame> | null; inheritedState?: InheritedState; frameId?: string }
@@ -387,7 +382,7 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
 
   // `text` is where the producer writes a TEXT node's content (text.ts); the export never carries `characters`.
   if (n.text != null) spec.text = n.text;
-  // F-69 (D114): Figma stores the typed string and applies the text case at render time (font.case) — `text` stays the
+  // Figma stores the typed string and applies the text case at render time (font.case) — `text` stays the
   // stored string, `textCase` says how it renders; --compare judges the RENDERED strings (renderedText). Small caps are
   // a font variant (smaller capitals), not different characters: not compared.
   const fcase = n.font ? n.font.case : undefined;
@@ -403,7 +398,7 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
     if (lh != null) spec.lineHeight = lh;
     const ls: { value?: number; unit?: string } | undefined = n.font.letterSpacing;
     // Figma's percent letter-spacing is a share of the font size; the producer writes "percent" (an older
-    // export "PERCENT") — it was read as px, so -2% on 20px text expected -2px, not -0.4px.
+    // export "PERCENT") — read as px, -2% on 20px text would be expected as -2px, not -0.4px.
     if (ls && typeof ls.value === "number") {
       if (String(ls.unit).toLowerCase() !== "percent") spec.letterSpacing = ls.value;
       else if (typeof n.font.size === "number") spec.letterSpacing = r2((ls.value / 100) * n.font.size);
@@ -412,14 +407,14 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
   }
   const fill = firstSolid(Array.isArray(n.fills) ? n.fills : null);
   // A TEXT node's fill is its TEXT colour, not a background — conflating the two is how a chip with a
-  // missing background still looked "bound" (finding 100).
+  // missing background still looked "bound".
   if (fill && n.type !== "TEXT") {
     if (isPaintNode(n)) spec.fill = normColor(fill.color);
     else spec.backgroundColor = normColor(fill.color);
   }
   if (fill && n.type === "TEXT" && !spec.color) spec.color = normColor(fill.color);
   // Paint this method does not compare (a shadow, a blur, a gradient or image fill) is still paint: such a
-  // wrapper is drawn, so a plan may never fold it away (F-77).
+  // wrapper is drawn, so a plan may never fold it away.
   const paints = Array.isArray(n.fills) ? n.fills : [];
   if ((Array.isArray(n.effects) && n.effects.length > 0) || paints.some((p) => p && p.type !== "solid" && p.visible !== false)) spec.decorated = true;
 
@@ -439,12 +434,12 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
     // Per-side weights (a divider with only a bottom border) have no single CSS `border-width` to
     // compare against, so record them as their own field rather than picking one arbitrarily.
     else if (st.weights && typeof st.weights === "object") { const ws = st.weights; spec.borderWidths = (["top", "right", "bottom", "left"] as const).map((k) => { const v = ws[k]; return typeof v === "number" ? v : 0; }); }
-    if (st.align) spec.strokeAlign = st.align; // (after the weight/weights chain — review M1)
+    if (st.align) spec.strokeAlign = st.align; // (after the weight/weights chain)
   }
   // Radius: one number, or per-corner. A per-corner radius with UNEQUAL corners (a table header
-  // rounded only at the top) is compared corner by corner — the old code read `radius.tl` only, so
-  // a card rounded at the bottom ({bl,br}) produced no radius spec at all (finding 162).
-  // F-75: a radius shows only where something draws the corners — a visible fill or stroke, an effect, or a clip of
+  // rounded only at the top) is compared corner by corner — reading `radius.tl` only would give
+  // a card rounded at the bottom ({bl,br}) no radius spec at all.
+  // a radius shows only where something draws the corners — a visible fill or stroke, an effect, or a clip of
   // the content. On a layer that draws none of them it is invisible in Figma too, and a build need not carry it.
   const drawsBox = paints.some((p) => p && p.visible !== false) || !!(st && ((Array.isArray(st.colors) && st.colors.length > 0) || (Array.isArray(st.paints) && st.paints.some((p) => p && p.visible !== false))))
     || (Array.isArray(n.effects) && n.effects.length > 0) || n.clip === true;
@@ -462,8 +457,8 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
   }
 
   const L: LegacyLayout | undefined = n.layout;
-  // DT-50: an asset/geometry/assetSkipped leaf is one exported image — whatever padding/gap an OLD export inferred for it is
-  // the inset already baked into the file (new exports carry no `layout` on such a leaf). Never compared.
+  // an asset/geometry/assetSkipped leaf is one exported image — whatever padding/gap an older export inferred for it is
+  // the inset already baked into the file (current exports carry no `layout` on such a leaf). Never compared.
   if (L && typeof L === "object" && (n.asset || n.geometry || n.assetSkipped)) {
     const BAKED = "inset baked into the exported asset";
     const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : undefined;
@@ -474,7 +469,7 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
     const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : undefined;
     if (g !== undefined) {
       // A stored gap is only a GAP when it separates laid-out children. Three shapes where it is not
-      // (finding 194: `gap 200 → 16`, `gap 146`, `gap 160` were all Figma auto-layout slack):
+      // (real pulls showed `gap 200 → 16`, `gap 146`, `gap 160` that were all Figma auto-layout slack):
       const dir = L.flexDirection === "column" ? "column" : "row";
       const flow = inFlowChildren(n);
       if (flow.length < 2) skip("gap", g, `fewer than two laid-out children (${flow.length}) — a gap has nothing to separate`);
@@ -493,7 +488,7 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
     else if (PAD_KEYS.some((k) => typeof L[k] === "number")) pad = PAD_KEYS.map((k) => L[k]);
     if (pad && pad.some((v) => typeof v === "number" && v !== 0)) {
       const p4 = pad.map((v) => (typeof v === "number" ? v : 0));
-      // F-79: padding that cannot show on a FIXED axis is not compared there (paddingSkip + a notComparable row per axis)
+      // padding that cannot show on a FIXED axis is not compared there (paddingSkip + a notComparable row per axis)
       const skipped: NonNullable<VerifySpec["paddingSkip"]> = [];
       for (const ax of paddingNotShown(n, L, p4)) {
         skipped.push(...ax.sides);
@@ -505,7 +500,7 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
   }
   if (n.box) {
     if (n.type === "TEXT") {
-      // DT-75 / F-62 / F-64 (D29): a TEXT's width. Hug text (autoResize width_and_height) IS its box — compared with
+      // a TEXT's width. Hug text (autoResize width_and_height) IS its box — compared with
       // the Range width, tolerance 1. Any other text box (fixed or fill width, height-auto) is wider than its words:
       // the build's element hugs the text, so the design's INK width (renderBox.w) is compared, tolerance textInk.
       // Truncation set (ellipsis / line clamp): a Range spans the full unclipped string (text-overflow keeps it), so a
@@ -527,9 +522,9 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
         spec.widthFrom = "renderBox";
         skip("width (text box)", n.box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, so the ink width (renderBox) is compared instead`);
       } else spec.width = n.box.w;
-      // F-119 (D112): a FIXED-height text box shorter than its line box (a 28px line in a 24px box). Figma lets the line
+      // a FIXED-height text box shorter than its line box (a 28px line in a 24px box). Figma lets the line
       // overflow the box; CSS has no such box, so the build picks one — say so instead of letting a later height or
-      // line-height delta read as a bug. Where Figma puts the glyphs inside the overflowing line is unverified (facts P7).
+      // line-height delta read as a bug. Where Figma puts the glyphs inside the overflowing line is unverified.
       const lh = spec.lineHeight;
       if (num(lh) && num(n.box.h) && lh > n.box.h + 0.5 && n.autoResize !== "width_and_height" && n.autoResize !== "height") {
         skip(TEXT_BOX_HEIGHT, n.box.h, lineBoxWhy(lh, n.box.h));
@@ -537,7 +532,7 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
     } else {
       if (typeof n.box.w === "number") spec.width = n.box.w;
       if (typeof n.box.h === "number") spec.height = n.box.h;
-      // D31: a hug axis may GROW in the build (more content) without the match being wrong
+      // a hug axis may GROW in the build (more content) without the match being wrong
       if (n.widthMode || n.heightMode) spec.sizing = { ...ifDefined("w", n.widthMode), ...ifDefined("h", n.heightMode) };
     }
   }
@@ -548,7 +543,7 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
     spec.positionFrom = pos.source;
   }
   if (typeof n.opacity === "number" && n.opacity !== 1) spec.opacity = n.opacity;
-  // DT-74: the exporter omits opacity 1 — a node that paints or carries copy states it anyway, so a control
+  // the exporter omits opacity 1 — a node that paints or carries copy states it anyway, so a control
   // rendered at opacity 0.5 is a delta instead of passing unchecked
   else if (spec.text !== undefined || spec.placeholderText !== undefined || spec.color !== undefined || spec.backgroundColor !== undefined || spec.fill !== undefined || spec.borderColor !== undefined || spec.decorated) spec.opacity = 1;
 
@@ -556,7 +551,7 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
   if (own) { spec.drawnState = own.state; spec.drawnStateWhy = own.why; spec.drawnStateOwn = true; }
   else if (ctx.inheritedState) {
     spec.drawnState = ctx.inheritedState.state; spec.drawnStateWhy = `inside '${ctx.inheritedState.from}', which ${ctx.inheritedState.why}`;
-    spec.drawnStateFrom = ctx.inheritedState.fromId; // F-74 (D111): the owner the probe puts in that state
+    spec.drawnStateFrom = ctx.inheritedState.fromId; // the owner the probe puts in that state
   }
 
   // The token NAME, carried through for the report. A mismatch whose spec value is bound to a token is
@@ -571,7 +566,7 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
 // Which nodes are worth a row. Everything visible that CARRIES a checkable value — a node with no
 // font, no fill, no radius, no layout and no stated position has nothing to be wrong about, and listing
 // it would bury the rows that matter. A stated position counts: the pagination bar that rendered 130px
-// below the frame carries nothing else (finding 164).
+// below the frame carries nothing else.
 function checkable(spec: VerifySpec): boolean {
   return (["text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderRadius", "radiusCorners", "gap", "padding", "borderColor", "x"] as const).some((k) => spec[k] !== undefined);
 }
@@ -586,8 +581,8 @@ const COORDINATES =
   "and no height (vertical ink and line boxes depend on font metrics). " +
   "Auto-layout children carry no position (the export does not state one); their parent's is compared.";
 
-// ts-port: legacy/producer-mismatch read kept as-is (item 3) — the older reaction shape (`action`
-// singular, `trigger.type`, `on`) beside the producer's reactions[].actions[] + plain-string trigger.
+// the older reaction shape (`action` singular, `trigger.type`, `on`) is still read beside the producer's
+// reactions[].actions[] + plain-string trigger.
 type LegacyReaction = Omit<Reaction, "trigger"> & { trigger?: ReactionTrigger | { type?: string }; action?: Action; on?: string };
 
 /** An expectation as READ BACK from disk (or built here): every field may be absent. */
@@ -604,25 +599,25 @@ export interface BuiltExpectation extends VerifyExpectation {
 }
 /** One screen export handed to buildExpectation(): the parsed document and the label it is known by. */
 export interface ExpectInput { doc: ScreenDoc | undefined; label?: string }
-/** buildExpectation()'s context beyond the screens: the export's pages/index.json layers (F-60), to tell an
+/** buildExpectation()'s context beyond the screens: the export's pages/index.json layers, to tell an
  *  interaction whose destination was never exported. A row's file is its own sourceFile stamp only. */
 export interface ExpectOptions { index?: { layers: IndexRow[] } | null;
-  /** D32: reads a sibling screen export by its index row's `file` (relative to the export root) — aliases are built
-   *  from the siblings of the SAME Figma file (the F-60/L-3 candidate rows); absent = no aliases */
+  /** reads a sibling screen export by its index row's `file` (relative to the export root) — aliases are built
+   *  from the siblings of the SAME Figma file (the candidate rows); absent = no aliases */
   readSibling?: ((file: string) => ScreenDoc | null | undefined) | null;
-  /** F-95: the plan for this screen — its interactions[] rows are merged (source "plan") when valid, the rest dropped
+  /** the plan for this screen — its interactions[] rows are merged (source "plan") when valid, the rest dropped
    *  with why; recorded as expectation.planInteractions (only when the plan has an interactions list) */
   plan?: { file: string; plan: Plan } | null;
-  /** 12c: reads the reference PNG by its export pointer (`assets/<file>`, relative to design/export/); null = not on
+  /** reads the reference PNG by its export pointer (`assets/<file>`, relative to design/export/); null = not on
    *  disk. Absent = no expectation.referenceImage is written (an in-memory caller with no export on disk). */
   readReference?: ((pointer: string) => Uint8Array | null) | null;
-  /** 12c: design/export/design-system.json's `colorProfile` stamp (bridge doc-types DesignSystemStamp), when read */
+  /** design/export/design-system.json's `colorProfile` stamp (bridge doc-types DesignSystemStamp), when read */
   colorProfile?: string | null }
 
-// D32: the OUTERMOST instances (no INSTANCE ancestor) of a screen's visible tree, by main component key, each indexed
+// the OUTERMOST instances (no INSTANCE ancestor) of a screen's visible tree, by main component key, each indexed
 // by the visible NAME PATH from the instance root ("" = the root itself) → node id. A path that repeats inside the
 // instance maps to null (ambiguous). Hidden layers are skipped (hidden.ts: the flag is inherited).
-// Each path also carries a CONTENT signature, and an alias needs both to agree (live run, group 11 review): a selected
+// Each path also carries a CONTENT signature, and an alias needs both to agree (seen in a live run): a selected
 // item moved between wrapper frames per screen, so one name path was unique in each export yet named "Orders" in
 // one and "Invoices" in the other. The signature is the subtree's visible TEXT (concatenated in tree order,
 // whitespace normalised); a subtree with no text uses the node types + main component key/set along the path.
@@ -650,7 +645,7 @@ function shellIndex(roots: readonly IrNode[]): ShellIndex {
       return texts;
     };
     go(inst, "", "", []);
-    // review M5: a node with no text of its own (a close icon) is also placed by its nearest ancestor (within the
+    // a node with no text of its own (a close icon) is also placed by its nearest ancestor (within the
     // instance) that HAS text — "x" in an "Add Item" popup is not the "x" of an "Edit Category" one
     for (const { p, anc } of noText) {
       const e = m.get(p);
@@ -670,13 +665,13 @@ function shellIndex(roots: readonly IrNode[]): ShellIndex {
 }
 const idSuffix = (id: string): string | null => { const i = id.indexOf(";"); return i === -1 ? null : id.slice(i + 1); };
 
-// F-104: the shape a sibling row is recognised by — the same component, or the same tree of node types.
+// the shape a sibling row is recognised by — the same component, or the same tree of node types.
 function rowSignature(n: IrNode): string {
   const mc = n.type === "INSTANCE" ? n.mainComponent : undefined;
   if (mc) return `I:${mc.setKey || mc.key || mc.setName || mc.name || ""}`;
   return `${n.type}(${(Array.isArray(n.children) ? n.children : []).filter((c) => c && !c.hidden).map(rowSignature).join(",")})`;
 }
-// F-104: under every parent, >=3 visible children with one signature are sibling ROWS; a TEXT at the same
+// under every parent, >=3 visible children with one signature are sibling ROWS; a TEXT at the same
 // relative path (child indices) in >=3 of them with the IDENTICAL string is the designer's repeated placeholder
 // copy ("14 Feb, 2026" in every row), not a claim about each row's data. Each such cluster is one group.
 function markRepeatedText(root: IrNode, specById: Map<string, VerifySpec>): void {
@@ -722,15 +717,15 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   const frames: Array<Partial<VerifyFrame>> = [];
   const seen = new Set<string>();
   let screen: string | undefined = undefined, exportedAt: string | undefined = undefined, reference: string | null = null;
-  // F-60: every node id each Figma file's docs carry (ids are per FILE), and the file each interaction came from
+  // every node id each Figma file's docs carry (ids are per FILE), and the file each interaction came from
   const idsByFile = new Map<string, Set<string>>();
-  // F-60 / L-3: each file's screen roots (id → name) — the index row that IS this screen ties it to its file
-  // (names: the root's own and the export's title — a multi-frame selection pull is indexed as "selection", review M-a)
+  // each file's screen roots (id → name) — the index row that IS this screen ties it to its file
+  // (names: the root's own and the export's title — a multi-frame selection pull is indexed as "selection")
   const rootsByFile = new Map<string, Map<string, Set<string>>>();
   const interactionFile = new Map<VerifyInteraction, string | undefined>();
   const roots: IrNode[] = [];
-  const rootNodesByFile = new Map<string, IrNode[]>(); // D32: each Figma file's input roots
-  const visibleById = new Map<string, { name: string; file: string }>(); // F-95: a plan row's node — its name and file
+  const rootNodesByFile = new Map<string, IrNode[]>(); // each Figma file's input roots
+  const visibleById = new Map<string, { name: string; file: string }>(); // a plan row's node — its name and file
 
   for (const { doc, label } of docs) {
     const exp = screenExportOf(doc);
@@ -743,20 +738,20 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
     for (const root of screenRoots(doc)) {
       if (root.id) {
         const names = getOrInit(getOrInit(rootsByFile, sourceFile ?? "", () => new Map<string, Set<string>>()), root.id, () => new Set<string>());
-        // (the title only for the frame the pull is filed under — the index row carries that one id, review LOW-1)
+        // (the title only for the frame the pull is filed under — the index row carries that one id)
         for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : undefined]) if (typeof n === "string" && n) names.add(n);
       }
       getOrInit(rootNodesByFile, sourceFile ?? "", () => []).push(root);
       if (!reference && root.reference) reference = root.reference;
       const b: Partial<Box> = root.box || {};
       const frame: Partial<VerifyFrame> = { nodeId: root.id, name: root.name, ...ifDefined("w", b.w), ...ifDefined("h", b.h), ...ifDefined("x", b.x), ...ifDefined("y", b.y), clip: root.clip === true,
-        ...ifDefined("scroll", root.scroll) }; // D43: a frame designed to scroll sideways
+        ...ifDefined("scroll", root.scroll) }; // a frame designed to scroll sideways
       frames.push(frame);
       const frameId = frames.length > 1 ? root.id : undefined;
       const stateOf = new WeakMap<IrNode, InheritedState>(); // node -> inherited drawn-state { state, why, from }
       // node -> the ancestorIds its CHILDREN get: itself then its own ancestors (the frame root contributes none)
       const chainOf = new WeakMap<IrNode, string[]>();
-      // F-61: a frame's fixed children (pinned while scrolling) and everything inside them. Figma keeps them "on
+      // a frame's fixed children (pinned while scrolling) and everything inside them. Figma keeps them "on
       // top of scrolling children" (plugin typings, numberOfFixedChildren) — the LAST N of children[], which is bottom-to-top.
       const fixedNodes = new WeakSet<IrNode>();
       roots.push(root);
@@ -764,7 +759,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
         if (n.id) fileIds.add(n.id);
         if (c.hidden) {
           // Counted, never specified. The ids travel with the expectation so --compare can say "you
-          // drove a hidden layer" instead of crediting it (finding 187).
+          // drove a hidden layer" instead of crediting it.
           if (!c.parentHidden) hidden.roots.push({ nodeId: n.id, name: n.name, path: c.path });
           if (n.id) hidden.ids.push(n.id);
           if (checkable(expectNode(n, { path: c.path }))) hidden.specsSkipped++;
@@ -775,7 +770,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
         }
         const inherited = c.parent ? stateOf.get(c.parent) : undefined;
         // Every ancestor of a visible node is visible (hidden is inherited), so this is the visible chain,
-        // nearest first. The probe scopes a text match to a tagged ancestor with it (group 7); compare ignores it.
+        // nearest first. The probe scopes a text match to a tagged ancestor with it; compare ignores it.
         const ancestorIds = c.parent ? chainOf.get(c.parent) ?? [] : [];
         chainOf.set(n, c.parent ? [...(n.id ? [n.id] : []), ...ancestorIds] : []);
         if (n.id && seen.has(n.id)) return;
@@ -791,8 +786,8 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
         if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id, fromId: n.id });
         if (checkable(spec)) nodes.push(spec);
         else {
-          // review M2: a group-11 exclusion (radius on a layer that draws nothing, padding the box cannot show) took the
-          // node's only checkable value — it is not a spec any more; say so rather than let it vanish
+          // an exclusion (radius on a layer that draws nothing, padding the box cannot show) took the
+          // node's only checkable value — it is not a spec; say so rather than let it vanish
           const g11 = gaps.filter((g) => g.field === "border-radius" || g.field.startsWith("padding ("));
           if (g11.length) gaps.push({ nodeId: n.id, name: n.name, field: "node", value: null,
             why: gaps.some((g) => g.field === "border-radius") ? "node not checked: it draws nothing (no fill, stroke, effect or clip) — its radius was its only stated value"
@@ -811,7 +806,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
           });
         }
         // The interaction graph is already in the export, keyed by node id — the richest input in the
-        // whole IR (finding 70) and the one nothing verified (finding 80). The real shape is
+        // whole IR and the one nothing verified. The real shape is
         // `reactions[].actions[]` (plural on both), with `trigger` a plain string — see
         // figma-plugin/src/prototype.ts. A singular `action` is accepted too so an older export still
         // yields interactions rather than silently producing none.
@@ -837,11 +832,11 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
     }
   }
 
-  // ---- F-95 (D40(7)): plan.interactions[] — interactions the export cannot carry (a control with no prototype
+  // ---- plan.interactions[] — interactions the export cannot carry (a control with no prototype
   // reaction). Merged only when the row can be graded like an export row: a visible node of this export, a known
   // `expect` (→ the action OUTCOMES_FOR_ACTION grades), a dialog naming the frame it opens, and no export row with
   // the same nodeId + trigger (the export wins). Every other row is dropped with why. exportContentSha256 does not
-  // change (D21: waivers bind the export, not the plan); only the rows' own hash binds (planInteractions.sha256).
+  // change (waivers bind the export, not the plan); only the rows' own hash binds (planInteractions.sha256).
   const planIn = opts && opts.plan;
   let planInteractions: VerifyExpectation["planInteractions"];
   if (planIn && Array.isArray(planIn.plan.interactions)) {
@@ -863,7 +858,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
       const node = visibleById.get(id);
       if (!node) return drop(hiddenIds.has(id) ? "the node is a hidden layer — it is not built or driven" : "no visible node of this export has that id");
       const trigger = o.trigger.trim().toLowerCase();
-      // review L2: the probe opens a dialog by clicking its opener — a dialog row on any other trigger (hover, key, drag…)
+      // the probe opens a dialog by clicking its opener — a dialog row on any other trigger (hover, key, drag…)
       // could never be driven, so it would sit not-probed forever
       if (o.expect === "dialog" && trigger !== "on_click" && trigger !== "on_press") return drop(`expect dialog needs trigger on_click or on_press (the probe opens a dialog by clicking its opener), not ${trigger}`);
       if (keys.has(`${id}|${trigger}`)) return drop(`duplicates ${interactions.some((r) => r.nodeId === id && r.trigger === trigger && r.source !== "plan") ? "the export's own interaction" : "an earlier plan row"} for this node and trigger (${trigger})`);
@@ -877,21 +872,21 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
     planInteractions = { plan: planIn.file, sha256: planInteractionsSha256(planIn.plan), merged, dropped };
   }
 
-  // F-104: repeated placeholder copy in sibling rows
+  // repeated placeholder copy in sibling rows
   const specById = new Map(nodes.map((s) => [s.nodeId, s]));
   for (const r of roots) markRepeatedText(r, specById);
 
-  // F-60 / D22: a destination that is no node of the export FOR THE SAME FIGMA FILE was never designed here.
+  // a destination that is no node of the export FOR THE SAME FIGMA FILE was never designed here.
   // Figma node ids are per file — a join across files would match unrelated nodes. So a row's file is only ever
   // its OWN sourceFile stamp (never the index's top-level one: the CLI merges rows of several index files), and a
   // destination is looked up among the rows that COULD be this screen's file: the rows naming it, plus every row
   // naming none (an export written before the bridge stamped sourceFile — every field-test export, and the rest
-  // of such an index after one screen is re-pulled, live run L-3). Found in one of those, or among the ids of any
+  // of such an index after one screen is re-pulled). Found in one of those, or among the ids of any
   // unnamed input, it counts as exported (it may be this file's); found in none, it was never exported.
   // The screen must be IN the index — a row with its root's id AND name (a bare id like 1:1 recurs across files),
   // in its file or unnamed — or an index of another file would call every destination "never exported". A screen
   // naming no file takes its file from that row: one named file → that file's rows + unnamed ones; any unnamed own
-  // row → every row; rows naming two files → nothing decided. Otherwise the row is left as it was (graded as before).
+  // row → every row; rows naming two files → nothing decided. Otherwise the row is left as it was.
   // Known misses: sourceFile is the file's NAME — rows pulled before a rename name the old one and are excluded; a
   // destination frame nested in an exported SECTION/GROUP is no index row of its own, so it reads as never exported.
   const index = opts && opts.index;
@@ -908,7 +903,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
     if (f === "") {
       const named = new Set(covering.map((l) => l.sourceFile).filter((x): x is string => !!x));
       if (named.size > 1) return null;
-      // an unnamed own row may be any file's (review L-c: a duplicated file shares ids AND names) → every row
+      // an unnamed own row may be any file's (a duplicated file shares ids AND names) → every row
       if (named.size === 0 || covering.some((l) => !l.sourceFile)) return { rows: index.layers, resolved: null };
       f = [...named][0] ?? "";
     }
@@ -916,7 +911,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   }
   for (const row of interactions) {
     const file = interactionFile.get(row);
-    // D28 (live L-4): a change_to's destination is a component VARIANT — a drawn state of this very instance, never a
+    // a change_to's destination is a component VARIANT — a drawn state of this very instance, never a
     // screen anyone exports — so it is never "undesigned"; undriven, it is not-probed like any other interaction.
     if (!row.destinationId || file === undefined || String(row.action).toLowerCase() === "change_to") continue;
     const known = idsByFile.get(file);
@@ -925,14 +920,14 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
     if (candidates && !candidates.some((l) => l.id === row.destinationId)) row.destinationExported = false;
   }
 
-  // ---- D32/D35: aliases. A shared shell (sidebar, header) is ONE component instance on every screen, but Figma re-mints
-  // the ids under each instance (`I<instance>;<path>`, nested instances re-mint the path too — F-85), so a build tagged
+  // ---- aliases. A shared shell (sidebar, header) is ONE component instance on every screen, but Figma re-mints
+  // the ids under each instance (`I<instance>;<path>`, nested instances re-mint the path too), so a build tagged
   // with screen A's ids misses on screen B. For each outermost instance, the SAME node in a sibling export of the SAME
-  // Figma file (the F-60/L-3 candidate rows — never a join across files: ids and keys would match unrelated nodes) is
+  // Figma file (the candidate rows — never a join across files: ids and keys would match unrelated nodes) is
   // the one at the same visible name path under an instance of the same main component key, when that key has exactly
   // one outermost instance in both exports and the path is unique in both. Its id is an alias; an id whose `;` suffix
   // equals the spec's own is left out (the probe's tag-shared-path finds it already). Rebuilt from the CURRENT
-  // siblings at every --expect (facts §8: sublayer id stability is undocumented). Known misses: a renamed layer, a
+  // siblings at every --expect (sublayer id stability is undocumented). Known misses: a renamed layer, a
   // repeated name inside the instance (e.g. same-named menu items), a shell instantiated twice on one screen.
   const readSibling = opts && opts.readSibling;
   if (index && readSibling) {
@@ -952,12 +947,12 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
         const sib = readSibling(row.file);
         if (!sib) continue;
         // the sibling's own stamp must not name another file (a row may be unnamed while its export is stamped). An
-        // UNSTAMPED sibling is allowed for a stamped screen (the L-3 partly re-pulled export): the risk is small — an alias
+        // UNSTAMPED sibling is allowed for a stamped screen (a partly re-pulled export): the risk is small — an alias
         // also needs the same component key, a unique name path, the same content and texted ancestor, and a tag-alias
-        // match is capped (D30), so D39 keeps it from making a pass on its own.
+        // match is capped, so it cannot make a pass on its own.
         const sx = screenExportOf(sib);
         const sibFile: unknown = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : undefined;
-        // (an unstamped screen is checked against the file its index row resolved to — review pass 2)
+        // (an unstamped screen is checked against the file its index row resolved to)
         if (co.resolved && typeof sibFile === "string" && sibFile && sibFile !== co.resolved) continue;
         const theirs = shellIndex(screenRoots(sib));
         for (const [key, mine] of own) {
@@ -969,7 +964,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
             if (!mine1 || !their1 || mine1.sig !== their1.sig) continue; // same path, different content: another node
             const id = mine1.id, sid = their1.id;
             if (sid === id) continue;
-            // (an id whose `;` suffix is ANY expected spec's suffix is that spec's tag-shared-path match — review LOW a)
+            // (an id whose `;` suffix is ANY expected spec's suffix is that spec's tag-shared-path match)
             const s2 = idSuffix(sid);
             if (s2 !== null && specSuffixes.has(s2)) continue;
             getOrInit(aliases, id, () => new Set<string>()).add(sid);
@@ -980,9 +975,9 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
     for (const [id, set] of aliases) { const sp = specById.get(id); if (sp) sp.aliases = [...set].sort(); }
   }
 
-  // ---- F-117: what an overlay/swap opens. The destination frame's own overlay block (serialize.ts writes it only when it
+  // ---- what an overlay/swap opens. The destination frame's own overlay block (serialize.ts writes it only when it
   // differs from Figma's default: centred, no scrim, no close-on-click-outside) — read off the destination ROOT among the
-  // inputs of the same file, else off the sibling export its index row names (the F-60/L-3 candidate rows). A destination
+  // inputs of the same file, else off the sibling export its index row names (the candidate rows). A destination
   // that is no exported root (never exported, or nested in another frame) gets no overlay.
   const siblingCache = new Map<string, ScreenDoc | null>();
   const sibling = (file: string): ScreenDoc | null => {
@@ -1017,7 +1012,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   }
 
   const f0: Partial<VerifyFrame> = frames[0] || {};
-  // 12c: the reference PNG's geometry over the first frame (D40(4), D48) — only when the caller can read the PNG
+  // the reference PNG's geometry over the first frame — only when the caller can read the PNG
   const readReference = opts && opts.readReference;
   let referenceImage: VerifyReferenceImage | VerifyReferenceUnusable | undefined;
   if (readReference) {
@@ -1032,7 +1027,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
     schema: EXPECTATION_SCHEMA,
     ...ifDefined("screen", screen),
     ...ifDefined("exportedAt", exportedAt),
-    // P2b round 2 (finding 314): the design's identity without the pull's timestamps, so a no-change
+    // the design's identity without the pull's timestamps, so a no-change
     // re-pull (only `exportedAt` differs) is recognised as the same design by content, not by clock.
     exportContentSha256: exportContentSha256(docs.map((d) => d.doc)),
     reference,
@@ -1061,11 +1056,11 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   };
 }
 
-// ---------------------------------------------------------------- 12c: the reference image (--expect, D40(4), D48)
+// ---------------------------------------------------------------- the reference image (--expect)
 // Where the export's reference PNG sits over the first frame, so the probe can render the build at the reference's own
 // scale and crop the frame box out of it. Index first (the row write-out.ts wrote for THIS png), else recomputed from
 // the export root exactly as the bridge does. A png whose scale is not the one Figma renders a reference at is a
-// discovery thumbnail (F-08) — never diffed at its own scale.
+// discovery thumbnail — never diffed at its own scale.
 /** PNG facts the visual diff needs (IHDR + the colour chunks before IDAT) — null when the bytes are not a PNG. A tiny
  *  local reader: design-to-code's png.ts is the probe's decoder (verify-screen stays independent of it). */
 export function pngHeader(b: Uint8Array): { w: number; h: number; colorType: number; bitDepth: number; interlace: number; iccp: string | null } | null {
@@ -1091,7 +1086,7 @@ export function pngHeader(b: Uint8Array): { w: number; h: number; colorType: num
 }
 const round4 = (n: number): number => Math.round(n * 10000) / 10000;
 /** `base` joined with a "/"-separated relative path, resolved, when it lies strictly inside `within` (default `base`) — else
- *  null (F-7: a pointer or a referenceImage.path with `..` segments never reads a file outside design/export). Lexical only:
+ *  null (a pointer or a referenceImage.path with `..` segments never reads a file outside design/export). Lexical only:
  *  no file is touched. Shared by --expect and the probe (probe-visual.ts). */
 export function resolveInside(base: string, rel: string, within: string = base): string | null {
   const root = path.resolve(within), file = path.resolve(base, ...rel.split("/"));
@@ -1110,7 +1105,7 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   const unusable = (p: string | null, why: string): VerifyReferenceUnusable => ({ usable: false, path: p, why });
   if (!reference) return unusable(null, "the export has no reference PNG for this screen — re-pull it with its reference");
   const p = "design/export/" + reference;
-  // F-7: confined to design/export (lexically — the root used here is any absolute one)
+  // confined to design/export (lexically — the root used here is any absolute one)
   if (resolveInside(path.resolve("design", "export"), reference) === null) return unusable(p, `the reference pointer ${reference} leads outside design/export — re-pull the screen`);
   if (!root || root.reference !== reference) return unusable(p, "the reference PNG belongs to another frame than the first one — only the first frame is diffed");
   const box = root.box;
@@ -1125,7 +1120,7 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   // index first: the row write-out.ts wrote for THIS png (same id, same file when both are stamped, same pointer)
   const row = o.rows.find((r) => r.id === root.id && (!r.sourceFile || !o.sourceFile || r.sourceFile === o.sourceFile) && r.reference === reference
     && num(r.referenceScale) && r.referenceScale > 0);
-  // The export fallback is bridge/src/write-out.ts writeScreen's formula (F-118), duplicated here — design-to-code never
+  // The export fallback is bridge/src/write-out.ts writeScreen's formula, duplicated here — design-to-code never
   // imports bridge runtime code; keep the two in step: refBox = renderBox || box; scale = round4(png.w / refBox.w);
   // offset = renderBox ? renderBox − box : {0, 0}.
   const rb = root.renderBox && num(root.renderBox.w) && root.renderBox.w > 0 ? root.renderBox : undefined;
@@ -1134,12 +1129,12 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   const scale = row && num(row.referenceScale) ? row.referenceScale : round4(png.w / (rb ? rb.w : box.w));
   const offset = rowOffset ?? exportOffset;
   if (!offset) return unusable(p, "the export root has render bounds but no position (box.x/y) — where the reference sits over the frame is unknown");
-  // F-08: a discovery thumbnail (360 px for a 1440 frame) is no export reference — Figma renders roots at s0
+  // a discovery thumbnail (360 px for a 1440 frame) is no export reference — Figma renders roots at s0
   // (the PNG on disk is checked too, not only the index's number: a thumbnail written over the pointer after the pull)
   const s0 = figmaReferenceScale(box.w, box.h), onDisk = png.w / (rb ? rb.w : box.w);
   if (![scale, onDisk].every((v) => Math.abs(v - s0) <= REFERENCE_SCALE_SLACK * s0))
     return unusable(p, `the reference is a ${png.w} px image, not the export reference (a discovery thumbnail) — re-pull the screen`);
-  // F-3: the PNG must be the render bounds at that scale on BOTH axes (±2 px; on the height also the scale's own rounding — it
+  // the PNG must be the render bounds at that scale on BOTH axes (±2 px; on the height also the scale's own rounding — it
   // comes from png.w, up to 1 px off the true width, + round4 — so a tall narrow frame's round(h · scale) can be h/w px off:
   // 0 extra for 1440×720, 12 for 400×5000). A PNG of another height is a stale or
   // foreign image under the pointer — and an absurd one (150 000 px tall) would be decoded in full by the probe.
@@ -1159,11 +1154,11 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
 
 // ---------------------------------------------------------------- the comparison
 //
-// The CANONICAL measured keys. A probe that names a field differently is not silently skipped any
-// more: a key in FIELDS that is present in zero measurements is printed in the headline, and keys this
-// file does not read are listed (finding 182 — a probe wrote `radius`, the comparer read
-// `borderRadius`, and a whole category of values passed untested for a phase).
-// F-67 (D112): two sets. A measured node's OWN keys (beside `styles`) and the keys INSIDE `styles` — a `styles.states`
+// The CANONICAL measured keys. A probe that names a field differently is never silently skipped:
+// a key in FIELDS that is present in zero measurements is printed in the headline, and keys this
+// file does not read are listed (a probe that wrote `radius` where the comparer reads
+// `borderRadius` would leave a whole category of values passed untested).
+// Two sets: a measured node's OWN keys (beside `styles`) and the keys INSIDE `styles` — a `styles.states`
 // block is a misplaced key (unknown, with a hint), never read; the flat form (no `styles`) carries both on the node.
 const KNOWN_NODE_KEYS = new Set([
   "nodeId", "styles", "states", "matchedBy", "note", "notes", "selector", "selectorCount", "unmeasured", "textFrom", "textFromMixed", "fillSource",
@@ -1172,9 +1167,9 @@ const KNOWN_STYLE_KEYS = new Set([
   "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color", "backgroundColor", "fill", "borderColor",
   "borderWidth", "borderRadius", "gap", "gapVisual", "width", "height", "x", "y", "opacity", "padding", "text",
   "placeholderText", "placeholderColor", "tag", "textBox", "display", "transform", "rotate", "visible",
-  // D34: where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
+  // where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
   "strokeFrom", "strokeAlign",
-  // F-69 (D114): a TEXT's computed text-transform; F-74 (D111): who paints a transparent element (optional keys)
+  // a TEXT's computed text-transform; who paints a transparent element (optional keys)
   "textTransform", "paintedBy",
   // free text, never read for a judgement — tolerated on either level
   "note", "notes",
@@ -1182,7 +1177,7 @@ const KNOWN_STYLE_KEYS = new Set([
 const KNOWN_MEASURED_KEYS = new Set([...KNOWN_NODE_KEYS, ...KNOWN_STYLE_KEYS]);
 // Suggestions only — the key is NEVER silently accepted (design note: a wrong key must be loud).
 const KEY_HINTS: Record<string, string> = { radius: "borderRadius", borderTopLeftRadius: "borderRadius", background: "backgroundColor", bg: "backgroundColor", w: "width", h: "height", svgFill: "fill", placeholder: "placeholderText", rowGap: "gapVisual", columnGap: "gap",
-  // F-67: a node-level key written INSIDE styles is not read there (a styles.fillSource "img" would not exempt the fill)
+  // a node-level key written INSIDE styles is not read there (a styles.fillSource "img" would not exempt the fill)
   ...Object.fromEntries([...KNOWN_NODE_KEYS].filter((k) => k !== "nodeId" && k !== "styles" && k !== "note" && k !== "notes").map((k) => [k, `nodes[].${k} (beside styles, not inside)`])) };
 
 /** The spec fields compared one-to-one against a measured style of the same name. */
@@ -1214,7 +1209,7 @@ const FIELDS: Field[] = [
 // Every key a measured node's `styles` carries — the FIELDS compared one-to-one, plus the keys compared
 // their own way. Exported: the shipped probe (verify-probe.ts) measures exactly these, and MEASURED_KEYS_DOC's
 // styles line is generated from it.
-// (F-78: `display` — an id on an inline element measures its text's box, not a frame's)
+// (`display` — an id on an inline element measures its text's box, not a frame's)
 const STYLE_KEYS: readonly string[] = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
 const STYLE_KEY_SHAPE: Record<string, string> = {
   borderRadius: "number | [tl,tr,br,bl]", padding: "[t,r,b,l]", fill: "an SVG's paint", textBox: "{x,w} of a Range over the text",
@@ -1224,7 +1219,7 @@ const STYLE_KEY_SHAPE: Record<string, string> = {
 
 const MEASURED_KEYS_DOC: Record<string, string> = {
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (DT-23: `fill` was missing)
+  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
   "nodes[].styles": `computed values, EVERY key on every node — lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) — (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
   "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null — a null is listed as not measured, never as checked",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill — never background-color",
@@ -1244,8 +1239,8 @@ const MEASURED_KEYS_DOC: Record<string, string> = {
   "expectationSha256": "sha256 of the .expected.json you measured against",
 };
 
-// Which variable a delta is about. It used to be `Object.values(spec.tokens)[0]` whatever the field,
-// so a background delta read `token: "Space 4"` (findings 98/160).
+// Which variable a delta is about, chosen by the field (not `Object.values(spec.tokens)[0]`, which
+// would make a background delta read `token: "Space 4"`).
 const TOKEN_KEYS: Record<string, string[]> = {
   color: ["fills", "color"], backgroundColor: ["fills"], fill: ["fills"], placeholderColor: ["fills"],
   borderColor: ["strokes"], borderWidth: ["strokeWeight", "strokeTopWeight"],
@@ -1269,7 +1264,7 @@ function compareField(f: Field, want: JsonValue | undefined, got: JsonValue | un
   const nw = f.norm ? f.norm(want) : want;
   const ng = f.norm ? f.norm(got) : got;
   // One side cannot be known after normalising (an unknown weight name, `line-height: normal`) — not a
-  // mismatch. A RAW null from the probe never gets here: compare() lists it under fieldsNotMeasured first (DT-43).
+  // mismatch. A RAW null from the probe never gets here: compare() lists it under fieldsNotMeasured first.
   if (nw == null || ng == null) return null;
   if (f.tol == null) return nw === ng ? null : { want: nw, got: ng, delta: null };
   const a = Number(nw), b = Number(ng);
@@ -1279,44 +1274,44 @@ function compareField(f: Field, want: JsonValue | undefined, got: JsonValue | un
 }
 
 function comparePadding(want: unknown, got: readonly number[], skip?: readonly string[]): Bad | null {
-  // (compare() hands over four px numbers — a null or unreadable side is listed as not measured first, DT-43/DT-42)
+  // (compare() hands over four px numbers — a null or unreadable side is listed as not measured first)
   if (!Array.isArray(want)) return null;
   const w: number[] = want.map(Number);
   if (w.some(Number.isNaN)) return null;
-  // F-79: a side the design cannot show (expectation paddingSkip) is not compared
+  // a side the design cannot show (expectation paddingSkip) is not compared
   const worst = Math.max(0, ...w.map((v, i) => (skip && skip.includes(PAD_SIDES[i] ?? "") ? 0 : Math.abs(v - (got[i] ?? 0)))));
   return worst <= TOLERANCE.padding ? null : { want: w, got: [...got], delta: Number(worst.toFixed(3)) };
 }
 
 // A measured radius as four corners [tl,tr,br,bl]: a number, a list of numbers or px strings
-// (["8px","8px","8px","8px"] — DT-46: each item used to go through Number() and fail), or a CSS shorthand
+// (["8px","8px","8px","8px"] — each item is parsed, not passed through Number()), or a CSS shorthand
 // string. A percentage or an elliptical "8px / 4px" is not a px radius here (the shipped probe resolves %).
 function radiusCorners(v: unknown): [number, number, number, number] | null {
   return v == null ? null : fourSides(v);
 }
 // CSS clamps a radius at half the shorter side, and so does Figma: `radius: 500` on a 36px box and
-// `rounded-full` (33554400px) are both a circle (finding 194). Compare the radius each side can ACTUALLY
+// `rounded-full` (33554400px) are both a circle. Compare the radius each side can ACTUALLY
 // draw, not the number either side stored.
 const clampRadius = (r: number, w: unknown, h: unknown): number => (num(w) && num(h) && w > 0 && h > 0 ? Math.min(r, Math.min(w, h) / 2) : r);
 
 const TABLE_TAGS = new Set(["table", "thead", "tbody", "tfoot", "tr"]);
-// DT-48 / F-75: a table row or row group draws no border-radius (CSS Backgrounds 3: radius applies to table and
+// a table row or row group draws no border-radius (CSS Backgrounds 3: radius applies to table and
 // table-cell boxes only) — getComputedStyle still returns the specified value, so neither direction is evidence.
 const ROW_TAGS = new Set(["tr", "thead", "tbody", "tfoot"]);
 const ROW_RADIUS_WHY = "a table row/row-group does not draw border-radius — report the corner cells' radii under this id, or tag the cells";
-// F-78: a FRAME/INSTANCE id on an inline element: its box is the union of its text's line boxes, not a frame's
+// a FRAME/INSTANCE id on an inline element: its box is the union of its text's line boxes, not a frame's
 const INLINE_BOX_FIELDS = new Set<string>(["width", "height", "x", "y", "borderRadius"]);
 const inlineWhy = (tag: string): string => `the id sits on an inline <${tag || "element"}>, whose box is its text's — tag the element that owns the box`;
-// DT-74 (D34, verified): Chromium FLOORS a computed border width to whole px, with a 1px minimum for any non-zero
+// Chromium FLOORS a computed border width to whole px, with a 1px minimum for any non-zero
 // width (0.5 → 1, 1.5 → 1, 2.7 → 2, at DPR 1/2/3). A design's stroke is compared as the border CSS can draw. A ring
 // (box-shadow spread, outline) is not snapped — it is compared with the raw design width.
 const cssBorderWidth = (d: number): number => (d <= 0 ? 0 : d < 1 ? 1 : Math.floor(d));
 const normText = (t: unknown): string => String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-// F-74 (D111): the probe's paintedBy block (a hand-written probe's free-form value is ignored)
+// the probe's paintedBy block (a hand-written probe's free-form value is ignored)
 const isPaintedBy = (x: unknown): x is PaintedBy => isJsonObject(x) && typeof x.backgroundColor === "string" && (x.via === "ancestor" || x.via === "child")
   && typeof x.tag === "string" && typeof x.depth === "number" && (x.dt === undefined || typeof x.dt === "string");
-// ---- F-69 (D114): text as it RENDERS. Figma keeps the typed string and applies font.case when drawing; CSS keeps the DOM
-// string and applies text-transform when drawing (textContent never carries it — facts P2).
+// ---- text as it RENDERS. Figma keeps the typed string and applies font.case when drawing; CSS keeps the DOM
+// string and applies text-transform when drawing (textContent never carries it).
 /** Figma's TextCase on a stored string. TITLE = "the first character of each word is upper case and all other characters
  *  are in lower case" (Plugin API, TextCase) — words split on white space. */
 function applyFigmaCase(t: string, c: VerifySpec["textCase"]): string {
@@ -1327,7 +1322,7 @@ function applyFigmaCase(t: string, c: VerifySpec["textCase"]): string {
 }
 /** CSS text-transform on a DOM string, or null for a value this does not model (full-width, math-auto…). `capitalize`
  *  upper-cases the first letter or digit of each word (a hyphen starts a word, an apostrophe does not, leading
- *  punctuation is skipped) and KEEPS the rest (MDN; facts P1: "hello wORLD-foo it's 3d" → "Hello WORLD-Foo It's 3d"). */
+ *  punctuation is skipped) and KEEPS the rest (MDN: "hello wORLD-foo it's 3d" → "Hello WORLD-Foo It's 3d"). */
 function applyCssTransform(t: string, tt: string): string | null {
   const v = tt.trim().toLowerCase();
   if (v === "none") return t;
@@ -1336,7 +1331,7 @@ function applyCssTransform(t: string, tt: string): string | null {
   if (v === "capitalize") return t.replace(/(^|[\s\-\u2010-\u2015])([^\p{L}\p{N}\s\-]*)([\p{L}\p{N}])/gu, (_m, b: string, punct: string, ch: string) => b + punct + ch.toUpperCase());
   return null;
 }
-/** The two strings a TEXT compare judges — ONE rule for the copy compare and the DT-75 width gate, so they agree.
+/** The two strings a TEXT compare judges — ONE rule for the copy compare and the width gate, so they agree.
  *  want = the design as rendered (stored text + textCase); have = the build as rendered (its text + textTransform). A
  *  build whose transform is unknown (a hand-written probe reports none) passes with EITHER the stored or the rendered
  *  design string — it may have typed either one. `norm` is the caller's own normalisation. */
@@ -1349,19 +1344,19 @@ function renderedText(stored: string, textCase: VerifySpec["textCase"], built: s
   return { want, have: built, same: norm(want) === norm(built), transform: null };
 }
 // A TEXT node's id on an element that is NOT the text's own box (a <th> with padding, a <button>,
-// a <label>) — its width/height/x describe the container, not the text (finding 194: `height 24 → 56`
-// on a Status header that is typographically exact).
+// a <label>) — its width/height/x describe the container, not the text (a real pull showed `height 24 → 56`
+// on a header that is typographically exact).
 const CONTAINER_TAGS = new Set(["th", "td", "tr", "button", "label", "li", "a", "section", "article", "header", "footer", "nav", "table", "input"]);
-// The mirror image (finding 170): a FRAME/INSTANCE id spread (by a `...rest` prop) onto a LEAF element
+// The mirror image: a FRAME/INSTANCE id spread (by a `...rest` prop) onto a LEAF element
 // inside the one that implements it — an <input> inside the <label> that draws the field. The leaf's
 // box, fill, border and padding are not the container's, so they are not graded as such.
 const LEAF_TAGS = new Set(["input", "textarea", "select", "img", "svg", "path", "video", "canvas"]);
 const CONTAINER_TYPES = new Set<string>(["FRAME", "INSTANCE", "COMPONENT", "GROUP", "SECTION"]);
-// Elements whose paint is pixels (F-81): an <img src="icon.svg"> is an isolated image document, so no computed
+// Elements whose paint is pixels: an <img src="icon.svg"> is an isolated image document, so no computed
 // style on it carries the SVG's fill — `fill` on the <img> is the inherited default, black. Such a spec's
 // fill is unverifiable by this method, never a mismatch and never "not measured".
 const PIXEL_TAGS = new Set(["img", "picture", "canvas", "object", "embed"]);
-// Lengths CSS cannot make negative (F-93): a negative one is a measuring artefact (a gap read across children
+// Lengths CSS cannot make negative: a negative one is a measuring artefact (a gap read across children
 // that are not laid out in one line, rows in different columns), listed as not measured — never compared.
 const NON_NEGATIVE = new Set<string>(["fontSize", "lineHeight", "borderWidth", "gap", "width", "height", "opacity"]);
 const LEAF_FIELDS = new Set<string>(["width", "height", "x", "y", "backgroundColor", "borderColor", "borderWidth", "borderRadius", "gap"]);
@@ -1383,43 +1378,43 @@ const LIMITS = [
 
 /** compare()'s options — the evidence the CLI ties the report to. `components` = the --interactions file's
  *  components[] (the agent's present:false claims), merged with measured.json's. `against` = the previous
- *  round's report (D18: the one about to be overwritten, or --against), for a coverage comparison only. */
+ *  round's report (the one about to be overwritten, or --against), for a coverage comparison only. */
 export interface CompareOptions {
   interactions?: InteractionEvidence[] | null; components?: MeasuredComponent[] | null; expectationSha256?: string; measuredSha256?: string;
   artifactCheck?: ArtifactCheck[] | null; code?: CodeInputs; against?: { file: string; report: VerifyReport } | null;
   /** what readableMeasured() dropped from the measured file (malformed optional extras) — reported, never judged */
   inputNotes?: string[] | null;
-  /** L3: readableMeasured() dropped a malformed measured.behaviour — report.behaviour says so (not "no block") */
+  /** readableMeasured() dropped a malformed measured.behaviour — report.behaviour says so (not "no block") */
   behaviourMalformed?: boolean;
-  /** 12c: readableMeasured() dropped a malformed measured.visual — report.visual says so (not "no block") */
+  /** readableMeasured() dropped a malformed measured.visual — report.visual says so (not "no block") */
   visualMalformed?: boolean;
-  /** 12c: where measured.visual.diff is now (the CLI resolves it beside the measured file when the recorded path is gone) */
+  /** where measured.visual.diff is now (the CLI resolves it beside the measured file when the recorded path is gone) */
   visualDiff?: { path: string; exists: boolean } | null;
-  /** D5: the plan's waivers[] — a matching delta is accepted (still listed, out of the counts) */
+  /** the plan's waivers[] — a matching delta is accepted (still listed, out of the counts) */
   waivers?: PlanWaiver[] | null;
-  /** D20: the plan's descopes[] — a matching interaction is removed from the graded set */
+  /** the plan's descopes[] — a matching interaction is removed from the graded set */
   descopes?: PlanDescope[] | null;
-  /** F-77: the plan's anchors{} — `foldedInto` takes a layout-only wrapper out of the denominator */
+  /** the plan's anchors{} — `foldedInto` takes a layout-only wrapper out of the denominator */
   anchors?: Record<string, PlanAnchor> | null;
   /** recorded as report.inputs.waivers: the plan file and waiversHash() of it */
   waiversInput?: { plan: string; sha256: string } | null;
-  /** F-72/D26: the run's status file beside the measured file — an unfinished run, or one naming another measured
+  /** the run's status file beside the measured file — an unfinished run, or one naming another measured
    *  file, makes the verdict incomplete. A v1 (hand-written) status is never trusted, never judged. null = looked
-   *  for and none found: a measured file naming its runId is then unrecorded (M-1); undefined = not looked for. */
+   *  for and none found: a measured file naming its runId is then unrecorded; undefined = not looked for. */
   status?: { file: string; status: VerifyStatusV2 | "v1" } | null;
-  /** the plan for this frame as found NOW: F-95 its interactions[] hash against the expectation's planInteractions;
-   *  L-1 its navigate[] against the probe's measured.reach (report.inputs.reach.matchesPlan). `choice` = how the CLI
+  /** the plan for this frame as found NOW: its interactions[] hash against the expectation's planInteractions;
+   *  its navigate[] against the probe's measured.reach (report.inputs.reach.matchesPlan). `choice` = how the CLI
    *  picked it (choosePlan) — the re-run advice names --plan when the plan was not the frame's only one */
   plan?: ChosenPlan | null;
-  /** review-2 M-b: the plan file the expectation merged interactions from (planInteractions.plan) could not be used at
+  /** the plan file the expectation merged interactions from (planInteractions.plan) could not be used at
    *  --compare — why ("no longer exists" / "is not a readable plan now: …"); the re-run advice then names both plans */
   recordedPlanGone?: string | null;
-  /** F-121 (D113): the --interactions evidence file's `inferred` value, unchecked — compare keeps the well-formed
+  /** the --interactions evidence file's `inferred` value, unchecked — compare keeps the well-formed
    *  {nodeId?, state, built, why?} rows (listed under Inferred, not designed) and notes the rest */
   inferred?: unknown;
 }
 
-// ---- D5 waivers: does a waiver's recorded value still describe this round's delta?
+// ---- waivers: does a waiver's recorded value still describe this round's delta?
 /** The slack a waiver's designed/built values are matched with — the field's own tolerance (null = exact). */
 function fieldTolerance(label: string): number | null {
   const f = FIELDS.find((x) => x.label === label);
@@ -1429,16 +1424,16 @@ function fieldTolerance(label: string): number | null {
   if (label === "placement") return TOLERANCE.position;
   if (label === "width (text ink)") return TOLERANCE.textInk;
   if (label === "match (size)") return TOLERANCE.size;
-  if (label === "overflowX") return TOLERANCE.position; // D43
+  if (label === "overflowX") return TOLERANCE.position;
   return null;
 }
-// ---- F-92: the previous round's deltas against this round's, keyed nodeId + field. A delta that is gone only
-// because its node or value was not measured this round is LOST COVERAGE, not a fix. H2: "not measured" means the
+// ---- the previous round's deltas against this round's, keyed nodeId + field. A delta that is gone only
+// because its node or value was not measured this round is LOST COVERAGE, not a fix. "Not measured" means the
 // node is unmeasured or its measured node lacks the value (absent / null) — a value that was measured but the compare
 // now declines (impossible, an <img> fill, a method gap) is nowUnverifiable; and when the measured file is the very
 // same file as last round's, no difference is the build's — every one is `reclassified`, none fixed/new/lost.
 const fieldBase = (f: string): string => f.replace(/\s*\(.*\)$/, "");
-// D26 (F-72): the verdict reasons that say the run itself is unverified — the ONE wording compare() writes and
+// the verdict reasons that say the run itself is unverified — the ONE wording compare() writes and
 // --accept recognises (it refuses a report carrying any of them).
 const INTEGRITY_PHRASES = {
   otherExpectation: "the measurements were taken against a DIFFERENT expectation",
@@ -1452,17 +1447,17 @@ const isIntegrityReason = (w: string): boolean => Object.values(INTEGRITY_PHRASE
 interface CoverageNow {
   notMeasured: Array<{ nodeId: string }>; fieldsNotMeasured: Array<{ nodeId: string; field: string; why: string }>; unverifiable: Array<{ nodeId: string; field: string; why: string }>;
   specIds: Set<string>; absent: Set<string>; sameMeasured: boolean;
-  /** L-3: nodes whose `placement` (derived from the box) could not be judged this round — absent = an input
+  /** nodes whose `placement` (derived from the box) could not be judged this round — absent = an input
    *  (x/y/width/height) was not reported or null (lost coverage), else one was reported but is not a number */
   placementGaps?: Map<string, { absent: boolean; why: string }>;
-  /** D18 (group 11): the design values the expectation excludes by method (expectation.notComparable) — a previous
+  /** the design values the expectation excludes by method (expectation.notComparable) — a previous
    *  delta on one of them is now unverifiable, not fixed (a TEXT box width, padding a fixed box cannot show) */
   notComparable?: Array<{ nodeId: string; field: string; why: string }>;
-  /** D43: coverage.pageOverflow this round — a previous overflowX delta with the page not judged now is lost coverage */
+  /** coverage.pageOverflow this round — a previous overflowX delta with the page not judged now is lost coverage */
   pageOverflow?: string;
 }
-// D18 (group 11): is a previous delta's value now excluded by method (expectation.notComparable)? Padding is per side
-// (review LOW b): a `padding (left/right)` exclusion covers a previous padding delta only when every side that differed
+// Is a previous delta's value now excluded by method (expectation.notComparable)? Padding is per side:
+// a `padding (left/right)` exclusion covers a previous padding delta only when every side that differed
 // is now skipped — a delta on the other axis is still the build's (fixed or open). Other fields: same base field.
 function excludedNow(d: VerifyDelta, nc: ReadonlyArray<{ nodeId: string; field: string; why: string }>): { why: string } | undefined {
   const rows = nc.filter((g) => g.nodeId === d.nodeId && fieldBase(g.field) === fieldBase(d.field));
@@ -1496,12 +1491,12 @@ function deltaChanges(prev: VerifyDelta[], cur: VerifyDelta[], now: CoverageNow)
   const sameField = (g: { nodeId: string; field: string }, d: VerifyDelta): boolean => g.nodeId === d.nodeId && (g.field === d.field || fieldBase(g.field) === fieldBase(d.field));
   for (const [k, d] of prevByKey) {
     if (curByKey.has(k)) { out.unchanged++; continue; }
-    // D43: the page's overflow is no spec — gone because the page was not judged at the design width is not a fix
+    // the page's overflow is no spec — gone because the page was not judged at the design width is not a fix
     if (d.field === "overflowX") {
       const po = now.pageOverflow;
       if (po === undefined || po === "not measured" || po === "not at design width") out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: po === "not at design width" ? "the page was not measured at the design width this round" : "page overflow was not measured this round" });
       else if (po === "designed to scroll") nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: "the frame is designed to scroll sideways now" });
-      // review L6: the content is still wider than the page — the page now hides it (overflow-x hidden/clip); not a fix
+      // the content is still wider than the page — the page now hides it (overflow-x hidden/clip); not a fix
       else if (po === "clipped") nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: "the page is still wider than the design width but clips it now (overflow-x hidden/clip) — clipped, not fixed" });
       else out.fixed++;
       continue;
@@ -1511,7 +1506,7 @@ function deltaChanges(prev: VerifyDelta[], cur: VerifyDelta[], now: CoverageNow)
     const gapRow = now.fieldsNotMeasured.find((g) => sameField(g, d));
     const absent = gapRow ? now.absent.has(`${gapRow.nodeId}\u0000${gapRow.field}`) : now.absent.has(k) || [...now.absent].some((a) => a.startsWith(`${d.nodeId}\u0000`) && fieldBase(a.slice(d.nodeId.length + 1)) === fieldBase(d.field));
     if (absent) { out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: `not measured this round: ${gapRow ? gapRow.why : "the probe did not report this property"}` }); continue; }
-    // L-3: placement is derived from the box — gone because an input is missing is not a fix
+    // placement is derived from the box — gone because an input is missing is not a fix
     const derived = d.field === "placement" ? now.placementGaps?.get(d.nodeId) : undefined;
     if (derived && derived.absent) { out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: `not measured this round: ${derived.why}` }); continue; }
     if (derived) { nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: derived.why }); continue; }
@@ -1537,7 +1532,7 @@ function sameWithin(a: JsonValue, b: JsonValue, tol: number | null): boolean {
   }
   return JSON.stringify(a) === JSON.stringify(b);
 }
-// F-77: what makes a spec more than a layout wrapper — it paints or carries copy, so it is built, never folded.
+// what makes a spec more than a layout wrapper — it paints or carries copy, so it is built, never folded.
 const PAINT_KEYS = ["decorated", "text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderColor", "borderWidth", "borderWidths", "borderRadius", "radiusCorners", "opacity"] as const;
 const paintOf = (s: VerifySpec): string[] => PAINT_KEYS.filter((k) => s[k] !== undefined);
 
@@ -1553,20 +1548,20 @@ const MATCH_LABEL: Record<string, string> = {
   tag: "tag", tagSharedPath: "shared path", tagAlias: "alias", text: "text", textOrdinal: "ordinal", position: "position", frame: "frame",
   sharedComponentPath: "shared component path", other: "other", unstated: "unstated",
 };
-// F-125 (D30): the canonical matchedBy vocabulary (the shipped probe's, probe-match.ts) and the cap each gets.
+// the canonical matchedBy vocabulary (the shipped probe's, probe-match.ts) and the cap each gets.
 // A hand-written probe's synonyms for a tag match ("data-dt-node", "id") read as "tag".
 const CANONICAL_MATCH = new Set<string>(CANONICAL_MATCHED_BY);
 const MATCH_SYNONYM: Record<string, string> = { "data-dt-node": "tag", id: "tag" };
 const NO_CAP = new Set<string>(["tag", "tag-shared-path", "text", "frame"] satisfies MatchedBy[]);
 const MEDIUM_CAP = new Set<string>(["text-ordinal", "tag-alias"] satisfies MatchedBy[]);
 // A TEXT spec's typography read off one of these without the probe naming the text run (textFrom) is the
-// container's font, not the text's (F-71: a 500-weight <button> around a 400-weight <span>).
+// container's font, not the text's (e.g. a 500-weight <button> around a 400-weight <span>).
 const TYPO_FIELDS = new Set<string>(["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color"]);
 
 const SEVERITY_RANK: Record<DeltaSeverity, number> = { high: 0, medium: 1, low: 2 };
 const NEVER_MEASURED_HEADLINE_MIN = 2;
 
-// Every top-level key of a measured file (F-94). Typed against VerifyMeasured, so a key added to the type
+// Every top-level key of a measured file. Typed against VerifyMeasured, so a key added to the type
 // must be added here; any other key is listed in report.probe.unknownTopLevelKeys, never silently read.
 const MEASURED_TOP_KEYS = {
   measuredAt: true, renderer: true, viewport: true, theme: true, artifacts: true, expectationSha256: true, mode: true, reason: true,
@@ -1575,14 +1570,14 @@ const MEASURED_TOP_KEYS = {
   tagsNotInExpectation: true, reach: true, page: true, behaviour: true, visual: true,
 } as const satisfies Record<keyof VerifyMeasured, true>;
 // (a hand-written probe's top-level `navEvents` object is its page-wide navigation log — the canonical key is
-// `navigation`; the per-interaction count F-102 reads lives on each interactions[] row, never up here)
-// F-121 (D113): top-level keys read untyped (not in VerifyMeasured) — the verifier's own `inferred[]` rows
+// `navigation`; the per-interaction count lives on each interactions[] row, never up here)
+// top-level keys read untyped (not in VerifyMeasured) — the verifier's own `inferred[]` rows
 const MEASURED_UNTYPED_TOP_KEYS = new Set(["inferred"]);
 const TOP_KEY_HINTS: Record<string, string> = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes", navEvents: "navigation" };
 
-// ---- F-102 (D24): what counts as evidence that an interaction worked. `ok:true` is a claim; a pass needs the one
+// ---- what counts as evidence that an interaction worked. `ok:true` is a claim; a pass needs the one
 // element driven (selectorCount === 1), an outcome that is what the designed action does, and no document loaded
-// during the interaction (navEvents: a reload or a cross-document navigation — a dev-server reload once read as "the
+// during the interaction (navEvents: a reload or a cross-document navigation — a dev-server reload can read as "the
 // dialog opened") — except where loading another document IS the action (navigate / back / url with url-changed).
 // An in-page URL change (pushState, a hash) loads no document: navEvents 0, and `url-changed` passes for any action
 // that allows it. Anything short of that is not-probed with the missing piece named, never fail: the control may work.
@@ -1597,7 +1592,7 @@ export const OUTCOMES_FOR_ACTION: Readonly<Record<"navigate" | "overlay" | "chan
   other: ANY_BUT_NONE,
 };
 // Actions whose effect IS a URL change: a document loaded during them (a full navigation) is the outcome, not a
-// reload. (D24 names navigate; `back` and `url` change the URL by definition too — without them a multi-page back
+// reload. (`back` and `url` change the URL by definition too, like navigate — without them a multi-page back
 // link could never pass.) An overlay opened as a route or a tab kept in the query string records what APPEARED
 // (dialog-opened / selector-appeared / state-changed), which its action allows — not url-changed.
 const URL_ACTIONS = new Set(["navigate", "back", "url"]);
@@ -1605,7 +1600,7 @@ const isOutcome = (x: unknown): x is Outcome => typeof x === "string" && INTERAC
 function outcomesFor(action: string | undefined): readonly Outcome[] {
   return action === "navigate" || action === "overlay" || action === "change_to" || action === "swap" ? OUTCOMES_FOR_ACTION[action] : OUTCOMES_FOR_ACTION.other;
 }
-/** What an ok:true row lacks to count as a pass (D24), in words — empty when it passes. */
+/** What an ok:true row lacks to count as a pass, in words — empty when it passes. */
 function evidenceGaps(hit: InteractionEvidence, action: string | undefined): string[] {
   const gaps: string[] = [];
   const count = Number(hit.selectorCount);
@@ -1647,13 +1642,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (byId.has(id)) { duplicateNodeIds++; continue; }
     byId.set(id, m);
     const s = m.styles || m;
-    // F-67: inside `styles` only style keys are known (a `styles.states` is misplaced — listed, never read)
+    // inside `styles` only style keys are known (a `styles.states` is misplaced — listed, never read)
     const known = m.styles ? KNOWN_STYLE_KEYS : KNOWN_MEASURED_KEYS;
     for (const k of Object.keys(s)) { keysSeen.add(k); if (!known.has(k)) unknownKeys.set(k, (unknownKeys.get(k) || 0) + 1); }
   }
   // A shared implementation (one AppShell rendered on two routes) carries the node ids of the frame it
-  // was built from: `I10970:111588;1910:23337` on Jet Roles is `I10970:109860;1910:23337` here — the
-  // same component-internal node under a different outer instance (findings 129/139/185). Match on
+  // was built from: `I10970:111588;1910:23337` on another screen is `I10970:109860;1910:23337` here — the
+  // same component-internal node under a different outer instance. Match on
   // that internal path when it is unambiguous, and say so.
   const expectedIds = new Set([...specs.map((s) => String(s.nodeId)), ...(expectation.instances || []).map((i) => String(i.nodeId))]);
   const suffix = (id: string): string | null => { const i = id.indexOf(";"); return i === -1 ? null : id.slice(i + 1); };
@@ -1683,17 +1678,17 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   let fieldsChecked = 0, nodesMeasured = 0, nodesMatchedByComponentPath = 0, fieldsReportedNull = 0;
   const matchedByCensus: Record<string, number> = Object.fromEntries(MATCH_BUCKETS.map((b) => [b, 0]));
   const typographyOn = new Map<string, string>(); // TEXT spec id -> the container tag its typography was read from
-  const matchKind = new Map<string, string>(); // measured spec id -> how it was found (D33: through another screen's id?)
-  const matchCapOf = new Map<string, DeltaSeverity>(); // D30: a node's match-confidence cap (D39: a size waiver keeps it)
-  // H2: the gaps where the measured node lacks the value (the key absent, or null) — the only kind that can LOSE a
+  const matchKind = new Map<string, string>(); // measured spec id -> how it was found (through another screen's id?)
+  const matchCapOf = new Map<string, DeltaSeverity>(); // a node's match-confidence cap (a size waiver keeps it)
+  // the gaps where the measured node lacks the value (the key absent, or null) — the only kind that can LOSE a
   // previous delta; every other gap is the compare declining a value it has (a method gap, not lost coverage)
   const absentGaps = new Set<string>();
-  const placementGaps = new Map<string, { absent: boolean; why: string }>(); // L-3: placement's inputs, per node
-  // F-67 / F-121: states measured on a node whose design draws none — never compared, listed under Inferred
+  const placementGaps = new Map<string, { absent: boolean; why: string }>(); // placement's inputs, per node
+  // states measured on a node whose design draws none — never compared, listed under Inferred
   const undrawnStates: Array<{ spec: VerifySpec; state: string }> = [];
-  // F-74 (D111): backgrounds compared through the element that paints them (paintedBy) — one input note
+  // backgrounds compared through the element that paints them (paintedBy) — one input note
   const paintedVia: Array<{ nodeId: string; how: string }> = [];
-  // F-119 (D112): nodes whose line box is taller than their fixed text box (the expectation's notComparable rows)
+  // nodes whose line box is taller than their fixed text box (the expectation's notComparable rows)
   const lineBoxWhyOf = new Map((expectation.notComparable || []).filter((g) => g.field === TEXT_BOX_HEIGHT).map((g) => [g.nodeId, g.why]));
   const gap = (spec: VerifySpec, field: string, why: string, absent = false): number => {
     if (absent) absentGaps.add(`${spec.nodeId}\u0000${field}`);
@@ -1704,13 +1699,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     expected: bad.want, actual: bad.got, delta: bad.delta,
   }, extra));
 
-  // F-77: plan anchors that fold a layout-only wrapper into a measured ancestor
+  // plan anchors that fold a layout-only wrapper into a measured ancestor
   const anchors = opts.anchors && isJsonObject(opts.anchors) ? opts.anchors : {};
   const folded: VerifyReportV2["folded"] = [];
   const probeFrames: ProbeFrame[] = [...(Array.isArray(measured.frames) ? measured.frames : []), ...(measured.frame ? [measured.frame] : [])];
   const multiFrame = (expectation.frames || []).length > 1;
   const frameMeasured = (id: string): boolean => probeFrames.some((f) => f.nodeId === id);
-  // F-104: the BUILD's texts per repeated-text group — varied texts are real data, one text for all is a copy bug
+  // the BUILD's texts per repeated-text group — varied texts are real data, one text for all is a copy bug
   const builtTexts = new Map<string, string[]>();
   for (const s of specs) {
     if (!s.repeatedTextGroup) continue;
@@ -1755,7 +1750,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     matchKind.set(String(spec.nodeId), matchedBy && matchedBy.startsWith("shared-component-path") ? "shared-component-path" : rawMatch);
     const bucket = matchedBy && matchedBy.startsWith("shared-component-path") ? "sharedComponentPath" : rawMatch === "" ? "unstated" : MATCH_BUCKET[rawMatch] ?? "other";
     matchedByCensus[bucket] = (matchedByCensus[bucket] ?? 0) + 1;
-    // DT-43: a null is the probe saying "I could not read this" — listed as not measured with its reason
+    // a null is the probe saying "I could not read this" — listed as not measured with its reason
     // (the shipped probe's unmeasured[key]), never compared, never counted as checked.
     const base: MeasuredStyles = m.styles || m;
     let got: MeasuredStyles = base, measuredIn = "rest";
@@ -1773,11 +1768,11 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const zeroAtRest = num(base.width) && num(base.height) && base.width === 0 && base.height === 0;
     const stateWhy = state ? `the designer drew this ${spec.drawnStateOwn ? "layer" : "layer's container"} in its ${state} state (${spec.drawnStateWhy}) — measure it ${state === "hover" ? "hovered" : state} and report the values under states.${state}` : "";
 
-    // Hover-only content measured at rest is absent by design, not missing (finding 128/194: the
+    // Hover-only content measured at rest is absent by design, not missing (e.g. the
     // edit button that exists only on the hovered row, "36 → 0").
     if (state && measuredIn === "rest" && zeroAtRest) {
       for (const f of FIELDS) if (spec[f.key] !== undefined) { tally(f.key, false); gap(spec, f.label, `renders 0×0 at rest: ${stateWhy}`); }
-      placementGaps.set(String(spec.nodeId), { absent: false, why: `renders 0×0 at rest: ${stateWhy}` }); // L-3
+      placementGaps.set(String(spec.nodeId), { absent: false, why: `renders 0×0 at rest: ${stateWhy}` });
       continue;
     }
     const isText = spec.type === "TEXT";
@@ -1790,20 +1785,20 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const leafWhy = onLeaf ? `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) — tag and measure the container` : "";
     const rowTag = ROW_TAGS.has(tagLc);
     const inline = CONTAINER_TYPES.has(spec.type) && typeof got.display === "string" && got.display.trim() === "inline";
-    // DT-75: copy that differs renders a different width (and a centred/right-aligned start) — judge the copy first
-    // (F-69: the RENDERED strings — the same rule as the copy compare below)
+    // copy that differs renders a different width (and a centred/right-aligned start) — judge the copy first
+    // (the RENDERED strings — the same rule as the copy compare below)
     const textDiffers = isText && spec.text !== undefined && typeof got.text === "string" && !renderedText(spec.text, spec.textCase, got.text, got.textTransform, normText).same;
-    const firstDelta = deltas.length; // this node's deltas: deltas.slice(firstDelta) (D30/D31 caps below)
+    const firstDelta = deltas.length; // this node's deltas: deltas.slice(firstDelta) (the caps below)
 
     for (const f0 of FIELDS) {
       const want0 = spec[f0.key];
       if (want0 === undefined) continue;
-      // D29: a fixed/fill-width TEXT's width is its INK width — its own label and tolerance
+      // a fixed/fill-width TEXT's width is its INK width — its own label and tolerance
       const f: Field = isText && f0.key === "width" && spec.widthFrom === "renderBox" ? { ...f0, label: "width (text ink)", tol: TOLERANCE.textInk } : f0;
       let val: JsonValue | undefined = got[f.key];
       let nullKeys: string[] = [f.key];
       let present = val !== undefined;
-      // F-62 (D29): a TEXT's x/width come ONLY from textBox (a Range over its characters) — never its element's box,
+      // a TEXT's x/width come ONLY from textBox (a Range over its characters) — never its element's box,
       // which a flex-1 <span> or a padded cell stretches past the words
       const textXW = isText && (f.key === "x" || f.key === "width");
       if (textXW) { val = tb ? (f.key === "x" ? tb.x : tb.w) : got.textBox === null ? null : undefined; present = val !== undefined; nullKeys = ["textBox", f.key]; }
@@ -1816,7 +1811,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       }
       tally(f.key, present);
 
-      // (DT-74: opacity too — hover-revealed content reads 0 at rest; any layer inside a drawn state, not only the owner)
+      // (opacity too — hover-revealed content reads 0 at rest; any layer inside a drawn state, not only the owner)
       if (state && measuredIn === "rest" && ((spec.drawnStateOwn && f.colour) || f.key === "opacity")) { gap(spec, f.label, stateWhy); continue; }
       if (onLeaf && LEAF_FIELDS.has(f.key)) { gap(spec, f.label, leafWhy); continue; }
       if (inline && INLINE_BOX_FIELDS.has(f.key)) { gap(spec, f.label, inlineWhy(tagLc)); continue; }
@@ -1841,10 +1836,10 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       }
       if (val === null || (Array.isArray(val) && val.includes(null))) { gapNull(f.label, ...nullKeys); continue; }
       // A measured value the normaliser cannot read (fontWeight "bolder", an object) is not measured — never
-      // "cannot be known, so no mismatch" (that allowance is for the spec side only; DT-43).
+      // "cannot be known, so no mismatch" (that allowance is for the spec side only).
       if (f.norm && (f.norm(val) == null || (typeof val !== "string" && typeof val !== "number"))) { gap(spec, f.label, `could not read '${typeof val === "string" ? val : JSON.stringify(val)}' as ${f.label}`); continue; }
-      // A numeric field reads a number or a px string (DT-42) — the delta then carries the number, so the
-      // report never prints "28pxpx" (DT-32). `letter-spacing: normal` is 0; any other keyword, unit or shape
+      // A numeric field reads a number or a px string — the delta then carries the number, so the
+      // report never prints "28pxpx". `letter-spacing: normal` is 0; any other keyword, unit or shape
       // is not a px value and is listed as not measured, never compared as a string.
       if (f.tol != null && !f.norm && f.key !== "borderRadius") {
         // `gap: normal` is 0 in flex and grid (the only layouts it applies to); without `display` it is unknown
@@ -1889,7 +1884,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
         const worst = c.map((r) => clampRadius(r, W, H)).reduce((a, r) => (Math.abs(r - target) > Math.abs(a - target) ? r : a), clampRadius(c[0], W, H));
         have = worst;
       }
-      // F-74 / DT-48 (D111): a transparent element whose background another element paints (a hovered <tr> behind its
+      // a transparent element whose background another element paints (a hovered <tr> behind its
       // <td>, a same-box child) — the painted colour is the one the user sees. Only the probe's paintedBy says so; read
       // from the same pass as the background (a state's own, never the resting one).
       let paintNote: string | undefined;
@@ -1963,7 +1958,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       else if (got.placeholderText === null) gapNull("placeholder text", "placeholderText");
       else {
         fieldsChecked++;
-        // (F-69: a cased placeholder may be built with either the stored or the rendered string — its transform is not read)
+        // (a cased placeholder may be built with either the stored or the rendered string — its transform is not read)
         if (!renderedText(String(spec.placeholderText), spec.textCase, String(got.placeholderText), undefined, (t) => t.trim()).same) push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
       }
     }
@@ -1976,7 +1971,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       else if (got.text === undefined) absentGaps.add(`${spec.nodeId}\u0000text`);
       else if (got.text !== undefined) {
         fieldsChecked++;
-        // F-69 (D114): compare the RENDERED strings — the stored string with the design's text case against the build's
+        // compare the RENDERED strings — the stored string with the design's text case against the build's
         // string with its computed text-transform (renderedText). Without a reported transform either design form passes.
         const rt = renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, (t) => t.replace(/ /g, " ").trim());
         const w = rt.want.replace(/ /g, " ").trim();
@@ -1987,10 +1982,10 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
           : `the design renders '${w}' (stored '${String(spec.text).trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
         if (!rt.same) {
           const caseOnly = w.toLowerCase() === g.toLowerCase();
-          // "Jet Role▲": the designed string plus glyphs that are not letters or digits (a sort caret,
+          // "Name▲": the designed string plus glyphs that are not letters or digits (a sort caret,
           // an icon font) — the copy is intact; name the extra glyphs rather than calling it a copy bug.
           const extraGlyphs = !caseOnly && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
-          // F-104: the design repeats this string in >=3 sibling rows (placeholder copy). Low ONLY when the build's
+          // the design repeats this string in >=3 sibling rows (placeholder copy). Low ONLY when the build's
           // texts in those rows differ from each other (real data); one wrong string in every row stays high.
           const rowTexts = spec.repeatedText && spec.repeatedTextGroup ? builtTexts.get(spec.repeatedTextGroup) : undefined;
           // Real data = at least three different built values, and the designed string in at most half the rows
@@ -2022,7 +2017,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       }
     }
 
-    // ---- placement: a designed-inside-the-frame node that renders outside it (finding 164)
+    // ---- placement: a designed-inside-the-frame node that renders outside it
     const fr = frameOf(spec);
     const bx = got;
     if (num(fr.w) && num(fr.h)) {
@@ -2044,12 +2039,12 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       if (num(bx.x) && bx.x + w > fr.w + tol) { out.push(`right edge at x=${r2(bx.x + w)} in a ${fr.w}-wide frame`); over.push(bx.x + w - fr.w); bottomOnly = false; }
       if (num(bx.x) && bx.x < -tol) { out.push(`left edge at x=${r2(bx.x)}`); over.push(-bx.x); bottomOnly = false; }
       if (inDesign && out.length && !(zeroAtRest)) {
-        // F-61: "below the fold" — a page that is simply longer than the design's frame scrolls to this node.
+        // "below the fold" — a page that is simply longer than the design's frame scrolls to this node.
         // Medium (still blocks a pass) only when ALL hold: the bottom edge is the only one crossed; the probe
         // took the viewport as the frame, or the rendered frame is taller than the design's (the page grew);
         // the node is not absolute/fixed (those do not scroll into view); one frame (not a multi-frame/overlay
         // expectation). Anything else stays high. Trade-off: a real bug that pushes a CTA below the fold also
-        // reads medium — it still blocks the pass, it only no longer shouts.
+        // reads medium — it still blocks the pass, it just does not shout.
         const pf = probeFrames.find((f) => f.nodeId === fr.nodeId) ?? (!multiFrame && probeFrames.length === 1 ? probeFrames[0] : undefined);
         const pageGrew = !!pf && (pf.via === "viewport" || (isJsonObject(pf.rect) && num(pf.rect.h) && pf.rect.h > fr.h + tol));
         const belowFold = bottomOnly && pageGrew && !spec.absolute && !spec.fixed && !multiFrame;
@@ -2060,7 +2055,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       }
     }
 
-    // ---- F-65 (D31): is this the element the design means? A matched box far from the design's size (>=2x or
+    // ---- is this the element the design means? A matched box far from the design's size (>=2x or
     // <=1/2 on an axis AND >=8px off) is one medium `match (size)` row, and every other delta of the node is capped
     // at low (they describe some other element). A hug axis (or a frame root's height — the page scrolls) that only
     // GREW counts only when the other axis is off too: more content legitimately grows it.
@@ -2082,7 +2077,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
         deltas.push(sizeRow);
       }
     }
-    // ---- F-125 (D30): severity is capped by how the element was found. tag / tag-shared-path / text / frame / a
+    // ---- severity is capped by how the element was found. tag / tag-shared-path / text / frame / a
     // shared component path / unstated: no cap; text-ordinal and tag-alias: at most medium; position and any matchedBy
     // outside the canonical vocabulary (a hand-written "position-partial-size", "structural"): at most low.
     const canon = MATCH_SYNONYM[rawMatch] ?? rawMatch;
@@ -2100,10 +2095,10 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     }
   }
 
-  // ---- D43: the page scrolls sideways at the design width — a HIGH, waivable fidelity delta on the frame root (field
+  // ---- the page scrolls sideways at the design width — a HIGH, waivable fidelity delta on the frame root (field
   // overflowX), read only from the probe's measurement pass (measured.page). Not judged when the page was not measured,
   // measured at another width, or the frame is designed to scroll sideways; an overflow the root clips (overflow-x
-  // hidden/clip) cannot be scrolled to — a note, not a delta. No match cap (D30/D31): no element was matched.
+  // hidden/clip) cannot be scrolled to — a note, not a delta. No match cap: no element was matched.
   const pageRaw: unknown = measured.page;
   const page = isPageOverflow(pageRaw) ? pageRaw : undefined;
   const pageNotes: string[] = [];
@@ -2128,7 +2123,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
           note: `the page scrolls sideways at the design width${widest ? ` (widest: ${widest})` : ""} — accept it (verify-screen --accept --node ${rootF.nodeId} --field overflowX) only if intended` });
       }
     }
-    // review L8: once — the shipped probe already notes quirks mode in measured.notes; compare adds its own only when it did not
+    // once — the shipped probe already notes quirks mode in measured.notes; compare adds its own only when it did not
     const probeNotedQuirks = Array.isArray(measured.notes) && measured.notes.some((n) => typeof n === "string" && n.includes("quirks mode"));
     if (page.compatMode && page.compatMode !== "CSS1Compat" && !probeNotedQuirks) pageNotes.push(`the page renders in quirks mode (document.compatMode ${page.compatMode}) — its overflow is measured off <body>`);
   }
@@ -2146,10 +2141,10 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const knownIds = new Set([...expectedIds, ...hiddenSet, ...[expectation.frame, ...(expectation.frames || [])].map((f) => f && f.nodeId).filter((id): id is string => typeof id === "string")]);
   for (const id of expectedIds) { const alt = viaSharedPath(id); if (alt) knownIds.add(alt); }
   const measuredIdsNotInExpectation = [...byId.keys()].filter((id) => !knownIds.has(id));
-  // ---- DT-47: tags on the page that name no node of this expectation (the shipped probe's tagsNotInExpectation) and
+  // ---- tags on the page that name no node of this expectation (the shipped probe's tagsNotInExpectation) and
   // a hand-written probe's measured ids outside it, classified: prefixDrift — the `;` suffix of an expected id under
   // another instance prefix (a stale id table, another pull's ids); alias — another screen's id for one of these
-  // nodes (D32); unknown — neither. Informational: the verdict never reads it.
+  // nodes; unknown — neither. Informational: the verdict never reads it.
   const tniRaw: unknown = measured.tagsNotInExpectation;
   const tni = isJsonObject(tniRaw) && typeof tniRaw.count === "number" && Array.isArray(tniRaw.ids) ? { count: tniRaw.count, ids: tniRaw.ids.filter(isJsonObject).map((r) => r.id).filter((x): x is string => typeof x === "string") } : null;
   const foreignListed = [...new Set([...(tni ? tni.ids : []), ...measuredIdsNotInExpectation])];
@@ -2163,7 +2158,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const foreignTags = foreignTotal > 0 ? { total: foreignTotal, prefixDrift, alias: aliasTags, unknown: foreignTotal - prefixDrift - aliasTags,
     sample: [...foreignListed.filter((id) => foreignClass(id) === "unknown"), ...foreignListed.filter((id) => foreignClass(id) !== "unknown")].slice(0, 5) } : undefined;
 
-  // ---- fields in FIELDS that the probe never reported under the canonical key (finding 182)
+  // ---- fields in FIELDS that the probe never reported under the canonical key
   const fieldsNeverMeasured: VerifyCoverageV2["fieldsNeverMeasured"] = [];
   for (const [key, c] of census) {
     if (FIELDS.some((f) => f.key === key && f.optional)) continue; // listed under `unverifiable` instead
@@ -2175,8 +2170,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
 
   // ---- component evidence. NOT presence: this is how many instance sets the probe could point at
   // (a data-dt-node id, a reported setName, or a shared-component path). A correct build that tags
-  // nothing scores 0 here and a build that tags everything scores 100% without a pixel checked
-  // (finding 169), so it never fails a screen on its own; only an explicit `present: false` does.
+  // nothing scores 0 here and a build that tags everything scores 100% without a pixel checked,
+  // so it never fails a screen on its own; only an explicit `present: false` does.
   const comps: MeasuredComponent[] = [...(Array.isArray(measured.components) ? measured.components : []), ...(Array.isArray(opts.components) ? opts.components : [])];
   const reported = comps.filter((c) => c && c.present !== false);
   const namesSeen = new Set(reported.map((c) => String(c.setName || c.name || c)));
@@ -2196,7 +2191,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (v.nodeIds.some((id) => viaSharedPath(id))) { setsViaSharedPath++; continue; }
     untaggedInstanceSets.push(v);
   }
-  // ---- D33 (DT-31, F-96): the shared shell, counted apart (informational — never the verdict). An OUTERMOST instance
+  // ---- the shared shell, counted apart (informational — never the verdict). An OUTERMOST instance
   // (an `I<instance>;…` id names its outermost instance; a plain id is one when it is an instance) is a shared shell
   // when any node under it was matched through ANOTHER screen's id (tag-shared-path, tag-alias, compare's shared
   // component path), or the plan marks it (anchors[<instance id>].shared: true).
@@ -2223,7 +2218,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const rows = [...shellIds].map((id) => { const i = instanceById.get(id); const g = shellGroups.get(id); return { nodeId: id, name: i ? i.name : id, ...ifDefined("setName", i && i.setName), expected: g ? g.expected : 0, measured: g ? g.measured : 0 }; });
     return { instances: rows, expected: rows.reduce((a, r) => a + r.expected, 0), measured: rows.reduce((a, r) => a + r.measured, 0) };
   })() : undefined;
-  // F-96: an untagged instance set that lives only inside the shared shell is not this screen's work — listed apart
+  // an untagged instance set that lives only inside the shared shell is not this screen's work — listed apart
   const untaggedInstanceSetsInShell = untaggedInstanceSets.filter((v) => shellIds.size > 0 && v.nodeIds.every((id) => { const o = outermostOf(String(id)); return o !== null && shellIds.has(o); }));
   const untaggedOnScreen = untaggedInstanceSets.filter((v) => !untaggedInstanceSetsInShell.includes(v));
 
@@ -2237,28 +2232,28 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const integrity: string[] = [];
   let unboundNote: string | undefined;
-  // D26 (F-72): the run's integrity, ranked FIRST. When any of these holds, the numbers below belong to an unverified
+  // the run's integrity, ranked FIRST. When any of these holds, the numbers below belong to an unverified
   // run (another expectation, no expectation, an unfinished run, another measured file) — so the verdict is
-  // `incomplete` even with high mismatches (L-6): a `fail` would grade numbers nothing ties to this design and run.
-  // The report is still written (the D18 baseline chain stays intact).
+  // `incomplete` even with high mismatches: a `fail` would grade numbers nothing ties to this design and run.
+  // The report is still written (the coverage-baseline chain stays intact).
   if (stale) integrity.push(`${INTEGRITY_PHRASES.otherExpectation} (${String(measured.expectationSha256).slice(0, 12)}… vs ${String(opts.expectationSha256).slice(0, 12)}…) — re-measure`);
   if (opts.expectationSha256 && !measured.expectationSha256) integrity.push(`${INTEGRITY_PHRASES.noExpectation} — nothing ties these numbers to this design; re-measure with the shipped probe`);
-  // M-1: a measured file that names its run, beside no status of that run (none found, a v1 file, another run's) —
+  // a measured file that names its run, beside no status of that run (none found, a v1 file, another run's) —
   // nothing recorded it as that run's (the probe's status write was refused, or another run has started since).
   // Only when compare looked for one (opts.status null or set; undefined = an in-process caller that passed none).
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : undefined;
   if (measuredRun !== undefined && opts.status !== undefined && (st === null || st.runId !== measuredRun)) {
     integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} — ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run — re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
   } else if (st && measuredRun === undefined && TERMINAL_PHASES.includes(st.phase) && Date.parse(String(measured.measuredAt)) > Date.parse(st.at)) {
-    // H1 (s19): a measured file that names no run (a probe without --run) and was measured AFTER the run ended is not
-    // part of any run — that run's status says nothing about it; it is graded unbound (D41: its interaction rows are
+    // a measured file that names no run (a probe without --run) and was measured AFTER the run ended is not
+    // part of any run — that run's status says nothing about it; it is graded unbound (its interaction rows are
     // agent evidence). An older unbound file (no or unreadable measuredAt included) stays judged by the run below.
     unboundNote = `${opts.status ? opts.status.file : "status.json"} is run ${st.runId} (${st.phase}); this measured file names no run — graded as an unbound measurement`;
   } else if (st) {
     const stFile = opts.status ? opts.status.file : "status.json";
     // an unbound measured file beside a run still open: say how to end that run (only if nobody is still running it)
     const endHint = measuredRun === undefined ? ` — wait for it, or if nobody is running it any more, end it: --status ${shellArg(st.screen)} --phase failed --run ${shellArg(st.runId)}` : "";
-    // r2 (s19): an unbound measured file that is NOT newer than an ENDED run (failed/blocked) — the run cannot be "ended"
+    // an unbound measured file that is NOT newer than an ENDED run (failed/blocked) — the run cannot be "ended"
     // again (that would only rewrite its status, and a blocked run's detail with it): the file is stale, measure again
     if (measuredRun === undefined && TERMINAL_PHASES.includes(st.phase) && st.phase !== "done") integrity.push(`this measured file names no run and ${INTEGRITY_PHRASES.measuredBefore} (${stFile}: run ${st.runId} ${st.phase} at ${st.at}) — measure again`);
     else if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}${endHint}`);
@@ -2267,13 +2262,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
 
   // ---- interactions: the export says what each control does; did it? Three states, not two:
   // pass (driven, with the selector that was driven), fail (driven, did not work), not-probed
-  // (nobody drove it — which is neither; finding 158 was a "not measured" detail under result "fail").
+  // (nobody drove it — which is neither, so it is never filed as a "not measured" detail under result "fail").
   const measuredRows: InteractionEvidence[] = Array.isArray(measured.interactions) ? measured.interactions : [];
   const allEvidence: InteractionEvidence[] = [...measuredRows, ...(Array.isArray(opts.interactions) ? opts.interactions : [])];
-  // D41: evidence precedence by PROVENANCE, never by a self-declared field. The measured file's rows are the shipped
+  // evidence precedence by PROVENANCE, never by a self-declared field. The measured file's rows are the shipped
   // probe's own (authoritative) only when the file is bound to a finished run: the shipped probe's identity, a runId,
-  // the run's status naming that run AND this measured file's sha (verify-run's `done`), and no integrity failure (D26).
-  // Otherwise every row is agent evidence, graded as before (later wins: measured rows, then --interactions).
+  // the run's status naming that run AND this measured file's sha (verify-run's `done`), and no integrity failure.
+  // Otherwise every row is agent evidence (later wins: measured rows, then --interactions).
   const probeBound = isProbeIdentity(measured.probe) && measuredRun !== undefined && st !== null && st.runId === measuredRun
     && !!st.measuredSha256 && st.measuredSha256 === opts.measuredSha256 && integrity.length === 0;
   const fromMeasured = new Set(measuredRows);
@@ -2288,13 +2283,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (probeBound && fromMeasured.has(r)) { if (r.cut !== "budget") probeRows.set(key, r); continue; }
     exercised.set(key, r); // later evidence wins
   }
-  // D20: the owner's descopes — bound to the export like a waiver; a re-export reopens them.
+  // the owner's descopes — bound to the export like a waiver; a re-export reopens them.
   const exportSha = expectation.exportContentSha256;
   const inputNotes = [...(Array.isArray(opts.inputNotes) ? opts.inputNotes : [])];
-  // review LOW d: expectation.tolerance carries textInk since group 11 — one without it was written by an older
+  // expectation.tolerance carries textInk — one without it was written by an older
   // verify-screen (TEXT box widths, no paddingSkip/aliases)
   inputNotes.push(...pageNotes);
-  if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === undefined) inputNotes.push("expectation written by an older verify-screen (before group 11: TEXT box widths, no aliases) — re-run --expect");
+  if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === undefined) inputNotes.push("expectation written by an older verify-screen (TEXT box widths, no aliases) — re-run --expect");
   const reopened: VerifyReportV2["waivers"]["reopened"] = [];
   const unused: VerifyReportV2["waivers"]["unused"] = [];
   const descopeRows: PlanDescope[] = [];
@@ -2312,16 +2307,16 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i): VerifyInteractionResult => {
     const key = String(i.nodeId) + "|" + i.trigger;
     const p = probeRows.get(key), a = exercised.get(key);
-    // D24: ok:true passes only with the evidence (one element, an outcome the action produces, no reload)
+    // ok:true passes only with the evidence (one element, an outcome the action produces, no reload)
     const gapsOf = (h: InteractionEvidence | undefined): string[] | null => (h && h.ok === true && h.result !== "not-probed" ? evidenceGaps(h, i.action) : null);
-    // D41: a probe pass of an overlay/swap also needs the destination frame's tag inside the element that opened
+    // a probe pass of an overlay/swap also needs the destination frame's tag inside the element that opened
     const act = String(i.action).toLowerCase();
     const needsInside = !!i.destinationId && (act === "overlay" || act === "swap");
     const pGaps = gapsOf(p);
     const pInside = !needsInside || (!!p && !!p.destination && p.destination.inside === true && p.destination.nodeId === i.destinationId);
     const pPass = pGaps !== null && pGaps.length === 0 && pInside;
     // (1) a run-bound probe pass wins; (2)/(3) a probe pass without the tag inside, a miss, a not-run or a fail never
-    // overrides an agent row — the agent's is graded (D24 as before); no agent row → the probe's, as it is
+    // overrides an agent row — the agent's is graded; no agent row → the probe's, as it is
     const hit = p && pPass ? p : a ?? p;
     const fromProbe = !!hit && hit === p;
     const insideMiss = fromProbe && pGaps !== null && pGaps.length === 0 && !pInside;
@@ -2336,12 +2331,12 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const said = hit ? { ...ifDefined("outcome", typeof hit.outcome === "string" ? hit.outcome : undefined), ...ifDefined("navEvents", typeof hit.navEvents === "number" ? hit.navEvents : undefined),
       ...(probeBound ? { evidenceFrom: fromProbe ? "probe" as const : "agent" as const } : {}),
       ...ifDefined("activation", str(hit.activation)), ...ifDefined("detectedBy", str(hit.detectedBy)), ...ifDefined("revealedBy", str(hit.revealedBy)), ...ifDefined("overridden", overridden) } : {};
-    // F8: whose words a detail quotes — the run-bound probe's, else agent evidence (D41: an unbound file's rows too)
+    // whose words a detail quotes — the run-bound probe's, else agent evidence (an unbound file's rows too)
     const saidBy = fromProbe ? "probe said" : "agent evidence said";
-    // D20: removed from the graded set before grading; evidence that it works anyway is noted, never graded.
+    // removed from the graded set before grading; evidence that it works anyway is noted, never graded.
     const scoped = descopeFor(i);
     if (scoped) return Object.assign(row, { result: "descoped" as const, detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`, ...(worked ? { note: "descoped but works — the probe drove it successfully; drop the descope?" } : {}) });
-    // D22: its destination was never exported — nothing designed to arrive at. A probe showing it working still passes.
+    // its destination was never exported — nothing designed to arrive at. A probe showing it working still passes.
     if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned" as const, detail: `destination ${i.destinationId} is not in this Figma file's export — nothing designed to check it against${hit && hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}` });
     if (!hit) return Object.assign(row, { result: "not-probed" as const, detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
@@ -2351,8 +2346,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       return Object.assign(row, { result: "not-probed" as const, detail: `probe pass without the destination tag inside the opened element — tag the root of what opens with data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
     // ok:true is a claim; the evidence is the selector that was driven and proof it matched something.
-    // An agent once credited two hidden popup rows with hovers it performed on unrelated controls (187).
-    // F-102: the outcome and the navigation count too — a reload once read as "the dialog opened".
+    // An agent can credit hidden popup rows with hovers on unrelated controls.
+    // The outcome and the navigation count too — a reload can read as "the dialog opened".
     if (!worked || !hit.selector) {
       return Object.assign(row, { result: "not-probed" as const, detail: `reported ok without evidence — ${(gaps || []).join("; ")}${hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
@@ -2360,7 +2355,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   });
   const unexpectedRows = allEvidence.filter((r) => r && r.nodeId != null && !hiddenSet.has(String(r.nodeId)) && !expectedKeys.has(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase()));
   const unexpectedInteractionEvidence = unexpectedRows.length;
-  // DT-29: name each unmatched result (once per nodeId + trigger) and, when a designed interaction is near, say which —
+  // name each unmatched result (once per nodeId + trigger) and, when a designed interaction is near, say which —
   // the evidence was probably meant for it (a trigger written `on_click(name link)`, an ancestor's id).
   const designed = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId)));
   const specAnc = new Map(specs.map((sp) => [String(sp.nodeId), sp.ancestorIds || []]));
@@ -2389,12 +2384,12 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const interactionsDescoped = interactions.filter((i) => i.result === "descoped");
   for (const d of descopeRows) if (!descopeUsed.has(d)) unused.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "no designed interaction with this node and trigger this round" });
 
-  // ---- F-121 (D113): "Inferred, not designed" — what the build does that the design never drew: an interaction only the
+  // ---- "Inferred, not designed" — what the build does that the design never drew: an interaction only the
   // plan declares, a destination never exported (what opens is the build's reading), a state measured on a node whose
-  // design draws none (F-67), and the verifier's own rows (measured.inferred[] / the evidence file's inferred[]). Judged
-  // against best practice and the design's intent, never "matched" — listed and counted, NEVER a verdict reason (D4 style).
+  // design draws none, and the verifier's own rows (measured.inferred[] / the evidence file's inferred[]). Judged
+  // against best practice and the design's intent, never "matched" — listed and counted, NEVER a verdict reason.
   const inferred: InferredRow[] = [];
-  // L11: the headline counts each thing once — an interaction already counted "undesigned" is not counted again, and
+  // the headline counts each thing once — an interaction already counted "undesigned" is not counted again, and
   // one interaction with two rows (plan-declared AND an unexported destination) counts once
   let inferredHead = 0, inferredUndesigned = 0;
   for (const i of interactions) {
@@ -2431,11 +2426,11 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   agentRows("inferred" in measured ? measured.inferred : undefined, "measured.json");
   agentRows(opts.inferred, "the --interactions evidence file's");
   if (unknownIds.size) inputNotes.push(`inferred[] row(s) name ${unknownIds.size} node id(s) not in this expectation: ${[...unknownIds].slice(0, 5).join(", ")}${unknownIds.size > 5 ? ", …" : ""} — listed as written (another screen's id, or a typo?)`);
-  // F-74 (D111): backgrounds compared through the element that paints them
+  // backgrounds compared through the element that paints them
   if (paintedVia.length) inputNotes.push(`background compared through the element that paints it on ${paintedVia.length} node(s) whose own background is transparent (paintedBy): ${paintedVia.slice(0, 5).map((p) => `${p.nodeId} by its ${p.how}`).join(", ")}${paintedVia.length > 5 ? `, …and ${paintedVia.length - 5} more` : ""}`);
 
-  // ---- D5: the plan's waivers. A waiver accepts ONE delta (node + field) while the design is the one it was
-  // accepted against (whole-export hash, D21), the designed value is the same and the built value has not moved
+  // ---- the plan's waivers. A waiver accepts ONE delta (node + field) while the design is the one it was
+  // accepted against (whole-export hash), the designed value is the same and the built value has not moved
   // beyond its tolerance. Anything else reopens it. Never waivable: an absent component, a failed interaction,
   // a node or value that was not measured — none of them is a delta.
   const notWaivable = new Map<string, string>();
@@ -2448,9 +2443,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const cands = deltas.filter((d) => d.nodeId === w.nodeId && d.field === w.field && !d.accepted);
     if (!cands.length) {
       const fieldGap = fieldsNotMeasured.some((g) => g.nodeId === w.nodeId && g.field === w.field) ? "that value was not measured this round — only a measured delta can be accepted" : undefined;
-      // review LOW c: a TEXT width waiver from before group 11 — the field is the ink width now, a different value
+      // a waiver on a TEXT width written against the old field — the field is the ink width, a different value
       const inkNow = w.field === "width" && (deltas.some((d) => d.nodeId === w.nodeId && d.field === "width (text ink)") || specs.some((sp) => sp.nodeId === w.nodeId && sp.widthFrom === "renderBox"))
-        ? "the field is now 'width (text ink)' (group 11) — re-accept against the new report" : undefined;
+        ? "this TEXT's width is compared as 'width (text ink)' — re-accept against the new report" : undefined;
       unused.push({ nodeId: w.nodeId, field: w.field, why: notWaivable.get(w.nodeId) ?? fieldGap ?? inkNow ?? "no such delta this round — fixed? drop the waiver" });
       return;
     }
@@ -2470,8 +2465,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       why: c0 ? `built value moved: was ${fmt(w.built)}, now ${fmt(c0.actual)}` : `designed value changed: was ${fmt(w.designed)}, now ${fmt(cands[0]?.expected)}` });
   });
 
-  // ---- D39 (refined): the owner accepted a `match (size)` row — the element IS the node, so the SIZE cap on its other
-  // deltas is lifted (a real high then fails). A D30 match-confidence cap stays: how the element was found has not changed.
+  // ---- the owner accepted a `match (size)` row — the element IS the node, so the SIZE cap on its other
+  // deltas is lifted (a real high then fails). A match-confidence cap stays: how the element was found is unchanged.
   for (const sz of deltas.filter((d) => d.field === "match (size)" && d.accepted)) {
     const mcap = matchCapOf.get(String(sz.nodeId));
     for (const d of deltas) {
@@ -2484,7 +2479,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     }
   }
 
-  // ---- F-76: presentational groups — one cause, many rows. Counts and verdict stay per delta.
+  // ---- presentational groups — one cause, many rows. Counts and verdict stay per delta.
   // (a) a placement delta inside another node with a placement delta belongs to the OUTERMOST such ancestor's
   //     group (a footer pushed down carries its children with it);
   // (b) the same field with the same expected and actual on >=2 nodes is one group (one wrong token/class).
@@ -2512,12 +2507,12 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const openHigh = open.filter((d) => d.severity === "high");
   const highCauses = new Set(openHigh.map((d, i) => d.group ?? `#${i}`)).size;
 
-  // F-95 (D40(7)): the plan's interactions[] bind the expectation by their hash — a plan that changed them since --expect
+  // the plan's interactions[] bind the expectation by their hash — a plan that changed them since --expect
   // (or declares some the expectation never merged) makes the run incomplete (not an integrity failure: --accept works)
   const planNow = opts.plan || null;
   const recordedPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.sha256 === "string" ? expectation.planInteractions : undefined;
   const nowRows = planNow && Array.isArray(planNow.plan.interactions) ? planNow.plan.interactions : null;
-  // review M3: name --plan when the plan was not simply the frame's only one (picked by --plan, among several, or as the
+  // name --plan when the plan was not simply the frame's only one (picked by --plan, among several, or as the
   // expectation's recorded plan), or the expectation merged another plan's rows — a plain re-run of --expect could
   // otherwise pick a different plan
   const otherPlan = recordedPi !== undefined && planNow !== null && !samePlanFile(recordedPi.plan, planNow.file);
@@ -2526,14 +2521,14 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const shaNow = planNow ? planInteractionsSha256(planNow.plan) : "";
   const planInteractionsChanged = !planNow || !(recordedPi ? shaNow !== recordedPi.sha256 : !!nowRows && nowRows.length > 0) ? null
     : !recordedPi ? `the plan's interactions[] changed since --expect (${planNow.file}: the expectation merged none) — re-run --expect${rerunPlanArg}`
-    // review-2 M-b: the rows --expect merged came from ANOTHER plan file — name both, never advise only the one used now
+    // the rows --expect merged came from ANOTHER plan file — name both, never advise only the one used now
     : otherPlan && planNow.choice === "flag" ? `the plan's interactions[] differ from those --expect merged (${planNow.file}, passed by --plan: sha256 ${shaNow.slice(0, 12)}…; --expect merged ${recordedPi.plan}'s${gone ? `, which ${gone}` : ""}: ${recordedPi.sha256.slice(0, 12)}…) — re-run --expect --plan ${planNow.file}${gone ? "" : `, or drop --plan at --compare to check against ${recordedPi.plan}`}`
     : otherPlan ? `the plan's interactions[] at --expect came from ${recordedPi.plan}, which ${gone ?? "--compare did not use"}; the plan found now, ${planNow.file}, declares others (sha256 ${recordedPi.sha256.slice(0, 12)}… at --expect, ${shaNow.slice(0, 12)}… now) — if that plan moved, re-run --compare … --plan <its path now>; otherwise re-run --expect … --plan <the plan you intend> (--plan ${planNow.file} to adopt this one)`
     : `the plan's interactions[] changed since --expect (${planNow.file}: sha256 ${recordedPi.sha256.slice(0, 12)}… at --expect, ${shaNow.slice(0, 12)}… now) — re-run --expect${rerunPlanArg}`;
   if (recordedPi && planNow && otherPlan && gone && !planInteractionsChanged) inputNotes.push(`the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}; ${planNow.file} (used now) declares the same interactions[]`);
   if (recordedPi && !planNow) inputNotes.push(gone ? `the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}, and no single plan describes this frame now — not checked; pass --compare … --plan <plan.json> (or re-run --expect … --plan <plan.json>)`
     : `the expectation merged plan interactions from ${recordedPi.plan}, but no plan was found for this frame now — not checked`);
-  // L-1: the steps the probe replayed to reach the screen, against the plan's navigate[] — informational, never the verdict
+  // the steps the probe replayed to reach the screen, against the plan's navigate[] — informational, never the verdict
   const reachRaw: unknown = measured.reach;
   const reach = isProbeReach(reachRaw) ? reachRaw : undefined;
   if (reachRaw !== undefined && !reach && !inputNotes.some((n) => n.startsWith("measured.reach "))) inputNotes.push("measured.reach is not the probe's steps block; ignored");
@@ -2546,10 +2541,10 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (matchesPlan === false) inputNotes.push(nav && "error" in nav ? `the plan's navigate ${nav.error} — the probe's steps (sha ${reach.sha256.slice(0, 12)}…) were not checked against it`
       : `the probe's steps (sha ${reach.sha256.slice(0, 12)}…, ${reach.source}) are not the plan's navigate (sha ${(planSha ?? "").slice(0, 12)}…) — measured another way than the plan says`);
   } else if (reachRaw === undefined && planNow && Array.isArray(planNow.plan.navigate) && planNow.plan.navigate.length > 0) {
-    // review L9 (live L-1): the plan says how to reach the screen, the probe was never told — it measured the landing page
+    // the plan says how to reach the screen, the probe was never told — it measured the landing page
     inputNotes.push(`the plan declares navigate steps but the probe ran without --steps (${planNow.file}) — it measured whatever the URL shows first; re-run the probe with --steps ${planNow.file}`);
   }
-  // ---- what the evidence is tied to (findings 153/166/190)
+  // ---- what the evidence is tied to
   // (an in-process caller can hand over any object: a probe that is not an identity reads as unknown, with a note)
   const probeRaw: unknown = measured.probe;
   const probeIdentity = isProbeIdentity(probeRaw) ? probeRaw : undefined;
@@ -2557,7 +2552,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const buildNow = isBuildIdentity(buildRaw) ? buildRaw : undefined;
   if (buildRaw !== undefined && !buildNow && !inputNotes.some((n) => n.startsWith("measured.build "))) inputNotes.push("measured.build is not a build identity; ignored (build: unknown)");
   if (opts.status && opts.status.status === "v1") inputNotes.push(`${opts.status.file} is an older hand-written status (no run id, no shas) — not checked; write it with verify-screen --status`);
-  // F3: an unbound measured file (no run, measured after that run ended) is no run's — the ended run is named in its
+  // an unbound measured file (no run, measured after that run ended) is no run's — the ended run is named in its
   // input note only, never as the report's own run
   const runId = measuredRun ?? (st && unboundNote === undefined ? st.runId : undefined);
   if (probeRaw !== undefined && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
@@ -2566,15 +2561,15 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     ...ifDefined("expectationSha256", opts.expectationSha256),
     ...ifDefined("measuredSha256", opts.measuredSha256),
     ...ifDefined("measuredAgainst", measured.expectationSha256 || undefined),
-    // P2b round 2 (findings 314/317): WHAT was measured, by content — the design (timestamps stripped)
+    // WHAT was measured, by content — the design (timestamps stripped)
     // and the code (sha256 of each file in the plan's files[], the hashes the Stop hook records).
     ...ifDefined("exportContentSha256", expectation.exportContentSha256 || undefined),
     ...ifDefined("code", opts.code || undefined),
-    // Which probe produced these numbers (F-101): a hand-written probe is "unknown", and its numbers are not
+    // Which probe produced these numbers: a hand-written probe is "unknown", and its numbers are not
     // comparable round to round — a changed probe changes what "measured" means.
     probe: probeIdentity ?? "unknown",
     ...ifDefined("waivers", opts.waiversInput || undefined),
-    // DT-81: the build the probe was served — "unknown" when it records none (a hand-written probe, an older one)
+    // the build the probe was served — "unknown" when it records none (a hand-written probe, an older one)
     build: buildNow ?? "unknown",
     ...ifDefined("runId", runId),
     ...ifDefined("reach", reachInput),
@@ -2584,13 +2579,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const noRender = !!artifactCheck && !artifactCheck.some((a) => a.exists && a.image);
 
   // The verdict is COMPUTED. Coverage first — how much was looked at decides what the rest is worth.
-  // (a spec a plan anchor folded into a measured ancestor, F-77, is out of the denominator)
+  // (a spec a plan anchor folded into a measured ancestor is out of the denominator)
   const nodesExpected = specs.length - folded.length;
   const reasons: string[] = [];
-  // D26 (F-72): the run's integrity (computed above, before the interactions — D41 binds probe rows to it), ranked FIRST.
+  // the run's integrity (computed above, before the interactions — probe rows bind to it), ranked FIRST.
   reasons.push(...integrity);
   const integrityFailed = integrity.length > 0;
-  // D39 (review H1): a capped delta keeps its lower severity, but the match behind it is not trusted — any open one
+  // a capped delta keeps its lower severity, but the match behind it is not trusted — any open one
   // blocks a plain pass (and a pass-with-deviations): incomplete, never fail on its own
   const lowConfidence = open.filter((d) => d.cappedFrom !== undefined).length;
   if (lowConfidence) reasons.push(`${lowConfidence} delta(s) on low-confidence matches — tag these elements`);
@@ -2608,7 +2603,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const fieldGapsOther = fieldsNotMeasured.length;
   if (fieldGapsOther) reasons.push(`${fieldGapsOther} value(s) on measured nodes were not reported by the probe${fieldsReportedNull ? ` (${fieldsReportedNull} reported null — the probe could not read them)` : ""}`);
 
-  // Reasons come from OPEN items only. Nothing open, but something accepted or descoped → pass-with-deviations (D5/D20).
+  // Reasons come from OPEN items only. Nothing open, but something accepted or descoped → pass-with-deviations.
   const verdict: VerifyVerdict = reasons.length === 0 ? (accepted || interactionsDescoped.length ? "pass-with-deviations" : "pass")
     : integrityFailed ? "incomplete" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
 
@@ -2640,9 +2635,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     pageOverflow,
   };
 
-  // ---- D18: coverage against the previous round. Printed, recorded, and NEVER part of the verdict — a
+  // ---- coverage against the previous round. Printed, recorded, and NEVER part of the verdict — a
   // round that measures 42 nodes where the last measured 185 is still judged on its own numbers, but it
-  // can no longer read as progress (DT-44).
+  // cannot read as progress.
   let against: VerifyAgainst | undefined;
   if (opts.against) {
     const prev = opts.against.report;
@@ -2660,14 +2655,14 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       expectationChanged: prevExp && opts.expectationSha256 ? prevExp !== opts.expectationSha256 : null,
       ...(Array.isArray(prev.deltas) ? { deltas: deltaChanges(prev.deltas, deltas, { notMeasured, fieldsNotMeasured, unverifiable, notComparable: expectation.notComparable || [], specIds: new Set(specs.map((sp) => String(sp.nodeId))), absent: absentGaps, placementGaps, pageOverflow,
         sameMeasured: !!(opts.measuredSha256 && prev.inputs && prev.inputs.measuredSha256 === opts.measuredSha256) }) } : {}),
-      // LOW a: unknown when either side's hash is partial (bodies left out) — never "the same build" on a partial hash
+      // unknown when either side's hash is partial (bodies left out) — never "the same build" on a partial hash
       sameBuild: prevBuild && buildNow && !prevBuild.unhashed && !buildNow.unhashed ? prevBuild.assetsSha256 === buildNow.assetsSha256 : null,
     };
   }
-  // DT-81: the same build served although the code changed → the preview/dist was not rebuilt (never the verdict)
+  // the same build served although the code changed → the preview/dist was not rebuilt (never the verdict)
   const prevCode = opts.against && opts.against.report.inputs ? opts.against.report.inputs.code : undefined;
-  // M3: only the files BOTH reports hashed — a key the previous report never recorded (D117's mapped modules, a file just
-  // added to files[]) says nothing about whether the code changed; none in common → the git commits, as before
+  // only the files BOTH reports hashed — a key the previous report never recorded (a mapped module, a file just
+  // added to files[]) says nothing about whether the code changed; none in common → the git commits
   const codeNow = opts.code ? opts.code.files : {};
   const common = prevCode ? Object.keys(prevCode.files).filter((f) => Object.hasOwn(codeNow, f)) : [];
   const codeChanged = prevCode && opts.code ? (common.length ? common.some((f) => prevCode.files[f] !== codeNow[f])
@@ -2677,10 +2672,10 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const unmatchedCount = unmatchedInteractionEvidence.length;
   const fell = against && against.nodesMeasured.before !== null && against.nodesMeasured.after < against.nodesMeasured.before;
   const mark = verdict.toUpperCase();
-  // The headline's NEVER MEASURED slot is for a key the probe got wrong everywhere (finding 182). One node
-  // that states a field says nothing about the probe — its gap is already listed under that node (F-59:
-  // "'y' present in 0 of 74 measurements" was the frame root's one y).
-  // A key no measured node carries at all is systemic too, however few specs state it (DT-23: `fill`).
+  // The headline's NEVER MEASURED slot is for a key the probe got wrong everywhere. One node
+  // that states a field says nothing about the probe — its gap is already listed under that node (a real pull read
+  // "'y' present in 0 of 74 measurements" off the frame root's one y).
+  // A key no measured node carries at all is systemic too, however few specs state it (e.g. `fill`).
   const systemic = fieldsNeverMeasured.filter((f) => f.expectedOn >= NEVER_MEASURED_HEADLINE_MIN || f.probeSent || !keysSeen.has(f.field));
   const headline =
     `${mark} — ` +
@@ -2695,16 +2690,16 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     `data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` +
     (against && fell ? ` · COVERAGE FELL ${against.nodesMeasured.before}→${against.nodesMeasured.after} vs ${against.report}` : "") +
     (against && against.probeChanged === true ? " · probe changed" : "") +
-    // group 10 — informational, never the verdict
+    // unmatched probe results — informational, never the verdict
     (unmatchedCount ? ` · ${unmatchedCount} probe result(s) matched no designed interaction` : "") +
     (inferredHead ? ` · ${inferredHead} inferred (not designed${inferredUndesigned ? `; the ${inferredUndesigned} undesigned interaction(s) are counted above` : ""})` : "") +
     (lost ? ` · LOST COVERAGE on ${lost} earlier delta(s)` : "") +
     (foreignTags ? ` · ${foreignTags.total} foreign tag(s) (${foreignTags.prefixDrift} prefix drift, ${foreignTags.alias} alias, ${foreignTags.unknown} unknown)` : "") +
     (sameBuildServed && against ? ` · SAME BUILD SERVED as ${against.report} although the code changed (stale preview/dist?)` : "");
 
-  // ---- DT-55 (D116): the plan's deviations with field "reference" — the reference PNG is illustrative for those nodes
+  // ---- the plan's deviations with field "reference" — the reference PNG is illustrative for those nodes
   // (the designer drew a stand-in there). Shown on the VISUAL line and in the input notes; it never waives or changes a
-  // delta (D5: only an owner's waiver does).
+  // delta (only an owner's waiver does).
   const visual = visualReport(measured.visual, opts.visualMalformed === true, { diff: opts.visualDiff ?? null, against: opts.against ?? null, noProbe: !isProbeIdentity(measured.probe) });
   const devs: unknown[] = planNow && Array.isArray(planNow.plan.deviations) ? planNow.plan.deviations : [];
   const illustrative: NonNullable<ReportVisual["illustrative"]> = [];
@@ -2728,14 +2723,14 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     renderer: measured.renderer || "unknown",
     ...ifDefined("viewport", measured.viewport),
     artifacts: artifactCheck || (Array.isArray(measured.artifacts) ? measured.artifacts : []),
-    // M2 (s19): --record-plan records a static-only run as static-only, with its why
+    // --record-plan records a static-only run as static-only, with its why
     ...(staticOnly ? { mode: "static-only" as const, ...ifDefined("reason", measured.reason || undefined) } : {}),
     inputs,
     verdict,
     headline,
-    // 12b (D4): copied and counted, read by nothing above
+    // copied and counted, read by nothing above
     behaviour: behaviourReport(measured.behaviour, opts.behaviourMalformed === true),
-    // 12c (D4, D40(3)): copied, read by nothing above
+    // copied, read by nothing above
     visual,
     why: reasons,
     integrity,
@@ -2780,7 +2775,7 @@ function matchedLine(census: Record<string, number> | undefined): string {
   return keys.map((k) => `${MATCH_LABEL[k] ?? k} ${c[k] ?? 0}`).join(" · ");
 }
 /**
- * The second stderr line after the headline (F-101): which probe produced the numbers, and how the nodes
+ * The second stderr line after the headline: which probe produced the numbers, and how the nodes
  * were found. `probe verify-probe 1.2.3 (sha 1a2b3c4d5e6f…) · playwright 1.63.0 · chromium 140.0 · matched: tag N · text N · ordinal N · position N`.
  */
 function probeLine(r: Pick<VerifyReport, "inputs" | "coverage">): string {
@@ -2791,11 +2786,11 @@ function probeLine(r: Pick<VerifyReport, "inputs" | "coverage">): string {
   return `${who} · matched: ${matchedLine(r.coverage && r.coverage.matchedBy)}`;
 }
 
-// ---------------------------------------------------------------- 12c: visual diff (D4, D40(3) — never the verdict)
+// ---------------------------------------------------------------- visual diff (never the verdict)
 // compare() copies measured.visual into report.visual; nothing else in compare reads it, so the verdict, why[],
-// integrity, summary, coverage, deltas and the fidelity headline are the same with or without it (D4).
-export const VISUAL_NO_BLOCK = "the measured file carries no visual diff (hand-written, or a probe older than 12c)";
-/** F-12: a measured file with no probe block (hand-written, a non-web stack) — the visual diff is a web-probe step */
+// integrity, summary, coverage, deltas and the fidelity headline are the same with or without it.
+export const VISUAL_NO_BLOCK = "the measured file carries no visual diff (hand-written, or a probe that predates the visual diff)";
+/** a measured file with no probe block (hand-written, a non-web stack) — the visual diff is a web-probe step */
 export const VISUAL_NOT_APPLICABLE = "not applicable (no web probe)";
 export const VISUAL_MALFORMED = "the measured file's visual block is malformed — ignored (see the input notes)";
 const VISUAL_PREFIX = "VISUAL (informational — never the verdict) — ";
@@ -2817,7 +2812,7 @@ export function visualHeadline(r: Omit<ReportVisual, "headline">, shiftPx?: numb
 }
 /** report.visual from measured.visual (absent → ran:false with why; malformed → ran:false, ignored). The block's fields
  *  are read one by one (the guard is lenient). `diff` = where the diff PNG is now (the CLI resolves it beside the measured
- *  file); absent = the recorded path, checked as-is. `against` = the previous round's report (D18). */
+ *  file); absent = the recorded path, checked as-is. `against` = the previous round's report. */
 export function visualReport(v: unknown, malformed = false, o?: { diff?: { path: string; exists: boolean } | null; against?: { file: string; report: VerifyReport } | null; noProbe?: boolean }): ReportVisual {
   const none = (why: string): ReportVisual => {
     const r = { ran: false, why, regions: [], notes: [] };
@@ -2843,7 +2838,7 @@ export function visualReport(v: unknown, malformed = false, o?: { diff?: { path:
   const own: unknown[] = Array.isArray(v.notes) ? v.notes : [];
   notes.unshift(...own.filter((n): n is string => typeof n === "string"));
   const diff = typeof dp === "string" && dp ? o && o.diff ? o.diff : { path: dp, exists: fs.existsSync(dp) } : undefined;
-  // D18-style: the previous round's percentage, only when it diffed the same reference on the same grid
+  // the previous round's percentage, only when it diffed the same reference on the same grid
   let against: ReportVisual["against"];
   const pv: unknown = o && o.against ? o.against.report.visual : undefined;
   if (o && o.against && isJsonObject(pv) && pv.ran === true && num(pv.shiftTolerantPct) && pv.grid === g && reference && reference.sha256
@@ -2884,13 +2879,13 @@ function visualMarkdown(v: ReportVisual): string[] {
   return L;
 }
 
-// ---------------------------------------------------------------- 12b: behaviour / a11y (D4 — never the verdict)
+// ---------------------------------------------------------------- behaviour / a11y (never the verdict)
 // compare() copies measured.behaviour into report.behaviour and counts it; nothing else in compare reads it, so the
 // verdict, why[], integrity, summary, coverage, deltas and the fidelity headline are the same with or without it.
 const BEHAVIOUR_ORDER: Record<BehaviourStatus, number> = { fail: 0, warn: 1, "not-run": 2, unsupported: 3, pass: 4 };
-export const BEHAVIOUR_NO_BLOCK = "the measured file carries no behaviour checks (hand-written, or a probe older than 12b)";
+export const BEHAVIOUR_NO_BLOCK = "the measured file carries no behaviour checks (hand-written, or a probe that predates the behaviour checks)";
 export const BEHAVIOUR_MALFORMED = "the measured file's behaviour block is malformed — ignored (see the input notes)";
-/** F-110: how accessible names were obtained — never a screen reader. */
+/** how accessible names were obtained — never a screen reader. */
 export const NAMES_LABEL = "names computed by Playwright (Chromium), not screen-reader verified";
 const BEHAVIOUR_PREFIX = "BEHAVIOUR/A11Y (not the fidelity verdict) — ";
 /** A "+N more" row (the elements past the per-element cap): the probe marks it evidence.more === true, and evidence.count
@@ -2900,7 +2895,7 @@ function moreCount(c: BehaviourCheck): number | null {
   const n = ev ? ev.count : undefined;
   if (!ev || c.status === "pass" || typeof n !== "number" || !Number.isInteger(n) || n <= 0) return null;
   if (ev.more === true) return n;
-  // FALLBACK (measured files written before evidence.more — the first 12b probe only): its exact "+N more" detail, with N
+  // FALLBACK (measured files written before evidence.more — an older probe only): its exact "+N more" detail, with N
   // equal to evidence.count. Remove once those files are gone.
   return ev.more === undefined && c.detail.startsWith(`+${n} more `) ? n : null;
 }
@@ -2933,7 +2928,7 @@ export function behaviourReport(b: unknown, malformed = false): ReportBehaviour 
     const summary = behaviourSummary([]);
     return { ran: false, why, summary, headline: behaviourHeadline(summary, { ran: false, why }), checks: [] };
   };
-  // L3: readableMeasured dropped a block that was there (malformed) — not the same as a probe that wrote none
+  // readableMeasured dropped a block that was there (malformed) — not the same as a probe that wrote none
   if (b === undefined) return none(malformed ? BEHAVIOUR_MALFORMED : BEHAVIOUR_NO_BLOCK);
   if (!isMeasuredBehaviour(b)) return none(BEHAVIOUR_MALFORMED);
   if (!b.ran) return none(b.why);
@@ -2955,7 +2950,7 @@ export function behaviourReport(b: unknown, malformed = false): ReportBehaviour 
     checks, ...(arts.length ? { artifacts: arts } : {}), ...ifDefined("writeBlock", typeof block === "string" ? block : undefined),
   };
 }
-// L5: behaviour text comes from the page (accessible names, text, element paths like "body > div > <span>") — escaped
+// behaviour text comes from the page (accessible names, text, element paths like "body > div > <span>") — escaped
 // for markdown AND inline HTML, so "focus went to <body>" never renders as "focus went to ", and a | or newline never
 // breaks the table. No code spans: a backtick inside one cannot be escaped.
 export const mdText = (x: string | undefined): string => (x ?? "").replace(/\r?\n|\r/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -2999,10 +2994,10 @@ function reportToMarkdown(r: VerifyReportV2): string {
   L.push(mdText(r.visual.headline), "");
   L.push(`renderer ${r.renderer}${r.viewport ? ` at ${typeof r.viewport === "object" ? JSON.stringify(r.viewport) : r.viewport}` : ""} · measured ${r.measuredAt}` +
     (r.inputs && r.inputs.expectationSha256 ? ` · against expectation ${r.inputs.expectationSha256.slice(0, 12)}…` : "") + (r.inputs && r.inputs.runId ? ` · run ${r.inputs.runId}` : ""), "");
-  // L-1: how the probe reached the screen (never the verdict)
+  // how the probe reached the screen (never the verdict)
   const rc = r.inputs && r.inputs.reach;
   if (rc) L.push(`Reached by ${rc.steps} step(s) (sha ${rc.sha256.slice(0, 12)}…, ${rc.source})${rc.matchesPlan === true ? " — the plan's navigate" : rc.matchesPlan === false ? " — **not the plan's navigate**" : ""}.`, "");
-  // DT-81: which build was served (a stale preview measures old code)
+  // which build was served (a stale preview measures old code)
   const b = r.inputs && r.inputs.build;
   L.push(b && b !== "unknown"
     ? `Build served: ${b.mode} ${b.url} · ${b.assets} asset(s), sha256 ${b.assetsSha256.slice(0, 12)}…${b.unhashed ? ` (partial: ${b.unhashed} body(ies) not hashed)` : ""} · git ${b.gitHead ? b.gitHead.slice(0, 12) : "none"}${b.gitDirty ? " (uncommitted changes)" : ""}`
@@ -3073,7 +3068,7 @@ function reportToMarkdown(r: VerifyReportV2): string {
   for (const b of MATCH_BUCKETS) if ((c.matchedBy[b] ?? 0) > 0 || b === "tag") L.push(`| ${MATCH_LABEL[b] ?? b} | ${c.matchedBy[b] ?? 0} |`);
   L.push("");
   if (r.deltas.length) {
-    // F-76: one line per cause first (a group = one cause, many rows); the table still lists every row.
+    // one line per cause first (a group = one cause, many rows); the table still lists every row.
     const groups = new Map<string, VerifyDelta[]>();
     for (const d of r.deltas) if (d.group) getOrInit(groups, d.group, () => []).push(d);
     if (groups.size) {
@@ -3131,7 +3126,7 @@ function reportToMarkdown(r: VerifyReportV2): string {
     for (const i of bad) L.push(`- \`${i.nodeId}\` ${i.name || ""} — ${i.trigger} → ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}${i.source === "plan" ? " [plan]" : ""}: **${i.result}**${i.detail ? ` — ${i.detail}` : ""}`);
     L.push("");
   }
-  // DT-29: a result filed under a node + trigger nothing designed — never graded, so it never helped the verdict
+  // a result filed under a node + trigger nothing designed — never graded, so it never helped the verdict
   const um = (r.probe && r.probe.unmatchedInteractionEvidence) || [];
   if (um.length) {
     L.push(`## Probe results that matched no designed interaction (${um.length})`, "", "*Copy nodeId and trigger verbatim from the expectation's interactions[]; these results were not graded.*", "");
@@ -3193,18 +3188,17 @@ function reportToMarkdown(r: VerifyReportV2): string {
   return L.join("\n") + "\n";
 }
 const fmt = (v: unknown): string => (Array.isArray(v) ? v.join("/") : String(v));
-// A value that already ends in its unit is printed once (DT-32: a probe's "28px" printed as "28pxpx").
+// A value that already ends in its unit is printed once (a probe's "28px" must not print as "28pxpx").
 const withUnit = (v: unknown, unit: string | undefined): string => { const t = fmt(v); return unit && !t.endsWith(unit) ? t + unit : t; };
 
-// P3 round 3, finding 315 ("--expect still writes two artefact sets for one screen" — Prompt 3
-// criterion 6 reopened): defaulting `--out` to the input's own basename (round 1's fix) only helps
-// when the caller actually uses that default. An explicit `--out <nickname>` — which both the verify
-// skill's own `<Screen>` placeholder and build-screen's `<Layer>__<id>` convention invite, under two
-// different names for the SAME node — still wrote a second, complete artefact set with no warning.
+// Defaulting `--out` to the input's own basename only helps when the caller actually uses that default.
+// An explicit `--out <nickname>` — which both the verify skill's own `<Screen>` placeholder and
+// build-screen's `<Layer>__<id>` convention invite, under two different names for the SAME node — would
+// write a second, complete artefact set with no warning.
 // Scans a directory's own `*.expected.json` files (never a subdirectory — one screen, one flat
 // design/verify/) for one whose `frame.nodeId` already matches, at a DIFFERENT basename than the one
 // about to be written. Returns that file's path, or null.
-// DT-45 (D102): what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
+// what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
 // failed/blocked: its measured/report files are partial; a non-terminal phase older than --wait's stall (300 s): it never
 // finished; younger: a run is measuring right now; v1: a hand-written status, not checked. done (or none): nothing to say.
 const STATUS_STALL_MS = 300_000;
@@ -3221,7 +3215,7 @@ function runStatusNote(base: string, now = Date.now()): string | null {
   return `a run of ${name} (run ${st.runId}) is in progress — phase ${st.phase}${detail}${Number.isFinite(age) ? `, ${Math.round(age / 1000)} s ago` : ""}; it measures against the expectation it started with`;
 }
 
-// DT-45: a replaced expectation's previous bytes, one generation (overwritten). Never `*.expected.json`, so no scan
+// a replaced expectation's previous bytes, one generation (overwritten). Never `*.expected.json`, so no scan
 // (findExistingExpectedFor, verify-build's report lookup, the run's expectation) ever takes it for a live one.
 const PREV_EXPECTED_SUFFIX = ".expected.prev.json";
 
@@ -3256,10 +3250,10 @@ function plansFor(frameId: string | undefined, stem: string): Array<{ file: stri
 
 /** How a plan was chosen for a frame: "flag" = --plan, "only" = the one plan that describes it, "files" = the one
  *  of several that lists files[] (the plan the build is tied to), "recorded" = --compare's: the plan file the expectation
- *  merged interactions from (planInteractions.plan), when another plan (or none) is found now — review-2 M-b. */
+ *  merged interactions from (planInteractions.plan), when another plan (or none) is found now. */
 type PlanChoice = "flag" | "only" | "files" | "recorded";
 export interface ChosenPlan { file: string; plan: Plan; choice?: PlanChoice }
-/** Review M3: ONE plan-selection rule for --expect and --compare (they must pick the same plan, or the plan's
+/** ONE plan-selection rule for --expect and --compare (they must pick the same plan, or the plan's
  *  interactions[] hash can never agree and the run stays incomplete). --plan; else the one plan in design/plan/ that
  *  describes this frame; else, among several, the one that lists files[]; else none (`all` names the candidates). */
 /** Two spellings of one plan file (`./design/plan/x.json`, an absolute path) are the same plan. */
@@ -3276,8 +3270,8 @@ function choosePlan(flagged: { file: string; plan: Plan } | undefined, frameId: 
 /** --accept's selection: the report deltas one waiver row each is written for, or why there are none. */
 function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; field?: string | undefined; group?: string | undefined }): { deltas: VerifyDelta[] } | { error: string } {
   // L-c: a report whose run failed its integrity checks graded numbers nothing ties to this design and run — a
-  // waiver written from it would bind to values that may never have been rendered (D26)
-  // L-1: the integrity reasons compare recorded (report.integrity); an older report has only why[] — match its wording
+  // waiver written from it would bind to values that may never have been rendered
+  // the integrity reasons compare recorded (report.integrity); an older report has only why[] — match its wording
   const integrity = Array.isArray(rep.integrity) ? rep.integrity : (rep.why || []).filter(isIntegrityReason);
   if (integrity.length) return { error: `the report's run is unverified (${integrity.join("; ")}) — nothing in it can be accepted; re-measure and --compare, then accept against the new report` };
   const deltas: VerifyDelta[] = Array.isArray(rep.deltas) ? rep.deltas : [];
@@ -3289,7 +3283,7 @@ function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; fi
     return { error: `no delta in the report belongs to group '${sel.group}'${gs.length ? ` (groups: ${gs.join(", ")})` : " (the report has no groups)"}` };
   }
   const id = sel.node;
-  // Not a delta = not waivable (D5): say which kind of item it is instead.
+  // Not a delta = not waivable: say which kind of item it is instead.
   if ((rep.componentsAbsent || []).some((c) => c.nodeIds.includes(String(id)))) return { error: `${id} belongs to a component set reported ABSENT — a missing component is never waivable; build it` };
   if ((rep.interactions || []).some((i) => i.nodeId === id && i.result === "fail")) return { error: `${id} is a failed interaction — never waivable; fix it, or have the owner descope it in plan.descopes` };
   if ((rep.notMeasured || []).some((n) => n.nodeId === id)) return { error: `${id} was not measured — there is no delta to accept; measure it (or fold it, plan anchor foldedInto) first` };
@@ -3365,7 +3359,7 @@ function main(argv: string[]): number | Promise<number> {
     help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  // F-72 (D25): the run's status file and the wait on it — the tools write machine time, rev and shas, never the agent
+  // the run's status file and the wait on it — the tools write machine time, rev and shas, never the agent
   const runFlags = ["phase", "run", "new-run", "detail", "dir", "publish", "timeout", "stall", "interval"] as const;
   if (flags.status !== undefined || flags.wait !== undefined) {
     if (flags.status !== undefined && flags.wait !== undefined) { console.error("pass --status or --wait, not both\n" + USAGE); return 2; }
@@ -3393,7 +3387,7 @@ function main(argv: string[]): number | Promise<number> {
 
   const write = (base: string | undefined, obj: unknown, md?: string): void => {
     if (!base) { process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); return; }
-    // F-72: atomic (tmp beside the target, then rename) — a reader never sees half a report or expectation
+    // atomic (tmp beside the target, then rename) — a reader never sees half a report or expectation
     writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
     if (md) writeFileAtomic(base + ".report.md", md);
     console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
@@ -3403,13 +3397,13 @@ function main(argv: string[]): number | Promise<number> {
     const firstFile = files[0];
     if (firstFile === undefined) { console.error("--expect needs at least one screen export\n" + USAGE); return 2; }
     const docs: ExpectInput[] = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json") }));
-    // F-60: the export's own index (relative to the project root) tells which destinations were exported
+    // the export's own index (relative to the project root) tells which destinations were exported
     const indexFile = path.join("design", "export", "pages", "index.json");
     const idx = readJson(indexFile, isPagesRootIndex);
     if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} — interaction destinations are checked against the given export(s) only`);
     // The root index is REPLACED by a page walk (only single-screen pulls merge into it), so the frames an earlier
     // walk exported live on only in their page's own pages/<dir>/index.json: read every one on disk too, or a
-    // destination exported by the first walk reads as "never exported" after the second (review H2).
+    // destination exported by the first walk reads as "never exported" after the second.
     const pagesDir = path.join("design", "export", "pages");
     const pageRows: IndexRow[] = [];
     let dirs: string[] = [];
@@ -3421,12 +3415,12 @@ function main(argv: string[]): number | Promise<number> {
     const rootRows: IndexRow[] = "doc" in idx ? idx.doc.layers || [] : [];
     const seen = new Set(rootRows.map((l) => `${l.id}\u0000${l.sourceFile ?? ""}`));
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\u0000${l.sourceFile ?? ""}`))];
-    // (rows only: the root index's own top-level sourceFile names its last walk, not the page-dir rows merged in — review M2)
-    // D32: sibling screen exports (aliases for a shared shell's nodes) — read lazily, only the same file's rows
+    // (rows only: the root index's own top-level sourceFile names its last walk, not the page-dir rows merged in)
+    // sibling screen exports (aliases for a shared shell's nodes) — read lazily, only the same file's rows
     const exportRoot = path.join("design", "export");
     const readSibling = (file: string): ScreenDoc | null => readJsonOrNull(path.join(exportRoot, file), isScreenDoc);
     const outBase0 = out || path.join("design", "verify", path.basename(firstFile, ".json"));
-    // F-95 (D40(7)): the plan's interactions[] — the plan --compare will pick too (choosePlan, review M3)
+    // the plan's interactions[] — the plan --compare will pick too (choosePlan)
     let flagged: { file: string; plan: Plan } | undefined;
     if (planFlag !== undefined) {
       const r = readJson(planFlag, isPlan);
@@ -3440,7 +3434,7 @@ function main(argv: string[]): number | Promise<number> {
       console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h) => h.file).join(", ")}) — using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another`
         : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h) => h.file).join(", ")}) — no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
     }
-    // 12c: the reference PNG (pointer relative to design/export/) and the document's colour profile stamp
+    // the reference PNG (pointer relative to design/export/) and the document's colour profile stamp
     const readReference = (pointer: string): Uint8Array | null => {
       const file = resolveInside(exportRoot, pointer);
       if (file === null) return null; // (referenceImageFor refuses such a pointer before reading)
@@ -3455,29 +3449,29 @@ function main(argv: string[]): number | Promise<number> {
       console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}…)`);
       for (const d of pi.dropped) console.error(`warn  plan interaction ${d.nodeId} dropped: ${d.why}`);
     }
-    // P3 #152: `--expect` run once by base name and once by a nickname for the SAME screen wrote
-    // two byte-identical files (`positions___7314_87192.expected.json` and `JetRoles.expected.json`)
-    // because nothing tied the output name to the screen's own identity. Defaulting to the FIRST
-    // input file's own basename — already `<LayerName>__<node-id>` by construction (write-out.js) —
+    // `--expect` run once by base name and once by a nickname for the SAME screen would write
+    // two byte-identical files (`<Layer>__<id>.expected.json` and `<Nickname>.expected.json`)
+    // if nothing tied the output name to the screen's own identity. Defaulting to the FIRST
+    // input file's own basename — already `<LayerName>__<node-id>` by construction (write-out.ts) —
     // means two runs against the same export file always land on the same name, whatever string the
     // caller typed on the command line.
     const outBase = outBase0;
-    // Findings 153/181: re-running --expect replaced the file in place and left a measurement and a
-    // report from the OLD expectation beside it, undated. The file itself stays byte-deterministic
-    // (finding 154) — the notice goes to stderr, and every report records the sha it was computed on.
+    // Re-running --expect replaces the file in place and leaves a measurement and a report from the
+    // PREVIOUS expectation beside it, undated. The file itself stays byte-deterministic —
+    // the notice goes to stderr, and every report records the sha it was computed on.
     const target = outBase + ".expected.json";
-    // Finding 315 / P3 c6: an explicit --out under a DIFFERENT name than the one already indexing
-    // this node (e.g. --out design/verify/JetRoles when design/verify/positions___7314_87192 already
-    // covers node 7314:87192) is refused rather than silently creating a second artefact set.
+    // an explicit --out under a DIFFERENT name than the one already indexing
+    // this node (e.g. --out design/verify/<Nickname> when design/verify/<Layer>__<id> already
+    // covers the node) is refused rather than silently creating a second artefact set.
     const dup = findExistingExpectedFor(path.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
-      // DT-34: the existing set is under another name (a nickname). Say what it is, which name is canonical
+      // the existing set is under another name (a nickname). Say what it is, which name is canonical
       // (the screen file's basename, `<Layer>__<id>`), and the way out: retire the old expectation, re-run.
       const oldBase = dup.slice(0, -".expected.json".length);
       const dir = path.dirname(dup), stemOld = path.basename(oldBase);
       const oldFiles = fs.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path.join(dir, f));
       const canonical = path.join(path.dirname(target), path.basename(firstFile, ".json"));
-      // DT-45: the old set's last run, when it says something (a failed run under the nickname is partial evidence)
+      // the old set's last run, when it says something (a failed run under the nickname is partial evidence)
       const oldStatus = runStatusNote(oldBase);
       if (oldStatus) console.error(`note  ${oldStatus}`);
       if (stemOld === path.basename(canonical)) {
@@ -3505,30 +3499,30 @@ function main(argv: string[]): number | Promise<number> {
     let prevContent: JsonValue | undefined = null;
     try { if (prev !== null) { const prevDoc: unknown = JSON.parse(prev); prevContent = isJsonObject(prevDoc) ? prevDoc.exportContentSha256 : null; } } catch { /* unreadable */ }
     const onlyExportedAt = prev !== null && prev !== next && !!prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "");
-    // DT-45: a REPLACED expectation keeps its previous bytes (one generation) — written before the new one
+    // a REPLACED expectation keeps its previous bytes (one generation) — written before the new one
     const prevFile = outBase + PREV_EXPECTED_SUFFIX;
     if (prev !== null && prev !== next && !onlyExportedAt) writeFileAtomic(prevFile, prev);
     write(outBase, exp);
-    // DT-45: what the last run beside this expectation says (failed/blocked, never finished, in progress, hand-written)
+    // what the last run beside this expectation says (failed/blocked, never finished, in progress, hand-written)
     const runNote = runStatusNote(outBase);
     if (runNote) console.error(`note  ${runNote}`);
     if (prev !== null && prev === next) console.error(`note  ${target} is byte-identical to the expectation on disk (same export inputs, sha256 ${h.slice(0, 12)}…) — unchanged; this says nothing about the build: re-measure to check the code`);
     else if (onlyExportedAt) {
-      // Finding 314: a re-pull with nothing changed rewrites only exportedAt. Same design, same specs —
+      // a re-pull with nothing changed rewrites only exportedAt. Same design, same specs —
       // the measurements and report beside it still describe it.
       console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}… unchanged) — existing measurements and report still apply`);
     } else if (prev !== null) {
-      // DT-45: say WHY it differs — the same export content means verify-screen itself changed (an upgrade)
+      // say WHY it differs — the same export content means verify-screen itself changed (an upgrade)
       const why = typeof prevContent === "string" && prevContent === exp.exportContentSha256 ? "same export content — the expectation generator changed (verify-screen upgrade)"
         : typeof prevContent === "string" ? `the export changed (content sha ${prevContent.slice(0, 12)}… → ${exp.exportContentSha256.slice(0, 12)}…)`
-        // L6: an expectation written before exportContentSha256 — whether the export or the generator changed is unknown
+        // an expectation written before exportContentSha256 — whether the export or the generator changed is unknown
         : `the expectation recorded no export hash (exportContentSha256) — cannot tell whether the export or the expectation generator changed`;
       console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto.createHash("sha256").update(prev).digest("hex").slice(0, 12)}… → ${h.slice(0, 12)}…): ${why}; the previous one is kept as ${prevFile}`);
       const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation — re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
     const hc = exp.counts.hidden;
-    const lineBoxes = exp.notComparable.filter((g) => g.field === TEXT_BOX_HEIGHT).length; // F-119
+    const lineBoxes = exp.notComparable.filter((g) => g.field === TEXT_BOX_HEIGHT).length;
     console.error(`${exp.counts.nodes} node spec(s), ${exp.counts.instances} instance(s), ${exp.counts.interactions} designed interaction(s) — visible layers only; ` +
       `skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ` +
       `${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable${lineBoxes ? `; ${lineBoxes} a line box taller than its fixed text box — the build chooses its line-height` : ""}) · expectation sha256 ${h.slice(0, 12)}…`);
@@ -3556,7 +3550,7 @@ function main(argv: string[]): number | Promise<number> {
   if (interactionsFile) {
     const raw = readJsonFile(interactionsFile, "interaction evidence", "Write a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}.");
     // The object form ({interactions:[…], components:[…], inferred:[…]}, the verifier's evidence.json) may carry any of
-    // the lists; `inferred` (F-121) is checked row by row in compare (a malformed row is an input note, not a refusal).
+    // the lists; `inferred` is checked row by row in compare (a malformed row is an input note, not a refusal).
     const obj = isJsonObject(raw) ? raw : null;
     const list = isInteractionEvidenceList(raw) ? raw : obj && isInteractionEvidenceList(obj.interactions) ? obj.interactions
       : obj && obj.interactions === undefined && (obj.components !== undefined || obj.inferred !== undefined) ? [] : null;
@@ -3567,17 +3561,17 @@ function main(argv: string[]): number | Promise<number> {
     if (comps.length) extraComponents = comps;
   }
   // Artifacts are checked on disk, relative to the working directory (the project root), so a report
-  // can never cite a screenshot that does not exist (findings 166/190).
+  // can never cite a screenshot that does not exist.
   const artifacts = measured.artifacts || [];
   const artifactCheck: ArtifactCheck[] = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
     const exists = !!p && fs.existsSync(p);
     return { ...ifDefined("path", p), exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists ? sha(p) : undefined) };
   });
-  // Finding 317: tie the report to the code it measured — the plan (design/plan/*.json) for this
+  // tie the report to the code it measured — the plan (design/plan/*.json) for this
   // frame lists the files; their content hashes and `git rev-parse HEAD` go into report.inputs.code.
   let code: CodeInputs | undefined;
-  // D5/D20/F-77: the same plan supplies waivers[], descopes[] and foldedInto anchors — found whether or not it lists files.
+  // the same plan supplies waivers[], descopes[] and foldedInto anchors — found whether or not it lists files.
   let planHit: ChosenPlan | undefined;
   let recordedPlanGone: string | undefined;
   const compareNotes: string[] = [];
@@ -3590,13 +3584,13 @@ function main(argv: string[]): number | Promise<number> {
   {
     const frameId = expectation.frame && expectation.frame.nodeId;
     const stem = path.basename(expFile, ".json").replace(/\.expected$/, "");
-    // review M3: the same rule --expect used (choosePlan) — never a second way of picking the plan
+    // the same rule --expect used (choosePlan) — never a second way of picking the plan
     const chosen = choosePlan(flagged, frameId, stem);
     const all = chosen.all;
     const hits = all.filter((h) => h.plan.files);
     const onlyHit = hits.length === 1 ? hits[0] : undefined;
     planHit = chosen.hit;
-    // review-2 M-b: the plan --expect merged interactions from (planInteractions.plan) wins over another found now —
+    // the plan --expect merged interactions from (planInteractions.plan) wins over another found now —
     // --expect may have been given --plan, or design/plan/ changed since; without --plan, check the rows it merged
     const recPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.plan === "string" ? expectation.planInteractions.plan : undefined;
     if (recPi !== undefined && !(planHit && samePlanFile(planHit.file, recPi))) {
@@ -3610,7 +3604,7 @@ function main(argv: string[]): number | Promise<number> {
       }
     }
     if (!planHit && all.length > 1) console.error(`note  ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) — no waivers/descopes applied; pass --plan <plan.json>`);
-    // F-100 (D115): --record-plan writes into the plan this compare uses — none, or several and no way to choose, is a
+    // --record-plan writes into the plan this compare uses — none, or several and no way to choose, is a
     // usage error BEFORE anything is compared or written
     if (recordPlanFlag && !planHit) {
       console.error(all.length > 1 ? `--record-plan: ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) — pass --plan <plan.json> to say which one records the run`
@@ -3618,9 +3612,9 @@ function main(argv: string[]): number | Promise<number> {
       return 2;
     }
     if (onlyHit && onlyHit.plan.files) {
-      // FU-shared-shell (D117): files[] and every module the plan's anchors/components map (a shared shell)
+      // files[] and every module the plan's anchors/components map (a shared shell)
       code = { plan: onlyHit.file, files: fileHashes(planCodeFiles(onlyHit.plan, process.cwd()), process.cwd()), gitHead: gitHead(process.cwd()) };
-      // L12 (D119 addendum): what the code hashes leave out, beside them in the report's input notes
+      // what the code hashes leave out, beside them in the report's input notes
       const skipped = planCodeSkippedNote(onlyHit.plan, process.cwd());
       if (skipped) { compareNotes.push(`${onlyHit.file}: ${skipped}`); console.error(`note  ${compareNotes[compareNotes.length - 1]}`); }
     } else {
@@ -3633,11 +3627,11 @@ function main(argv: string[]): number | Promise<number> {
     ...ifDefined("waivers", planHit.plan.waivers), ...ifDefined("descopes", planHit.plan.descopes), ...ifDefined("anchors", planHit.plan.anchors),
     waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) },
   } : {};
-  // Same rule as --expect (P3 #152): default to the EXPECTATION file's own basename (stripping the
+  // Same rule as --expect: default to the EXPECTATION file's own basename (stripping the
   // `.expected` suffix it was written with), so `--compare <Screen>.expected.json <measured.json>`
   // always reports under `<Screen>.report.*`, never a second name for the same screen.
   const compareBase = out || path.join("design", "verify", path.basename(expFile, ".json").replace(/\.expected$/, ""));
-  // D18 (DT-44): the report this run is about to overwrite is the coverage baseline — read BEFORE writing.
+  // the report this run is about to overwrite is the coverage baseline — read BEFORE writing.
   // --against names another one. An explicit file that cannot be read is an error; an unreadable implicit
   // one is only noted (it is about to be replaced anyway).
   let against: { file: string; report: VerifyReport } | undefined;
@@ -3651,17 +3645,17 @@ function main(argv: string[]): number | Promise<number> {
     if ("doc" in r) against = { file: own, report: r.doc };
     else if (!r.missing) console.error(`note  ${own} ${r.error} — no coverage baseline this round (it is about to be overwritten)`);
   }
-  // F-72/D26: the run status of the measured file (<dir>/<S>.measured.json → the live status of <dir>/<S>, else the
-  // published <dir>/<S>.status.json) — the same resolver --status, --wait and verify-probe --run use (H1)
+  // the run status of the measured file (<dir>/<S>.measured.json → the live status of <dir>/<S>, else the
+  // published <dir>/<S>.status.json) — the same resolver --status, --wait and verify-probe --run use
   // — and, for a measured file naming its run, else the status of the expectation's dir the probe wrote it to
   // (verify-probe keys the run by the expectation's dir, so a measured file it wrote to a stage dir finds its run)
   const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
   const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path.join(path.dirname(expFile), path.basename(measuredBase)) : null;
   const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path.resolve(probeBase) !== path.resolve(measuredBase) ? readStatusAt(probeBase) : null);
-  // (status: null = looked and found none — a measured file naming its run then has nothing recording it, M-1)
+  // (status: null = looked and found none — a measured file naming its run then has nothing recording it)
   const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`, status: found.status } }
     : measuredBase !== null ? { status: null } : {};
-  // 12c: the diff PNG the probe recorded — as recorded, else the same name beside the measured file (a published stage)
+  // the diff PNG the probe recorded — as recorded, else the same name beside the measured file (a published stage)
   const vd: unknown = measured.visual && measured.visual.ran ? measured.visual.diff : undefined;
   let visualDiff: { path: string; exists: boolean } | null = null;
   if (typeof vd === "string" && vd) {
@@ -3679,10 +3673,10 @@ function main(argv: string[]): number | Promise<number> {
   if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) — measured against another screen or an older expectation?`);
   for (const w of rep.waivers.reopened) console.error(`warn  waiver REOPENED ${w.nodeId} (${w.field}): ${w.why}`);
   if (rep.waivers.unused.length) console.error(`note  ${rep.waivers.unused.length} plan waiver(s)/descope(s) match nothing this round: ${rep.waivers.unused.map((w) => `${w.nodeId} (${w.field})`).join(", ")} — fixed? drop them`);
-  // F-100 (D115): the report just written → the tool-owned keys of plan.verification (plan-record.ts). A failure leaves
+  // the report just written → the tool-owned keys of plan.verification (plan-record.ts). A failure leaves
   // the report in place and says so (exit 1): the plan then still holds the previous record.
   if (recordPlanFlag && planHit) {
-    // D129: relative to the project by REAL paths — an absolute --out through a symlink (macOS /tmp → /private/tmp) is
+    // relative to the project by REAL paths — an absolute --out through a symlink (macOS /tmp → /private/tmp) is
     // still inside the project
     const realOf = (p: string): string => { try { return fs.realpathSync(p); } catch { return p; } };
     const reportRel = path.relative(realOf(process.cwd()), realOf(path.resolve(compareBase + ".report.json"))).split(path.sep).join("/");
@@ -3698,7 +3692,7 @@ function main(argv: string[]): number | Promise<number> {
   return isPassingVerdict(rep.verdict) ? 0 : 1;
 }
 
-// D23: `--accept <report> (--node <id> [--field <label>] | --group <gid>) --reason … --by … [--plan <plan.json>]`.
+// `--accept <report> (--node <id> [--field <label>] | --group <gid>) --reason … --by … [--plan <plan.json>]`.
 // Copies the report delta(s) into plan.waivers[] — one row per node + field — bound to the export content hash
 // and to the designed and built values. It never grades anything: the next --compare applies (or reopens) them.
 function acceptMain(files: string[], flags: { node?: string | undefined; field?: string | undefined; group?: string | undefined; reason?: string | undefined; by?: string | undefined; plan?: string | undefined; "all-fields"?: boolean | undefined }, USAGE: string): number {
@@ -3742,7 +3736,7 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
     wrote.push(`${at >= 0 ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
   }
   plan.waivers = waivers;
-  writePlan(planFile, plan); // L5: atomic (a crash never leaves half a plan), in the plan file's own format
+  writePlan(planFile, plan); // atomic (a crash never leaves half a plan), in the plan file's own format
   console.error(`wrote ${wrote.length} waiver(s) to ${planFile} (decided by ${by}: ${reason})`);
   for (const w of wrote) console.error(`  ${w}`);
   console.error(`re-run --compare to apply ${wrote.length === 1 ? "it" : "them"}: an accepted delta stays listed, leaves the counts, and reopens if the design is re-exported or the built value moves.`);

@@ -1,12 +1,11 @@
 // content-hash.ts — "is this the same design / the same code?" answered by CONTENT, never by a clock.
-// P2b round 2 (livetest-4 findings 314, 317).
 //
-// 314: a re-pull with nothing changed in Figma rewrites only `exportedAt`, and status used to compare
-// timestamps — so every no-change sync demoted a verified screen and forced a re-measure. The export's
+// Design identity: a re-pull with nothing changed in Figma rewrites only `exportedAt`, so comparing timestamps
+// would demote a verified screen on every no-change sync and force a re-measure. The export's
 // identity is its content with the pull's own timestamps removed: `exportedAt` at any depth and the
-// `at` of each `_slices[]` entry (variables-merge.js's per-pull provenance).
-// 317: whether a report measured the code on disk was decided by mtime, so a `touch` or a fresh clone
-// flipped the status. Code identity is the content hash of each file in the plan's `files[]` and (D117) the
+// `at` of each `_slices[]` entry (variables-merge.ts's per-pull provenance).
+// Code identity: whether a report measured the code on disk is never decided by mtime, which a `touch` or a fresh
+// clone would flip. Code identity is the content hash of each file in the plan's `files[]` and the
 // modules its anchors/components map (planCodeFiles) — the same 16-hex sha256 prefix the Stop hook records in
 // `verification.hook.files`.
 import fs from "node:fs";
@@ -58,7 +57,7 @@ function gitHead(cwd: string): string | null {
   } catch { return null; }
 }
 
-// FU-shared-shell (D117): the code files a plan's verification depends on — `files[]` (as written, in order), then
+// the code files a plan's verification depends on — `files[]` (as written, in order), then
 // every anchors{}/components[] `mapModule` path not already listed, sorted. A shared shell (a Sidebar/Header the plan
 // maps by anchor but another plan lists in its files[]) is code this screen renders: a change to it must reopen the
 // plan. `#Export` suffixes are stripped. Only a project-relative FILE counts — an absolute path, a `..` escape, a
@@ -78,7 +77,7 @@ function mappedModulePath(raw: unknown, cwd?: string): string | null {
   const dotted = /\.[A-Za-z0-9]+$/.test(path.posix.basename(rel));
   if (cwd === undefined) return dotted ? rel : null;
   if (dotted && isFile(path.join(cwd, rel))) return rel;
-  // D129: an import-style name whose last part has a dot ("app.component", "Button.styles") is not an extension —
+  // an import-style name whose last part has a dot ("app.component", "Button.styles") is not an extension —
   // resolve it too; a dotted path that resolves to nothing stays hashed as written (missing → null) and is NAMED by
   // planCodeSkipped, so a typo or a deleted file is visible rather than silently "unchanged".
   const tries = [...RESOLVE_EXT.map((e) => `${rel}.${e}`), ...RESOLVE_EXT.map((e) => `${rel}/index.${e}`)];
@@ -91,7 +90,7 @@ function mapModules(plan: { anchors?: unknown; components?: unknown }): unknown[
   if (isUnknownArray(plan.components)) for (const c of plan.components) if (isRec(c)) out.push(c.mapModule);
   return out;
 }
-// `cwd`: the project root extensionless mapModules resolve under (absent: they are skipped, as before).
+// `cwd`: the project root extensionless mapModules resolve under (absent: they are skipped).
 function planCodeFiles(plan: { files?: unknown; anchors?: unknown; components?: unknown }, cwd?: string): string[] {
   const listed = isUnknownArray(plan.files) ? plan.files.map(String) : [];
   const seen = new Set(listed.map((f) => path.posix.normalize(f.trim().split("\\").join("/"))));
@@ -99,7 +98,7 @@ function planCodeFiles(plan: { files?: unknown; anchors?: unknown; components?: 
   for (const m of mapModules(plan)) { const rel = mappedModulePath(m, cwd); if (rel !== null && !seen.has(rel)) extra.add(rel); }
   return [...listed, ...[...extra].sort()];
 }
-// L12: the non-empty mapModule strings planCodeFiles(plan, cwd) could not turn into an existing project file (aliases,
+// The non-empty mapModule strings planCodeFiles(plan, cwd) could not turn into an existing project file (aliases,
 // packages, paths outside the project, paths that resolve to no file) — distinct, as written, sorted.
 function planCodeSkipped(plan: { anchors?: unknown; components?: unknown }, cwd: string): string[] {
   const out = new Set<string>();
@@ -110,7 +109,7 @@ function planCodeSkipped(plan: { anchors?: unknown; components?: unknown }, cwd:
   }
   return [...out].sort();
 }
-// L12 (D119 addendum): the one note naming them — shown by `verify-build --status` (once per plan) and in a --compare
+// The one note naming them — shown by `verify-build --status` (once per plan) and in a --compare
 // report's input notes; never by the Stop hook (it would repeat on every stop). null when nothing was skipped.
 function planCodeSkippedNote(plan: { anchors?: unknown; components?: unknown }, cwd: string): string | null {
   const s = planCodeSkipped(plan, cwd);
@@ -119,14 +118,14 @@ function planCodeSkippedNote(plan: { anchors?: unknown; components?: unknown }, 
 
 // The plan's own content as the Stop hook binds it (verify-build.ts verification.hook.planHash): the plan minus
 // `status`, the owner's waivers[]/descopes[] (accepting a delta must not send the hook back to pending; a report
-// records their hash instead) and — F-100 (D115) — ALL of `verification`: every verification check is a warning, so
+// records their hash instead) and ALL of `verification`: every verification check is a warning, so
 // the hook's result never depends on it, and `verify-screen --compare --record-plan` writing it must not reopen a plan.
 function planHash(plan: object | null | undefined): string {
   const copy: Record<string, unknown> = { ...(plan || {}) };
   delete copy.status; delete copy.waivers; delete copy.descopes; delete copy.verification;
   return sha256(JSON.stringify(copy)).slice(0, 16);
 }
-// The formula before F-100: `verification` minus only `verification.hook`. Still ACCEPTED (verify-build isOpen /
+// The older formula: `verification` minus only `verification.hook`. Still ACCEPTED (verify-build isOpen /
 // computeStatus) so no plan the hook closed under it reopens on upgrade.
 function legacyPlanHash(plan: object | null | undefined): string {
   const copy: Record<string, unknown> = structuredClone({ ...(plan || {}) });

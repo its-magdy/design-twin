@@ -163,7 +163,7 @@ for (const proj of [pMain, pOld, pThumb, pSwap, pMono]) {
 const el = await vs(pMain, ["--expect", LED, "--out", out("Ledger")]);
 if (el.status !== 0) console.log(el.stderr);
 const EXP = out("Firings") + ".expected.json";
-// e7: the same expectation without referenceImage (an expectation older than 12c)
+// e7: the same expectation without referenceImage (an expectation that predates the visual diff)
 const full = readJsonOrNull(path.join(pMain, EXP), isVerifyExpectation);
 if (full !== null) { const { referenceImage: _drop, ...old } = full; fs.writeFileSync(path.join(pMain, out("Older") + ".expected.json"), JSON.stringify(old, null, 2) + "\n"); }
 // e11 (F-1): referenceImage null (hand-edited "to turn the diff off") — once a TypeError that left chromium open forever
@@ -248,7 +248,7 @@ const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? 
   const a = read(pMain, out("Off")), b = read(pMain, out("Older"));
   console.log(`    e7: exit ${ra.status}/${rb.status} — ${brief(a)} | ${brief(b)}`);
   check("e7 with --behaviour off the visual diff still runs (it is no behaviour check)", ran(a) !== null);
-  check(`e7 an expectation older than 12c: not run, re-run --expect (${whyOf(b)})`, /older than 12c \(no referenceImage\) — re-run --expect/.test(whyOf(b)) && !fs.existsSync(path.join(pMain, out("Older") + ".diff.png")));
+  check(`e7 an expectation that predates the visual diff: not run, re-run --expect (${whyOf(b)})`, /predates the visual diff \(no referenceImage\) — re-run --expect/.test(whyOf(b)) && !fs.existsSync(path.join(pMain, out("Older") + ".diff.png")));
   check("e7 nodes, notMeasured, interactions, page and navigation are identical with and without the diff", a !== null && b !== null && strip(a) === strip(b));
   check("e7 the measured artifacts are the same list shape (only the screenshot)", a !== null && b !== null && (a.artifacts ?? []).length === 1 && (b.artifacts ?? []).length === 1);
 }

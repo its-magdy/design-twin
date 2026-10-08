@@ -31,14 +31,15 @@ export function sameAsset(fileName: unknown, a: Buffer | string, b: Buffer | str
   return Buffer.compare(normalizeForCompare(fileName, a), normalizeForCompare(fileName, b)) === 0;
 }
 
-// ---- ContentIndex: "is this content already in assets/, under ANY name" (DT-18, D61)
+// ---- ContentIndex: "is this content already in assets/, under ANY name"
 //
 // A hash cannot express "within a tolerance", so the index is two-level: the KEY is exact — sha1 of the
 // SVG's fingerprint skeleton (ids canonical, numbers out), or sha1 of the bytes for anything that is not an
 // SVG (a changed pixel is real signal) — and inside one key's bucket the members are compared on their
-// numbers, every one within SVG_TOL (a `<use>`/`<image>` transform's relatively — svg-normalize.ts M-5). Members are kept in REPRESENTATIVE order — the plain name before a
-// `-<6 hex>[_N]` suffixed copy, then the shortest, then alphabetical (ownCopyWithContent's order in
-// write-out.ts) — so `find` names the same file whichever order the directory listed them in.
+// numbers, every one within SVG_TOL (a `<use>`/`<image>` transform's relatively — see svg-normalize.ts). Members are kept in
+// REPRESENTATIVE order — the plain name before a `-<6 hex>[_N]` suffixed copy, then the shortest, then
+// alphabetical (ownCopyWithContent's order in write-out.ts) — so `find` names the same file whichever order
+// the directory listed them in.
 
 /** The exact half of an asset's content identity, plus the numbers its tolerance applies to (`rel`: the
  *  relatively compared ones). */

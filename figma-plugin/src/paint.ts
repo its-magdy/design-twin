@@ -195,8 +195,8 @@ export async function simplifyStrokes(node: SceneNode): Promise<IrStrokes | unde
   const vis = node.strokes.filter((s) => s.visible !== false);
   if (!vis.length) return undefined;
   const out: IrStrokes = {};
-  // `colors` holds COLORS. It used to fall back to the paint's type name for anything non-solid, so a
-  // gradient border emitted the string "gradient_linear" in a field consumers read as a hex — pushing
+  // `colors` holds COLORS. It must not fall back to the paint's type name for anything non-solid: a
+  // gradient border would emit the string "gradient_linear" in a field consumers read as a hex — pushing
   // "is this element a color or a type name?" onto every codegen profile. Non-solid stroke paints are
   // described by `paints` below (stops/transform/hash/opacity/blend and all), which is strictly more
   // information, so the type-name fallback carried nothing the record didn't already have.

@@ -1,13 +1,13 @@
-// png.ts — a small PNG codec for the 12c visual diff (F-89): Node builtins only (node:zlib), so the shipped bundles stay
+// png.ts — a small PNG codec for the visual diff: Node builtins only (node:zlib), so the shipped bundles stay
 // builtins-only and the pixels never go through a browser.
 //
-// Why not decode in Chromium (facts-12c §2/§3): an <img> / createImageBitmap colour-manages gAMA / cHRM / iCCP by default,
+// Why not decode in Chromium: an <img> / createImageBitmap colour-manages gAMA / cHRM / iCCP by default,
 // a 2D canvas quantises alpha, and returning the pixels through page.evaluate takes 45 s (a number[]) or 4–5× the time of
 // this decoder (base64). Both sides of the diff are raw sRGB samples: Figma's references carry sRGB + gAMA 45455, and
 // Playwright's screenshots are taken under --force-color-profile=srgb.
 //
 // What it reads: colour type 2 (RGB) and 6 (RGBA), bit depth 8, not interlaced — every Figma reference and every Playwright
-// screenshot seen (facts-12c §3). Anything else throws PngError naming the colour type / depth / interlace. Every chunk's CRC
+// screenshot seen. Anything else throws PngError naming the colour type / depth / interlace. Every chunk's CRC
 // is checked (W3C PNG 3 §5.3), the filters are §9 (None, Sub, Up, Average, Paeth). What it writes: RGB8, filter 0, deflate
 // level 1 (a mostly uniform diff image compresses well at level 1, and fast), CRC via zlib.crc32 (Node ≥ 22.2).
 import { crc32, deflateSync, inflateSync } from "node:zlib";
@@ -67,7 +67,7 @@ export function decodePng(b: Uint8Array): Rgba {
   const w = d.readUInt32BE(0), h = d.readUInt32BE(4), depth = d[8] ?? 0, ct = d[9] ?? 0, interlace = d[12] ?? 0;
   if (depth !== 8 || (ct !== 2 && ct !== 6) || interlace !== 0) throw new PngError(`unsupported PNG (colour type ${ct} / depth ${depth}${interlace ? " / interlaced" : ""}) — only 8-bit RGB / RGBA, not interlaced`);
   if (!w || !h) throw new PngError("empty PNG");
-  // F-3: refused BEFORE inflating — a few-MB zlib stream can claim gigabytes (Figma's references are ≤ ~2100 px on the long side)
+  // refused BEFORE inflating — a few-MB zlib stream can claim gigabytes (Figma's references are ≤ ~2100 px on the long side)
   if (w * h > MAX_DECODE_PIXELS) throw new PngError(`the PNG is ${w}×${h} px — over the ${MAX_DECODE_SIDE}×${MAX_DECODE_SIDE} pixels this decoder reads`);
   const ch = ct === 6 ? 4 : 3, stride = w * ch;
   let raw: Buffer;

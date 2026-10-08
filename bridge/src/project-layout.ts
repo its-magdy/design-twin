@@ -1,12 +1,12 @@
 // project-layout.ts — the ONE definition of where a Design Twin project keeps things.
 //
-// The layout used to be "everything under design/", which put two incompatible kinds of file in one
+// The layout is not "everything under design/", which would put two incompatible kinds of file in one
 // directory: what a pull WRITES and may overwrite without asking (pages/, design-system/, assets/,
 // variables.json), and what a human or a build step OWNS and cannot regenerate (target.json, the
 // component map, the plan, the audit, the verification evidence). "Delete design/ and re-pull" is the
-// obvious recovery move for a bad export, and it silently destroyed the second kind — including a
-// component map that can represent hours of hand-mapping. The component map dodged that by living at
-// the repo root instead, which only meant the line was drawn in two different places.
+// obvious recovery move for a bad export, and it would silently destroy the second kind — including a
+// component map that can represent hours of hand-mapping. Moving the component map to
+// the repo root would only draw the line in two different places.
 //
 // So the line is drawn once, and where it can be seen:
 //
@@ -40,17 +40,17 @@ export const PLAN_DIR = path.join(DESIGN_DIR, "plan");
 export const AUDIT_DIR = path.join(DESIGN_DIR, "audit");
 export const VERIFY_DIR = path.join(DESIGN_DIR, "verify");
 
-// DT-79: Tailwind v4's automatic source detection scans every file git does not ignore — Markdown
+// Tailwind v4's automatic source detection scans every file git does not ignore — Markdown
 // included (tailwindcss.com/docs/detecting-classes-in-source-files) — so class names quoted in design/
 // notes, audits and plans are generated into the shipped CSS. The exclusion is `@source not "<path
-// relative to the stylesheet>";` (Tailwind v4.1+). Only SUGGESTED (D9): the path depends on where the
-// CSS entry lives, and the user's stylesheet is theirs. One wording for `dtwin init` and tokens.js.
+// relative to the stylesheet>";` (Tailwind v4.1+). Only SUGGESTED: the path depends on where the
+// CSS entry lives, and the user's stylesheet is theirs. One wording for `dtwin init` and tokens.ts.
 export const TAILWIND_SOURCE_NOT_NOTE =
   `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. ` +
   `Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` ` +
   `(e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) — Tailwind v4.1+`;
 
-// F-91 (D9: suggest only). What was proven on a real Vite + Tailwind v4 app: with Tailwind's automatic source
+// Suggest only. What was proven on a real Vite + Tailwind v4 app: with Tailwind's automatic source
 // detection, rewriting an existing text file under design/ makes Vite fully reload the page — the reload that aborted
 // a measurement. Either Vite's `server.watch.ignored` (chokidar options, vite.dev/config/server-options) or Tailwind's
 // `@source not` stops it. Only emitted when the project lists BOTH vite and Tailwind v4: without Tailwind scanning
@@ -61,7 +61,7 @@ export const VITE_WATCH_IGNORED_NOTE =
   `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. ` +
   `Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above — both stop it`;
 
-// F-91: design/verify/ is regenerated on every verify run (measurements, screenshots, reports); the
+// design/verify/ is regenerated on every verify run (measurements, screenshots, reports); the
 // plan's waivers and descopes live in design/plan/, so ignoring it loses no decision.
 export const VERIFY_GITIGNORE_NOTE =
   `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) — consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
@@ -93,7 +93,7 @@ export function findExportDir(cwd: string): ExportDirInfo {
   const legacy = path.join(cwd, DESIGN_DIR);
   const modernExists = looksLikeExportDir(modern);
   const legacyExists = looksLikeExportDir(legacy);
-  // Both layouts present at once (P4 #14/#33/#203's fallout): a stray `dtwin pull design …` wrote a
+  // Both layouts present at once: a stray `dtwin pull design …` wrote a
   // second, parallel export tree directly in design/ beside the real design/export/. The modern one
   // still wins (it is where every tool looks), but the caller must be told the legacy one exists too
   // — picking one silently is exactly what a project in this state cannot afford, since the two trees

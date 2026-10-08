@@ -151,7 +151,7 @@ export function readSnapshotInfo(outDir?: string): SnapshotInfo | SnapshotParseE
   return { file, exportedAt, ageMs, sourceFile, warning };
 }
 
-/** The newest screen row of the root pages/index.json (F-07). `file` is the screen JSON's path relative
+/** The newest screen row of the root pages/index.json. `file` is the screen JSON's path relative
  *  to the export dir, as the index records it. */
 export interface LastScreenExport {
   name: string | undefined;
@@ -162,7 +162,7 @@ export interface LastScreenExport {
   sourceFile?: string;
 }
 
-// F-07: which screen was exported LAST, read from disk — the root pages/index.json's `layers[]` rows,
+// Which screen was exported LAST, read from disk — the root pages/index.json's `layers[]` rows,
 // newest `exportedAt` wins (a page walk's rows carry no stamp of their own and fall back to the index's
 // top-level `exportedAt`). Never throws: a missing, garbled or row-less index (or no parseable stamp) is
 // null, the same "nothing to report" figma_status gives any other absent export.
