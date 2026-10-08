@@ -7,9 +7,9 @@
 //
 // --fast: the name filters (if any) pick the suites first, then FAST_SKIP is dropped from that pick. The dropped suites
 // stay in the SUMMARY as `not run` (why `--fast`) and do NOT make the exit code 1 — `not run` otherwise means an
-// interruption, which does — but the run ends with a loud line saying it was not the full suite (CI uses plain `npm test`;
-// under CI=true --fast is still allowed and still prints it). A FAST_SKIP name that is not in SUITES exits 1, so a rename
-// cannot silently drop a suite from the skip list.
+// interruption, which does — but the run ends with a loud line saying it was not the full suite (CI runs it as one
+// leg of a matrix whose other legs name the skipped suites; under CI=true --fast is still allowed and still prints it).
+// A FAST_SKIP name that is not in SUITES exits 1, so a rename cannot silently drop a suite from the skip list.
 //
 // It replaced a 40-link `a && b && c` chain: the first non-zero exit skipped every later suite, there was no
 // summary and no timing, and a suite that exited 0 without printing its `N/N checks passed` line went unnoticed.

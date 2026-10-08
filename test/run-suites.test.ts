@@ -270,6 +270,16 @@ console.log("CMD " + JSON.stringify({
 
   check("[fast] `npm run test:fast` is the runner with --fast (package.json scripts[\"test:fast\"] === \"node test/run-suites.ts --fast\")", pkg.scripts?.["test:fast"] === "node test/run-suites.ts --fast");
 
+  // CI splits the run over a matrix (.github/workflows/test.yml): one leg `--fast`, the others name suites. Between them
+  // every suite runs exactly once — the named ones are exactly what --fast leaves out, none twice.
+  const wf = read(path.join(testDir, "..", ".github", "workflows", "test.yml"));
+  const legs = [...wf.matchAll(/^\s+suites: (.+)$/gm)].map((m) => (m[1] ?? "").trim().split(/\s+/));
+  const legNamed = legs.filter((l) => !l.includes("--fast")).flat();
+  check("[ci] the workflow's Test step runs the runner with the leg's suites (`node test/run-suites.ts ${{ matrix.suites }}`)", /^\s+run: node test\/run-suites\.ts \$\{\{ matrix\.suites \}\}$/m.test(wf));
+  check("[ci] exactly one matrix leg is `--fast` and it names no suites", legs.filter((l) => l.includes("--fast")).length === 1 && legs.some((l) => l.length === 1 && l[0] === "--fast"));
+  check("[ci] the other legs name exactly the suites --fast leaves out, each once (no suite dropped from CI, none run twice)",
+    legNamed.length === SLOW.length && new Set(legNamed).size === legNamed.length && [...legNamed].sort().join(",") === [...SLOW].sort().join(","));
+
   const mirror = path.join(tmp, "mirror");
   fs.mkdirSync(mirror);
   for (const f of onDisk) fs.writeFileSync(path.join(mirror, f), "");
