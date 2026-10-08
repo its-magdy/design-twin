@@ -55,6 +55,7 @@ import type {
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { findMapFile } from "../bridge/src/project-layout.ts";
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
@@ -1516,7 +1517,8 @@ function main(argv: string[]): number {
   let map: CodeConnectMap | null = null;
   if (mapFlag) map = readDocFile(mapFlag, "component map", isCodeConnectMap);
   else {
-    const found = ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs.existsSync(f));
+    const mapAt = findMapFile(process.cwd());
+    const found = mapAt.missing ? undefined : mapAt.rel;
     const r = found ? readJson(found, isCodeConnectMap) : null;
     if (found && r && "doc" in r) { map = r.doc; console.error(`map: ${found}`); }
     else if (found && r && "error" in r) console.error(`warn  ${found} ${r.error} — proposals are not labelled alreadyMapped (pass --map to fail on it)`);

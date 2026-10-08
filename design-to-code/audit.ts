@@ -67,6 +67,7 @@ import type {
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule
+import { AUDIT_DIR, findMapFile } from "../bridge/src/project-layout.ts";
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
@@ -1444,7 +1445,7 @@ function main(argv: string[]): number {
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
   // The user's severity decisions for this report pair, beside it (or --overrides). Present but
   // malformed is a one-line exit 2 — a decision silently not applied would re-open a dismissed blocker.
-  const outBase = out || path.join("design", "audit", path.basename(firstFile, ".json"));
+  const outBase = out || path.join(AUDIT_DIR, path.basename(firstFile, ".json"));
   // A sidecar run (`--out design/audit/<report>.library`) reads its own overrides file, else its report's.
   const ownOverrides = outBase + ".overrides.json";
   const stem = path.basename(outBase), dot = stem.indexOf(".");
@@ -1454,7 +1455,8 @@ function main(argv: string[]): number {
   // Cross-check's default map discovery (design/codeconnect.local.json, else ./codeconnect.local.json) and
   // the export's other screens, so the embedded crossFile's proposals carry the same alreadyMapped/sharedWith
   // labels as a cross-check run. Labels only — a broken default map is a warning, never a failed audit.
-  const mapFound = ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs.existsSync(f));
+  const mapAt = findMapFile(process.cwd());
+  const mapFound = mapAt.missing ? undefined : mapAt.rel;
   const mapRead = mapFound ? readJson(mapFound, isCodeConnectMap) : null;
   if (mapFound && mapRead && "error" in mapRead) console.error(`warn  ${mapFound} ${mapRead.error} — cross-file proposals are not labelled alreadyMapped`);
   const res = audit(inputs, {

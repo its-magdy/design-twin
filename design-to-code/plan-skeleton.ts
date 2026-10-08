@@ -60,6 +60,8 @@ import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import { writePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { findMapFile } from "../bridge/src/project-layout.ts";
+import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 
 const USAGE = [
   `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
@@ -680,11 +682,13 @@ function main(argv: string[]): number {
     const r = readJson(path.join(dsDir, file), guard);
     return "doc" in r ? r : r.missing ? { doc: null } : { error: r.error };
   };
-  const dsRead = optional("tokens.json", isTokensDoc), catRead = optional("components.local.json", isComponentsCatalog), libRead = optional("components.library.json", isComponentsCatalog);
-  if ("error" in dsRead) return cannotRead("the design system's tokens", path.join(dsDir, "tokens.json"), dsRead.error);
-  if ("error" in catRead) return cannotRead("the component catalog", path.join(dsDir, "components.local.json"), catRead.error);
-  if ("error" in libRead) return cannotRead("the library component catalog", path.join(dsDir, "components.library.json"), libRead.error);
-  const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs.existsSync(f));
+  const { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY } = DESIGN_SYSTEM_FILES;
+  const dsRead = optional(TOKENS, isTokensDoc), catRead = optional(COMPONENTS_LOCAL, isComponentsCatalog), libRead = optional(COMPONENTS_LIBRARY, isComponentsCatalog);
+  if ("error" in dsRead) return cannotRead("the design system's tokens", path.join(dsDir, TOKENS), dsRead.error);
+  if ("error" in catRead) return cannotRead("the component catalog", path.join(dsDir, COMPONENTS_LOCAL), catRead.error);
+  if ("error" in libRead) return cannotRead("the library component catalog", path.join(dsDir, COMPONENTS_LIBRARY), libRead.error);
+  const mapAt = findMapFile(process.cwd());
+  const mapFile = mapFlag || (mapAt.missing ? undefined : mapAt.rel);
   let mapKeys = new Map<string, MapKeyEntry>();
   if (mapFile) {
     const m = readJson(mapFile, isCodeConnectMap);

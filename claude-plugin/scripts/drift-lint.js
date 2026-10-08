@@ -763,6 +763,39 @@ if (false) process.exitCode = main(process.argv.slice(2));
 // design-to-code/design-system-dir.ts
 import fs3 from "node:fs";
 import path3 from "node:path";
+
+// bridge/src/design-system-layout.ts
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var STYLES_PAINT = "styles.paint.json";
+var STYLES_TEXT = "styles.text.json";
+var STYLES_EFFECT = "styles.effect.json";
+var STYLES_GRID = "styles.grid.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var DESIGN_SYSTEM_FILES = {
+  TOKENS,
+  STYLES_PAINT,
+  STYLES_TEXT,
+  STYLES_EFFECT,
+  STYLES_GRID,
+  COMPONENTS_LOCAL,
+  COMPONENTS_LIBRARY,
+  COMPONENTS_DIR,
+  HYGIENE,
+  MANIFEST
+};
+
+// bridge/src/library-layout.ts
+var ROOT = "libraries";
+var INDEX = "index.json";
+var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var COMPONENTS = "components.json";
+
+// design-to-code/design-system-dir.ts
+var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 function exportRootOf(screenFile, dsDir) {
   const roots = [];
   if (screenFile) {
@@ -771,18 +804,18 @@ function exportRootOf(screenFile, dsDir) {
   }
   if (dsDir) {
     const parent = path3.dirname(path3.normalize(dsDir));
-    roots.push(path3.basename(parent) === "libraries" ? path3.dirname(parent) : parent);
+    roots.push(path3.basename(parent) === ROOT ? path3.dirname(parent) : parent);
   }
-  return roots.find((r) => fs3.existsSync(path3.join(r, "libraries", "index.json"))) ?? null;
+  return roots.find((r) => fs3.existsSync(path3.join(r, ROOT, INDEX))) ?? null;
 }
 function findLibraryExports(screenFile, dsDir) {
   const root = exportRootOf(screenFile, dsDir);
   if (!root) return [];
-  const index = readJsonOrNull(path3.join(root, "libraries", "index.json"), isLibrariesIndex);
+  const index = readJsonOrNull(path3.join(root, ROOT, INDEX), isLibrariesIndex);
   if (!index) return [];
   return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
-    const rel = path3.join(root, "libraries", r.dir);
-    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path3.join(rel, "components.json"), isComponentsCatalog) };
+    const rel = path3.join(root, ROOT, r.dir);
+    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path3.join(rel, COMPONENTS), isComponentsCatalog) };
   });
 }
 function discoverCatalogs(namedFile, screenFile) {
@@ -794,8 +827,8 @@ function discoverCatalogs(namedFile, screenFile) {
     seen.add(path3.resolve(file));
     out.push({ file, role, catalog });
   };
-  for (const lib of findLibraryExports(screenFile, dir)) add(path3.join(lib.rel, "components.json"), "library", lib.components);
-  const sample = path3.join(dir, "components.library.json");
+  for (const lib of findLibraryExports(screenFile, dir)) add(path3.join(lib.rel, COMPONENTS), "library", lib.components);
+  const sample = path3.join(dir, COMPONENTS_LIBRARY2);
   add(sample, "library-sample", readJsonOrNull(sample, isComponentsCatalog));
   return out;
 }

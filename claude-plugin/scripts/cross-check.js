@@ -2,8 +2,8 @@
 
 
 // design-to-code/cross-check.ts
-import fs6 from "node:fs";
-import path4 from "node:path";
+import fs7 from "node:fs";
+import path5 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -423,7 +423,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path5, message) => errors.push({ path: path5, message });
+  const err = (path6, message) => errors.push({ path: path6, message });
   if (!isObj(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -818,15 +818,46 @@ function contrastRatio(a, b) {
 // design-to-code/design-system-dir.ts
 import fs4 from "node:fs";
 import path2 from "node:path";
+
+// bridge/src/design-system-layout.ts
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var STYLES_PAINT = "styles.paint.json";
+var STYLES_TEXT = "styles.text.json";
+var STYLES_EFFECT = "styles.effect.json";
+var STYLES_GRID = "styles.grid.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var DESIGN_SYSTEM_FILES = {
+  TOKENS,
+  STYLES_PAINT,
+  STYLES_TEXT,
+  STYLES_EFFECT,
+  STYLES_GRID,
+  COMPONENTS_LOCAL,
+  COMPONENTS_LIBRARY,
+  COMPONENTS_DIR,
+  HYGIENE,
+  MANIFEST
+};
+
+// bridge/src/library-layout.ts
+var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var COMPONENTS = "components.json";
+
+// design-to-code/design-system-dir.ts
+var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 function readDesignSystemDir(dir) {
-  const local = path2.join(dir, "components.local.json");
-  const isLibrary = !fs4.existsSync(local) && fs4.existsSync(path2.join(dir, "components.json"));
+  const local = path2.join(dir, COMPONENTS_LOCAL2);
+  const isLibrary = !fs4.existsSync(local) && fs4.existsSync(path2.join(dir, COMPONENTS));
   return {
-    tokens: readOptionalDoc(path2.join(dir, "tokens.json"), "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(isLibrary ? path2.join(dir, "components.json") : local, "component catalog", isComponentsCatalog),
-    componentsLibrary: readOptionalDoc(path2.join(dir, "components.library.json"), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path2.join(dir, "styles.text.json"), "text styles", isTextStylesDoc),
-    componentsFile: isLibrary ? "components.json" : "components.local.json",
+    tokens: readOptionalDoc(path2.join(dir, TOKENS3), "design-system tokens", isTokensDoc),
+    components: readOptionalDoc(isLibrary ? path2.join(dir, COMPONENTS) : local, "component catalog", isComponentsCatalog),
+    componentsLibrary: readOptionalDoc(path2.join(dir, COMPONENTS_LIBRARY2), "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(path2.join(dir, STYLES_TEXT3), "text styles", isTextStylesDoc),
+    componentsFile: isLibrary ? COMPONENTS : COMPONENTS_LOCAL2,
     isLibrary
   };
 }
@@ -894,6 +925,29 @@ function variablesContext(screenFiles, varsFile, opts) {
     if (fs5.existsSync(legacy) && path3.resolve(legacy) !== path3.resolve(variablesPath || "")) staleLegacy = legacy;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
+}
+
+// bridge/src/project-layout.ts
+import fs6 from "node:fs";
+import path4 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path4.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path4.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path4.join(DESIGN_DIR, "codeconnect.local.json");
+var LEGACY_MAP_FILE = "codeconnect.local.json";
+var PLAN_DIR = path4.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path4.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path4.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+function findMapFile(cwd) {
+  const modern = path4.join(cwd, MAP_FILE);
+  if (fs6.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  const legacy = path4.join(cwd, LEGACY_MAP_FILE);
+  if (fs6.existsSync(legacy)) return { file: legacy, rel: LEGACY_MAP_FILE, legacy: true };
+  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
 }
 
 // design-to-code/cross-check.ts
@@ -1493,34 +1547,34 @@ function labelProposals(rekey, visible, map, siblings) {
   return out.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || (b.p.sharedWith || 0) - (a.p.sharedWith || 0) || a.i - b.i).map((x) => x.p);
 }
 function exportSiblings(files) {
-  const checked = new Set(files.map((f) => path4.resolve(f)));
+  const checked = new Set(files.map((f) => path5.resolve(f)));
   const roots = /* @__PURE__ */ new Set();
   for (const f of checked) {
-    const pages = path4.dirname(path4.dirname(f));
-    if (path4.basename(pages) === "pages" && fs6.existsSync(path4.join(pages, "index.json"))) roots.add(path4.dirname(pages));
+    const pages = path5.dirname(path5.dirname(f));
+    if (path5.basename(pages) === "pages" && fs7.existsSync(path5.join(pages, "index.json"))) roots.add(path5.dirname(pages));
   }
   if (!roots.size) return null;
   return () => {
     const out = [];
     const seen = new Set(checked);
     for (const root of roots) {
-      const index = readJsonOrNull(path4.join(root, "pages", "index.json"), isPagesRootIndex);
+      const index = readJsonOrNull(path5.join(root, "pages", "index.json"), isPagesRootIndex);
       if (!index) continue;
       let rows = index.layers || [];
       if (!index.layers) {
         for (const pd of index.pageDirs) {
-          const idx = pd.dir ? readJsonOrNull(path4.join(root, "pages", pd.dir, "index.json"), isPageIndex) : null;
+          const idx = pd.dir ? readJsonOrNull(path5.join(root, "pages", pd.dir, "index.json"), isPageIndex) : null;
           if (idx) rows = rows.concat(idx.layers);
         }
       }
       for (const row of rows) {
         const rel = row.file;
-        if (!rel || path4.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) continue;
-        const file = path4.resolve(root, rel);
+        if (!rel || path5.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) continue;
+        const file = path5.resolve(root, rel);
         if (seen.has(file)) continue;
         seen.add(file);
         const doc = readJsonOrNull(file, isScreenDoc);
-        if (doc) out.push({ doc, label: path4.basename(file, ".json") });
+        if (doc) out.push({ doc, label: path5.basename(file, ".json") });
       }
     }
     return out;
@@ -1892,10 +1946,10 @@ function toMarkdown(res) {
     }
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs7 = res.findings.filter((f) => f.severity === sev);
-    if (!fs7.length) continue;
-    L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs7.length})`, "");
-    for (const f of fs7) L.push(`- \`${f.code}\` ${f.message}`);
+    const fs8 = res.findings.filter((f) => f.severity === sev);
+    if (!fs8.length) continue;
+    L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs8.length})`, "");
+    for (const f of fs8) L.push(`- \`${f.code}\` ${f.message}`);
     L.push("");
   }
   const pairs = res.findings.find((f) => f.code === "token-pair-contrast")?.tokenPairs || [];
@@ -1939,7 +1993,7 @@ function main(argv) {
   const ctx = variablesContext(files, varsFile);
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) return 2;
-  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path4.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
+  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path5.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
   const dsBase = dsDir || "design/design-system";
   const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);
@@ -1950,7 +2004,8 @@ function main(argv) {
   let map = null;
   if (mapFlag) map = readDocFile(mapFlag, "component map", isCodeConnectMap);
   else {
-    const found = ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs6.existsSync(f));
+    const mapAt = findMapFile(process.cwd());
+    const found = mapAt.missing ? void 0 : mapAt.rel;
     const r = found ? readJson(found, isCodeConnectMap) : null;
     if (found && r && "doc" in r) {
       map = r.doc;
@@ -1974,9 +2029,9 @@ function main(argv) {
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (out) {
-    fs6.mkdirSync(path4.dirname(out), { recursive: true });
-    fs6.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs6.writeFileSync(out + ".md", toMarkdown(res));
+    fs7.mkdirSync(path5.dirname(out), { recursive: true });
+    fs7.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs7.writeFileSync(out + ".md", toMarkdown(res));
     console.error(`wrote ${out}.json and ${out}.md`);
   } else {
     process.stdout.write(toMarkdown(res));

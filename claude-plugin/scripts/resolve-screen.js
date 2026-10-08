@@ -2,8 +2,8 @@
 
 
 // design-to-code/resolve-screen.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
+import fs4 from "node:fs";
+import path3 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -315,6 +315,25 @@ function isMainFallback(metaUrl) {
   }
 }
 
+// bridge/src/project-layout.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path2.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path2.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path2.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path2.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path2.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path2.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+function listPlans(dir) {
+  if (!fs3.existsSync(dir)) return [];
+  return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+}
+
 // design-to-code/resolve-screen.ts
 var NODE_ID_RE2 = /^\d+:\d+$/;
 var BASENAME_ID_RE = /__(\d+)_(\d+)(?:\.[A-Za-z0-9-]+)*$/;
@@ -328,35 +347,34 @@ function queryIds(q) {
   return out;
 }
 function findExportRoot(dir) {
-  const has = (d) => fs3.existsSync(path2.join(d, "pages", "index.json"));
-  const abs = path2.resolve(dir);
-  for (let d = path2.dirname(abs); ; d = path2.dirname(d)) {
+  const has = (d) => fs4.existsSync(path3.join(d, "pages", "index.json"));
+  const abs = path3.resolve(dir);
+  for (let d = path3.dirname(abs); ; d = path3.dirname(d)) {
     if (has(d)) return d;
-    if (path2.dirname(d) === d) break;
+    if (path3.dirname(d) === d) break;
   }
-  for (const sub of ["export", path2.join("design", "export")]) {
-    if (has(path2.join(abs, sub))) return path2.join(abs, sub);
+  for (const sub of [EXPORT_SUBDIR, EXPORT_DIR]) {
+    if (has(path3.join(abs, sub))) return path3.join(abs, sub);
   }
   return null;
 }
 function allRows(exportDir) {
-  const rootFile = path2.join(exportDir, "pages", "index.json");
+  const rootFile = path3.join(exportDir, "pages", "index.json");
   const root = readJsonOrNull(rootFile, isPagesRootIndex);
   if (!root) return [];
   if (root.layers) return root.layers;
   const rows = [];
   for (const pd of root.pageDirs) {
-    const idx = pd.dir ? readJsonOrNull(path2.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
+    const idx = pd.dir ? readJsonOrNull(path3.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
     if (idx) rows.push(...idx.layers);
   }
   return rows;
 }
 function planRows(planDir) {
-  if (!planDir || !fs3.existsSync(planDir)) return [];
+  if (!planDir) return [];
   const out = [];
-  for (const f of fs3.readdirSync(planDir)) {
-    if (!f.endsWith(".json")) continue;
-    const doc = readJsonOrNull(path2.join(planDir, f), isPlan);
+  for (const f of listPlans(planDir)) {
+    const doc = readJsonOrNull(path3.join(planDir, f), isPlan);
     if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, ...ifDefined("screenName", doc.screenName), ...ifDefined("nodeId", doc.nodeId), ...ifDefined("route", doc.route) });
   }
   return out;
@@ -394,7 +412,7 @@ function resolveScreen(exportDir, query, opts) {
   const q = String(query || "").trim();
   const qFold = fold(q);
   const noTitles = rows.length > 0 && !rows.some((r) => r.title);
-  if (!fs3.existsSync(path2.join(exportDir, "pages", "index.json"))) {
+  if (!fs4.existsSync(path3.join(exportDir, "pages", "index.json"))) {
     return { status: "not-found", candidates: [], noIndex: { dir: exportDir, hint: findExportRoot(exportDir) } };
   }
   const byId = (id) => {

@@ -62,6 +62,7 @@ import type {
 import { getOrInit } from "./map-util.ts";
 import { writePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { DESIGN_DIR, EXPORT_DIR, LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 
 // ================================================================ input / timeouts
 
@@ -141,9 +142,8 @@ const isPlanFile = (p: PlanFile | BadPlan): p is PlanFile => "plan" in p;
 // Every plan under design/plan/, and — separately — the ones that could not be read: those are reported,
 // never silently skipped (a hand-broken plan would otherwise vanish from the hook's view, so it would never be checked).
 function findPlans(cwd: string): { plans: PlanFile[]; bad: BadPlan[] } {
-  const dir = path.join(cwd, "design", "plan");
-  if (!fs.existsSync(dir)) return { plans: [], bad: [] };
-  const read = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path.join(dir, f)));
+  const dir = path.join(cwd, PLAN_DIR);
+  const read = listPlans(dir).map((f) => readPlan(path.join(dir, f)));
   return { plans: read.filter(isPlanFile), bad: read.filter((p): p is BadPlan => !isPlanFile(p)) };
 }
 
@@ -151,7 +151,7 @@ function findPlans(cwd: string): { plans: PlanFile[]; bad: BadPlan[] } {
 function rootOfPlan(file: string, fallback?: string): string {
   const abs = path.resolve(file);
   const dir = path.dirname(abs);
-  if (path.basename(dir) === "plan" && path.basename(path.dirname(dir)) === "design") return path.dirname(path.dirname(dir));
+  if (dir.endsWith(path.sep + PLAN_DIR)) return path.dirname(path.dirname(dir));
   return fallback || process.cwd();
 }
 
@@ -417,9 +417,11 @@ function moduleImported(mapModule: string, byFile: FileText[], cwd: string): boo
 // Every JSON read below (an export, its index, a verify report/expectation, a component map) is checked
 // against its doc-guards.ts guard; a lookup that finds only a broken file behaves as if it found nothing.
 
+// Stricter than project-layout's findExportDir (any export marker): the plan's screen is looked up in pages/,
+// so design/export counts only once it holds pages/ — else the pre-split design/ is tried.
 function exportDirOf(cwd: string): string {
-  const e = path.join(cwd, "design", "export");
-  return fs.existsSync(path.join(e, "pages")) ? e : path.join(cwd, "design"); // pre-split projects
+  const e = path.join(cwd, EXPORT_DIR);
+  return fs.existsSync(path.join(e, "pages")) ? e : path.join(cwd, DESIGN_DIR); // pre-split projects
 }
 
 // Node id from a `<Screen>__<a>_<b>` stem (the exporter's own file naming).
@@ -524,8 +526,9 @@ const NO_TOKEN = new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
 const hasToken = (row: PlanTokenRow): row is PlanTokenRow & { codeToken: string } => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
 
 function loadMapKeys(cwd: string): Map<string, { name: string; module: string }> {
-  for (const f of [path.join(cwd, "design", "codeconnect.local.json"), path.join(cwd, "codeconnect.local.json")]) {
-    // An invalid map is treated as no map (these are warnings about reuse; map-validate names the fault).
+  for (const f of [path.join(cwd, MAP_FILE), path.join(cwd, LEGACY_MAP_FILE)]) {
+    // An invalid map is treated as no map (these are warnings about reuse; map-validate names the fault),
+    // so a broken design/ map falls through to the root one — unlike findMapFile, which stops at the first that exists.
     const map = readJsonOrNull(f, isCodeConnectMap);
     if (!map) continue;
     const keys = new Map<string, { name: string; module: string }>();
@@ -908,7 +911,7 @@ function profileOf(plan: Plan, cwd: string): string | null {
   const t = plan.target;
   if (typeof t === "string" && t.trim()) return t.trim();
   if (t && typeof t === "object" && typeof t.profile === "string" && t.profile.trim()) return t.profile.trim();
-  const doc = readJsonOrNull(path.join(cwd, "design", "target.json"), isJsonObject);
+  const doc = readJsonOrNull(path.join(cwd, TARGET_FILE), isJsonObject);
   return doc && typeof doc.profile === "string" && doc.profile.trim() ? doc.profile.trim() : null;
 }
 const isWebProfile = (p: string | null): boolean => !!p && /^web(-|$)/i.test(p);
@@ -1249,7 +1252,7 @@ function behaviourRef(x: unknown): ReportRef["behaviour"] {
   return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
 function locateReports(plan: Plan, planFile: string | undefined, cwd: string, exp: ExportHit | null | undefined): ReportRef[] {
-  const dir = path.join(cwd, "design", "verify");
+  const dir = path.join(cwd, VERIFY_DIR);
   if (!fs.existsSync(dir)) return [];
   const e = exp === undefined ? locateExport(plan, planFile, cwd) : exp;
   const stems = new Set([

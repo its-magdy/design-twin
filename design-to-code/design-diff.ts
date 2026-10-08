@@ -53,7 +53,7 @@ import { getOrInit } from "./map-util.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
-import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
+import { DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // The generic key loops below compare WHATEVER a document or node carries, named field or not; they
@@ -586,7 +586,7 @@ function siblingFilesOf(f: string): string[] {
     const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path.dirname(dir);
     for (const name of DS_FILE_NAMES) {
       if (name === base) continue;
-      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path.join(dsRoot, "design-system");
+      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path.join(dsRoot, DESIGN_SYSTEM_DIR);
       out.push(path.relative(process.cwd(), path.join(siblingDir, name)));
     }
     return out;

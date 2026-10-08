@@ -53,6 +53,7 @@ import { toNodeId } from "../bridge/src/node-id.ts";
 import { getOrInit } from "./map-util.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { EXPORT_DIR, EXPORT_SUBDIR, listPlans } from "../bridge/src/project-layout.ts";
 
 // Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
 // doc-guards.ts guard; one that is absent, unreadable or not that kind of document contributes no rows.
@@ -87,7 +88,7 @@ function findExportRoot(dir: string): string | null {
     if (has(d)) return d;
     if (path.dirname(d) === d) break;
   }
-  for (const sub of ["export", path.join("design", "export")]) {
+  for (const sub of [EXPORT_SUBDIR, EXPORT_DIR]) {
     if (has(path.join(abs, sub))) return path.join(abs, sub);
   }
   return null;
@@ -117,10 +118,9 @@ export interface PlanRow { file: string; screenName?: string | null; nodeId?: st
 // screenName, and a sibling plan for the SAME run can have nothing useful in it. Used here only
 // to map a query to a nodeId, which is then resolved through the same row list as everything else.
 function planRows(planDir: string | null | undefined): PlanRow[] {
-  if (!planDir || !fs.existsSync(planDir)) return [];
+  if (!planDir) return [];
   const out: PlanRow[] = [];
-  for (const f of fs.readdirSync(planDir)) {
-    if (!f.endsWith(".json")) continue;
+  for (const f of listPlans(planDir)) {
     const doc = readJsonOrNull(path.join(planDir, f), isPlan);
     if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, ...ifDefined("screenName", doc.screenName), ...ifDefined("nodeId", doc.nodeId), ...ifDefined("route", doc.route) });
   }

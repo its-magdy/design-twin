@@ -2,8 +2,8 @@
 
 
 // design-to-code/audit.ts
-import fs7 from "node:fs";
-import path5 from "node:path";
+import fs8 from "node:fs";
+import path6 from "node:path";
 
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
@@ -90,8 +90,8 @@ function screenExportOf(doc) {
 }
 
 // design-to-code/cross-check.ts
-import fs6 from "node:fs";
-import path4 from "node:path";
+import fs7 from "node:fs";
+import path5 from "node:path";
 
 // bridge/src/json-util.ts
 function nullProto() {
@@ -506,7 +506,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path6, message) => errors.push({ path: path6, message });
+  const err = (path7, message) => errors.push({ path: path7, message });
   if (!isObj(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -852,15 +852,48 @@ function isDisabledLayer(layer) {
 // design-to-code/design-system-dir.ts
 import fs4 from "node:fs";
 import path2 from "node:path";
+
+// bridge/src/design-system-layout.ts
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var STYLES_PAINT = "styles.paint.json";
+var STYLES_TEXT = "styles.text.json";
+var STYLES_EFFECT = "styles.effect.json";
+var STYLES_GRID = "styles.grid.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var DESIGN_SYSTEM_FILES = {
+  TOKENS,
+  STYLES_PAINT,
+  STYLES_TEXT,
+  STYLES_EFFECT,
+  STYLES_GRID,
+  COMPONENTS_LOCAL,
+  COMPONENTS_LIBRARY,
+  COMPONENTS_DIR,
+  HYGIENE,
+  MANIFEST
+};
+
+// bridge/src/library-layout.ts
+var ROOT = "libraries";
+var INDEX = "index.json";
+var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var COMPONENTS = "components.json";
+
+// design-to-code/design-system-dir.ts
+var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 function readDesignSystemDir(dir) {
-  const local = path2.join(dir, "components.local.json");
-  const isLibrary = !fs4.existsSync(local) && fs4.existsSync(path2.join(dir, "components.json"));
+  const local = path2.join(dir, COMPONENTS_LOCAL2);
+  const isLibrary = !fs4.existsSync(local) && fs4.existsSync(path2.join(dir, COMPONENTS));
   return {
-    tokens: readOptionalDoc(path2.join(dir, "tokens.json"), "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(isLibrary ? path2.join(dir, "components.json") : local, "component catalog", isComponentsCatalog),
-    componentsLibrary: readOptionalDoc(path2.join(dir, "components.library.json"), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path2.join(dir, "styles.text.json"), "text styles", isTextStylesDoc),
-    componentsFile: isLibrary ? "components.json" : "components.local.json",
+    tokens: readOptionalDoc(path2.join(dir, TOKENS3), "design-system tokens", isTokensDoc),
+    components: readOptionalDoc(isLibrary ? path2.join(dir, COMPONENTS) : local, "component catalog", isComponentsCatalog),
+    componentsLibrary: readOptionalDoc(path2.join(dir, COMPONENTS_LIBRARY2), "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(path2.join(dir, STYLES_TEXT3), "text styles", isTextStylesDoc),
+    componentsFile: isLibrary ? COMPONENTS : COMPONENTS_LOCAL2,
     isLibrary
   };
 }
@@ -872,18 +905,18 @@ function exportRootOf(screenFile, dsDir) {
   }
   if (dsDir) {
     const parent = path2.dirname(path2.normalize(dsDir));
-    roots.push(path2.basename(parent) === "libraries" ? path2.dirname(parent) : parent);
+    roots.push(path2.basename(parent) === ROOT ? path2.dirname(parent) : parent);
   }
-  return roots.find((r) => fs4.existsSync(path2.join(r, "libraries", "index.json"))) ?? null;
+  return roots.find((r) => fs4.existsSync(path2.join(r, ROOT, INDEX))) ?? null;
 }
 function findLibraryExports(screenFile, dsDir) {
   const root = exportRootOf(screenFile, dsDir);
   if (!root) return [];
-  const index = readJsonOrNull(path2.join(root, "libraries", "index.json"), isLibrariesIndex);
+  const index = readJsonOrNull(path2.join(root, ROOT, INDEX), isLibrariesIndex);
   if (!index) return [];
   return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
-    const rel = path2.join(root, "libraries", r.dir);
-    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path2.join(rel, "components.json"), isComponentsCatalog) };
+    const rel = path2.join(root, ROOT, r.dir);
+    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path2.join(rel, COMPONENTS), isComponentsCatalog) };
   });
 }
 function readFrameTexts(file) {
@@ -994,6 +1027,29 @@ function variablesContext(screenFiles, varsFile, opts) {
     if (fs5.existsSync(legacy) && path3.resolve(legacy) !== path3.resolve(variablesPath || "")) staleLegacy = legacy;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
+}
+
+// bridge/src/project-layout.ts
+import fs6 from "node:fs";
+import path4 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path4.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path4.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path4.join(DESIGN_DIR, "codeconnect.local.json");
+var LEGACY_MAP_FILE = "codeconnect.local.json";
+var PLAN_DIR = path4.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path4.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path4.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+function findMapFile(cwd) {
+  const modern = path4.join(cwd, MAP_FILE);
+  if (fs6.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  const legacy = path4.join(cwd, LEGACY_MAP_FILE);
+  if (fs6.existsSync(legacy)) return { file: legacy, rel: LEGACY_MAP_FILE, legacy: true };
+  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
 }
 
 // design-to-code/cross-check.ts
@@ -1593,34 +1649,34 @@ function labelProposals(rekey, visible, map, siblings) {
   return out.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || (b.p.sharedWith || 0) - (a.p.sharedWith || 0) || a.i - b.i).map((x) => x.p);
 }
 function exportSiblings(files) {
-  const checked = new Set(files.map((f) => path4.resolve(f)));
+  const checked = new Set(files.map((f) => path5.resolve(f)));
   const roots = /* @__PURE__ */ new Set();
   for (const f of checked) {
-    const pages = path4.dirname(path4.dirname(f));
-    if (path4.basename(pages) === "pages" && fs6.existsSync(path4.join(pages, "index.json"))) roots.add(path4.dirname(pages));
+    const pages = path5.dirname(path5.dirname(f));
+    if (path5.basename(pages) === "pages" && fs7.existsSync(path5.join(pages, "index.json"))) roots.add(path5.dirname(pages));
   }
   if (!roots.size) return null;
   return () => {
     const out = [];
     const seen = new Set(checked);
     for (const root of roots) {
-      const index = readJsonOrNull(path4.join(root, "pages", "index.json"), isPagesRootIndex);
+      const index = readJsonOrNull(path5.join(root, "pages", "index.json"), isPagesRootIndex);
       if (!index) continue;
       let rows = index.layers || [];
       if (!index.layers) {
         for (const pd of index.pageDirs) {
-          const idx = pd.dir ? readJsonOrNull(path4.join(root, "pages", pd.dir, "index.json"), isPageIndex) : null;
+          const idx = pd.dir ? readJsonOrNull(path5.join(root, "pages", pd.dir, "index.json"), isPageIndex) : null;
           if (idx) rows = rows.concat(idx.layers);
         }
       }
       for (const row of rows) {
         const rel = row.file;
-        if (!rel || path4.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) continue;
-        const file = path4.resolve(root, rel);
+        if (!rel || path5.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) continue;
+        const file = path5.resolve(root, rel);
         if (seen.has(file)) continue;
         seen.add(file);
         const doc = readJsonOrNull(file, isScreenDoc);
-        if (doc) out.push({ doc, label: path4.basename(file, ".json") });
+        if (doc) out.push({ doc, label: path5.basename(file, ".json") });
       }
     }
     return out;
@@ -2155,8 +2211,8 @@ function audit(input, opts = {}) {
   }
   function walk2(node, ancestors, ctx) {
     if (!node || typeof node !== "object") return;
-    const path6 = [...ancestors.map((a) => a.name), node.name].join(" > ");
-    const here = { label: ctx.label, path: path6 };
+    const path7 = [...ancestors.map((a) => a.name), node.name].join(" > ");
+    const here = { label: ctx.label, path: path7 };
     const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
     if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
     if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
@@ -2532,7 +2588,7 @@ function audit(input, opts = {}) {
   if (catalog.length) fullCatalogs.push({ label: "--catalog", components: catalog, byName: true });
   const dsCatalog = opts.designSystem && opts.designSystem.components;
   if (dsCatalog && dsCatalog !== opts.catalog && Array.isArray(dsCatalog.components)) fullCatalogs.push({ label: opts.designSystemDir || "the design system", components: dsCatalog.components, byName: true });
-  const sameDir = (a, b) => b !== void 0 && path5.resolve(a) === path5.resolve(b);
+  const sameDir = (a, b) => b !== void 0 && path6.resolve(a) === path6.resolve(b);
   for (const lib of opts.libraries || []) {
     if (!lib.components || sameDir(lib.rel, opts.designSystemDir)) continue;
     const unknown = !screenCollKeys.size || !lib.collectionKeys.length;
@@ -2945,10 +3001,10 @@ function toMarkdown(res) {
     for (const c of res.components) L.push(`| ${c.name} | ${c.kind} | ${c.present.join(", ") || "\u2013"} | ${c.known ? c.missing.join(", ") || "none" : c.note}${c.sampled ? " (sampled)" : ""} | ${c.catalog ? `${c.catalog}${c.matchedBy === "name" ? " (by name)" : ""}` : "\u2013"} |`);
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs8 = res.findings.filter((f) => f.severity === sev);
-    if (!fs8.length) continue;
-    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs8.length})`, "");
-    for (const f of fs8) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
+    const fs9 = res.findings.filter((f) => f.severity === sev);
+    if (!fs9.length) continue;
+    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs9.length})`, "");
+    for (const f of fs9) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
   }
   if (res.annotations.length) {
     L.push("", "## Designer annotations", "");
@@ -2971,12 +3027,12 @@ function reportFindings(auditDoc) {
   return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
 function findExistingAuditFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs7.existsSync(dir)) return null;
-  for (const f of fs7.readdirSync(dir)) {
+  if (!nodeId || !fs8.existsSync(dir)) return null;
+  for (const f of fs8.readdirSync(dir)) {
     if (!f.endsWith(".json") || f.slice(0, -5).includes(".")) continue;
-    if (path5.basename(ownTarget, ".json").startsWith(f.slice(0, -5) + ".")) continue;
-    const full = path5.join(dir, f);
-    if (path5.resolve(full) === path5.resolve(ownTarget)) continue;
+    if (path6.basename(ownTarget, ".json").startsWith(f.slice(0, -5) + ".")) continue;
+    const full = path6.join(dir, f);
+    if (path6.resolve(full) === path6.resolve(ownTarget)) continue;
     const doc = readJsonOrNull(full, isJsonObject);
     if (doc && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
   }
@@ -3037,7 +3093,7 @@ function main(argv) {
   if (ctx.invalid.length) return 2;
   const inputs = files.map((f, i) => ({
     doc: readDocFile(f, "screen export", isScreenDoc),
-    label: path5.basename(f, ".json"),
+    label: path6.basename(f, ".json"),
     ...ifDefined("vars", ctx.own[i]),
     // own[i] is set: own is files.map(...)
     assets: readJsonOrNull(f.replace(/\.json$/, ".assets.json"), isScreenAssetsDoc)
@@ -3049,13 +3105,14 @@ function main(argv) {
   const neighbours = findExportNeighbours(firstFile);
   const variables = ctx.variablesDoc;
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  const outBase = out || path5.join("design", "audit", path5.basename(firstFile, ".json"));
+  const outBase = out || path6.join(AUDIT_DIR, path6.basename(firstFile, ".json"));
   const ownOverrides = outBase + ".overrides.json";
-  const stem = path5.basename(outBase), dot = stem.indexOf(".");
-  const parentOverrides = dot > 0 ? path5.join(path5.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
-  const overridesFile = flags.overrides || (!fs7.existsSync(ownOverrides) && parentOverrides && fs7.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
+  const stem = path6.basename(outBase), dot = stem.indexOf(".");
+  const parentOverrides = dot > 0 ? path6.join(path6.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
+  const overridesFile = flags.overrides || (!fs8.existsSync(ownOverrides) && parentOverrides && fs8.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
   const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
-  const mapFound = ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs7.existsSync(f));
+  const mapAt = findMapFile(process.cwd());
+  const mapFound = mapAt.missing ? void 0 : mapAt.rel;
   const mapRead = mapFound ? readJson(mapFound, isCodeConnectMap) : null;
   if (mapFound && mapRead && "error" in mapRead) console.error(`warn  ${mapFound} ${mapRead.error} \u2014 cross-file proposals are not labelled alreadyMapped`);
   const res = audit(inputs, {
@@ -3074,7 +3131,7 @@ function main(argv) {
   });
   const md = jsonOnly ? "" : toMarkdown(res);
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
-    const dup = findExistingAuditFor(path5.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
+    const dup = findExistingAuditFor(path6.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
     if (dup && !force) {
       console.error(
         `error  node ${res.nodeIds[0]} already has an audit report at ${dup} \u2014 refusing to also write ${outBase}.json/.md (one screen, one report pair). Use that existing name, or pass --force to write this one anyway.`
@@ -3085,9 +3142,9 @@ function main(argv) {
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (outBase) {
-    fs7.mkdirSync(path5.dirname(outBase), { recursive: true });
-    fs7.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs7.writeFileSync(outBase + ".md", md);
+    fs8.mkdirSync(path6.dirname(outBase), { recursive: true });
+    fs8.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs8.writeFileSync(outBase + ".md", md);
     console.error(`wrote ${outBase}.json and ${outBase}.md`);
   } else {
     process.stdout.write(md);
