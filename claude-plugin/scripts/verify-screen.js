@@ -56,11 +56,11 @@ function exportContentSha256(docs) {
   const list = isUnknownArray(docs) ? docs : [docs];
   return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
 }
-function fileHashes(files, cwd) {
+function fileHashes(files, cwd, cached) {
   const out = {};
   for (const rel of isUnknownArray(files) ? files.map(String) : []) {
     try {
-      out[rel] = sha256(fs.readFileSync(path.join(cwd, rel))).slice(0, 16);
+      out[rel] = sha256(cached?.(rel) ?? fs.readFileSync(path.join(cwd, rel))).slice(0, 16);
     } catch {
       out[rel] = null;
     }

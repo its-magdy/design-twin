@@ -477,6 +477,93 @@ check("fan-out: the session transcript is never used to scope a SUBAGENT's stop"
   fs.writeFileSync(main, toolUse("Edit", { file_path: "design/plan/login.json", old_string: "a", new_string: "b" }));
   return runHook(root, { cwd: root, agent_id: "a1", transcript_path: main }).status === 2 && runHook(root, { cwd: root, transcript_path: main }).status === 0;
 })());
+// The Stop hook reads a transcript of tens of MB line by line, and JSON.parses only the lines that can hold a
+// tool_use item. Both halves must lose nothing the whole-file read and parse-every-line would have used.
+check("transcript lines: forEachLine yields exactly readFileSync(…, \"utf8\").split(\"\\n\") — at any chunk size, across multi-byte characters, invalid bytes, CRLF, a BOM, a missing last newline and lines longer than the chunk", (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-lines-"));
+  const bodies: Buffer[] = [
+    Buffer.alloc(0), Buffer.from("\n"), Buffer.from("\n\n"), Buffer.from("one"), Buffer.from("one\n"),
+    Buffer.from("\uFEFF{\"a\":1}\r\n{\"b\":\"é中😀\"}\n" + "x".repeat(50) + "\nlast"),
+    Buffer.concat([Buffer.from("ok\n"), Buffer.from([0xe4, 0xb8, 0x0a, 0x80, 0x41, 0x0a, 0xf0, 0x9f]), Buffer.from("\ntail")]),
+  ];
+  return bodies.every((body, n) => {
+    const f = path.join(root, `t${n}.jsonl`);
+    fs.writeFileSync(f, body);
+    const want = fs.readFileSync(f, "utf8").split("\n");
+    return [1, 2, 3, 5, 7, 64, 1 << 20].every((chunk) => {
+      const got: string[] = [];
+      verifyBuild.forEachLine(f, (l) => got.push(l), chunk);
+      return got.length === want.length && got.every((l, i) => l === want[i]);
+    });
+  });
+})());
+const carriesToolUse = (line: string): boolean => {
+  try { const v: unknown = JSON.parse(line); return isJsonObject(v) && isJsonObject(v.message) && Array.isArray(v.message.content) && v.message.content.some((i) => isJsonObject(i) && i.type === "tool_use"); } catch { return false; }
+};
+// Lines as Claude Code writes them (toolUse/toolResult above, plus the other entry types a session transcript holds),
+// and the same tool_use lines re-escaped the way another JSON writer may spell them.
+const escapeAll = (s: string): string => s.replace(/"tool_use"/g, () => '"' + [..."tool_use"].map((c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0").toUpperCase()).join("") + '"');
+const TRANSCRIPT_LINES = [
+  toolUse("Write", { file_path: "design/plan/login.json", content: "{}" }),
+  toolUse("Bash", { command: "echo {} > design/plan/login.json" }, true),
+  JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "text", text: "next" }, { type: "tool_use", id: "t2", name: "Edit", input: { file_path: "a.tsx", old_string: "a", new_string: "b" } }] } }),
+  toolResult("wrote design/plan/login.json \u001b[32mok\u001b[0m"),
+  JSON.stringify({ type: "user", message: { role: "user", content: "build the login screen" } }),
+  JSON.stringify({ type: "attachment", attachment: { kind: "file", text: "x" } }),
+  JSON.stringify({ type: "system", subtype: "info", content: "compacted" }),
+  "",
+  "not json",
+];
+const ESCAPED_LINES = TRANSCRIPT_LINES.filter(carriesToolUse).flatMap((l) => [escapeAll(l), l.replace('"tool_use"', '"tool\\u005fuse"'), l.replace('"tool_use"', '"\\u0074ool_us\\u0065"')]);
+check("transcript filter: every line that holds a tool_use item passes it — Claude Code's plain spelling and any \\u-escaped one", (() => {
+  const users = [...TRANSCRIPT_LINES, ...ESCAPED_LINES].filter(carriesToolUse);
+  return users.length === 3 + ESCAPED_LINES.length && users.every((l) => verifyBuild.mayHoldToolUse(l));
+})());
+check("transcript filter: a line that holds no tool_use item is skipped unparsed — a tool_result (even one with \\u escapes in its text), a prompt, an attachment, a system entry, a blank or non-JSON line",
+  TRANSCRIPT_LINES.filter((l) => !carriesToolUse(l)).length === 6 && TRANSCRIPT_LINES.filter((l) => !carriesToolUse(l)).every((l) => !verifyBuild.mayHoldToolUse(l)));
+check("transcript filter: a Write spelled with \\u escapes still claims its plan (ownPlans reads the file through the filter)", (() => {
+  const root = project({ "a.tsx": "x" }, { status: "pending", files: ["a.tsx"], verification: STATIC });
+  const t = path.join(root, "t.jsonl");
+  fs.writeFileSync(t, escapeAll(toolUse("Write", { file_path: path.join(root, "design", "plan", "login.json"), content: "{}" })) + "\n" + toolResult("ok"));
+  const plan = { file: path.join(root, "design", "plan", "login.json"), plan: planOf(root) };
+  const all = verifyBuild.transcriptActions(t, true);
+  return all.length === 1 && verifyBuild.ownPlans([plan], { cwd: root, transcript_path: t }, [plan], root).scope === "named";
+})());
+// The project graph reads every plan's files once per hook run; checkPlan and the recorded hashes take their bytes
+// from it, except for a file the run itself has rewritten since (a plan another plan lists).
+check("project graph: checkPlan takes a listed file's text from the graph it is handed (no second read)…", (() => {
+  const root = project({ "a.tsx": "text-brand-600" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  const g = verifyBuild.buildGraph(root);
+  fs.writeFileSync(path.join(root, "a.tsx"), "#5B5FC7"); // changed behind the graph's back: the run's snapshot is what is checked
+  return checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root, { graph: () => g }).blocking.length === 0;
+})());
+check("…but reads one the run rewrote from disk", (() => {
+  const root = project({ "a.tsx": "text-brand-600" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  const g = verifyBuild.buildGraph(root);
+  fs.writeFileSync(path.join(root, "a.tsx"), "#5B5FC7");
+  g.rewrote(path.join(root, "a.tsx"));
+  return g.cached("a.tsx") === undefined && has(checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root, { graph: () => g }).blocking, /raw colour #5B5FC7/);
+})());
+check("project graph: hashes from its bytes equal hashes read from disk; the plans handed to it are the ones it counts", (() => {
+  const root = project({ "a.tsx": "é\u0000bytes", "b.css": "x" }, { status: "pending", files: ["a.tsx", "b.css", "gone.tsx"], verification: STATIC });
+  const g = verifyBuild.buildGraph(root);
+  const viaGraph = hashFiles(["a.tsx", "b.css", "gone.tsx"], root, g.cached), fromDisk = hashFiles(["a.tsx", "b.css", "gone.tsx"], root);
+  fs.writeFileSync(path.join(root, "b.css"), "y"); // not re-read: the hash is of the bytes the graph holds
+  return JSON.stringify(viaGraph) === JSON.stringify(fromDisk) && viaGraph["gone.tsx"] === null && hashFiles(["b.css"], root, g.cached)["b.css"] === fromDisk["b.css"]
+    && g.listCount.get("a.tsx") === 1 && verifyBuild.buildGraph(root, [], []).listCount.size === 0;
+})());
+check("hook: a plan listed in a later plan's files[] is hashed as the hook rewrote it (the --status that follows says not stale)", (() => {
+  const root = project({ "a.tsx": "text-brand-600" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  const later = path.join(root, "design", "plan", "settings.json"); // sorts after login.json, so it is checked second
+  fs.writeFileSync(later, JSON.stringify({ status: "pending", files: ["a.tsx", "design/plan/login.json"], tokens: [brand], verification: STATIC }));
+  const t = path.join(root, "t.jsonl");
+  fs.writeFileSync(t, [toolUse("Write", { file_path: path.join(root, "design", "plan", "login.json"), content: "{}" }), toolUse("Write", { file_path: later, content: "{}" })].join("\n"));
+  const r = runHook(root, { cwd: root, transcript_path: t });
+  const rec = readFixture(later, isPlan).verification?.hook?.files || {};
+  const onDisk = hashFiles(["design/plan/login.json"], root)["design/plan/login.json"];
+  const st = computeStatus(readFixture(later, isPlan), { cwd: root, planFile: later }).status;
+  return r.status === 0 && !!hookOf(root).result && rec["design/plan/login.json"] === onDisk && st !== "stale";
+})());
 check("missing coverage / a11y evidence WARNS on a passing rendered plan — exit 0", (() => {
   const files = { "a.tsx": "", "design/verify/login.png": "png" };
   const bare = project(files, { status: "pending", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [] } });

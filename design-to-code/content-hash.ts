@@ -39,10 +39,12 @@ function exportContentSha256(docs: unknown): string {
 
 // { "<rel path>": "<sha256 16-hex>" | null } for every file listed — null when it is not on disk.
 // `files` is a plan's `files[]` as found on disk (any JSON value is tolerated; only an array counts).
-function fileHashes(files: unknown, cwd: string): Record<string, string | null> {
+// `cached(rel)`: the file's bytes when the caller already read them this run and nothing has written the file since
+// (undefined: read it from disk) — the verify-build hook passes the bytes its project graph read.
+function fileHashes(files: unknown, cwd: string, cached?: (rel: string) => Uint8Array | undefined): Record<string, string | null> {
   const out: Record<string, string | null> = {};
   for (const rel of isUnknownArray(files) ? files.map(String) : []) {
-    try { out[rel] = sha256(fs.readFileSync(path.join(cwd, rel))).slice(0, 16); } catch { out[rel] = null; }
+    try { out[rel] = sha256(cached?.(rel) ?? fs.readFileSync(path.join(cwd, rel))).slice(0, 16); } catch { out[rel] = null; }
   }
   return out;
 }
