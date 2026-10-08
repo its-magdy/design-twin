@@ -3,7 +3,8 @@
 
 // design-to-code/tokens.ts
 import fs3 from "node:fs";
-import path2 from "node:path";
+import { createHash } from "node:crypto";
+import path4 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -99,6 +100,11 @@ function ifDefined(key, v) {
   return o;
 }
 
+// design-to-code/probe-steps.ts
+function isPlanExpect(x) {
+  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
+}
+
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -132,10 +138,23 @@ function isTextStylesDoc(x) {
   return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+var SEVERITIES = ["blocker", "warning", "info"];
+function isAuditOverridesDoc(x) {
+  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -157,9 +176,61 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
-function isVerifyMeasured(x) {
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+function isProbeIdentity(x) {
+  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+function isBuildIdentity(x) {
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
+var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
+var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+function isMeasuredVisual(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+var MEASURED_EXTRAS = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // group 11 (DT-47): the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // 12c: the visual diff (informational, D40(3))
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
+];
+function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+function isVerifyMeasured(x) {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
 }
 isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
 function isEvidence(x) {
@@ -169,11 +240,15 @@ function isInteractionEvidenceList(x) {
   return Array.isArray(x) && x.every(isEvidence);
 }
 isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
-function isVerifyReport(x) {
-  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+function isMeasuredComponentList(x) {
+  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -182,7 +257,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -190,21 +265,43 @@ function planProblem(x) {
   if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
   if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
   if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+var reqStr = (v) => typeof v === "string" && v.trim() !== "";
+function isPlanWaiver(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+function isPlanDescope(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isPlanInteraction(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
+}
+isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
 
 // design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -253,7 +350,7 @@ ${usage}`);
 import { parseArgs as parseArgs2 } from "node:util";
 
 // design-to-code/slice-sources.ts
-import path from "node:path";
+import path2 from "node:path";
 function sourcesOf(doc, docPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
@@ -262,12 +359,12 @@ function sourcesOf(doc, docPath) {
     if (!list.includes(screen)) list.push(screen);
     out.set(key, list);
   };
-  const base = docPath ? path.dirname(docPath) : ".";
+  const base = docPath ? path2.dirname(docPath) : ".";
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
     if (typeof sl.file === "string") {
-      const slice = readJsonOrNull(path.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      const slice = readJsonOrNull(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
       if (slice) {
         for (const v of slice.variables || []) add(v.key, sl.screen);
         read = true;
@@ -279,7 +376,7 @@ function sourcesOf(doc, docPath) {
     for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
   }
   if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v.key, path.basename(docPath, ".vars.json"));
+    for (const v of doc && doc.variables || []) add(v.key, path2.basename(docPath, ".vars.json"));
   }
   return out;
 }
@@ -689,12 +786,12 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
 
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -708,6 +805,20 @@ function getOrInit(m, k, init) {
   m.set(k, made);
   return made;
 }
+
+// bridge/src/project-layout.ts
+import path3 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
 
 // design-to-code/tokens.ts
 var isLeaf = (n) => n !== void 0 && n.$value !== void 0;
@@ -755,7 +866,7 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
     if (id == null) continue;
     getOrInit(groups, id, () => []).push(v);
   }
-  const ids = /* @__PURE__ */ new Map(), canonical = /* @__PURE__ */ new Map(), notes = [];
+  const ids = /* @__PURE__ */ new Map(), canonical2 = /* @__PURE__ */ new Map(), notes = [];
   const taken = new Set(groups.keys());
   for (const [id, list] of groups) {
     const byIdent = /* @__PURE__ */ new Map();
@@ -770,7 +881,7 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
     const onlyCluster = clusters.length === 1 ? clusters[0] : void 0;
     if (onlyCluster) {
       for (const v of list) ids.set(v, id);
-      canonical.set(onlyCluster[0], id);
+      canonical2.set(onlyCluster[0], id);
       if (members.length > 1) notes.push({ output, id, differ: false, members: members.map((v) => ({ v, id })) });
       continue;
     }
@@ -781,7 +892,7 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
     for (const v of members) {
       if (v === keeper) {
         assigned.set(identityOf(v), id);
-        canonical.set(v, id);
+        canonical2.set(v, id);
         memberIds.push({ v, id });
         continue;
       }
@@ -790,7 +901,7 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
       for (let n = 2; taken.has(nid); n++) nid = suffix(id, s + "-" + n);
       taken.add(nid);
       assigned.set(identityOf(v), nid);
-      canonical.set(v, nid);
+      canonical2.set(v, nid);
       memberIds.push({ v, id: nid });
     }
     for (const v of list) {
@@ -803,7 +914,7 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
   for (const v of vars) {
     getOrInit(byName, v.name, () => []).push(v);
   }
-  return { id: (v) => ids.get(v), canonical, notes, byName };
+  return { id: (v) => ids.get(v), canonical: canonical2, notes, byName };
 }
 function aliasTargetId(plan, name, referrer, warn) {
   const cands = [];
@@ -996,8 +1107,8 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     }
     const planned = plan.canonical.get(v);
     if (planned === void 0) continue;
-    const path3 = planned.split(DTCG_SEP);
-    if (path3.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
+    const path5 = planned.split(DTCG_SEP);
+    if (path5.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
       warn(`token '${v.name}' uses a reserved key (__proto__/constructor/prototype) \u2014 skipped`);
       continue;
     }
@@ -1008,25 +1119,25 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
       continue;
     }
     let node = root, collided = false;
-    for (const [i, seg] of path3.slice(0, -1).entries()) {
+    for (const [i, seg] of path5.slice(0, -1).entries()) {
       let child = node[seg];
       if (child === void 0) child = node[seg] = {};
       else if (isLeaf(child)) {
-        warn(`token '${v.name}' collides with token '${path3.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) \u2014 skipped`);
+        warn(`token '${v.name}' collides with token '${path5.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) \u2014 skipped`);
         collided = true;
         break;
       }
       node = child;
     }
     if (collided) continue;
-    const leafKey = path3[path3.length - 1] ?? "";
+    const leafKey = path5[path5.length - 1] ?? "";
     const existing = node[leafKey];
     if (existing !== void 0 && !isLeaf(existing)) {
       warn(`token '${v.name}' collides with a group of the same name \u2014 skipped`);
       continue;
     }
     if (existing !== void 0) {
-      warn(`token '${v.name}' lands on '${path3.join("/")}', which another token already holds \u2014 skipped, nothing overwritten`);
+      warn(`token '${v.name}' lands on '${path5.join("/")}', which another token already holds \u2014 skipped, nothing overwritten`);
       continue;
     }
     let type = DTCG_TYPE[v.type];
@@ -1166,10 +1277,92 @@ function cssPlan(designSystem) {
     (v) => cssVarName(v.name) === "--" + segs(v.name).join("-")
   );
 }
+function collectionOf(v, collections) {
+  const named = collections.filter((c) => c.name === v.collection);
+  if (named.length <= 1) return named[0];
+  const modes = Object.keys(v.values || {});
+  return named.find((c) => modes.every((m) => (c.modes || []).includes(m))) ?? named[0];
+}
+function planModeScopes(designSystem) {
+  const collections = designSystem && designSystem.collections || [];
+  const vars = designSystem && designSystem.variables || [];
+  const groupIds = /* @__PURE__ */ new Map();
+  collections.forEach((c, i) => groupIds.set(c, "c" + i));
+  const groupOf = (v) => {
+    const c = collectionOf(v, collections);
+    return c ? groupIds.get(c) ?? "" : "";
+  };
+  const collOfGroup = /* @__PURE__ */ new Map();
+  for (const [c, id] of groupIds) collOfGroup.set(id, c);
+  const groupsPerMode = /* @__PURE__ */ new Map();
+  const declared = (g, v) => {
+    const c = collOfGroup.get(g);
+    if (c) {
+      const def2 = c.default ?? (c.modes || [])[0];
+      return (c.modes || []).filter((m) => m !== def2);
+    }
+    const def = defaultModeName(v, collections);
+    return Object.keys(v.values || {}).filter((m) => m !== def);
+  };
+  for (const v of vars) {
+    if (!segs(v.name).length || !emitted(v)) continue;
+    if (baseValue(v, collections) === void 0) continue;
+    const g = groupOf(v);
+    for (const m of declared(g, v)) {
+      const list = getOrInit(groupsPerMode, m, () => []);
+      if (!list.includes(g)) list.push(g);
+    }
+  }
+  const qualified = /* @__PURE__ */ new Set();
+  for (const list of groupsPerMode.values()) if (list.length > 1) for (const g of list) qualified.add(g);
+  const nameOf = (g) => collOfGroup.get(g)?.name;
+  const slugOf = (g) => suffixSlug(nameOf(g) ?? "no collection") || "collection";
+  const slugCount = /* @__PURE__ */ new Map();
+  for (const g of qualified) slugCount.set(slugOf(g), (slugCount.get(slugOf(g)) ?? 0) + 1);
+  const attrOf = /* @__PURE__ */ new Map();
+  const used = /* @__PURE__ */ new Set();
+  for (const g of qualified) {
+    const slug = slugOf(g);
+    const key = collOfGroup.get(g)?.key;
+    let attr = "data-theme-" + slug + ((slugCount.get(slug) ?? 0) > 1 && key ? "-" + suffixSlug(key.slice(0, KEY_SUFFIX_LEN)) : "");
+    for (let n = 2; used.has(attr); n++) attr = "data-theme-" + slug + "-" + n;
+    used.add(attr);
+    attrOf.set(g, attr);
+  }
+  const warnings = [];
+  for (const [m, list] of groupsPerMode) {
+    if (list.length < 2) continue;
+    const label = (g) => nameOf(g) ?? "(no collection)";
+    warnings.push(`mode '${m}' exists in ${list.length} collections (${list.map(label).join(", ")}); their blocks are scoped per collection instead of [data-theme="${m}"]: set ${list.map((g) => `${attrOf.get(g) ?? "data-theme"}="${m}"`).join(" / ")} on the element that picks each collection's mode`);
+  }
+  const scope = (g, m) => {
+    const list = groupsPerMode.get(m) || [];
+    return { collection: nameOf(g), attribute: list.length > 1 ? attrOf.get(g) ?? "data-theme" : "data-theme" };
+  };
+  return { groupOf, scope, warnings };
+}
+function modeBlocks(plan) {
+  const blocks = /* @__PURE__ */ new Map();
+  return {
+    set(v, mode, prop, line) {
+      const group = plan.groupOf(v);
+      getOrInit(blocks, group + "\0" + mode, () => ({ group, mode, lines: /* @__PURE__ */ new Map() })).lines.set(prop, line);
+    },
+    render(selector) {
+      let out = "";
+      for (const b of blocks.values()) {
+        const sc = plan.scope(b.group, b.mode);
+        out += `
+${selector ? selector(b.mode, sc) : `[${sc.attribute}="${cssAttrEscape(b.mode)}"]`} {
+` + [...b.lines.values()].join("\n") + "\n}\n";
+      }
+      return out;
+    }
+  };
+}
 function toCSS(designSystem, opts, notes) {
   const collections = designSystem && designSystem.collections || [];
   const vars = designSystem && designSystem.variables || [];
-  const selectorFor = (mode) => opts && opts.selector ? opts.selector(mode) : `[data-theme="${cssAttrEscape(mode)}"]`;
   const plan = cssPlan(designSystem);
   if (notes) notes.push(...plan.notes);
   const ref = (referrer) => (name) => {
@@ -1178,7 +1371,7 @@ function toCSS(designSystem, opts, notes) {
   };
   const pctRef = (referrer) => (name) => cssPercentVar(plan, aliasTarget(plan, name, referrer), opts);
   const rootLines = /* @__PURE__ */ new Map();
-  const perMode = nullProto();
+  const perMode = modeBlocks(planModeScopes(designSystem));
   for (const v of vars) {
     if (!segs(v.name).length) continue;
     if (!emitted(v)) continue;
@@ -1191,18 +1384,17 @@ function toCSS(designSystem, opts, notes) {
     const baseStr = JSON.stringify(base);
     const unit = numberUnit(v, opts);
     const r = ref(v), p = pctRef(v);
-    rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r, p)};`);
+    const font = v.type === "STRING" && twKind(v, opts) === "fontFamily";
+    const val = (raw) => font && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, r, p);
+    rootLines.set(varName, `  ${varName}: ${val(base)};`);
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === void 0) continue;
       if (JSON.stringify(values[m]) === baseStr) continue;
-      (perMode[m] || (perMode[m] = /* @__PURE__ */ new Map())).set(varName, `  ${varName}: ${cssValue(webNumber(v, values[m]), unit, r, p)};`);
+      perMode.set(v, m, varName, `  ${varName}: ${val(values[m])};`);
     }
   }
-  let out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
-  for (const [m, lines] of Object.entries(perMode)) out += `
-${selectorFor(m)} {
-` + [...lines.values()].join("\n") + "\n}\n";
-  return out;
+  const out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
+  return out + perMode.render(opts && opts.selector);
 }
 var TW_NAMESPACE = { color: "--color-", dimension: "--spacing-", radius: "--radius-", fontSize: "--text-", fontFamily: "--font-" };
 var TW_PREFIX = "figma-";
@@ -1217,16 +1409,24 @@ function twName(v, opts) {
 var RADIUS_SCOPES = /* @__PURE__ */ new Set(["CORNER_RADIUS"]);
 function twKind(v, opts) {
   if (v.type === "COLOR") return "color";
-  if (v.type === "STRING") return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
-  if (v.type !== "FLOAT") return null;
-  if (unitDecision(v, opts) !== "px") return null;
   const scopes = v.scopes || [];
   const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
+  if (v.type === "STRING") {
+    if (narrowed) return scopes.includes("FONT_FAMILY") ? "fontFamily" : null;
+    return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
+  }
+  if (v.type !== "FLOAT") return null;
+  if (unitDecision(v, opts) !== "px") return null;
   if (narrowed && scopes.some((x) => RADIUS_SCOPES.has(x))) return "radius";
   if (narrowed && scopes.includes("FONT_SIZE")) return "fontSize";
   if (!narrowed && /radius|corner|rounded/i.test(v.name)) return "radius";
   if (!narrowed && /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name)) return "fontSize";
   return "dimension";
+}
+function cssFontFamily(raw) {
+  const s = raw.trim();
+  if (!s || /[,'"]/.test(s) || /^[A-Za-z_-][A-Za-z0-9_-]*$/.test(s)) return cssEscapeText(raw);
+  return '"' + s.replace(/["\\\n\r\f]/g, hexEsc) + '"';
 }
 function toTailwind(designSystem, opts, notes) {
   const collections = designSystem && designSystem.collections || [];
@@ -1243,7 +1443,21 @@ function toTailwind(designSystem, opts, notes) {
   if (notes) notes.push(...plan.notes);
   else warnings.push(...collisionMessages(plan.notes, opts));
   const theme = /* @__PURE__ */ new Map();
-  const perMode = nullProto();
+  const scopes = planModeScopes(designSystem);
+  const perMode = modeBlocks(scopes);
+  warnings.push(...scopes.warnings);
+  const aliasedByFont = /* @__PURE__ */ new Set();
+  const queue = vars.filter((v) => v.type === "STRING" && twKind(v, opts) === "fontFamily");
+  for (let v = queue.pop(); v !== void 0; v = queue.pop()) {
+    for (const m of Object.keys(v.values || {})) for (const n of aliasNames(v.values[m])) {
+      const t = aliasTarget(plan, n, v);
+      if (t && !aliasedByFont.has(t)) {
+        aliasedByFont.add(t);
+        queue.push(t);
+      }
+    }
+  }
+  const leftOut = [];
   let utilities = 0;
   for (const v of vars) {
     if (!segs(v.name).length) continue;
@@ -1253,28 +1467,34 @@ function toTailwind(designSystem, opts, notes) {
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === void 0) continue;
-    if (twKind(v, opts)) utilities++;
+    const kind = twKind(v, opts);
+    if (v.type === "STRING" && !kind && !aliasedByFont.has(v)) {
+      if (!leftOut.includes(v.name)) leftOut.push(v.name);
+      continue;
+    }
+    if (kind) utilities++;
     const unit = numberUnit(v, opts);
     const ref = (n) => {
       const t = aliasTargetId(plan, n, v);
       return t ? t.id : "--" + TW_PREFIX + twSlug(n);
     };
     const pctRef = (n) => cssPercentVar(plan, aliasTarget(plan, n, v), opts);
-    const val = (raw) => cssValue(webNumber(v, raw), unit, ref, pctRef);
+    const val = (raw) => kind === "fontFamily" && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, ref, pctRef);
     const baseStr = JSON.stringify(base);
     theme.set(name, `  ${name}: ${val(base)};`);
     const values = v.values || {};
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === void 0) continue;
       if (JSON.stringify(values[m]) === baseStr) continue;
-      (perMode[m] || (perMode[m] = /* @__PURE__ */ new Map())).set(name, `  ${name}: ${val(values[m])};`);
+      perMode.set(v, m, name, `  ${name}: ${val(values[m])};`);
     }
+  }
+  if (leftOut.length) {
+    warnings.push(`theme.css leaves out ${leftOut.length} STRING token(s) that are not font families (${leftOut.slice(0, 4).map((n) => `'${n}'`).join(", ")}${leftOut.length > 4 ? `, \u2026 +${leftOut.length - 4} more` : ""}) \u2014 a value like 'Semi Bold' is not usable in @theme and generates no utility. They are kept in tokens.dtcg.json and tokens.css (written with --also-generic); scope a font-family STRING to FONT_FAMILY in Figma to get a --font-figma-* utility`);
   }
   let out = '@import "tailwindcss";\n/* GENERATED by Design Twin (tokens.js --web tailwind) \u2014 do not edit by hand; re-run after a token pull.\n   Every design-system variable sits under a `figma-` name (rounded-figma-xl, p-figma-space-4, bg-figma-\u2026),\n   so Tailwind\'s own scale (rounded-xl, p-4, \u2026) keeps its framework meaning. */\n';
   if (theme.size) out += "\n@theme {\n" + [...theme.values()].join("\n") + "\n}\n";
-  for (const [m, lines] of Object.entries(perMode)) out += `
-[data-theme="${cssAttrEscape(m)}"] {
-` + [...lines.values()].join("\n") + "\n}\n";
+  out += perMode.render();
   return { text: out, utilities, tokens: theme.size, warnings };
 }
 var RESOLVER_VERSION = "2025.10";
@@ -1398,8 +1618,14 @@ function lintTokens(designSystem, opts) {
   return dedupe(warnings);
 }
 var dedupe = (list) => [...new Set(list)];
+function cssFilesOf(opts) {
+  return opts && opts.cssFiles ? [...opts.cssFiles] : opts && opts.tailwind ? ["tokens.css", "theme.css"] : ["tokens.css"];
+}
 function lintNames(designSystem, opts, warnings) {
   const vars = designSystem && designSystem.variables || [];
+  const files = cssFilesOf(opts);
+  const inCss = files.join("/") || "the CSS";
+  warnings.push(...planModeScopes(designSystem).warnings);
   const names = new Set(vars.map((v) => segs(v.name).join(".")).filter(Boolean));
   for (const v of vars) for (const m of Object.keys(v.values || {})) {
     for (const target of aliasNames(v.values[m])) {
@@ -1416,11 +1642,11 @@ function lintNames(designSystem, opts, warnings) {
       if (isAlias(opacity)) {
         plan = plan || cssPlan(designSystem);
         if (!cssPercentVar(plan, aliasTarget(plan, opacity.aliasOf, v), opts)) {
-          warnings.push(`token '${v.name}' (mode ${m}) is a composed colour whose opacity '${opacity.aliasOf}' is not an OPACITY/COLOR_OPACITY-scoped number (its CSS is not a percentage); tokens.css/theme.css carry the colour only \u2014 the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
+          warnings.push(`token '${v.name}' (mode ${m}) is a composed colour whose opacity '${opacity.aliasOf}' is not an OPACITY/COLOR_OPACITY-scoped number (its CSS is not a percentage); ${inCss} carr${files.length > 1 ? "y" : "ies"} the colour only \u2014 the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
           break;
         }
       } else if (pctOutOfRange(opacity)) {
-        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(opacity)}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${opacity}`);
+        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(opacity)}% in ${inCss} (as Figma does); tokens.dtcg.json keeps ${opacity}`);
       }
     }
   }
@@ -1429,14 +1655,14 @@ function lintNames(designSystem, opts, warnings) {
     for (const m of Object.keys(v.values || {})) {
       const raw = v.values[m];
       const txt = typeof raw === "number" ? String(raw) : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? raw : null;
-      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(Number(txt))}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${txt}`);
+      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(Number(txt))}% in ${inCss} (as Figma does); tokens.dtcg.json keeps ${txt}`);
     }
   }
   for (const v of vars) {
     if (v.type !== "STRING") continue;
     for (const m of Object.keys(v.values || {})) {
       if (cssNeedsEscape(v.values[m])) {
-        warnings.push(`token '${v.name}' (mode ${m}) contains CSS-structural characters; escaped for safety in tokens.css`);
+        warnings.push(`token '${v.name}' (mode ${m}) contains CSS-structural characters; escaped for safety in ${inCss}`);
         break;
       }
     }
@@ -1445,7 +1671,7 @@ function lintNames(designSystem, opts, warnings) {
   for (const c of designSystem && designSystem.collections || []) for (const m of c.modes || []) modeNames.add(m);
   for (const v of vars) for (const m of Object.keys(v.values || {})) modeNames.add(m);
   for (const m of modeNames) {
-    if (cssAttrNeedsEscape(m)) warnings.push(`mode '${m}' contains a quote or backslash; escaped in its tokens.css selector`);
+    if (cssAttrNeedsEscape(m)) warnings.push(`mode '${m}' contains a quote or backslash; escaped in its ${inCss} selector`);
   }
   for (const v of vars) {
     if (v.type === "FLOAT" && unitDecision(v, opts) === "name") {
@@ -1455,7 +1681,8 @@ function lintNames(designSystem, opts, warnings) {
     if (!s.length) continue;
     const folded = cssVarName(v.name);
     if (folded !== "--" + s.join("-")) {
-      warnings.push(`token '${v.name}' contains characters that are illegal in a CSS custom property; emitted as ${folded}`);
+      const as = files.map((f) => `${f === "theme.css" ? twName(v, opts) : folded} in ${f}`).join(", ");
+      warnings.push(`token '${v.name}' contains characters that are illegal in a CSS custom property; emitted as ${as}`);
     }
   }
   return warnings;
@@ -1468,22 +1695,136 @@ function emitTokens(designSystem, opts) {
   const tailwind = opts && opts.tailwind ? toTailwind(designSystem, opts, notes) : void 0;
   const { resolver, files } = toResolver(designSystem, warnings, opts);
   const collisions = collisionMessages(notes, opts);
+  if (tailwind) warnings.push(...tailwind.warnings);
   lintNames(designSystem, opts, warnings);
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
 var { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity });
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const args = process.argv.slice(2);
+var canonJson = (x) => {
+  if (Array.isArray(x)) return "[" + x.map(canonJson).join(",") + "]";
+  if (x && typeof x === "object") {
+    return "{" + Object.entries(x).filter(([, v]) => v !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => JSON.stringify(k) + ":" + canonJson(v)).join(",") + "}";
+  }
+  return JSON.stringify(x) ?? "null";
+};
+var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+function catalogProvenance(ds) {
+  const collections = (ds.collections || []).map((c) => canonJson(c)).sort(cmpStr);
+  const variables = (ds.variables || []).map((v) => ({ sort: [v.collection ?? "", v.name, v.key ?? ""].join("\0"), json: canonJson(v) })).sort((a, b) => cmpStr(a.sort, b.sort) || cmpStr(a.json, b.json)).map((v) => v.json);
+  const sha = createHash("sha256").update(`{"collections":[${collections.join(",")}],"variables":[${variables.join(",")}]}`).digest("hex").slice(0, 12);
+  return { count: (ds.variables || []).length, sha };
+}
+var PROVENANCE_RE = /designtwin-source: (.+?) · (\d+) variables · sha256 ([0-9a-f]{12})/;
+function sourceName(input) {
+  const abs = path4.resolve(input);
+  const parent = path4.basename(path4.dirname(abs));
+  return parent ? `${parent}/${path4.basename(abs)}` : path4.basename(abs);
+}
+function provenanceLine(input, ds, comment) {
+  const { count, sha } = catalogProvenance(ds);
+  const body = `designtwin-source: ${sourceName(input)} \xB7 ${count} variables \xB7 sha256 ${sha}`;
+  return comment === "css" ? `/* ${body} */
+` : `// ${body}
+`;
+}
+function lookupColor(ds, query) {
+  const q = normHex(query);
+  if (q === null) return null;
+  const withAlpha = q.length === 9;
+  const same = (hex) => withAlpha ? (hex.length === 7 ? hex + "ff" : hex) === q : hex.slice(0, 7) === q.slice(0, 7);
+  const collections = ds.collections;
+  const byName = /* @__PURE__ */ new Map();
+  for (const v of ds.variables || []) getOrInit(byName, v.name, () => []).push(v);
+  const target = (name, referrer) => (byName.get(name) || []).slice().sort((a, b) => Number(b.collection === referrer.collection) - Number(a.collection === referrer.collection) || cmpStr(a.key ?? "", b.key ?? ""))[0];
+  const resolve = (v, mode, via) => {
+    if (via.length > 20) return null;
+    const raw = v.values[mode] !== void 0 ? v.values[mode] : baseValue(v, collections);
+    if (isAlias(raw)) {
+      const t = target(raw.aliasOf, v);
+      return t && t.type === "COLOR" ? resolve(t, mode, [...via, raw.aliasOf]) : null;
+    }
+    const hex = isHexish(raw) ? normHex(raw) : null;
+    return hex === null ? null : { hex, via };
+  };
+  const hits = [];
+  for (const v of ds.variables || []) {
+    if (v.type !== "COLOR") continue;
+    for (const mode of Object.keys(v.values || {})) {
+      const r = resolve(v, mode, []);
+      if (r && same(r.hex)) hits.push({ name: v.name, collection: v.collection ?? "(no collection)", mode, hex: r.hex, via: r.via });
+    }
+  }
+  return hits;
+}
+function mixedRootModes(ds) {
+  const collections = ds.collections || [];
+  const colour = /* @__PURE__ */ new Set();
+  for (const v of ds.variables || []) {
+    if (v.type !== "COLOR") continue;
+    const c = collectionOf(v, collections);
+    if (c && (c.modes || []).length > 1) colour.add(c);
+  }
+  const list = [...colour];
+  const assumed = (c) => c.default === void 0 || !c.modes.includes(c.default);
+  const defOf = (c) => assumed(c) ? c.modes[0] ?? "?" : c.default ?? "?";
+  const mixed = /* @__PURE__ */ new Set();
+  for (const a of list) {
+    for (const b of list) {
+      if (a !== b && defOf(a) !== defOf(b) && a.modes.some((m) => b.modes.includes(m))) {
+        mixed.add(a);
+        mixed.add(b);
+      }
+    }
+  }
+  if (!mixed.size) return null;
+  const byDefault = /* @__PURE__ */ new Map();
+  for (const c of list) if (mixed.has(c)) getOrInit(byDefault, defOf(c), () => []).push(c);
+  const groups = [...byDefault].sort((x, y) => y[1].length - x[1].length || cmpStr(x[0], y[0]));
+  const named = (cs) => cs.map((c) => `'${c.name}'${assumed(c) ? " (the export names no default mode \u2014 its first mode assumed)" : ""}`).join(", ");
+  return `:root mixes modes: ` + groups.map(([mode, cs], i) => `${named(cs)} ${i ? "" : cs.length > 1 ? "default " : "defaults "}to '${mode}'`).join("; ") + ` \u2014 :root takes each collection's DEFAULT mode, so a screen drawn in one of these modes shows the other mode's values for the other collections' tokens. Set each collection's mode on the screen's root element (its export's resolvedModes says which), or have the designer give these collections one default`;
+}
+function checkGenerated(ds, input, generated, cmd) {
+  let head;
+  try {
+    head = fs3.readFileSync(generated, "utf8").slice(0, 4096);
+  } catch (e) {
+    console.error(`error  --check: '${generated}' could not be read (${e instanceof Error ? e.message : String(e)}).`);
+    return 2;
+  }
+  const m = PROVENANCE_RE.exec(head);
+  if (!m) {
+    console.error(`no designtwin-source line in '${generated}' \u2014 it was generated before the line existed, or by hand: regenerate once with ${cmd} <outDir> [the same flags], then --check works.`);
+    return 2;
+  }
+  const now = catalogProvenance(ds);
+  if (m[3] === now.sha) {
+    console.log(`current  ${generated} was generated from ${m[1]} (${m[2]} variables, sha ${m[3]}) \u2014 same content as ${input}`);
+    return 0;
+  }
+  const here = sourceName(input);
+  if (m[1] !== (m[1]?.includes("/") ? here : path4.basename(input))) {
+    console.error(`other source  ${generated} was generated from ${m[1]}, not ${here} \u2014 pass that file: ${scriptCmd("tokens")} <path to ${m[1]}> --check ${shellArg(generated)}`);
+    return 2;
+  }
+  console.error(`stale  ${generated} was generated from ${m[2]} variables (sha ${m[3]}); ${input} now has ${now.count} (sha ${now.sha}) \u2014 re-run ${cmd} <outDir> [the same flags]`);
+  return 1;
+}
+function main(args) {
   const USAGE = `usage: ${scriptCmd("tokens")} <design-system/tokens.json | design/variables.json> [outDir]
        [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]
        With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to
        additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).
-       Without a target flag, only the generic set is written (unchanged).`;
-  const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, help: { type: "boolean", short: "h" } };
-  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, 1, (a) => parseArgs2({ args: a, options: OPTIONS, allowPositionals: true }));
+       Without a target flag, only the generic set is written (unchanged).
+       Every CSS / native file it writes starts with a \`designtwin-source:\` line (input as <parent dir>/<name>, variable count, hash of its content).
+       ${scriptCmd("tokens")} <catalog> --check <generated file>   writes nothing: exit 0 when the file is current, 1 when the catalog has changed since, 2 when it has no source line or was generated from a different file or the command line is wrong
+       ${scriptCmd("tokens")} <catalog> --lookup <hex> [--lookup <hex> \u2026]   writes nothing (ffbc1c, or quote '#ffbc1c': an unquoted # is a shell comment): every COLOR variable that resolves to that hex, per mode, directly or through an alias (exit 1 when none, 2 on a usage error)`;
+  const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, check: { type: "string" }, lookup: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } };
+  const readOnlyRun = args.some((x) => /^--(check|lookup)(=|$)/.test(x));
+  const usageExit = readOnlyRun ? 2 : 1;
+  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, usageExit, (a) => parseArgs2({ args: a, options: OPTIONS, allowPositionals: true }));
   if (flags.help) {
     console.log(USAGE);
-    process.exit(0);
+    return 0;
   }
   const { native, web, package: kotlinPackage } = flags;
   const alsoGeneric = !!flags["also-generic"];
@@ -1491,19 +1832,19 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const outDir = positionals[1] || ".";
   if (!input) {
     console.error(USAGE);
-    process.exit(1);
+    return usageExit;
   }
   if (native !== void 0 && !platformOf(native)) {
     console.error(`--native: unknown platform "${native}"
 ${USAGE}`);
-    process.exit(1);
+    return usageExit;
   }
   const WEB_TARGETS = { tailwind: "theme.css", "web-tailwind": "theme.css" };
   const webFile = web === void 0 ? void 0 : WEB_TARGETS[web];
   if (web !== void 0 && !webFile) {
     console.error(`--web: unknown target "${web}" (known: tailwind)
 ${USAGE}`);
-    process.exit(1);
+    return usageExit;
   }
   const ds = readSplitFile(
     input,
@@ -1513,18 +1854,43 @@ ${USAGE}`);
     "design-system/tokens.json",
     NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json \u2014 pass that instead."
   );
+  const lookups = flags.lookup || [];
+  if (flags.check !== void 0 || lookups.length) {
+    if (flags.check !== void 0 && lookups.length) {
+      console.error(`--check and --lookup are separate runs
+${USAGE}`);
+      return usageExit;
+    }
+    const cmd = `${scriptCmd("tokens")} ${shellArg(input)}`;
+    if (flags.check !== void 0) return checkGenerated(ds, input, flags.check, cmd);
+    let status = 0;
+    for (const q of lookups) {
+      const hits = lookupColor(ds, q);
+      if (hits === null) {
+        console.error(`error  --lookup '${q}' is not a hex colour (#rgb, #rrggbb or #rrggbbaa)`);
+        return 2;
+      }
+      for (const h of hits) console.log(`${h.name}  [${h.collection} / ${h.mode}]  ${h.hex}  (${h.via.length ? "via " + h.via.join(" -> ") : "direct"})`);
+      if (!hits.length) {
+        console.error(`no variable in ${input} resolves to ${normHex(q)} in any mode \u2014 a catalog holds only the variables its pulled nodes bind${/[\\/]libraries[\\/]/.test(path4.resolve(input)) ? "" : "; try the library catalog: design/export/libraries/<dir>/tokens.json"}`);
+        status = 1;
+      }
+    }
+    return status;
+  }
   fs3.mkdirSync(outDir, { recursive: true });
-  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: sourcesOf(ds, input) });
   const hasTarget = web !== void 0 || native !== void 0;
   const writeGeneric = !hasTarget || alsoGeneric;
+  const cssFiles = [...writeGeneric ? ["tokens.css"] : [], ...webFile !== void 0 ? [webFile] : []];
+  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: sourcesOf(ds, input), cssFiles });
   const genericCount = Object.keys(resolverFiles).length;
   if (writeGeneric) {
-    fs3.writeFileSync(path2.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
-    fs3.writeFileSync(path2.join(outDir, "tokens.css"), css);
-    fs3.writeFileSync(path2.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
+    fs3.writeFileSync(path4.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
+    fs3.writeFileSync(path4.join(outDir, "tokens.css"), provenanceLine(input, ds, "css") + css);
+    fs3.writeFileSync(path4.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
     for (const rel of Object.keys(resolverFiles)) {
-      const dest = path2.join(outDir, ...rel.split("/"));
-      fs3.mkdirSync(path2.dirname(dest), { recursive: true });
+      const dest = path4.join(outDir, ...rel.split("/"));
+      fs3.mkdirSync(path4.dirname(dest), { recursive: true });
       fs3.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
     }
   }
@@ -1532,25 +1898,35 @@ ${USAGE}`);
   const tw = tailwind;
   if (web !== void 0 && webFile !== void 0 && tw !== void 0) {
     const file = webFile;
-    fs3.writeFileSync(path2.join(outDir, file), tw.text);
+    fs3.writeFileSync(path4.join(outDir, file), provenanceLine(input, ds, "css") + tw.text);
     canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities \u2014 every token is a plain custom property you must reference with var()`);
-    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
+    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, booleans, strings a font family aliases) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== void 0) {
     const n = toNative(ds, native, { ...ifDefined("package", kotlinPackage || void 0) });
-    fs3.writeFileSync(path2.join(outDir, n.file), n.text);
+    fs3.writeFileSync(path4.join(outDir, n.file), provenanceLine(input, ds, "line") + n.text);
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }
+  const vars = ds.variables || [];
+  const slice = /\.vars\.json$/i.test(input) || path4.basename(input) === "variables.json";
+  if (!slice && vars.length && vars.every((v) => v.remote === true)) {
+    warnings.push(`all ${vars.length} variable(s) in ${input} are remote:true \u2014 this is a design-system pull of a file that CONSUMES a library (only the library variables it references), not the library's catalog; open the library file and run \`dtwin pull --as-library "<name>"\` for the catalog`);
+  }
+  const mixedRoot = mixedRootModes(ds);
+  if (mixedRoot) warnings.push(mixedRoot);
   warnings.forEach((w) => console.error("warn  " + w));
+  if (webFile !== void 0) console.error("note  " + TAILWIND_SOURCE_NOT_NOTE);
   if (hasTarget) {
     const genericNote = writeGeneric ? ` (+ the generic set: tokens.dtcg.json, tokens.css, tokens.resolver.json, ${genericCount} file(s) under ${RESOLVER_DIR}/ \u2014 also written here because --also-generic was passed)` : ` \u2014 the generic handoff set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/) was NOT written here; it belongs under design/, not the app's source tree (pass --also-generic to also write it to ${outDir})`;
     console.log(`wrote ${canonicalFile} to ${outDir} \u2014 this is the file your app should import${genericNote} (${(ds.variables || []).length} variables)`);
   } else {
     console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${genericCount} set files under ${RESOLVER_DIR}/) (${(ds.variables || []).length} variables)`);
   }
+  return 0;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   PLATFORMS,
   TW_PREFIX,

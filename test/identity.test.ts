@@ -1,6 +1,6 @@
-// Token and component IDENTITY, against livetest-3's real export (test/fixtures/livetest3/, built by
-// its build.py from /Users/…/design-twin-livetest-3 — pruned to the Spacing/Border Radius collections
-// and to the instance skeleton of three screens, every value copied, nothing hand-written).
+// Token and component IDENTITY, against livetest-3's real export (test/fixtures/livetest3/, pruned from
+// a live-test export, names replaced — pruned to the Spacing/Border Radius collections and to the
+// instance skeleton of three screens, every other value copied, nothing hand-written).
 //
 // The defect (livetest-3 findings 21, 31, 35, 40, 44, 94, 95, 96, 106, 137, 183, 211, 226): the
 // pipeline identified a Figma variable — and a component — by NAME, while the export is keyed on the
@@ -43,9 +43,9 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "dt-identity-"));
 const node = (script: string, args: string[], opts?: SpawnSyncOptions) => spawnSync(process.execPath, [path.join(D2C, script), ...args], Object.assign({ encoding: "utf8" as const }, opts || {}));
 const tryImport = async <T>(p: string): Promise<T | null> => { try { return (await import(pathToFileURL(p).href)) as T; } catch { return null; } };
 
-const POS = "pages/__Organization_management_/positions___7314_87192";
-const GP = "pages/__Organization_management_/System_Configurations__1359_21337";
-const CAT = "pages/In_progress/Create_Activity_Type__18411_84111";
+const POS = "pages/__Optimization_management_/positions___7314_87192";
+const GP = "pages/__Optimization_management_/Studio_Configurations__1359_21337";
+const CAT = "pages/In_progress/Create_Assembly_Type__18411_84111";
 const K24 = "e26d506ea43ae0582896add59d9e04156fb3f6d5", K16 = "64928e3a5f094c0d9a2c916f50b98ff37c789882";
 
 // ------------------------------------------------------------------ tokens.js (44, 94, 95, 96, 137, 183)
@@ -63,7 +63,7 @@ console.log("tokens.js on the merged variables.json:");
   ok("[44] and no bare name is left to mean whichever came last", !/--spacing(-figma)?-space-4: /.test(theme));
   ok("[44] the warning names BOTH keys, BOTH values and the screen each came from — not 'later definition wins'",
     /e26d506e/.test(warnings) && /64928e3a/.test(warnings) && /"Mode 1":24/.test(warnings) && /"Desktop":16/.test(warnings)
-      && /positions___7314_87192/.test(warnings) && /Create_Activity_Type__18411_84111/.test(warnings) && !/later definition wins/.test(warnings));
+      && /positions___7314_87192/.test(warnings) && /Create_Assembly_Type__18411_84111/.test(warnings) && !/later definition wins/.test(warnings));
   ok("[44] tokens.css and tokens.dtcg.json keep both too, and the DTCG leaf carries its Figma key",
     /--Space-4-e26d506e: 24px;/.test(css) && /--Space-4-64928e3a: 16px;/.test(css)
       && !!dtcg["Space-4-e26d506e"] && dtcg["Space-4-e26d506e"].$extensions?.["figma.com"].key === K24);
@@ -85,7 +85,7 @@ console.log("tokens.js on the merged variables.json:");
   const out = tmp();
   const r = node("tokens.ts", [path.join(FX, POS + ".vars.json"), out, "--web", "tailwind", "--also-generic"]);
   const theme = fs.existsSync(path.join(out, "theme.css")) ? fs.readFileSync(path.join(out, "theme.css"), "utf8") : "";
-  ok("[95] a screen's OWN .vars.json (Job Roles: one Space 4) gets the plain name, at the value its Figma binds: 24",
+  ok("[95] a screen's OWN .vars.json (Jet Roles: one Space 4) gets the plain name, at the value its Figma binds: 24",
     r.status === 0 && /--spacing-figma-space-4: 24px;/.test(theme));
   ok("[137] and even there `Space 3` keeps 16 — the screen's own slice no longer collapses it onto `(Space 3)`'s 12",
     /--spacing-figma-space-3: 16px;/.test(theme) && /--spacing-figma-space-3-a96c665b: 12px;/.test(theme));
@@ -145,8 +145,8 @@ console.log("variables-merge.js — same name, different key, is a conflict:");
   ok("[21] replaying the five real pulls still ACCUMULATES (finding 20 must not regress)", doc.variables.length === merged.variables.length);
   ok("[21] `_conflicts` is no longer empty: the two `Space 4` are recorded, both keys, both values",
     !!space4 && space4.kind === "same-name" && space4.sameValue === false && space4.variants.map((v) => v.key).sort().join() === [K16, K24].sort().join());
-  ok("[21] …with the screens each came from (64928e3a only from the two Create Activity Type pulls)",
-    !!space4 && space4.variants.find((v) => v.key === K16)?.screens.join() === "Create_Activity_Type__18411_84111,Create_Activity_Type__18411_84502"
+  ok("[21] …with the screens each came from (64928e3a only from the two Create Assembly Type pulls)",
+    !!space4 && space4.variants.find((v) => v.key === K16)?.screens.join() === "Create_Assembly_Type__18411_84111,Create_Assembly_Type__18411_84502"
       && (space4.variants.find((v) => v.key === K24)?.screens.includes("positions___7314_87192") ?? false));
   ok("[21] and mirrored into `hygiene`, the other place both skills say to read",
     doc.hygiene.some((h) => /CONFLICT/.test(h) && /'Space 4'/.test(h) && /e26d506e/.test(h) && /64928e3a/.test(h)));
@@ -167,25 +167,26 @@ const cc = (screenRel: string, extra?: string[]): CcResult => {
 const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?: string) => res.findings.some((f) => f.severity === "blocker" && f.code === code && (!token || f.token === token));
 {
   const pos = cc(POS), cat = cc(CAT);
-  ok("[40/106] Job Roles' own slice has ONE Space 4 (24, as the design system) — no token-name-collision blocker for it",
+  ok("[40/106] Jet Roles' own slice has ONE Space 4 (24, as the design system) — no token-name-collision blocker for it",
     Array.isArray(pos.findings) && pos.findings.length > 0 && !blockerOn(pos, "token-name-collision", "Space 4"));
   ok("[40] the union's ambiguity is still said, once, as a note naming the screen it belongs to",
-    pos.findings.some((f) => f.code === "token-name-collision-elsewhere" && f.severity === "info" && /Create_Activity_Type__18411_84111/.test(f.message)));
-  ok("[40] Create Activity Type's slice really carries both — there it IS a blocker, naming the 16-valued key",
+    pos.findings.some((f) => f.code === "token-name-collision-elsewhere" && f.severity === "info" && /Create_Assembly_Type__18411_84111/.test(f.message)));
+  ok("[40] Create Assembly Type's slice really carries both — there it IS a blocker, naming the 16-valued key",
     cat.findings.some((f) => f.severity === "blocker" && f.code === "token-name-collision" && f.token === "Space 4" && f.key === K16));
-  ok("[137] Global Policies: no Space 4 blocker either", !blockerOn(cc(GP), "token-name-collision", "Space 4"));
+  ok("[137] Guided Policies: no Space 4 blocker either", !blockerOn(cc(GP), "token-name-collision", "Space 4"));
 }
 {
   const ref = read<MappingReference>("mapping.reference.json");
-  for (const [k, screenRel, min] of [["job-roles", POS, 26], ["global-policies", GP, 23]] as const) {
+  for (const [k, screenRel, min] of [["jet-roles", POS, 26], ["guided-policies", GP, 23]] as const) {
     const res = cc(screenRel);
     const props = res.componentProposals || [];
     const refEntry = must(ref[k], `mapping.reference.json['${k}']`);
     const refRows = refEntry.names;
     const refMatched = Object.entries(refRows).filter(([, r]) => r.match);
     const refResidual = Object.entries(refRows).filter(([, r]) => !r.match);
-    ok(`[226] ${k}: reports the copy/re-key case as its own finding (catalog-rekeyed), not catalog-covers-nothing`,
-      blockerOn(res, "catalog-rekeyed") && !res.findings.some((f) => f.code === "catalog-covers-nothing"));
+    // D1 (field tests): catalog-rekeyed is a warning with a confirm question now, no longer a blocker.
+    ok(`[226/D1] ${k}: reports the copy/re-key case as its own finding (catalog-rekeyed, a warning to confirm), not catalog-covers-nothing`,
+      res.findings.some((f) => f.code === "catalog-rekeyed" && f.severity === "warning" && !!f.confirm) && !res.findings.some((f) => f.code === "catalog-covers-nothing"));
     ok(`[226] ${k}: proposes ≥ 20 name+prop-signature matches (reference: ${min}) — ${props.length}`, props.length >= 20 && props.length === refMatched.length);
     ok(`[226] ${k}: name-for-name AND id-for-id the same as scripts-test/map-components.mjs`,
       refMatched.every(([n, r]) => props.some((p) => p.name === n && p.catalog?.id === r.match)) && props.every((p) => { const row = refRows[p.name]; return row && row.match === p.catalog?.id; }));
@@ -267,8 +268,9 @@ console.log("map-bootstrap.js --from-proposals / drift-lint.js:");
   const fresh = path.join(dir, "fresh.json");
   node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", fresh]);
   const dl0 = node("drift-lint.ts", [fresh, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
-  ok("[226] with a catalog-only map, drift-lint names the re-key case instead of 'not the library this screen is built from'",
-    dl0.status === 1 && /\[catalog-rekeyed\]/.test(dl0.stderr) && !/not the library this screen is built from/.test(dl0.stderr));
+  // D13 (field tests): catalog-rekeyed is a warning with a question to confirm — exit 0, no longer 1.
+  ok("[226/D13] with a catalog-only map, drift-lint names the re-key case (a warning to confirm, exit 0) instead of 'not the library this screen is built from'",
+    dl0.status === 0 && /^warn {3}\[catalog-rekeyed\]/m.test(dl0.stderr) && /Confirm: /.test(dl0.stderr) && !/not the library this screen is built from/.test(dl0.stderr));
 }
 
 report();

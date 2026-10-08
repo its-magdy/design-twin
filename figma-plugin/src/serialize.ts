@@ -16,6 +16,7 @@ import { simplifyReactions } from "./prototype";
 import { collectAsset } from "./assets";
 import { instanceComponentRef, componentPropRefs, instanceOverrides } from "./components";
 import { collectMotion } from "./motion";
+import { checkCancelled } from "./progress";
 
 const MAX_DEPTH = 60;
 
@@ -104,7 +105,39 @@ async function nodeCss(node: SceneNode): Promise<Record<string, string> | undefi
   }
 }
 
-export async function serialize(node: SceneNode, depth: number, parentControlsLayout?: boolean): Promise<IrNode | null> {
+// An asset/geometry/skipped node is a LEAF that ships as one picture, so its own `layout` (inferred
+// padding, or a real auto-layout icon frame's padding/gap) describes an inset the file already
+// contains — verify compared it and audit flagged it as off-grid spacing. Its role in its PARENT
+// (widthMode/heightMode/alignSelf/grow/absolute/x/y/box) stays: the builder still places the leaf.
+function leaf(out: IrNode): IrNode {
+  delete out.layout;
+  return out;
+}
+
+// exportAsync draws the node in its on-screen orientation (an `angle-left` VECTOR at rotation 90 +
+// flipped exports an 18×10 down chevron whose box already matches), so a bare rotation/flipped/skew
+// on an `asset` leaf invites a consumer to apply it a SECOND time. They move under sourceTransform:
+// what Figma already baked in, kept for provenance. Not for `geometry` leaves — fillGeometry is in the
+// node's local space, so their bare transform still applies.
+function bakeTransform(out: IrNode): void {
+  const st: NonNullable<IrNode["sourceTransform"]> = {};
+  if (out.rotation !== undefined) { st.rotation = out.rotation; delete out.rotation; }
+  if (out.flipped) { st.flipped = true; delete out.flipped; }
+  if (out.skew !== undefined) { st.skew = out.skew; delete out.skew; }
+  putNonEmpty(out, "sourceTransform", st);
+}
+
+// `underHidden`: some ANCESTOR is `visible:false`. A root's own ancestor chain is computed once by its
+// collector (collect.ts hiddenAncestor); below that it is threaded down here, never re-walked.
+// `inGrid`: the parent is a GRID auto-layout frame. A root never gets it — its parent is not exported.
+export async function serialize(node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean, inGrid?: boolean): Promise<IrNode | null> {
+  // The per-node abort point (b2): a cancel or an abandonment stops the walk within one node, not at
+  // the next asset/frame/page — a cold first read of a dense screen can otherwise walk for a minute for
+  // a caller that has already gone. Safe to throw here: children are serialized one at a time (never
+  // inside a Promise.all), every partial `out` above this frame is dropped as the throw unwinds, every
+  // collector's error path refuses to emit a doc, and the per-run toggles (skipAssets,
+  // skipInvisibleInstanceChildren) are restored by their own `finally` blocks.
+  checkCancelled();
   if (depth > MAX_DEPTH) {
     stats.truncated++;
     if (stats.truncated === 1) warn("depth limit " + MAX_DEPTH + " reached — deep subtrees truncated (first: " + node.name + ")");
@@ -115,6 +148,8 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   // are part of the design and must be implementable; codegen decides render vs display:none.
   const out: IrNode = { type: node.type, name: node.name, id: node.id };
   if ("visible" in node && node.visible === false) out.hidden = true;
+  const hidden = !!out.hidden || !!underHidden;
+  if (hidden) stats.hiddenNodes++;
 
   if (node.type === "INSTANCE" && node.componentProperties) {
     const props: ComponentPropValues = {};
@@ -151,14 +186,18 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   if ("layoutSizingVertical" in node && node.layoutSizingVertical && node.layoutSizingVertical !== "FIXED") out.heightMode = lower(node.layoutSizingVertical);
   if ("overflowDirection" in node && node.overflowDirection && node.overflowDirection !== "NONE") out.scroll = lower(node.overflowDirection);
 
-  // Grid child placement — span across tracks AND the starting (anchor) cell.
-  if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
-  if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
-  if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number") out.gridColumnStart = node.gridColumnAnchorIndex; // 0-based track index
-  if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number") out.gridRowStart = node.gridRowAnchorIndex;
-  // Grid child cell alignment, mapped through GRID_SELF (MIN/CENTER/MAX -> start/center/end).
-  if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
-  if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
+  // Grid child placement — span across tracks AND the starting (anchor) cell. Anchor/span/self-align
+  // are read only on an in-flow child of a GRID frame: off a grid the anchors read −1 on every node
+  // (observed 7,882/7,882), which is not a track index; an absolute child is not a grid item.
+  if (inGrid && !absoluteInParent) {
+    if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
+    if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
+    if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number" && node.gridColumnAnchorIndex >= 0) out.gridColumnStart = node.gridColumnAnchorIndex; // 0-based track index
+    if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number" && node.gridRowAnchorIndex >= 0) out.gridRowStart = node.gridRowAnchorIndex;
+    // Grid child cell alignment, mapped through GRID_SELF (MIN/CENTER/MAX -> start/center/end).
+    if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
+    if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
+  }
 
   // Position — only when the parent does NOT auto-position this node.
   if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof node.x === "number") {
@@ -166,8 +205,8 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     out.y = round(node.y);
   }
 
-  // Resolved page-space box — the ground-truth pixel size. `renderBox` adds stroke/shadow/blur extent,
-  // emitted only when it actually differs from the layout box.
+  // Resolved page-space box — the ground-truth pixel size. `renderBox` = Figma's render bounds (absoluteRenderBounds): larger
+  // with effects, tighter than `box` on TEXT; emitted only when it actually differs from the layout box.
   if ("absoluteBoundingBox" in node && node.absoluteBoundingBox) {
     const b = node.absoluteBoundingBox;
     // w/h always; x/y only under the SAME rule as the `x`/`y` fields above. These are PAGE-space
@@ -218,9 +257,11 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     out.pin = { h: lower(node.constraints.horizontal), v: lower(node.constraints.vertical) };
   }
 
-  // Sticky children: the first N children of a scrolling frame are PINNED (Figma's "fixed position
-  // when scrolling"). Without this a sticky header / bottom nav / FAB serializes as a plain flow
-  // child and codegen emits a header that scrolls away with the content.
+  // Sticky children: the LAST N children of a scrolling frame are PINNED (Figma's "fixed position
+  // when scrolling"; children[] is back-to-front and Figma keeps the fixed children on top of the
+  // scrolling ones). Without this a sticky header / bottom nav / FAB serializes as a plain flow
+  // child and codegen emits a header that scrolls away with the content. Every pinned child carries
+  // x/y + box.x/y (the children loop below).
   if ("numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) {
     out.fixedChildren = node.numberOfFixedChildren;
   }
@@ -373,7 +414,7 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     instanceComponentRef(node),
     boundTokens(node),
     nodeStyles(node),
-    collectAsset(node),
+    collectAsset(node, hidden),
     simplifyReactions(node),
     variableModes(node),
     runOpts.css ? nodeCss(node) : Promise.resolve(undefined),
@@ -397,19 +438,22 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   // flattens this node to one SVG/PNG, so descending here would hand back a DIFFERENT tree than the
   // default export — the structural drift --no-assets promises not to cause. Flagged per-node (not
   // just counted in the manifest) so a consumer can tell "graphic omitted here" from "no graphic".
+  // A HIDDEN graphic is the same kind of leaf, marked `"hidden"`: it was never rendered (see
+  // collectAsset), and the bridge may point it at a visible twin's file (asset-owners.ts).
   if (asset && "skipped" in asset) {
-    out.assetSkipped = true;
-    return out;
+    out.assetSkipped = asset.skipped;
+    return leaf(out);
   }
   if (asset && "geometry" in asset) {
     // exportAsync refused a node that genuinely paints something, so its resolved outlines stand in.
     // Still a LEAF, exactly as a successful export would be — the paths ARE the whole subtree.
     out.geometry = asset.geometry;
-    return out;
+    return leaf(out);
   }
   if (asset) {
     out.asset = asset.path;
-    return out; // asset nodes are leaves — skip children
+    bakeTransform(out);
+    return leaf(out); // asset nodes are leaves — skip children
   }
 
   // Tables expose NO `children` — cells are reached only via cellAt(r,c).
@@ -446,10 +490,19 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   const children: readonly SceneNode[] | undefined = "children" in node ? node.children : undefined;
   if (children && children.length) {
     // An auto-layout or grid container positions its own children → they don't need x/y.
-    const controlsChildren = "layoutMode" in node && node.layoutMode && node.layoutMode !== "NONE";
+    const controlsChildren = "layoutMode" in node && !!node.layoutMode && node.layoutMode !== "NONE";
+    const grid = "layoutMode" in node && node.layoutMode === "GRID";
+    // A PINNED child (one of the LAST `numberOfFixedChildren`, counted by Figma over ALL children,
+    // hidden ones included — so index node.children, not `kids`) always gets x/y + box.x/y: a builder
+    // places it by its `y`. Figma lets only an absolute child of an auto-layout frame be fixed, so this
+    // normally changes nothing — it guards a frame that got auto layout after its children were fixed.
+    const nFixed = "numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" ? node.numberOfFixedChildren : 0;
+    const pinnedFrom = children.length - nFixed;
     const kids: IrNode[] = [];
-    for (const c of children) {
-      const s = await serialize(c, depth + 1, controlsChildren);
+    for (let i = 0; i < children.length; i++) {
+      const c = children[i];
+      if (!c) continue;
+      const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid);
       if (s) kids.push(s);
     }
     if (kids.length) out.children = kids;

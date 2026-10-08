@@ -150,3 +150,46 @@ export function readSnapshotInfo(outDir?: string): SnapshotInfo | SnapshotParseE
     : undefined;
   return { file, exportedAt, ageMs, sourceFile, warning };
 }
+
+/** The newest screen row of the root pages/index.json (F-07). `file` is the screen JSON's path relative
+ *  to the export dir, as the index records it. */
+export interface LastScreenExport {
+  name: string | undefined;
+  id: string;
+  file: string | undefined;
+  exportedAt: string;
+  ageMs: number;
+  sourceFile?: string;
+}
+
+// F-07: which screen was exported LAST, read from disk — the root pages/index.json's `layers[]` rows,
+// newest `exportedAt` wins (a page walk's rows carry no stamp of their own and fall back to the index's
+// top-level `exportedAt`). Never throws: a missing, garbled or row-less index (or no parseable stamp) is
+// null, the same "nothing to report" figma_status gives any other absent export.
+export function lastScreenExport(outDir?: string, now?: number): LastScreenExport | null {
+  const dir = outDir || process.env.FIGMA_EXPORT_DIR || findExportDir(process.cwd()).dir;
+  let doc: unknown;
+  try { doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "index.json"), "utf8")) as unknown; } catch { return null; }
+  const rows = field(doc, "layers");
+  if (!Array.isArray(rows)) return null;
+  const rootStamp = asText(field(doc, "exportedAt"));
+  let best: { row: unknown; t: number; at: string } | null = null;
+  for (const row of rows) {
+    const id = field(row, "id");
+    if (typeof id !== "string" || !id) continue;
+    const at = asText(field(row, "exportedAt")) || rootStamp;
+    const t = at ? Date.parse(at) : NaN;
+    if (!at || Number.isNaN(t)) continue;
+    if (!best || t >= best.t) best = { row, t, at }; // a tie goes to the later row: merges append the newest pull
+  }
+  if (!best) return null;
+  const name = field(best.row, "name"), file = field(best.row, "file"), src = field(best.row, "sourceFile");
+  return {
+    name: typeof name === "string" ? name : undefined,
+    id: String(field(best.row, "id")),
+    file: typeof file === "string" ? file : undefined,
+    exportedAt: best.at,
+    ageMs: (now || Date.now()) - best.t,
+    ...(typeof src === "string" && src ? { sourceFile: src } : {}),
+  };
+}

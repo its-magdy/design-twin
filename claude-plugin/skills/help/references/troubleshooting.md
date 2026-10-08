@@ -27,6 +27,21 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   - `waiting` — it WAS connected and the bridge went away. Normal after a one-shot `dtwin` pull ends.
   - `token rejected` (red, and the section opens itself) — a bridge is running but refused the token;
     see the next entry.
+- **"The plugin is connected but sent nothing for '<cmd>'"** (stall message) → the plugin socket is up but
+  the file's plugin is busy: an earlier export is still running in that file (the plugin runs one at a
+  time), or it is a long cold first read of a large page. It is not a dead connection. Retry; with a warm
+  plugin (`dtwin serve` in another terminal) the same read answers in seconds. The plugin reports `start`
+  when it begins a run and `queued` when it arrives behind another, so a progress line shows which. If it
+  keeps happening, look at the plugin window.
+- **A pull took ~80 s but the export itself was ~3 s** → read the closing `done in …` line: `waited Ys for
+  the plugin to connect` is the plugin re-dialling a fresh one-shot bridge (3 s retry, slower in a
+  background window). `dtwin serve` keeps one bridge open and the plugin connected.
+- **A late or "abandoned" reply answered the wrong command** → fixed: request ids are unique per bridge
+  and a reply only settles the connection it was sent to. A cancelled request now stops in the plugin
+  within one node (a single long `exportAsync` still runs to its end), so an abandoned export no longer
+  keeps the plugin busy for the next command.
+- **`dtwin pull --out <dir>` → "outDir is positional"** → write `dtwin pull <dir>`. There is also no
+  `--port`: set `FIGMA_BRIDGE_PORT` (`DTWIN_PORT` is not read; `dtwin doctor` warns about it).
 - **Token rejected / 401** → token mismatch: the plugin's **Bridge token** field doesn't equal
   the bridge's. Run `dtwin --token-status` (says which source is winning — a saved token *shadowed* by
   a `FIGMA_BRIDGE_TOKEN` export is the usual surprise), then `dtwin --show-token` and re-paste + Save.
@@ -67,7 +82,7 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 - **`design/` is empty / `/designtwin:build-screen` can't find files** → nothing exported yet. `design/` is a
   generated drop-target and doesn't exist until an export runs. Do Path A/B first.
 - **Wrong stack generated** → set `design/target.json`, or add a profile at your project's own repo
-  root (copy `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/profiles/_template.md`) — it overrides the bundled profiles.
+  root (copy `<plugin>/skills/build-screen/profiles/_template.md`) — it overrides the bundled profiles.
 - **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/` is older than
   24h (or has no `exportedAt`), so a "clean" result is against the snapshot, not the live file.
   Re-run Path A/B. Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.
@@ -78,12 +93,20 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   (Loading/Skeleton/Empty/Error/Offline…) in the exported layers only. Export the page that holds it, or
   rename the frame. Library components' states show as "sampled" — pull the library with
   `--as-library` for their full variants.
-- **`audit.js`/`drift-lint.js`/etc. "not found"** → these ship at `${CLAUDE_PLUGIN_ROOT}/scripts/`
-  inside the plugin itself — that env var is set by Claude Code whenever a skill from this plugin is
-  active, so `node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js"` resolves regardless of the consumer
-  project's own layout. If it still doesn't resolve, check `ls "${CLAUDE_PLUGIN_ROOT}/scripts"`: an
-  empty/missing directory means a broken install — re-run `/plugin install designtwin`. Working from
-  a clone of the Design Twin repo instead? The same scripts are `node design-to-code/<name>.js`.
+- **A script "not found" / `Cannot find module '/scripts/…'`** → the command ran with an empty plugin
+  path. The scripts ship at `<plugin>/scripts/<name>.js`. Claude Code writes the real plugin path into a
+  skill's or agent's own text when it loads it, but `CLAUDE_PLUGIN_ROOT` is NOT an environment variable in
+  the Bash tool, so `node "$CLAUDE_PLUGIN_ROOT/scripts/…"` typed into a shell always fails. Copy the path
+  exactly as the skill shows it; a script's own usage/hint lines also print their real path. If the skill
+  text itself still shows the literal `${…}` form (it was preloaded into an agent), the agent's prompt
+  names the folder. The folder is missing → re-run `/plugin install designtwin`. Working from a clone of
+  the Design Twin repo instead? The same scripts are `node design-to-code/<name>.ts`.
+- **`verify-probe` exits 3: "chromium did not launch" / no usable browser** → Playwright's Chromium is not
+  installed (or not the revision this Playwright expects). The install line the probe prints downloads a browser —
+  the user's call. A Chromium already on the machine works instead: `verify-probe.js --browser-path <executable>`
+  (also on `--check`) — the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`). A path that is
+  not an executable file is exit 3 with one line saying so. Only guaranteed with the bundled Chromium (another
+  version may not launch or may render differently); `measured.json` records `custom`, never the path.
 - **Audit flags a lot of `small-touch-target` / `fixed-size-text`** → thresholds differ per platform
   (web 24px, iOS 44pt, Android 48dp) — make sure `--platform` matches the stack. Visual size can stay
   small if the hit area is padded; decorative static text can ignore the fixed-size warning.

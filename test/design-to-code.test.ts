@@ -221,6 +221,12 @@ check("[B2] variantOverrides.when non-string value rejected", !ok({ version: 1, 
 check("[B2] childrenByLayer junk key rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, childrenByLayer: { layerNamePattern: "*", nope: 1 } } } }));
 check("valid full entry (targets/variantOverrides/childrenByLayer/instance) passes", ok({ version: 1, components: { K: { figma: { name: "B", key: "k" }, code: { module: "m", export: "E", targets: { web: { module: "w", export: "W" } } }, props: { I: { kind: "instance", slot: "icon" } }, variantOverrides: [{ when: { Type: "Danger" }, code: { module: "d", export: "D" } }], childrenByLayer: { slot: "children" } } } }));
 check("null map fails gracefully", validateMap(null).ok === false);
+// F-32 / DT-26: an entry may carry a free-text `note` (build-screen leaves one); it must be a string.
+check("[F-32] an entry with note:\"…\" validates", ok({ version: 1, components: { K: { ...okEntry, status: "active", note: "props mapped by hand" } } }));
+check("[F-32] note: 3 fails with 'must be a string' at components.K.note", (() => {
+  const r = validateMap({ version: 1, components: { K: { ...okEntry, note: 3 } } });
+  return !r.ok && r.errors.length === 1 && r.errors[0]?.path === "components.K.note" && r.errors[0]?.message === "must be a string";
+})());
 
 // ---------- drift lint (F1..F8) ----------
 console.log("drift — lint:");
@@ -359,7 +365,7 @@ check("[T-sn] string-number FLOAT gets px", toCSS(tokens({ variables: [{ name: "
 check("[T-lh] LINE_HEIGHT-scoped FLOAT stays px (not unitless)", toCSS(tokens({ variables: [{ name: "text/lh", type: "FLOAT", scopes: ["LINE_HEIGHT"], values: { v: 24 } }] })).includes("--text-lh: 24px;"));
 // [T-ls] letter-spacing bare number is invalid CSS -> px, not unitless.
 check("[T-ls] LETTER_SPACING-scoped FLOAT stays px (bare number is invalid CSS)", toCSS(tokens({ variables: [{ name: "text/ls", type: "FLOAT", scopes: ["LETTER_SPACING"], values: { v: 0.5 } }] })).includes("--text-ls: 0.5px;"));
-// ---------- [RD-*] real-data regressions: names/scopes taken from a live "Design System - NERA"
+// ---------- [RD-*] real-data regressions: names/scopes taken from a live "Design System - NIMA"
 // file (Figma starter plan). The mock fixtures above all set NARROW scopes, which hid these: real
 // files leave Figma's default ALL_SCOPES in place, so the scopes-only unit rule emitted invalid CSS.
 check("[RD-fw] ALL_SCOPES font-weight is unitless by NAME (was `500px`, invalid CSS)",
@@ -630,7 +636,9 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   const root = (css.match(/:root \{([\s\S]*?)\}/) || ["", ""])[1] ?? "";
   check("[dup-css] three IDENTICAL variables sharing a name emit ONE :root declaration, not three",
     (root.match(/--Schemes-On-Primary/g) || []).length === 1);
-  const dark = (css.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1] ?? "";
+  // D15: both collections DECLARE "Dark", so its blocks are scoped per collection; the twins still fold
+  // onto ONE declaration across all of them (the canonical record's collection carries it).
+  const dark = [...css.matchAll(/\[data-theme[^\]]*="Dark"\] \{([\s\S]*?)\}/g)].map((m) => m[1] ?? "").join("\n");
   check("[dup-css] and one per mode block too", (dark.match(/--Schemes-On-Primary/g) || []).length === 1);
   check("[dup-css] the identical twins are reported as such (naming the keys), not silently swallowed",
     lintTokens(twins).some((w) => /share the name 'Schemes\/On Primary'.*resolve identically in every mode — emitted ONCE/.test(w) && /aaa1/.test(w) && /ccc3/.test(w)));
@@ -723,6 +731,138 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   check("[tw] a mode name cannot break out of its attribute selector (same escaping toCSS uses)",
     !/dark"\]/.test(toTailwind(tokens({ collections: [{ name: "A", modes: ["Light", 'dark"] * { display: none } [x="'], default: "Light" }],
       variables: [{ name: "c", type: "COLOR", collection: "A", values: { Light: "#fff", 'dark"] * { display: none } [x="': "#000" } }] })).text));
+})();
+
+// ---------- DT-24 / D15: non-default modes are scoped PER COLLECTION when a mode name is shared ----------
+// Figma selects a mode per collection; one `[data-theme="Dark"]` per mode NAME flipped every collection
+// with a "Dark" at once. Real shape: collections carry name/modes/default/theming/key; two collections may
+// share a NAME (a single-mode "Spacing" and a multi-mode "Spacing" in the same export) — told apart by key.
+(() => {
+  const KB = "b1a2c3d4e5f60718293a4b5c6d7e8f9012345678", KS = "5a5b5c5d5e5f60718293a4b5c6d7e8f9012345678";
+  const K1 = "aaaaaaaa11112222333344445555666677778888", K2 = "bbbbbbbb11112222333344445555666677778888";
+  const clash = tokens({
+    collections: [
+      { name: "Brand", modes: ["Light", "Dark"], default: "Light", theming: true, key: KB },
+      { name: "Surface", modes: ["Light", "Dark"], default: "Light", theming: true, key: KS },
+      { name: "Contrast", modes: ["Normal", "High"], default: "Normal", theming: true, key: "cccc0000111122223333444455556666777788ff" },
+      { name: "Spacing", modes: ["Regular", "Compact"], default: "Regular", theming: false, key: K1 },
+      { name: "Spacing", modes: ["Regular", "Compact", "Wide"], default: "Regular", theming: false, key: K2 },
+    ],
+    variables: [
+      { name: "Brand/Primary", type: "COLOR", collection: "Brand", values: { Light: "#112233", Dark: "#aabbcc" }, scopes: ["ALL_FILLS"], key: "v1" },
+      { name: "Surface/Page", type: "COLOR", collection: "Surface", values: { Light: "#ffffff", Dark: "#000000" }, scopes: ["FRAME_FILL"], key: "v2" },
+      { name: "Contrast/Ink", type: "COLOR", collection: "Contrast", values: { Normal: "#333333", High: "#000000" }, scopes: ["TEXT_FILL"], key: "v3" },
+      { name: "Gap/Card", type: "FLOAT", collection: "Spacing", values: { Regular: 16, Compact: 8 }, scopes: ["GAP"], key: "v4" },
+      { name: "Gap/Page", type: "FLOAT", collection: "Spacing", values: { Regular: 24, Compact: 12, Wide: 32 }, scopes: ["GAP"], key: "v5" },
+    ],
+  });
+  const css = toCSS(clash), tw = toTailwind(clash), lint = lintTokens(clash);
+  const block = (text: string, sel: string) => (text.split("\n" + sel + " {\n")[1] || "").split("\n}")[0] ?? "";
+  check("[D15] a mode only ONE collection has a block for keeps [data-theme=\"<mode>\"] (unchanged)",
+    /--Contrast-Ink: #000000;/.test(block(css, '[data-theme="High"]')));
+  check("[D15] 'Dark' in two collections: each gets its own [data-theme-<collection>] block, no shared [data-theme=\"Dark\"]",
+    /--Brand-Primary: #aabbcc;/.test(block(css, '[data-theme-brand="Dark"]')) && !/Surface/.test(block(css, '[data-theme-brand="Dark"]'))
+    && /--Surface-Page: #000000;/.test(block(css, '[data-theme-surface="Dark"]')) && !css.includes('[data-theme="Dark"]'));
+  check("[D15] ONE warning per clashing mode name, naming the collections and the attributes to set",
+    lint.filter((w) => /^mode 'Dark' exists in 2 collections \(Brand, Surface\)/.test(w) && w.includes('data-theme-brand="Dark" / data-theme-surface="Dark"')).length === 1
+    && !lint.some((w) => /^mode 'High'/.test(w)));
+  check("[D15] two collections that share a NAME are told apart by the first 8 hex of their key",
+    /--Gap-Card: 8px;/.test(block(css, '[data-theme-spacing-aaaaaaaa="Compact"]')) && /--Gap-Page: 12px;/.test(block(css, '[data-theme-spacing-bbbbbbbb="Compact"]'))
+    && /--Gap-Page: 32px;/.test(block(css, '[data-theme="Wide"]')));
+  const selectors = (text: string) => text.split("\n").filter((l) => /^\[data-theme/.test(l)).join("\n");
+  check("[D15] tokens.css and theme.css use the same selectors for the same blocks", selectors(css) !== "" && selectors(css) === selectors(tw.text));
+  check("[D15] toTailwind (standalone) carries the same warning", tw.warnings.some((w) => /^mode 'Dark' exists in 2 collections/.test(w)));
+  const hostile = tokens({ collections: [{ name: 'X"] * {} [y', modes: ["L", "D"], default: "L", key: KB }, { name: "Other", modes: ["L", "D"], default: "L", key: KS }],
+    variables: [{ name: "a", type: "COLOR", collection: 'X"] * {} [y', values: { L: "#fff", D: "#000" } }, { name: "b", type: "COLOR", collection: "Other", values: { L: "#fff", D: "#000" } }] });
+  check("[D15] the attribute NAME is only [a-z0-9-] whatever the collection is called", /^\[data-theme-x-y="D"\] \{$/m.test(toCSS(hostile)) && !/\[data-theme-[^=]*[^a-z0-9=-][^=]*=/.test(toCSS(hostile)));
+  const seen: string[] = [];
+  toCSS(clash, { selector: (m, sc) => { seen.push(`${sc.collection}:${sc.attribute}:${m}`); return `.theme-${m}`; } });
+  check("[D15] opts.selector(mode, scope) gets the collection and the attribute it would have used",
+    seen.includes("Brand:data-theme-brand:Dark") && seen.includes("Contrast:data-theme:High"));
+  const noColl = tokens({ collections: [{ name: "Brand", modes: ["Light", "Dark"], default: "Light", key: KB }],
+    variables: [{ name: "Loose", type: "COLOR", values: { Light: "#fff", Dark: "#000" } }, { name: "Brand/Primary", type: "COLOR", collection: "Brand", values: { Light: "#fff", Dark: "#111" } }] });
+  check("[D15] a variable with no collection is its own group (scoped when it clashes)",
+    /--Loose: #000000;/.test(block(toCSS(noColl), '[data-theme-no-collection="Dark"]')) && /--Brand-Primary: #111111;/.test(block(toCSS(noColl), '[data-theme-brand="Dark"]')));
+})();
+
+// ---------- review fixes: sharing is DECLARED modes; font families quoted in both files; alias chains kept ----------
+(() => {
+  const declaredOnly = tokens({
+    collections: [{ name: "Brand", modes: ["Light", "Dark"], default: "Light", theming: true, key: "b1a2c3d4e5f60718293a4b5c6d7e8f9012345678" },
+      { name: "Surface", modes: ["Light", "Dark"], default: "Light", theming: true, key: "5a5b5c5d5e5f60718293a4b5c6d7e8f9012345678" }],
+    variables: [
+      { name: "Brand/Primary", type: "COLOR", collection: "Brand", values: { Light: "#112233", Dark: "#aabbcc" }, key: "v1" },
+      { name: "Surface/Page", type: "COLOR", collection: "Surface", values: { Light: "#ffffff", Dark: "#ffffff" }, key: "v2" }, // Dark = Light today
+    ],
+  });
+  const c = toCSS(declaredOnly);
+  check("[D15-declared] two collections DECLARE 'Dark' but only one has a differing value: still scoped per collection (stable across a value edit)",
+    c.includes('[data-theme-brand="Dark"] {') && !c.includes('[data-theme="Dark"]') && toTailwind(declaredOnly).text.includes('[data-theme-brand="Dark"] {'));
+  const fonts = tokens({ collections: [{ name: "Type", modes: ["Mode 1"], default: "Mode 1" }], variables: [
+    { name: "Heading", type: "STRING", collection: "Type", values: { "Mode 1": "Inter Display 2" }, scopes: ["FONT_FAMILY"] },
+    { name: "Font Family/Body", type: "STRING", collection: "Type", values: { "Mode 1": "Open Sans" }, scopes: ["ALL_SCOPES"] },
+    { name: "Label", type: "STRING", collection: "Type", values: { "Mode 1": "Semi Bold" }, scopes: ["ALL_SCOPES"] }] });
+  const fc = toCSS(fonts), ft = toTailwind(fonts).text;
+  check("[DT-24-css] tokens.css quotes a font-family STRING like theme.css does (FONT_FAMILY scope, name fallback); other strings stay as they were",
+    fc.includes('  --Heading: "Inter Display 2";') && ft.includes('  --font-figma-heading: "Inter Display 2";')
+    && fc.includes('  --Font-Family-Body: "Open Sans";') && ft.includes('  --font-figma-font-family-body: "Open Sans";') && fc.includes("  --Label: Semi Bold;"));
+  const chain = tokens({ collections: [{ name: "Type", modes: ["M"], default: "M" }], variables: [
+    { name: "Primitive/Inter", type: "STRING", collection: "Type", values: { M: "Inter" }, scopes: ["ALL_SCOPES"] },
+    { name: "Semantic/Sans", type: "STRING", collection: "Type", values: { M: { aliasOf: "Primitive/Inter" } }, scopes: ["ALL_SCOPES"] },
+    { name: "Heading", type: "STRING", collection: "Type", values: { M: { aliasOf: "Semantic/Sans" } }, scopes: ["FONT_FAMILY"] }] });
+  const ct = toTailwind(chain);
+  check("[DT-24-chain] the whole alias chain under a font family is kept — no var() dangles",
+    ct.text.includes("--font-figma-heading: var(--figma-semantic-sans);") && ct.text.includes("--figma-semantic-sans: var(--figma-primitive-inter);") && ct.text.includes("--figma-primitive-inter: Inter;")
+    && !ct.warnings.some((w) => /leaves out/.test(w)));
+})();
+
+// ---------- DT-24: STRING tokens in theme.css — the scope decides a font family; other strings stay out ----------
+(() => {
+  const ds = tokens({
+    collections: [{ name: "Type", modes: ["Mode 1"], default: "Mode 1", theming: false, key: "7777aaaa11112222333344445555666677778888" }],
+    variables: [
+      { name: "Heading", type: "STRING", collection: "Type", values: { "Mode 1": "Open Sans" }, scopes: ["FONT_FAMILY"], key: "s1" },
+      { name: "Body", type: "STRING", collection: "Type", values: { "Mode 1": "Inter" }, scopes: ["FONT_FAMILY"], key: "s2" },
+      { name: "Weight/Strong", type: "STRING", collection: "Type", values: { "Mode 1": "Semi Bold" }, scopes: ["ALL_SCOPES"], key: "s3" },
+      { name: "Weight/Plain", type: "STRING", collection: "Type", values: { "Mode 1": "Regular" }, scopes: ["FONT_STYLE"], key: "s4" },
+      { name: "Font Family/Mono", type: "STRING", collection: "Type", values: { "Mode 1": "Fira Code" }, scopes: ["ALL_SCOPES"], key: "s5" },
+    ],
+  });
+  const tw = toTailwind(ds);
+  check("[DT-24] a FONT_FAMILY-scoped STRING named 'Heading' (collection 'Type') is a font family: --font-figma-heading", /--font-figma-heading: /.test(tw.text));
+  check("[DT-24] a font family with a space is a quoted font-family value; a one-word one is left bare",
+    tw.text.includes('  --font-figma-heading: "Open Sans";') && tw.text.includes("  --font-figma-body: Inter;"));
+  check("[DT-24] with ALL_SCOPES the name still decides (fallback): 'Font Family/Mono' is a font family", tw.text.includes('  --font-figma-font-family-mono: "Fira Code";'));
+  check("[DT-24] 'Semi Bold' (ALL_SCOPES) and 'Regular' (FONT_STYLE) are NOT written to theme.css", !/Semi Bold|Regular|weight/i.test(tw.text));
+  check("[DT-24] ONE warning names the left-out strings and where they are kept",
+    tw.warnings.filter((w) => /theme\.css leaves out 2 STRING token\(s\) that are not font families \('Weight\/Strong', 'Weight\/Plain'\)/.test(w) && /tokens\.dtcg\.json/.test(w) && /--also-generic/.test(w)).length === 1);
+  check("[DT-24] tokens.css still carries them as plain custom properties (unchanged)", /--Weight-Strong: Semi Bold;/.test(toCSS(ds)));
+  check("[DT-24] emitTokens passes theme.css's warnings through", emitTokens(ds, { tailwind: true }).warnings.some((w) => /theme\.css leaves out 2 STRING/.test(w)));
+  const aliased = tokens({ collections: [{ name: "Type", modes: ["M"], default: "M" }], variables: [
+    { name: "Primitive/Inter", type: "STRING", collection: "Type", values: { M: "Inter" }, scopes: ["ALL_SCOPES"] },
+    { name: "Heading", type: "STRING", collection: "Type", values: { M: { aliasOf: "Primitive/Inter" } }, scopes: ["FONT_FAMILY"] }] });
+  const at = toTailwind(aliased).text;
+  check("[DT-24] a STRING a font family aliases is kept, so the var() resolves", /--font-figma-heading: var\(--figma-primitive-inter\);/.test(at) && /--figma-primitive-inter: Inter;/.test(at));
+})();
+
+// ---------- DT-24: lint warnings name the CSS file(s) actually written; DT-79: the @source not suggestion ----------
+(() => {
+  const TOK = path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "tokens.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt24-lint-"));
+  const input = path.join(dir, "variables.json");
+  fs.writeFileSync(input, JSON.stringify({ collections: [{ name: "Spacing", modes: ["Mode 1"], default: "Mode 1", theming: false, key: "69f809ce00000000000000000000000000000000" }],
+    variables: [{ name: "(Space 3)", type: "FLOAT", collection: "Spacing", tier: "primitive", values: { "Mode 1": 12 }, scopes: ["GAP"], key: "k1" }] }));
+  const run = (out: string, extra: string[]) => spawnSync(process.execPath, [TOK, input, path.join(dir, out), ...extra], { encoding: "utf8" });
+  const illegal = (stderr: string) => stderr.split("\n").find((l) => /illegal in a CSS custom property/.test(l)) ?? "";
+  const tw = run("tw", ["--web", "tailwind"]), gen = run("gen", []), both = run("both", ["--web", "tailwind", "--also-generic"]);
+  check("[DT-24] --web tailwind: the illegal-character warning names theme.css (what was written), not tokens.css",
+    tw.status === 0 && / in theme\.css/.test(illegal(tw.stderr)) && !/tokens\.css/.test(illegal(tw.stderr)) && illegal(tw.stderr).includes("--spacing-figma-space-3") && !fs.existsSync(path.join(dir, "tw", "tokens.css")));
+  check("[DT-24] default run: it names tokens.css", /emitted as ---Space-3- in tokens\.css$/.test(illegal(gen.stderr)) && !/theme\.css/.test(illegal(gen.stderr)));
+  check("[DT-24] --also-generic: it names both", /in tokens\.css/.test(illegal(both.stderr)) && /in theme\.css/.test(illegal(both.stderr)));
+  const note = (stderr: string) => stderr.split("\n").filter((l) => /^note {2}.*@source not "<path from that CSS file to design\/>";/.test(l) && /v4\.1\+/.test(l));
+  check("[DT-79] --web tailwind prints ONE @source not suggestion (stderr, beside the other notes) and does not write it into theme.css",
+    note(tw.stderr).length === 1 && !/@source/.test(fs.readFileSync(path.join(dir, "tw", "theme.css"), "utf8")));
+  check("[DT-79] without --web tailwind there is no such note", note(gen.stderr).length === 0);
 })();
 
 // ---------- the design-system split: these CLIs must reject the slim manifest -----------------
@@ -841,9 +981,11 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
     const r = run("drift-lint.ts", ["map.json", goodCat, "--max-age", "-5"]);
     return r.status === 2 && /--max-age expects a positive number of hours/.test(r.stderr);
   })());
-  check("[usage] the usage line names the installed command (${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js), not a repo path",
-    /usage: node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/drift-lint\.js"/.test(run("drift-lint.ts", []).stderr)
-    && /usage: node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/tokens\.js"/.test(run("tokens.ts", ["--help"]).stdout));
+  // DT-15/F-28: the usage line is text the model copies into Bash, where ${CLAUDE_PLUGIN_ROOT} is empty — so it
+  // names the script by the real path it is running from (here, the source; installed, the bundle).
+  check("[usage] the usage line names the script by its real path (node \"<its own folder>/<name>\"), not ${CLAUDE_PLUGIN_ROOT}",
+    run("drift-lint.ts", []).stderr.includes(`usage: node "${path.join(D2C, "drift-lint.ts")}"`)
+    && run("tokens.ts", ["--help"]).stdout.includes(`usage: node "${path.join(D2C, "tokens.ts")}"`));
 })();
 
 // ---------- tokens: the export's colour profile (the plugin writes Figma's DISPLAY_P3 lowercased: "display_p3") ----------
@@ -1181,12 +1323,11 @@ console.log("map — SLOT props:");
   check("[native] prototype-named modes/tokens cannot break the emitter", (() => { try { toNative(tokens({ collections: [{ name: "__proto__", modes: ["__proto__", "constructor"], default: "__proto__" }], variables: [{ name: "__proto__", type: "COLOR", collection: "__proto__", values: { __proto__: "#fff", constructor: "#000" } }] }), "flutter"); return true; } catch { return false; } })());
 })();
 
-// ---------- P6-123: drift-lint CLI must exit non-zero at 0% screen coverage (not a bug, but pin it) ----------
-// Finding 123 claimed `--screen` printed ERROR [screen-coverage]/[catalog-rekeyed] yet exited 0.
-// Reproduced directly against the real livetest-3 map/catalog/screens (both the Job Role Details
-// export and the positions export, 0% coverage in both): the CLI exits 1 both times, run directly
-// AND through a pipe. Not reproducible on head — recorded here as a regression pin so a future
-// change cannot silently reintroduce it.
+// ---------- P6-123 → D13: 0% screen coverage is a WARNING to confirm, exit 0 ----------
+// Finding 123 pinned exit 1 at 0% coverage. Owner decision D13 (field tests): 0% `screen-coverage` and
+// `catalog-rekeyed` are warnings ending in a question to confirm (as cross-check's are) — "this catalog is
+// not the library the screen uses" has a default (build every instance as new) and is the user's call.
+// Still checked against the real livetest-3 map/catalog/screens (0% by map in both).
 {
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const emptyMapFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "p6-123-")), "map.json");
@@ -1195,13 +1336,146 @@ console.log("map — SLOT props:");
   const catalogFile = path.join(FXL, "design-system", "components.local.json");
   const screens = [
     path.join(FXL, "verify", "positions___7314_87192.json"),
-    path.join(FXL, "verify", "System_Configurations__1359_21337.json"),
+    path.join(FXL, "verify", "Studio_Configurations__1359_21337.json"),
   ];
   for (const screen of screens) {
     const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "drift-lint.ts"), emptyMapFile, catalogFile, "--screen", screen], { encoding: "utf8" });
-    check(`[P6-123] drift-lint --screen exits non-zero at 0% coverage for ${path.basename(screen)}`, r.status !== 0 && /ERROR\s+\[(screen-coverage|catalog-rekeyed)\]/.test(r.stderr));
+    check(`[P6-123/D13] drift-lint --screen at 0% coverage: exit 0, a warn line with a Confirm question, no ERROR (${path.basename(screen)})`,
+      r.status === 0 && /^warn\s+\[(screen-coverage|catalog-rekeyed)\] NONE/m.test(r.stderr) && /Confirm: .*\?/.test(r.stderr) && !/^ERROR/m.test(r.stderr));
   }
 }
+
+// ---------- D13 + DT-26 on the SHIPPED scripts: exit codes, and the catalogs beside the named one ----------
+// drift-lint read ONE catalog, so an entry keyed to a component of a pulled library (libraries/<dir>/
+// components.json) or of the sampled components.library.json was `orphaned-entry`, and map-bootstrap
+// --screen never stubbed a library component. Real layout: design/export/{design-system,libraries}/.
+(() => {
+  const SCRIPTS = path.join(import.meta.dirname, "..", "claude-plugin", "scripts");
+  const run = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(SCRIPTS, script), ...args], { encoding: "utf8" });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dt26-"));
+  const exp = path.join(root, "design", "export"), dsDir = path.join(exp, "design-system"), libDir = path.join(exp, "libraries", "acme-ui");
+  fs.mkdirSync(dsDir, { recursive: true }); fs.mkdirSync(libDir, { recursive: true }); fs.mkdirSync(path.join(root, "other"));
+  const stamp = { exportedAt: new Date().toISOString(), file: "Acme App", colorProfile: "srgb" };
+  const put = (f: string, doc: unknown): string => { fs.writeFileSync(f, JSON.stringify(doc)); return f; };
+  const label = { "Label#1:0": { key: "Label#1:0", type: "TEXT", default: "Label" } };
+  const named = put(path.join(dsDir, "components.local.json"), { ...stamp, components: [{ name: "Brand Button", id: "1:1", type: "COMPONENT", key: "k-local", page: "Components", pageId: "0:1" }] });
+  put(path.join(dsDir, "components.library.json"), { ...stamp, components: [{ name: "Surface Chip", key: "k-sample", type: "COMPONENT", remote: true, source: "unknown-library", uses: 4, variant: null, props: { "Label#1:0": { key: "Label#1:0", type: "TEXT", observed: ["Hi"] } } }] });
+  put(path.join(exp, "libraries", "index.json"), { libraries: [{ dir: "acme-ui", libraryName: "Acme UI", file: "Acme UI", collectionKeys: [], counts: {} }], generatedAt: stamp.exportedAt });
+  put(path.join(libDir, "components.json"), { ...stamp, file: "Acme UI", source: "library", components: [{ name: "Surface Avatar", id: "5:5", type: "COMPONENT", key: "k-lib", page: "Library", pageId: "0:1", props: label }] });
+  const extra = put(path.join(root, "other", "components.json"), { ...stamp, components: [{ name: "Surface Badge", id: "7:7", type: "COMPONENT", key: "k-extra" }] });
+  const entry = (key: string, name: string) => ({ figma: { key, name }, code: { module: "@/ui", export: name.replace(/\W/g, "") }, status: "active" });
+  const mapFile = put(path.join(root, "map.json"), { version: 1, components: { "k-local": entry("k-local", "Brand Button"), "k-sample": entry("k-sample", "Surface Chip"), "k-lib": entry("k-lib", "Surface Avatar"), "k-extra": entry("k-extra", "Surface Badge") } });
+  const orphanOf = (r: ReturnType<typeof run>, key: string) => new RegExp(`\\[orphaned-entry\\] map entry '${key}'`).test(r.stderr);
+
+  const withExtra = run("drift-lint.js", [mapFile, named, "--catalog", extra]);
+  const noExtraRun = () => run("drift-lint.js", [mapFile, named]); // no --catalog: runs on HEAD too (the flag is new)
+  check("[DT-26] drift-lint: an entry keyed to a components.library.json component is mapped, not orphaned", withExtra.status === 0 && !orphanOf(withExtra, "k-sample") && !orphanOf(noExtraRun(), "k-sample"));
+  check("[DT-26] drift-lint: an entry keyed to a libraries/<dir>/components.json component is mapped, not orphaned", withExtra.status === 0 && !orphanOf(withExtra, "k-lib") && !orphanOf(noExtraRun(), "k-lib"));
+  check("[DT-26] drift-lint: --catalog adds a catalog; all four entries resolve, exit 0", withExtra.status === 0 && !/orphaned-entry/.test(withExtra.stderr) && /\+3 map entries resolved in the other catalog/.test(withExtra.stderr));
+  check("[DT-26] drift-lint prints ONE line naming every catalog read",
+    withExtra.stderr.split("\n").filter((l) => /^catalogs read \(4\): /.test(l) && l.includes("components.local.json [named") && l.includes("components.library.json [library-sample") && l.includes(path.join("acme-ui", "components.json") + " [library") && l.includes("other" + path.sep + "components.json [extra")).length === 1);
+  const noExtra = run("drift-lint.js", [mapFile, named]);
+  check("[DT-26] without --catalog, the entry only that catalog holds is still orphaned (exit 1)", noExtra.status === 1 && orphanOf(noExtra, "k-extra") && !orphanOf(noExtra, "k-lib"));
+  const twoExtra = run("drift-lint.js", [mapFile, named, "--catalog", extra, "--catalog", put(path.join(root, "other", "more.json"), { ...stamp, components: [{ name: "Surface Tag", id: "8:8", type: "COMPONENT", key: "k-more" }] })]);
+  check("[DT-26] --catalog is repeatable", /catalogs read \(5\)/.test(twoExtra.stderr) && twoExtra.status === 0);
+  const absent = put(path.join(root, "absent.json"), { version: 1, components: { "k-gone": entry("k-gone", "Surface Gone") } });
+  const gone = run("drift-lint.js", [absent, named, "--catalog", extra]);
+  check("[DT-26] a key in NO catalog is still orphaned-entry, exit 1", gone.status === 1 && orphanOf(gone, "k-gone"));
+  check("[DT-26] the same key in two catalogs is not a duplicate-key warning (one component seen twice)", (() => {
+    const dup = put(path.join(root, "other", "dup.json"), { ...stamp, components: [{ name: "Surface Avatar", id: "5:5", type: "COMPONENT", key: "k-lib" }] });
+    const r = run("drift-lint.js", [mapFile, named, "--catalog", extra, "--catalog", dup]);
+    return r.status === 0 && !/duplicate-key/.test(r.stderr);
+  })());
+
+  // D13 on the built script: 0% by map → warn + confirm, exit 0; the same run with an orphan → exit 1.
+  const inst = (id: string, name: string, key: string) => ({ type: "INSTANCE", id, name, props: { "Label#1:0": "Hi" }, mainComponent: { name, key } });
+  const screenFile = (f: string, kids: unknown[]) => put(path.join(root, f), { exportedAt: stamp.exportedAt, screen: "Home", nodes: [{ type: "FRAME", id: "1:0", name: "Home", children: kids }] });
+  const foreign = screenFile("foreign.json", [inst("2:1", "Foreign Thing", "k-foreign-1"), inst("2:2", "Foreign Other", "k-foreign-2")]);
+  const emptyMap = put(path.join(root, "empty.json"), { version: 1, components: {} });
+  const zero = run("drift-lint.js", [emptyMap, named, "--screen", foreign]);
+  check("[D13] 0% screen coverage: exit 0 and a `warn   [screen-coverage]` line ending in a Confirm question",
+    zero.status === 0 && /^warn {3}\[screen-coverage\] NONE/m.test(zero.stderr) && /Confirm: is .*the component library this screen is built from\? Until confirmed, build every instance as new\./.test(zero.stderr) && !/^ERROR/m.test(zero.stderr));
+  check("[D13] the 0% advice still says the library export is CLI-only (the MCP server has no library export — F-19's wording)",
+    /dtwin pull --as-library "<name>"` \(CLI only — the MCP server has no library export\)/.test(zero.stderr));
+  const rekeyCat = put(path.join(root, "rekey-cat.json"), { ...stamp, components: ["Brand Alpha", "Brand Beta", "Brand Gamma"].map((n, i) => ({ name: n, id: `9:${i}`, type: "COMPONENT", key: `k-old-${i}`, props: label })) });
+  const rekeyScreen = screenFile("rekey.json", ["Brand Alpha", "Brand Beta", "Brand Gamma"].map((n, i) => inst(`3:${i}`, n, `k-new-${i}`)));
+  const rk = run("drift-lint.js", [emptyMap, rekeyCat, "--screen", rekeyScreen]);
+  check("[D13] catalog-rekeyed: exit 0 and a `warn   [catalog-rekeyed]` line ending in a Confirm question",
+    rk.status === 0 && /^warn {3}\[catalog-rekeyed\] NONE/m.test(rk.stderr) && /Confirm: 3 component\(s\) match the catalog by name and prop signature but not by key .*\?/.test(rk.stderr) && !/^ERROR/m.test(rk.stderr));
+  const orphanZero = run("drift-lint.js", [absent, named, "--screen", foreign]);
+  check("[D13] an orphaned entry still exits 1 (with the 0% warning beside it)", orphanZero.status === 1 && /^ERROR  \[orphaned-entry\]/m.test(orphanZero.stderr) && /^warn {3}\[screen-coverage\]/m.test(orphanZero.stderr));
+  const invalid = run("drift-lint.js", [put(path.join(root, "bad-map.json"), { version: 1, components: { X: { figma: {} } } }), named, "--screen", foreign]);
+  check("[D13] an invalid map still exits 1", invalid.status === 1 && /\[map-invalid\]/.test(invalid.stderr));
+
+  // map-bootstrap --screen stubs the library components the screen uses (it scoped the named catalog alone).
+  const libScreen = screenFile("lib-screen.json", [inst("4:1", "Surface Avatar", "k-lib"), inst("4:2", "Surface Chip", "k-sample"), inst("4:3", "Brand Button", "k-local")]);
+  const boot = run("map-bootstrap.js", [named, "--screen", libScreen]);
+  const booted = ((): CodeConnectMap | null => { try { const m: unknown = JSON.parse(boot.stdout); return isCodeConnectMap(m) ? m : null; } catch { return null; } })();
+  check("[DT-26] map-bootstrap --screen stubs library-only components the screen uses (components.json and components.library.json)",
+    boot.status === 0 && !!booted && ["k-lib", "k-sample", "k-local"].every((k) => !!booted.components[k]) && Object.keys(booted.components).length === 3 && /2 of them from a library catalog/.test(boot.stderr));
+  check("[DT-26] map-bootstrap names every catalog it read", /map-bootstrap: catalogs read \(3\)/.test(boot.stderr));
+  const bootExtra = run("map-bootstrap.js", [named, "--screen", screenFile("extra-screen.json", [inst("5:1", "Surface Badge", "k-extra")]), "--catalog", extra]);
+  check("[DT-26] map-bootstrap --catalog (repeatable flag) adds a catalog --screen can stub from", bootExtra.status === 0 && /"k-extra"/.test(bootExtra.stdout));
+  // Review HIGH: node ids are per FILE. A library row with the same id as a deleted local component
+  // must not resolve the entry (by figma.id, or by an id-shaped map key).
+  const idRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dt26-id-"));
+  const idDs = path.join(idRoot, "design", "export", "design-system"), idLib = path.join(idRoot, "design", "export", "libraries", "acme-ui");
+  fs.mkdirSync(idDs, { recursive: true }); fs.mkdirSync(idLib, { recursive: true });
+  const idNamed = put(path.join(idDs, "components.local.json"), { ...stamp, components: [{ name: "Brand Button", id: "1:1", type: "COMPONENT" }] });
+  put(path.join(idRoot, "design", "export", "libraries", "index.json"), { libraries: [{ dir: "acme-ui", libraryName: "Acme UI", collectionKeys: [], counts: {} }], generatedAt: stamp.exportedAt });
+  put(path.join(idLib, "components.json"), { ...stamp, file: "Acme UI", components: [{ name: "Surface Toggle", id: "1:5", type: "COMPONENT", key: "k-toggle" }] });
+  const byDeclaredId = put(path.join(idRoot, "map-id.json"), { version: 1, components: { "local-switch": { figma: { id: "1:5", name: "Brand Switch" }, code: { module: "@/ui", export: "Switch" }, status: "active" } } });
+  const byMapKeyId = put(path.join(idRoot, "map-key.json"), { version: 1, components: { "1:5": { figma: { name: "Brand Switch" }, code: { module: "@/ui", export: "Switch" }, status: "active" } } });
+  const r1 = run("drift-lint.js", [byDeclaredId, idNamed]), r2 = run("drift-lint.js", [byMapKeyId, idNamed]);
+  check("[DT-26-id] an entry whose figma.id collides with a LIBRARY row's id is still orphaned-entry, exit 1 (ids are per file)",
+    /catalogs read \(2\)/.test(r1.stderr) && r1.status === 1 && orphanOf(r1, "local-switch"));
+  check("[DT-26-id] …and so is an id-shaped map key with no figma identity", r2.status === 1 && orphanOf(r2, "1:5"));
+  const idScreen = put(path.join(idRoot, "s.json"), { exportedAt: stamp.exportedAt, screen: "Home", nodes: [{ type: "FRAME", id: "1:0", name: "Home", children: [inst("2:1", "Surface Toggle", "k-toggle")] }] });
+  const idBoot = run("map-bootstrap.js", [idNamed, byDeclaredId, "--screen", idScreen]);
+  const idMap = ((): CodeConnectMap | null => { try { const m: unknown = JSON.parse(idBoot.stdout); return isCodeConnectMap(m) ? m : null; } catch { return null; } })();
+  check("[DT-26-id] map-bootstrap --screen: a library component is stubbed by KEY, never merged into the local entry that shares its id",
+    !!idMap && !!idMap.components["k-toggle"] && idMap.components["k-toggle"]?.figma.id === undefined && idMap.components["local-switch"]?.figma.name === "Brand Switch" && idMap.components["local-switch"]?.figma.key === undefined);
+  // Final-review MEDIUM: re-running a bootstrap over a map that already holds a LIBRARY entry must not merge
+  // a keyed local component into it through a shared node id (it would re-point the mapping).
+  const mixedCat = put(path.join(idRoot, "mixed-local.json"), { ...stamp, components: [{ name: "Brand Widget", id: "1:5", type: "COMPONENT", key: "k-local" }] });
+  const mixedMap = put(path.join(idRoot, "map-mixed.json"), { version: 1, components: { "k-toggle": { figma: { key: "k-toggle", id: "1:5", name: "Surface Toggle" }, code: { module: "@/ui/Toggle", export: "Toggle" }, status: "active" } } });
+  const mixedBoot = run("map-bootstrap.js", [mixedCat, mixedMap]);
+  const mixed = ((): CodeConnectMap | null => { try { const m: unknown = JSON.parse(mixedBoot.stdout); return isCodeConnectMap(m) ? m : null; } catch { return null; } })();
+  check("[DT-26-merge] a bootstrap re-run never merges a keyed component into an entry with a DIFFERENT key that shares its id",
+    mixedBoot.status === 0 && !!mixed && mixed.components["k-toggle"]?.figma.key === "k-toggle" && mixed.components["k-toggle"]?.figma.name === "Surface Toggle"
+      && mixed.components["k-toggle"]?.code.module === "@/ui/Toggle" && !!mixed.components["k-local"]);
+  // Review MEDIUM: a full bootstrap never reads the other catalogs, so a broken one does not fail it.
+  const brokenDir = fs.mkdtempSync(path.join(os.tmpdir(), "dt26-broken-"));
+  const brokenNamed = put(path.join(brokenDir, "components.local.json"), { ...stamp, components: [{ name: "Brand Button", id: "1:1", type: "COMPONENT", key: "k-local" }] });
+  fs.writeFileSync(path.join(brokenDir, "components.library.json"), "{ not json");
+  const brokenFull = run("map-bootstrap.js", [brokenNamed]);
+  check("[DT-26-full] a full bootstrap ignores a broken components.library.json beside the catalog (exit 0, as on HEAD)", brokenFull.status === 0 && /"k-local"/.test(brokenFull.stdout));
+  // Re-review LOW 1: a DISCOVERED catalog is never asked for — a broken one is a warn naming it, then skipped
+  // (as the MCP tool does); only a --catalog the user named fails loud.
+  const brokenScreen = run("map-bootstrap.js", [brokenNamed, "--screen", idScreen]);
+  check("[DT-26-lenient] map-bootstrap --screen: a broken discovered components.library.json is a warn naming it, skipped (exit 0)",
+    brokenScreen.status === 0 && /warn .*components\.library\.json is not a readable component catalog — skipped/.test(brokenScreen.stderr));
+  const brokenMap = put(path.join(brokenDir, "map.json"), { version: 1, components: { "k-local": entry("k-local", "Brand Button") } });
+  const brokenLint = run("drift-lint.js", [brokenMap, brokenNamed]);
+  check("[DT-26-lenient] drift-lint: the same broken discovered file is `warn   [catalog-unreadable] <file>` and the run goes on (exit 0, as on HEAD)",
+    brokenLint.status === 0 && /^warn {3}\[catalog-unreadable\] .*components\.library\.json is not a readable component catalog — skipped/m.test(brokenLint.stderr));
+  fs.writeFileSync(path.join(brokenDir, "named-extra.json"), "{ not json");
+  check("[DT-26-lenient] …but a broken --catalog the user NAMED still fails loud (exit 2)", run("drift-lint.js", [brokenMap, brokenNamed, "--catalog", path.join(brokenDir, "named-extra.json")]).status === 2);
+  // Re-review LOW 5: a duplicate key inside an extra catalog names that file.
+  const dupInside = put(path.join(root, "other", "dup-inside.json"), { ...stamp, components: [{ name: "Surface A", id: "9:1", type: "COMPONENT", key: "k-dupin" }, { name: "Surface B", id: "9:2", type: "COMPONENT", key: "k-dupin" }] });
+  check("[DT-26-dupfile] a duplicate key inside an extra catalog names that file",
+    new RegExp(`duplicate-key\\] two catalog components share key 'k-dupin' \\('Surface A' and 'Surface B'\\) in ${dupInside.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(run("drift-lint.js", [mapFile, named, "--catalog", dupInside]).stderr));
+  // Re-review HIGH: a confirmed proposal WITH a key binds by key only — never to a local component that
+  // happens to share its (other file's) node id.
+  const idLocal = put(path.join(idDs, "components.local.json"), { ...stamp, components: [{ name: "Local Widget", id: "1:5", type: "COMPONENT", key: "k-local-widget" }] });
+  const proposals = put(path.join(idRoot, "proposals.json"), [{ name: "Surface Toggle", instanceKeys: ["inst-1"], catalog: { key: "k-toggle", id: "1:5", name: "Surface Toggle", type: "COMPONENT" }, confirmed: true, reasons: [], alternatives: [] }]);
+  const prop = run("map-bootstrap.js", [idLocal, "--from-proposals", proposals]);
+  const propMap = ((): CodeConnectMap | null => { try { const m: unknown = JSON.parse(prop.stdout); return isCodeConnectMap(m) ? m : null; } catch { return null; } })();
+  check("[DT-26-prop] --from-proposals: a keyed library proposal binds to the library component by key, not to the local '1:5'",
+    prop.status === 0 && propMap?.components["inst-1"]?.figma.key === "k-toggle" && propMap.components["inst-1"]?.figma.name === "Surface Toggle");
+  const full = run("map-bootstrap.js", [named]);
+  check("[DT-26] a full bootstrap (no --screen) still stubs the named catalog only — not every library component", (() => { try { const m: unknown = JSON.parse(full.stdout); return isCodeConnectMap(m) && Object.keys(m.components).join() === "k-local"; } catch { return false; } })());
+})();
 
 // ---------- map-bootstrap.js --screen scopes the catalog to what one screen actually uses (P4 #103) ----------
 // Before the fix, a full bootstrap on a real catalog stubbed EVERY component in it (59 here, 318 on
@@ -1211,7 +1485,7 @@ console.log("map — SLOT props:");
   const D2C = path.join(import.meta.dirname, "..", "design-to-code");
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const catalog = path.join(FXL, "design-system", "components.local.json");
-  const screen = path.join(FXL, "pages", "__Organization_management_", "positions___7314_87192.json");
+  const screen = path.join(FXL, "pages", "__Optimization_management_", "positions___7314_87192.json");
   const asMap = (stdout: string): CodeConnectMap => { const m: unknown = JSON.parse(stdout); return must(isCodeConnectMap(m) ? m : null, "map-bootstrap to print a valid map"); };
   const full = asMap(spawnSync(process.execPath, [path.join(D2C, "map-bootstrap.ts"), catalog], { encoding: "utf8" }).stdout);
   const scopedRun = spawnSync(process.execPath, [path.join(D2C, "map-bootstrap.ts"), catalog, "--screen", screen], { encoding: "utf8" });
@@ -1222,7 +1496,8 @@ console.log("map — SLOT props:");
   // instance keys are in this catalog), so the scoped count is legitimately 0 — the point is that it
   // is never the full 59, i.e. it never asks the user to confirm components the screen doesn't use.
   check("[map-bootstrap --screen] scopes to fewer components than a full bootstrap", scopedCount < fullCount);
-  check("[map-bootstrap --screen] says on stderr how much it scoped, from -> to", new RegExp(`from ${fullCount} to ${scopedCount}`).test(scopedRun.stderr));
+  // DT-26: the "from" side is every catalog read (this fixture's components.library.json too), so it is >= the full bootstrap's count.
+  check("[map-bootstrap --screen] says on stderr how much it scoped, from -> to", Number((new RegExp(`from (\\d+) to ${scopedCount} `).exec(scopedRun.stderr) || [])[1]) >= fullCount);
 })();
 
 // ---------- finding 313: a consumer-project path that does not exist in a consumer project --------
@@ -1246,6 +1521,106 @@ console.log("map — SLOT props:");
   }
   check("[313] no skill/agent doc quotes the repo-relative design-to-code/ path — every script is ${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js" +
     (offenders.length ? " — offenders: " + offenders.join(", ") : ""), offenders.length === 0);
+})();
+
+// ---------- DT-15 / F-28: every script command resolves to a real path ------------------------------
+// `${CLAUDE_PLUGIN_ROOT}` is substituted into skill/agent Markdown when Claude Code loads it, but it is not
+// an environment variable in the Bash tool, a skill preloaded into an agent kept it literal, and a
+// references/*.md opened with Read is never substituted — so commands built on it ran with an empty path in
+// both field runs. No bin/ launcher: claude.ai and Cowork refuse a plugin with a top-level bin/
+// (https://code.claude.com/docs/en/plugins-reference, "Standard layout"). Instead: skill/agent bodies say
+// `${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js` (substituted there), references/profiles say `<scripts>/…`
+// defined by their SKILL.md, the agent that preloads a skill names the folder itself, and every usage line
+// or printed hint carries the script's own real path.
+(() => {
+  const PLUGIN_ROOT = path.join(import.meta.dirname, "..", "claude-plugin");
+  const REPO = path.join(PLUGIN_ROOT, "..");
+  const SCRIPTS = path.join(PLUGIN_ROOT, "scripts");
+  const entries = fs.readdirSync(SCRIPTS).filter((f) => f.endsWith(".js")).map((f) => f.slice(0, -3));
+  const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith(".md") ? [path.join(d, e.name)] : []);
+  const docs = [...walk(path.join(PLUGIN_ROOT, "skills")), ...walk(path.join(PLUGIN_ROOT, "agents"))];
+  const isBody = (f: string) => path.basename(f) === "SKILL.md" || f.includes(`${path.sep}agents${path.sep}`);
+  const lines = (f: string) => fs.readFileSync(f, "utf8").split("\n");
+
+  check("[DT-15] the plugin has no top-level bin/ (claude.ai and Cowork refuse to install such a plugin)", !fs.existsSync(path.join(PLUGIN_ROOT, "bin")));
+
+  const unknown: string[] = [], rootInReadFile: string[] = [], undefinedPlaceholder: string[] = [];
+  for (const f of docs) {
+    const rel = path.relative(PLUGIN_ROOT, f);
+    lines(f).forEach((line, i) => {
+      for (const m of line.matchAll(/(?:\$\{CLAUDE_PLUGIN_ROOT\}|<scripts>)\/scripts\/([a-z][a-z0-9-]*)\.js|<scripts>\/([a-z][a-z0-9-]*)\.js/g)) {
+        const n = m[1] ?? m[2] ?? "";
+        if (!entries.includes(n)) unknown.push(`${rel}:${i + 1} ${n}`);
+      }
+      if (!isBody(f) && line.includes("${CLAUDE_PLUGIN_ROOT}")) rootInReadFile.push(`${rel}:${i + 1}`);
+    });
+  }
+  // A read-as-is file that says <scripts>/<plugin> needs EVERY SKILL.md that sends the model to it — its own
+  // skill's, and any other skill that loads it by name (sync-design and audit-design load build-screen's
+  // profiles and export-layout.md; extract loads help's troubleshooting.md) — to say what that means.
+  const placeholderFiles = docs.filter((f) => !isBody(f)).map((f) => {
+    const text = fs.readFileSync(f, "utf8");
+    return { f, rel: path.relative(PLUGIN_ROOT, f), scripts: text.includes("<scripts>"), plugin: text.includes("<plugin>/") };
+  }).filter((x) => x.scripts || x.plugin);
+  for (const skillMd of docs.filter((f) => path.basename(f) === "SKILL.md")) {
+    const def = fs.readFileSync(skillMd, "utf8");
+    const own = path.dirname(skillMd);
+    for (const pf of placeholderFiles) {
+      const isProfile = pf.rel.split(path.sep).includes("profiles");
+      const loads = pf.f.startsWith(own + path.sep) || def.includes(path.basename(pf.f)) || (isProfile && def.includes("profiles/"));
+      if (!loads) continue;
+      const where = `${path.relative(PLUGIN_ROOT, skillMd)} → ${pf.rel}`;
+      if (pf.scripts && !(def.includes("`<scripts>`") && def.includes("${CLAUDE_PLUGIN_ROOT}/scripts"))) undefinedPlaceholder.push(`${where} (<scripts>)`);
+      if (pf.plugin && !(def.includes("`<plugin>`") && def.includes("${CLAUDE_PLUGIN_ROOT}"))) undefinedPlaceholder.push(`${where} (<plugin>)`);
+    }
+  }
+  check("[DT-15] every script a doc names (${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js or <scripts>/<name>.js) is one the plugin ships" + (unknown.length ? " — " + unknown.join(", ") : ""), unknown.length === 0);
+  check("[DT-15] no references/ or profiles/ file relies on ${CLAUDE_PLUGIN_ROOT} (a file opened with Read is never substituted)" +
+    (rootInReadFile.length ? " — " + rootInReadFile.join(", ") : ""), rootInReadFile.length === 0);
+  check("[DT-15] every SKILL.md that loads a file using <scripts>/<plugin> (its own or another skill's) defines it as the substituted plugin path" +
+    (undefinedPlaceholder.length ? " — " + undefinedPlaceholder.join(", ") : ""), undefinedPlaceholder.length === 0);
+  // F-28: the agent that PRELOADS build-screen (whose body then stays literal) names the folder in its own,
+  // substituted prompt.
+  const builder = fs.readFileSync(path.join(PLUGIN_ROOT, "agents", "screen-builder.md"), "utf8");
+  check("[F-28] screen-builder preloads build-screen and names the scripts folder itself (${CLAUDE_PLUGIN_ROOT}/scripts/ in its own prompt)",
+    /skills:\s*\n\s*-\s*build-screen/.test(builder) && builder.split("---").slice(2).join("---").includes("${CLAUDE_PLUGIN_ROOT}/scripts/"));
+
+  // Sources: usage lines and printed hints give the real path; nothing prints the unsubstituted variable,
+  // and no hint names a bare `<script>.js` (command not found in a consumer project).
+  const D2C_DIR = path.join(REPO, "design-to-code");
+  const NAMES = entries.join("|");
+  const bare = new RegExp("(?<![\\w/.-])(" + NAMES + ")\\.js\\b");
+  // verify-screen's expectation `note` is written into every <screen>.expected.json: its text is part of the
+  // file's sha256 (reports and probes record it), so it keeps its original wording.
+  const DATA_TEXT = ["with `verify-screen.js --compare`; the probe's field names"];
+  const inSources: string[] = [], hints: string[] = [];
+  for (const f of fs.readdirSync(D2C_DIR).filter((x) => x.endsWith(".ts"))) {
+    lines(path.join(D2C_DIR, f)).forEach((line, i) => {
+      if (/\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\//.test(line)) inSources.push(`${f}:${i + 1}`);
+      const s = line.trimStart();
+      if (/^(\/\/|\*|\/\*|import )/.test(s) || line.includes("GENERATED by Design Twin") || DATA_TEXT.some((d) => line.includes(d))) return;
+      if (bare.test(line.split(" // ")[0] ?? "")) hints.push(`${f}:${i + 1}`);
+    });
+  }
+  check("[DT-15] no design-to-code source prints ${CLAUDE_PLUGIN_ROOT}/scripts/… (usage and hints use scriptCmd → the real path)" +
+    (inSources.length ? " — " + inSources.join(", ") : ""), inSources.length === 0);
+  check("[DT-15] no script output tells the model to run a bare `<script>.js`" + (hints.length ? " — " + hints.join(", ") : ""), hints.length === 0);
+
+  // The shipped bundles print THEIR OWN folder: run from an unrelated cwd, the usage path and a sibling
+  // script named in a hint both exist.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dt-paths-"));
+  const help = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), "--help"], { cwd: tmp, encoding: "utf8" });
+  const usagePath = /usage: node "([^"]+)"/.exec(help.stdout)?.[1];
+  check("[DT-15] the shipped tokens.js --help prints its own real path (node \"…/scripts/tokens.js\"), from any cwd",
+    help.status === 0 && usagePath === path.join(SCRIPTS, "tokens.js") && fs.existsSync(usagePath));
+  fs.writeFileSync(path.join(tmp, "map.json"), "{}");
+  fs.writeFileSync(path.join(tmp, "cat.json"), JSON.stringify({ components: [] }));
+  const lint = spawnSync(process.execPath, [path.join(SCRIPTS, "drift-lint.js"), "map.json", "cat.json"], { cwd: tmp, encoding: "utf8" });
+  const hintPath = /node "([^"]+map-validate\.js)"/.exec(lint.stderr)?.[1];
+  check("[DT-15] a hint the shipped drift-lint.js prints names the sibling script by its real path (…/scripts/map-validate.js)",
+    hintPath === path.join(SCRIPTS, "map-validate.js") && fs.existsSync(hintPath));
+  fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
 report();

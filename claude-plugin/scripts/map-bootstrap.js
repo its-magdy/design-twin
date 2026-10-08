@@ -2,7 +2,7 @@
 
 
 // design-to-code/map-bootstrap.ts
-import fs3 from "node:fs";
+import fs4 from "node:fs";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -48,6 +48,10 @@ function readJson(file, guard) {
   }
   if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
   return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
 }
 
 // design-to-code/catalog-input.ts
@@ -97,6 +101,11 @@ function ifDefined(key, v) {
   return o;
 }
 
+// design-to-code/probe-steps.ts
+function isPlanExpect(x) {
+  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
+}
+
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -130,10 +139,23 @@ function isTextStylesDoc(x) {
   return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+var SEVERITIES = ["blocker", "warning", "info"];
+function isAuditOverridesDoc(x) {
+  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -155,9 +177,61 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
-function isVerifyMeasured(x) {
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+function isProbeIdentity(x) {
+  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+function isBuildIdentity(x) {
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
+var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
+var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+function isMeasuredVisual(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+var MEASURED_EXTRAS = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // group 11 (DT-47): the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // 12c: the visual diff (informational, D40(3))
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
+];
+function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+function isVerifyMeasured(x) {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
 }
 isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
 function isEvidence(x) {
@@ -167,11 +241,15 @@ function isInteractionEvidenceList(x) {
   return Array.isArray(x) && x.every(isEvidence);
 }
 isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
-function isVerifyReport(x) {
-  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+function isMeasuredComponentList(x) {
+  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -180,7 +258,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -188,13 +266,30 @@ function planProblem(x) {
   if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
   if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
   if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+var reqStr = (v) => typeof v === "string" && v.trim() !== "";
+function isPlanWaiver(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+function isPlanDescope(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isPlanInteraction(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
+}
+isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -222,7 +317,11 @@ function screenRoots(doc) {
 }
 
 // design-to-code/cli-args.ts
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 // design-to-code/component-match.ts
 function visibleInstances(doc, label) {
@@ -266,12 +365,12 @@ function parseVariant(s) {
 
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -281,7 +380,7 @@ function isMainFallback(metaUrl) {
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
   root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
   figma: ["key", "id", "name", "unstable"],
   code: ["module", "export", "targets"],
   target: ["module", "export"],
@@ -308,7 +407,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path, message) => errors.push({ path, message });
+  const err = (path3, message) => errors.push({ path: path3, message });
   if (!isObj2(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -350,6 +449,7 @@ function validateMap(map) {
       }
     }
     if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
     if (e.props !== void 0) {
       if (!isObj2(e.props)) err(`${at}.props`, "must be an object");
       else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
@@ -411,29 +511,78 @@ function validateProp(p, at, err) {
 function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
-isCodeConnectMap.expected = "a valid component map (map-validate.js <file> lists what is wrong with it)";
-if (false) {
-  const file = process.argv[2];
-  const USAGE = `usage: ${scriptCmd2("map-validate")} <map.json>`;
-  if (file === "--help" || file === "-h") {
-    console.log(USAGE);
-    process.exit(0);
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/design-system-dir.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+function exportRootOf(screenFile, dsDir) {
+  const roots = [];
+  if (screenFile) {
+    const pages = path2.dirname(path2.dirname(screenFile));
+    if (path2.basename(pages) === "pages") roots.push(path2.dirname(pages));
   }
-  if (!file || file.startsWith("-")) {
-    console.error((file ? `map-validate: unknown flag ${file}
-` : "") + USAGE);
-    process.exit(1);
+  if (dsDir) {
+    const parent = path2.dirname(path2.normalize(dsDir));
+    roots.push(path2.basename(parent) === "libraries" ? path2.dirname(parent) : parent);
   }
-  const res = validateMap(readJsonFile2(file, "component map"));
-  if (res.ok) {
-    console.log("map valid");
-    process.exit(0);
-  }
-  res.errors.forEach((e) => console.error(`  ${e.path || "(root)"}: ${e.message}`));
-  console.error(`
-${res.errors.length} error(s)`);
-  process.exit(1);
+  return roots.find((r) => fs3.existsSync(path2.join(r, "libraries", "index.json"))) ?? null;
 }
+function findLibraryExports(screenFile, dsDir) {
+  const root = exportRootOf(screenFile, dsDir);
+  if (!root) return [];
+  const index = readJsonOrNull(path2.join(root, "libraries", "index.json"), isLibrariesIndex);
+  if (!index) return [];
+  return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
+    const rel = path2.join(root, "libraries", r.dir);
+    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path2.join(rel, "components.json"), isComponentsCatalog) };
+  });
+}
+function discoverCatalogs(namedFile, screenFile) {
+  const dir = path2.dirname(namedFile);
+  const out = [];
+  const seen = /* @__PURE__ */ new Set([path2.resolve(namedFile)]);
+  const add = (file, role, catalog) => {
+    if (seen.has(path2.resolve(file)) || !fs3.existsSync(file)) return;
+    seen.add(path2.resolve(file));
+    out.push({ file, role, catalog });
+  };
+  for (const lib of findLibraryExports(screenFile, dir)) add(path2.join(lib.rel, "components.json"), "library", lib.components);
+  const sample = path2.join(dir, "components.library.json");
+  add(sample, "library-sample", readJsonOrNull(sample, isComponentsCatalog));
+  return out;
+}
+function readCatalogSet(namedFile, named, extraFiles, screenFile, onSkip) {
+  const out = [{ file: namedFile, catalog: named, role: "named" }];
+  const seen = /* @__PURE__ */ new Set([path2.resolve(namedFile)]);
+  for (const f of extraFiles) {
+    if (seen.has(path2.resolve(f))) continue;
+    seen.add(path2.resolve(f));
+    out.push({ file: f, role: "extra", catalog: readSplitFile(f, "component catalog (--catalog)", isComponentsCatalog, "components", "design-system/components.library.json") });
+  }
+  for (const d of discoverCatalogs(namedFile, screenFile)) {
+    if (seen.has(path2.resolve(d.file))) continue;
+    seen.add(path2.resolve(d.file));
+    if (d.catalog) out.push({ file: d.file, role: d.role, catalog: d.catalog });
+    else if (onSkip) onSkip(d.file);
+  }
+  return out;
+}
+function unionCatalog(sources) {
+  const first = sources[0];
+  const keys = /* @__PURE__ */ new Set();
+  const components = [];
+  for (const s of sources) for (const c of s.catalog.components) {
+    if (c.key) {
+      if (keys.has(c.key)) continue;
+      keys.add(c.key);
+    }
+    components.push(c);
+  }
+  return { ...first ? first.catalog : {}, components };
+}
+var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + sources.map((s) => `${s.file} [${s.role}, ${s.catalog.components.length} component(s)]`).join(", ");
 
 // design-to-code/map-bootstrap.ts
 var clone = (o) => structuredClone(o);
@@ -513,7 +662,13 @@ function bootstrap(catalog, existing) {
     if (c.type !== "COMPONENT" && c.type !== "COMPONENT_SET") continue;
     const id = c.key || c.id;
     if (!id) continue;
-    const matchKey = [c.key, c.id, id].find((x) => x && prevByIdent.has(x));
+    const keyClash = (x) => {
+      if (!c.key || x === c.key) return false;
+      const pk = prevByIdent.get(x);
+      const pkKey = pk ? (prev[pk]?.figma || {}).key : void 0;
+      return !!pkKey && pkKey !== c.key;
+    };
+    const matchKey = [c.key, c.id, id].find((x) => x && prevByIdent.has(x) && !keyClash(x));
     const prevKey = matchKey ? prevByIdent.get(matchKey) : null;
     const prevEntry = prevKey ? prev[prevKey] : null;
     if (prevKey && prevEntry) {
@@ -543,7 +698,7 @@ function bootstrap(catalog, existing) {
   for (const [pk, pe] of Object.entries(prev)) if (!usedPrev.has(pk) && !(pk in out.components)) out.components[pk] = clone(pe);
   return out;
 }
-function bootstrapFromProposals(proposals, catalog, existing) {
+function bootstrapFromProposals(proposals, catalog, existing, others) {
   const out = { version: 1, components: nullProto() };
   if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
   const prev = existing && existing.components || {};
@@ -554,7 +709,7 @@ function bootstrapFromProposals(proposals, catalog, existing) {
     if (!p || p.confirmed !== true) continue;
     report.confirmed++;
     const want = p.catalog || {};
-    const c = comps.find((x) => want.key && x.key === want.key || want.id && x.id === want.id);
+    const c = want.key ? comps.find((x) => x.key === want.key) || (others && others.components || []).find((x) => x.key === want.key) : want.id ? comps.find((x) => x.id === want.id) : void 0;
     const mapKey = (p.instanceKeys || [])[0];
     if (!c) {
       report.skipped.push(`'${p.name}': catalog component ${want.id || want.key || "?"} is not in this catalog`);
@@ -581,16 +736,29 @@ function proposalsIn(doc) {
   if (isJsonObject(doc) && isJsonObject(doc.crossFile) && isProposalList(doc.crossFile.componentProposals)) return doc.crossFile.componentProposals;
   return null;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]`;
-  const argv = process.argv.slice(2);
+function main(argv) {
+  const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>] [--catalog <components.json>]...`;
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(usage);
+    return 0;
+  }
   let outFile = null, proposalsFile = null, screenFile = null;
+  const extraCatalogFiles = [];
+  for (let ci = argv.indexOf("--catalog"); ci !== -1; ci = argv.indexOf("--catalog")) {
+    const next = argv[ci + 1];
+    if (!next || next.startsWith("--")) {
+      console.error("--catalog needs a component catalog .json (components.json / components.library.json)\n" + usage);
+      return 1;
+    }
+    extraCatalogFiles.push(next);
+    argv.splice(ci, 2);
+  }
   const pi = argv.indexOf("--from-proposals");
   if (pi !== -1) {
     const next = argv[pi + 1];
     if (!next || next.startsWith("--")) {
-      console.error("--from-proposals needs the JSON report cross-check.js (or audit.js) wrote\n" + usage);
-      process.exit(1);
+      console.error("--from-proposals needs the JSON report the cross-check (or audit) script wrote with --out/--json\n" + usage);
+      return 1;
     }
     proposalsFile = next;
     argv.splice(pi, 2);
@@ -600,7 +768,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const next = argv[si + 1];
     if (!next || next.startsWith("--")) {
       console.error("--screen needs a screen export .json\n" + usage);
-      process.exit(1);
+      return 1;
     }
     screenFile = next;
     argv.splice(si, 2);
@@ -610,7 +778,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const next = argv[o + 1];
     if (!next || next.startsWith("--")) {
       console.error("--out needs a file path\n" + usage);
-      process.exit(1);
+      return 1;
     }
     outFile = next;
     argv.splice(o, 2);
@@ -619,12 +787,12 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (unknown) {
     console.error(`unknown option ${unknown}
 ${usage}`);
-    process.exit(1);
+    return 1;
   }
   const [catalogFile, existingArg] = argv;
   if (!catalogFile) {
     console.error(usage);
-    process.exit(1);
+    return 1;
   }
   const catalog = readSplitFile(
     catalogFile,
@@ -634,15 +802,25 @@ ${usage}`);
     "design-system/components.local.json",
     NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1)."
   );
+  const sources = screenFile || proposalsFile ? readCatalogSet(
+    catalogFile,
+    catalog,
+    extraCatalogFiles,
+    screenFile ?? void 0,
+    (f) => console.error(`map-bootstrap: warn  ${f} is not a readable component catalog \u2014 skipped`)
+  ) : [{ file: catalogFile, catalog, role: "named" }];
+  const union = unionCatalog(sources);
+  const others = { components: unionCatalog(sources.slice(1)).components.filter((c) => !!c.key && !catalog.components.some((n) => n.key === c.key)).map(({ id: _foreignId, ...c }) => c) };
+  if (screenFile || proposalsFile) console.error(`map-bootstrap: ${catalogSetLine(sources)}`);
   const existingFile = existingArg || outFile;
-  const existingRaw = existingFile && fs3.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  const existingRaw = existingFile && fs4.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
   let existing = null;
   if (existingRaw !== null) {
     const valid = validateMap(existingRaw);
     if (!valid.ok || !isCodeConnectMap(existingRaw)) {
       valid.errors.forEach((e) => console.error(`map-bootstrap: ${existingFile}: ${e.path || "(root)"}: ${e.message}`));
-      console.error(`map-bootstrap: ${existingFile} is not a valid component map (${valid.errors.length} error(s)) \u2014 refusing to rewrite it. Fix it (\`map-validate.js ${existingFile}\`) or move it aside. Nothing was written.`);
-      process.exit(1);
+      console.error(`map-bootstrap: ${existingFile} is not a valid component map (${valid.errors.length} error(s)) \u2014 refusing to rewrite it. Fix it (\`${scriptCmd("map-validate")} ${existingFile}\`) or move it aside. Nothing was written.`);
+      return 1;
     }
     existing = existingRaw;
   }
@@ -650,20 +828,20 @@ ${usage}`);
     const doc = readJsonFile(proposalsFile, "proposals report");
     const proposals = proposalsIn(doc);
     if (!proposals) {
-      console.error(`map-bootstrap: ${proposalsFile} has no componentProposals \u2014 run cross-check.js with --out (or --json) and pass the JSON it wrote`);
-      process.exit(1);
+      console.error(`map-bootstrap: ${proposalsFile} has no componentProposals \u2014 run \`${scriptCmd("cross-check")} <screen.json> --out <base>\` (or --json) and pass the JSON it wrote`);
+      return 1;
     }
-    const { map, report } = bootstrapFromProposals(proposals, catalog, existing);
+    const { map, report } = bootstrapFromProposals(proposals, catalog, existing, others);
     if (!report.confirmed) {
       console.error(`map-bootstrap: none of the ${proposals.length} proposal(s) in ${proposalsFile} is confirmed. Show the user the list, set "confirmed": true on each entry they accept, and re-run. Nothing was written \u2014 proposals are never accepted automatically.`);
-      process.exit(1);
+      return 1;
     }
     const out = JSON.stringify(map, null, 2) + "\n";
-    if (outFile) fs3.writeFileSync(outFile, out);
+    if (outFile) fs4.writeFileSync(outFile, out);
     else process.stdout.write(out);
     for (const sk of report.skipped) console.error(`warn  ${sk}`);
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) \u2192 ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` \u2014 wrote ${outFile}` : ""}`);
-    process.exit(0);
+    return 0;
   }
   let scopedCatalog = catalog;
   if (screenFile) {
@@ -673,22 +851,27 @@ ${usage}`);
       if (i.key) used.add(i.key);
       if (i.setKey) used.add(i.setKey);
     }
-    const all = catalog.components;
-    const scoped = all.filter((c) => c.key && used.has(c.key) || c.id && used.has(c.id));
+    const all = union.components;
+    const fromNamed = catalog.components.filter((c) => c.key && used.has(c.key) || c.id && used.has(c.id));
+    const fromLibs = others.components.filter((c) => c.key && used.has(c.key));
+    const scoped = [...fromNamed, ...fromLibs];
     scopedCatalog = safeAssign({}, catalog, { components: scoped });
-    console.error(`map-bootstrap: --screen scoped the catalog from ${all.length} to ${scoped.length} component(s) this screen actually uses.`);
+    const fromOthers = fromLibs.length;
+    console.error(`map-bootstrap: --screen scoped the catalog${sources.length > 1 ? `s` : ""} from ${all.length} to ${scoped.length} component(s) this screen actually uses` + (fromOthers ? ` (${fromOthers} of them from a library catalog).` : "."));
   }
   const written = bootstrap(scopedCatalog, existing);
   const json = JSON.stringify(written, null, 2) + "\n";
   if (!outFile) {
     process.stdout.write(json);
   } else {
-    fs3.writeFileSync(outFile, json);
+    fs4.writeFileSync(outFile, json);
     const entries = Object.values(written.components);
     const review = entries.filter((e) => e.status === "needs-review").length;
     console.error(`map-bootstrap: wrote ${outFile} \u2014 ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);
   }
+  return 0;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   bootstrap,
   bootstrapFromProposals,

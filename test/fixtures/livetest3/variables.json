@@ -188,36 +188,36 @@
  ],
  "_slices": [
   {
-   "screen": "Create_Activity_Type__18411_84111",
-   "file": "pages/In_progress/Create_Activity_Type__18411_84111.json",
+   "screen": "Create_Assembly_Type__18411_84111",
+   "file": "pages/In_progress/Create_Assembly_Type__18411_84111.json",
    "at": "2026-09-22T16:24:13.199Z",
    "variables": 60,
    "collections": 12
   },
   {
-   "screen": "Create_Activity_Type__18411_84502",
-   "file": "pages/In_progress/Create_Activity_Type__18411_84502.json",
+   "screen": "Create_Assembly_Type__18411_84502",
+   "file": "pages/In_progress/Create_Assembly_Type__18411_84502.json",
    "at": "2026-09-22T16:24:21.358Z",
    "variables": 54,
    "collections": 12
   },
   {
-   "screen": "Job_Role_Details__20174_143363",
-   "file": "pages/__Organization_management_/Job_Role_Details__20174_143363.json",
+   "screen": "Jet_Role_Details__20174_143363",
+   "file": "pages/__Optimization_management_/Jet_Role_Details__20174_143363.json",
    "at": "2026-09-22T16:32:45.044Z",
    "variables": 73,
    "collections": 12
   },
   {
    "screen": "positions___7314_87192",
-   "file": "pages/__Organization_management_/positions___7314_87192.json",
+   "file": "pages/__Optimization_management_/positions___7314_87192.json",
    "at": "2026-09-22T20:55:45.275Z",
    "variables": 65,
    "collections": 12
   },
   {
-   "screen": "System_Configurations__1359_21337",
-   "file": "pages/__Organization_management_/System_Configurations__1359_21337.json",
+   "screen": "Studio_Configurations__1359_21337",
+   "file": "pages/__Optimization_management_/Studio_Configurations__1359_21337.json",
    "at": "2026-09-22T20:55:54.925Z",
    "variables": 79,
    "collections": 13

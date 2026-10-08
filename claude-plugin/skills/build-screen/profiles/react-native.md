@@ -23,10 +23,10 @@ column widths. For a genuinely dense/irregular grid, prefer a grid-capable list 
 
 **Scroll, clip & sticky**
 - `clip:true` → `overflow:'hidden'` in the style object.
-- `layout.scroll` → wrap in `<ScrollView horizontal={scroll==='horizontal'}>` (or a virtualized
+- `scroll` → wrap in `<ScrollView horizontal={scroll==='horizontal'}>` (or a virtualized
   `FlatList`/`SectionList` for long lists).
-- `fixedChildren` **if present** (count of leading children pinned while the rest scrolls) → render those
-  children OUTSIDE/above the `ScrollView` (RN has no `position:sticky` support in plain `ScrollView`);
+- `fixedChildren` **if present** (the LAST N entries of `children[]` are pinned while the rest scrolls; place
+  each by its `y`) → render those children OUTSIDE/above the `ScrollView` (RN has no `position:sticky` support in plain `ScrollView`);
   use `SectionList` `stickySectionHeadersEnabled` or a fixed header `View` + `ScrollView` below it.
 
 **Prototype `reactions`/`flows` → navigation, not markup** — `flows` are candidate top-level screens for
@@ -105,6 +105,8 @@ platform components; a name like "Tab Bar" is a hint, never the decision.
 `keyboardType`/`secureTextEntry`/`returnKeyType` inferred from the field), Slider→`@react-native-community/
 slider`, Spinner→`ActivityIndicator`, Progress→`ProgressBarAndroid`/a bar lib, pull-to-refresh→
 `RefreshControl`, Picker→`@react-native-picker/picker`, Segmented→`SegmentedControl` (iOS) or tabs.
+A picker draws its own text: set the picker's text colour explicitly to the drawn token (`Picker.Item`'s `color`,
+and the `Picker`'s `style` `color` on Android).
 Anything tappable → `Pressable` (not `TouchableOpacity`) so pressed/disabled state comes from its
 `({pressed})` style callback rather than a custom gesture.
 

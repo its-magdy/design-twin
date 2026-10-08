@@ -1,6 +1,6 @@
 {
   "screen": "positions___7314_87192",
-  "screenName": "positions  (7314:87192) \u2014 the frame whose visible title is 'Job Roles'",
+  "screenName": "positions  (7314:87192) \u2014 the frame whose visible title is 'Jet Roles'",
   "status": "verified",
   "target": {
     "profile": "web-tailwind",
@@ -11,8 +11,8 @@
     "convention": "proposed",
     "source": null,
     "shared": "app/src/components",
-    "features": "app/src/features/job-roles",
-    "notes": "Empty directory: `ls src app lib` and a find for features/modules/pages returned nothing, there is no package.json and no tsconfig.json, so there was nothing to follow (references/architecture.md \u00a71). Proposed \u00a72's default layout, adapted to the user's requirement that the app live under app/. No component catalog resolves for this screen (0/61 by key), so shared-vs-feature is a judgement call, not a derived fact: the shell (Sidebar/Header/Footer/AppShell) and the generic list primitives (Button, SquareButton, SearchInput, DataTable, Pagination, Modal, PageTitle, Icon) are shared because the Figma frame builds them from components the other Org-management screens reuse; only jobRoles data and the screen itself are feature-local."
+    "features": "app/src/features/jet-roles",
+    "notes": "Empty directory: `ls src app lib` and a find for features/modules/pages returned nothing, there is no package.json and no tsconfig.json, so there was nothing to follow (references/architecture.md \u00a71). Proposed \u00a72's default layout, adapted to the user's requirement that the app live under app/. No component catalog resolves for this screen (0/61 by key), so shared-vs-feature is a judgement call, not a derived fact: the shell (Sidebar/Header/Footer/AppShell) and the generic list primitives (Button, SquareButton, SearchInput, DataTable, Pagination, Modal, PageTitle, Icon) are shared because the Figma frame builds them from components the other Ops-management screens reuse; only jetRoles data and the screen itself are feature-local."
   },
   "files": [
     "app/Dockerfile",
@@ -27,8 +27,8 @@
     "app/src/components/Pagination.tsx",
     "app/src/components/SearchInput.tsx",
     "app/src/components/SquareButton.tsx",
-    "app/src/features/job-roles/data/jobRoles.ts",
-    "app/src/features/job-roles/screens/JobRolesScreen.tsx",
+    "app/src/features/jet-roles/data/jetRoles.ts",
+    "app/src/features/jet-roles/screens/JetRolesScreen.tsx",
     "app/src/index.css",
     "app/src/layout/AppShell.tsx",
     "app/src/layout/Footer.tsx",
@@ -415,8 +415,8 @@
       "symbol": "Sidebar"
     },
     "20173:137668": {
-      "file": "app/src/features/job-roles/screens/JobRolesScreen.tsx",
-      "symbol": "JobRolesScreen"
+      "file": "app/src/features/jet-roles/screens/JetRolesScreen.tsx",
+      "symbol": "JetRolesScreen"
     },
     "20173:137669": {
       "file": "app/src/layout/Header.tsx",
@@ -431,16 +431,16 @@
       "symbol": "Button"
     },
     "I20173:137670;2006:22479": {
-      "file": "app/src/features/job-roles/screens/JobRolesScreen.tsx",
-      "symbol": "JobRolesScreen (export button)"
+      "file": "app/src/features/jet-roles/screens/JetRolesScreen.tsx",
+      "symbol": "JetRolesScreen (export button)"
     },
     "20173:137671": {
-      "file": "app/src/features/job-roles/screens/JobRolesScreen.tsx",
-      "symbol": "JobRolesScreen"
+      "file": "app/src/features/jet-roles/screens/JetRolesScreen.tsx",
+      "symbol": "JetRolesScreen"
     },
     "20173:142047": {
-      "file": "app/src/features/job-roles/screens/JobRolesScreen.tsx",
-      "symbol": "JobRolesScreen (search and filter)"
+      "file": "app/src/features/jet-roles/screens/JetRolesScreen.tsx",
+      "symbol": "JetRolesScreen (search and filter)"
     },
     "I20173:142047;885:2724": {
       "file": "app/src/components/SearchInput.tsx",
@@ -498,7 +498,7 @@
       "table row hover (20173:142096 fill Backgrounds/Row Hover + the `actions` overlay)",
       "pagination current page (Primary/Primary)",
       "active sidebar item (gradient)",
-      "Add Job Role button hover (reaction to 'Type=Primary, Status=Hover')"
+      "Add Jet Role button hover (reaction to 'Type=Primary, Status=Hover')"
     ],
     "defaulted": [
       "focus-visible ring on every control (undrawn, WCAG 2.4.7)",
@@ -513,37 +513,37 @@
     "No empty state is drawn \u2014 what shows for no data vs no results?",
     "No error state is drawn \u2014 what shows when a request fails?",
     "The two 'Popup' overlay targets (20170:132666, 20173:132861) were not exported \u2014 what is in them?",
-    "115 text nodes use 2 font families (Poppins 110, Roboto 5). Is Roboto intentional on the TeamSmart wordmark, the 'By' label and the footer?",
+    "115 text nodes use 2 font families (Poppins 110, Roboto 5). Is Roboto intentional on the TideStack wordmark, the 'By' label and the footer?",
     "Text style 'Medium/14 Medium' vs the design system's 'Medium/14 medium' \u2014 same style?"
   ],
   "verification": {
     "mode": "rendered",
-    "renderer": "Playwright 1.47 / Chromium, Vite dev server in Docker at http://localhost:5173/job-roles, viewport 1440x1236",
+    "renderer": "Playwright 1.47 / Chromium, Vite dev server in Docker at http://localhost:5173/jet-roles, viewport 1440x1236",
     "artifacts": [
-      "scripts-test/out/phase5/job-roles.png",
-      "scripts-test/out/phase5/job-roles-row-hover.png",
-      "scripts-test/out/phase5/job-roles-edit-modal.png",
-      "scripts-test/out/phase5/job-roles-light.png",
-      "design/verify/JobRoles.expected.json",
-      "design/verify/JobRoles.measured.json",
-      "design/verify/JobRoles.report.json",
-      "design/verify/JobRoles.report.md",
+      "scripts-test/out/phase5/jet-roles.png",
+      "scripts-test/out/phase5/jet-roles-row-hover.png",
+      "scripts-test/out/phase5/jet-roles-edit-modal.png",
+      "scripts-test/out/phase5/jet-roles-light.png",
+      "design/verify/JetRoles.expected.json",
+      "design/verify/JetRoles.measured.json",
+      "design/verify/JetRoles.report.json",
+      "design/verify/JetRoles.report.md",
       "scripts-test/axe.mjs"
     ],
     "deltas": [
       "verify-screen.js --compare: 2 high, 77 medium. Both 'high' rows are the verifier being wrong, not the build: (a) node I20173:137669;45:1743 (' Vector', the moon glyph) \u2014 the export's FILL is compared against CSS background-color, and an inline SVG's colour is not a background; (b) node 20173:142096 ('Table row') \u2014 expected #46464f because the designer drew that row in its HOVER state; the build renders the resting state and shows #46464f on hover (verified in scripts-test/interact.mjs).",
       "Most 'medium' rows are width/height on containers that are fluid by design (the frame is one viewport, not a canvas): e.g. Frame 1000004145 expected 247 wide, actual 280 (the sidebar's inner column is measured with its padding).",
-      "Table header text case: the export sets font.case='title' on 'NO. of Employees' / 'NO. of Units' / 'Manage DOO'; CSS `capitalize` is applied but Chromium leaves 'of' lowercase. Cosmetic.",
+      "Table header text case: the export sets font.case='title' on 'NO. of Employees' / 'NO. of Units' / 'Manage DOX'; CSS `capitalize` is applied but Chromium leaves 'of' lowercase. Cosmetic.",
       "The screen shows 20 rows per page because the design's own pagination text says 'Showing 1 to 20 of 95', while the frame draws only 12 rows. The label was treated as authoritative and the content column scrolls.",
       "'57 components never built' and '0/28 interactions confirmed' in the report are artifacts of the measurement file: the probe in scripts-test/measure.mjs records computed styles only. The 11 designed/derived interactions were driven separately and all pass (scripts-test/interact.mjs)."
     ],
     "coverage": {
       "rendered": [
-        "Job Roles at 1440x1236 (Dark, the frame's resolved mode)",
+        "Jet Roles at 1440x1236 (Dark, the frame's resolved mode)",
         "row hover + row actions",
         "edit dialog",
         "Light theme",
-        "/global-policies route"
+        "/guided-policies route"
       ],
       "notChecked": [
         {
@@ -573,14 +573,14 @@
       "column sort (not designed; added as the screen default) \u2014 PASS",
       "pagination next/prev/page numbers \u2014 PASS",
       "edit dialog opens, saves, Esc closes \u2014 PASS",
-      "Add Job Role dialog adds a row (Figma overlay reaction to un-exported 'Popup' 20170:132666) \u2014 PASS",
+      "Add Jet Role dialog adds a row (Figma overlay reaction to un-exported 'Popup' 20170:132666) \u2014 PASS",
       "delete dialog removes a row \u2014 PASS",
       "theme toggle flips data-theme Dark/Light \u2014 PASS",
-      "sidebar link routes to /global-policies \u2014 PASS",
-      "Table row on_click -> 'Job Role Details' (7410:12299): NOT wired \u2014 that screen is not part of this build"
+      "sidebar link routes to /guided-policies \u2014 PASS",
+      "Table row on_click -> 'Jet Role Details' (7410:12299): NOT wired \u2014 that screen is not part of this build"
     ],
     "a11y": {
-      "tool": "@axe-core/playwright (wcag2a, wcag2aa, wcag21a, wcag21aa) against the rendered /job-roles page",
+      "tool": "@axe-core/playwright (wcag2a, wcag2aa, wcag21a, wcag21aa) against the rendered /jet-roles page",
       "violations": 0
     }
   }

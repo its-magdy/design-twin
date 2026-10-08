@@ -15,11 +15,12 @@
   function safe(id) {
     return String(id).replace(/[^a-zA-Z0-9]/g, "_");
   }
+  var shown = (c) => !!c && typeof c === "object" && !c.hidden;
   function firstByName(node, name) {
     if (!node || typeof node !== "object") return null;
     if (node.name === name) return node;
     for (const c of node.children || []) {
-      const found = firstByName(c, name);
+      const found = shown(c) ? firstByName(c, name) : null;
       if (found) return found;
     }
     return null;
@@ -32,7 +33,7 @@
       if (t && !PLACEHOLDER_TEXT.has(t.toLowerCase())) return node.text;
     }
     for (const c of node.children || []) {
-      const found = firstText(c);
+      const found = shown(c) ? firstText(c) : null;
       if (found) return found;
     }
     return null;
@@ -43,7 +44,7 @@
       return node.text;
     }
     for (const c of node.children || []) {
-      const found = firstNamedText(c, name);
+      const found = shown(c) ? firstNamedText(c, name) : null;
       if (found) return found;
     }
     return null;
@@ -63,8 +64,8 @@
     const n = limit || 8;
     const seen = /* @__PURE__ */ new Set();
     const out = [];
-    (function walk(node) {
-      if (!node || typeof node !== "object" || out.length >= n) return;
+    (function walk(node, isRoot) {
+      if (!node || typeof node !== "object" || node.hidden && !isRoot || out.length >= n) return;
       if (node.type === "TEXT" && typeof node.text === "string") {
         const t = node.text.trim();
         if (t && !seen.has(t)) {
@@ -74,9 +75,9 @@
       }
       for (const c of node.children || []) {
         if (out.length >= n) break;
-        walk(c);
+        walk(c, false);
       }
-    })(root);
+    })(root, true);
     return out;
   }
   function buildPageLayout(layersDoc, sep) {
@@ -365,13 +366,17 @@
     cancelRequested = null;
     page = void 0;
     lastPost = 0;
-    post({ type: "run-begin", source: info.source, label: info.label });
+    post({ type: "run-begin", source: info.source, label: info.label, ...ifDefined("requestId", info.requestId) });
   }
   function endRun(abandoned) {
     running = null;
     cancelRequested = null;
     page = void 0;
     post(abandoned ? { type: "run-end", abandoned: true } : { type: "run-end" });
+  }
+  function postQueued(run) {
+    if (run.source !== "bridge") return;
+    post({ type: "progress", phase: "queued", source: "bridge", label: run.label, ...ifDefined("requestId", run.requestId) });
   }
   function requestCancel() {
     if (!running) return null;
@@ -499,6 +504,9 @@
     if (!("width" in node) || typeof node.width !== "number" || typeof node.height !== "number") return true;
     return node.width > 0 && node.height > 0;
   }
+  function paintsNothing(node, isVector, fills) {
+    return !hasArea(node) || isVector && !hasVisiblePaint(node, fills);
+  }
   function geometryOf(node) {
     const ds = (g) => g ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
     const fills = ds("fillGeometry" in node ? node.fillGeometry : void 0);
@@ -513,7 +521,7 @@
     }
     return out;
   }
-  async function collectAsset(node) {
+  async function collectAsset(node, hidden) {
     const isVector = VECTOR_TYPES.has(node.type);
     const rawFills = "fills" in node ? node.fills : void 0;
     const fills = Array.isArray(rawFills) ? rawFills : null;
@@ -538,12 +546,20 @@
       stats.assetsSkipped++;
       return { skipped: true };
     }
+    if (hidden && (isVector || iconLike || hasImage)) {
+      if ((isVector || iconLike) && paintsNothing(node, isVector, fills)) {
+        stats.assetsSkippedInvisible++;
+        return void 0;
+      }
+      stats.assetsHidden++;
+      return { skipped: "hidden" };
+    }
     if (isVector || iconLike || hasImage) {
       checkCancelled();
       progress("assets", { nodes: stats.nodes, assets: assets.length });
     }
     if (isVector || iconLike) {
-      if (!hasArea(node) || isVector && !hasVisiblePaint(node, fills)) {
+      if (paintsNothing(node, isVector, fills)) {
         stats.assetsSkippedInvisible++;
         return void 0;
       }
@@ -557,7 +573,7 @@
       if (svg && svg.indexOf("<svg") !== -1) {
         return { path: register({ id: node.id, name: node.name, format: "svg", text: svg }) };
       }
-      const geo = geometryOf(node);
+      const geo = isVector ? geometryOf(node) : void 0;
       if (geo) {
         stats.assetsGeometry++;
         return { geometry: geo };
@@ -582,10 +598,16 @@
     }
     return void 0;
   }
+  function referenceScale(node, opts) {
+    if (opts && typeof opts.scale === "number" && opts.scale > 0) return opts.scale;
+    const w = "width" in node ? node.width || 0 : 0;
+    const h = "height" in node ? node.height || 0 : 0;
+    return Math.min(2, 2048 / (Math.max(w, h) || 1));
+  }
   async function collectReference(node, opts) {
     if (!node || !("exportAsync" in node) || !("width" in node)) return void 0;
     try {
-      const value = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : Math.min(2, 2048 / (Math.max(node.width || 0, node.height || 0) || 1));
+      const value = referenceScale(node, opts);
       const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
       if (!bytes || !bytes.length) {
         warn("reference screenshot empty: " + node.name);
@@ -671,7 +693,16 @@
   var runOpts = readOptDefaults();
   var imageSizeCache = /* @__PURE__ */ new Map();
   var warnings = [];
-  var newStats = () => ({ nodes: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0, truncated: 0 });
+  var newStats = () => ({
+    nodes: 0,
+    assetsFailed: 0,
+    assetsSkipped: 0,
+    assetsSkippedInvisible: 0,
+    assetsGeometry: 0,
+    assetsHidden: 0,
+    hiddenNodes: 0,
+    truncated: 0
+  });
   var stats = newStats();
   function warn(msg) {
     warnings.push(msg);
@@ -736,13 +767,21 @@
   var getCollection = collectionLookup.obj;
   var queuedRuns = /* @__PURE__ */ new Set();
   var runChain = Promise.resolve();
+  var inChain = 0;
   function serializeRun(fn, run) {
     const ticket = { run, abandoned: false };
     queuedRuns.add(ticket);
+    if (inChain > 0) postQueued(run);
+    inChain++;
     const go = () => {
       queuedRuns.delete(ticket);
-      if (ticket.abandoned) return Promise.reject(abandonedError());
-      return bracket(fn, run);
+      if (ticket.abandoned) {
+        inChain--;
+        return Promise.reject(abandonedError());
+      }
+      return bracket(fn, run).finally(() => {
+        inChain--;
+      });
     };
     const next = runChain.then(go, go);
     runChain = next.then(() => {
@@ -1011,6 +1050,7 @@
   }
   var GRID_SELF = { MIN: "start", CENTER: "center", MAX: "end" };
   function layout(node) {
+    if (!("children" in node)) return void 0;
     const n = node;
     if (!("layoutMode" in node) || n.layoutMode === "NONE") {
       if ("inferredAutoLayout" in node && n.inferredAutoLayout) {
@@ -1231,10 +1271,13 @@
         }
         values[modeName[modeId] || modeId] = value;
       }
+      const coll = collOf(v.variableCollectionId);
+      const collKey = coll ? coll.key : void 0;
       const rec = {
         name: v.name,
         type: v.resolvedType,
-        collection: (collOf(v.variableCollectionId) || {}).name,
+        collection: (coll || {}).name,
+        ...ifDefined("collectionKey", typeof collKey === "string" && collKey ? collKey : void 0),
         // tier: alias => semantic; raw+meaningfully-scoped => semantic leaf; raw+unscoped => primitive.
         // ALL_SCOPES is Figma's default catch-all (it pollutes every picker — see the hygiene flag below),
         // so it does NOT count as a meaningful scope; otherwise almost every variable would read semantic.
@@ -2701,7 +2744,28 @@
       return void 0;
     }
   }
-  async function serialize(node, depth, parentControlsLayout) {
+  function leaf(out) {
+    delete out.layout;
+    return out;
+  }
+  function bakeTransform(out) {
+    const st = {};
+    if (out.rotation !== void 0) {
+      st.rotation = out.rotation;
+      delete out.rotation;
+    }
+    if (out.flipped) {
+      st.flipped = true;
+      delete out.flipped;
+    }
+    if (out.skew !== void 0) {
+      st.skew = out.skew;
+      delete out.skew;
+    }
+    putNonEmpty(out, "sourceTransform", st);
+  }
+  async function serialize(node, depth, parentControlsLayout, underHidden, inGrid) {
+    checkCancelled();
     if (depth > MAX_DEPTH) {
       stats.truncated++;
       if (stats.truncated === 1) warn("depth limit " + MAX_DEPTH + " reached \u2014 deep subtrees truncated (first: " + node.name + ")");
@@ -2710,6 +2774,8 @@
     stats.nodes++;
     const out = { type: node.type, name: node.name, id: node.id };
     if ("visible" in node && node.visible === false) out.hidden = true;
+    const hidden = !!out.hidden || !!underHidden;
+    if (hidden) stats.hiddenNodes++;
     if (node.type === "INSTANCE" && node.componentProperties) {
       const props = {};
       const propTokens = {};
@@ -2733,12 +2799,14 @@
     if ("layoutSizingHorizontal" in node && node.layoutSizingHorizontal && node.layoutSizingHorizontal !== "FIXED") out.widthMode = lower(node.layoutSizingHorizontal);
     if ("layoutSizingVertical" in node && node.layoutSizingVertical && node.layoutSizingVertical !== "FIXED") out.heightMode = lower(node.layoutSizingVertical);
     if ("overflowDirection" in node && node.overflowDirection && node.overflowDirection !== "NONE") out.scroll = lower(node.overflowDirection);
-    if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
-    if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
-    if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number") out.gridColumnStart = node.gridColumnAnchorIndex;
-    if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number") out.gridRowStart = node.gridRowAnchorIndex;
-    if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
-    if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
+    if (inGrid && !absoluteInParent) {
+      if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
+      if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
+      if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number" && node.gridColumnAnchorIndex >= 0) out.gridColumnStart = node.gridColumnAnchorIndex;
+      if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number" && node.gridRowAnchorIndex >= 0) out.gridRowStart = node.gridRowAnchorIndex;
+      if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
+      if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
+    }
     if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof node.x === "number") {
       out.x = round(node.x);
       out.y = round(node.y);
@@ -2895,7 +2963,7 @@
       instanceComponentRef(node),
       boundTokens(node),
       nodeStyles(node),
-      collectAsset(node),
+      collectAsset(node, hidden),
       simplifyReactions(node),
       variableModes(node),
       runOpts.css ? nodeCss(node) : Promise.resolve(void 0)
@@ -2910,16 +2978,17 @@
     if (varModes) out.variableModes = varModes;
     if (css) out.css = css;
     if (asset && "skipped" in asset) {
-      out.assetSkipped = true;
-      return out;
+      out.assetSkipped = asset.skipped;
+      return leaf(out);
     }
     if (asset && "geometry" in asset) {
       out.geometry = asset.geometry;
-      return out;
+      return leaf(out);
     }
     if (asset) {
       out.asset = asset.path;
-      return out;
+      bakeTransform(out);
+      return leaf(out);
     }
     if (node.type === "TABLE" && typeof node.numRows === "number" && typeof node.numColumns === "number") {
       const grid = await Promise.all(
@@ -2944,10 +3013,15 @@
     }
     const children = "children" in node ? node.children : void 0;
     if (children && children.length) {
-      const controlsChildren = "layoutMode" in node && node.layoutMode && node.layoutMode !== "NONE";
+      const controlsChildren = "layoutMode" in node && !!node.layoutMode && node.layoutMode !== "NONE";
+      const grid = "layoutMode" in node && node.layoutMode === "GRID";
+      const nFixed = "numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" ? node.numberOfFixedChildren : 0;
+      const pinnedFrom = children.length - nFixed;
       const kids = [];
-      for (const c of children) {
-        const s = await serialize(c, depth + 1, controlsChildren);
+      for (let i = 0; i < children.length; i++) {
+        const c = children[i];
+        if (!c) continue;
+        const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid);
         if (s) kids.push(s);
       }
       if (kids.length) out.children = kids;
@@ -2956,15 +3030,26 @@
   }
 
   // src/collect.ts
-  async function serializeWithRefs(node) {
-    const tree = await serialize(node, 0);
+  async function serializeWithRefs(node, underHidden) {
+    const tree = await serialize(node, 0, void 0, underHidden);
     if (!tree) return { tree: null };
     const [ref, dev, modes] = await Promise.all([collectReference(node), devResources(node), resolvedModes(node)]);
     if (modes) tree.resolvedModes = modes;
     return { tree, ...ifDefined("ref", ref || void 0), ...ifDefined("dev", dev || void 0) };
   }
+  function hiddenAncestor(node) {
+    for (let p = node.parent; p && p.type !== "PAGE" && p.type !== "DOCUMENT"; p = p.parent) {
+      if ("visible" in p && p.visible === false) return true;
+    }
+    return false;
+  }
   async function rootTree(node) {
-    const { tree, ref, dev } = await serializeWithRefs(node);
+    const self = "visible" in node && node.visible === false;
+    const underHidden = hiddenAncestor(node);
+    if (self || underHidden) {
+      warn("'" + node.name + "' (" + node.id + ") is hidden " + (self ? "itself" : "under a hidden ancestor") + ' \u2014 its graphics are not exported (assetSkipped:"hidden") and its reference image may be blank');
+    }
+    const { tree, ref, dev } = await serializeWithRefs(node, underHidden);
     if (!tree) return null;
     if (ref) tree.reference = ref;
     if (dev) tree.devResources = dev;
@@ -2995,7 +3080,133 @@
       o.h = Math.round(nd.height);
     }
     if ("visible" in nd && nd.visible === false) o.hidden = true;
+    if ("children" in nd) {
+      try {
+        o.childCount = nd.children.length;
+      } catch (e) {
+      }
+    }
     return o;
+  }
+  function collisionGroups(rows) {
+    const by = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      if (typeof r.w !== "number") continue;
+      const k = JSON.stringify([r.name, r.w, r.h]);
+      const g = by.get(k);
+      if (g) g.push(r);
+      else by.set(k, [r]);
+    }
+    return Array.from(by.values()).filter((g) => g.length > 1);
+  }
+  function collisionNote(g, what, tellBy) {
+    const first2 = g[0];
+    const name = first2 ? first2.name : "";
+    const size = first2 ? first2.w + "\xD7" + first2.h : "";
+    return g.length + " " + what + " share name '" + name + "' and size " + size + " \u2014 told apart by " + tellBy + "; when those match too, `dtwin screenshot <id> --scale 0.25` each (" + g.map((r) => r.id).join(", ") + ")";
+  }
+  var TITLE_VISIT_CAP = 5e3;
+  var TitleCapReached = class extends Error {
+  };
+  function spend(b, fresh) {
+    if (b.listing && b.listing.spent) return false;
+    if (++b.visits > b.cap) {
+      if (!b.soft) throw new TitleCapReached();
+      b.capped = true;
+      return false;
+    }
+    if (fresh && b.listing && ++b.listing.reads > b.listing.cap) {
+      b.listing.spent = true;
+      return false;
+    }
+    return true;
+  }
+  function liveWalkNode(n, ref) {
+    let src;
+    const kids = [];
+    const children = {
+      [Symbol.iterator]: () => {
+        let i = 0;
+        return {
+          next: () => {
+            if (!src) src = "children" in n ? n.children : [];
+            const c = src[i];
+            if (!c || !spend(ref.budget, !kids[i])) return { done: true, value: void 0 };
+            const w = kids[i] || (kids[i] = liveWalkNode(c, ref));
+            i++;
+            return { done: false, value: w };
+          }
+        };
+      }
+    };
+    return {
+      name: n.name,
+      type: n.type,
+      hidden: "visible" in n && n.visible === false,
+      get text() {
+        return n.type === "TEXT" ? n.characters : "";
+      },
+      // read only when a walker hits a TEXT
+      children
+    };
+  }
+  function rowWalk(node) {
+    const ref = { budget: { visits: 0, cap: TITLE_VISIT_CAP } };
+    return { root: liveWalkNode(node, ref), ref };
+  }
+  function titleOf(w) {
+    w.ref.budget = { visits: 1, cap: TITLE_VISIT_CAP };
+    try {
+      return deriveTitle(w.root);
+    } catch (e) {
+      if (!(e instanceof TitleCapReached)) throw e;
+    }
+    w.ref.budget.visits = 1;
+    return firstText(w.root) || void 0;
+  }
+  var DISTINCT_TEXTS = 3;
+  var DISTINCT_TEXT_CHARS = 60;
+  var DISTINCT_TEXT_SCAN = 200;
+  var DISTINCT_TEXT_LISTING_READS = 2e4;
+  var oneLine = (t) => t.replace(/\s+/g, " ").trim();
+  function titlesTellApart(g) {
+    const titles = g.map((r) => r.title);
+    return titles.every((t) => !!t) && new Set(titles).size === g.length;
+  }
+  function addDistinctTexts(g, walks, listing, sink) {
+    let skipped = 0;
+    const textsOf = g.map((row) => {
+      const w = walks.get(row.id);
+      if (!w) return { texts: /* @__PURE__ */ new Set(), cut: false };
+      if (listing.spent) {
+        skipped++;
+        return void 0;
+      }
+      const budget = { visits: 1, cap: TITLE_VISIT_CAP, soft: true, listing };
+      w.ref.budget = budget;
+      const texts = collectTexts(w.root, DISTINCT_TEXT_SCAN).map(oneLine).filter((t) => t && !PLACEHOLDER_TEXT.has(t.toLowerCase()));
+      if (listing.spent) {
+        skipped++;
+        return { texts: new Set(texts), cut: true };
+      }
+      if (budget.capped) sink("`distinctTexts` for '" + row.name + "' (" + row.id + ") read only its first " + TITLE_VISIT_CAP + " nodes");
+      return { texts: new Set(texts), cut: false };
+    });
+    if (skipped) return g.filter((row) => walks.has(row.id)).map((row) => row.id);
+    g.forEach((row, i) => {
+      const mine = textsOf[i];
+      if (!mine || mine.cut) return;
+      const others = textsOf.filter((o, j) => j !== i && !!o).map((o) => o.texts);
+      const unique = [];
+      const notCommon = [];
+      for (const t of mine.texts) {
+        if (others.every((o) => !o.has(t))) unique.push(t);
+        else if (others.some((o) => !o.has(t))) notCommon.push(t);
+      }
+      const picked = unique.concat(notCommon).slice(0, DISTINCT_TEXTS).map((t) => Array.from(t).slice(0, DISTINCT_TEXT_CHARS).join(""));
+      if (picked.length) row.distinctTexts = picked;
+    });
+    return [];
   }
   async function loadPageSafely(page2, sink, what) {
     if (typeof page2.loadAsync !== "function") return false;
@@ -3161,7 +3372,8 @@
     if (!reference) {
       throw new Error("Node " + nodeId + " could not be rendered (hidden, zero-size, or the export failed \u2014 see warnings).");
     }
-    return { id: node.id, name: node.name, type: node.type, reference, manifest: manifest(), assets: assets.slice() };
+    const size = "width" in node && "height" in node ? { w: round(node.width), h: round(node.height) } : {};
+    return { id: node.id, name: node.name, type: node.type, ...size, scale: referenceScale(node, opts), reference, manifest: manifest(), assets: assets.slice() };
   }
   var TOP_LEVEL_TYPES = /* @__PURE__ */ new Set([
     "FRAME",
@@ -3202,6 +3414,7 @@
           continue;
         }
         const frames = children.filter((nd) => TOP_LEVEL_TYPES.has(nd.type)).map(summarize);
+        for (const g of collisionGroups(frames)) sink("page '" + page2.name + "': " + collisionNote(g, "frames", "`childCount`"));
         frameCount += frames.length;
         entry.frames = frames;
       }
@@ -3235,14 +3448,30 @@
     }
     for (const nd of kids) {
       const c = summarize(nd);
-      if ("children" in nd) {
-        try {
-          c.hasChildren = nd.children.length > 0;
-        } catch (e) {
-        }
-      }
+      if (c.childCount !== void 0) c.hasChildren = c.childCount > 0;
       children.push(c);
     }
+    const listing = { reads: 0, cap: DISTINCT_TEXT_LISTING_READS };
+    const noDistinct = [];
+    for (const g of collisionGroups(children)) {
+      const walks = /* @__PURE__ */ new Map();
+      for (const row of g) {
+        const nd = kids.find((k) => k.id === row.id);
+        if (!nd) continue;
+        const w = rowWalk(nd);
+        walks.set(row.id, w);
+        try {
+          const t = titleOf(w);
+          if (t) row.title = t;
+        } catch (e) {
+          if (!(e instanceof TitleCapReached)) throw e;
+          sink("no title for '" + row.name + "' (" + row.id + "): more than " + TITLE_VISIT_CAP + " nodes to search");
+        }
+      }
+      if (!titlesTellApart(g)) noDistinct.push(...addDistinctTexts(g, walks, listing, sink));
+      sink(collisionNote(g, "children", "`title`/`childCount`/`distinctTexts`"));
+    }
+    if (noDistinct.length) sink("`distinctTexts` skipped for " + noDistinct.length + " row(s) (" + noDistinct.slice(0, 6).join(", ") + (noDistinct.length > 6 ? ", \u2026" : "") + "): the listing's budget of " + DISTINCT_TEXT_LISTING_READS + " node reads ran out, and a group with a row not read in full gets none");
     return {
       exportedAt: exportedAt(),
       id: node.id,
@@ -3256,10 +3485,13 @@
     resetRun();
     applyOpts(opts);
     const designSystem = await buildDesignSystem(void 0, serialize);
-    designSystem.hygiene = [
-      "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced \u2014 pull a page for the full set.",
-      ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
-    ];
+    checkCancelled();
+    if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true)) {
+      designSystem.hygiene = [
+        'design-system pull of a file that consumes libraries: library (remote) variables are only the ones this file references \u2014 this is not the library\'s catalog; open the library file and run `dtwin pull --as-library "<name>"` for it.',
+        ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
+      ];
+    }
     return { designSystem };
   }
   async function collectLibraryFile(opts) {
@@ -3267,6 +3499,7 @@
     applyOpts(opts);
     const asLibrary = opts && opts.asLibrary || figma.root && figma.root.name || "library";
     const designSystem = await buildDesignSystem({ asLibrary }, serialize);
+    checkCancelled();
     designSystem.hygiene = [
       "library pull: this is the COMPLETE local catalog of '" + asLibrary + "' \u2014 variables, styles and components, with full per-mode values. It is a snapshot of the library file's CURRENT state, which is not necessarily what consumers see: `publish` reports each object's own status (current | changed | unpublished).",
       ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
@@ -3338,6 +3571,7 @@
     checkCancelled();
     progress("design-system", { nodes: stats.nodes, assets: assets.length }, true);
     const designSystem = await buildDesignSystem(void 0, serialize);
+    checkCancelled();
     const measurements = collectMeasurements(pages);
     const layersDoc = {
       exportedAt: exportedAt(),
@@ -3511,7 +3745,7 @@
           page: figma.currentPage.name,
           pageId: figma.currentPage.id,
           editorType: figma.editorType,
-          // Finding 327: baked in at build time (build.js's esbuild `define`) from
+          // Finding 327: baked in at build time (build.ts's esbuild `define`) from
           // figma-plugin/package.json — the one way to tell a stale plugin in Figma apart from a
           // freshly reloaded one, since neither startedAt nor code.js's mtime can. Reused verbatim by
           // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,

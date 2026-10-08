@@ -11,7 +11,7 @@
 //   node verify-build.js --status [<plan>…]  print each plan's COMPUTED status; never writes
 //
 // ---------------------------------------------------------------- what BLOCKS (exit 2)
-// Exactly two things (livetest-3 §2.9 b):
+// Two things (livetest-3 §2.9 b), plus a third on web profiles only:
 //   1. an UNEXPLAINED colour literal: a colour the plan resolved to a real code token, written as a raw
 //      literal (`#5B5FC7`, `0xFF5B5FC7`, `rgb(91, 95, 199)`) in a SOURCE file listed in `files[]`.
 //      Only code is scanned: comments, prose string literals (provenance notes) and every non-source
@@ -25,6 +25,9 @@
 //      hidden ancestor) that neither it nor any ancestor maps to code in `anchors{}`. The plan is the
 //      map from design to code; a visible subtree missing from it is a piece of the screen nobody
 //      accounted for. `plan-skeleton.ts` lists every visible node, so this is only ever a fill-in.
+//   3. (web profile: the plan's `target`, else design/target.json) NO `data-dt-node` attribute in any
+//      plan's files[] (F-58): the verify step then measures nothing by id. Below 50% of anchored visible
+//      nodes tagged is a warning; `"tagging": {"off": true, "reason": …}` opts out.
 // Everything else — token identity merges (finding 130, right), a11y/coverage evidence (101, right),
 // arbitrary px, file existence, `mapModule` imports (131), MISSING rows with no decision, the plan
 // header (P3), the verification block's self-consistency (156), `deviations[]` shape (196) — is a
@@ -35,10 +38,11 @@
 // reports that said "fail"). It writes `plan.verification.hook`:
 //   { result: "pass"|"blocked", checkedAt, blocking:[…], warnings:N, planHash, files:{<path>: <sha256/16>|null} }
 // and `computeStatus()` derives the status at read time from THREE facts that must all hold:
-//   hook result "pass"  AND  every file in files[] still hashes the same  AND  the verify report
-//   (design/verify/<…>.report.json, schema @2) says "pass" and measured THIS design and THIS code —
-//   by content: its inputs.exportContentSha256 equals the export's (timestamps stripped) and its
-//   inputs.code.files equal the files' hashes now. No clock is consulted (livetest-4 314/317).
+//   hook result "pass"  AND  every file in files[] (and every mapped module, D117) still hashes the same  AND  the verify report
+//   (design/verify/<…>.report.json, schema @2) says "pass" (or "pass-with-deviations") and measured THIS
+//   design and THIS code — by content: its inputs.exportContentSha256 equals the export's (timestamps
+//   stripped), its inputs.code.files equal the files' hashes now, and its inputs.waivers.sha256 equals the
+//   hash of the plan's waivers[]/descopes[] now (absent = none). No clock is consulted (livetest-4 314/317).
 // A stored "verified"/"static-only" (written by an older hook) is ignored by computeStatus and
 // deleted the next time the hook checks that plan. `status` keeps only the states a PERSON sets:
 // "pending" (default) · "awaiting-user" (paused on a question — skipped, never closed) ·
@@ -46,9 +50,11 @@
 // `verify-build.js --status` instead of trusting a field.
 //
 // Computed statuses: pending (hook has not checked this version of the plan) · blocked · stale (a
-// file changed since the hook passed) · failed (a verify report exists and does not say pass) ·
+// file changed since the hook passed) · failed (a verify report exists and says fail) ·
 // unverified (no report; a report that is "incomplete", older than schema @2, or that measured a
-// different design or different code) · static-only · verified.
+// different design, different code or different waivers) · static-only · verified ·
+// verified-with-deviations (every report passes and ≥1 says "pass-with-deviations": accepted deltas or
+// descoped interactions, D5/D20).
 //
 // ---------------------------------------------------------------- when it runs
 // Fast path: a plan is OPEN when its status is "pending" (or absent/legacy), it was touched within
@@ -74,15 +80,17 @@ import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { colorKey } from "./color.ts";
 import { scriptCmd } from "./cli-args.ts";
-import { isPageIndex, isPagesRootIndex, isVerifyReport, parsePlan } from "./doc-guards.ts";
+import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
+import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerifyReport, parsePlan } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { isScreenDoc } from "./export-shape.ts";
 import type {
-  CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, Plan, PlanAnchor, PlanComputedStatus, PlanLifecycle,
+  CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
   PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyReport,
 } from "./types.ts";
 import { getOrInit } from "./map-util.ts";
+import { writePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // ================================================================ input / timeouts
@@ -181,7 +189,7 @@ function rootOfPlan(file: string, fallback?: string): string {
 // older hook) is a computed value that must not be trusted, and counts as pending.
 const REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
 const LIFECYCLE = new Set<string>(["pending", "awaiting-user", "abandoned"]);
-const COMPUTED_STORED = new Set<string>(["verified", "static-only"]);
+const COMPUTED_STORED = new Set<string>(["verified", "verified-with-deviations", "static-only"]);
 const isLifecycle = (s: string): s is PlanLifecycle => LIFECYCLE.has(s);
 const lifecycleOf = (plan: Plan | null | undefined): PlanLifecycle => {
   const s = String((plan && plan.status) || "pending").trim().toLowerCase();
@@ -190,31 +198,45 @@ const lifecycleOf = (plan: Plan | null | undefined): PlanLifecycle => {
 
 // ================================================================ hashing
 
-const sha = (buf: string | Buffer): string => crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
-
+// D117 (FU-shared-shell): files[] AND every anchors/components mapModule (contentHash.planCodeFiles) — a shared
+// shell the plan maps but another plan lists is code this screen renders. The same list verify-screen --compare hashes.
 function fileHashes(plan: Plan | null | undefined, cwd: string): Record<string, string | null> {
-  return contentHash.fileHashes(plan && plan.files, cwd); // the same hashes verify-screen --compare records
+  return contentHash.fileHashes(contentHash.planCodeFiles(plan || {}, cwd), cwd); // the same hashes verify-screen --compare records
 }
 
-// The plan's own content, minus what the hook writes and what is not the plan's substance.
-function planHash(plan: Plan | null | undefined): string {
-  const copy: Plan = structuredClone(plan || {});
-  delete copy.status;
-  if (copy.verification) {
-    delete copy.verification.hook;
-    if (!Object.keys(copy.verification).length) delete copy.verification;
-  }
-  return sha(JSON.stringify(copy));
-}
+// The plan's own content, minus what the hook writes and what is not the plan's substance: status, the owner's
+// waivers[]/descopes[] (accepting a delta must not send the hook back to pending; a report records their hash instead,
+// inputs.waivers.sha256, and reportVerdict() compares that) and — F-100 (D115) — all of `verification` (every
+// verification check is a warning, so the hook result never depends on it; --compare --record-plan writes it).
+const planHash = (plan: Plan | null | undefined): string => contentHash.planHash(plan);
+// D115: a hook record written before F-100 holds the old formula (verification minus hook) — still accepted, so no
+// plan reopens on upgrade. The hook's next write records the new one.
+const hookHashMatches = (hook: PlanHookRecord, plan: Plan): boolean => hook.planHash === planHash(plan) || hook.planHash === contentHash.legacyPlanHash(plan);
 
-function changedFiles(plan: Plan, cwd: string): string[] | null {
+// The hook record against the files now: `changed` reopens the plan (stale); `unhashed` does not. A key the record never
+// hashed is a change when it is a files[] entry ("added to files[]"); a MAPPED module the record never hashed (M2: a hook
+// record written before D117 hashed files[] only) is only noted — the upgrade must not reopen a plan the hook closed with
+// no file changed. The hook's next write records it, and from then on a change to it is a change.
+interface HookFileDiff { changed: string[]; unhashed: string[] }
+function hookFileDiff(plan: Plan, cwd: string): HookFileDiff | null {
   const hook = plan.verification && plan.verification.hook;
   if (!hook || !hook.files) return null;
   const now = fileHashes(plan, cwd);
-  const changed: string[] = [];
+  const listed = new Set(Array.isArray(plan.files) ? plan.files.map(String) : []);
+  const changed: string[] = [], unhashed: string[] = [];
   const all = new Set([...Object.keys(hook.files), ...Object.keys(now)]);
-  for (const f of all) if (hook.files[f] !== now[f]) changed.push(now[f] === undefined ? `${f} (no longer in files[])` : hook.files[f] === undefined ? `${f} (added to files[])` : now[f] === null ? `${f} (missing)` : f);
-  return changed;
+  for (const f of all) {
+    if (hook.files[f] === now[f]) continue;
+    // L9: gone from planCodeFiles — dropped from files[] or the anchors, or an extensionless mapModule no longer resolves
+    if (now[f] === undefined) changed.push(`${f} (no longer hashed: not in files[] nor a mapped module that resolves)`);
+    else if (hook.files[f] === undefined) { if (listed.has(f)) changed.push(`${f} (added to files[])`); else unhashed.push(`${f} (now hashed: mapped module)`); }
+    else changed.push(now[f] === null ? `${f} (missing)` : f);
+  }
+  return { changed, unhashed };
+}
+function changedFiles(plan: Plan, cwd: string): string[] | null {
+  const d = hookFileDiff(plan, cwd);
+  return d && d.changed;
 }
 
 // OPEN = the hook still has work on this plan.
@@ -223,7 +245,7 @@ function isOpen(p: PlanFile, cwd: string): boolean {
   if (isStale(p.file)) return false;
   const hook = p.plan.verification && p.plan.verification.hook;
   if (!hook || hook.result !== "pass") return true;
-  if (hook.planHash !== planHash(p.plan)) return true;
+  if (!hookHashMatches(hook, p.plan)) return true;
   const ch = changedFiles(p.plan, cwd);
   return !ch || ch.length > 0;
 }
@@ -386,6 +408,10 @@ export interface FileText { rel: string; text: string }
 // therefore matches `'../../../components/PageTitle'` and `'@/components/PageTitle'` alike — the
 // unsatisfiable substring test of finding 131 is gone. Non-JS stacks (Swift/Kotlin/Dart import
 // modules, not files): the component's own name used as an identifier counts.
+// importsOf per file text, memoised: the import graph below asks the same file about every other file.
+const importCache = new Map<string, string[]>();
+const cachedImports = (text: string): string[] => getOrInit(importCache, text, () => importsOf(text));
+
 function moduleImported(mapModule: string, byFile: FileText[], cwd: string): boolean {
   const want = moduleSegments(mapModule);
   if (!want.length) return true;
@@ -400,7 +426,7 @@ function moduleImported(mapModule: string, byFile: FileText[], cwd: string): boo
   };
   const wantAbs = moduleSegments(path.relative(cwd, path.resolve(cwd, String(mapModule))));
   for (const f of byFile) {
-    for (const spec of importsOf(f.text)) {
+    for (const spec of cachedImports(f.text)) {
       if (spec.startsWith(".")) {
         const resolved = moduleSegments(path.relative(cwd, path.resolve(cwd, path.dirname(f.rel), spec)));
         if (resolved.join("/").toLowerCase() === wantAbs.join("/").toLowerCase() || suffixMatch(resolved)) return true;
@@ -545,6 +571,13 @@ function checkVerification(plan: Plan, cwd: string): string[] {
     return ["no `verification.mode` in the plan — record how the build was checked: {mode:\"rendered\", renderer, artifacts:[…], deltas:[…]} after rendering and comparing (references/verify.md), or {mode:\"static-only\", reason} if the project genuinely has no way to render"];
   }
   if (v.mode === "rendered") {
+    // live L-2: an agent wrote artifacts/deltas as OBJECTS ({screenshot: "…"}, {high: 33, …}) — say the shape is wrong, not "empty"/"missing"
+    const shape = (x: unknown): string => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
+    // (both shape errors in one round: the field-test plans had both as objects, and this is only a warning — review LOW-1)
+    const wrongShape: string[] = [];
+    if (v.artifacts !== undefined && !Array.isArray(v.artifacts)) wrongShape.push(`verification.artifacts must be an array of paths, got ${shape(v.artifacts)} — e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
+    if (v.deltas !== undefined && !Array.isArray(v.deltas)) wrongShape.push(`verification.deltas must be an array of the residual differences, got ${shape(v.deltas)} — the counts live in the report; list each difference ([] if none were found)`);
+    if (wrongShape.length) return v.deltas === undefined ? [...wrongShape, "verification.deltas is missing — list the residual differences against the reference ([] if none were found)"] : wrongShape;
     const artifacts = Array.isArray(v.artifacts) ? v.artifacts : [];
     if (!artifacts.length) return ["verification.mode is \"rendered\" but `artifacts` is empty — list the screenshot(s)/report the render produced"];
     const missing = artifacts.filter((a) => !fs.existsSync(path.join(cwd, String(a))));
@@ -565,8 +598,20 @@ function verificationWarnings(plan: Plan): string[] {
   const out: string[] = [];
   const c = v.coverage;
   if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push("verification.coverage is missing — record {rendered:[…], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, \"Beyond the ideal frame\")");
-  if (!v.a11y) out.push("verification.a11y is missing — no accessibility check is recorded (web: @axe-core/playwright on the rendered page); say so in the report rather than implying one ran");
+  if (!v.a11y) out.push("verification.a11y is missing — copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) — `verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded — say so in the report rather than implying one ran");
   return out;
+}
+
+// F-100 (D115): plan.verification.recorded is what `--compare --record-plan` copied from ONE report. When that report
+// has since been rewritten (another --compare without --record-plan, a hand edit), the plan's copy is older than the
+// verdict it summarises. A warning — the report is the verdict either way; computeStatus never reads `recorded`.
+function recordedReportWarnings(plan: Plan, cwd: string): string[] {
+  const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
+  if (!rec || typeof rec !== "object" || typeof rec.report !== "string" || !rec.report) return [];
+  let bytes: Buffer;
+  try { bytes = fs.readFileSync(path.resolve(cwd, rec.report)); } catch { return []; }
+  const now = crypto.createHash("sha256").update(bytes).digest("hex");
+  return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} — re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
 }
 
 /** A verify report as locateReports() summarises it for the status computation. */
@@ -576,6 +621,78 @@ export interface ReportRef {
   rel: string; matchedBy: ReportMatch; schema: string | null; verdict: VerifyReport["verdict"] | null; headline: string | null; why: string[]; deltas: VerifyDelta[] | null;
   exportedAt: string | null; measuredAt: string | null; mtimeMs: number; exportContentSha256: string | null; code: CodeInputs | null;
   expectationChanged: boolean; expectationRel: string | null;
+  /** inputs.waivers.sha256: the plan waivers/descopes the compare applied (null = recorded none — an older report). */
+  waiversSha256: string | null;
+  /** 12b report.behaviour, summarised (null = none or unreadable — a report older than 12b). Warnings only (D40(9)). */
+  behaviour: { ran: boolean; why: string | null; fail: number; warn: number; failed: string[] } | null;
+  /** report.inputs.probe is the shipped probe's identity (not "unknown" / absent: a hand-written or non-web measured file) */
+  shippedProbe: boolean;
+}
+
+// 12b, D40(9): what the report's behaviour/a11y section says — WARNINGS only, never a block (D4: not the fidelity verdict).
+// (a) a failed check; (b) plan.verification.a11y disagreeing with the report's fail count; (c) the checks did not run.
+// L6: (b) compares the plan's ONE a11y number with the ONE report it was copied from — verification.a11y.report when set
+// (report.json or its .md), else the report for the plan's own screen (matched by name, as locateReports ranks), newest first.
+// The name is read as written: project-relative, absolute, relative to the plan file, or a bare file name — the last two
+// fall back to the basename when exactly one located report has it. Several with that basename → the own-screen rule among
+// them. "Not found" only when nothing matches, so a real disagreement is never hidden behind a path spelling.
+const newestOwn = (reports: ReportRef[]): ReportRef | null => {
+  const own = reports.filter((r) => r.matchedBy === "name");
+  return (own.length ? own : reports).reduce<ReportRef | null>((best, r) => (!best || r.mtimeMs > best.mtimeMs ? r : best), null);
+};
+function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cwd?: string; planFile?: string } = {}): { ref: ReportRef | null; missing?: string } {
+  if (named === undefined || !named.trim()) return { ref: newestOwn(reports) };
+  const json = (x: string): string => x.replace(/\.report\.md$/, ".report.json");
+  const slash = (x: string): string => x.split(path.sep).join("/").split("\\").join("/");
+  const want = slash(named.trim());
+  const rels = new Set<string>([json(want.replace(/^\.\//, ""))]);
+  if (ctx.cwd !== undefined) {
+    rels.add(json(slash(path.relative(ctx.cwd, path.resolve(ctx.cwd, named.trim()))))); // absolute, or relative to the project
+    if (ctx.planFile !== undefined) rels.add(json(slash(path.relative(ctx.cwd, path.resolve(path.dirname(path.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
+  }
+  const exact = reports.find((r) => rels.has(r.rel));
+  if (exact) return { ref: exact };
+  const base = json(path.posix.basename(want));
+  const byBase = reports.filter((r) => path.posix.basename(r.rel) === base);
+  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
+  return { ref: null, missing: want };
+}
+// L-5: ONE report speaks for the run — the one verification.a11y.report names, else the plan's own newest; its fail count is of
+// failed elements ("+N more" rows count N), so it says "failures". A re-run with the same --out overwrites its report, so a run's
+// older rounds are gone. Review 4 L-4 / review 5 L-3: every OTHER report file locateReports matched (design/verify/ is flat, so
+// another file is another --out — a narrow-width or dark-theme variant, a nodeId-named run, or one left from an earlier name)
+// warns on its own failures: one warning per other report file, so no FAIL is silenced; the disagreement and "did not run"
+// warnings stay with the one report above.
+function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, ctx: { cwd?: string; planFile?: string } = {}): string[] {
+  const out: string[] = [];
+  const all = reports || [];
+  const a11y = plan.verification && typeof plan.verification === "object" ? plan.verification.a11y : undefined;
+  const recorded = a11y && typeof a11y === "object" ? a11y.violations : undefined;
+  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : undefined, all, ctx);
+  if (recorded !== undefined && target.missing !== undefined && all.some((r) => r.behaviour && r.behaviour.ran)) out.push(`verification.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ — the a11y count was not checked against it`);
+  const r = target.ref ?? newestOwn(all);
+  const n = (k: number, one: string, many: string): string => `${k} ${k === 1 ? one : many}`;
+  const failWarning = (ref: ReportRef, fail: number, failed: string[]): string => {
+    const ids = [...new Set(failed)];
+    return `${ref.rel}: behaviour/a11y — ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) — not the fidelity verdict, but a measurable accessibility failure is never waived: fix it or raise a designer question`;
+  };
+  // review 4 L-4 / review 5 L-3: every other report file (not the one speaking for the run)
+  const others = all.filter((x) => x !== r);
+  const otherFails = others.flatMap((x) => (x.behaviour && x.behaviour.ran && x.behaviour.fail > 0 ? [failWarning(x, x.behaviour.fail, x.behaviour.failed)] : []));
+  const b = r ? r.behaviour : null;
+  if (!r || !b) return [...out, ...otherFails];
+  if (!b.ran) {
+    // a measured file the shipped probe did not write (hand-written, non-web — D2: the probe is web only) never has a
+    // block: no warning every Stop. "--behaviour off" is the probe's own switch, so it always warns.
+    if (b.why !== "--behaviour off" && !r.shippedProbe) return out;
+    out.push(b.why === "--behaviour off"
+      ? `${r.rel}: behaviour/a11y checks were not run (--behaviour off) — the skills never pass that switch; re-run the probe without it before claiming accessibility`
+      : `${r.rel}: behaviour/a11y checks did not run (${b.why || "no reason recorded"}) — re-run the shipped probe, or say in the report that accessibility was not checked`);
+    return [...out, ...otherFails];
+  }
+  if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
+  if (recorded !== undefined && target.missing === undefined && recorded !== b.fail) out.push(`verification.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} — copy report.behaviour.summary`);
+  return [...out, ...otherFails];
 }
 
 // Finding 156: the verification block contradicting itself in adjacent keys.
@@ -593,11 +710,15 @@ function verificationContradictions(plan: Plan, reports: ReportRef[] | null | un
   }
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
   for (const r of reports || []) {
-    if (Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — copy them (or the ones you judged real, with why) into the plan`);
+    // F-100: --record-plan writes only the OPEN high/medium deltas — [] beside a report of lows is that record, not a gap
+    const recordedHere = !!(v.recorded && typeof v.recorded === "object" && v.recorded.report === r.rel);
+    if (!recordedHere && Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — copy them (or the ones you judged real, with why) into the plan`);
     for (const k of ["verifyScreenVerdict", "verdict"] as const) {
       const claimed = v[k];
       const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
-      if (typeof s === "string" && /pass/i.test(s) && r.verdict !== "pass") out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} — the report is the verdict; the plan cannot overrule it`);
+      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict)) out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} — the report is the verdict; the plan cannot overrule it`);
+      // accepted deviations are not a plain pass: the plan must not summarise them away
+      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations") out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" — say the accepted deviations, not a plain pass`);
     }
   }
   return out;
@@ -625,7 +746,7 @@ function validatePlanHeader(plan: Plan): string[] {
   const missing = (["screenName", "nodeId", "route", "file"] as const).filter((k) => plan[k] === undefined || plan[k] === null || plan[k] === "");
   if (!missing.length) return [];
   return [
-    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} — other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (plan-skeleton.js writes the header; only the route is yours to fill)`,
+    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} — other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (the plan-skeleton script writes the header; only the route is yours to fill)`,
   ];
 }
 
@@ -643,22 +764,277 @@ function tokenCore(x: unknown): string {
   s = s.replace(/^figma-/, "").replace(/-[0-9a-f]{8}$/, "");
   return slug(s);
 }
-function declaresToken(line: string, literal: string, codeToken: string): boolean {
-  const at = line.indexOf(literal);
-  if (at === -1) return false;
+// Does a declared name name THIS token? Exactly — after normalising both sides (`--color-x`, `var(--x)`,
+// `bg-x`, the `figma-` namespace, a key suffix all reduce to the same core) — never by substring: with
+// tokens `input` and `border`, `border-color:` is a CSS property, not either token's definition. In a
+// stylesheet only a custom property (`--x:`) declares a token; plain properties never do. Elsewhere a
+// token object key / native constant (`brand600:`, `val brand600 =`) counts, by the same exact match.
+const STYLESHEET_EXT = new Set(["css", "scss", "sass", "less", "styl"]);
+const isStylesheet = (rel: string): boolean => STYLESHEET_EXT.has(extOf(rel));
+// A free-text codeToken ("bg-primary / text-primary/80", "hover:bg-x", "var(--x)", "brand-600") split into
+// the names it stands for — ONE reading, shared by the definition check (F-31) and the undeclared-token
+// check (F-124): split on whitespace, " / " and commas; strip variants (`hover:`), `!` and an opacity
+// modifier (`/80`); `var(--x)` and `--x` name the custom property; a colour utility names `--color-<name>`
+// (`builtin` when <name> is a Tailwind built-in colour, a width or an arbitrary value).
+const COLOUR_UTILITY = /^(bg|text|border|ring|fill|stroke|outline|divide|placeholder|decoration|accent|caret|from|via|to|shadow)-(.+)$/;
+const TW_PALETTE = /^(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}$/;
+const TW_KEYWORD = new Set(["white", "black", "transparent", "current", "inherit"]);
+interface TokenPart { text: string; prop: string | null; builtin: boolean }
+function tokenParts(codeToken: string): TokenPart[] {
+  const out: TokenPart[] = [];
+  // `var(--x, fallback)` → `var(--x)` before splitting on commas
+  for (const raw of codeToken.replace(/var\(\s*(--[\w-]+)\s*,[^)]*\)/g, "var($1)").split(/[\s,]+/)) {
+    let t = raw.trim().toLowerCase().replace(/!$/, ""); // trailing `!` (Tailwind v4 important)
+    if (!t || t === "/") continue;
+    const v = /^var\((--[\w-]+)\)$/.exec(t);
+    if (v && v[1]) { out.push({ text: v[1], prop: v[1], builtin: false }); continue; }
+    if (t.startsWith("--")) { const n = t.replace(/:$/, ""); out.push({ text: n, prop: n, builtin: false }); continue; }
+    t = t.slice(t.lastIndexOf(":") + 1).replace(/^!/, "").replace(/\/[\w.[\]%]+$/, "");
+    const v4 = /^[a-z-]+-\((--[\w-]+)\)$/.exec(t); // Tailwind v4 `bg-(--brand)` reads the property directly
+    if (v4 && v4[1]) { out.push({ text: t, prop: v4[1], builtin: false }); continue; }
+    const name = COLOUR_UTILITY.exec(t)?.[2];
+    if (!name) { out.push({ text: t, prop: null, builtin: false }); continue; }
+    out.push({ text: t, prop: `--color-${name}`, builtin: TW_KEYWORD.has(name) || TW_PALETTE.test(name) || /^[\d.]+$|^\[/.test(name) });
+  }
+  return out;
+}
+// Every spelling a declaration of this token may carry: the whole codeToken, each part, each part's property.
+const tokenCandidates = (codeToken: string): string[] => [...new Set([codeToken, ...tokenParts(codeToken).flatMap((p) => (p.prop ? [p.text, p.prop] : [p.text]))])];
+function namesToken(name: string, codeToken: string, stylesheet: boolean): boolean {
+  if (stylesheet && !name.startsWith("--")) return false;
+  const declared = slug(name), dc = tokenCore(name);
+  if (!declared) return false;
+  return tokenCandidates(codeToken).some((c) => { const tc = tokenCore(c); return declared === slug(c) || (!!dc && dc === tc); });
+}
+// Is the occurrence of `literal` at `at` the value of a declaration of `codeToken`?
+function declaresTokenAt(line: string, at: number, codeToken: string, stylesheet: boolean): boolean {
   const m = DECLARATION.exec(line.slice(0, at));
-  if (!m) return false;
-  const declared = slug(m[2]), token = slug(codeToken);
-  if (!declared || !token) return false;
-  const dc = tokenCore(m[2]), tc = tokenCore(codeToken);
-  return declared === token || declared.includes(token) || token.includes(declared) || (!!dc && !!tc && (dc === tc || dc.includes(tc) || tc.includes(dc)));
+  return !!m && namesToken(m[2] ?? "", codeToken, stylesheet); // group 2 is not optional: set whenever the regex matched
+}
+// F-31: a line is a DEFINITION line for `literal` when EVERY occurrence of it on the line is the value of
+// a declaration of one of `codeTokens` — every plan token that resolves to this literal, not only the
+// row being checked: `--color-surface: #1d1d1f; --color-canvas: #1d1d1f;` defines two tokens that share
+// a value, and neither definition is a "usage" of the other.
+function definesAny(line: string, literal: string, codeTokens: readonly string[], stylesheet: boolean): boolean {
+  let at = line.indexOf(literal);
+  if (at === -1) return false;
+  while (at !== -1) {
+    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, stylesheet))) return false;
+    at = line.indexOf(literal, at + literal.length);
+  }
+  return true;
 }
 
-/** checkPlan()'s optional pre-located inputs (the CLI locates each once and passes them through). */
-export interface CheckPlanOptions { export?: ExportHit | null; reports?: ReportRef[] }
-export interface CheckPlanResult { blocking: string[]; warnings: string[] }
+/** checkPlan()'s optional pre-located inputs (the CLI locates each once and passes them through).
+ *  `graph`: the project graph over every plan's files[] (built on first use when absent) — one per hook run. */
+export interface CheckPlanOptions { export?: ExportHit | null; reports?: ReportRef[]; graph?: () => ProjectGraph }
+export interface TagCoverage { tagged: number; anchored: number }
+export interface CheckPlanResult { blocking: string[]; warnings: string[]; tagCoverage?: TagCoverage }
+
+const isAcknowledged = (row: PlanTokenRow): boolean => typeof row.acknowledged === "string" && !!row.acknowledged.trim();
+
+function readFiles(rels: readonly string[], cwd: string): FileText[] {
+  const out: FileText[] = [];
+  for (const rel of rels) {
+    const abs = path.join(cwd, rel);
+    try { if (fs.statSync(abs).isFile()) out.push({ rel, text: fs.readFileSync(abs, "utf8") }); } catch { /* absent: reported for its own plan */ }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- the project graph (F-43, F-58, F-124)
+// Every plan's files[] under design/plan/, read once per hook run: their texts, how many plans list each
+// file, and the import graph between the script files (each file's imports parsed once, then resolved
+// through a path-suffix index — linear in files + imports, not files²).
+const SCRIPT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro)$/i;
+export interface ProjectGraph {
+  files: FileText[];
+  /** how many plans list each file */
+  listCount: Map<string, number>;
+  kids: Map<string, string[]>;
+  parents: Map<string, string[]>;
+  byRel: Map<string, FileText>;
+  /** the project's .css files and whether it has a tailwind.config.* (walked on first use) */
+  scan: () => { css: FileText[]; tailwindConfig: boolean };
+}
+function buildGraph(cwd: string, extra: readonly string[] = []): ProjectGraph {
+  const listCount = new Map<string, number>();
+  for (const p of findPlans(cwd).plans) for (const f of new Set(p.plan.files || [])) listCount.set(f, (listCount.get(f) || 0) + 1);
+  const files = readFiles([...new Set([...listCount.keys(), ...extra])], cwd);
+  const byRel = new Map(files.map((f): [string, FileText] => [f.rel, f]));
+  const scripts = files.filter((f) => SCRIPT_RE.test(f.rel));
+  const lower = (segs: string[]): string => segs.map((x) => x.toLowerCase()).join("/");
+  const bySuffix = new Map<string, string[]>(), byFull = new Map<string, string[]>();
+  for (const f of scripts) {
+    const segs = moduleSegments(f.rel);
+    getOrInit(byFull, lower(segs), () => []).push(f.rel);
+    for (let i = 0; i < segs.length; i++) getOrInit(bySuffix, lower(segs.slice(i)), () => []).push(f.rel);
+  }
+  const kids = new Map<string, string[]>(), parents = new Map<string, string[]>();
+  for (const f of scripts) {
+    const found = new Set<string>();
+    for (const spec of cachedImports(f.text)) {
+      const segs = spec.startsWith(".") ? moduleSegments(path.relative(cwd, path.resolve(cwd, path.dirname(f.rel), spec))) : moduleSegments(spec);
+      if (!segs.length) continue;
+      for (const r of bySuffix.get(lower(segs)) || []) found.add(r); // spec is a suffix of the file's path
+      for (let i = 1; i < segs.length; i++) for (const r of byFull.get(lower(segs.slice(i))) || []) found.add(r); // the file's path is a suffix of the spec
+    }
+    found.delete(f.rel);
+    kids.set(f.rel, [...found]);
+    for (const r of found) getOrInit(parents, r, () => []).push(f.rel);
+  }
+  let scanned: { css: FileText[]; tailwindConfig: boolean } | null = null;
+  // a Tailwind config is looked for directly at the root and at each listed file's package root, not
+  // only by the (capped) walk
+  const scan = (): { css: FileText[]; tailwindConfig: boolean } => {
+    if (scanned) return scanned;
+    const walked = projectScan(cwd);
+    const dirs = new Set([path.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
+    return (scanned = { css: walked.css, tailwindConfig: walked.tailwindConfig || [...dirs].some(hasTwConfig) });
+  };
+  return { files, listCount, kids, parents, byRel, scan };
+}
+
+// F-43: the files whose imports count for a plan whose files are `own`: its own files; the files they
+// import (one hop — the shell a screen renders in); every ANCESTOR (a file that transitively imports one of
+// them: App → router → routes → this page); and the files an ancestor imports — except another screen's
+// own file (listed by exactly one plan, not this one): App → Page → {ScreenA, ScreenB} must not let plan A
+// borrow ScreenB's imports, while App → AppShell (listed by several plans) → Sidebar does count. The reverse
+// walk keeps a visited set, so an import cycle cannot loop.
+function reachableFor(g: ProjectGraph, own: readonly string[]): FileText[] {
+  const mine = new Set(own);
+  const ancestors = new Set<string>();
+  const queue = own.filter((r) => g.kids.has(r));
+  for (let i = 0; i < queue.length; i++) {
+    for (const par of g.parents.get(queue[i] ?? "") || []) if (!mine.has(par) && !ancestors.has(par)) { ancestors.add(par); queue.push(par); }
+  }
+  const out = new Set<string>([...mine, ...ancestors]);
+  for (const r of mine) for (const k of g.kids.get(r) || []) out.add(k);
+  const steppable = (r: string): boolean => mine.has(r) || (g.listCount.get(r) || 0) !== 1;
+  for (const r of ancestors) for (const k of g.kids.get(r) || []) if (steppable(k)) out.add(k);
+  return [...out].map((r) => g.byRel.get(r)).filter((f): f is FileText => !!f);
+}
+
+// ---------------------------------------------------------------- F-58: profile and tag coverage
+// The plan's `target` ("web-tailwind", or {profile: "web-tailwind", …}), else design/target.json's `profile`.
+function profileOf(plan: Plan, cwd: string): string | null {
+  const t = plan.target;
+  if (typeof t === "string" && t.trim()) return t.trim();
+  if (t && typeof t === "object" && typeof t.profile === "string" && t.profile.trim()) return t.profile.trim();
+  const doc = readJsonOrNull(path.join(cwd, "design", "target.json"), isJsonObject);
+  return doc && typeof doc.profile === "string" && doc.profile.trim() ? doc.profile.trim() : null;
+}
+const isWebProfile = (p: string | null): boolean => !!p && /^web(-|$)/i.test(p);
+
+// An anchored visible node is TAGGED when its id appears as a string literal in any scanned file (the
+// attribute value itself, or an entry of a lookup table the attribute reads: `data-dt-node={IDS.row}`).
+// Anchored = its own anchor maps it to code (mapModule/file/symbol; `omitted` is not built, so not
+// counted); visible = drawn by the export (all anchored ids when the export cannot be found).
+function tagCoverageOf(plan: Plan, exp: ExportHit | null, files: FileText[]): { tagged: number; anchored: number; attribute: boolean; untagged: string[] } {
+  const anchors: Record<string, PlanAnchor> = plan.anchors || {};
+  const vis = exp ? visibility(exp.doc).visible : null;
+  const ids = Object.keys(anchors).filter((id) => { const a = anchors[id]; return anchored(a) && !(a && typeof a.omitted === "string" && a.omitted.trim()) && (!vis || vis.has(id)); });
+  const attribute = files.some((f) => f.text.includes("data-dt-node"));
+  // verify reads data-dt-node only: with the attribute nowhere, an id in some other attribute tags nothing.
+  const untagged = attribute ? ids.filter((id) => !files.some((f) => f.text.includes(`"${id}"`) || f.text.includes(`'${id}'`) || f.text.includes("`" + id + "`"))) : ids;
+  return { tagged: ids.length - untagged.length, anchored: ids.length, attribute, untagged };
+}
+
+// ---------------------------------------------------------------- F-124: colour tokens nothing declares
+const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".git", "design", ".next", "out", "coverage", ".turbo", ".svelte-kit", ".nuxt", ".output",
+  "Pods", ".venv", "venv", "vendor", "target", "tmp"]);
+const TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
+const hasTwConfig = (dir: string): boolean => { try { return fs.readdirSync(dir).some((n) => TW_CONFIG.test(n)); } catch { return false; } };
+// The package root a file belongs to: the nearest directory up from it (not above cwd) with a package.json.
+function packageDirOf(cwd: string, rel: string): string {
+  const root = path.resolve(cwd);
+  for (let d = path.dirname(path.resolve(cwd, rel)); d.startsWith(root); d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, "package.json"))) return d;
+    if (d === root) break;
+  }
+  return root;
+}
+// The project's stylesheets, and whether it has a Tailwind v3 config (its colours live there, not in CSS vars).
+function projectScan(cwd: string, limit = 2000): { css: FileText[]; tailwindConfig: boolean } {
+  const css: FileText[] = [];
+  let tailwindConfig = false;
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (css.length >= limit) return;
+      const abs = path.join(dir, e.name);
+      if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) walk(abs); }
+      else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
+      else if (e.isFile() && /\.css$/i.test(e.name)) {
+        try { css.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), text: fs.readFileSync(abs, "utf8") }); } catch { /* unreadable: skip */ }
+      }
+    }
+  };
+  walk(cwd);
+  return { css, tailwindConfig };
+}
+// Every CSS custom property DECLARED in a text (`--color-x:`), comments stripped.
+function declaredCustomProps(files: FileText[]): Set<string> {
+  const out = new Set<string>();
+  for (const f of files) {
+    const text = isSourceFile(f.rel) ? scanText(f.rel, f.text) : f.text;
+    for (const m of text.matchAll(/(--[\w-]+)\s*:/g)) { const n = m[1]; if (n !== undefined) out.add(n.toLowerCase()); }
+  }
+  return out;
+}
+// What a codeToken needs declared (tokenParts): a custom property for `--x` / `var(--x)`, `--color-<name>`
+// for a colour utility that is not a Tailwind built-in. Anything else (a bare name, `Color.brand`) is not checked.
+const requiredCustomProps = (codeToken: string): string[] => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
+// F-124: a colour row's codeToken whose custom property no file declares — the utility or variable it
+// names renders nothing (a hand-written @theme without the alias). Not checked in a project with a
+// tailwind.config.* (Tailwind v3: colours are configured there, not declared as CSS variables).
+function undeclaredColourTokens(live: PlanTokenRow[], g: ProjectGraph): string[] {
+  const colour = [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() === "color").map((r) => String(r.codeToken).trim()))];
+  const wanted = colour.map((t) => ({ t, props: requiredCustomProps(t) })).filter((x) => x.props.length);
+  if (!wanted.length) return [];
+  const scan = g.scan();
+  if (scan.tailwindConfig) return [];
+  const declared = declaredCustomProps([...g.files, ...scan.css]);
+  const missing = wanted.filter((x) => x.props.some((p) => !declared.has(p)));
+  if (!missing.length) return [];
+  const show = missing.slice(0, 8).map((x) => `'${x.t}' (needs ${x.props.filter((p) => !declared.has(p)).join(", ")})`).join(", ");
+  return [`${missing.length} colour code token(s) are declared nowhere — not in any plan's files[] nor in a .css file of the project: ${show}${missing.length > 8 ? `, +${missing.length - 8} more` : ""} — a utility or variable with no definition renders nothing; add the alias to the theme (e.g. in the @theme block the tokens script writes)`];
+}
+
+// ---------------------------------------------------------------- F-54: a deviation that contradicts the plan
+const STYLE_FIELDS = new Set(["effects", "shadow", "fill", "fills", "stroke", "strokes", "radius", "cornerradius", "opacity", "padding", "gap", "font",
+  "typography", "color", "background", "border", "blur", "size", "width", "height", "fontsize", "fontweight", "lineheight", "letterspacing",
+  "borderradius", "borderwidth", "textalign", "textcase"]);
+function deviationConflicts(plan: Plan): string[] {
+  const out: string[] = [];
+  const anchors: Record<string, PlanAnchor> = plan.anchors || {};
+  (plan.deviations || []).forEach((d, i) => {
+    if (!d) return;
+    // Only a WHOLE-NODE omission: `built` says nothing was built, and the field is not a style
+    // sub-property (a reused card whose shadow was not built is a field-level change, not the card left out).
+    // the LAST segment of a path-like field: `style.shadow` → shadow, `fills[0]` → fills
+    const field = typeof d.field === "string" ? (d.field.trim().toLowerCase().split(/[.[\]\s/]+/).filter(Boolean).pop() ?? "") : "";
+    if (STYLE_FIELDS.has(field)) return;
+    const built = d.built;
+    const omitted = built === null || built === false || (typeof built === "string" && /^(omitted|not built|not rendered|removed)/i.test(built.trim()));
+    if (!omitted) return;
+    const ids = [...(typeof d.nodeId === "string" && d.nodeId ? [d.nodeId] : []), ...(Array.isArray(d.nodeIds) ? d.nodeIds : [])];
+    for (const id of ids) {
+      const comp = (plan.components || []).find((c) => c.nodeId === id && verdictOf(c) === "reused");
+      const a = anchors[id];
+      const mod = a && typeof a.mapModule === "string" && a.mapModule.trim() ? a.mapModule : null;
+      if (!comp && !mod) continue;
+      const says = [comp ? `components[] marks '${comp.name}' "reused"${comp.mapModule ? ` from ${comp.mapModule}` : ""}` : null, mod ? `anchors["${id}"] maps it to ${mod}` : null].filter(Boolean).join(" and ");
+      out.push(`deviation #${i}${d.id ? ` (${d.id})` : ""} says node ${id} was not built, but ${says} — one of them is wrong: if it was left out, anchor it as {"omitted": "<why>"} and drop the reuse claim; if it was built, correct the deviation`);
+    }
+  });
+  return out;
+}
 
 // Returns { blocking: [...], warnings: [...] }.
+// Its `blocking` messages are SAVED into the plan (verification.hook.blocking), a file users commit: name
+// scripts in words here, never with scriptCmd() — that is a per-machine, per-plugin-version absolute path.
 function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOptions): CheckPlanResult {
   const o = opts || {};
   const blocking: string[] = [], warnings: string[] = [];
@@ -675,7 +1051,8 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== undefined).map((a) => String(a.value).toLowerCase()));
   const allowedFiles = (plan.allowedLiterals || []).filter((a) => a && a.reason && a.file).map((a) => String(a.file));
   const isAllowed = (row: PlanTokenRow, literal: string): boolean => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
-  function definedOnlyInTokenSource(literal: string, codeToken: string): boolean {
+  // `codeTokens`: every plan token that resolves to this literal's value (F-31) — a line defining any of them is a definition.
+  function definedOnlyInTokenSource(literal: string, codeTokens: readonly string[]): boolean {
     if (!literal) return false;
     let seen = false;
     for (const f of code) {
@@ -683,7 +1060,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
       if (allowedFiles.includes(f.rel)) { seen = true; continue; }
       for (const line of f.text.split("\n")) {
         if (!line.includes(literal)) continue;
-        if (!declaresToken(line, literal, codeToken)) return false;
+        if (!definesAny(line, literal, codeTokens, isStylesheet(f.rel))) return false;
         seen = true;
       }
     }
@@ -692,6 +1069,8 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
 
   const tokens = plan.tokens || [];
   const live = tokens.filter((r) => verdictOf(r) !== "hidden-only");
+  const colourTokensOf = (key: string): string[] => [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() === "color" && colorKey(r.value) === key).map((r) => String(r.codeToken)))];
+  const dimTokensOf = (n: number): string[] => [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() !== "color" && parseFloat(String(r.value)) === n).map((r) => String(r.codeToken)))];
   // One message, however many rows: a fresh plan-skeleton plan has every row unfilled, and 33 lines
   // of the same sentence would bury the two things that actually block.
   const undecided = live.filter((row) => (verdictOf(row) === "missing" || !hasToken(row)) && !row.decision);
@@ -701,9 +1080,11 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   }
 
   // Token IDENTITY: two DIFFERENT Figma tokens on one code token (finding 130 — right, and kept).
+  // F-43: a row carrying `"acknowledged": "<why>"` is a merge a person decided on — it is left out.
+  for (const row of live) if (row.acknowledged !== undefined && !isAcknowledged(row)) warnings.push(`token row '${row.figmaName || String(row.value)}' has an empty \`acknowledged\` — say why the shared code token is right, or remove the field`);
   const byCodeToken = new Map<string, Map<string, PlanTokenRow["value"]>>();
   for (const row of live) {
-    if (!hasToken(row) || !row.figmaName) continue;
+    if (!hasToken(row) || !row.figmaName || isAcknowledged(row)) continue;
     const c = String(row.codeToken).trim();
     const names = byCodeToken.get(c) || new Map<string, PlanTokenRow["value"]>();
     if (!names.has(row.figmaName)) names.set(row.figmaName, row.value);
@@ -712,27 +1093,30 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   for (const [c, names] of byCodeToken) {
     if (names.size < 2) continue;
     const l = [...names].map(([n, v]) => `'${n}' (${String(v)})`).join(" and ");
-    warnings.push(`code token '${c}' is mapped from ${names.size} DIFFERENT Figma tokens — ${l}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name`);
+    warnings.push(`code token '${c}' is mapped from ${names.size} DIFFERENT Figma tokens — ${l}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name (or, if sharing is deliberate, add "acknowledged": "<why>" to the row that shares it)`);
   }
 
   // BLOCK 1: an unexplained colour literal. One message per LITERAL, however many plan rows resolve it
   // (finding 100 raised two problems for one comment).
   const colors = colorLiterals(source);
-  const colourHits = new Map<string, { value: PlanTokenRow["value"]; tokens: string[] }>();
+  const colourHits = new Map<string, { value: PlanTokenRow["value"]; tokens: string[]; defs: string[] }>();
   for (const row of live) {
     if (!hasToken(row) || String(row.kind).toLowerCase() !== "color") continue;
     const h = colorKey(row.value);
     const lit = h && colors.get(h);
-    if (lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, row.codeToken)) {
-      const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [] }));
+    if (h && lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, colourTokensOf(h))) {
+      const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [], defs: colourTokensOf(h) }));
       if (!e.tokens.includes(row.codeToken)) e.tokens.push(row.codeToken);
     }
   }
   for (const [lit, e] of colourHits) {
     // Finding 325: name only files that USE the literal — not an allow-listed token file, not a file
-    // where every occurrence is the token's own definition line.
+    // where every occurrence is a token's own definition line.
     const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel)
-      && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => e.tokens.some((t) => declaresToken(l, lit, t)))).map((f) => f.rel);
+      && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => definesAny(l, lit, e.defs, isStylesheet(f.rel)))).map((f) => f.rel);
+    // F-31: a block must name where the literal is used. No such file means every occurrence is a
+    // definition or allow-listed — nothing to fix, so nothing to block on.
+    if (!where.length) continue;
     blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${String(e.value)} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} — use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "…"}, matched on the exact value string, or name the file that defines the tokens: {"file": "…", "reason": "…"}`);
   }
 
@@ -741,9 +1125,17 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     if (!hasToken(row) || String(row.kind).toLowerCase() === "color") continue;
     const n = parseFloat(String(row.value));
     const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
-    const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, row.codeToken));
+    const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, dimTokensOf(n)));
     if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${String(row.value)} (${row.kind}) to token '${String(row.codeToken)}' — use the token (or add it to allowedLiterals with a reason)`);
   }
+
+  // Every plan's files[] under design/plan/ (this one's included): a shared shell lives in another plan's
+  // files, and the import check (F-43), the tag count (F-58) and the declared-token check (F-124) see it.
+  let built: ProjectGraph | null = null;
+  const graph = (): ProjectGraph => built || (built = o.graph ? o.graph() : buildGraph(cwd, listed));
+  const sharedByFile = (): FileText[] => graph().files.filter((f) => !listed.includes(f.rel));
+  let reach: FileText[] | null = null;
+  const reachable = (): FileText[] => reach || (reach = reachableFor(graph(), listed));
 
   const mapped = loadMapKeys(cwd);
   const seenModule = new Set<string>();
@@ -751,7 +1143,8 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     const verdict = verdictOf(row);
     if (verdict === "reused" && row.mapModule && !seenModule.has(row.mapModule)) {
       seenModule.add(row.mapModule);
-      if (!moduleImported(row.mapModule, byFile, cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) — was it regenerated instead of reused?`);
+      // F-43: see reachableFor — this plan's files, what they import, and the app shell that renders them.
+      if (!moduleImported(row.mapModule, byFile, cwd) && !moduleImported(row.mapModule, reachable(), cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (neither this plan's files, nor a plan file they import, nor one that renders them — an app shell — or its direct imports; compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) — was it regenerated instead of reused? If it is rendered by a shared layout above this screen (e.g. an app shell), list that layout file in this plan's files[] too`);
     }
     const mappedTo = verdict === "new" && row.key ? mapped.get(row.key) : undefined;
     if (mappedTo) {
@@ -763,29 +1156,52 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   // BLOCK 2: every visible design node has an anchor (itself or an ancestor).
   const exp = o.export === undefined ? locateExport(plan, file, cwd) : o.export;
   if (!exp) {
-    warnings.push("could not find this plan's screen export (no `file`/`nodeId` header, and no node id in its name) — the anchor check did not run; plan-skeleton.js writes the header");
+    warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) — the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
     const cov = anchorCoverage(plan, exp.doc);
     if (cov.unmapped.length) {
       const show = cov.unmapped.slice(0, 10).map((u) => `${u.id} '${String(u.name).trim()}' (${u.type})`).join(", ");
-      blocking.push(`${cov.unmappedNodes} visible design node(s) have no anchor in the plan — neither they nor any ancestor map to code. Top of each unmapped subtree: ${show}${cov.unmapped.length > 10 ? `, +${cov.unmapped.length - 10} more` : ""}. Add anchors["<id>"] = {"mapModule": "<the file that renders it>"} on the subtree's top (children inherit it), or {"omitted": "<why it is not built>"} — plan-skeleton.js lists every visible node`);
+      blocking.push(`${cov.unmappedNodes} visible design node(s) have no anchor in the plan — neither they nor any ancestor map to code. Top of each unmapped subtree: ${show}${cov.unmapped.length > 10 ? `, +${cov.unmapped.length - 10} more` : ""}. Add anchors["<id>"] = {"mapModule": "<the file that renders it>"} on the subtree's top (children inherit it), or {"omitted": "<why it is not built>"} — the plan-skeleton script lists every visible node`);
     }
     if (cov.wrappers.length) warnings.push(`${cov.wrappers.length} visible container(s) have anchored children but no anchor of their own (e.g. ${cov.wrappers.slice(0, 3).map((w) => `${w.id} '${String(w.name).trim()}'`).join(", ")}) — anchor the frame to the screen component so sync-design can place a change to it`);
     if (cov.hiddenAnchored.length) warnings.push(`${cov.hiddenAnchored.length} anchor(s) point at HIDDEN nodes (${cov.hiddenAnchored.slice(0, 4).join(", ")}${cov.hiddenAnchored.length > 4 ? ", …" : ""}) — hidden layers are not built; remove them`);
     if (cov.unknown.length) warnings.push(`${cov.unknown.length} anchor(s) name node ids that are not on this frame (${cov.unknown.slice(0, 4).join(", ")}${cov.unknown.length > 4 ? ", …" : ""}) — e.g. a shared shell tagged with another frame's instance ids; anchor THIS frame's ids`);
   }
 
+  // F-58: web tag coverage. F-124: colour code tokens nothing declares.
+  let tagCoverage: TagCoverage | undefined;
+  if (isWebProfile(profileOf(plan, cwd))) {
+    const optOut = plan.tagging;
+    const reason = optOut && optOut.off === true && typeof optOut.reason === "string" ? optOut.reason.trim() : "";
+    if (optOut && optOut.off === true && !reason) warnings.push("`tagging.off` is set with no `reason` — the opt-out is ignored until it says why this project cannot carry data-dt-node tags");
+    if (!reason && listed.length) { // no files[] at all is the "`files` is empty" warning, not a tag block
+      const tagged = tagCoverageOf(plan, exp, [...code, ...sharedByFile().filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }))]);
+      if (tagged.anchored > 0) {
+        tagCoverage = { tagged: tagged.tagged, anchored: tagged.anchored };
+        const pct = Math.round((100 * tagged.tagged) / tagged.anchored);
+        const how = "tag every element that implements a design node one-to-one with data-dt-node=\"<node id>\" (an id from a lookup table counts: the id string only has to appear in a listed file), so the verify step measures the right element instead of guessing";
+        if (!tagged.attribute) blocking.push(`web build with no data-dt-node tags: none of the files in any plan's files[] carries the attribute, so 0 of ${tagged.anchored} anchored visible node(s) can be measured — ${how}. A project that genuinely cannot tag records "tagging": {"off": true, "reason": "…"} in the plan`);
+        else if (tagged.tagged * 2 < tagged.anchored) warnings.push(`data-dt-node tag coverage is ${tagged.tagged}/${tagged.anchored} anchored visible node(s) (${pct}%), below 50% — ${how}${tagged.untagged.length ? `; untagged e.g. ${tagged.untagged.slice(0, 5).join(", ")}` : ""}`);
+      }
+    }
+  }
+  warnings.push(...undeclaredColourTokens(live, graph()));
+
   warnings.push(...checkVerification(plan, cwd));
   warnings.push(...verificationWarnings(plan));
-  warnings.push(...verificationContradictions(plan, o.reports || locateReports(plan, file, cwd, exp)));
+  warnings.push(...recordedReportWarnings(plan, cwd));
+  const reports = o.reports || locateReports(plan, file, cwd, exp);
+  warnings.push(...verificationContradictions(plan, reports));
+  warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
   warnings.push(...deviationWarnings(plan));
+  warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
   warnings.push(...auditGateWarnings(plan, cwd, exp));
-  return { blocking, warnings };
+  // One line per distinct message (F-45: the same sentence repeated is noise that buries the real ones).
+  return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...(tagCoverage ? { tagCoverage } : {}) };
 }
 
-// Finding 136: only a WARNING (this file blocks on exactly two things — a raw colour and an
-// unanchored node). When design/audit/<screen>.json (or a legacy-named audit) has blocker(s) and the
+// Finding 136: only a WARNING (this file blocks on a raw colour, an unanchored node and — web — no tags at all). When design/audit/<screen>.json (or a legacy-named audit) has blocker(s) and the
 // plan has no auditGate covering them, a build reading a Blocked audit and proceeding would otherwise
 // be indistinguishable, on disk, from one that never read it.
 // (audit-gate.ts is a static import now; the CJS version's lazy require — and its "could not load →
@@ -796,17 +1212,36 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
   let g: ReturnType<typeof auditGateStatus>;
   try { g = auditGateStatus(cwd, screenFile, screenName); } catch { return []; }
   // An audit file that is there but cannot be read gates nothing — say so rather than read it as "no blockers".
-  if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} — the audit gate was NOT checked; re-run audit.js for this screen`];
+  if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} — the audit gate was NOT checked; re-run the audit script for this screen`];
   if (!g.auditFile || !g.blockers.length) return [];
   const gate = plan.auditGate;
   if (!gate) {
     return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` — either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
   }
   const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
-  const uncovered = g.blockers.filter((id) => !overridden.has(id));
-  if (uncovered.length) return [`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} — either resolve them or add them with a reason`];
-  if (!gate.reason) return [`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` — say why it is safe to build past ${g.auditFile}`];
-  return [];
+  // F-44: a blocker is covered by its id (`code` / `code@nodeId`, + `~n`) — which is also the bare code a
+  // person writes for a node-less finding — or by its pre-F-44 positional id (`code#i`), so an older plan's
+  // decision still stands. The warning lists the new ids.
+  const out: string[] = [];
+  const uncovered = g.blockers.filter((id, i) => !overridden.has(id) && !overridden.has(g.legacyBlockers[i] ?? id));
+  if (uncovered.length) out.push(`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} — either resolve them or add them with a reason`);
+  else if (!gate.reason) out.push(`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` — say why it is safe to build past ${g.auditFile}`);
+  // D134 (FU-legacy-id): the positional id is still accepted, but it is not stable — it is the blocker's
+  // position among ALL blockers, so fixing an earlier one shifts it onto a different blocker and the old
+  // entry silently covers that one. ONE non-blocking warning maps every entry that covers a blocker only
+  // through its positional id to the stable id, and names a positional entry that matches no current blocker.
+  const legacySet = new Set(g.legacyBlockers);
+  const viaLegacy: string[] = [];
+  g.blockers.forEach((id, i) => {
+    const old = g.legacyBlockers[i];
+    if (old !== undefined && !overridden.has(id) && overridden.has(old)) viaLegacy.push(`${old} → ${id}`);
+  });
+  const staleLegacy = [...overridden].filter((e): e is string => typeof e === "string" && /^[^@#~]+#\d+$/.test(e) && !legacySet.has(e));
+  if (viaLegacy.length || staleLegacy.length) {
+    const parts = [...viaLegacy, ...(staleLegacy.length ? [`no current blocker: ${staleLegacy.map((e) => `${e} (drop it)`).join(", ")}`] : [])];
+    out.push(`${g.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id — a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker — if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
+  }
+  return out;
 }
 
 // ================================================================ the verify report behind a plan
@@ -814,10 +1249,16 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
 // Reports are found by name first — `<Layer>__<id>` (verify-screen's default --out since P3), the plan's
 // own name, its `screen` — then by content: a report whose `nodeId` is the plan's, whose sibling
 // `<stem>.expected.json` is this frame's (`frame.nodeId`, verify-expectation@2), or whose `screen` is
-// the frame's layer name when that name is unique in the export (the pre-P3 `JobRoles.report.json`
+// the frame's layer name when that name is unique in the export (the pre-P3 `JetRoles.report.json`
 // naming carries only the layer name). Every match counts; ONE failing report is enough to fail.
-// Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|fail|incomplete,
-// `headline`, `inputs.expectationSha256` — the expectation it was computed against).
+// Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|pass-with-deviations|fail|
+// incomplete, `headline`, `inputs.expectationSha256` — the expectation it was computed against,
+// `inputs.waivers.sha256` — the plan waivers/descopes it applied).
+// (read leniently: a malformed behaviour section is read as none — it never decides anything here)
+function behaviourRef(x: unknown): ReportRef["behaviour"] {
+  if (!isReportBehaviour(x)) return null;
+  return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
+}
 function locateReports(plan: Plan, planFile: string | undefined, cwd: string, exp: ExportHit | null | undefined): ReportRef[] {
   const dir = path.join(cwd, "design", "verify");
   if (!fs.existsSync(dir)) return [];
@@ -838,6 +1279,8 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     const stem = f.replace(/\.report\.json$/, "");
     let by: ReportMatch | null = null;
     const expFile = path.join(dir, stem + ".expected.json");
+    // DT-34: a set retired by the guard's printed migration (`<old>.expected.json.retired`) is history, not this screen's report
+    if (!fs.existsSync(expFile) && fs.existsSync(expFile + ".retired")) continue;
     // Only the expectation's frame.nodeId is read here, so only that is required of the file.
     const expFrame = (): string | null => { const x = readJsonOrNull(expFile, isJsonObject); return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null; };
     if (stems.has(stem)) by = "name";
@@ -854,7 +1297,9 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, schema: r.schema || null, verdict: r.verdict || null, headline: r.headline || null,
       why: r.why || [], deltas: r.deltas || null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
       exportContentSha256: (r.inputs && r.inputs.exportContentSha256) || null, code: (r.inputs && r.inputs.code) || null,
-      expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null });
+      expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null,
+      waiversSha256: (r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256) || null,
+      behaviour: behaviourRef(r.behaviour), shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe) });
   }
   return out;
 }
@@ -864,23 +1309,30 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
 interface Verdict { status: PlanComputedStatus; reasons: string[] }
 
 // What the verify report(s) say about this plan, on their own: { status, reasons }. status is one of
-// failed | unverified | static-only | verified. Never empty reasons.
+// failed | unverified | static-only | verified | verified-with-deviations. Never empty reasons.
+// A report that recorded no inputs.waivers (older than group 9) applied none: it stays fresh while the
+// plan has none, and goes stale once the owner accepts one.
+const NO_WAIVERS = waiversHash(null);
+const waiversChanged = (r: ReportRef, now: string): boolean => (r.waiversSha256 || NO_WAIVERS) !== now;
+const WAIVERS_CHANGED = "waivers changed since the last compare — re-run --compare (with --plan <plan.json> when several plans describe the frame)";
 function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: ReportRef[]): Verdict {
   const v = plan.verification;
   if (!reports.length) {
     if (v && v.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically — not rendered (${v.reason || "no reason recorded"})`] };
-    return { status: "unverified", reasons: ["no verify report found for this screen in design/verify/ — run verify-screen.js --expect/--compare (the report's verdict is what grants \"verified\")"] };
+    return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ — run ${scriptCmd("verify-screen")} --expect/--compare (the report's verdict is what grants "verified")`] };
   }
   // Finding 316: a report older than verify-report@2 counted hidden layers as "never built" / "failed"
   // (0-for-83 wrong on the live run). Its figures are not repeated as fact — only its verdict, labelled.
   const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
-  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: verify-screen.js --expect, then --compare`) };
+  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
   const said = (r: ReportRef): string => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
+  const waiversNow = waiversHash(plan);
   const failing = reports.filter((r) => r.verdict === "fail");
-  if (failing.length) return { status: "failed", reasons: failing.map(said) };
+  // A fail stays a fail until it is re-compared — but say when the owner has since accepted something.
+  if (failing.length) return { status: "failed", reasons: failing.map((r) => said(r) + (waiversChanged(r, waiversNow) ? ` — ${WAIVERS_CHANGED}` : "")) };
   // "incomplete" (@2: nothing failed, but not everything was measured/probed) or no verdict at all is
   // not a pass — and not a failure the build caused either.
-  const notPass = reports.filter((r) => r.verdict !== "pass");
+  const notPass = reports.filter((r) => !isPassingVerdict(r.verdict));
   if (notPass.length) return { status: "unverified", reasons: notPass.map(said) };
   // Freshness is decided by CONTENT, never by a clock (findings 314/317): not exportedAt (a no-change
   // re-pull rewrites it), not mtimes (a `touch` or a fresh clone reorders them).
@@ -888,18 +1340,22 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
   for (const r of reports) {
     if (!r.exportContentSha256) {
       if (r.expectationChanged) return { status: "unverified", reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) — re-run --compare`] };
-      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) — re-run verify-screen.js --expect and --compare`] };
+      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) — re-run ${scriptCmd("verify-screen")} --expect and --compare`] };
     }
     if (!expSha) return { status: "unverified", reasons: [`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 — give the plan its \`file\` header`] };
     if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}… → ${expSha.slice(0, 12)}…, timestamps ignored) — re-run --expect and --compare`] };
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
-    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run verify-screen.js --compare from the project root, where design/plan/ lists this screen's files`] };
+    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
     const now = fileHashes(plan, cwd);
-    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]);
+    // D117: a mapped module an older report never hashed reads "(not recorded)" — one re-compare records it
+    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => (measured[f] === undefined ? `${f} (not recorded)` : f));
     if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — re-run --compare`] };
+    if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
   }
   const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
-  return { status: "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} says pass and measured this design and exactly these files (by content)${head ? ` — at git ${head.slice(0, 12)}` : ""}`] };
+  const withDeviations = reports.filter((r) => r.verdict === "pass-with-deviations");
+  const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations — accepted deltas / descoped interactions are listed in the report)` : "says pass";
+  return { status: withDeviations.length ? "verified-with-deviations" : "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} ${says} and measured this design and exactly these files (by content)${head ? ` — at git ${head.slice(0, 12)}` : ""}`] };
 }
 
 /** computeStatus()'s options: where the plan lives (for locating its export/reports), or those pre-located. */
@@ -913,7 +1369,7 @@ export interface StatusResult { status: PlanComputedStatus; reasons: string[]; r
 //   3. blocked   — the Stop hook's last check blocked
 //   4. stale     — a file in files[] changed since the hook passed
 //   5. pending   — the hook has not checked this version of the plan
-//   6. unverified / static-only / verified — what the report says (see reportVerdict)
+//   6. unverified / static-only / verified / verified-with-deviations — what the report says (see reportVerdict)
 // `reasons` is never empty for a non-verified status: it always carries the hook's state AND what the
 // report(s) say (a report too old to trust is named with its schema), plus a note when a stored
 // "verified"/"static-only" was ignored.
@@ -929,37 +1385,180 @@ function computeStatus(plan: Plan, opts?: StatusOptions): StatusResult {
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
   const rv = reportVerdict(plan, cwd, exp, reports);
   const hook = plan.verification && plan.verification.hook;
-  let hookState: PlanComputedStatus | null = null, hookWhy: string[] = [];
+  let hookState: PlanComputedStatus | null = null, hookWhy: string[] = [], unhashedWhy: string[] = [];
   if (!hook || !hook.result) { hookState = "pending"; hookWhy = ["the build-screen Stop hook has not checked this plan"]; }
-  else if (hook.planHash && hook.planHash !== planHash(plan)) { hookState = "pending"; hookWhy = ["the plan changed after the hook's last check"]; }
+  else if (hook.planHash && !hookHashMatches(hook, plan)) { hookState = "pending"; hookWhy = ["the plan changed after the hook's last check"]; }
   else if (hook.result !== "pass") { hookState = "blocked"; hookWhy = hook.blocking && hook.blocking.length ? hook.blocking : ["the hook's last check blocked"]; }
   else {
-    const ch = changedFiles(plan, cwd) || [];
+    const d = hookFileDiff(plan, cwd);
+    const ch = d ? d.changed : [];
     if (ch.length) { hookState = "stale"; hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`]; }
+    if (d && d.unhashed.length) unhashedWhy = [`hook: not hashed by the hook's last check (its record predates D117), so not a change: ${d.unhashed.slice(0, 6).join(", ")}${d.unhashed.length > 6 ? `, +${d.unhashed.length - 6} more` : ""} — the hook's next check of this plan records it; until then an edit to it does not reopen the plan (\`verify-build <plan>\` re-checks now)`];
   }
   const reportWhy = rv.reasons.map((r) => (hookState ? "report: " : "") + r);
-  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h)), reports };
-  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy), reports };
-  return { status: rv.status, reasons: notes.concat(rv.status === "verified" ? ["hook passed; " + rv.reasons[0]] : rv.reasons), reports };
+  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h), unhashedWhy), reports };
+  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy, unhashedWhy), reports };
+  return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons, unhashedWhy), reports };
 }
 
 // ================================================================ fan-out scoping
 
 // Several screens build in parallel (one screen-builder each), and every one lands here when it
 // stops. Narrow to the plans the stopping agent's own transcript mentions (a subagent's own transcript
-// when the payload names one, else the session's) — on positive evidence only: a transcript that
-// mentions NO plan file at all keeps every open plan. A transcript that mentions only plans the hook
-// already closed narrows to nothing: agent A, finished, is not blocked on agent B's half-built plan.
-function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null | undefined): PlanFile[] {
+// when the payload names one, else the session's). A transcript that mentions NO plan file checks
+// NOTHING (F-45): build-screen's Stop hook is skill-scoped, so it also fires in an orchestrator session
+// that loaded the skill and built nothing itself — it must not block that session on a plan another
+// agent is still filling. A transcript that mentions only plans the hook already closed narrows to
+// nothing too: agent A, finished, is not blocked on agent B's half-built plan. `scope: "unscoped"` means
+// the payload carried no readable transcript at all (a hand-piped `{"cwd": …}`): every open plan is checked.
+export type PlanScope = "unscoped" | "none-named" | "named";
+// OWNERSHIP (F-45). A plan is this session's when the session's OWN tool calls (message.content[] tool_use
+// items; for the session transcript, not a subagent's sidechain entries) either
+//   (a) WRITE the plan; or
+//   (b) WRITE a file that exactly ONE open plan lists in files[] — a builder or fixer editing that
+//       screen's code. A file several plans list (a shared component) claims none of them.
+// "Write" = a Write/Edit/MultiEdit/NotebookEdit of the path, or a Bash command that writes it (see
+// bashWriteTargets; a path merely inside a heredoc body or echo text does not count). Not prose, not an
+// Agent/Task prompt (an orchestrator naming the plan a subagent should fill), not a tool_result (a
+// subagent's report). Relative paths resolve against the transcript entry's own `cwd`, else the payload's
+// (so `cd design/plan && echo {} > x.json` in ONE command is missed — accepted: fail-open). Separators
+// are normalised; a Windows drive path from another machine matches by its project-relative tail.
+// Nothing claimed → nothing checked, by design: the screen-builder's SubagentStop still gates delegated builds.
+const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+/** A path the session wrote, and the directory it was relative to (the entry's `cwd`, when recorded). */
+export interface WrittenPath { path: string; base: string | null }
+function transcriptActions(text: string, ownOnly: boolean): WrittenPath[] {
+  const out: WrittenPath[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let v: unknown = null;
+    try { const parsed: unknown = JSON.parse(line); v = parsed; } catch { continue; }
+    if (!isJsonObject(v) || (ownOnly && v.isSidechain === true) || !isJsonObject(v.message) || !Array.isArray(v.message.content)) continue;
+    for (const item of v.message.content) {
+      if (!isJsonObject(item) || item.type !== "tool_use" || typeof item.name !== "string" || !isJsonObject(item.input)) continue;
+      const inp = item.input;
+      const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
+      if (WRITE_TOOLS.has(item.name)) { for (const k of ["file_path", "notebook_path"]) { const f = inp[k]; if (typeof f === "string") out.push({ path: f, base }); } }
+      else if (item.name === "Bash" && typeof inp.command === "string") for (const f of bashWriteTargets(inp.command)) out.push({ path: f, base });
+    }
+  }
+  return out;
+}
+
+// The paths a shell command writes (see OWNERSHIP): after `>`/`>>`; after `tee`; after `--out`/`-o`; every
+// argument of a command running plan-skeleton; the last argument of cp/mv/install/ln; the file arguments of
+// `sed -i`/`perl -i`; a quoted path in a `python -c` / `node -e` code string. Heredoc bodies are dropped
+// first; then the command is tokenised (quotes respected) and split into simple commands at && || ; | and
+// newlines.
+function bashWriteTargets(cmd: string): string[] {
+  const kept: string[] = [];
+  let delim: string | null = null;
+  for (const line of cmd.split("\n")) {
+    if (delim !== null) { if (line.trim() === delim) delim = null; continue; }
+    kept.push(line);
+    const h = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
+    if (h && h[2]) delim = h[2];
+  }
+  type Tok = { op: string } | { word: string };
+  const toks: Tok[] = [];
+  const text = kept.join("\n");
+  let i = 0, word: string | null = null;
+  const flush = (): void => { if (word !== null) { toks.push({ word }); word = null; } };
+  while (i < text.length) {
+    const c = text[i] ?? "";
+    if (c === "'" || c === '"') {
+      const j = text.indexOf(c, i + 1);
+      const end = j === -1 ? text.length : j;
+      word = (word ?? "") + text.slice(i + 1, end).replace(/\\(.)/g, c === '"' ? "$1" : "\\$1");
+      i = end + 1; continue;
+    }
+    if (c === "\\" && i + 1 < text.length) { word = (word ?? "") + (text[i + 1] ?? ""); i += 2; continue; }
+    if (/\s/.test(c) && c !== "\n") { flush(); i++; continue; }
+    const two = text.slice(i, i + 2);
+    // `2>` / `2>>`: the digits are a file descriptor, not a word
+    const fdThenFlush = (): void => { if (word !== null && /^\d+$/.test(word)) word = null; else flush(); };
+    if (two === ">>" || two === "&>") { fdThenFlush(); toks.push({ op: two === "&>" ? ">" : ">>" }); i += 2; continue; }
+    if (c === ">") { fdThenFlush(); toks.push({ op: ">" }); i++; continue; }
+    if (two === "&&" || two === "||" || two === "<<") { flush(); toks.push({ op: two }); i += 2; continue; }
+    if ([";", "|", "\n", "<", "&", "(", ")"].includes(c)) { flush(); toks.push({ op: c }); i++; continue; }
+    word = (word ?? "") + c; i++;
+  }
+  flush();
+  const out: string[] = [];
+  let cmdWords: string[] = [];
+  const endCommand = (): void => {
+    const [head, ...args] = cmdWords;
+    const name = head === undefined ? "" : path.posix.basename(head.replace(/\\/g, "/"));
+    const plain = args.filter((w) => !w.startsWith("-"));
+    if (["cp", "mv", "install", "ln"].includes(name) && plain.length >= 2) out.push(plain[plain.length - 1] ?? "");
+    if ((name === "sed" && args.some((w) => w === "-i" || w.startsWith("-i") || w.startsWith("--in-place"))) || (name === "perl" && args.some((w) => /^-\w*i/.test(w)))) {
+      // skip the flags, the in-place suffix (`-i ''`), the script (`-e X`, or the first bare word for sed); the rest are files
+      let script = false;
+      for (let k = 0; k < args.length; k++) {
+        const w = args[k] ?? "";
+        if (w === "-i" && args[k + 1] === "") { k++; continue; }
+        if (w === "-e" || w === "-f" || (name === "perl" && /^-\w*e$/.test(w))) { k++; script = true; continue; }
+        if (w.startsWith("-")) continue;
+        if (!script && name === "sed") { script = true; continue; }
+        out.push(w);
+      }
+    }
+    if (/^(python3?|node)$/.test(name)) {
+      const at = args.findIndex((w) => w === "-c" || w === "-e");
+      const code = at === -1 ? undefined : args[at + 1];
+      if (code) for (const m of code.matchAll(/['"`]([^'"`\n]+)['"`]/g)) if (m[1]) out.push(m[1]);
+    }
+    if (cmdWords.some((w) => /plan-skeleton/.test(w))) out.push(...cmdWords.filter((w) => !w.startsWith("-")));
+    const tee = cmdWords.findIndex((w) => w === "tee" || w.endsWith("/tee"));
+    if (tee !== -1) out.push(...cmdWords.slice(tee + 1).filter((w) => !w.startsWith("-")));
+    cmdWords.forEach((w, k) => {
+      if ((w === "--out" || w === "-o") && cmdWords[k + 1] !== undefined) out.push(cmdWords[k + 1] ?? "");
+      const eq = /^--out=(.+)$/.exec(w);
+      if (eq && eq[1]) out.push(eq[1]);
+    });
+    cmdWords = [];
+  };
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k];
+    if (!t) continue;
+    if ("word" in t) { cmdWords.push(t.word); continue; }
+    if (t.op === ">" || t.op === ">>") { const n = toks[k + 1]; if (n && "word" in n) { out.push(n.word); k++; } continue; }
+    if (t.op === "<" || t.op === "<<") { const n = toks[k + 1]; if (n && "word" in n) k++; continue; } // input / heredoc delimiter
+    endCommand();
+  }
+  endCommand();
+  return out.filter(Boolean);
+}
+
+// Does a path the session wrote name `rel` (project-relative) under `cwd`?
+function sameFile(w: WrittenPath, rel: string, cwd: string): boolean {
+  const c = w.path.trim().replace(/\\/g, "/");
+  if (!c) return false;
+  const want = path.resolve(cwd, rel).replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path.posix.normalize(c).toLowerCase().endsWith("/" + path.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
+  const got = path.resolve(w.base || cwd, c).replace(/\\/g, "/");
+  return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
+}
+
+function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null | undefined, cwd: string): { plans: PlanFile[]; scope: PlanScope } {
+  const agent = typeof input.agent_transcript_path === "string" && !!input.agent_transcript_path;
   const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
   // (a non-string path would have thrown in readFileSync and been caught the same way)
-  if (!file || typeof file !== "string") return open;
-  let text: string;
-  try { text = fs.readFileSync(file, "utf8"); } catch { return open; }
-  const mentioned = (p: PlanFile): boolean => { const base = path.basename(p.file); return text.includes("plan/" + base) || text.includes("plan\\\\" + base); };
+  if (!file || typeof file !== "string") return { plans: open, scope: "unscoped" };
+  let writes: WrittenPath[];
+  // the session transcript may carry a subagent's sidechain entries: those are not this session's actions
+  try { writes = transcriptActions(fs.readFileSync(file, "utf8"), !agent); } catch { return { plans: open, scope: "unscoped" }; }
+  // rule (b): a written file claims the ONE open plan that lists it; a file two or more open plans list claims none
+  const listers = new Map<string, number>();
+  for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
+  const owns = (p: PlanFile): boolean => {
+    const planRel = path.relative(cwd, path.resolve(p.file));
+    if (writes.some((w) => sameFile(w, planRel, cwd))) return true;
+    return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile(w, f, cwd)));
+  };
   const known = all && all.length ? all : open;
-  if (!known.some(mentioned)) return open;
-  return open.filter(mentioned);
+  if (!known.some(owns)) return { plans: [], scope: "none-named" };
+  return { plans: open.filter(owns), scope: "named" };
 }
 
 // ================================================================ CLI
@@ -969,30 +1568,35 @@ const USAGE = [
   `       ${scriptCmd("verify-build")} <plan.json>…        check these plans now (no stdin read)`,
   `       ${scriptCmd("verify-build")} --status [<plan.json>…] [--json]   print each plan's computed status (all of design/plan/ by default); never writes`,
   "",
-  "Blocks (exit 2) on exactly two things: a raw colour the plan resolved to a token, in a source file of",
-  "files[] (comments, prose strings and .svg/.json/non-source files are not scanned); and a visible",
-  "design node with no anchor (itself or an ancestor) in anchors{}. Everything else is a warning (exit 0).",
+  "Blocks (exit 2) on: a raw colour the plan resolved to a token, in a source file of files[] (comments,",
+  "prose strings and .svg/.json/non-source files are not scanned); a visible design node with no anchor",
+  "(itself or an ancestor) in anchors{}; and, on web profiles, no data-dt-node tag in any plan's files[]",
+  "(opt out: \"tagging\": {\"off\": true, \"reason\": \"…\"}). Everything else is a warning (exit 0).",
+  "Hook mode checks the plans the stopping agent's transcript names; a transcript that names none checks nothing.",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<…>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
   "  2. failed       a verify-report@2 for this screen says fail (never hidden behind the hook's state)",
   "  3. blocked      the Stop hook's last check blocked",
-  "  4. stale        a file in files[] changed (by content) since the hook passed",
+  "  4. stale        a file in files[] or a module anchors/components map changed (by content) since the hook passed",
   "  5. pending      the hook has not checked this version of the plan",
-  "  6. unverified | static-only | verified   what the report says: verified only for an @2 'pass' that",
-  "     measured this design and these files, by content hash (no report / a pre-@2 report / other",
-  "     design or code -> unverified). A stored \"verified\" is ignored.",
+  "  6. unverified | static-only | verified | verified-with-deviations   what the report says: verified",
+  "     only for an @2 'pass' that measured this design, these files and the plan's current waivers[]/",
+  "     descopes[], by content hash (no report / a pre-@2 report / other design, code or waivers ->",
+  "     unverified); verified-with-deviations when every report passes and >=1 says 'pass-with-deviations'.",
+  "     A stored \"verified\" is ignored. waivers[]/descopes[] and verification{} are not part of the hook's",
+  "     planHash (a hook record with the older formula, which hashed verification, is still accepted).",
   "Every non-verified status carries a non-empty why: the hook's state AND what the report says (a",
   "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}.",
 ].join("\n");
 
 interface RecordResult { blocking: string[]; warnings: string[]; cleared: PlanStoredStatus | null | undefined; status: StatusResult }
 
-function checkAndRecord(p: PlanFile, cwd: string): RecordResult {
+function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): RecordResult {
   const exp = locateExport(p.plan, p.file, cwd);
   const reports = locateReports(p.plan, p.file, cwd, exp);
   setPhase(`checking ${path.basename(p.file)}`);
-  const { blocking, warnings } = checkPlan(p, cwd, { export: exp, reports });
+  const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...(graph ? { graph } : {}) });
   const plan = p.plan;
   const cleared = COMPUTED_STORED.has(String(plan.status || "").toLowerCase()) ? plan.status : null;
   if (cleared) delete plan.status;
@@ -1005,12 +1609,13 @@ function checkAndRecord(p: PlanFile, cwd: string): RecordResult {
     warnings: warnings.length,
     planHash: planHash(plan),
     files: fileHashes(plan, cwd),
+    ...(tagCoverage ? { tagCoverage } : {}),
   };
   // The plan's mtime is the staleness clock — it measures the BUILDER's last edit. The hook's own
   // write must not reset it, or a blocked leftover plan would stay "fresh" (and nag) forever.
   let times: [Date, Date] | null = null;
   try { const s = fs.statSync(p.file); times = [s.atime, s.mtime]; } catch { /* new file */ }
-  fs.writeFileSync(p.file, JSON.stringify(plan, null, 2) + "\n");
+  writePlan(p.file, plan); // L5: atomic, in the plan file's own format (BOM, indentation, line endings)
   if (times) try { fs.utimesSync(p.file, times[0], times[1]); } catch { /* ignore */ }
   const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports });
   return { blocking, warnings, cleared, status: st };
@@ -1031,7 +1636,12 @@ async function main(argv: string[]): Promise<number> {
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p): p is BadPlan => !isPlanFile(p)) } : findPlans(process.cwd());
     for (const b of bad) console.error(`verify-build: cannot read plan ${b.file}: ${b.error}`);
     const show = (f: string): string => { const r = path.relative(process.cwd(), f); return r.startsWith("..") ? f : r; };
-    const rows = plans.map((p) => Object.assign({ plan: show(p.file) }, computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) })));
+    // L12 (D119 addendum): the mapModules the code hash cannot follow — one note per plan, here only (the Stop hook stays quiet)
+    const rows = plans.map((p) => {
+      const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });
+      const skipped = contentHash.planCodeSkippedNote(p.plan, rootOfPlan(p.file));
+      return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
+    });
     if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" · ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
     else for (const r of rows) console.log(`${r.plan}: ${r.status}${r.reasons.length ? "\n  - " + r.reasons.join("\n  - ") : ""}`);
     if (!plans.length) console.error("verify-build: no plans found (design/plan/*.json)");
@@ -1067,22 +1677,32 @@ async function main(argv: string[]): Promise<number> {
     setPhase("finding open plans in design/plan/");
     const { plans, bad } = findPlans(cwd);
     // A plan the hook cannot read is not checked — say so on every stop rather than skip it silently.
-    for (const b of bad) console.error(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; fix it (plan-skeleton.js rewrites the skeleton fields and keeps what you filled)`);
+    for (const b of bad) console.error(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
     const open = plans.filter((p) => isOpen(p, cwd));
     if (!open.length) return 0; // fast path
-    for (const p of ownPlans(open, input, plans)) all.push({ p, cwd });
+    const own = ownPlans(open, input, plans, cwd);
+    if (own.scope === "none-named") {
+      console.error(`verify-build: this session wrote or ran nothing naming a plan under design/plan/ — nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
+      return 0;
+    }
+    for (const p of own.plans) all.push({ p, cwd });
   }
 
-  const blockedOut: string[] = [];
+  const blockedOut: string[] = [], lines: string[] = [];
+  // A warning several plans share (a merged token on a shared theme) is printed ONCE, naming them all.
+  const warned = new Map<string, string[]>();
+  const graphs = new Map<string, ProjectGraph>(); // built once per project root per run, on first use
   for (const { p, cwd } of all) {
-    const res = checkAndRecord(p, cwd);
+    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd)));
     const name = path.basename(p.file);
-    if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" — status is computed now (verify-build.js --status), never stored`);
-    for (const w of res.warnings) console.error(`verify-build: warning (${name}): ${w}`);
+    if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" — status is computed now (${scriptCmd("verify-build")} --status), never stored`);
+    for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
     if (res.blocking.length) blockedOut.push(`# ${name}`, ...res.blocking.map((m) => `  - ${m}`));
     const why = res.blocking.length ? "see below" : res.status.reasons[res.status.reasons.length - 1];
-    console.error(`verify-build: ${name}: hook ${res.blocking.length ? "BLOCKED" : "passed"} · computed status: ${res.status.status}${why ? ` — ${why}` : ""}`);
+    lines.push(`verify-build: ${name}: hook ${res.blocking.length ? "BLOCKED" : "passed"} · computed status: ${res.status.status}${why ? ` — ${why}` : ""}`);
   }
+  for (const [w, names] of warned) console.error(`verify-build: warning (${names.join(", ")}): ${w}`);
+  for (const l of lines) console.error(l);
   if (blockedOut.length) {
     console.error("\nverify-build: build-screen check failed — do not report this screen as done until these are resolved");
     console.error("(a plan that will not be finished: set its status to \"abandoned\"; a build paused on a question for the user: \"awaiting-user\", then ask):\n");
@@ -1094,7 +1714,7 @@ async function main(argv: string[]): Promise<number> {
 
 export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
-  verificationWarnings, verificationContradictions, deviationWarnings, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
+  verificationWarnings, recordedReportWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
   colorLiterals, arbitraryPx, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
 };
 

@@ -1,8 +1,8 @@
 // component-match.ts — which design-system component is this instance, when the KEYS cannot say?
 //
 // A component's identity is its publish `key`, and every tool here resolves by key first. But
-// duplicating a Figma file re-mints every key in the copy (livetest-3 finding 226: `TeamSmart (Copy)`
-// and `Design System - NERA (Copy)`), so a screen's instances then match the pulled catalog by key
+// duplicating a Figma file re-mints every key in the copy (livetest-3 finding 226: `TideStack (Copy)`
+// and `Design System - NIMA (Copy)`), so a screen's instances then match the pulled catalog by key
 // 0 times out of 51 — while 26 of its 41 distinct components are plainly the catalog's own `Button`,
 // `Header`, `Pagination`… by name AND by prop signature. Three tools concluded "the catalog is not
 // this screen's library", the build made every component `verdict:"new"`, and none of the design
@@ -24,7 +24,7 @@
 // The reference this was checked against is livetest-3's hand-written scripts-test/map-components.mjs:
 // same visible-instance walk, same name rule, same variant/prop evidence and tie-breaks.
 import type {
-  CatalogComponent, ComponentPropDef, ComponentsCatalog, IrNode, MatchAlternative, MatchInstance, MatchResult, MatchRow, ProposedMatchRow, ScreenDoc, VisibleInstance,
+  CatalogComponent, ComponentPropDef, ComponentsCatalog, IrNode, MatchAlternative, MatchInstance, MatchResult, MatchRow, NameVerdict, ProposedMatchRow, ScreenDoc, VisibleInstance,
 } from "./types.ts";
 import { screenRoots } from "./export-shape.ts";
 import { isJsonObject } from "./types.ts";
@@ -167,6 +167,9 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
       rows.push(row);
       continue;
     }
+    // DT-27: the same-named entries, so nameVerdict can tell "several candidates, none verified" (ambiguous)
+    // from "the one candidate disagrees" (unmatched), and plan-skeleton can list them.
+    if (cands.length > 1) row.candidates = cands.map((c) => ({ ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name }));
     // Every instance of the name must agree with the winner — one mismatching variant is enough to
     // refuse the proposal, since a mapping is per component, not per instance.
     const [firstInst, ...otherInsts] = list;
@@ -223,6 +226,25 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
   };
 }
 
+// DT-27: the ONE name rule cross-check's coverage and plan-skeleton's catalog column both read, so they
+// cannot disagree on a component:
+//   * matched   — a verified match that is not a tie between DIFFERENT signatures (a duplicate-definitions
+//                 tie is harmless: the entries are one definition);
+//   * ambiguous — a different-signatures tie, or 2+ same-named candidates of which none verified: a person
+//                 must pick, and it never counts as a match;
+//   * unmatched — otherwise (no candidate of that name, or the single candidate's signature disagrees).
+// `reason` is the row's own explanation, one line.
+function nameVerdict(row: MatchRow): NameVerdict {
+  if (row.match && row.tie === "different-signatures") {
+    return { status: "ambiguous", reason: `several catalog entries named ${JSON.stringify(row.name)} agree with the instance equally but have DIFFERENT signatures — confirm which one` };
+  }
+  if (row.match) return { status: "matched", reason: `name + ${row.evidence === "name+no-props" ? "no props to check (a plain component)" : "prop signature"}${row.tie === "duplicate-definitions" ? "; same-named duplicates of one definition" : ""}` };
+  const n = (row.candidates || []).length;
+  if (n > 1) return { status: "ambiguous", reason: `${n} catalog entries are named ${JSON.stringify(row.name)} and none agrees with the instance's prop signature — confirm which one, if any` };
+  const why = (row.reasons || []).find((r) => /no catalog entry named|no prop signature agrees/.test(r));
+  return { status: "unmatched", reason: why || `no catalog entry named ${JSON.stringify(row.name)} agrees with the instance` };
+}
+
 // The copy/re-key verdict, in ONE place so cross-check, audit and drift-lint cannot disagree:
 // (almost) nothing resolves by key, yet most names that DO exist in the catalog agree on signature.
 const REKEY_MIN_PROPOSALS = 3;
@@ -233,4 +255,4 @@ function isRekeyed(result: MatchResult): boolean {
     s.withCandidates > 0 && s.proposedWithSignature / s.withCandidates >= REKEY_MIN_SHARE;
 }
 
-export { visibleInstances, parseVariant, matchByNameAndSignature, isRekeyed, REKEY_MIN_PROPOSALS, REKEY_MIN_SHARE };
+export { visibleInstances, parseVariant, matchByNameAndSignature, nameVerdict, isRekeyed, REKEY_MIN_PROPOSALS, REKEY_MIN_SHARE };

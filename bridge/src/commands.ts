@@ -128,6 +128,12 @@ export interface NodeSummary {
   h?: number;
   hidden?: true;
   hasChildren?: boolean;
+  /** number of direct children, when they are readable */
+  childCount?: number;
+  /** first-visible-text title, only on rows that share name + size with another row of the same listing */
+  title?: string;
+  /** K-6 (D145): colliding rows whose titles do not tell them apart — ≤ 3 texts this row shows and its twins do not */
+  distinctTexts?: string[];
 }
 /** One page of a listPages reply. `frames` is present at depth 2 only, and absent on an `unreadable` page. */
 export interface PageSummary {
@@ -205,6 +211,10 @@ export interface ScreenshotReply {
   reference: string;
   manifest: Manifest;
   assets: Asset[];
+  /** DT-06: the node's width/height and the render scale the plugin used — absent from an older plugin. */
+  w?: number;
+  h?: number;
+  scale?: number;
 }
 /** Every reply write-out.ts knows how to land on disk. The members are told apart by the fields only
  *  they carry (`screen` / `reference` / `layersDoc`), which is what writeAny narrows on. */

@@ -18,10 +18,18 @@
 //                 key/setKey/name/variant/props and its identity: the design-system catalog entry it
 //                 matches — by key, or by P1's name+prop-signature matcher (component-match.ts) when a
 //                 duplicated file re-keyed everything — and the codeconnect.local.json mapping when one
-//                 exists. Component identity comes from here, never from a hand-placed attribute.
+//                 exists. Component identity comes from here, never from a hand-placed attribute. A name
+//                 that component-match calls ambiguous (nameVerdict — the rule cross-check uses too, DT-27)
+//                 gets `catalog: {by:"ambiguous", candidates}`: never a match, the entries to choose from.
 //   anchors{}     every VISIBLE node id → {name, type, parent, mapModule:""}. Fill `mapModule` on
 //                 sections and instances; a node whose own mapModule is empty is covered by its nearest
 //                 mapped ancestor, so a 12-row `.map()` or a reused shell needs one entry, not twelve.
+//   anchorsSuggested[]  where to put those entries (F-34): the screen frame itself first ("screen"; when it is an
+//                 INSTANCE, that is all), the root's direct children ("section"), every outermost INSTANCE
+//                 ("instance"), and each container whose children are mostly rows of one shape, >= 3 (a list:
+//                 "repeat", its rows and the dividers between them are covered by it; its other children are still
+//                 suggested). Every visible anchor is a suggestion or under one.
+//                 Not part of counts; refreshed on every merge.
 //   hidden[]      the roots of every hidden subtree (`hidden: true`), with how many nodes each hides.
 //
 // Hidden predicate — the ONE rule (design-to-code/hidden.ts, shared with verify-screen/audit/drift-lint
@@ -33,10 +41,12 @@
 // existing plan it MERGES: every model-filled field (codeToken, mapModule, verdict, decision, …) and
 // every top-level field the skeleton does not own (files, architecture, verification, deviations,
 // status, …) is kept; rows that no longer exist in the export are dropped and counted on stderr.
+// --seed-from <sibling plan> (DT-33) then fills what is still empty from another screen's plan — only a
+// row with the same identity (and, for a token, the same value), marked `seededFrom` for review.
 
 import fs from "node:fs";
 import path from "node:path";
-import { matchByNameAndSignature, parseVariant } from "./component-match.ts";
+import { matchByNameAndSignature, nameVerdict, parseVariant } from "./component-match.ts";
 import { walkWithHidden } from "./hidden.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
@@ -48,7 +58,7 @@ import { isCodeConnectMap } from "./map-validate.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import type {
-  CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, PageIndex, PagesRootIndex, Plan,
+  AnchorSuggestion, CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, PageIndex, PagesRootIndex, Plan,
   PlanAnchor, PlanAuditGate, PlanComponentMatch, PlanComponentRow, PlanHiddenRoot, PlanTokenRow, PlanTokenVerdict, ScreenDoc, TokenKind, TokensDoc, Variable, VariableAlias,
   MatchInstance, VariableType,
 } from "./types.ts";
@@ -58,12 +68,13 @@ import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const USAGE = [
-  `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>]`,
+  `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
   "",
   "  Emits the build-screen plan skeleton for one screen, derived from the export:",
   "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
   "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping)",
   "    anchors{}     every VISIBLE node id, mapModule empty — fill it on sections and instances",
+  "    anchorsSuggested[]  the few anchors worth filling first (the screen frame, root sections, outermost instances, repeated lists)",
   "    hidden[]      roots of hidden subtrees (hidden: true or a hidden ancestor) — never built, never anchored",
   "    screenName / nodeId / file / route   the header every skill resolves a plan by",
   "",
@@ -78,6 +89,11 @@ const USAGE = [
   "  --map <file>         codeconnect.local.json (default: design/codeconnect.local.json or",
   "                       codeconnect.local.json in the current directory, when present).",
   "  --route <route>      the app route this screen will live at (else left null for you to fill).",
+  "  --seed-from <plan>   a sibling screen's plan (repeatable; the first that has an answer wins). A row still",
+  "                       empty here takes that plan's answer when it is the SAME thing: a token with the same",
+  "                       key (or, both keyless, the same Figma name) AND the same value → codeToken/verdict/",
+  "                       decision; a component with the same setKey (else key) → mapModule/verdict/decision.",
+  "                       Nothing filled is ever overwritten. Seeded rows carry `seededFrom` — review them.",
 ].join("\n");
 
 /** What walkNodes hands its visitor beside the node. */
@@ -365,10 +381,14 @@ function buildComponents(doc: ScreenDoc | null | undefined, catalog: ComponentsC
     // the first of key / setKey the catalog has (catalog entries are objects, so `??` = first hit)
     const c = (i.key ? catKeys.get(i.key) : undefined) ?? (i.setKey ? catKeys.get(i.setKey) : undefined);
     const r = byName.get(i.name);
+    // DT-27: a name match is component-match's nameVerdict — the one rule cross-check uses too. A tie
+    // between different signatures, or several same-named entries none of which agrees, is `ambiguous`:
+    // never a match, but the candidates are listed so the builder sees why and what to choose from.
+    const verdict = !c && r ? nameVerdict(r).status : null;
     if (c) match = { by: "key", ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name };
-    else if (r && r.match) {
+    else if (r && r.match && verdict === "matched") {
       match = { by: r.evidence || "name+signature", ...ifDefined("id", r.match.id), ...ifDefined("key", r.match.key), name: r.match.name, confirmed: false };
-    }
+    } else if (r && verdict === "ambiguous") match = { by: "ambiguous", candidates: r.candidates || [] };
     const mapped = [i.key, i.setKey].map((x) => x && mapKeys.get(x)).find(Boolean) || null;
     const row: PlanComponentRow = {
       nodeId: i.nodeId,
@@ -397,10 +417,72 @@ export interface SkeletonInput {
 }
 /** The plan as this file writes it: every skeleton-owned field is present (Plan leaves them optional). */
 export interface SkeletonPlan extends Plan {
+  /** skeleton-owned, refreshed on merge, not in counts */
+  anchorsSuggested: AnchorSuggestion[];
   tokens: SkeletonTokenRow[]; components: PlanComponentRow[]; anchors: Record<string, PlanAnchor>; hidden: PlanHiddenRoot[];
   counts: NonNullable<Plan["counts"]>;
   /** the skeleton writes every auditGate field (a person edits them later) */
   auditGate: Required<PlanAuditGate> | null;
+}
+
+// F-34: the boundaries a builder should name, so 12-291 anchor slots need not be filled one by one. Tree order.
+// The screen frame comes first (it has no ancestor to cover it; a frame that is an INSTANCE is the whole
+// suggestion, its internals belong to the component). Each suggestion covers its subtree: a root section, an outermost instance (its internals belong to the component),
+// or a list — a `.map()`: a container whose most frequent child shape occurs >= 3 times, when those rows are the
+// MAJORITY of its SHAPED visible children (a row variant that keeps the rows' layer name — a "Table row" with a badge where
+// the others have none — counts as a row). Found by sibling signature, not by code structure. A childless leaf (a
+// TEXT, a vector, a rectangle) has no shape to repeat — a title + description + note is no list — and three fields
+// among six children are a form, not a list. Leaves do not vote (a title above the rows, a LINE divider), and a
+// shaped child sitting between two rows (a divider instance) is their separator: it rides along with the repeat
+// and does not vote either. A list's other children (a search bar above the rows) are still
+// visited and suggested by the same rules.
+const REPEAT_MIN = 3;
+function suggestAnchors(doc: ScreenDoc | null | undefined, vis: Visibility): AnchorSuggestion[] {
+  const out: AnchorSuggestion[] = [];
+  const kids = (n: IrNode): IrNode[] => (n.children || []).filter((c) => !!c.id && vis.visible.has(c.id));
+  const size = (n: IrNode): number => 1 + kids(n).reduce((a, c) => a + size(c), 0);
+  const sig = (n: IrNode): string | null => {
+    if (n.type === "INSTANCE") { const mc = n.mainComponent; return "I:" + ((mc && (mc.setKey || mc.key || mc.setName || mc.name)) || n.name); }
+    const k = kids(n);
+    return k.length ? n.type + ":" + k.map((c) => c.type).join(",") : null; // a childless leaf: no shape
+  };
+  // a list's rows (the most frequent shape, >= REPEAT_MIN, plus same-named variants of it) when they are the majority
+  const listRows = (n: IrNode): Set<IrNode> | null => {
+    const all = kids(n);
+    const seen = new Map<string, IrNode[]>();
+    for (const c of all) { const g = sig(c); if (g !== null) getOrInit(seen, g, () => []).push(c); }
+    let best: IrNode[] | null = null, bestSig: string | null = null;
+    for (const [g, l] of seen) if (l.length >= REPEAT_MIN && (!best || l.length > best.length)) { best = l; bestSig = g; }
+    if (!best) return null;
+    const names = new Set(best.map((c) => c.type + ":" + c.name));
+    const rows = all.filter((c) => { const g = sig(c); return g !== null && (g === bestSig || names.has(c.type + ":" + c.name)); });
+    // childless leaves (a title, a LINE divider) have no shape, so they do not vote; shaped children between rows are
+    // the rows' separators (divider instances) only when they share ONE shape and fill every gap — a form's mixed
+    // fields between its text fields are not separators
+    const rowSet = new Set(rows);
+    const isRow = (c: IrNode | undefined): boolean => c !== undefined && rowSet.has(c);
+    const between = all.filter((c, i) => !rowSet.has(c) && sig(c) !== null && isRow(all[i - 1]) && isRow(all[i + 1]));
+    const sepSigs = new Set(between.map(sig));
+    // …and nothing of that shape sits outside the gaps ([Q, A, Q, A, Q, A] is pairs, not rows with separators)
+    const seps = between.length === rows.length - 1 && sepSigs.size === 1 && !all.some((c) => !between.includes(c) && sepSigs.has(sig(c))) ? between : [];
+    const shaped = all.filter((c) => sig(c) !== null).length - seps.length;
+    return rows.length * 2 > shaped ? new Set([...rows, ...seps]) : null;
+  };
+  const visit = (n: IrNode, section: boolean): void => {
+    const instance = n.type === "INSTANCE";
+    const rows = instance ? null : listRows(n);
+    const why = section ? "section" : instance ? "instance" : rows ? "repeat" : null;
+    if (why) out.push({ id: n.id, name: n.name, why, covers: size(n) });
+    if (instance) return;
+    for (const c of kids(n)) if (!rows || !rows.has(c)) visit(c, false);
+  };
+  for (const r of screenRoots(doc)) {
+    if (!r.id || !vis.visible.has(r.id)) continue; // a hidden frame is never built
+    out.push({ id: r.id, name: r.name, why: "screen", covers: size(r) });
+    if (r.type === "INSTANCE") continue; // the frame is a template instance: its internals belong to the component
+    for (const c of kids(r)) visit(c, true);
+  }
+  return out;
 }
 
 function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, route, indexRow }: SkeletonInput): SkeletonPlan {
@@ -421,11 +503,16 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   // (or a person) has somewhere to record "acknowledged and overridden, here is why" instead of the
   // build silently proceeding past a Blocked verdict. overridden/reason/decidedBy/decidedAt are left
   // for a person to fill; a re-run of this script never clears what was already decided (see merge()).
+  // F-44: blockers are the audit's finding ids (`code` / `code@nodeId`), and crossCheckFile points at the
+  // cross-check report beside it (`<audit stem>.cross.json`, where cross-file findings carry the same ids).
   let auditGate: Required<PlanAuditGate> | null = null;
   try {
-    const g = auditGateStatus(cwd || process.cwd(), screenFile, screenName);
+    const base = cwd || process.cwd();
+    const g = auditGateStatus(base, screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
-      auditGate = { auditFile: g.auditFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
+      const cross = g.auditFile.replace(/\.json$/, ".cross.json");
+      const crossCheckFile = cross !== g.auditFile && fs.existsSync(path.join(base, cross)) ? cross : null;
+      auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
   } catch { /* the auditGate pre-fill is best-effort: plan-skeleton must never fail on reading an audit */ }
   // (audit-gate.ts is a static import now; the CJS version's lazy require — and its "could not load →
@@ -446,6 +533,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     tokens,
     components,
     anchors,
+    anchorsSuggested: suggestAnchors(doc, vis),
     hidden: vis.hiddenRoots,
     deviations: [],
     auditGate,
@@ -462,11 +550,22 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
 export interface MergeResult { plan: Plan; dropped: { tokens: number; components: number; anchors: number } }
 
 // Merge a fresh skeleton into an existing plan without losing anything a person or the model wrote.
-const FILLED_TOKEN = ["codeToken", "verdict", "decision"] as const;
-const FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName"] as const;
+const FILLED_TOKEN = ["codeToken", "verdict", "decision", "acknowledged", "seededFrom"] as const;
+const FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName", "seededFrom"] as const;
+
+// F-44: the skeleton owns what it READ — auditFile, crossCheckFile, blockers (the audit's current ids) — and a
+// person owns the decision: overridden / reason / decidedBy / decidedAt / verdict are never touched. (It used
+// to keep the whole old gate, so its blockers froze at the ids of the first run.) With no fresh gate (no audit
+// file now, or no blockers left in it) the old one stays as it was: a decision is never cleared.
+function mergeAuditGate(prev: PlanAuditGate | null | undefined, fresh: Required<PlanAuditGate> | null): PlanAuditGate | null {
+  if (!prev || typeof prev !== "object") return fresh;
+  if (!fresh) return prev;
+  return { ...prev, auditFile: fresh.auditFile, crossCheckFile: fresh.crossCheckFile, blockers: fresh.blockers };
+}
 function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult {
   if (!prev || typeof prev !== "object") return { plan: fresh, dropped: { tokens: 0, components: 0, anchors: 0 } };
   const out: Plan = Object.assign({}, prev, {
+    anchorsSuggested: fresh.anchorsSuggested, // skeleton-owned: refreshed, like hidden[]
     schema: fresh.schema,
     screenName: prev.screenName || fresh.screenName,
     nodeId: fresh.nodeId,
@@ -474,8 +573,7 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
     file: fresh.file,
     exportedAt: fresh.exportedAt,
     hidden: fresh.hidden,
-    // Never clear a decided auditGate; only fill one in if the plan never had one.
-    auditGate: prev.auditGate || fresh.auditGate,
+    auditGate: mergeAuditGate(prev.auditGate, fresh.auditGate),
     counts: fresh.counts,
   });
   const dropped = { tokens: 0, components: 0, anchors: 0 };
@@ -508,6 +606,50 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
   return { plan: out, dropped };
 }
 
+// ---------------------------------------------------------------- --seed-from (DT-33)
+
+/** What seed() copied from one sibling plan. */
+export interface SeedCount { tokens: number; components: number }
+
+const isEmpty = (v: unknown): boolean => v === undefined || v === null || v === "";
+const SEED_TOKEN = ["codeToken", "verdict", "decision"] as const;
+const SEED_COMPONENT = ["mapModule", "verdict", "decision"] as const;
+
+// Fill what is still EMPTY in `plan` from a sibling screen's plan, in place. Only the same thing is seeded:
+//   * a token row with the same key — or, when both rows are keyless, the same Figma name — AND the same
+//     value (JSON-equal): a same-named token with a different value is exactly the trap a mapping must not
+//     carry over. A row the skeleton marked hidden-only needs no code token and is left alone, and so is a
+//     sibling row that is hidden-only there;
+//   * a component row with the same setKey, else the same key.
+// A field already filled (by the skeleton, the merge, or an earlier --seed-from) is never overwritten. A
+// row that took anything is marked `seededFrom: <seed basename>` (the decision was made on another screen —
+// review it); seeded rows then count as filled like any other answer, so a re-run keeps them.
+function seed(plan: Plan, from: Plan, label: string): SeedCount {
+  const n: SeedCount = { tokens: 0, components: 0 };
+  const sameValue = (a: PlanTokenRow, b: PlanTokenRow): boolean => JSON.stringify(a.value ?? null) === JSON.stringify(b.value ?? null);
+  const sameToken = (a: PlanTokenRow, b: PlanTokenRow): boolean =>
+    (a.key ? a.key === b.key : !b.key && !!a.figmaName && a.figmaName === b.figmaName) && sameValue(a, b);
+  const answered = <R extends object, K extends keyof R>(r: R, fields: readonly K[]): boolean => fields.some((f) => !isEmpty(r[f]));
+  for (const row of plan.tokens || []) {
+    if (row.seededFrom || row.verdict === "hidden-only" || !SEED_TOKEN.some((f) => isEmpty(row[f]))) continue;
+    const src = (from.tokens || []).find((t) => t.verdict !== "hidden-only" && sameToken(row, t) && answered(t, SEED_TOKEN));
+    if (!src) continue;
+    let took = false;
+    for (const f of SEED_TOKEN) if (isEmpty(row[f]) && !isEmpty(src[f])) { Object.assign(row, { [f]: src[f] }); took = true; }
+    if (took) { row.seededFrom = label; n.tokens++; }
+  }
+  const sameComponent = (a: PlanComponentRow, b: PlanComponentRow): boolean => a.setKey ? a.setKey === b.setKey : !!a.key && a.key === b.key;
+  for (const row of plan.components || []) {
+    if (row.seededFrom || !SEED_COMPONENT.some((f) => isEmpty(row[f]))) continue;
+    const src = (from.components || []).find((c) => sameComponent(row, c) && answered(c, SEED_COMPONENT));
+    if (!src) continue;
+    let took = false;
+    for (const f of SEED_COMPONENT) if (isEmpty(row[f]) && !isEmpty(src[f])) { Object.assign(row, { [f]: src[f] }); took = true; }
+    if (took) { row.seededFrom = label; n.components++; }
+  }
+  return n;
+}
+
 const isIndexDoc = (x: unknown): x is PagesRootIndex | PageIndex => isPagesRootIndex(x) || isPageIndex(x);
 function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow | null {
   // pages/<Page>/<Screen>__id.json → ../../pages/index.json or ../index.json (best effort: the title only)
@@ -524,13 +666,14 @@ function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow 
 const cannotRead = (what: string, file: string, error: string): number => { console.error(`plan-skeleton: cannot read ${what} ${file}: ${error}`); return 1; };
 
 function main(argv: string[]): number {
-  const OPTIONS = { out: { type: "string" }, map: { type: "string" }, route: { type: "string" }, help: { type: "boolean", short: "h" } } as const;
+  const OPTIONS = { out: { type: "string" }, map: { type: "string" }, route: { type: "string" }, "seed-from": { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
   const { values: flags, positionals } = cliParse("plan-skeleton", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); return 0; }
   const { out, map: mapFlag, route } = flags;
+  const seedFiles = flags["seed-from"] || [];
   const [screenFile, varsFile, dsDir] = positionals;
   // (three positionals means all three are set; the undefined tests only let the type see it)
-  if (positionals.length !== 3 || screenFile === undefined || varsFile === undefined || dsDir === undefined || [out, mapFlag, route].some((v) => v === "")) { console.error(USAGE); return 2; }
+  if (positionals.length !== 3 || screenFile === undefined || varsFile === undefined || dsDir === undefined || [out, mapFlag, route, ...seedFiles].some((v) => v === "")) { console.error(USAGE); return 2; }
   const screen = readJson(screenFile, isScreenDoc);
   if (!("doc" in screen)) return cannotRead("the screen JSON", screenFile, screen.error);
   const varsRead = readJson(varsFile, isTokensDoc);
@@ -555,10 +698,25 @@ function main(argv: string[]): number {
     if (!("doc" in m)) return cannotRead("the component map", mapFile, m.error);
     mapKeys = mapKeysOf(m.doc);
   }
+  // Every seed is read up front: one that cannot be read (or is not a plan) refuses the run before anything is written.
+  const seeds: Array<{ file: string; plan: Plan }> = [];
+  for (const f of seedFiles) {
+    const r = readJson(f, anyJson);
+    const parsed = "doc" in r ? parsePlan(r.doc) : null;
+    if (!parsed || "error" in parsed) return cannotRead("the --seed-from plan", f, !("doc" in r) ? r.error : parsed && "error" in parsed ? parsed.error : "is not a plan");
+    seeds.push({ file: f, plan: parsed.plan });
+  }
+  const seedAll = (plan: Plan): void => {
+    for (const sd of seeds) {
+      const n = seed(plan, sd.plan, path.basename(sd.file));
+      console.error(`plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " — review them (seededFrom)" : ""));
+    }
+  };
   const nodeId = screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id;
   const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow: findIndexRow(screenFile, nodeId) });
   const c = fresh.counts;
   if (!out) {
+    seedAll(fresh);
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");
   } else {
     // An existing plan is MERGED into — so one that cannot be read (or is not a plan) is refused, untouched.
@@ -568,15 +726,16 @@ function main(argv: string[]): number {
     if (why) { console.error(`plan-skeleton: ${out} exists but ${why} — refusing to overwrite it`); return 1; }
     const prev = parsed && "plan" in parsed ? parsed.plan : null;
     const { plan, dropped } = merge(fresh, prev);
+    seedAll(plan); // after the own-plan merge: this plan's own answers always win
     fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
     fs.writeFileSync(out, JSON.stringify(plan, null, 2) + "\n");
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }
-  console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded`);
+  console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded, ${fresh.anchorsSuggested.length} suggested anchor root(s) (anchorsSuggested)`);
   return 0;
 }
 
-export { skeleton, merge, visibility, walkNodes, bindingsOf, buildTokens, buildComponents, USAGE };
+export { skeleton, merge, seed, visibility, walkNodes, bindingsOf, buildTokens, buildComponents, USAGE };
 
 // exitCode, not exit(): exit() would cut a large plan off mid-write when stdout is a pipe.
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

@@ -44,10 +44,10 @@ infinity maximum height constraint"). Either make the lazy container the scroll 
 content into `item {}`/`header` slots), or keep the parent scroll and render the grid non-lazily with
 `FlowRow`/chunked `Row`s. Fixing it with a hardcoded `.height(N.dp)` is a bug, not a fix.
 
-**Scroll, clip & sticky** — `clip:true` → `Modifier.clip(...)`; `layout.scroll` → `Modifier.verticalScroll`/
+**Scroll, clip & sticky** — `clip:true` → `Modifier.clip(...)`; `scroll` → `Modifier.verticalScroll`/
 `horizontalScroll(rememberScrollState())`, or `LazyColumn`/`LazyRow` for long content. `fixedChildren`
-**if present** (count of leading children pinned while the rest scrolls) → `LazyColumn` `stickyHeader { }`
-for that many leading children, or keep them outside the scrollable composable as a fixed header/footer.
+**if present** (the LAST N entries of `children[]` are pinned while the rest scrolls; place each by its `y`)
+→ `LazyColumn` `stickyHeader { }` for those N children, or keep them outside the scrollable composable as a fixed header/footer.
 
 **Theming (`resolvedModes`/`variableModes`)** — `resolvedModes` (root) names the effective color scheme
 this export represents; if a subtree carries its own `variableModes`, force that scheme explicitly (a
@@ -105,6 +105,8 @@ Figma named text style, not raw `.sp`; map Figma weights to `FontWeight.*`. Flag
 Slider→`Slider`, Segmented→`SingleChoiceSegmentedButtonRow { SegmentedButton(...) }`, Menu→`DropdownMenu`/
 `ExposedDropdownMenuBox`, Spinner→`CircularProgressIndicator`, Progress→`LinearProgressIndicator`,
 TextField→`TextField`/`OutlinedTextField`.
+A picker (`ExposedDropdownMenuBox`'s field, `DatePicker`) draws its own text: set the picker's text colour explicitly
+to the drawn tokens (`TextFieldDefaults.colors(…TextColor, …PlaceholderColor)`, `DatePickerDefaults.colors(…)`).
 
 **Icons** — `Icon(Icons.Default.X)` (or `Icons.Outlined/Rounded`) / `painterResource(R.drawable.x)` from the
 exported vector drawable. Never redraw a vector; reuse a Material icon only if the glyph clearly matches.

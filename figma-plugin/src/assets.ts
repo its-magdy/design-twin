@@ -32,9 +32,9 @@ const ASSET_DIR = "assets/";
 // the design, comes back with different floating-point path coordinates (measured ≤0.002px drift —
 // findings 25/222). Hashing the raw SVG text made every re-pull with zero design changes report a
 // fresh batch of "changed" assets, and made two genuinely identical icons dedupe-fail (finding 24).
-// `normalizeSvgText` (bridge/svg-normalize.js, re-exported via ./util — see its header for why 1
+// `normalizeSvgText` (bridge/src/svg-normalize.ts, re-exported via ./util — see its header for why 1
 // decimal place, not 2) is the ONE shared definition of "same SVG, modulo export noise", used here AND
-// by bridge/write-out.js AND design-to-code/design-diff.js so the three cannot silently disagree.
+// by bridge/src/write-out.ts AND design-to-code/design-diff.ts so the three cannot silently disagree.
 // PNG/base64 assets are untouched: they have no textual coordinate space to normalise, and their
 // pixels really do change when Figma recompresses them, which is legitimate signal, not noise.
 
@@ -102,7 +102,7 @@ function register(a: { id: string; name: string; format: AssetFormat; base64?: s
   let file = base + "." + fmt;
   // Fold case for the UNIQUENESS check, not for the name written to disk: `angle-left.svg` and
   // `Angle-left.svg` are two different Figma layers that collide into ONE path on a case-insensitive
-  // filesystem (macOS default) — write-out.js writes both into the same shared assets/ dir, so
+  // filesystem (macOS default) — write-out.ts writes both into the same shared assets/ dir, so
   // whichever pull ran second silently clobbered the first (finding 124). Comparing case-folded keys
   // here means the SECOND name is treated as "taken" even though it differs only in case, so it gets
   // the same content-hash suffix a same-name-different-content collision gets — both files end up with
@@ -179,10 +179,11 @@ const ICON_CONTAINER_TYPES = new Set(["FRAME", "INSTANCE", "GROUP", "COMPONENT"]
 
 // Four outcomes, four shapes — NOT a magic string smuggled through the path channel: `undefined`
 // (this node renders no asset), a path, `geometry` (the export failed but the node's own vector paths
-// were recovered), or `skipped` when --no-assets suppressed a render that WOULD have happened
-// (serialize.ts keeps the node a leaf — see the note on assetSkipped there). A caller that treats the
-// result as a path can't accidentally write the sentinel into the exported tree.
-export type AssetResult = { path: string } | { geometry: Geometry } | { skipped: true } | undefined;
+// were recovered), or `skipped` when a render that WOULD have happened was not attempted — `true` for
+// --no-assets, `"hidden"` for a hidden graphic (serialize.ts keeps the node a leaf either way — see the
+// note on assetSkipped there). A caller that treats the result as a path can't accidentally write the
+// sentinel into the exported tree.
+export type AssetResult = { path: string } | { geometry: Geometry } | { skipped: true | "hidden" } | undefined;
 
 // Does this node paint ANYTHING? A live export reported 807 "failed" asset exports; the overwhelming
 // majority were vector nodes with every fill and stroke invisible (or emptied), which Figma refuses to
@@ -201,6 +202,11 @@ function hasVisiblePaint(node: SceneNode, fills: ReadonlyArray<Paint> | null): b
 function hasArea(node: SceneNode): boolean {
   if (!("width" in node) || typeof node.width !== "number" || typeof node.height !== "number") return true; // unknown -> don't skip
   return node.width > 0 && node.height > 0;
+}
+// The pre-check: VECTOR-ish leaves need area AND a visible paint; an icon CONTAINER only area (it paints
+// nothing itself — its children do). One definition for the hidden and the visible path (L-11).
+function paintsNothing(node: SceneNode, isVector: boolean, fills: ReadonlyArray<Paint> | null): boolean {
+  return !hasArea(node) || (isVector && !hasVisiblePaint(node, fills));
 }
 
 // Last-resort icon recovery when exportAsync genuinely fails on a node that DOES paint something.
@@ -221,7 +227,10 @@ function geometryOf(node: SceneNode): Geometry | undefined {
   return out;
 }
 
-export async function collectAsset(node: SceneNode): Promise<AssetResult> {
+// `hidden`: the node is `visible:false` itself or sits under a hidden ancestor (serialize.ts threads
+// that down). Figma renders nothing for such a node — every one of 477 geometry fallbacks in a real
+// export was hidden, and not one hidden node exported — so the call is not made at all.
+export async function collectAsset(node: SceneNode, hidden?: boolean): Promise<AssetResult> {
   const isVector = VECTOR_TYPES.has(node.type);
   // node.fills / node.children are Plugin-API GETTERS — each read crosses the sandbox bridge and
   // materializes a fresh array of paint/node wrappers. Read each once per node, not three times.
@@ -273,6 +282,21 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
     stats.assetsSkipped++;
     return { skipped: true };
   }
+  // A hidden graphic: same decision point, same leaf shape, so the tree is identical whether the
+  // layer is shown or not. Asking exportAsync anyway came back without an `<svg`, and the geometry
+  // fallback then shipped a hidden icon's paths (or a container's background square) as if they
+  // were a degraded VISIBLE vector — "N % fell back to raw geometry" on every screen.
+  // The nothing-to-paint pre-check (below) runs FIRST, hidden or not (L-11): a layer with no area or no
+  // visible paint draws nothing either way, so it stays `assetsSkippedInvisible` with no marker (a
+  // zero-area container still recurses) — never a "hidden graphic" the bridge could hand a twin's file.
+  if (hidden && (isVector || iconLike || hasImage)) {
+    if ((isVector || iconLike) && paintsNothing(node, isVector, fills)) {
+      stats.assetsSkippedInvisible++;
+      return undefined;
+    }
+    stats.assetsHidden++;
+    return { skipped: "hidden" };
+  }
   // The finest safe abort point, and the only one INSIDE a single frame. exportAsync is the one
   // per-node await in the whole walk, so a dense screen of 600 icons is otherwise a multi-minute
   // stretch with no page/frame boundary to check at — a Cancel pressed there would appear ignored.
@@ -285,7 +309,7 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
   if (isVector || iconLike) {
     // The paint pre-check is for VECTOR-ish LEAVES only: an icon CONTAINER paints nothing itself —
     // its children do — so asking it the same question would skip every real icon frame.
-    if (!hasArea(node) || (isVector && !hasVisiblePaint(node, fills))) {
+    if (paintsNothing(node, isVector, fills)) {
       stats.assetsSkippedInvisible++;
       return undefined; // silent by design — see RunStats.assetsSkippedInvisible
     }
@@ -305,7 +329,10 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
     }
     // The node DOES paint something and still would not render — recover its outlines rather than
     // emit a node with no graphic at all, which is what left 663 icons unimplementable.
-    const geo = geometryOf(node);
+    // VECTOR leaves only: an icon CONTAINER's fillGeometry is its OWN background rectangle
+    // (GeometryMixin sits on the frame mixins), never its children's paths — so a failed container
+    // recovered as a filled `M0 0 L16 0 …` square. That is a real failure, counted and warned below.
+    const geo = isVector ? geometryOf(node) : undefined;
     if (geo) {
       stats.assetsGeometry++;
       return { geometry: geo };
@@ -333,6 +360,16 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
   return undefined;
 }
 
+// The scale a reference render uses: the caller's own (a positive number), else 2x capped so the
+// longer side is at most 2048 px. ONE rule for the render and for what collectScreenshot reports
+// (DT-06), so the reported scale is the one the PNG was actually made at.
+export function referenceScale(node: SceneNode, opts?: { scale?: number }): number {
+  if (opts && typeof opts.scale === "number" && opts.scale > 0) return opts.scale;
+  const w = "width" in node ? node.width || 0 : 0;
+  const h = "height" in node ? node.height || 0 : 0;
+  return Math.min(2, 2048 / (Math.max(w, h) || 1));
+}
+
 // Render a whole top-level frame to a PNG the codegen agent can self-correct against. Also the
 // on-demand single-node screenshot op (collectScreenshot in collect.ts) reuses this unchanged — same
 // render, just called on a component/instance instead of a root. `opts.scale` lets that caller override
@@ -341,9 +378,7 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
 export async function collectReference(node: SceneNode, opts?: { scale?: number }): Promise<string | undefined> {
   if (!node || !("exportAsync" in node) || !("width" in node)) return undefined;
   try {
-    const value = opts && typeof opts.scale === "number" && opts.scale > 0
-      ? opts.scale
-      : Math.min(2, 2048 / (Math.max(node.width || 0, node.height || 0) || 1));
+    const value = referenceScale(node, opts);
     const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
     if (!bytes || !bytes.length) {
       warn("reference screenshot empty: " + node.name);

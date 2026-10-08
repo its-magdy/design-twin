@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Seed Shelf (probe fixture)</title>
+<!-- Group 12b's behaviour/a11y fixture (invented app). ?mode= is a comma list of broken flags ("broken" = all of the
+     per-check ones below — hover-only included); no mode = the correct twin. The app script is the text/plain block at the end: the test server
+     serves it as /seed-shelf.js under `Content-Security-Policy: script-src 'self'` (axe-core must still run: it is injected
+     by page.evaluate, which the page's CSP does not govern). -->
+<style>
+  html, body { margin: 0; font: 14px/20px Arial, sans-serif; color: #1d1d1f; background: #f6f4ee; }
+  .app { width: 100%; height: 800px; box-sizing: border-box; background: #f6f4ee; overflow: hidden; }
+  .top { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; height: 56px; padding: 0 16px; box-sizing: border-box; background: #2e4a2e; color: #ffffff; }
+  .brand { font-weight: 700; }
+  .top a { color: #ffffff; }
+  main { display: block; padding: 16px; }
+  h1 { margin: 0 0 12px; font: 700 20px/28px Arial, sans-serif; }
+  h2 { margin: 0 0 8px; font: 700 16px/24px Arial, sans-serif; }
+  table.crates { border-collapse: collapse; width: 100%; max-width: 640px; background: #ffffff; }
+  table.crates th, table.crates td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #c8c4b8; }
+  /* the row action shows on row hover AND when focus is inside the row (correct twin) */
+  .edit { opacity: 0; }
+  tr.row:hover .edit, tr.row:focus-within .edit { opacity: 1; }
+  /* ?mode=hidden-opener (DT-60): visibility:hidden until hovered — no keyboard reach, focus cannot return to it */
+  .m-hidden-opener .edit { opacity: 1; visibility: hidden; }
+  .m-hidden-opener tr.row:hover .edit { visibility: visible; }
+  button, .btn { font: 14px/20px Arial, sans-serif; color: #ffffff; background: #2e4a2e; border: 0; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; max-width: 100%; }
+  .slot { position: relative; display: inline-block; }
+  /* the focus-ring pair on a line of its own at whole-pixel positions: an indicator drawn only OUTSIDE the box (outline-offset
+     2px, a ring) shows only in a clip with a margin around it */
+  .tools { flex-basis: 100%; display: flex; gap: 8px; }
+  .tools button { width: 96px; height: 32px; }
+  /* ?mode=hover-only (DT-60's opacity shape): an opener revealed by hover alone — invisible while focused with the pointer away */
+  .m-hover-only #ship { opacity: 0; }
+  .m-hover-only .actions:hover #ship { opacity: 1; }
+  .cover { position: absolute; inset: 0; background: rgba(0, 0, 0, 0); }
+  /* compiled Tailwind v4 (DT-76): outline-hidden + focus-visible:outline-2 draws nothing without outline-solid */
+  .outline-hidden { --tw-outline-style: none; outline-style: none; }
+  .focus-visible\:outline-2:focus-visible { outline-style: var(--tw-outline-style); outline-width: 2px; outline-color: #1d1d1f; outline-offset: 2px; }
+  .focus-visible\:outline-solid:focus-visible { --tw-outline-style: solid; outline-style: solid; }
+  .focus-visible\:ring-2:focus-visible { box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #1d1d1f; }
+  /* a CSS-mask icon painted with currentColor (DT-77): forced colours turn its background into Canvas */
+  .icon { display: inline-block; width: 16px; height: 16px; vertical-align: middle; background: currentColor;
+          -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1 2h14l-5 6v6l-4-2V8z'/%3E%3C/svg%3E") center / contain no-repeat;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1 2h14l-5 6v6l-4-2V8z'/%3E%3C/svg%3E") center / contain no-repeat;
+          }
+  /* the correct twin: a system colour under forced colours (forced-color-adjust:none alone keeps the inherited white) */
+  @media (forced-colors: active) { html:not(.m-mask-bare) .icon { forced-color-adjust: none; background-color: ButtonText; } }
+  .trays { background: #ffffff; padding: 12px; max-width: 640px; }
+  .trays ul { margin: 0; padding-left: 20px; }
+  .tall { display: block; height: 2200px; padding: 16px; box-sizing: border-box; background: #ece8dc; }
+  /* ?mode=fixed-table (F-98, D42): fixed columns + a zero-width column; the auto last column collapses at 1024 */
+  table.fx { table-layout: fixed; width: 100%; border-collapse: collapse; background: #ffffff; }
+  table.fx td { padding: 0; height: 20px; overflow: hidden; white-space: nowrap; }
+  dialog { padding: 0; border: 0; border-radius: 8px; width: 420px; max-width: calc(100vw - 32px); }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+  /* ?mode=backdrop-ignored (F-117): no scrim on this dialog */
+  .m-backdrop-ignored #dlg-stack::backdrop { background: transparent; }
+  /* ?mode=relative-dialog (F-116): positioned against the document, not the viewport */
+  .m-relative-dialog #dlg-label { position: absolute; }
+  .form { display: flex; flex-direction: column; gap: 8px; padding: 20px; background: #ffffff; }
+  .form .row-btns { display: flex; gap: 8px; }
+  .listbox { margin: 0; padding: 4px; list-style: none; border: 1px solid #c8c4b8; }
+  .listbox[hidden] { display: none; }
+  .scrim { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); z-index: 10; }
+  .scrim.open { display: block; }
+  .panel { position: fixed; z-index: 11; left: 50%; top: 50%; width: 420px; transform: translate(-50%, -50%); display: none; }
+  .panel.open { display: block; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="tail"></div>
+<!-- overlays, closed until opened; each carries the destination frame's tag (80:60) -->
+<dialog id="dlg-edit" aria-labelledby="t-edit"><form method="dialog" class="form" data-dt-node="80:60"><h2 id="t-edit">Edit crate</h2>
+  <label>Name <input name="name" value="Oak crate"></label>
+  <div class="row-btns"><button type="button" class="js-cancel">Cancel</button><button type="submit" value="save">Save</button></div></form></dialog>
+<dialog id="dlg-sort" aria-labelledby="t-sort"><div class="form" data-dt-node="80:60"><h2 id="t-sort">Sort crates</h2>
+  <button type="button" id="sort-combo" aria-haspopup="listbox" aria-expanded="false" aria-controls="sort-list">Sort by: name</button>
+  <ul class="listbox" id="sort-list" role="listbox" aria-label="Sort order" hidden><li role="option" aria-selected="true">Name</li><li role="option" aria-selected="false">Date</li></ul>
+  <div class="row-btns"><button type="button" id="delete-crate">Delete crate</button><button type="button" class="js-cancel" aria-label="Close">×</button></div></div></dialog>
+<dialog id="dlg-label" aria-labelledby="t-label"><div class="form" data-dt-node="80:60"><h2 id="t-label">Label crate</h2><p>Print a label for this crate.</p>
+  <div class="row-btns"><button type="button" class="js-cancel">Cancel</button></div></div></dialog>
+<dialog id="dlg-stack" aria-labelledby="t-stack"><div class="form" data-dt-node="80:60"><h2 id="t-stack">Stack crate</h2><p>Stack it on another crate.</p>
+  <div class="row-btns"><button type="button" class="js-cancel">Close</button></div></div></dialog>
+<dialog id="dlg-plant" aria-labelledby="t-plant"><div class="form" data-dt-node="80:60"><h2 id="t-plant">Plant crate</h2>
+  <label>Seed <select><option>Basil</option><option>Kale</option></select></label>
+  <div class="row-btns"><button type="button" class="js-cancel">Cancel</button></div></div></dialog>
+<dialog id="dlg-ship" aria-labelledby="t-ship"><div class="form" data-dt-node="80:60"><h2 id="t-ship">Ship crate</h2><p>Ship it to the depot.</p>
+  <div class="row-btns"><button type="button" class="js-cancel">Not now</button></div></div></dialog>
+<dialog id="dlg-weigh" aria-labelledby="t-weigh"><div class="form" data-dt-node="80:60"><h2 id="t-weigh">Weigh crate</h2>
+  <div class="row-btns"><button type="button" class="js-cancel">Cancel</button></div></div></dialog>
+<div class="scrim" id="move-scrim"></div>
+<div class="panel" id="dlg-move" role="dialog" aria-modal="true" aria-labelledby="t-move"><div class="form" data-dt-node="80:60"><h2 id="t-move">Move crate</h2>
+  <label>Shelf <input id="move-shelf" value="A1"></label>
+  <div class="row-btns"><button type="button" id="move-cancel">Cancel</button><button type="button" id="move-ok">Move</button></div></div></div>
+<script src="seed-shelf.js"></script>
+<script type="text/plain" id="seed-shelf-app">
+(() => {
+  const raw = new URLSearchParams(location.search).get("mode") || "";
+  const ALL = ["hidden-opener", "leaky-listbox", "div-modal", "relative-dialog", "backdrop-ignored", "outline-hidden", "mask-bare", "nested-regions", "two-main", "unnamed-icon", "div-button", "hover-only"];
+  const flags = new Set(raw.split(",").filter(Boolean).flatMap((f) => (f === "broken" ? ALL : [f])));
+  for (const f of flags) document.documentElement.classList.add("m-" + f);
+  const on = (f) => flags.has(f);
+  const later = (fn) => setTimeout(fn, 30);
+  const tailTag = on("two-main") ? "main" : "footer";
+  document.getElementById("root").innerHTML =
+    `<div class="app" data-dt-node="80:1">
+      <header class="top" data-dt-node="80:3"><span class="brand" data-dt-node="80:4">Seed Shelf</span>
+        <nav aria-label="Primary"><a href="#crates">Crates</a> · <a href="#trays">Trays</a></nav></header>
+      <main>
+        <h1 data-dt-node="80:2">Crates</h1>
+        <table class="crates" data-dt-node="80:10"><thead><tr><th scope="col">Name</th><th scope="col">Actions</th></tr></thead>
+          <tbody><tr class="row" data-dt-node="80:11"><td data-dt-node="80:13">Oak crate</td><td><button type="button" class="edit" data-dt-node="80:12" id="edit">Edit crate</button></td></tr></tbody></table>
+        <div class="actions" data-dt-node="80:30">
+          <button type="button" data-dt-node="80:15" id="sort">Sort crates</button>
+          <button type="button" data-dt-node="80:16" id="move">Move crate</button>
+          <button type="button" data-dt-node="80:17" id="label">Label crate</button>
+          <button type="button" data-dt-node="80:18" id="stack">Stack crate</button>
+          <button type="button" data-dt-node="80:22" id="plant">Plant crate</button>
+          ${on("div-button") ? `<div class="btn" role="button" tabindex="0" data-dt-node="80:23" id="ship">Ship crate</div>` : `<button type="button" data-dt-node="80:23" id="ship">Ship crate</button>`}
+          <span class="slot"><button type="button" data-dt-node="80:24" id="weigh">Weigh crate</button><span class="cover"></span></span>
+          <button type="button" data-dt-node="80:21" id="filter"${on("unnamed-icon") ? "" : ` aria-label="Filter crates"`}><span class="icon" data-dt-node="80:20"></span></button>
+          <span class="tools"><button type="button" data-dt-node="80:19" class="outline-hidden focus-visible:outline-2${on("outline-hidden") ? "" : " focus-visible:outline-solid"}">Print labels</button>
+          <button type="button" data-dt-node="80:25" class="outline-hidden focus-visible:ring-2">Export</button></span>
+        </div>
+        <section class="trays" aria-label="Seed Trays" data-dt-node="80:40" id="trays"><h2>Seed Trays</h2>
+          <label>Find tray <input type="search" id="find-tray"></label>
+          ${on("nested-regions") ? `<section aria-label="Seed Trays list"><ul><li>Tray A</li><li>Tray B</li></ul></section>` : `<ul aria-label="Seed Trays list"><li>Tray A</li><li>Tray B</li></ul>`}
+        </section>
+      </main>
+    </div>`;
+  document.getElementById("tail").outerHTML =
+    `<${tailTag} class="tall"><p>Seed Shelf keeps crates in order.</p>` +
+    (on("fixed-table") ? `<table class="fx"><colgroup><col style="width:600px"><col style="width:400px"><col style="width:0"><col></colgroup>
+      <tr><td>Crate</td><td>Bin</td><td>x</td><td>Notes for the crate</td></tr></table>` : "") + `</${tailTag}>`;
+  if (on("spin-on-tab")) document.addEventListener("keydown", (e) => { if (e.key === "Tab") { for (;;) { /* a page that never yields */ } } });
+
+  const dlg = (id) => document.getElementById(id);
+  const open = (id) => () => later(() => dlg(id).showModal());
+  document.getElementById("edit").onclick = open("dlg-edit");
+  for (const [btn, id] of [["sort", "dlg-sort"], ["label", "dlg-label"], ["stack", "dlg-stack"], ["plant", "dlg-plant"], ["weigh", "dlg-weigh"]]) document.getElementById(btn).onclick = open(id);
+  // the ship opener: a <button> (correct), or ?mode=div-button a div role=button with only a click handler (MED7)
+  document.getElementById("ship").addEventListener("click", open("dlg-ship"));
+  for (const b of document.querySelectorAll(".js-cancel")) b.addEventListener("click", () => b.closest("dialog").close());
+  // click outside a native modal: the click's target is the <dialog> itself (facts-12b §7)
+  for (const d of document.querySelectorAll("dialog")) {
+    if (on("backdrop-ignored") && d.id === "dlg-stack") continue;
+    d.addEventListener("click", (e) => { if (e.target === d) d.close(); });
+  }
+  // the sort combobox: Escape collapses the listbox; the correct twin keeps the dialog open (preventDefault + stopPropagation)
+  const combo = document.getElementById("sort-combo"), list = document.getElementById("sort-list");
+  combo.addEventListener("click", () => { const x = combo.getAttribute("aria-expanded") !== "true"; combo.setAttribute("aria-expanded", String(x)); list.hidden = !x; });
+  combo.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || combo.getAttribute("aria-expanded") !== "true") return;
+    combo.setAttribute("aria-expanded", "false"); list.hidden = true;
+    if (!on("leaky-listbox")) { e.preventDefault(); e.stopPropagation(); }
+  });
+  dlg("dlg-sort").addEventListener("close", () => { combo.setAttribute("aria-expanded", "false"); list.hidden = true; });
+  // a destructive control: the probe must never press it (a write the server counts)
+  document.getElementById("delete-crate").addEventListener("click", () => { fetch("/mutate?delete-crate", { method: "POST" }); });
+  // the custom modal (role=dialog aria-modal): focus in, Escape, scrim click, focus back — and a Tab trap unless ?mode=div-modal
+  const panel = dlg("dlg-move"), scrim = document.getElementById("move-scrim"), moveBtn = document.getElementById("move");
+  const closeMove = () => { panel.classList.remove("open"); scrim.classList.remove("open"); moveBtn.focus({ preventScroll: true }); };
+  moveBtn.onclick = () => later(() => { panel.classList.add("open"); scrim.classList.add("open"); document.getElementById("move-shelf").focus({ preventScroll: true }); });
+  scrim.addEventListener("click", closeMove);
+  document.getElementById("move-cancel").addEventListener("click", closeMove);
+  document.addEventListener("keydown", (e) => {
+    if (!panel.classList.contains("open")) return;
+    if (e.key === "Escape") { e.preventDefault(); closeMove(); return; }
+    if (e.key !== "Tab" || on("div-modal")) return;
+    const f = [...panel.querySelectorAll("input, button")];
+    const i = f.indexOf(document.activeElement);
+    const next = e.shiftKey ? (i <= 0 ? f.length - 1 : i - 1) : (i === f.length - 1 ? 0 : i + 1);
+    e.preventDefault(); f[next].focus();
+  });
+  // ---- fix pass 1 shapes (review 1), one flag each — not part of "broken": every one is a CORRECT build the probe must not
+  // misjudge (or a page it must not touch)
+  // H1: "Stack crate" (80:18) is a picker FIELD in a POST filter form (a readonly input inside the tagged opener): Enter in it
+  // would submit the form — the probe must never press it
+  if (on("enter-submit")) {
+    document.getElementById("stack").outerHTML = `<form method="post" action="/mutate?implicit-submit" style="display:inline-flex;gap:4px"><span data-dt-node="80:18" id="stack"><input readonly value="Stack crate" aria-label="Stack crate"></span><button type="submit">Apply</button></form>`;
+    document.getElementById("stack").addEventListener("click", () => later(() => dlg("dlg-stack").showModal()));
+  }
+  // H1: "Edit crate" (80:12) is a clickable div inside a focusable data-grid row whose Enter opens the row's detail route
+  if (on("row-enter")) {
+    const tr = document.querySelector("tr.row"); tr.tabIndex = 0;
+    const div = document.createElement("div"); div.className = "edit btn"; div.id = "edit"; div.setAttribute("data-dt-node", "80:12"); div.textContent = "Edit crate";
+    document.getElementById("edit").replaceWith(div);
+    div.addEventListener("click", (e) => { e.stopPropagation(); later(() => dlg("dlg-edit").showModal()); });
+    tr.addEventListener("keydown", (e) => { if (e.key === "Enter") { history.pushState({}, "", "/crates/oak"); fetch("/mutate?row-opened-viewed", { method: "POST" }); } });
+  }
+  // H2: "Label crate" (80:17) animates in with Web Animations (framer-motion style: the probe's CSS animation:none cannot stop it)
+  if (on("anim-in")) document.getElementById("label").addEventListener("click", () => setTimeout(() => {
+    dlg("dlg-label").animate([{ transform: "translateY(24px)", opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 250, easing: "ease-out" });
+  }, 31));
+  // M6: "Label crate" (80:17) locks the page scroll the position:fixed way (body at top:-scrollY), restored on close
+  if (on("scroll-lock")) {
+    let saved = 0;
+    document.getElementById("label").addEventListener("click", () => later(() => { saved = scrollY; Object.assign(document.body.style, { position: "fixed", top: `-${saved}px`, left: "0", right: "0" }); }));
+    dlg("dlg-label").addEventListener("close", () => { Object.assign(document.body.style, { position: "", top: "", left: "", right: "" }); scrollTo(0, saved); });
+  }
+  // M1: focusables Chromium Tabs THROUGH while activeElement stays put — a date input, a shadow-DOM pager, a titled iframe
+  if (on("cycle-date")) document.querySelector("header nav").insertAdjacentHTML("afterend", '<label style="color:#fff">From <input type="date" id="from"></label>');
+  if (on("cycle-shadow")) { const host = document.createElement("span"); host.id = "pager"; document.querySelector("header nav").after(host); host.attachShadow({ mode: "open" }).innerHTML = "<button>Prev</button><button>Next</button>"; }
+  if (on("cycle-iframe")) document.querySelector("header nav").insertAdjacentHTML("afterend", '<iframe title="Map" style="height:40px;width:200px" srcdoc="<button>Zoom in</button><button>Zoom out</button>"></iframe>');
+  // M2: a disclosure <summary> (its snapshot line is `- text:`) and a focusable unnamed role=group (a group's name is optional)
+  if (on("names")) document.getElementById("trays").insertAdjacentHTML("beforeend", '<details><summary>Tray rules</summary><p>Water daily.</p></details><div role="group" tabindex="0">Tray A · Tray B</div>');
+  // M3: Headless UI's Dialog shape for "Move crate" (80:16): <div role=dialog aria-modal=true> with a 0-px box holding the fixed
+  // backdrop and the fixed panel
+  if (on("headless-ui")) {
+    const panel = dlg("dlg-move"), scrimEl = document.getElementById("move-scrim");
+    const wrap = document.createElement("div");
+    wrap.setAttribute("role", "dialog"); wrap.setAttribute("aria-modal", "true"); wrap.setAttribute("aria-labelledby", "t-move");
+    wrap.style.cssText = "position:relative;z-index:50;display:none";
+    panel.before(wrap); wrap.append(scrimEl, panel);
+    panel.removeAttribute("role"); panel.removeAttribute("aria-modal"); panel.removeAttribute("aria-labelledby");
+    new MutationObserver(() => { wrap.style.display = panel.classList.contains("open") ? "block" : "none"; }).observe(panel, { attributes: true, attributeFilter: ["class"] });
+    // the root shows before focus moves in (as Headless UI renders, then focuses)
+    moveBtn.onclick = () => later(() => { wrap.style.display = "block"; panel.classList.add("open"); scrim.classList.add("open"); document.getElementById("move-shelf").focus({ preventScroll: true }); });
+  }
+  // M4: "Move crate" (80:16) has NO scrim, and an app-shell help toggle sits in the top-left corner (a div with a click
+  // handler that writes): a click "outside" there would press it
+  if (on("fab")) {
+    document.getElementById("move-scrim").remove();
+    const fab = document.createElement("div");
+    fab.textContent = "?"; fab.title = "Help";
+    fab.style.cssText = "position:fixed;left:0;top:0;width:56px;height:56px;background:#2e4a2e;color:#fff;z-index:20";
+    fab.addEventListener("click", () => fetch("/mutate?fab-clicked", { method: "POST" }));
+    document.body.append(fab);
+  }
+  // M5: "Plant crate" (80:22) lives in a closed disclosure menu ("More", aria-expanded=false; the menu is visibility:hidden)
+  if (on("closed-menu")) {
+    const plant = document.getElementById("plant");
+    const wrap = document.createElement("span"); wrap.style.cssText = "position:relative;display:inline-block";
+    wrap.innerHTML = '<button type="button" id="more" aria-expanded="false" aria-controls="more-menu">More</button><span id="more-menu" style="visibility:hidden;position:absolute;left:0;top:36px;z-index:5"></span>';
+    plant.before(wrap); document.getElementById("more-menu").append(plant);
+    const more = document.getElementById("more"), menu = document.getElementById("more-menu");
+    more.addEventListener("click", () => { const x = more.getAttribute("aria-expanded") !== "true"; more.setAttribute("aria-expanded", String(x)); menu.style.visibility = x ? "visible" : "hidden"; });
+  }
+  // M8: "Stack crate"'s (80:18) Close is a router LINK (pushState + re-render): following it navigates
+  if (on("cancel-link")) {
+    const d = dlg("dlg-stack");
+    d.querySelector(".js-cancel").outerHTML = '<a href="/crates/all" id="stack-close">Close</a>';
+    document.getElementById("stack-close").addEventListener("click", (e) => { e.preventDefault(); history.pushState({}, "", "/crates/all"); d.close(); });
+  }
+  // L1: "Move crate" (80:16) holds a 40-field form (with ?mode=div-modal: no trap)
+  if (on("trap-cap")) {
+    const box = document.createElement("div"); box.style.cssText = "max-height:300px;overflow:auto";
+    for (let i = 1; i <= 40; i++) box.insertAdjacentHTML("beforeend", `<label>Field ${i} <input name="f${i}"></label>`);
+    document.querySelector("#dlg-move .form .row-btns").before(box);
+  }
+  // L2: the row action is revealed on row hover or on its OWN :focus-visible (no :focus-within)
+  if (on("fv-reveal")) { const st = document.createElement("style"); st.textContent = "tr.row:focus-within .edit{opacity:0} tr.row:hover .edit, tr.row:focus-within .edit:focus-visible{opacity:1}"; document.head.append(st); }
+  // L8: a scrim in a colour space the probe does not convert (lab()): never a false "the scrim is …" warn
+  if (on("lab-scrim")) { const st = document.createElement("style"); st.textContent = "#dlg-stack::backdrop{background:lab(0% 0 0 / 0.4)}"; document.head.append(st); }
+  // L7: a button with NO focus indicator holding a Web Animations spinner — only a screenshot with animations:"disabled" sees
+  // that focus changes nothing
+  if (on("waapi-spin")) {
+    document.querySelector(".tools").insertAdjacentHTML("beforeend", '<button type="button" id="plain-save" style="outline:none;width:120px">Saving <span id="spin" style="display:inline-block;width:10px;height:10px;border:2px solid #fff;border-top-color:transparent;border-radius:50%"></span></button>');
+    document.getElementById("spin").animate([{ transform: "rotate(0)" }, { transform: "rotate(360deg)" }], { duration: 700, iterations: Infinity });
+  }
+  // ---- fix pass 2 shapes (review 2), one flag each (none in "broken")
+  // L-3: "Plant crate"'s (80:22) Cancel is an <a role="button"> router link — a link by its href, never a safe close
+  if (on("role-link-close")) {
+    const d = dlg("dlg-plant");
+    d.querySelector(".js-cancel").outerHTML = '<a role="button" href="/crates/all" id="plant-close">Cancel</a>';
+    document.getElementById("plant-close").addEventListener("click", (e) => { e.preventDefault(); history.pushState({}, "", "/crates/all"); d.close(); });
+  }
+  // H-1: "Move crate" (80:16) is a clickable CARD whose own inline Delete button writes — Enter is never pressed on it
+  if (on("card-delete")) {
+    // H1 remaining (D40(8)): "Move crate" (80:16) is a clickable CARD (the Figma reaction sits on the card frame) holding its own
+    // icon action "Delete" (<button type=button>, which writes; its click does not bubble). 12a clicks the card's centre (the
+    // label) and the move panel opens. The battery Tabs into the card: its first stop is the Delete button — "inside the opener",
+    // button-like, not a submit — and presses Enter on it.
+    {
+      const old = document.getElementById("move");
+      const card = document.createElement("div");
+      card.id = "move"; card.setAttribute("data-dt-node", "80:16");
+      card.style.cssText = "display:inline-flex;align-items:center;gap:8px;width:260px;padding:6px 10px;background:#fff;border:1px solid #c8c4b8;border-radius:6px;cursor:pointer";
+      card.innerHTML = '<button type="button" id="card-del" aria-label="Delete crate">✕</button><span style="flex:1;text-align:center">Move crate</span>';
+      old.replaceWith(card);
+      document.getElementById("card-del").addEventListener("click", (e) => { e.stopPropagation(); fetch("/mutate?card-delete", { method: "POST" }); });
+      const panel = document.getElementById("dlg-move"), scrim = document.getElementById("move-scrim");
+      card.addEventListener("click", () => setTimeout(() => { panel.classList.add("open"); scrim.classList.add("open"); document.getElementById("move-shelf").focus({ preventScroll: true }); }, 30));
+      // the fixture's closeMove focuses the old #move button; keep focus return on the card's label area harmless
+    }
+  }
+  // H-2: "Label crate"'s dialog confirms (writes) on Enter anywhere in it — the safe close is a click, never an Enter
+  if (on("enter-confirm")) {
+    // L2 regression (D40(8)): "Label crate" (80:17) is a confirm-style dialog — Enter anywhere in it confirms (a common
+    // "press Enter to confirm" keydown handler on the dialog). Its Cancel is a plain <button type=button>. The probe's safe
+    // close now focuses Cancel and presses Enter → the dialog's handler confirms → a write.
+    {
+      const d = document.getElementById("dlg-label");
+      d.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); fetch("/mutate?label-confirmed-by-enter", { method: "POST" }); d.close(); } });
+    }
+  }
+  // H-1/H-2 exposure: a global hotkey — Enter outside a text field writes; the write block keeps every such Enter from landing
+  if (on("doc-enter")) {
+    // D40(8) hostile: a global hotkey — Enter anywhere (outside a text field) "applies" (writes). Any Enter the probe presses
+    // fires it. (Inherent to keyboard.activation; counted to show the exposure, not a regression.)
+    document.addEventListener("keydown", (e) => { if (e.key === "Enter" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName)) fetch("/mutate?doc-enter-" + (document.activeElement && (document.activeElement.id || document.activeElement.tagName)), { method: "POST" }); });
+  }
+  // H-3: "Sort crates" (80:15) opens on keydown Enter and focuses "Delete crate" in the same task — the same Enter's keypress clicks it
+  if (on("keydown-open")) {
+    // D40(8): "Sort crates" (80:15) is a div role=button that opens its dialog on keydown Enter (and click), and the dialog
+    // moves focus to its first control "Delete crate" synchronously. The same Enter's keypress then lands on Delete.
+    {
+      const old = document.getElementById("sort");
+      const div = document.createElement("div"); div.className = "btn"; div.setAttribute("role", "button"); div.tabIndex = 0;
+      div.setAttribute("data-dt-node", "80:15"); div.id = "sort"; div.textContent = "Sort crates"; old.replaceWith(div);
+      const d = document.getElementById("dlg-sort");
+      const openSort = () => { d.showModal(); document.getElementById("delete-crate").focus(); };
+      div.addEventListener("click", openSort);
+      div.addEventListener("keydown", (e) => { if (e.key === "Enter") openSort(); });
+    }
+  }
+  // M-2: Headless UI's Tailwind layout for "Move crate" (80:16): a backdrop + a TRANSPARENT fixed centring wrapper around the panel
+  if (on("hui-wrap")) {
+    // M3/M4: Headless UI's documented Tailwind layout for "Move crate" (80:16): <div role=dialog aria-modal=true class="relative
+    // z-50"> holding <div class="fixed inset-0 bg-black/30"> (the backdrop) and <div class="fixed inset-0 flex items-center
+    // justify-content p-4"> (a TRANSPARENT centring wrapper) around the panel. A click on the wrapper outside the panel closes it.
+    {
+      const panel = document.getElementById("dlg-move"), scrimEl = document.getElementById("move-scrim");
+      const root = document.createElement("div");
+      root.setAttribute("role", "dialog"); root.setAttribute("aria-modal", "true"); root.setAttribute("aria-labelledby", "t-move");
+      root.style.cssText = "position:relative;z-index:50;display:none";
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "position:fixed;inset:0;z-index:12;display:flex;align-items:center;justify-content:center;padding:16px";
+      panel.before(root); root.append(scrimEl, wrap); wrap.append(panel);
+      panel.removeAttribute("role"); panel.removeAttribute("aria-modal"); panel.removeAttribute("aria-labelledby");
+      panel.style.cssText = "position:static;transform:none;width:420px";
+      new MutationObserver(() => { root.style.display = panel.classList.contains("open") ? "block" : "none"; }).observe(panel, { attributes: true, attributeFilter: ["class"] });
+      const moveBtn = document.getElementById("move");
+      wrap.addEventListener("click", (e) => { if (e.target === wrap) { panel.classList.remove("open"); scrimEl.classList.remove("open"); moveBtn.focus({ preventScroll: true }); } });
+    }
+    // (the root shows before focus moves in, as Headless UI renders then focuses)
+    {
+      const root = document.getElementById("dlg-move").parentElement.parentElement, panel = document.getElementById("dlg-move"), scrimEl = document.getElementById("move-scrim");
+      document.getElementById("move").onclick = () => setTimeout(() => { root.style.display = "block"; panel.classList.add("open"); scrimEl.classList.add("open"); document.getElementById("move-shelf").focus({ preventScroll: true }); }, 30);
+    }
+  }
+  // M-2: Angular CDK's overlay for "Move crate" (80:16): a pointer-events:none container > backdrop + a pointer-events:none wrapper > the pane
+  if (on("cdk-overlay")) {
+    // M4/scrim: Angular CDK's overlay structure for "Move crate" (80:16): .cdk-overlay-container (position:fixed, full viewport,
+    // pointer-events:none) > .cdk-overlay-backdrop (position:absolute inset 0, rgba(0,0,0,.4), pointer-events:auto; a click
+    // closes) + .cdk-global-overlay-wrapper (absolute, flex centre, pointer-events:none) > the role=dialog aria-modal panel.
+    {
+      const panel = document.getElementById("dlg-move"), scrimEl = document.getElementById("move-scrim");
+      const cont = document.createElement("div"); cont.className = "cdk-overlay-container";
+      cont.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1000";
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none";
+      scrimEl.style.cssText = "position:absolute;inset:0;pointer-events:auto;background:rgba(0,0,0,0.4)";
+      scrimEl.classList.remove("scrim"); scrimEl.style.display = "none";
+      document.body.append(cont); cont.append(scrimEl, wrap); wrap.append(panel);
+      panel.style.cssText = "position:static;transform:none;width:420px;pointer-events:auto";
+      new MutationObserver(() => { scrimEl.style.display = panel.classList.contains("open") ? "block" : "none"; }).observe(panel, { attributes: true, attributeFilter: ["class"] });
+    }
+  }
+  // M-3: the screen is itself an open aria-modal sheet; "Move crate" (80:16) opens a NON-modal role=dialog picker inside it
+  if (on("nested-modal")) {
+    // M3 nested: the screen is itself an open aria-modal sheet (as a state-selected screen reached by --steps is), and "Move
+    // crate" (80:16) opens a NON-modal role=dialog panel (a picker popover: role=dialog, no aria-modal, no scrim) inside it.
+    // D40(1): the battery runs only on a modal — this opened element is not one.
+    {
+      const app = document.querySelector(".app");
+      app.setAttribute("role", "dialog"); app.setAttribute("aria-modal", "true"); app.setAttribute("aria-label", "Crates sheet");
+      const panel = document.getElementById("dlg-move");
+      panel.removeAttribute("aria-modal");
+      document.getElementById("move-scrim").remove();
+      app.append(panel);
+    }
+  }
+  // L-1: "Label crate"'s tag (80:17) sits on the label inside its <button> (a reaction on a child layer)
+  if (on("tag-inner")) {
+    // H1 coverage: the opener's tag sits on the LABEL inside its <button> ("Label crate", 80:17: <button><span data-dt-node>…),
+    // as when the Figma reaction lives on a child layer. 12a clicks the span (the button fires); Enter on the button opens it.
+    {
+      const b = document.getElementById("label");
+      b.removeAttribute("data-dt-node");
+      b.innerHTML = '<span data-dt-node="80:17">Label crate</span>';
+    }
+  }
+  // D47: the Figma reaction sits on a table CELL whose only focusable is its centred icon button ("Plant crate", 80:22 — the
+  // real row-action shape): Enter on that button is the opener. "Sort crates" (80:15): a cell whose centred button has a 2nd
+  // focusable beside it (Clear, which writes) — never pressed
+  if (on("cell-opener")) {
+    const cell = (btnId, label, extra) => {
+      const b = document.getElementById(btnId);
+      const id = b.getAttribute("data-dt-node");
+      const t = document.createElement("table"); t.style.cssText = "display:inline-table;border-collapse:collapse";
+      t.innerHTML = `<tbody><tr><td data-dt-node="${id}" style="width:160px;height:44px;text-align:center;position:relative;padding:0"></td></tr></tbody>`;
+      b.removeAttribute("data-dt-node"); b.setAttribute("aria-label", label); b.textContent = "✎";
+      b.before(t); const td = t.querySelector("td"); td.append(b);
+      if (extra) td.insertAdjacentHTML("beforeend", extra);
+    };
+    cell("plant", "Plant crate", "");
+    cell("sort", "Sort crates", '<button type="button" id="sort-clear" style="position:absolute;right:2px;top:10px">Clear</button>');
+    document.getElementById("sort-clear").addEventListener("click", () => fetch("/mutate?sort-clear", { method: "POST" }));
+  }
+  // review 5 H-3 (D51): cells whose sole centred icon button IS the opener's own, beside text that shows nothing — "Stack crate"
+  // (80:18) with a hover tooltip hidden by opacity:0 (Tailwind opacity-0 group-hover:opacity-100), "Ship crate" (80:23) with a
+  // label hidden only by clip-path: inset(50%) — the 12a drive clicks them and the keyboard battery presses them as the plain
+  // D47 cell (80:22, with cell-opener)
+  if (on("cell-quiet")) {
+    const cell = (btnId, label, extra) => {
+      const b = document.getElementById(btnId);
+      const id = b.getAttribute("data-dt-node");
+      const t = document.createElement("table"); t.style.cssText = "display:inline-table;border-collapse:collapse";
+      t.innerHTML = `<tbody><tr><td data-dt-node="${id}" style="width:160px;height:44px;text-align:center;position:relative;padding:0"></td></tr></tbody>`;
+      b.removeAttribute("data-dt-node"); b.setAttribute("aria-label", label); b.textContent = "✎";
+      b.before(t); const td = t.querySelector("td"); td.append(b);
+      td.insertAdjacentHTML("beforeend", extra);
+    };
+    cell("stack", "Stack crate", '<span style="position:absolute;left:0;top:-22px;opacity:0;white-space:nowrap;background:#1d1d1f;color:#ffffff;font-size:11px;padding:2px 4px">Stack crate</span>');
+    cell("ship", "Ship crate", '<span style="position:absolute;left:0;top:0;clip-path:inset(50%);white-space:nowrap">Ship this crate</span>');
+  }
+  // D51: "Stack crate" (80:18) is a card with its own label whose ONLY control is a centred "Unstack crate" button (which writes)
+  // — the card shows text of its own, so that button is not the card's control: the drive never clicks the centre, Tab reaching
+  // the button is not the card reached
+  if (on("card-own")) {
+    const old = document.getElementById("stack");
+    const card = document.createElement("div");
+    card.id = "stack"; card.setAttribute("data-dt-node", "80:18");
+    card.style.cssText = "display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px 10px;border:1px solid #c8c4b8;border-radius:6px;cursor:pointer";
+    card.innerHTML = '<span>Stack crate</span><button type="button" id="stack-del" aria-label="Unstack crate">✕</button><span></span>';
+    old.replaceWith(card);
+    document.getElementById("stack-del").addEventListener("click", (e) => { e.stopPropagation(); fetch("/mutate?card-own-unstack", { method: "DELETE" }); });
+    card.addEventListener("click", () => dlg("dlg-stack").showModal());
+  }
+  // review 6 H-1 / H-3 (D51): cards whose ONLY control is a centred Delete, with content of their own the check misread —
+  // "Stack crate" (80:18) whose label is opacity 0 IN FLOW until the first pointer move (an entrance played on interaction: the
+  // keyboard never plays it), "Ship crate" (80:23) whose icon is a CSS mask: neither Delete is the card's control (never
+  // clicked, Tab reaching it is not the card reached). "Plant crate" (80:22): a D47 cell under a pointer-events:none hover tint
+  // over the whole cell — the tint is the cell's chrome, its button is the opener's
+  if (on("own-r6")) {
+    const card = (oldId, dt, inner, delId, delLabel, dialogId) => {
+      const old = document.getElementById(oldId);
+      const c = document.createElement("div");
+      c.id = oldId; c.setAttribute("data-dt-node", dt);
+      c.style.cssText = "display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px 10px;border:1px solid #c8c4b8;border-radius:6px;cursor:pointer";
+      c.innerHTML = `${inner}<button type="button" id="${delId}" aria-label="${delLabel}">✕</button><span></span>`;
+      old.replaceWith(c);
+      document.getElementById(delId).addEventListener("click", (e) => { e.stopPropagation(); fetch(`/mutate?${delId}`, { method: "DELETE" }); });
+      c.addEventListener("click", () => dlg(dialogId).showModal());
+    };
+    card("stack", "80:18", '<span id="stack-label" style="opacity:0">Stack crate</span>', "r6-unstack", "Unstack crate", "dlg-stack");
+    document.addEventListener("pointermove", () => { document.getElementById("stack-label").style.opacity = "1"; }, { once: true });
+    card("ship", "80:23", '<span style="display:inline-block;width:20px;height:20px;background-color:#2e4a2e;-webkit-mask:radial-gradient(circle, #000000 60%, transparent 61%);mask:radial-gradient(circle, #000000 60%, transparent 61%)"></span>', "r6-unship", "Unship crate", "dlg-ship");
+    const b = document.getElementById("plant");
+    const id = b.getAttribute("data-dt-node");
+    const t = document.createElement("table"); t.style.cssText = "display:inline-table;border-collapse:collapse";
+    t.innerHTML = `<tbody><tr><td data-dt-node="${id}" style="width:160px;height:44px;text-align:center;position:relative;padding:0"></td></tr></tbody>`;
+    b.removeAttribute("data-dt-node"); b.setAttribute("aria-label", "Plant crate"); b.textContent = "✎";
+    b.before(t); const td = t.querySelector("td"); td.append(b);
+    td.insertAdjacentHTML("beforeend", '<span style="position:absolute;inset:0;background:rgba(0, 0, 0, 0.04);pointer-events:none"></span>');
+  }
+  // fix 8 (owner D52, D47-wide): the keyboard battery takes a container's sole centred control for the opener's own only when
+  // the PIXELS say the container paints nothing of its own beside it — the same check as the 12a drive's. "Stack crate" (80:18):
+  // a card whose only control is a centred "Unstack crate" Delete beside a <progress> bar (no text, no fill the DOM reads);
+  // "Ship crate" (80:23): a card whose status dot is its own empty ::before — neither Delete is the card's control (never
+  // clicked, Tab reaching it is not the card reached, no key pressed on it). "Plant crate" (80:22): a D47 cell whose sole button
+  // sits in a filled wrapper — the opener's own (driven, Enter opens it)
+  if (on("own-r7")) {
+    const card = (oldId, dt, inner, delId, delLabel, dialogId) => {
+      const old = document.getElementById(oldId);
+      const c = document.createElement("div");
+      c.id = oldId; c.setAttribute("data-dt-node", dt);
+      c.style.cssText = "display:inline-grid;grid-template-columns:1fr auto 1fr;align-items:center;width:240px;padding:6px 10px;border:1px solid #c8c4b8;border-radius:6px;cursor:pointer";
+      c.innerHTML = `${inner}<button type="button" id="${delId}" aria-label="${delLabel}">✕</button><span></span>`;
+      old.replaceWith(c);
+      document.getElementById(delId).addEventListener("click", (e) => { e.stopPropagation(); fetch(`/mutate?${delId}`, { method: "DELETE" }); });
+      c.addEventListener("click", () => dlg(dialogId).showModal());
+    };
+    card("stack", "80:18", '<progress value="60" max="100" style="width:70px"></progress>', "r7-unstack", "Unstack crate", "dlg-stack");
+    const st = document.createElement("style");
+    st.textContent = "#ship::before { content: \"\"; width: 10px; height: 10px; border-radius: 50%; background: #2e7d4f; }";
+    document.head.appendChild(st);
+    card("ship", "80:23", "", "r7-unship", "Unship crate", "dlg-ship");
+    const b = document.getElementById("plant");
+    const id = b.getAttribute("data-dt-node");
+    const t = document.createElement("table"); t.style.cssText = "display:inline-table;border-collapse:collapse";
+    t.innerHTML = `<tbody><tr><td data-dt-node="${id}" style="width:160px;height:44px;text-align:center;position:relative;padding:0"></td></tr></tbody>`;
+    b.removeAttribute("data-dt-node"); b.setAttribute("aria-label", "Plant crate"); b.textContent = "✎";
+    b.before(t); const td = t.querySelector("td");
+    const wrap = document.createElement("span"); wrap.style.cssText = "display:inline-block;padding:4px;background:#e8eef8";
+    wrap.append(b); td.append(wrap);
+  }
+  // review 4 M-3: "Sort crates" (80:15) opens a WebSocket whose URL carries the action (?op=late-open) when it opens its dialog —
+  // once a battery unit has acted, that socket must never reach the server (the 12a drive's click, unblocked, opens one). Review
+  // 5 M-2: it sends "delete-crate" on open only when a key pressed the button (a keyboard click has detail 0; the drive's mouse
+  // click has 1), so the unblocked drive never writes here — a frame that reaches the server is the battery's
+  if (on("ws-late-open")) {
+    const b = document.getElementById("sort");
+    b.onclick = (e) => {
+      dlg("dlg-sort").showModal();
+      const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/ws?op=late-open&from=" + encodeURIComponent(location.search));
+      if (e.detail === 0) ws.onopen = () => ws.send("delete-crate");
+    };
+  }
+  // L-2: a toast region (fixed, full viewport, pointer-events:none) with a clickable toast in the top-left corner that writes
+  if (on("toast-portal")) {
+    // M4: a toast region (react-hot-toast style: position:fixed; inset:16px; pointer-events:none, ≥ 90% of the viewport) holds
+    // a visible toast in its top-left corner whose body is clickable (a div, no role — "click to view the undo log", which writes).
+    // "Move crate" (80:16) keeps its scrim; the toast sits above it.
+    {
+      const reg = document.createElement("div");
+      reg.style.cssText = "position:fixed;inset:0;z-index:9999;pointer-events:none";
+      const t = document.createElement("div");
+      t.textContent = "!"; t.title = "Crate moved"; t.style.cssText = "pointer-events:auto;position:absolute;left:0;top:0;width:40px;height:40px;background:#333;color:#fff";
+      t.addEventListener("click", () => fetch("/mutate?toast-clicked", { method: "POST" }));
+      reg.append(t); document.body.append(reg);
+    }
+  }
+  // ---- fix pass 4 shapes (review 3), one flag each (none in "broken")
+  // the H-3 shape on any opener: a div role=button that opens its dialog on keydown Enter and focuses a destructive "Delete
+  // crate" in it in the same task — the same Enter's keypress clicks it. `del` is what that Delete does (never the fixture's
+  // own fetch: each shape writes through its own channel)
+  const keydownDelete = (btnId, dialogId, del) => {
+    const d = dlg(dialogId);
+    let x = d.querySelector(".js-del");
+    if (btnId === "sort") { const d0 = document.getElementById("delete-crate"); x = d0.cloneNode(true); d0.replaceWith(x); }
+    else if (!x) { d.querySelector(".row-btns").insertAdjacentHTML("afterbegin", '<button type="button" class="js-del">Delete crate</button>'); x = d.querySelector(".js-del"); }
+    x.addEventListener("click", del);
+    const old = document.getElementById(btnId);
+    const div = document.createElement("div"); div.className = "btn"; div.setAttribute("role", "button"); div.tabIndex = 0;
+    div.setAttribute("data-dt-node", old.getAttribute("data-dt-node")); div.id = btnId; div.textContent = old.textContent; old.replaceWith(div);
+    const openIt = () => { d.showModal(); x.focus(); };
+    div.addEventListener("click", openIt);
+    div.addEventListener("keydown", (e) => { if (e.key === "Enter") openIt(); });
+  };
+  // H-1: the app's API client is a SharedWorker ("Sort crates", 80:15): its DELETE is not the page's own request
+  if (on("shared-api")) {
+    const api = new SharedWorker("/seed-api-worker.js"); api.port.start();
+    keydownDelete("sort", "dlg-sort", () => api.port.postMessage("shared-worker-delete-crate"));
+  }
+  // H-1: a service worker registered through the PROTOTYPE ("Label crate", 80:17): Delete posts it a message, it writes
+  if (on("sw-proto")) {
+    const reg = ServiceWorkerContainer.prototype.register.call(navigator.serviceWorker, "/seed-sw.js").then(() => navigator.serviceWorker.ready);
+    keydownDelete("label", "dlg-label", () => reg.then((r) => r.active && r.active.postMessage("sw-delete-crate")));
+  }
+  // H-1: a realtime channel ("Stack crate", 80:18): Delete sends a WebSocket message
+  if (on("ws-delete")) {
+    const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/ws?from=" + encodeURIComponent(location.search));
+    keydownDelete("stack", "dlg-stack", () => { if (ws.readyState === 1) ws.send("delete-crate"); });
+  }
+  // M-1: an undo window — Delete commits 300 ms later ("Sort crates", 80:15): the write lands while a later check runs
+  if (on("undo-delay")) keydownDelete("sort", "dlg-sort", () => setTimeout(() => fetch("/mutate?undo-window-expired", { method: "POST" }), 300));
+  // M-1: an autosave 300 ms after the Cancel click that closes "Plant crate" (80:22) — after the unit's LAST action
+  if (on("close-autosave")) dlg("dlg-plant").querySelector(".js-cancel").addEventListener("click", () => setTimeout(() => fetch("/mutate?autosave-on-close", { method: "POST" }), 300));
+  // H-2 / D50: data read by POST (GraphQL's default transport) and an MSW-style dev service worker the app waits for — the action
+  // bar shows only once both answered (an error state otherwise)
+  const gates = new Set(), bar = document.querySelector(".actions");
+  const hold = (n) => { gates.add(n); bar.style.display = "none"; };
+  const release = (n) => { gates.delete(n); if (!gates.size) bar.style.display = ""; };
+  if (on("graphql-load")) {
+    hold("graphql");
+    fetch("/graphql", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "query Crates { crates { name } }" }) })
+      .then((r) => r.json()).then(() => release("graphql"), () => { document.querySelector("main").insertAdjacentHTML("afterbegin", '<p id="load-error">Could not load crates</p>'); });
+  }
+  if (on("msw-like")) { hold("msw"); navigator.serviceWorker.register("/seed-sw.js").then(() => navigator.serviceWorker.ready).then(() => release("msw")); }
+  // fingerprint: every load after the first one of this URL is answered as an empty state (the test server marks it
+  // <html data-later>) — the battery's page then differs from the measured one
+  if (on("later-empty") && document.documentElement.hasAttribute("data-later")) {
+    bar.style.display = "none"; document.querySelector("main").insertAdjacentHTML("afterbegin", '<p id="load-error">Could not load crates</p>');
+  }
+  // M-2: "Move crate" (80:16) has NO scrim; a decorative fixed layer UNDER the content and a transparent app container that
+  // writes on a click on its own surface (a "deselect")
+  if (on("deco-bg")) {
+    document.getElementById("move-scrim").remove();
+    const deco = document.createElement("div"); deco.style.cssText = "position:fixed;inset:0;z-index:-1;background:#e8eef8"; document.body.prepend(deco);
+    const app = document.querySelector(".app"); app.style.background = "transparent"; document.body.style.background = "transparent"; document.documentElement.style.background = "transparent";
+    app.addEventListener("click", (e) => { if (e.target === app) fetch("/mutate?app-shell-deselect", { method: "POST" }); });
+  }
+  // L-1: with hui-wrap, the transparent centring wrapper's background computes to oklab(0 0 0 / 0) (Tailwind v4 bg-black/0)
+  if (on("oklab-wrap") && on("hui-wrap")) document.getElementById("dlg-move").parentElement.style.background = "color-mix(in oklab, #000 0%, transparent)";
+  // M-3: the screen sits in an ALREADY-OPEN modal root with a 0-px box (role=dialog aria-modal, its sheet fixed); "Move crate"
+  // (80:16) opens a NON-dialog popup panel inside it
+  if (on("hui-outer")) {
+    const app = document.querySelector(".app");
+    const root = document.createElement("div");
+    root.setAttribute("role", "dialog"); root.setAttribute("aria-modal", "true"); root.setAttribute("aria-label", "Crates sheet");
+    root.style.cssText = "position:relative";
+    const sheet = document.createElement("div"); sheet.style.cssText = "position:fixed;inset:0;overflow:auto;background:#f6f4ee";
+    app.before(root); root.append(sheet); sheet.append(app);
+    const panel = dlg("dlg-move");
+    panel.removeAttribute("role"); panel.removeAttribute("aria-modal"); panel.removeAttribute("aria-labelledby");
+    document.getElementById("move-scrim").remove();
+    sheet.append(panel);
+  }
+  // L-4: the main thread freezes for good on the first Enter (only the battery presses Enter)
+  if (on("freeze-enter")) document.addEventListener("keydown", (e) => { if (e.key === "Enter") { for (;;) { /* never yields */ } } }, true);
+  // an app that focuses its search box on load: a Tab walk that does not start from a known point starts HERE (facts-12b §2)
+  document.getElementById("find-tray").focus();
+})();
+</script>
+</body>
+</html>
