@@ -307,7 +307,7 @@ export function prepareStaged(stageDir: string, destDir: string): PreparedPublis
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(stageDir, { withFileTypes: true }); } catch (e) { return { error: `--publish ${stageDir}: ${errMsg(e).split("\n")[0]}` }; }
   // realpaths: a symlinked or ../ spelling of the verify dir is still the verify dir (L-10)
-  if (canonical(stageDir) === canonical(destDir)) return { error: `--publish ${stageDir} is the verify directory itself — stage outside the project (D9)` };
+  if (canonical(stageDir) === canonical(destDir)) return { error: `--publish ${stageDir} is the verify directory itself — stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
   const owned = files.filter((f) => TOOL_OWNED.test(f));
   if (owned.length) return { error: `--publish refuses ${owned.join(", ")} — expected/report/status files are written by verify-screen itself, never copied in` };

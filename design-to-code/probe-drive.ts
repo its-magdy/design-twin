@@ -1343,14 +1343,14 @@ export async function ownPixels(page: Page, o: { park: boolean }): Promise<{ ctl
     if (typeof a === "string") return { ctl, why: a };
     const b = await shot("B", a.clip);
     if (typeof b === "string") return { ctl, why: b };
-    if (!a.png.equals(b.png)) return { ctl, why: "the opener paints something of its own beside it (D52: its screenshot with only that control hidden differs from the one with all its content hidden)" };
+    if (!a.png.equals(b.png)) return { ctl, why: "the opener paints something of its own beside it (its screenshot with only that control hidden differs from the one with all its content hidden)" };
     if (m.keep === 0) return { ctl, why: null };
     const k = await shot("K", a.clip);
     if (typeof k === "string") return { ctl, why: k };
     const n = await shot("N", a.clip);
     if (typeof n === "string") return { ctl, why: n };
     const plain = plainKept(decodePng(k.png), decodePng(n.png), k.clip, k.keep);
-    return { ctl, why: plain === null ? null : `a box kept as the opener's decoration is not a plain fill — ${plain} (D53: alone it must paint one uniform colour)` };
+    return { ctl, why: plain === null ? null : `a box kept as the opener's decoration is not a plain fill — ${plain} (alone it must paint one uniform colour)` };
   } catch (e) {
     return { ctl, why: `its own content could not be compared by pixels (${firstLine(e)})` };
   } finally {

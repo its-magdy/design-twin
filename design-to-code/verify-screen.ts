@@ -465,7 +465,7 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
   // DT-50: an asset/geometry/assetSkipped leaf is one exported image — whatever padding/gap an OLD export inferred for it is
   // the inset already baked into the file (new exports carry no `layout` on such a leaf). Never compared.
   if (L && typeof L === "object" && (n.asset || n.geometry || n.assetSkipped)) {
-    const BAKED = "inset baked into the exported asset (DT-50)";
+    const BAKED = "inset baked into the exported asset";
     const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : undefined;
     if (g !== undefined) skip("gap", g, BAKED);
     const pad = Array.isArray(L.padding) ? L.padding.slice(0, 4) : PAD_KEYS.some((k) => typeof L[k] === "number") ? PAD_KEYS.map((k) => L[k]) : null;
@@ -1138,7 +1138,7 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   // (the PNG on disk is checked too, not only the index's number: a thumbnail written over the pointer after the pull)
   const s0 = figmaReferenceScale(box.w, box.h), onDisk = png.w / (rb ? rb.w : box.w);
   if (![scale, onDisk].every((v) => Math.abs(v - s0) <= REFERENCE_SCALE_SLACK * s0))
-    return unusable(p, `the reference is a ${png.w} px image, not the export reference (a discovery thumbnail, F-08) — re-pull the screen`);
+    return unusable(p, `the reference is a ${png.w} px image, not the export reference (a discovery thumbnail) — re-pull the screen`);
   // F-3: the PNG must be the render bounds at that scale on BOTH axes (±2 px; on the height also the scale's own rounding — it
   // comes from png.w, up to 1 px off the true width, + round4 — so a tall narrow frame's round(h · scale) can be h/w px off:
   // 0 extra for 1440×720, 12 for 400×5000). A PNG of another height is a stale or
@@ -1370,15 +1370,15 @@ const isContainer = (got: MeasuredStyles): boolean => !!((got.tag && CONTAINER_T
 const LIMITS = [
   "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, so they are compared only if the probe reports them under the node's id.",
   "::placeholder colour is compared only when the probe reports placeholderColor (getComputedStyle(el,'::placeholder') or the stylesheet rule); otherwise it is listed under `unverifiable`, never passed.",
-  "A <table> with border-spacing (border-collapse: separate) also puts that spacing between its edge and the outer rows — above the first and below the last (CSS 2.1 §17.6.1): a container-height delta of twice the spacing is the table model, not a layout bug (F-108).",
-  "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) — read `rotate` too before calling a rotation missing (finding 198).",
+  "A <table> with border-spacing (border-collapse: separate) also puts that spacing between its edge and the outer rows — above the first and below the last (CSS 2.1 §17.6.1): a container-height delta of twice the spacing is the table model, not a layout bug.",
+  "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) — read `rotate` too before calling a rotation missing.",
   "An icon drawn by an <img> (or <canvas>, <object>) has no readable fill: the SVG inside is a separate document, so its fill is listed under `unverifiable` — compare the asset file instead.",
   "Numbers are read as px: a number or a px string (\"20px\"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; so is a value CSS cannot produce (a negative gap, padding or size).",
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared.",
   "A TEXT node's height is not compared (neither a Range nor its element gives the line box Figma's text box has), and the width of text the design truncates is not either (a Range spans the unclipped string). A fixed- or fill-width text is compared at its ink width within 3px — an empirical bound (field runs: −0.6…+2.4px); heavy italics or overhanging glyphs may exceed it.",
-  "A transparent element's background is compared through the element that paints it (paintedBy, F-74): its only same-box child, else its nearest painting ancestor that holds it. A sibling or an absolutely positioned overlay painting over it is not seen — when the ancestor's colour is the designed one the node may PASS although the overlay shows another; a transparent element whose own children paint all of it gets no painter (compared as transparent).",
+  "A transparent element's background is compared through the element that paints it (paintedBy): its only same-box child, else its nearest painting ancestor that holds it. A sibling or an absolutely positioned overlay painting over it is not seen — when the ancestor's colour is the designed one the node may PASS although the overlay shows another; a transparent element whose own children paint all of it gets no painter (compared as transparent).",
   "Border widths are compared as CSS draws them: Chromium floors a computed border width to whole px, at least 1 (a 1.5px stroke is a 1px border). A ring (box-shadow spread, outline) is compared with the design's own width.",
-  "Severity follows the match (D30/D31): a node matched by position or a non-canonical rule is at most low, by text-ordinal or another screen's id (tag-alias) at most medium; a matched element far from the design's size gets one 'match (size)' row and its other deltas are capped at low (cappedFrom keeps the original, cappedBy says which cap). D39: an open capped delta blocks a plain pass (verdict incomplete, never fail on its own); a waiver on 'match (size)' lifts only the size cap — a match-confidence cap stays.",
+  "Severity follows the match: a node matched by position or a non-canonical rule is at most low, by text-ordinal or another screen's id (tag-alias) at most medium; a matched element far from the design's size gets one 'match (size)' row and its other deltas are capped at low (cappedFrom keeps the original, cappedBy says which cap). An open capped delta blocks a plain pass (verdict incomplete, never fail on its own); a waiver on 'match (size)' lifts only the size cap — a match-confidence cap stays.",
 ];
 
 /** compare()'s options — the evidence the CLI ties the report to. `components` = the --interactions file's
@@ -2308,7 +2308,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     return live;
   };
   if (unboundNote !== undefined) inputNotes.push(unboundNote);
-  if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length) inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) — graded as agent evidence (D41)");
+  if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length) inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) — graded as agent evidence");
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i): VerifyInteractionResult => {
     const key = String(i.nodeId) + "|" + i.trigger;
     const p = probeRows.get(key), a = exercised.get(key);
@@ -2329,7 +2329,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const worked = fromProbe ? pPass : gaps !== null && gaps.length === 0;
     const overridden = fromProbe && pPass && a && !(a.ok === true && (gapsOf(a) ?? []).length === 0)
       ? `agent row ok: ${a.ok === undefined ? "(none)" : String(a.ok)}${a.detail ? ` — ${a.detail}` : ""}` : undefined;
-    if (overridden) inputNotes.push(`${i.nodeId} (${i.trigger}): the run-bound probe's pass overrides the agent's row (${overridden}) — D41`);
+    if (overridden) inputNotes.push(`${i.nodeId} (${i.trigger}): the run-bound probe's pass overrides the agent's row (${overridden})`);
     const row: VerifyInteraction = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, ...ifDefined("action", i.action), ...ifDefined("destinationId", i.destinationId), ...(i.destinationExported === false ? { destinationExported: false } : {}),
       ...(i.source === "plan" ? { source: "plan" as const, ...ifDefined("expect", i.expect) } : {}) };
     const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
@@ -2348,7 +2348,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (hit.result === "not-probed" || hit.ok === null || hit.ok === undefined) return Object.assign(row, { result: "not-probed" as const, ...ifDefined("detail", hit.detail), ...(probeBound ? said : {}) });
     if (hit.ok === false) return Object.assign(row, { result: "fail" as const, ...ifDefined("detail", hit.detail), ...ifDefined("selector", hit.selector), ...said });
     if (insideMiss) {
-      return Object.assign(row, { result: "not-probed" as const, detail: `probe pass without the destination tag inside the opened element (D41) — tag the root of what opens with data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
+      return Object.assign(row, { result: "not-probed" as const, detail: `probe pass without the destination tag inside the opened element — tag the root of what opens with data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
     // ok:true is a claim; the evidence is the selector that was driven and proof it matched something.
     // An agent once credited two hidden popup rows with hovers it performed on unrelated controls (187).
@@ -2440,8 +2440,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   // a node or value that was not measured — none of them is a delta.
   const notWaivable = new Map<string, string>();
   for (const n of notMeasured) notWaivable.set(n.nodeId, "the node was not measured — only a measured delta can be accepted");
-  for (const i of interactionsFailed) notWaivable.set(i.nodeId, "a failed interaction is never waivable (D5) — descope it (plan.descopes, owner-only) if it is deliberately inert");
-  for (const c of componentsAbsent) for (const id of c.nodeIds) notWaivable.set(id, `component set '${c.setName}' is reported ABSENT — a missing component is never waivable (D5)`);
+  for (const i of interactionsFailed) notWaivable.set(i.nodeId, "a failed interaction is never waivable — descope it (plan.descopes, owner-only) if it is deliberately inert");
+  for (const c of componentsAbsent) for (const id of c.nodeIds) notWaivable.set(id, `component set '${c.setName}' is reported ABSENT — a missing component is never waivable`);
   let applied = 0;
   (Array.isArray(opts.waivers) ? opts.waivers : []).forEach((w, i) => {
     if (!isPlanWaiver(w)) { inputNotes.push(`plan waivers[${i}] is not ${isPlanWaiver.expected}; ignored`); return; }
@@ -2858,7 +2858,7 @@ const VISUAL_MD_ROWS = 10;
 /** The md section "Visual diff — informational, not part of the verdict". */
 function visualMarkdown(v: ReportVisual): string[] {
   const L: string[] = ["## Visual diff — informational, not part of the verdict", ""];
-  L.push("*The pixel diff never changes the fidelity verdict above (D4, D40(3)). Font rasterisation alone differs 1–3% on text-heavy screens (Figma's renderer vs Chromium), so read the regions, not the percentage.*", "");
+  L.push("*The pixel diff never changes the fidelity verdict above. Font rasterisation alone differs 1–3% on text-heavy screens (Figma's renderer vs Chromium), so read the regions, not the percentage.*", "");
   if (!v.ran) {
     L.push(v.why === VISUAL_NOT_APPLICABLE ? "Not applicable (no web probe)." : `Not run (${mdText(v.why) || "no reason recorded"}).`, "");
     return L;
@@ -2965,7 +2965,7 @@ const BEHAVIOUR_MD_ROWS = 80;
 /** The md section "Behaviour and accessibility — not part of the verdict". */
 function behaviourMarkdown(b: ReportBehaviour): string[] {
   const L: string[] = ["## Behaviour and accessibility — not part of the verdict", ""];
-  L.push("*These checks never change the fidelity verdict above (D4). A failed check is still a measurable accessibility failure: fix it or raise a designer question.*", "");
+  L.push("*These checks never change the fidelity verdict above. A failed check is still a measurable accessibility failure: fix it or raise a designer question.*", "");
   if (!b.ran) {
     L.push(`Not run (${mdText(b.why) || "no reason recorded"}).`, "");
     return L;
@@ -3120,7 +3120,7 @@ function reportToMarkdown(r: VerifyReportV2): string {
   }
   const inShell = r.untaggedInstanceSetsInShell || [];
   if (inShell.length) {
-    L.push(`## Instance sets with no evidence, inside the shared shell (${inShell.length})`, "", "*Built once for every screen (F-96): listed apart, not this screen's work. Not a failure on its own.*", "");
+    L.push(`## Instance sets with no evidence, inside the shared shell (${inShell.length})`, "", "*Built once for every screen — listed apart, not this screen's work. Not a failure on its own.*", "");
     for (const m of inShell.slice(0, 40)) L.push(`- ${m.setName} — ${m.instances} instance(s), e.g. \`${m.nodeIds[0]}\``);
     if (inShell.length > 40) L.push(`- …and ${inShell.length - 40} more`);
     L.push("");
@@ -3290,8 +3290,8 @@ function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; fi
   }
   const id = sel.node;
   // Not a delta = not waivable (D5): say which kind of item it is instead.
-  if ((rep.componentsAbsent || []).some((c) => c.nodeIds.includes(String(id)))) return { error: `${id} belongs to a component set reported ABSENT — a missing component is never waivable (D5); build it` };
-  if ((rep.interactions || []).some((i) => i.nodeId === id && i.result === "fail")) return { error: `${id} is a failed interaction — never waivable (D5); fix it, or have the owner descope it in plan.descopes (D20)` };
+  if ((rep.componentsAbsent || []).some((c) => c.nodeIds.includes(String(id)))) return { error: `${id} belongs to a component set reported ABSENT — a missing component is never waivable; build it` };
+  if ((rep.interactions || []).some((i) => i.nodeId === id && i.result === "fail")) return { error: `${id} is a failed interaction — never waivable; fix it, or have the owner descope it in plan.descopes` };
   if ((rep.notMeasured || []).some((n) => n.nodeId === id)) return { error: `${id} was not measured — there is no delta to accept; measure it (or fold it, plan anchor foldedInto) first` };
   if (sel.field !== undefined && (rep.fieldsNotMeasured || []).some((n) => n.nodeId === id && n.field === sel.field)) return { error: `${id} (${sel.field}) was not measured — there is no delta to accept` };
   const fields = deltas.filter((d) => d.nodeId === id).map((d) => d.field);

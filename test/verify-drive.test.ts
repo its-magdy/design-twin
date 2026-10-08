@@ -201,7 +201,7 @@ console.log("D41 — a run-bound probe row against the agent's:");
 {
   const r = compare(exp, measured([probePass("2:2", "3:1", false), ...OTHERS]), bound());
   safe("[9] a probe pass WITHOUT the destination tag inside what opened → not-probed (D41), not pass", () =>
-    res(r, "2:2")?.result === "not-probed" && /without the destination tag inside the opened element \(D41\)/.test(res(r, "2:2")?.detail ?? "") && r.verdict === "incomplete");
+    res(r, "2:2")?.result === "not-probed" && /without the destination tag inside the opened element —/.test(res(r, "2:2")?.detail ?? "") && r.verdict === "incomplete");
   const other = compare(exp, measured([{ ...probePass("2:2", "3:2") }, ...OTHERS]), bound());
   safe("[9] …nor a pass whose tag inside names another frame", () => res(other, "2:2")?.result === "not-probed");
   const withAgent = compare(exp, measured([probePass("2:2", "3:1", false), ...OTHERS]), bound({ interactions: [pass("2:2", "dialog-opened")] }));

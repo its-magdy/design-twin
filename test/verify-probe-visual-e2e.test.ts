@@ -257,7 +257,7 @@ const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? 
   const r = await P.e4;
   const m = read(pThumb, out("Firings"));
   console.log(`    e4: exit ${r.status} — ${brief(m)}`);
-  check(`e4 a 360 px thumbnail: not run, the F-08 why (${whyOf(m)})`, r.status === 0 && /a discovery thumbnail, F-08/.test(whyOf(m)) && !fs.existsSync(path.join(pThumb, out("Firings") + ".diff.png")));
+  check(`e4 a 360 px thumbnail: not run, the F-08 why (${whyOf(m)})`, r.status === 0 && /a discovery thumbnail\)/.test(whyOf(m)) && !fs.existsSync(path.join(pThumb, out("Firings") + ".diff.png")));
   const c4 = await vs(pThumb, ["--compare", EXP, out("Firings") + ".measured.json", "--out", out("Firings")]);
   const c1 = await vs(pMain, ["--compare", EXP, out("Off") + ".measured.json", "--out", out("Off")]);
   const r4 = readReport(pThumb, out("Firings")), r1 = readReport(pMain, out("Off"));

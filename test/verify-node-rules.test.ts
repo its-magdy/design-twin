@@ -495,7 +495,7 @@ console.log("review 2 — overfull alignment per axis, wrap, space-*, refined D3
   const sameStamp = pair(unstampedOwn, card2("13:20", "2", "Alpha", "Beta", "Sample Kit"));
   safe("[sibling pass 2] …a sibling stamped Sample Kit: aliases built", () => JSON.stringify(spec(sameStamp, "I13:10;6:14")?.aliases) === '["I13:20;6:24"]');
 
-  safe("[D39 LIMITS] the report's limits say capped deltas block a plain pass and a size waiver lifts only the size cap", () => (noWaiver.limits || []).some((l) => /D39/.test(l) && /lifts only the size cap/.test(l)));
+  safe("[D39 LIMITS] the report's limits say capped deltas block a plain pass and a size waiver lifts only the size cap", () => (noWaiver.limits || []).some((l) => /capped delta blocks a plain pass/.test(l) && /lifts only the size cap/.test(l)));
 }
 
 // ---------------------------------------------------------------- review pass 3
