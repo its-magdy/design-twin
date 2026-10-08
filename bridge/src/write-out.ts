@@ -19,7 +19,7 @@ import { buildDesignSystemLayout } from "./design-system-layout.ts";
 import type { DesignSystemLayout } from "./design-system-layout.ts";
 import { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } from "./library-layout.ts";
 import { mergeVariablesDoc } from "./variables-merge.ts";
-import { sha1Hex, normalizeForCompare, ContentIndex, contentKey } from "./asset-compare.ts";
+import { sha1Hex, normalizeForCompare, ContentIndex, contentKey, fileKeyCache } from "./asset-compare.ts";
 import { isRasterShell } from "./svg-normalize.ts";
 import { collectGraphics, reuseHiddenAssets, usesByPointer } from "./asset-owners.ts";
 import type { AssetContext, AssetOwner, Graphic, ReuseResult } from "./asset-owners.ts";
@@ -290,15 +290,15 @@ function readExistingDirCaseFold(adir: string): Map<string, string> {
 // side of a 0.1 rounding boundary), so 11 copies of one icon stayed 11 files. Built ONCE per writeScreen /
 // writeExport over the files ALREADY on disk, updated as writeAssets writes, and handed on to
 // writeScreenAssets' `duplicates` — one scan, one rule, so a file writeAssets reuses can never show up
-// as a `duplicates` entry it did not also see.
+// as a `duplicates` entry it did not also see. A file unchanged since an earlier pull in this process is
+// not read again (asset-compare.ts fileKeyCache says when a cached key may be used).
 function buildContentIndex(adir: string): ContentIndex {
   const index = new ContentIndex();
   let names: string[] = [];
   try { names = fs.readdirSync(adir); } catch { return index; }
   for (const name of names) {
-    let bytes: Buffer;
-    try { bytes = fs.readFileSync(path.join(adir, name)); } catch { continue; }
-    index.add(name, bytes);
+    const key = fileKeyCache.keyOf(path.join(adir, name), name);
+    if (key) index.addKey(name, key);
   }
   return index;
 }
