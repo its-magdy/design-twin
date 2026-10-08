@@ -3,7 +3,6 @@
 
 // design-to-code/tokens.ts
 import fs3 from "node:fs";
-import { createHash } from "node:crypto";
 import path4 from "node:path";
 
 // design-to-code/types.ts
@@ -16,6 +15,7 @@ import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
 // design-to-code/read-json.ts
 var anyJson = (_x) => true;
@@ -100,6 +100,10 @@ function ifDefined(key, v) {
   return o;
 }
 
+// bridge/src/hash.ts
+import crypto from "node:crypto";
+var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
+
 // design-to-code/probe-steps.ts
 function isPlanExpect(x) {
   return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
@@ -113,6 +117,16 @@ var isObj = isJsonObject;
 var optObj = (x) => x === void 0 || isObj(x);
 var optStr = (x) => x === void 0 || typeof x === "string";
 var anyObject = (x) => isObj(x);
+var isAlias = (v) => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
+var isComposed = (v) => {
+  if (!v || typeof v !== "object" || !("composed" in v)) return false;
+  const c = v.composed;
+  if (!c || typeof c !== "object" || !("color" in c) || !("opacity" in c)) return false;
+  const colorOk = typeof c.color === "string" || isAlias(c.color);
+  const opacityOk = typeof c.opacity === "number" || isAlias(c.opacity);
+  return colorOk && opacityOk && (isAlias(c.color) || isAlias(c.opacity));
+};
+var NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function isVariable(x) {
   return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
 }
@@ -302,9 +316,6 @@ var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
-function errCode(e) {
-  return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
-}
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -339,7 +350,7 @@ ${usage}`);
       console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
 ${usage}`);
     } else {
-      console.error(`${tool}: ${e instanceof Error ? e.message : String(e)}
+      console.error(`${tool}: ${errMsg(e)}
 ${usage}`);
     }
     process.exit(exitCode);
@@ -459,7 +470,7 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
     if (v.type === "FLOAT") return unitDecision2(v, opts) === "px" ? isFontSize(v) ? "fontSize" : "dimension" : "number";
     return null;
   }
-  const isComposed2 = (x) => !!x && typeof x === "object" && "composed" in x;
+  const hasComposedKey = (x) => !!x && typeof x === "object" && "composed" in x;
   const isNativeScalar = (x) => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
   function resolve(byName, collections, v, mode, seen) {
     const values = v.values || {};
@@ -484,9 +495,8 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
     if (!isAlias2(raw)) return isNativeScalar(raw) ? raw : void 0;
     return follow(raw);
   }
-  const NUMERIC_TEXT2 = /^-?\d+(?:\.\d+)?$/;
   function opacityNumber(r) {
-    const n = typeof r === "number" ? r : typeof r === "string" && NUMERIC_TEXT2.test(r) ? Number(r) : NaN;
+    const n = typeof r === "number" ? r : typeof r === "string" && NUMERIC_TEXT.test(r) ? Number(r) : NaN;
     return Number.isFinite(n) ? n : null;
   }
   function model(designSystem, warnings, opts) {
@@ -535,7 +545,7 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
           }
           values[m] = isSentinel2 && isSentinel2(v, r) ? FULL : r;
         }
-        if (!ok && Object.values(v.values || {}).some(isComposed2)) {
+        if (!ok && Object.values(v.values || {}).some(hasComposedKey)) {
           warnings.push(`${v.name}: skipped \u2014 a composed colour (colour + separate opacity) whose colour or opacity could not be resolved inside this file has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
           continue;
         }
@@ -995,15 +1005,6 @@ function isSentinel(v, raw) {
 var webNumber = (v, raw) => isSentinel(v, raw) ? WEB_FULL_ROUND : raw;
 var isHexish = (v) => typeof v === "string" && /^#/.test(v);
 var isScalar = (v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean";
-var isAlias = (v) => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
-var isComposed = (v) => {
-  if (!v || typeof v !== "object" || !("composed" in v)) return false;
-  const c = v.composed;
-  if (!c || typeof c !== "object" || !("color" in c) || !("opacity" in c)) return false;
-  const colorOk = typeof c.color === "string" || isAlias(c.color);
-  const opacityOk = typeof c.opacity === "number" || isAlias(c.opacity);
-  return colorOk && opacityOk && (isAlias(c.color) || isAlias(c.opacity));
-};
 function aliasNames(v) {
   if (isAlias(v)) return [v.aliasOf];
   if (!isComposed(v)) return [];
@@ -1254,7 +1255,6 @@ function numberUnit(variable, opts) {
 }
 var pctOutOfRange = (n) => n < 0 || n > 100;
 var cssPercent = (s) => (pctOutOfRange(Number(s)) ? String(clampOpacityPct(Number(s))) : s) + "%";
-var NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function cssPercentVar(plan, v, opts, depth = 0) {
   if (!v || depth > 8 || !percentOpacity(v, opts)) return false;
   const vals = Object.values(v.values || {}).filter((x) => x !== void 0);
@@ -1722,7 +1722,7 @@ var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 function catalogProvenance(ds) {
   const collections = (ds.collections || []).map((c) => canonJson(c)).sort(cmpStr);
   const variables = (ds.variables || []).map((v) => ({ sort: [v.collection ?? "", v.name, v.key ?? ""].join("\0"), json: canonJson(v) })).sort((a, b) => cmpStr(a.sort, b.sort) || cmpStr(a.json, b.json)).map((v) => v.json);
-  const sha = createHash("sha256").update(`{"collections":[${collections.join(",")}],"variables":[${variables.join(",")}]}`).digest("hex").slice(0, 12);
+  const sha = sha256Hex(`{"collections":[${collections.join(",")}],"variables":[${variables.join(",")}]}`).slice(0, 12);
   return { count: (ds.variables || []).length, sha };
 }
 var PROVENANCE_RE = /designtwin-source: (.+?) · (\d+) variables · sha256 ([0-9a-f]{12})/;
@@ -1799,7 +1799,7 @@ function checkGenerated(ds, input, generated, cmd) {
   try {
     head = fs3.readFileSync(generated, "utf8").slice(0, 4096);
   } catch (e) {
-    console.error(`error  --check: '${generated}' could not be read (${e instanceof Error ? e.message : String(e)}).`);
+    console.error(`error  --check: '${generated}' could not be read (${errMsg(e)}).`);
     return 2;
   }
   const m = PROVENANCE_RE.exec(head);

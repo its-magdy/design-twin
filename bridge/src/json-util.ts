@@ -11,6 +11,11 @@ export function nullProto<T>(): Record<string, T> {
   return Object.create(null) as Record<string, T>;
 }
 
+/** A plain JSON object: not null, not an array. */
+export function isRecord(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
 /** Array.isArray for an `unknown`, narrowing to `unknown[]` (the built-in narrows to an untyped array). */
 export function isUnknownArray(x: unknown): x is unknown[] {
   return Array.isArray(x);

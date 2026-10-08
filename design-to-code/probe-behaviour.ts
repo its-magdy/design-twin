@@ -38,9 +38,9 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { BehaviourAxe, BehaviourCheck, BehaviourCheckId, BehaviourLandmark, BehaviourStatus, BehaviourWidth, InteractionEvidence, JsonObject, MeasuredBehaviour, PageOverflow, VerifyExpectation, VerifyInteraction } from "./types.ts";
-import { DIALOG_CONTRACT, StepError, armDetector, drivable, openerState, ownPixels, pollDetector, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
+import { CUT_SETTLE_MS, DIALOG_CONTRACT, NAVIGATED, StepError, armDetector, drivable, openerState, ownPixels, pollDetector, raceBudget, raf2, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
 import type { DetectorRead } from "./probe-drive.ts";
-import { errMsg } from "../bridge/src/errmsg.ts";
+import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { parseCssColor } from "./color.ts";
 
 // ---------------------------------------------------------------- the page, as far as these functions use it
@@ -132,7 +132,8 @@ declare function requestAnimationFrame(cb: () => void): number;
  *  of a wedged browser (two CLOSE_STEP_CAP_MS steps, then a SIGKILL after a `ps` capped at PS_CAP_MS) and writing the files
  *  (WRITE_MARGIN_MS) — all inside
  *  --max-time, so a measurement that finished is never lost to the watchdog. */
-export const CUT_SETTLE_MS = 5_000, CLOSE_STEP_CAP_MS = 5_000, PS_CAP_MS = 3_000, WRITE_MARGIN_MS = 2_000;
+export { CUT_SETTLE_MS };
+export const CLOSE_STEP_CAP_MS = 5_000, PS_CAP_MS = 3_000, WRITE_MARGIN_MS = 2_000;
 export const BEHAVIOUR_CAP_MS = 90_000, BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS + 2 * CLOSE_STEP_CAP_MS + PS_CAP_MS + WRITE_MARGIN_MS;
 /** The behaviour sub-budget: min(90 s, what is left of --max-time less the reserve for settling, closing and writing) — never < 0. */
 export function behaviourBudget(now: number, deadline: number, capMs = BEHAVIOUR_CAP_MS, reserveMs = BEHAVIOUR_RESERVE_MS): number {
@@ -1529,15 +1530,12 @@ export interface BehaviourResult { behaviour: MeasuredBehaviour; forcedPng: Buff
 
 /** the most Tab presses one walk makes (duplicates included) */
 const WALK_CAP = 150;
-const NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
-const firstLine = (e: unknown): string => errMsg(e).split("\n")[0] ?? "";
 class UnitNavigated extends Error {}
 class AxeTimeout extends Error {}
 const AXE_CAP_MS = 20_000;
 const AXE_TIMED_OUT = Symbol("axe timed out");
 /** A battery unit that cannot go on: its remaining checks are not-run with this reason. */
 class BatteryStop extends Error {}
-const raf2 = (page: Page): Promise<unknown> => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 const park = async (page: Page): Promise<void> => { await page.mouse.move(0, 0); await raf2(page); };
 /** markOpener, then — when it took a container's sole control that this page has not judged yet — the SAME
  *  pixel check as the drive's (probe-drive.ts ownPixels): content of the container's own drops the control (no key is
@@ -1801,8 +1799,6 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
     });
     const blocked = (): BlockedWrite[] => blockedOf(tried, taintedPhases(trace));
     block.unit(net);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const cutP = new Promise<"cut">((resolve) => { timer = setTimeout(() => resolve("cut"), left); });
     const work = (async (): Promise<string | null> => {
       let reached: Awaited<ReturnType<typeof openUnitPage>>;
       try {
@@ -1834,14 +1830,9 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       if (e instanceof BatteryStop) return e.message;
       return `the check could not run — ${firstLine(e)}`;
     });
-    const r = await Promise.race([work, cutP]);
-    clearTimeout(timer);
+    // the context exists from before the screen was reached: closing it ends whatever the unit waits on — ≤ 5 s in all
+    const r = await raceBudget(work, left, held, () => { closed = true; cut = true; });
     if (r === "cut") {
-      closed = true;
-      cut = true;
-      // the context exists from before the screen was reached: closing it ends whatever the unit waits on — ≤ 5 s in all
-      const ctx = held.ctx;
-      await Promise.race([(async (): Promise<void> => { if (ctx) await ctx.close().catch(() => undefined); await work; })(), sleep(CUT_SETTLE_MS, undefined, { ref: false })]);
       block.unit(null);
       checks.push(...judgeWrites(produced, blocked()));
       fill(checks, produced, unit.declared, left < budgetLeft ? `time budget (this unit's share: ${Math.round(left / 1000)} s)` : "time budget");

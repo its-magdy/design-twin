@@ -11,6 +11,7 @@
 // is checked (W3C PNG 3 §5.3), the filters are §9 (None, Sub, Up, Average, Paeth). What it writes: RGB8, filter 0, deflate
 // level 1 (a mostly uniform diff image compresses well at level 1, and fast), CRC via zlib.crc32 (Node ≥ 22.2).
 import { crc32, deflateSync, inflateSync } from "node:zlib";
+import { errMsg } from "../bridge/src/errmsg.ts";
 
 /** RGBA8 pixels, row-major, w·h·4 bytes. */
 export interface Rgba { w: number; h: number; data: Uint8Array }
@@ -72,7 +73,7 @@ export function decodePng(b: Uint8Array): Rgba {
   const ch = ct === 6 ? 4 : 3, stride = w * ch;
   let raw: Buffer;
   // the inflated size is capped at exactly what the IHDR implies (one filter byte per row)
-  try { raw = inflateSync(Buffer.concat(cs.filter((c) => c.type === "IDAT").map((c) => c.data)), { maxOutputLength: (stride + 1) * h }); } catch (e) { throw new PngError(`bad image data (${e instanceof Error ? e.message : String(e)})`); }
+  try { raw = inflateSync(Buffer.concat(cs.filter((c) => c.type === "IDAT").map((c) => c.data)), { maxOutputLength: (stride + 1) * h }); } catch (e) { throw new PngError(`bad image data (${errMsg(e)})`); }
   if (raw.length < (stride + 1) * h) throw new PngError("truncated image data");
   const px = new Uint8Array(stride * h);
   for (let y = 0; y < h; y++) {

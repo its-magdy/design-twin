@@ -38,7 +38,7 @@
 // a reload after a click changed the page in place loses that state — the pass is re-run once.
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
+import { sha256Hex } from "../bridge/src/hash.ts";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -56,16 +56,16 @@ import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
 import type { BuildIdentity, InteractionEvidence, MeasuredBehaviour, MeasuredComponent, MeasuredVisual, MeasuredNode, PageOverflow, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, ProbeStep, VerifyMeasured, VerifySpec } from "./types.ts";
 import { describeStep, parseSteps, stepsSha256 } from "./probe-steps.ts";
-import { StepError, drivable, driveBudget, driveInteractions, readPageOverflow, submitGuard } from "./probe-drive.ts";
-import { CLOSE_STEP_CAP_MS, CUT_SETTLE_MS, PS_CAP_MS, WRITE_MARGIN_MS, behaviourBudget, runBehaviour } from "./probe-behaviour.ts";
+import { CLOSED, CUT_SETTLE_MS, NAVIGATED, StepError, drivable, driveBudget, driveInteractions, raf2, readPageOverflow, submitGuard } from "./probe-drive.ts";
+import { CLOSE_STEP_CAP_MS, PS_CAP_MS, WRITE_MARGIN_MS, behaviourBudget, runBehaviour } from "./probe-behaviour.ts";
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
-import { RunCacheUnwritable, RunEnded, TERMINAL_PHASES, liveStatusFile, readStatus, sha256Of, stageDirOf, writeStatus } from "./verify-run.ts";
+import { RunCacheUnwritable, RunEnded, TERMINAL_PHASES, liveStatusFile, readStatus, stageDirOf, writeStatus } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite } from "./verify-run.ts";
 import type { Expectation } from "./verify-screen.ts";
-import { errMsg } from "../bridge/src/errmsg.ts";
+import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts";
 
 // ---------------------------------------------------------------- resolving the project's Playwright
@@ -112,7 +112,7 @@ export function resolvePlaywright(dir: string): Resolution {
     let file: string;
     try { file = req.resolve(name); } catch { tried.push(`${name}: not installed`); continue; }
     let mod: unknown;
-    try { mod = req(name); } catch (e) { tried.push(`${name}: failed to load (${errMsg(e).split("\n")[0]})`); continue; }
+    try { mod = req(name); } catch (e) { tried.push(`${name}: failed to load (${firstLine(e)})`); continue; }
     if (!isPlaywrightModule(mod)) { tried.push(`${name}: has no chromium launcher`); continue; }
     let version = "unknown";
     try { const pj: unknown = req(`${name}/package.json`); if (isJsonObject(pj) && typeof pj.version === "string") version = pj.version; } catch { /* exports without ./package.json */ }
@@ -129,7 +129,7 @@ export function resolveAxe(dir: string): AxeResolution {
   let file: string;
   try { file = req.resolve("axe-core"); } catch { return { ok: false, why: "axe-core not installed in the project (optional)" }; }
   let mod: unknown;
-  try { mod = req("axe-core"); } catch (e) { return { ok: false, why: `axe-core failed to load (${errMsg(e).split("\n")[0]})` }; }
+  try { mod = req("axe-core"); } catch (e) { return { ok: false, why: `axe-core failed to load (${firstLine(e)})` }; }
   if (typeof mod !== "object" || mod === null || !("source" in mod) || typeof mod.source !== "string") return { ok: false, why: "axe-core resolved, but it exports no source" };
   let version = "version" in mod && typeof mod.version === "string" ? mod.version : "unknown";
   try { const pj: unknown = req("axe-core/package.json"); if (isJsonObject(pj) && typeof pj.version === "string") version = pj.version; } catch { /* exports without ./package.json */ }
@@ -178,7 +178,7 @@ function probeVersion(): string | null {
   }
   return null;
 }
-const selfSha256 = (): string => crypto.createHash("sha256").update(fs.readFileSync(SELF)).digest("hex");
+const selfSha256 = (): string => sha256Hex(fs.readFileSync(SELF));
 
 // what was SERVED. Every same-origin document/script/stylesheet response body is hashed (by path, the
 // query dropped: Vite's ?v=/?t= stamps change without the code changing), so two runs against an unchanged
@@ -189,7 +189,7 @@ const BUILD_TYPES = new Set(["document", "script", "stylesheet"]);
  *  which verify-screen never calls the same build as another. */
 export function buildFrom(url: string, served: ReadonlyMap<string, string>, viteClient: boolean, unhashed = 0): ServedBuild {
   const lines = [...served].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([p, h]) => `${p} ${h}`);
-  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Of(lines.join("\n")), ...(unhashed > 0 ? { unhashed } : {}) };
+  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Hex(lines.join("\n")), ...(unhashed > 0 ? { unhashed } : {}) };
 }
 /** The project's git state — null when it is not a git work tree. Changes under design/ (the verifier's own files) do not count. */
 function gitState(dir: string): { gitHead: string | null; gitDirty: boolean | null } {
@@ -223,16 +223,12 @@ export const INIT_SCRIPT = `(() => {
   addEventListener("load", adopt, { once: true });
 })();`;
 const QUIET_MS = 500, QUIET_CAP_MS = 10_000, POLL_MS = 100;
-/** Playwright errors that mean the document went away under an evaluate/locator call. */
-const NAV_ERROR = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
-/** Playwright errors that mean the browser or page itself is gone (a crash, a kill) — not a reload. */
-const CLOSED_ERROR = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i;
 
 /** What a Playwright error during measurement means: the document was replaced (a reload → re-run), the
  *  browser/page is gone (a crash → exit 4, never read as a reload), or something else. */
 export function errorKind(message: string, pageClosed: boolean): "gone" | "navigated" | "other" {
-  if (pageClosed || CLOSED_ERROR.test(message)) return "gone";
-  return NAV_ERROR.test(message) ? "navigated" : "other";
+  if (pageClosed || CLOSED.test(message)) return "gone";
+  return NAVIGATED.test(message) ? "navigated" : "other";
 }
 
 class NavigatedError extends Error {}
@@ -240,7 +236,7 @@ class NavigatedError extends Error {}
  *  re-run replays them; a second time is exit 4 with this step named, not the dev-server hint). */
 class StepStateLostError extends NavigatedError {}
 class BrowserGoneError extends Error {}
-const gone = (e: unknown): BrowserGoneError => new BrowserGoneError(`the browser closed or crashed during measurement (${errMsg(e).split("\n")[0]})`);
+const gone = (e: unknown): BrowserGoneError => new BrowserGoneError(`the browser closed or crashed during measurement (${firstLine(e)})`);
 class KeptNavigatingError extends Error {}
 class UnreachableError extends Error {}
 
@@ -393,7 +389,7 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
       if (moved() && Date.now() < docDeadline) { await sleep(POLL_MS); continue; }
       if (moved()) throw kept();
       if (errorKind(errMsg(e), false) === "navigated" && Date.now() < docDeadline) { await sleep(POLL_MS); continue; }
-      throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${errMsg(e).split("\n")[0]}` : errMsg(e).split("\n")[0]);
+      throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${firstLine(e)}` : firstLine(e));
     }
     let mark = log.docLoads;
     let last = "", since = Date.now();
@@ -458,7 +454,7 @@ async function oneVisible(page: Page, sel: string, wait: number, name: string, a
     } catch (e) {
       const kind = errorKind(errMsg(e), page.isClosed());
       if (kind === "gone") throw gone(e);
-      if (kind === "other") throw new StepError(`${name}: ${errMsg(e).split("\n")[0]}`);
+      if (kind === "other") throw new StepError(`${name}: ${firstLine(e)}`);
     }
     if (Date.now() >= deadline) {
       throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1000)}s — ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
@@ -609,7 +605,7 @@ async function runSteps(page: Page, log: NavLog, o: ProbeOptions): Promise<void>
           const kind = errorKind(errMsg(e), page.isClosed());
           if (kind === "gone") throw gone(e);
           // a click that started a document load is a step's navigation (settled below); anything else failed the step
-          if (kind === "other") throw new StepError(`${name} could not be clicked: ${errMsg(e).split("\n")[0]}`);
+          if (kind === "other") throw new StepError(`${name} could not be clicked: ${firstLine(e)}`);
         }
       }
     }
@@ -709,7 +705,6 @@ export function foreignTags(tagged: Candidate[], expectedIds: ReadonlySet<string
   return { count: n.size, ids };
 }
 
-const raf2 = (page: Page): Promise<unknown> => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 const docToken = async (page: Page): Promise<string> => { const v: unknown = await page.evaluate("window.__dtProbeDoc || ''"); return String(v); };
 
 async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResult> {
@@ -809,7 +804,7 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
         }
       } catch (e) {
         if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
-        node.note = `${state} state not measured: ${errMsg(e).split("\n")[0]}`;
+        node.note = `${state} state not measured: ${firstLine(e)}`;
       } finally {
         if (state === "hover") await page.mouse.move(0, 0).catch(() => undefined);
         else if (focusPath !== null) await page.locator(focusPath).first().blur({ timeout: 2000 }).catch(() => undefined);
@@ -846,7 +841,7 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
   } catch (e) {
     if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError || e instanceof StepError) throw e;
     if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-    if (errorKind(errMsg(e), false) === "navigated") throw new NavigatedError(errMsg(e).split("\n")[0]);
+    if (errorKind(errMsg(e), false) === "navigated") throw new NavigatedError(firstLine(e));
     throw e;
   }
 }
@@ -872,7 +867,7 @@ async function hoverDrawnState(page: Page, spec: VerifySpec, m: Match, own: stri
       // a covered point is retried until the timeout — elementFromPoint said it is free, so a short one
       try { await loc.hover({ position, timeout: 1000 }); return { hovered: c.path, note: null }; } catch (e) {
         if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
-        covered ??= `the free point on ${c.id} was covered (${errMsg(e).split("\n")[0]})`;
+        covered ??= `the free point on ${c.id} was covered (${firstLine(e)})`;
         await page.mouse.move(0, 0);
       }
     }
@@ -945,7 +940,7 @@ export async function runProbe(browser: Browser, o: ProbeOptions): Promise<Probe
     if (u.pathname === "/@vite/client") viteClient = true;
     const g = gen;
     const read: BodyRead = { path: u.pathname, state: "pending", done: Promise.resolve() };
-    const body = res.body().then((b) => { if (g === gen) served.set(u.pathname, sha256Of(b)); read.state = "hashed"; }, () => { read.state = "no body"; }); // a redirect has no body
+    const body = res.body().then((b) => { if (g === gen) served.set(u.pathname, sha256Hex(b)); read.state = "hashed"; }, () => { read.state = "no body"; }); // a redirect has no body
     // a request that failed (aborted, refused) says so here — its body is never waited for
     const failed = res.finished().then((err) => { if (!err) return body; read.state = "failed"; return undefined; }, () => { read.state = "failed"; });
     read.done = Promise.race([body, failed]);
@@ -1121,7 +1116,7 @@ export async function main(argv: string[]): Promise<number> {
   // the run's status is the one of the expectation's verify dir (design/verify/<S>), even when --out stages
   // the files elsewhere; it is written to the run cache (liveStatusFile), never into the watched project tree
   const statusBase = f.expected ? path.join(path.dirname(f.expected), path.basename(outBase)) : "";
-  const expSha = expBytes ? sha256Of(expBytes) : undefined;
+  const expSha = expBytes ? sha256Hex(expBytes) : undefined;
   const runId = f.run !== undefined && !f.check && statusBase ? f.run : undefined;
   // an ended run (done/failed/blocked) takes no more writes — a probe with its --run would reopen it
   // (phase back to measuring) and lose the verifier's `blocked` the same way a --status write would
@@ -1191,7 +1186,7 @@ export async function main(argv: string[]): Promise<number> {
     } catch (e) {
       await browser.close().catch(() => undefined);
       if (e instanceof UnreachableError) { console.error(`verify-probe: ${e.message} — nothing written.`); return 4; }
-      if (/Timeout .*exceeded/i.test(errMsg(e))) { console.error(`verify-probe: timed out — ${errMsg(e).split("\n")[0]} — nothing written.`); return 4; }
+      if (/Timeout .*exceeded/i.test(errMsg(e))) { console.error(`verify-probe: timed out — ${firstLine(e)} — nothing written.`); return 4; }
       throw e;
     }
     // drive the overlay interactions, each on a fresh page, after the measurement pass and before the
@@ -1215,7 +1210,7 @@ export async function main(argv: string[]): Promise<number> {
         if (r === hung) { wedged = true; driveNote = "driving the interactions did not finish within its budget (the browser stopped answering) — none recorded"; }
         else driven = r;
       } catch (e) {
-        driveNote = `driving the interactions failed (${errMsg(e).split("\n")[0]}) — none recorded`;
+        driveNote = `driving the interactions failed (${firstLine(e)}) — none recorded`;
       }
     }
     // The visual capture — after the drive (it can never cut verdict-affecting rows), before behaviour (one capped
@@ -1224,7 +1219,7 @@ export async function main(argv: string[]): Promise<number> {
     // so (a throw here would leave the browser open and the process hanging)
     let prep: VisualPrep = { ok: false, why: "not measured" };
     if (run.kind === "ok") {
-      try { prep = prepareVisual(expectation, referenceRoot(f.expected, project)); } catch (e) { prep = { ok: false, why: `the reference could not be read (${errMsg(e).split("\n")[0]})` }; }
+      try { prep = prepareVisual(expectation, referenceRoot(f.expected, project)); } catch (e) { prep = { ok: false, why: `the reference could not be read (${firstLine(e)})` }; }
     }
     const visualAt = Date.now();
     let visualCap: VisualCapture | { why: string } = { why: prep.ok ? "not captured" : prep.why };
@@ -1262,7 +1257,7 @@ export async function main(argv: string[]): Promise<number> {
           behaviour = r.behaviour;
           forcedPng = r.forcedPng;
         } catch (e) {
-          behaviour = { version: 1, ran: false, why: `the behaviour checks failed (${errMsg(e).split("\n")[0]})` };
+          behaviour = { version: 1, ran: false, why: `the behaviour checks failed (${firstLine(e)})` };
         }
       }
     }
@@ -1337,15 +1332,15 @@ export async function main(argv: string[]): Promise<number> {
     if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
     else if (fs.existsSync(diffPath)) fs.rmSync(diffPath, { force: true });
   } catch (e) {
-    console.error(`warning  ${diffPath}: ${errMsg(e).split("\n")[0]} — the visual diff image is not written`);
-    if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${errMsg(e).split("\n")[0]})`] };
+    console.error(`warning  ${diffPath}: ${firstLine(e)} — the visual diff image is not written`);
+    if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
   }
   const measured: VerifyMeasured = {
     measuredAt: new Date().toISOString(),
     renderer: "playwright-chromium",
     viewport: `${viewport.w}x${viewport.h}`,
     artifacts: [png.split(path.sep).join("/")],
-    expectationSha256: sha256Of(expBytes),
+    expectationSha256: sha256Hex(expBytes),
     probe: identity,
     ...(firstFrame ? { frame: frameOut(firstFrame) } : {}),
     ...(r.frames.length > 1 ? { frames: r.frames.map(frameOut) } : {}),
@@ -1376,11 +1371,11 @@ export async function main(argv: string[]): Promise<number> {
   try {
     if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
     else if (fs.existsSync(forcedPath)) fs.rmSync(forcedPath, { force: true });
-  } catch (e) { console.error(`warning  ${forcedPath}: ${errMsg(e).split("\n")[0]} — the behaviour screenshot is not written`); }
+  } catch (e) { console.error(`warning  ${forcedPath}: ${firstLine(e)} — the behaviour screenshot is not written`); }
   writeFileAtomic(outBase + ".measured.json", measuredText);
   // the measured file stays when this write is refused: the run's status still says measuring, so say what records it
   const statusRefused = runId !== undefined && !status({ runId, phase: "measured", by: "verify-probe", detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
-    ...(expSha ? { expectationSha256: expSha } : {}), measuredSha256: sha256Of(measuredText) });
+    ...(expSha ? { expectationSha256: expSha } : {}), measuredSha256: sha256Hex(measuredText) });
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
   console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) — tag ${c.tag} · shared path ${c.sharedPath} · alias ${c.tagAlias} · text ${c.text} · ordinal ${c.textOrdinal} · position ${c.position} · frame ${c.frame} · not measured ${c.notMeasured}` +

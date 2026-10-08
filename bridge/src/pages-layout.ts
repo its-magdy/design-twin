@@ -371,14 +371,16 @@ export interface MergedRootIndex {
   layers?: unknown[];
 }
 
-const isRecord = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object";
+// Not json-util's isRecord: an array counts here, so a previous index that is an array is merged over as before
+// (its elements land on the result under their indices) instead of being replaced by {}.
+const isObjectLike = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object";
 
 // Keeps a previous row unless it is the one being replaced — `l && l.file !== file` in plain JS
 // (a truthy non-object has no `.file`, so it is kept).
-const notFile = (file: string) => (l: unknown): boolean => (isRecord(l) ? l.file !== file : !!l);
+const notFile = (file: string) => (l: unknown): boolean => (isObjectLike(l) ? l.file !== file : !!l);
 
 export function mergeScreenIndex(prev: unknown, entry: ScreenIndexRow): MergedPageIndex {
-  const base: Record<string, unknown> = isRecord(prev) ? prev : {};
+  const base: Record<string, unknown> = isObjectLike(prev) ? prev : {};
   const layers: unknown[] = Array.isArray(base.layers) ? base.layers.filter(notFile(entry.file)) : [];
   layers.push(entry);
   return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
@@ -391,9 +393,9 @@ export function mergeScreenIndex(prev: unknown, entry: ScreenIndexRow): MergedPa
 // …) — so the root index looks identical to a consumer regardless of which pull shape produced it
 // (the root is the ONE file every skill is told to read).
 export function mergeRootIndex(prev: unknown, paths: ScreenPaths, layerCount: number, entry?: ScreenIndexRow): MergedRootIndex {
-  const base: Record<string, unknown> = isRecord(prev) ? prev : {};
+  const base: Record<string, unknown> = isObjectLike(prev) ? prev : {};
   const pageDirs: unknown[] = Array.isArray(base.pageDirs)
-    ? base.pageDirs.filter((p: unknown) => (isRecord(p) ? p.dir !== paths.dir : !!p))
+    ? base.pageDirs.filter((p: unknown) => (isObjectLike(p) ? p.dir !== paths.dir : !!p))
     : [];
   pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
   const result: MergedRootIndex = Object.assign({}, base, { pageDirs });

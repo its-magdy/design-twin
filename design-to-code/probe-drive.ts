@@ -29,7 +29,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { InteractionEvidence, InteractionOutcome, PageOverflow, ProbeActivation, VerifyExpectation, VerifyInteraction } from "./types.ts";
-import { errMsg } from "../bridge/src/errmsg.ts";
+import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { decodePng } from "./png.ts";
 
 // ---------------------------------------------------------------- the page, as far as these functions use it
@@ -1235,10 +1235,29 @@ export interface DriveHooks {
   afterOpen?(page: Page, row: VerifyInteraction, opened: NonNullable<DetectorRead["opened"]>): Promise<void>;
 }
 
-const raf2 = (page: Page): Promise<unknown> => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
-const CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i;
-const NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
-const firstLine = (e: unknown): string => errMsg(e).split("\n")[0] ?? "";
+/** Two animation frames: whatever the last action changed has been laid out and painted. The expression is a string, so
+ *  nothing from this module's scope is serialised into the page. */
+export const raf2 = (page: Page): Promise<unknown> => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+export const CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i;
+export const NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
+/** What a cut unit may still take to settle after its context is closed. */
+export const CUT_SETTLE_MS = 5_000;
+/**
+ * Race `work` against a `ms` deadline. Returns its result, or "cut" when the deadline came first — after
+ * `onCut` (called at once, before anything is awaited), then closing the context `held` captured (that ends
+ * whatever `work` is waiting on) and giving `work` at most CUT_SETTLE_MS to wind down. `work` must not reject.
+ */
+export async function raceBudget<T>(work: Promise<T>, ms: number, held: { ctx?: BrowserContext }, onCut?: () => void): Promise<T | "cut"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cutP = new Promise<"cut">((resolve) => { timer = setTimeout(() => resolve("cut"), ms); });
+  const r = await Promise.race([work, cutP]);
+  clearTimeout(timer);
+  if (r !== "cut") return r;
+  onCut?.();
+  const ctx = held.ctx;
+  await Promise.race([(async (): Promise<void> => { if (ctx) await ctx.close().catch(() => undefined); await work; })(), sleep(CUT_SETTLE_MS, undefined, { ref: false })]);
+  return "cut";
+}
 const notRun = (row: VerifyInteraction, detail: string, extra?: Partial<InteractionEvidence>): InteractionEvidence => ({ nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `not-run: ${detail}`, ...extra });
 
 /** The signed distance (CSS px; < 0 inside) from (px, py) to a rounded rect — its rect, or by the corner's
@@ -1504,7 +1523,6 @@ async function driveRow(browser: Browser, o: DriveOptions, row: VerifyInteractio
  * Drive every row (drivable()), each on a fresh page in a fresh context, within the sub-budget. A row the budget
  * does not reach is {ok:null, cut:"budget"}; a row that throws is ok:null with why. Never throws for a row.
  */
-const CUT_SETTLE_MS = 5_000;
 export async function driveInteractions(browser: Browser, o: DriveOptions, hooks?: DriveHooks): Promise<InteractionEvidence[]> {
   const out: InteractionEvidence[] = [];
   const end = Date.now() + o.budgetMs;
@@ -1512,18 +1530,13 @@ export async function driveInteractions(browser: Browser, o: DriveOptions, hooks
     const left = end - Date.now();
     if (left <= 0) { out.push(notRun(row, "time budget", { cut: "budget" })); continue; }
     const held: { ctx?: BrowserContext } = {};
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const cut = new Promise<"cut">((resolve) => { timer = setTimeout(() => resolve("cut"), left); });
     const work = driveRow(browser, o, row, hooks, (c) => { held.ctx = c; }).catch((e: unknown): InteractionEvidence => {
       if (CLOSED.test(errMsg(e))) return notRun(row, `the browser closed while driving — ${firstLine(e)}`);
       return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
     });
-    const r = await Promise.race([work, cut]);
-    clearTimeout(timer);
+    // the context exists from before the screen was reached: closing it ends whatever the row was waiting on
+    const r = await raceBudget(work, left, held);
     if (r === "cut") {
-      // the context exists from before the screen was reached: closing it ends whatever the row was waiting on
-      if (held.ctx) await held.ctx.close().catch(() => undefined);
-      await Promise.race([work, sleep(CUT_SETTLE_MS, undefined, { ref: false })]);
       out.push(notRun(row, "time budget", { cut: "budget" }));
       continue;
     }

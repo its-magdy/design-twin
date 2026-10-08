@@ -42,7 +42,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
+import { sha256Hex } from "../bridge/src/hash.ts";
 import { visibility } from "./plan-skeleton.ts";
 import { screenExportOf, screenRoots } from "./export-shape.ts";
 import * as contentHash from "./content-hash.ts";
@@ -59,7 +59,7 @@ import type {
   CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
   PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyReport,
 } from "./types.ts";
-import { getOrInit } from "./map-util.ts";
+import { alnumKey, getOrInit } from "./map-util.ts";
 import { writePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { DESIGN_DIR, EXPORT_DIR, LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
@@ -580,7 +580,7 @@ function recordedReportWarnings(plan: Plan, cwd: string): string[] {
   if (!rec || typeof rec !== "object" || typeof rec.report !== "string" || !rec.report) return [];
   let bytes: Buffer;
   try { bytes = fs.readFileSync(path.resolve(cwd, rec.report)); } catch { return []; }
-  const now = crypto.createHash("sha256").update(bytes).digest("hex");
+  const now = sha256Hex(bytes);
   return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} — re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
 }
 
@@ -725,14 +725,13 @@ function validatePlanHeader(plan: Plan): string[] {
 // `--brand-600: #5b5fc7`, `brand600: "#5b5fc7"`, `val brand600 = Color(0xFF5B5FC7)`. The declared
 // name must be the TOKEN's — `color: #5b5fc7` inside a component declares a CSS property.
 const DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
-const slug = (x: unknown): string => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 // Strip what differs between a CSS variable and the utility/token that uses it: the category prefix
 // (`--color-`, `bg-`, `text-`, `gap-`, `rounded-` …), the `figma-` namespace, and a `-<8 hex>` key suffix.
 function tokenCore(x: unknown): string {
   let s = String(x || "").toLowerCase().replace(/^--/, "").replace(/^var\(--|\)$/g, "");
   s = s.replace(/^(color|colors|spacing|space|radius|rounded|text|font|font-size|font-weight|leading|tracking|shadow|bg|border|fill|stroke|ring|outline|gap|gap-[xy]|p[xytrbl]?|m[xytrbl]?|w|h|size|inset|top|left|right|bottom)-/, "");
   s = s.replace(/^figma-/, "").replace(/-[0-9a-f]{8}$/, "");
-  return slug(s);
+  return alnumKey(s);
 }
 // Does a declared name name THIS token? Exactly — after normalising both sides (`--color-x`, `var(--x)`,
 // `bg-x`, the `figma-` namespace, a key suffix all reduce to the same core) — never by substring: with
@@ -772,9 +771,9 @@ function tokenParts(codeToken: string): TokenPart[] {
 const tokenCandidates = (codeToken: string): string[] => [...new Set([codeToken, ...tokenParts(codeToken).flatMap((p) => (p.prop ? [p.text, p.prop] : [p.text]))])];
 function namesToken(name: string, codeToken: string, stylesheet: boolean): boolean {
   if (stylesheet && !name.startsWith("--")) return false;
-  const declared = slug(name), dc = tokenCore(name);
+  const declared = alnumKey(name), dc = tokenCore(name);
   if (!declared) return false;
-  return tokenCandidates(codeToken).some((c) => { const tc = tokenCore(c); return declared === slug(c) || (!!dc && dc === tc); });
+  return tokenCandidates(codeToken).some((c) => { const tc = tokenCore(c); return declared === alnumKey(c) || (!!dc && dc === tc); });
 }
 // Is the occurrence of `literal` at `at` the value of a declaration of `codeToken`?
 function declaresTokenAt(line: string, at: number, codeToken: string, stylesheet: boolean): boolean {
@@ -1280,7 +1279,7 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     // @2: which expectation the report was computed against, and whether that file still says the same
     const want = r.inputs && r.inputs.expectationSha256;
     let expectationChanged = false;
-    if (want && fs.existsSync(expFile)) { try { expectationChanged = crypto.createHash("sha256").update(fs.readFileSync(expFile)).digest("hex") !== want; } catch { /* ignore */ } }
+    if (want && fs.existsSync(expFile)) { try { expectationChanged = sha256Hex(fs.readFileSync(expFile)) !== want; } catch { /* ignore */ } }
     out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, schema: r.schema || null, verdict: r.verdict || null, headline: r.headline || null,
       why: r.why || [], deltas: r.deltas || null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
       exportContentSha256: (r.inputs && r.inputs.exportContentSha256) || null, code: (r.inputs && r.inputs.code) || null,

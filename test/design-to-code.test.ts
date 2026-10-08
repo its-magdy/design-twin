@@ -19,6 +19,14 @@ import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import type { CodeConnectMap, ComponentPropDef, ComponentsCatalog, DesignSystemDoc, DriftFinding, TokensDoc } from "../design-to-code/types.ts";
 import type { GetComponentResult } from "../design-to-code/get-component.ts";
 import type { DtcgGroup } from "../design-to-code/tokens.ts";
+import { errCode, errMsg, firstLine } from "../bridge/src/errmsg.ts";
+import { sha256Hex } from "../bridge/src/hash.ts";
+import { isRecord } from "../bridge/src/json-util.ts";
+import { mergeScreenIndex } from "../bridge/src/pages-layout.ts";
+import { NUMERIC_TEXT, isAlias, isComposed } from "../design-to-code/doc-guards.ts";
+import { alnumKey } from "../design-to-code/map-util.ts";
+import { CUT_SETTLE_MS, raceBudget } from "../design-to-code/probe-drive.ts";
+import { PAINT_TYPES, idSuffix, normText } from "../design-to-code/probe-match.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1628,5 +1636,38 @@ console.log("map — SLOT props:");
     hintPath === path.join(SCRIPTS, "map-validate.js") && fs.existsSync(hintPath));
   fs.rmSync(tmp, { recursive: true, force: true });
 })();
+
+// ---------- helpers shared across files (one definition each) ----------
+{
+  check("[shared] isRecord: an object yes; null, an array, a string, a number no", isRecord({}) && isRecord({ a: 1 }) && !isRecord(null) && !isRecord([]) && !isRecord("x") && !isRecord(1));
+  const withCode = Object.assign(new Error("boom"), { code: "ENOENT" });
+  check("[shared] errCode: a string code of an error object; undefined for no code, a non-string code, null, a string",
+    errCode(withCode) === "ENOENT" && errCode(new Error("x")) === undefined && errCode({ code: 7 }) === undefined && errCode(null) === undefined && errCode("ENOENT") === undefined);
+  check("[shared] firstLine: only the first line of a message (an Error, a string, an object with .message); empty for an empty message",
+    firstLine(new Error("a\nb\nc")) === "a" && firstLine("one\ntwo") === "one" && firstLine({ message: "m\nn" }) === "m" && firstLine("") === "");
+  check("[shared] errMsg: a thrown string is itself; an Error is its message", errMsg("s") === "s" && errMsg(new Error("e")) === "e");
+  check("[shared] sha256Hex: the known digest of 'abc', the same for a string and its bytes", sha256Hex("abc") === "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" && sha256Hex(Buffer.from("abc")) === sha256Hex("abc"));
+  check("[shared] alnumKey: case and punctuation folded away, null/undefined empty", alnumKey("Primary / Fill-2") === "primaryfill2" && alnumKey(null) === "" && alnumKey(undefined) === "");
+  check("[shared] isAlias: {aliasOf: string} only", isAlias({ aliasOf: "a/b" }) && !isAlias({ aliasOf: 1 }) && !isAlias("a/b") && !isAlias(null));
+  check("[shared] isComposed (strict): both halves valid and one an alias; a literal pair or a missing half is not composed",
+    isComposed({ composed: { color: { aliasOf: "c" }, opacity: 0.5 } }) && isComposed({ composed: { color: "#fff", opacity: { aliasOf: "o" } } })
+    && !isComposed({ composed: { color: "#fff", opacity: 0.5 } }) && !isComposed({ composed: { color: { aliasOf: "c" } } }) && !isComposed({ composed: null }) && !isComposed("composed"));
+  check("[shared] NUMERIC_TEXT: signed decimals as text; not an exponent, a unit or an empty string", NUMERIC_TEXT.test("40") && NUMERIC_TEXT.test("-5") && NUMERIC_TEXT.test("12.5") && !NUMERIC_TEXT.test("1e3") && !NUMERIC_TEXT.test("40px") && !NUMERIC_TEXT.test(""));
+  check("[shared] probe-match exports: PAINT_TYPES, idSuffix, normText (U+00A0 and runs of space folded)",
+    PAINT_TYPES.has("VECTOR") && !PAINT_TYPES.has("FRAME") && idSuffix("I1:2;3:4;5:6") === "3:4;5:6" && idSuffix("1:2") === null && normText(" a\u00a0 b\n c ") === "a b c");
+  // pages-layout keeps its own array-accepting guard: a previous index that is an array is still merged over, as before
+  const merged = mergeScreenIndex(["x"], { name: "A", id: "2:1", page: "P", pageId: "1:1", file: "a.json" });
+  check("[shared] mergeScreenIndex over an array index keeps its elements (its guard accepts arrays, unlike isRecord)", merged["0"] === "x" && Array.isArray(merged.layers) && merged.layers.length === 1);
+  // raceBudget: the result of work that beats the deadline; "cut" (onCut first, then a settle for work) when it does not
+  const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  let cuts = 0;
+  const fast = await raceBudget(sleepMs(5).then(() => 7), 500, {}, () => { cuts++; });
+  check("[shared] raceBudget: work that finishes inside the deadline returns its value and never calls onCut", fast === 7 && cuts === 0);
+  let settled = false;
+  const t0 = Date.now();
+  const slow = await raceBudget(sleepMs(120).then(() => { settled = true; return 1; }), 30, {}, () => { cuts++; });
+  check("[shared] raceBudget: past the deadline it returns 'cut', has called onCut once, and waited for work to settle (well under CUT_SETTLE_MS)",
+    slow === "cut" && cuts === 1 && settled && Date.now() - t0 < CUT_SETTLE_MS);
+}
 
 report();

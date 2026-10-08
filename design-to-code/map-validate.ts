@@ -14,7 +14,7 @@ import type { CodeConnectMap, MapValidationResult } from "./types.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { readJsonFile } from "./catalog-input.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
-import { nullProto } from "../bridge/src/json-util.ts";
+import { isRecord as isObj, nullProto } from "../bridge/src/json-util.ts";
 
 const STATUSES = ["active", "deprecated", "needs-review"];
 // Allowed key sets per object (mirrors additionalProperties:false in the schema).
@@ -50,7 +50,6 @@ type Err = (path: string, message: string) => void;
 // Pure predicates — module scope, not rebuilt per validateMap call and not threaded into validateProp
 // as a helper bag just to cross a function boundary.
 const isStr = (v: unknown): v is string => typeof v === "string";
-const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const isBool = (v: unknown): v is boolean => typeof v === "boolean";
 // additionalProperties:false — flag any key not in the allowed list.
 // `allowed` is always one of the KEYS lists; the Array.isArray guard is belt-and-braces so a

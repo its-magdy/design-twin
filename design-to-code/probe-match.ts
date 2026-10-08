@@ -55,7 +55,8 @@ export function specText(spec: VerifySpec): { text: string; placeholder: boolean
   if (typeof spec.text === "string" && normText(spec.text)) return { text: normText(spec.text), placeholder: false };
   return null;
 }
-const PAINT_TYPES = new Set<string>(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
+/** The node types whose colour is an SVG-style paint, not a CSS background. verify-screen.ts reads it for the same test. */
+export const PAINT_TYPES = new Set<string>(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
 /** A spec whose colour is an SVG-style paint (verify-screen.ts writes `fill` only for those). */
 export const isPaintSpec = (spec: VerifySpec): boolean => spec.fill !== undefined || PAINT_TYPES.has(spec.type);
 

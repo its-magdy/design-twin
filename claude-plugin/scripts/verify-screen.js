@@ -4,7 +4,10 @@
 // design-to-code/verify-screen.ts
 import fs9 from "node:fs";
 import path7 from "node:path";
-import crypto7 from "node:crypto";
+
+// bridge/src/hash.ts
+import crypto from "node:crypto";
+var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
@@ -23,10 +26,12 @@ function walkWithHidden(root, fn, opts) {
 // design-to-code/content-hash.ts
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 
 // bridge/src/json-util.ts
+function isRecord(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
 function isUnknownArray(x) {
   return Array.isArray(x);
 }
@@ -40,7 +45,6 @@ function ifDefined(key, v) {
 }
 
 // design-to-code/content-hash.ts
-var sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
 function stripPullTimes(v, parentKey) {
   if (isUnknownArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
   if (!v || typeof v !== "object") return v;
@@ -54,13 +58,13 @@ function stripPullTimes(v, parentKey) {
 }
 function exportContentSha256(docs) {
   const list = isUnknownArray(docs) ? docs : [docs];
-  return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
+  return sha256Hex(JSON.stringify(list.map((d) => stripPullTimes(d))));
 }
 function fileHashes(files, cwd, cached) {
   const out = {};
   for (const rel of isUnknownArray(files) ? files.map(String) : []) {
     try {
-      out[rel] = sha256(cached?.(rel) ?? fs.readFileSync(path.join(cwd, rel))).slice(0, 16);
+      out[rel] = sha256Hex(cached?.(rel) ?? fs.readFileSync(path.join(cwd, rel))).slice(0, 16);
     } catch {
       out[rel] = null;
     }
@@ -76,7 +80,6 @@ function gitHead(cwd) {
     return null;
   }
 }
-var isRec = (x) => !!x && typeof x === "object" && !Array.isArray(x);
 var RESOLVE_EXT = ["tsx", "ts", "jsx", "js"];
 var isFile = (abs) => {
   try {
@@ -99,11 +102,11 @@ function mappedModulePath(raw, cwd) {
 }
 function mapModules(plan) {
   const out = [];
-  if (isRec(plan.anchors)) {
-    for (const a of Object.values(plan.anchors)) if (isRec(a)) out.push(a.mapModule);
+  if (isRecord(plan.anchors)) {
+    for (const a of Object.values(plan.anchors)) if (isRecord(a)) out.push(a.mapModule);
   }
   if (isUnknownArray(plan.components)) {
-    for (const c of plan.components) if (isRec(c)) out.push(c.mapModule);
+    for (const c of plan.components) if (isRecord(c)) out.push(c.mapModule);
   }
   return out;
 }
@@ -136,26 +139,25 @@ function planHash(plan) {
   delete copy.waivers;
   delete copy.descopes;
   delete copy.verification;
-  return sha256(JSON.stringify(copy)).slice(0, 16);
+  return sha256Hex(JSON.stringify(copy)).slice(0, 16);
 }
 function legacyPlanHash(plan) {
   const copy = structuredClone({ ...plan || {} });
   delete copy.status;
   delete copy.waivers;
   delete copy.descopes;
-  if (isRec(copy.verification)) {
+  if (isRecord(copy.verification)) {
     const v = { ...copy.verification };
     delete v.hook;
     if (Object.keys(v).length) copy.verification = v;
     else delete copy.verification;
   }
-  return sha256(JSON.stringify(copy)).slice(0, 16);
+  return sha256Hex(JSON.stringify(copy)).slice(0, 16);
 }
 
 // design-to-code/plan-record.ts
 import fs4 from "node:fs";
 import path3 from "node:path";
-import crypto5 from "node:crypto";
 
 // bridge/src/json-file.ts
 import fs3 from "node:fs";
@@ -208,11 +210,7 @@ function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
 
-// design-to-code/probe-steps.ts
-import crypto4 from "node:crypto";
-
 // design-to-code/plan-waivers.ts
-import crypto3 from "node:crypto";
 var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
 function isPassingVerdict(v) {
   return typeof v === "string" && PASSING_VERDICTS.includes(v);
@@ -228,11 +226,11 @@ function canonical(v) {
 function waiversHash(plan) {
   const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
   const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return crypto3.createHash("sha256").update(canonical({ descopes, waivers })).digest("hex");
+  return sha256Hex(canonical({ descopes, waivers }));
 }
 function planInteractionsSha256(plan) {
   const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
-  return crypto3.createHash("sha256").update(canonical(rows)).digest("hex");
+  return sha256Hex(canonical(rows));
 }
 
 // design-to-code/probe-steps.ts
@@ -274,7 +272,7 @@ function parseSteps(x) {
   return { steps };
 }
 function stepsSha256(steps) {
-  return crypto4.createHash("sha256").update(canonical(steps)).digest("hex");
+  return sha256Hex(canonical(steps));
 }
 function isPlanExpect(x) {
   return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
@@ -562,9 +560,9 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
   const notMeasured = typeof report.coverage.nodesNotMeasured === "number" ? report.coverage.nodesNotMeasured : report.notMeasured.length;
   let reportSha256;
   try {
-    reportSha256 = crypto5.createHash("sha256").update(fs4.readFileSync(path3.resolve(cwd, reportAt))).digest("hex");
+    reportSha256 = sha256Hex(fs4.readFileSync(path3.resolve(cwd, reportAt)));
   } catch {
-    reportSha256 = crypto5.createHash("sha256").update(JSON.stringify(report, null, 2) + "\n").digest("hex");
+    reportSha256 = sha256Hex(JSON.stringify(report, null, 2) + "\n");
     notes.push(`${reportAt} is not on disk \u2014 recorded the sha256 of the report as --compare writes it`);
   }
   const b = report.behaviour;
@@ -630,6 +628,8 @@ import fs5 from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var firstLine = (e) => errMsg(e).split("\n")[0] ?? "";
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
 // design-to-code/read-json.ts
 var anyJson = (_x) => true;
@@ -684,7 +684,7 @@ function readDocFile(file, what, guard, hint) {
 import fs7 from "node:fs";
 import os from "node:os";
 import path6 from "node:path";
-import crypto6 from "node:crypto";
+import crypto3 from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // design-to-code/cli-args.ts
@@ -695,9 +695,6 @@ var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `node ${shellQuote(path4.join(path4.dirname(SELF), name + path4.extname(SELF)))}`;
-function errCode(e) {
-  return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
-}
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -732,7 +729,7 @@ ${usage}`);
       console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
 ${usage}`);
     } else {
-      console.error(`${tool}: ${e instanceof Error ? e.message : String(e)}
+      console.error(`${tool}: ${errMsg(e)}
 ${usage}`);
     }
     process.exit(exitCode);
@@ -770,16 +767,15 @@ function isVerifyStatusV2(x) {
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
-var sha256Of = (data) => crypto6.createHash("sha256").update(data).digest("hex");
 function sha256File(file) {
   try {
-    return sha256Of(fs7.readFileSync(file));
+    return sha256Hex(fs7.readFileSync(file));
   } catch {
     return null;
   }
 }
 var CACHE_NAME = "designtwin-verify";
-var shortSha = (s) => sha256Of(s).slice(0, 16);
+var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
     return fs7.statSync(p).isDirectory();
@@ -848,7 +844,6 @@ function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
 }
 var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
-var errCode2 = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 var RunCacheUnwritable = class extends Error {
   cacheDir;
   root;
@@ -865,7 +860,7 @@ function inRunCache(verifyDir, fn) {
   try {
     return fn();
   } catch (e) {
-    const code = errCode2(e);
+    const code = errCode(e);
     if (code !== void 0 && UNWRITABLE_CODES.has(code)) {
       const c = runCacheOf(verifyDir);
       throw new RunCacheUnwritable(c.dir, c.root, code);
@@ -877,7 +872,7 @@ var EXIT_RUN_CACHE = 6;
 var liveStatusFile = (base) => path6.join(runCacheDir(path6.dirname(base)), path6.basename(base) + ".status.json");
 var stageDirOf = (base, runId) => path6.join(runCacheDir(path6.dirname(base)), "stage", runId);
 function newRunId() {
-  return (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto6.randomBytes(3).toString("hex");
+  return (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto3.randomBytes(3).toString("hex");
 }
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
@@ -938,7 +933,7 @@ function prepareStaged(stageDir, destDir) {
   try {
     entries = fs7.readdirSync(stageDir, { withFileTypes: true });
   } catch (e) {
-    return { error: `--publish ${stageDir}: ${errMsg(e).split("\n")[0]}` };
+    return { error: `--publish ${stageDir}: ${firstLine(e)}` };
   }
   if (canonical2(stageDir) === canonical2(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
@@ -958,7 +953,7 @@ function prepareStaged(stageDir, destDir) {
       fs7.copyFileSync(path6.join(stageDir, f), tmpOf(f));
     } catch (e) {
       abort();
-      return { error: `--publish: copying ${f} failed (${errMsg(e).split("\n")[0]}) \u2014 nothing was published` };
+      return { error: `--publish: copying ${f} failed (${firstLine(e)}) \u2014 nothing was published` };
     }
   }
   return { files, tmpOf, abort, commit: () => {
@@ -1179,7 +1174,7 @@ function cacheUnreadable(base) {
     try {
       fs7.accessSync(p, mode);
     } catch (e) {
-      const code = errCode2(e);
+      const code = errCode(e);
       if (code === "EACCES" || code === "EPERM") return new RunCacheUnwritable(c.dir, c.root, "read");
     }
   }
@@ -1297,6 +1292,12 @@ function parseCssColor(v) {
 
 // design-to-code/probe-match.ts
 var CANONICAL_MATCHED_BY = ["tag", "tag-shared-path", "tag-alias", "text", "text-ordinal", "position", "frame"];
+var normText = (s) => s.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+var idSuffix = (id) => {
+  const i = id.indexOf(";");
+  return i === -1 ? null : id.slice(i + 1);
+};
+var PAINT_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
 
 // design-to-code/map-util.ts
 function getOrInit(m, k, init) {
@@ -1438,7 +1439,6 @@ function drawnStateOf(n) {
   }
   return null;
 }
-var PAINT_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
 var isPaintNode = (n) => PAINT_TYPES.has(n.type) || typeof n.asset === "string" && /\.svg$/i.test(n.asset);
 function isPlaceholder(n) {
   if (n.type !== "TEXT") return false;
@@ -1724,10 +1724,6 @@ function shellIndex(roots) {
   for (const r of roots) walk(r);
   return out;
 }
-var idSuffix = (id) => {
-  const i = id.indexOf(";");
-  return i === -1 ? null : id.slice(i + 1);
-};
 function rowSignature(n) {
   const mc = n.type === "INSTANCE" ? n.mainComponent : void 0;
   if (mc) return `I:${mc.setKey || mc.key || mc.setName || mc.name || ""}`;
@@ -2136,7 +2132,7 @@ function referenceImageFor(o) {
   return {
     usable: true,
     path: p,
-    sha256: crypto7.createHash("sha256").update(bytes).digest("hex"),
+    sha256: sha256Hex(bytes),
     png: { w: png.w, h: png.h },
     scale,
     offset,
@@ -2321,7 +2317,6 @@ var ROW_RADIUS_WHY = "a table row/row-group does not draw border-radius \u2014 r
 var INLINE_BOX_FIELDS = /* @__PURE__ */ new Set(["width", "height", "x", "y", "borderRadius"]);
 var inlineWhy = (tag) => `the id sits on an inline <${tag || "element"}>, whose box is its text's \u2014 tag the element that owns the box`;
 var cssBorderWidth = (d) => d <= 0 ? 0 : d < 1 ? 1 : Math.floor(d);
-var normText = (t) => String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 var isPaintedBy = (x) => isJsonObject(x) && typeof x.backgroundColor === "string" && (x.via === "ancestor" || x.via === "child") && typeof x.tag === "string" && typeof x.depth === "number" && (x.dt === void 0 || typeof x.dt === "string");
 function applyFigmaCase(t, c) {
   if (c === "upper") return t.toUpperCase();
@@ -3507,7 +3502,7 @@ function compare(expectation, measured, opts) {
   for (const d of deltas) if (!d.group) getOrInit(sameKey, JSON.stringify([d.field, d.expected, d.actual]), () => []).push(d);
   for (const [k, list] of sameKey) {
     if (list.length < 2) continue;
-    const gid = `same:${crypto7.createHash("sha256").update(k).digest("hex").slice(0, 8)}`;
+    const gid = `same:${sha256Hex(k).slice(0, 8)}`;
     for (const d of list) d.group = gid;
   }
   const open = deltas.filter((d) => !d.accepted);
@@ -4184,7 +4179,7 @@ function selectForAccept(rep, sel) {
   return { error: `no delta in the report for ${id}${sel.field !== void 0 ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
 }
 function main(argv) {
-  const sha = (file) => crypto7.createHash("sha256").update(fs9.readFileSync(file)).digest("hex");
+  const sha = (file) => sha256Hex(fs9.readFileSync(file));
   const USAGE = `usage:
   ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force] [--plan <plan.json>]
       writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
@@ -4424,7 +4419,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     }
     const next = JSON.stringify(exp, null, 2) + "\n";
     const prev = fs9.existsSync(target) ? fs9.readFileSync(target, "utf8") : null;
-    const h = crypto7.createHash("sha256").update(next).digest("hex");
+    const h = sha256Hex(next);
     let prevContent = null;
     try {
       if (prev !== null) {
@@ -4444,7 +4439,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}\u2026 unchanged) \u2014 existing measurements and report still apply`);
     } else if (prev !== null) {
       const why = typeof prevContent === "string" && prevContent === exp.exportContentSha256 ? "same export content \u2014 the expectation generator changed (verify-screen upgrade)" : typeof prevContent === "string" ? `the export changed (content sha ${prevContent.slice(0, 12)}\u2026 \u2192 ${exp.exportContentSha256.slice(0, 12)}\u2026)` : `the expectation recorded no export hash (exportContentSha256) \u2014 cannot tell whether the export or the expectation generator changed`;
-      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto7.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026): ${why}; the previous one is kept as ${prevFile}`);
+      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${sha256Hex(prev).slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026): ${why}; the previous one is kept as ${prevFile}`);
       const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs9.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
@@ -4600,7 +4595,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       for (const n of r.notes) console.error(`note  ${n}`);
       console.error(r.written ? `recorded ${reportRel} in ${planHit.file} (plan.verification)` : `${planHit.file}: plan.verification already records ${reportRel} \u2014 unchanged`);
     } catch (e) {
-      console.error(`error  --record-plan: ${e instanceof Error ? e.message : String(e)} \u2014 ${reportRel} is written; ${planHit.file} was not updated`);
+      console.error(`error  --record-plan: ${errMsg(e)} \u2014 ${reportRel} is written; ${planHit.file} was not updated`);
       return 1;
     }
   }
@@ -4687,7 +4682,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   else code.then((c) => {
     process.exitCode = c;
   }, (e) => {
-    console.error(`verify-screen: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`verify-screen: ${errMsg(e)}`);
     process.exitCode = 1;
   });
 }

@@ -1,7 +1,7 @@
 // plan-waivers.ts — the pieces of the deviation registry both verify-screen and verify-build
 // need: which verdicts pass, and the hash of a plan's waivers/descopes a report records. verify-build
 // imports this file, never verify-screen.
-import crypto from "node:crypto";
+import { sha256Hex } from "../bridge/src/hash.ts";
 import type { Plan, PlanWaiver, PlanDescope } from "./types.ts";
 
 export type { PlanWaiver, PlanDescope };
@@ -29,12 +29,12 @@ export function canonical(v: unknown): string {
 export function waiversHash(plan: Plan | null | undefined): string {
   const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
   const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return crypto.createHash("sha256").update(canonical({ descopes, waivers })).digest("hex");
+  return sha256Hex(canonical({ descopes, waivers }));
 }
 
 /** sha256 (hex) of the canonical JSON of plan.interactions — the only part of a plan that binds an
  *  expectation; absent or non-array hashes as `[]`. */
 export function planInteractionsSha256(plan: Plan | null | undefined): string {
   const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
-  return crypto.createHash("sha256").update(canonical(rows)).digest("hex");
+  return sha256Hex(canonical(rows));
 }

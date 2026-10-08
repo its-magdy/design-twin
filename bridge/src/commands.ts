@@ -18,6 +18,7 @@
 // documents on disk (ScreenExport, LayersDoc, DesignSystemDoc, VariablesDoc, Manifest, Asset) are
 // referenced from doc-types.ts, never restated.
 import type { Asset, DesignSystemDoc, LayersDoc, Manifest, ScreenExport, VariablesDoc } from "./doc-types.ts";
+import { isRecord } from "./json-util.ts";
 import { READ_OPTS, type ReadOptName } from "./read-opts.ts";
 
 // ---------------------------------------------------------------- arguments
@@ -284,10 +285,6 @@ export function isCmd(x: string): x is Cmd {
 export const COMMANDS: readonly Cmd[] = Object.keys(COMMAND_SET).filter(isCmd);
 
 // ---------------------------------------------------------------- reply shape checks
-
-function isRecord(x: unknown): x is Record<string, unknown> {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
-}
 
 // Each check names the FIRST thing wrong, in the caller's vocabulary ("`pages` is not an array"), so
 // the message that reaches a user says what the plugin sent instead of what the reader tripped over.

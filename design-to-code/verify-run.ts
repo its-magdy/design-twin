@@ -35,11 +35,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { sha256Hex } from "../bridge/src/hash.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import { anyJson, readJson } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
-import { errMsg } from "../bridge/src/errmsg.ts";
+import { errCode, firstLine } from "../bridge/src/errmsg.ts";
 import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
 
@@ -85,15 +86,14 @@ isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, pha
 // ---------------------------------------------------------------- files
 /** `<base>.status.json` — the PUBLISHED (durable) status in the verify dir; base is design/verify/<S>. */
 export const statusFile = (base: string): string => base + ".status.json";
-export const sha256Of = (data: string | Uint8Array): string => crypto.createHash("sha256").update(data).digest("hex");
 /** sha256 of a file's bytes, or null when it cannot be read. */
 export function sha256File(file: string): string | null {
-  try { return sha256Of(fs.readFileSync(file)); } catch { return null; }
+  try { return sha256Hex(fs.readFileSync(file)); } catch { return null; }
 }
 
 // ---- where a run's live files go — never under the tree a dev server watches
 const CACHE_NAME = "designtwin-verify";
-const shortSha = (s: string): string => sha256Of(s).slice(0, 16);
+const shortSha = (s: string): string => sha256Hex(s).slice(0, 16);
 const isDir = (p: string): boolean => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 const exists = (p: string): boolean => fs.existsSync(p);
 /** fs.realpathSync.native (the on-disk spelling: on a case-insensitive filesystem `Design/Verify` and `design/verify`
@@ -172,7 +172,6 @@ export function runCacheDir(verifyDir: string): string {
 }
 /** Filesystem refusals that mean "this process may not write there" (the sandbox's write scope, a read-only mount). */
 const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
-const errCode = (e: unknown): string | undefined => (e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : undefined);
 /** A write into the run cache was refused: the one sentence --status (exit 6), --wait (exit 6) and the probe (a warning) print. */
 export class RunCacheUnwritable extends Error {
   readonly cacheDir: string;
@@ -291,7 +290,7 @@ const TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\
 export interface PreparedPublish { files: string[]; tmpOf(name: string): string; commit(): void; abort(): void }
 export function prepareStaged(stageDir: string, destDir: string): PreparedPublish | { error: string } {
   let entries: fs.Dirent[];
-  try { entries = fs.readdirSync(stageDir, { withFileTypes: true }); } catch (e) { return { error: `--publish ${stageDir}: ${errMsg(e).split("\n")[0]}` }; }
+  try { entries = fs.readdirSync(stageDir, { withFileTypes: true }); } catch (e) { return { error: `--publish ${stageDir}: ${firstLine(e)}` }; }
   // realpaths: a symlinked or ../ spelling of the verify dir is still the verify dir
   if (canonical(stageDir) === canonical(destDir)) return { error: `--publish ${stageDir} is the verify directory itself — stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
@@ -304,7 +303,7 @@ export function prepareStaged(stageDir: string, destDir: string): PreparedPublis
   for (const f of files) {
     try { fs.copyFileSync(path.join(stageDir, f), tmpOf(f)); } catch (e) {
       abort();
-      return { error: `--publish: copying ${f} failed (${errMsg(e).split("\n")[0]}) — nothing was published` };
+      return { error: `--publish: copying ${f} failed (${firstLine(e)}) — nothing was published` };
     }
   }
   return { files, tmpOf, abort, commit: () => { for (const f of files) fs.renameSync(tmpOf(f), path.join(destDir, f)); } };
