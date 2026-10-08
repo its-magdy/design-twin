@@ -3,7 +3,7 @@
 
 
 // design-to-code/design-diff.ts
-import fs3 from "node:fs";
+import fs4 from "node:fs";
 import path2 from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -364,6 +364,7 @@ import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/asset-compare.ts
 import crypto from "node:crypto";
+import fs2 from "node:fs";
 
 // bridge/src/svg-normalize.ts
 var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
@@ -378,6 +379,60 @@ function normalizeSvgText(svg) {
 function isSvgName(fileName) {
   return /\.svg$/i.test(String(fileName || ""));
 }
+var ID_DEF_RE = /(?<![\w:-])id\s*=\s*(["'])(.*?)\1/g;
+var ID_MARK = "\0";
+var TOKEN_RE = /(\u0000id\d+\u0000)|(#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-]))|(base64,[A-Za-z0-9+/=]+)|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/g;
+var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function canonicalIds(svg) {
+  const order = /* @__PURE__ */ new Map();
+  ID_DEF_RE.lastIndex = 0;
+  for (let m = ID_DEF_RE.exec(svg); m; m = ID_DEF_RE.exec(svg)) {
+    const id = m[2];
+    if (id && !order.has(id)) order.set(id, ID_MARK + "id" + order.size + ID_MARK);
+  }
+  if (!order.size) return svg;
+  const alts = [...order.keys()].sort((x, y) => y.length - x.length).map(escapeRe).join("|");
+  const re = new RegExp(`(?<![\\w:-])(id\\s*=\\s*["'])(` + alts + `)(?=["'])|#(` + alts + ")(?![\\w.:-])", "g");
+  return svg.replace(re, (m, attr, defined, ref) => {
+    if (attr !== void 0 && defined !== void 0) return attr + (order.get(defined) ?? defined);
+    if (ref !== void 0) return "#" + (order.get(ref) ?? ref);
+    return m;
+  });
+}
+var REL_TAG_RE = /<(?:use|image|pattern)\b[^>]*>/g;
+var TRANSFORM_ATTR_RE = /(?<![\w:-])transform\s*=\s*(["'])([^"']*)\1/g;
+var PATTERN_ATTR_RE = /(?<![\w:-])(?:x|y|width|height|patternTransform)\s*=\s*(["'])([^"']*)\1/g;
+function relSpans(svg) {
+  const spans = [];
+  REL_TAG_RE.lastIndex = 0;
+  for (let t = REL_TAG_RE.exec(svg); t; t = REL_TAG_RE.exec(svg)) {
+    const re = t[0].startsWith("<pattern") ? /patternUnits\s*=\s*["']userSpaceOnUse/.test(t[0]) ? null : PATTERN_ATTR_RE : TRANSFORM_ATTR_RE;
+    if (!re) continue;
+    re.lastIndex = 0;
+    for (let a = re.exec(t[0]); a; a = re.exec(t[0])) {
+      const start = t.index + a.index + a[0].length - 1 - (a[2] || "").length;
+      spans.push([start, start + (a[2] || "").length]);
+    }
+  }
+  return spans;
+}
+function svgFingerprint(svg) {
+  const nums = [];
+  const rel = [];
+  const text = canonicalIds(svg);
+  const spans = relSpans(text);
+  const inRel = (at) => spans.some(([s, e]) => at >= s && at < e);
+  const skeleton = text.replace(TOKEN_RE, (m, _id, _hex, _b64, num, at) => {
+    if (num === void 0) return m;
+    if (spans.length && inRel(at)) {
+      rel.push(Number(num));
+      return "%";
+    }
+    nums.push(Number(num));
+    return "#";
+  });
+  return { skeleton, nums: Float64Array.from(nums), rel: Float64Array.from(rel) };
+}
 
 // bridge/src/asset-compare.ts
 function normalizeForCompare(fileName, content) {
@@ -389,6 +444,68 @@ function sha1Hex(buf) {
   return crypto.createHash("sha1").update(buf).digest("hex");
 }
 var EMPTY_NUMS = new Float64Array(0);
+function contentKey(fileName, content) {
+  const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
+  if (!isSvgName(fileName)) return { key: "b:" + sha1Hex(buf), nums: EMPTY_NUMS, rel: EMPTY_NUMS };
+  const fp = svgFingerprint(buf.toString("utf8"));
+  return { key: "s:" + sha1Hex(fp.skeleton), nums: fp.nums, rel: fp.rel };
+}
+var FileKeyCache = class {
+  entries = /* @__PURE__ */ new Map();
+  recentMs;
+  maxEntries;
+  now;
+  constructor(o = {}) {
+    this.recentMs = o.recentMs ?? 2e3;
+    this.maxEntries = o.maxEntries ?? 5e4;
+    this.now = o.now ?? Date.now;
+  }
+  get size() {
+    return this.entries.size;
+  }
+  clear() {
+    this.entries.clear();
+  }
+  /** contentKey(name, <the bytes of `file`>), or undefined when the file cannot be read. */
+  keyOf(file, name) {
+    let st;
+    try {
+      st = fs2.statSync(file);
+    } catch {
+      return void 0;
+    }
+    if (!st.isFile()) {
+      try {
+        return contentKey(name, fs2.readFileSync(file));
+      } catch {
+        return void 0;
+      }
+    }
+    const hit = this.entries.get(file);
+    if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs && hit.ctimeMs === st.ctimeMs && hit.ino === st.ino && hit.dev === st.dev) {
+      this.entries.delete(file);
+      this.entries.set(file, hit);
+      return hit.key;
+    }
+    this.entries.delete(file);
+    let bytes;
+    try {
+      bytes = fs2.readFileSync(file);
+    } catch {
+      return void 0;
+    }
+    const key = contentKey(name, bytes);
+    if (Math.max(st.mtimeMs, st.ctimeMs) <= this.now() - this.recentMs) {
+      this.entries.set(file, { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, ino: st.ino, dev: st.dev, key });
+      for (const oldest of this.entries.keys()) {
+        if (this.entries.size <= this.maxEntries) break;
+        this.entries.delete(oldest);
+      }
+    }
+    return key;
+  }
+};
+var fileKeyCache = new FileKeyCache();
 
 // bridge/src/design-system-layout.ts
 var COMPONENTS_DIR = "components";
@@ -415,13 +532,13 @@ var DESIGN_SYSTEM_FILES = {
 };
 
 // bridge/src/is-main.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
+    return fs3.realpathSync(argv1) === fs3.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -792,14 +909,14 @@ function assetPaths(doc) {
 }
 function assetRoot(file, assets) {
   let dir = path2.dirname(path2.resolve(file));
-  for (let i = 0; i < 6; i++, dir = path2.dirname(dir)) if (assets.some((a) => fs3.existsSync(path2.join(dir, a)))) return dir;
+  for (let i = 0; i < 6; i++, dir = path2.dirname(dir)) if (assets.some((a) => fs4.existsSync(path2.join(dir, a)))) return dir;
   return null;
 }
 function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
   if (root) for (const a of assets) {
     try {
-      out[a] = hashAssetBytes(a, fs3.readFileSync(path2.join(root, a)));
+      out[a] = hashAssetBytes(a, fs4.readFileSync(path2.join(root, a)));
     } catch {
     }
   }
@@ -827,13 +944,13 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   }
   const found = [];
   const snap = snapshotPath(file, cwd);
-  if (fs3.existsSync(snap)) {
+  if (fs4.existsSync(snap)) {
     const assets = readJsonOrNull(snap + ".assets.json", isStringRecord);
     const r = readJson(snap, anyJson);
     if (!("doc" in r)) throw new Error(`the snapshot ${path2.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force, or pass --against <an older copy>`);
     found.push({ doc: r.doc, source: path2.relative(cwd, snap), kind: "snapshot", assets });
   }
-  if (fs3.existsSync(snap + ".prev")) {
+  if (fs4.existsSync(snap + ".prev")) {
     const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord);
     const r = readJson(snap + ".prev", anyJson);
     if ("doc" in r) found.push({ doc: r.doc, source: path2.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
@@ -884,14 +1001,14 @@ function siblingFilesOf(f) {
   if (m) {
     for (const suf of [".vars.json", ".assets.json"]) {
       const p = path2.join(dir, m + suf);
-      if (fs3.existsSync(p)) out.push(path2.relative(process.cwd(), p));
+      if (fs4.existsSync(p)) out.push(path2.relative(process.cwd(), p));
     }
   }
   const pageDir = dir;
   const pagesDir = path2.dirname(pageDir);
   if (path2.basename(pagesDir) === "pages") {
     const idx = path2.join(pagesDir, "index.json");
-    if (fs3.existsSync(idx)) out.push(path2.relative(process.cwd(), idx));
+    if (fs4.existsSync(idx)) out.push(path2.relative(process.cwd(), idx));
   }
   return out;
 }
@@ -914,42 +1031,42 @@ function main(argv) {
     const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
     let refused = 0;
     for (const f of files) {
-      if (!fs3.existsSync(f)) {
+      if (!fs4.existsSync(f)) {
         console.error(`design-diff: ${f} not found \u2014 nothing to snapshot (first pull?)`);
         continue;
       }
       const dest = snapshotPath(f);
-      fs3.mkdirSync(path2.dirname(dest), { recursive: true });
+      fs4.mkdirSync(path2.dirname(dest), { recursive: true });
       let identical = false;
-      if (fs3.existsSync(dest)) {
+      if (fs4.existsSync(dest)) {
         try {
-          identical = Buffer.compare(fs3.readFileSync(dest), fs3.readFileSync(f)) === 0;
+          identical = Buffer.compare(fs4.readFileSync(dest), fs4.readFileSync(f)) === 0;
         } catch {
         }
       }
-      if (fs3.existsSync(dest) && !identical && !force) {
+      if (fs4.existsSync(dest) && !identical && !force) {
         console.error(`design-diff: ${path2.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
         refused++;
         continue;
       }
-      if (fs3.existsSync(dest) && !identical && force) {
+      if (fs4.existsSync(dest) && !identical && force) {
         try {
-          fs3.copyFileSync(dest, dest + ".prev");
+          fs4.copyFileSync(dest, dest + ".prev");
         } catch {
         }
         try {
-          if (fs3.existsSync(dest + ".assets.json")) fs3.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
+          if (fs4.existsSync(dest + ".assets.json")) fs4.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
         } catch {
         }
       }
-      if (!identical) fs3.copyFileSync(f, dest);
+      if (!identical) fs4.copyFileSync(f, dest);
       let n = 0;
       try {
         const parsed = readJsonOrNull(f, isScreen);
         if (parsed) {
           const h = assetHashes(f, parsed).hashes;
           n = Object.keys(h).length;
-          fs3.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
+          fs4.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
         }
       } catch {
       }
@@ -991,8 +1108,8 @@ Next time run \`${scriptCmd("design-diff")} --snapshot ${file}\` BEFORE re-pulli
   const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) {
-    fs3.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
-    fs3.writeFileSync(out, text);
+    fs4.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
+    fs4.writeFileSync(out, text);
     console.log(`wrote ${out} \u2014 ${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`);
   } else process.stdout.write(text);
   return 0;
