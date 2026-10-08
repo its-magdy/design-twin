@@ -21,6 +21,7 @@
 //
 // The frame root is its own rule: [data-dt-node=<frame id>], else the outermost element of the
 // frame's size that paints (a transparent <body> is not the frame), else the viewport.
+import { parseCssColor } from "./color.ts";
 import type { Candidate, CollectOutput, MeasureResult, Rect, SizedCandidate } from "./probe-page.ts";
 import type { MeasuredNode, MeasuredStyles, PaintedBy, ProbeFrame, VerifySpec } from "./types.ts";
 
@@ -59,9 +60,8 @@ const PAINT_TYPES = new Set<string>(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POL
 export const isPaintSpec = (spec: VerifySpec): boolean => spec.fill !== undefined || PAINT_TYPES.has(spec.type);
 
 // ---------------------------------------------------------------- the frame root
-const ALPHA_ZERO = /^transparent$|^rgba\([^)]*,\s*0(?:\.0+)?\)$/;
 /** Whether a size-matched candidate paints: probe-page computes `paints`; a hand-built candidate may carry only the colour. */
-const paints = (c: SizedCandidate): boolean => c.paints || (!ALPHA_ZERO.test(c.background.trim()) && c.background.trim() !== "") || (c.backgroundImage !== "" && c.backgroundImage !== "none");
+const paints = (c: SizedCandidate): boolean => c.paints || (c.background.trim() !== "" && parseCssColor(c.background)?.a !== 0) || (c.backgroundImage !== "" && c.backgroundImage !== "none");
 
 /**
  * The element that IS the frame: tagged with the frame id (visible) → via "tag"; else the OUTERMOST element

@@ -55,12 +55,16 @@ export function parseHex(v: unknown): Rgba | null {
 // (§16.2: sRGB colours serialize as legacy comma-separated "rgb(r, g, b)" / "rgba(r, g, b, a)" — components
 // base 10 in [0, 255], not necessarily integers; Tailwind v4 palettes compute to oklab()/oklch(), some to
 // color(srgb …)), and colours authors write in source (both rgb() syntaxes, % alpha).
-const NUM = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?";
+// A CSS <number> has digits after its '.' (`1.` is not one); the exponent is case-insensitive (the input is lower-cased).
+const NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+const PCT = `${NUM}%`;
 const CH = `${NUM}%?`;
 const CH_OR_NONE = `(?:${CH}|none)`;
-// §5.1: legacy `rgb( <number|percentage>#{3} , <alpha-value>? )` (commas, `none` not allowed) and modern
-// `rgb( [<number> | <percentage> | none]{3} [ / [<alpha-value> | none] ]? )` (spaces); rgba() is the same function.
-const RGB_LEGACY = new RegExp(`^rgba?\\(\\s*(${CH})\\s*,\\s*(${CH})\\s*,\\s*(${CH})\\s*(?:,\\s*(${CH})\\s*)?\\)$`);
+// §5.1: legacy `rgb( <percentage>#{3} , <alpha-value>? ) | rgb( <number>#{3} , <alpha-value>? )` (commas; the three
+// channels are all percentages or all numbers, the alpha either; `none` not allowed) and modern
+// `rgb( [<number> | <percentage> | none]{3} [ / [<alpha-value> | none] ]? )` (spaces; channels may mix); rgba() is the same function.
+const legacy = (ch: string): string => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+const RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
 const RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 const OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 const SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
@@ -87,10 +91,12 @@ export function parseCssColor(v: unknown): Rgba | null {
   const t = v.trim().toLowerCase();
   if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
   if (t.startsWith("#")) return parseHex(t);
-  const rgb = RGB_LEGACY.exec(t) ?? RGB_MODERN.exec(t);
+  const leg = RGB_LEGACY.exec(t);
+  // the legacy pattern has two alternatives (percentage channels, number channels): groups 1-4 or 5-8
+  const rgb = leg ? (leg[1] !== undefined ? leg.slice(1, 5) : leg.slice(5, 9)) : RGB_MODERN.exec(t)?.slice(1, 5);
   if (rgb) {
     const ch = (x: string | undefined): number => clamp(comp(x, 255), 255);
-    const c = { r: ch(rgb[1]), g: ch(rgb[2]), b: ch(rgb[3]), a: alphaOf(rgb[4]) };
+    const c = { r: ch(rgb[0]), g: ch(rgb[1]), b: ch(rgb[2]), a: alphaOf(rgb[3]) };
     return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
   }
   const ok = OK.exec(t);

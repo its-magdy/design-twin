@@ -37,6 +37,7 @@ const measured = (nodes: MeasuredNode[], extra?: Partial<VerifyMeasured>): Verif
 // ---------------------------------------------------------------- normalisation
 console.log("verify-screen — normalising what Figma and CSS each call the same thing:");
 ok("[norm] #fff and #ffffffff are the same colour", normColor("#fff") === normColor("#ffffffff"));
+ok("[norm] oklch() is compared as hex: a non-zero colour converts (oklch red = #ff0000ff, a mid grey = #808080ff)", normColor("oklch(0.628 0.2577 29.23)") === "#ff0000ff" && normColor("oklch(0.6 0 0)") === "#808080ff");
 ok("[norm] rgb() is compared as hex", normColor("rgb(29, 29, 31)") === "#1d1d1fff");
 ok("[norm] a fully transparent background is 'no background', whatever its channels", normColor("rgba(0, 0, 0, 0)") === "transparent");
 // normColor reads rgb() with color.ts parseCssColor (the probe's reader): a % alpha is read, not left as a raw string; an
