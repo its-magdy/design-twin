@@ -407,10 +407,12 @@ function parseHex(v) {
   const n = (i) => parseInt(k.slice(i, i + 2), 16);
   return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
 }
-var NUM = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?";
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
 var CH = `${NUM}%?`;
 var CH_OR_NONE = `(?:${CH}|none)`;
-var RGB_LEGACY = new RegExp(`^rgba?\\(\\s*(${CH})\\s*,\\s*(${CH})\\s*,\\s*(${CH})\\s*(?:,\\s*(${CH})\\s*)?\\)$`);
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
 var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);

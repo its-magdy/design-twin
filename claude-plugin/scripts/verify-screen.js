@@ -1240,10 +1240,12 @@ function parseHex(v) {
   const n = (i) => parseInt(k.slice(i, i + 2), 16);
   return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
 }
-var NUM = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?";
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
 var CH = `${NUM}%?`;
 var CH_OR_NONE = `(?:${CH}|none)`;
-var RGB_LEGACY = new RegExp(`^rgba?\\(\\s*(${CH})\\s*,\\s*(${CH})\\s*,\\s*(${CH})\\s*(?:,\\s*(${CH})\\s*)?\\)$`);
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
 var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
@@ -1255,10 +1257,11 @@ function parseCssColor(v) {
   const t = v.trim().toLowerCase();
   if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
   if (t.startsWith("#")) return parseHex(t);
-  const rgb = RGB_LEGACY.exec(t) ?? RGB_MODERN.exec(t);
+  const leg = RGB_LEGACY.exec(t);
+  const rgb = leg ? leg[1] !== void 0 ? leg.slice(1, 5) : leg.slice(5, 9) : RGB_MODERN.exec(t)?.slice(1, 5);
   if (rgb) {
     const ch = (x) => clamp(comp(x, 255), 255);
-    const c = { r: ch(rgb[1]), g: ch(rgb[2]), b: ch(rgb[3]), a: alphaOf(rgb[4]) };
+    const c = { r: ch(rgb[0]), g: ch(rgb[1]), b: ch(rgb[2]), a: alphaOf(rgb[3]) };
     return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
   }
   const ok = OK.exec(t);
@@ -2578,7 +2581,7 @@ function compare(expectation, measured, opts) {
   opts = opts || {};
   measured = measured || {};
   const hiddenSet = new Set((expectation.hidden && expectation.hidden.ids || []).map(String));
-  const legacy = expectation.schema !== EXPECTATION_SCHEMA;
+  const legacy2 = expectation.schema !== EXPECTATION_SCHEMA;
   const specs = (expectation.nodes || []).filter((s) => !hiddenSet.has(String(s.nodeId)));
   const frameOf = (spec) => spec.frameId && (expectation.frames || []).find((f) => f.nodeId === spec.frameId) || expectation.frame || {};
   const byId = /* @__PURE__ */ new Map();
@@ -3572,7 +3575,7 @@ function compare(expectation, measured, opts) {
   const lowConfidence = open.filter((d) => d.cappedFrom !== void 0).length;
   if (lowConfidence) reasons.push(`${lowConfidence} delta(s) on low-confidence matches \u2014 tag these elements`);
   if (planInteractionsChanged) reasons.push(planInteractionsChanged);
-  if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering \u2014 regenerate it with --expect before trusting any number here`);
+  if (legacy2) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering \u2014 regenerate it with --expect before trusting any number here`);
   if (staticOnly) reasons.push(`not rendered \u2014 the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk \u2014 nothing ties these numbers to a picture (write design/verify/<Screen>.png and list it in artifacts)");
   for (const f of fieldsNeverMeasured) reasons.push(`field '${f.field}' was present on 0 of the ${f.expectedOn} measured node(s) whose spec states it${f.probeSent ? ` (the probe sent '${f.probeSent.join("', '")}' \u2014 the canonical key is '${f.field}')` : ""}`);

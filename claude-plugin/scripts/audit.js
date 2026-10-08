@@ -35,10 +35,12 @@ function parseHex(v) {
   const n = (i) => parseInt(k.slice(i, i + 2), 16);
   return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
 }
-var NUM = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?";
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
 var CH = `${NUM}%?`;
 var CH_OR_NONE = `(?:${CH}|none)`;
-var RGB_LEGACY = new RegExp(`^rgba?\\(\\s*(${CH})\\s*,\\s*(${CH})\\s*,\\s*(${CH})\\s*(?:,\\s*(${CH})\\s*)?\\)$`);
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
 var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
@@ -1032,8 +1034,8 @@ function variablesContext(screenFiles, varsFile, opts) {
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
   if (firstFile !== void 0) {
-    const legacy = path3.join(path3.resolve(path3.dirname(firstFile), "..", ".."), "..", "variables.json");
-    if (fs5.existsSync(legacy) && path3.resolve(legacy) !== path3.resolve(variablesPath || "")) staleLegacy = legacy;
+    const legacy2 = path3.join(path3.resolve(path3.dirname(firstFile), "..", ".."), "..", "variables.json");
+    if (fs5.existsSync(legacy2) && path3.resolve(legacy2) !== path3.resolve(variablesPath || "")) staleLegacy = legacy2;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
 }

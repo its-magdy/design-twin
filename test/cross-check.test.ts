@@ -481,8 +481,23 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
   ok("[css] #ABC -> (170, 187, 204, 1), #aabbcc80 alpha 128/255; 'abc', '#abcde', 'red', 'rgb(0, 0 0)' (mixed separators) and a non-string -> null",
     eq("#ABC", 170, 187, 204, 1) && eq("#aabbcc80", 170, 187, 204, 128 / 255)
     && parseCssColor("abc") === null && parseCssColor("#abcde") === null && parseCssColor("red") === null && parseCssColor("rgb(0, 0 0)") === null && parseCssColor(42) === null);
-  ok("[css] transparent -> (0, 0, 0, 0); oklch red; color(srgb 1 0 0 / 0.5)",
-    eq("transparent", 0, 0, 0, 0) && eq("oklch(0.628 0.2577 29.23)", 255, 0, 0, 1) && eq("color(srgb 1 0 0 / 0.5)", 255, 0, 0, 0.5));
+  ok("[css] transparent -> (0, 0, 0, 0); oklch red; oklab red; color(srgb 1 0 0 / 0.5)",
+    eq("transparent", 0, 0, 0, 0) && eq("oklch(0.628 0.2577 29.23)", 255, 0, 0, 1) && eq("oklab(0.628 0.2249 0.1258)", 255, 0, 0, 1) && eq("color(srgb 1 0 0 / 0.5)", 255, 0, 0, 0.5));
+  // §5.1 legacy grammar: the three channels are all numbers or all percentages (the alpha is either); a mix is dropped.
+  ok("[css] legacy rgb(): all-percentage and all-number channels parse (alpha number or %); a mix is null, the modern space syntax may mix",
+    eq("rgb(100%, 0%, 50%)", 255, 0, 127.5, 1) && eq("rgba(100%, 0%, 0%, 25%)", 255, 0, 0, 0.25) && eq("rgba(255, 0, 0, 25%)", 255, 0, 0, 0.25)
+    && parseCssColor("rgb(100%, 0, 0)") === null && parseCssColor("rgb(255, 0%, 0)") === null && parseCssColor("rgba(0, 0, 0%, 1)") === null
+    && eq("rgb(100% 0 0)", 255, 0, 0, 1));
+  // A CSS <number> needs digits after '.'; e-notation is a number.
+  ok("[css] numbers: `1.` is not a number; `.5`, `1.5`, `+1e1`, `2.55E2` are",
+    parseCssColor("rgb(1., 2, 3)") === null && parseCssColor("rgb(1 2 3 / 1.)") === null && eq("rgb(.5, 1.5, +1e1)", 0.5, 1.5, 10, 1) && eq("rgb(2.55E2 0 0)", 255, 0, 0, 1)
+    && eq("rgb(1e2, 0, 0, 5e-1)", 100, 0, 0, 0.5));
+  // §4.4 `none` is modern-only: a 4th legacy argument of `none` is not a colour.
+  ok("[css] legacy rgba(0, 0, 0, none) is not a colour (modern `/ none` is alpha 0)",
+    parseCssColor("rgba(0, 0, 0, none)") === null && parseCssColor("rgba(0%, 0%, 0%, none)") === null && eq("rgb(0 0 0 / none)", 0, 0, 0, 0));
+  // color(srgb …): components 0-1 (or %), rounded, clamped; alpha clamps.
+  ok("[css] color(srgb): clamps to the gamut, % components and % alpha, none is 0",
+    eq("color(srgb 2 -1 0.5)", 255, 0, 128, 1) && eq("color(srgb 100% 50% 0% / 50%)", 255, 128, 0, 0.5) && eq("color(srgb 1 0 0 / 3)", 255, 0, 0, 1) && eq("color(srgb none 1 0)", 0, 255, 0, 1));
   // The formatter is bridge/src/hex-color.ts's, re-exported: the plugin's export and design-to-code agree on 6 vs 8 digits.
   ok("[css] formatHex is the bridge's (one formatter); alpha 0.999 -> 254.745 rounds to 255 -> 6 digits",
     formatHex === bridgeFormatHex && formatHex({ r: 17, g: 17, b: 17, a: 0.999 }) === "#111111");

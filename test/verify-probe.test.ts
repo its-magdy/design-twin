@@ -630,6 +630,10 @@ t("[D135 ABORT-2] loadFailureWhy: another cause → its first line, unchanged",
   const r = resolveFrame(f, [], [inner, body, rootDiv, app], vp, true);
   t("[F-63] transparent <body> and #root skipped: the OUTERMOST painted element of the frame's size → via size-and-fill", () => r?.via === "size-and-fill" && r.path === app.path);
   t("[F-63] a background image counts as paint", () => resolveFrame(f, [], [{ ...body, backgroundImage: "url(a.png)" }], vp, true)?.path === body.path);
+  const clearBg = ["transparent", "rgba(0, 0, 0, 0)", "rgba(0,0,0,0.0)", "rgb(0 0 0 / 0)", "rgba(0, 0, 0, 0%)", "oklab(0 0 0 / 0)"];
+  t("[color] every spelling of alpha 0 is no paint (a transparent frame root is not the frame): " + clearBg.join(" | "),
+    () => clearBg.every((bg) => resolveFrame(f, [], [{ ...body, background: bg }], vp, false) === null));
+  t("[color] a non-zero alpha, an opaque colour and an unreadable value paint", () => ["rgba(0, 0, 0, 0.01)", "rgb(0 0 0 / 1%)", "rgb(255, 255, 255)", "red"].every((bg) => resolveFrame(f, [], [{ ...body, background: bg }], vp, false)?.path === body.path));
   t("[F-63] ±2px of the frame size only", () => resolveFrame(f, [], [{ ...app, rect: { x: 0, y: 0, w: 780, h: 600 } }], vp, true)?.via === "viewport");
   const v = resolveFrame(f, [], [body], vp, true);
   t("[F-63] nothing paints → via viewport with a note", () => v?.via === "viewport" && /tag the frame root/.test(v.note || ""));
