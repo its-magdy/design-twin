@@ -7,6 +7,7 @@ hooks:
     - hooks:
         - type: command
           command: node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js"
+          timeout: 90
 ---
 
 # Design changed → patch the code

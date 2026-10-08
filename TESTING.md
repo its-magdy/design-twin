@@ -56,8 +56,9 @@ node test/verify-build.test.ts         # expect: all checks pass, exit 0 — the
                                        # (stdin only when fd 0 is not a TTY, 1s silent-pipe / 60s hard cutoff,
                                        # computed --status never stored), and that claude-plugin/scripts/ is in
                                        # sync with design-to-code/ (stale? run: node claude-plugin/build-scripts.ts)
-node test/plan-skeleton.test.ts        # expect: all checks pass, exit 0 — the shared plan shape/visibility
-                                       # helpers (visibility, rootsOf) every skill and verify-build.js walk with
+node test/plan-skeleton.test.ts        # expect: all checks pass, exit 0 — the build-screen plan skeleton generated
+                                       # from the export (tokens, visible instances, anchors, hidden roots, --out merge,
+                                       # --seed-from) and the visibility rule verify-build.js walks with
 node test/ui.test.ts                   # expect: all checks pass, exit 0 — the plugin window's script against a fake
                                        # DOM + WebSocket: connection states, theming, the ids/ports it depends on
 node test/cross-check.test.ts          # expect: all checks pass, exit 0 — the JOIN between a screen and the
@@ -68,7 +69,7 @@ node test/cross-check.test.ts          # expect: all checks pass, exit 0 — the
                                        # design/export/variables.json (never a stale design/variables.json sibling)
 node test/verify-screen.test.ts        # expect: all checks pass, exit 0 — the per-node comparison behind a
                                        # "pass": the expectation emitted as data, the tolerance table, component
-                                       # coverage, reactions/--interactions-driven checks, and the rule that an
+                                       # coverage, reactions and `--interactions` checks, and the rule that an
                                        # unmeasured expectation is not a passed one
 node test/design-diff.test.ts          # expect: all checks pass, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
                                        # token diffs, baseline choice, re-drawn assets, --snapshot/--force CLI)
@@ -137,16 +138,12 @@ attacker iframe sends `Origin: null` exactly like the real plugin does, so the s
 (non-loopback `Host`) and tokens of a different length — which must compare `false` rather than throw,
 since the compare hashes both sides to a fixed width precisely so length cannot leak.
 
-This suite was hardened over FOUR adversarial review rounds. Round 1 found 28 confirmed bugs; round 2
-(re-reviewing the fixes) found ~6 regressions the fixes themselves introduced; round 3 found one more (a
-bootstrap "refresh untouched stub" heuristic that destroyed half-finished human edits → reverted to
-always-preserve); round 4 found one narrow code fix (an asymmetric ambiguous-prop guard) and confirmed the
-rest, with the remaining findings all LOW/pathological or pure test-coverage gaps (now closed). The
-validator was cross-checked against an ajv oracle (0 divergences over 10,733 inputs), and the whole pipeline
-was confirmed to compose end-to-end. Assertions pin actual VALUES (RGB channels, not just
-`components.length`), drift warnings are asserted to *fire*, and every finding has a tagged regression test.
-Lesson baked in: assert values, mutation-test, and adversarially re-review EACH fix pass — every fix pass
-can introduce its own bugs (findings converged 28 → ~6 → 1 → ~0 real across the four rounds).
+In the design-to-code suite, assertions pin actual VALUES (RGB channels, not just `components.length`),
+drift warnings are asserted to *fire*, and every fixed bug has a tagged regression test. The validator is
+cross-checked against an ajv oracle (0 divergences over 10,733 inputs), and the whole pipeline is tested to
+compose end-to-end. The rule: assert values, mutation-test, and adversarially re-review EACH fix pass — a fix
+pass can introduce its own bugs (reviewing this suite's first round of 28 fixes found ~6 regressions those
+fixes introduced).
 
 When you change a `design-to-code/` script or the map shape, extend `test/design-to-code.test.ts` with the new
 behavior. `design-to-code/map-validate.ts` is the single source of truth for that shape — update its KEYS/PROP
@@ -198,9 +195,8 @@ output and the CSS output.
 
 ### Layers are split per-page, per-file
 
-`screens.json` used to bundle every exported frame into a single file — a real design-system export
-measured **24MB**, unworkable for an agent that only wants to build one at a time. Splitting to
-one-file-per-node fixed that; grouping those files by Figma PAGE is the next step of the same idea.
+Every exported layer is its own file, grouped by Figma PAGE: one file holding every exported frame
+measured **24MB** on a real design-system export, unworkable for an agent that only wants to build one at a time.
 Naming: Figma itself calls every object in a file a **layer** (its own Layers-panel vocabulary; there is
 no "screen" node type in Figma). This tool reserves **"screen"** for a single node a human deliberately
 selected (`collectSelection`/`collectNode`) — everything swept up by walking a
@@ -209,8 +205,8 @@ instead, which is both the accurate Figma term and avoids implying every one of 
 A page can hold many layers, never the reverse (Figma's own model is File → Page → Frame), so the
 directory structure mirrors that containment instead of dumping every layer from every page into one
 flat folder. A deliberately-selected SCREEN files into the same tree, under the same
-`<name>__<id>.json` convention — it used to land flat as `design/<Screen>.json`, which meant two
-frames called `Popup` overwrote each other and a single-screen project had no index at all. Both export paths write `design/export/pages/index.json` (the run-wide `manifest` + a lean
+`<name>__<id>.json` convention — the `__<id>` suffix keeps two frames with the same name from overwriting
+each other, and a single-screen project gets an index too. Both export paths write `design/export/pages/index.json` (the run-wide `manifest` + a lean
 `pageDirs[]` of `{page,dir,index,layers}` (`index` is the pointer to that page's own index file — open it verbatim, don't rebuild it from `dir`) — NOT the full layer list, so reading it never means loading every
 layer's metadata) plus, per page, `design/export/pages/<page>/index.json` (that page's own
 `{name,id,type,page,file}` entries) and one `design/export/pages/<page>/<name>__<id>.json` per layer (`{name,
@@ -245,7 +241,7 @@ no-recursion, no-asset cost as `--list`), which is otherwise a jump straight to 
 
 ### Visually checking one component after generating code for it
 
-`node bridge/src/figma-pull.ts --screenshot <id> [--scale N]` renders ONE node to `screenshots/<id>_ref.png` —
+`node bridge/src/figma-pull.ts --screenshot <id> [--scale N]` renders ONE node to `assets/<id>_ref.png` —
 skips `serialize()` and the recursive asset walk, so it stays cheap even on a node deep inside a large
 tree. Use it after `build-screen` generates code for a specific component in a dense screen, where the
 one whole-frame reference PNG every export already carries is too zoomed-out to compare against.
@@ -300,7 +296,7 @@ clobbering hand-authored fields.
 
 ## Layer C — design-to-code tooling on a REAL export (checklist)
 
-The `design-to-code/` suite (`test/design-to-code.test.ts`, 288 checks) runs on **mock** data, so validate it against a
+The `design-to-code/` suite (`test/design-to-code.test.ts`) runs on **mock** data, so validate it against a
 genuine `design-system.json` once (a full export from Layer B) to catch what the mocks can't. Work
 top-to-bottom; each box is a concrete pass/fail.
 
@@ -387,7 +383,7 @@ and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`
 | `node bridge/src/figma-pull.ts --list-pages` | Cheap: page names only, no page load (prints to stdout) |
 | `node bridge/src/figma-pull.ts --list` | Cheap: pages + their top-level frames (prints to stdout) |
 | `node bridge/src/figma-pull.ts --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |
-| `node bridge/src/figma-pull.ts --screenshot <id> [--scale N]` | Cheap-ish: renders ONE node to `screenshots/<id>_ref.png` (writes a file, unlike the row above) |
+| `node bridge/src/figma-pull.ts --screenshot <id> [--scale N]` | Cheap-ish: renders ONE node to `assets/<id>_ref.png` (writes a file, unlike the row above) |
 | `node bridge/src/figma-pull.ts --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
 | `node bridge/src/figma-pull.ts --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
 | `node bridge/src/figma-pull.ts --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |

@@ -33,7 +33,7 @@ The repo ships **three products**, installed separately:
 | Piece | What it is | How you install it |
 |---|---|---|
 | `figma-plugin/` | The Figma-side extractor. Reads the open file and exports JSON, variables, and SVG/PNG assets. | Imported into Figma desktop from its manifest |
-| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | root `npm install` + `npm link --workspace bridge` from a clone (not on npm yet) |
+| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | From a clone (not on npm): root `npm install`, `npm run build --workspace bridge`, `npm link --workspace bridge` |
 | `claude-plugin/` | The `designtwin` Claude Code plugin: skills, stack profiles and agents. It has no dependencies. | `claude plugin install` |
 
 There are three ways to get a design out of Figma:
@@ -67,7 +67,8 @@ Supported target stacks: `web-tailwind`, `web-css-modules`, `react-native`, `swi
 git clone https://github.com/its-magdy/design-twin.git
 cd design-twin
 npm install
-npm link --workspace bridge   # or: cd bridge && npm link — puts `dtwin` on your PATH
+npm run build --workspace bridge   # dtwin's bin is bridge/dist/figma-pull.js, which is gitignored
+npm link --workspace bridge        # or: cd bridge && npm link — puts `dtwin` on your PATH
 dtwin --version
 ```
 

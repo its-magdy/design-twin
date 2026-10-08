@@ -54,7 +54,7 @@ is the calling convention, spelled out under the diagram.
 
 **The real split is not CLI-vs-MCP — it is "does the payload go through the context window".**
 Both front-ends speak the *same* plugin commands (`figma-plugin/src/bridge.ts`) over the *same*
-`createBridge()`, and both now write through the *same* `write-out.ts`. What differs is the calling
+`createBridge()`, and both write through the *same* `write-out.ts`. What differs is the calling
 convention and where the bytes land:
 - **Bulk payloads → disk, always.** The CLI has always done this; the MCP export tools do it too via
   `writeToDisk: true`, which returns a compact index (counts + paths) instead of the tree. Inline MCP
@@ -209,7 +209,7 @@ Design decisions worth not re-litigating:
 
 ## Extended IR (implemented on top of the surface above)
 
-The exporter now also reads (all verified fields, all guarded by `in`/`figma.mixed`):
+The exporter also reads (all verified fields, all guarded by `in`/`figma.mixed`):
 - **Interactions:** `node.reactions` → `{trigger, actions:[{navigation, destination, transition:{type,
   easing, duration, direction, matchLayers, cubicBezier, spring}}]}`. FREE via the Plugin API and
   **unreadable by the paid `get_motion_context`** — the UX/navigation layer is ours. `transition` carries
@@ -257,7 +257,7 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
 - **Prop-driven components:** `componentPropertyReferences` → `propRefs` (`{visible/characters/mainComponent:
   propName}`, `#id` suffix stripped) tells codegen which prop drives a nested layer; instance `overrides`
   (direct `overriddenFields` only, empty-filtered, capped 100) shows what diverges from the main component;
-  design-system prop defs now carry INSTANCE_SWAP `preferredValues` (`{type,key}[]` — the allowed swap set →
+  design-system prop defs carry INSTANCE_SWAP `preferredValues` (`{type,key}[]` — the allowed swap set →
   a typed enum) + per-prop `description`.
 - **Full-frame reference render → `reference`:** `collectReference()` renders each top-level frame to PNG
   (`exportAsync {format:PNG, constraint:{type:SCALE,value}}`, longest side capped ~2048px, downscales below
@@ -272,10 +272,10 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   scope, called on demand) rather than pre-rendering every node/instance up front — deliberately NOT a
   bulk pass, which would pay the same O(nodes) cost `--no-assets` exists to avoid for a much bigger
   payload (PNG > structural JSON).
-- **Token bindings beyond node level:** generalized `resolveBoundMap()` now resolves `boundVariables` on
+- **Token bindings beyond node level:** generalized `resolveBoundMap()` resolves `boundVariables` on
   **text runs** (`getStyledTextSegments` + `boundVariables` field → `runs[].tokens`), **effects**
-  (`effect.tokens`), **gradient stops** (`stop.tokens`), and **paints** (`fill.tokens`). Previously these
-  bindings degraded to hardcoded literals — the whole point of token extraction. (`simplifyFills` /
+  (`effect.tokens`), **gradient stops** (`stop.tokens`), and **paints** (`fill.tokens`). Without it these
+  bindings would degrade to hardcoded literals — defeating the whole point of token extraction. (`simplifyFills` /
   `simplifyEffects` / `serializeText` became async; all call sites awaited, incl. design-system style maps.)
 - **Bug fix + HIGH/MED coverage (2026-07-23, all names verified vs developers.figma.com; harness 89/89):**
   Fixed a real defect — progressive-blur `startOffset`/`endOffset` are **Vectors `{x,y}`** in normalized
@@ -338,8 +338,8 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   **Code Connect** (node→codebase-component + prop transforms) is Org/Ent-gated — **now replicated locally**
   in `design-to-code/` (DTCG token emitter, schema'd + validated + drift-checked `design/codeconnect.local.json` map,
   bootstrapper). See `design-to-code/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced
-  ADR); validate on real data via the Layer C checklist in `TESTING.md`. Built + 4-round adversarially
-  reviewed (tooling suite 126/126); codegen resolver deferred to a target repo.
+  ADR); validate on real data via the Layer C checklist in `TESTING.md`. Built and offline-tested; codegen
+  resolver deferred to a target repo.
 - **Competitor sweep + Plugin API cross-check (2026-08-13; harness 306/306):** researched 10+ Figma-to-code
   tools (FigmaToCode, Anima, Locofy, Builder.io Visual Copilot, TeleportHQ, Figma's own Dev Mode/Code
   Connect/official MCP, html.to.design, Codia AI, Superflex, v0, Magic Patterns, Uizard, Galileo, Zeroheight,
@@ -378,7 +378,7 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   on a real design-system file — one real export measured `components.local.json` at 4.3MB, almost
   entirely `variants[].node` trees an agent doesn't need just to see a component's prop table. Neither
   `design-to-code/drift-lint.ts` nor `design-to-code/map-bootstrap.ts` ever reads `.node` (both key off
-  `name`/`id`/`key`/`type`/`props`), so `bridge/src/design-system-layout.ts` now strips it out of each
+  `name`/`id`/`key`/`type`/`props`), so `bridge/src/design-system-layout.ts` strips it out of each
   `COMPONENT_SET` entry into a sibling `design-system/components/<safe(name)>__<safe(id)>.json`, and adds
   a `variantsFile` pointer on the entry (absent, not null, when the set had no exported node trees — same
   convention as `pageId`'s absence on pre-pageId exports). Every variant keeps its `id`/`name`/`key`/
@@ -390,7 +390,7 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
 - **`--variant-visuals` extended to standalone COMPONENTs (2026-08-18; harness 374/374, tooling 222/222):**
   the flag only ever walked variant children of a `COMPONENT_SET` — a standalone `COMPONENT` (never part
   of a set) got none of the same treatment, leaving it with only the slim catalog fields and no way to
-  pull its real layout/tokens/css. `collectComponentCatalog` (`figma-plugin/src/components.ts`) now also
+  pull its real layout/tokens/css. `collectComponentCatalog` (`figma-plugin/src/components.ts`) also
   runs `serializeVariant` on a standalone `COMPONENT` (same depth budget, same forced `skipAssets`) and
   attaches the result as **`entry.node`** (not `entry.variants[]` — there is no set to enumerate variants
   of). `bridge/src/design-system-layout.ts` splits any local `COMPONENT` entry carrying `.node` into the same
@@ -405,8 +405,8 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   and keeps the WebSocket-to-plugin internal.
 - **`.mcp.json`** (project scope, committable): `{ "mcpServers": { "designtwin": { "type":"stdio",
   "command":"node", "args":["/abs/path/to/bridge/src/figma-mcp.ts"] } } }` — `bridge/dist/figma-mcp.js`
-  (npm install) or `bridge/src/figma-mcp.ts` (repo checkout) — registered in the project you point the
-  bridge at, never in this repo.
+  (built with `npm run build`, as a linked `dtwin` runs) or `bridge/src/figma-mcp.ts` (run from
+  source) — registered in the project you point the bridge at, never in this repo.
 - **Permissions:** MCP tools are `mcp__<server>__<tool>`; pre-approve via `permissions.allow`
   (`"mcp__designtwin__*"`). CLI: allowlist `"Bash(dtwin:*)"`.
 - **Skill vs MCP:** the skills **orchestrate** — `audit-design` reviews the export before code
@@ -430,8 +430,8 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   `componentPropertyReferences`) for a richer `components.json`, and the `figma-swiftui` structural rules
   (recognize `List`/`NavigationStack`/`TabView`; HIG semantic colors → dark mode; SF Symbols by name).
 - **Typings:** ✅ pulled from **npm `@figma/plugin-typings`** (properly licensed, v1.131.0) — not the
-  unlicensed vendored copy in mcp-server-guide. The plugin source is now TypeScript checked against it,
-  retiring the hand-maintained API list.
+  unlicensed vendored copy in mcp-server-guide. The plugin source is TypeScript checked against it, so there is
+  no hand-maintained API list.
 - **Community skills (third-party, MIT/CC0):** `export-tokens-figma`, `design-react-api`, the a11y set
   (`lint-design-figma`, `apca-compliance-figma`) — vendorable *with attribution*, applied to our JSON export.
 - **Free advantage the paid tools lack:** `node.reactions` (prototype interactions) reads free via the
@@ -440,14 +440,15 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
 ## Build order
 
 1. ✅ **Exporter plugin** (done) — full design system + all layers + assets, loopback-only
-   `allowedDomains`, read-only, no internet. Manual file handoff. **This is enough to start.** Now authored in
+   `allowedDomains`, read-only, no internet. Manual file handoff. **This is enough to start.** Authored in
    **TypeScript** (`figma-plugin/src/*.ts`, typed against `@figma/plugin-typings`) and bundled to
    `code.js` via esbuild; the built `code.js` is committed so import stays zero-build. `tsc --noEmit`
    is the first test gate. See `figma-plugin/README.md`.
 2. ✅ **`dtwin` CLI** (done, optional) — the plugin has a hidden-iframe WS client
    (`allowedDomains: ["ws://localhost:PORT"]`); the CLI hosts an ephemeral WS server, pulls, writes
-   the same files, exits. Removes the manual click. No MCP. Packaged as the `designtwin` npm package
-   (**not yet published** — until it is, run `node bridge/src/figma-pull.ts` from a clone);
+   the same files, exits. Removes the manual click. No MCP. Packaged as the `designtwin` package, which is
+   **not on npm**: clone, `npm install`, `npm run build --workspace bridge`, then `npm link --workspace bridge`
+   (or run `node bridge/src/figma-pull.ts` from the clone);
    `bridge/src/figma-pull.ts` is its entry point. `dtwin init` sets a consumer project up in one command.
 3. ✅ **`dtwin mcp` server** (done, opt-in only) — stdio↔Claude Code, persistent WS↔plugin. The
    interactive front-end: the same reads as the CLI as typed tools, plus `figma_write`, the only
