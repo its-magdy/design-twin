@@ -376,6 +376,7 @@ function describe(row, matchedVia) {
   return out;
 }
 var fold = (s) => String(s || "").trim().toLowerCase();
+var foldCompact = (s) => String(s || "").replace(/\s+/g, "").toLowerCase();
 function resolveScreen(exportDir, query, opts) {
   const options = opts || {};
   const rows = allRows(exportDir);
@@ -419,6 +420,32 @@ function resolveScreen(exportDir, query, opts) {
   for (const id of NODE_ID_RE2.test(q) ? [] : queryIds(q)) {
     const hit = byId(id);
     if (hit) return { status: "resolved", row: hit, stage: "node id" };
+  }
+  const qCompact = foldCompact(q);
+  if (qCompact) {
+    const planCompactIds = new Set(
+      plans.filter((p) => foldCompact(p.screenName) === qCompact || foldCompact(p.route) === qCompact).map((p) => p.nodeId).filter((id) => !!id)
+    );
+    const compact = /* @__PURE__ */ new Map();
+    const joinCompact = (row, via) => {
+      const key = row.id || row.file || JSON.stringify(row);
+      getOrInit(compact, key, () => ({ row, via: /* @__PURE__ */ new Set() })).via.add(via);
+    };
+    for (const r of rows) {
+      if (foldCompact(r.name) === qCompact) joinCompact(r, "layer name ignoring spaces");
+      if (r.title && foldCompact(r.title) === qCompact) joinCompact(r, "indexed title ignoring spaces");
+      if (planCompactIds.has(r.id)) joinCompact(r, "plan screenName/route ignoring spaces");
+    }
+    const compactRows = [...compact.values()];
+    const one = compactRows.length === 1 ? compactRows[0] : void 0;
+    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + ") };
+    if (compactRows.length > 1) {
+      return {
+        status: "ambiguous",
+        stage: "whitespace-insensitive match (layer name / title / plan header)",
+        candidates: compactRows.map((u) => describe(u.row, [...u.via]))
+      };
+    }
   }
   const textMatches = rows.filter(
     (r) => r.name && fold(r.name).includes(qFold) || r.title && fold(r.title).includes(qFold) || Array.isArray(r.texts) && r.texts.some((t) => fold(t).includes(qFold))

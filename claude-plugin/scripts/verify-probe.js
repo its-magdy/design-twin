@@ -950,6 +950,7 @@ ${usage}`);
 // design-to-code/verify-run.ts
 var STATUS_SCHEMA = "designtwin/verify-status@2";
 var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var TERMINAL_PHASES = ["done", "failed", "blocked"];
 var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
 var optStr = (x) => x === void 0 || typeof x === "string";
 function isVerifyStatusV2(x) {
@@ -6559,7 +6560,8 @@ var USAGE = `usage:
       --out defaults to the .expected.json path minus \`.expected\`; --viewport to the frame's w\xD7h; --project to cwd.
       --run <id> (from verify-screen --status \u2026 --new-run): writes the run's LIVE status (the run cache,
       node_modules/.cache/designtwin-verify/<Screen>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
-      before the browser starts, \`measured\` (+ the measured file's sha256) after it is closed; an exit 3/4 bumps its rev.
+      before the browser starts, \`measured\` (+ the measured file's sha256) after it is closed; an exit 3/4 bumps its rev. A run that
+      already ended (done/failed/blocked) is refused before anything starts (exit 2: start a --new-run).
       --max-time bounds the whole run (default 180000 ms): past it the browser is closed and nothing is written (exit 4).
       --steps: a JSON list of steps (or a plan whose \`navigate\` holds them) replayed after every page load, before --ready,
       to reach a screen that is a section of the app (not a URL): {"click": "<selector>"} | {"waitFor": "<selector>"} |
@@ -6719,6 +6721,13 @@ ${USAGE}`);
   const statusBase = f.expected ? path5.join(path5.dirname(f.expected), path5.basename(outBase)) : "";
   const expSha = expBytes ? sha256Of(expBytes) : void 0;
   const runId = f.run !== void 0 && !f.check && statusBase ? f.run : void 0;
+  if (runId !== void 0) {
+    const prev = readStatus(statusBase);
+    if (prev && prev !== "v1" && prev.runId === runId && TERMINAL_PHASES.includes(prev.phase)) {
+      console.error(`verify-probe: run ${runId} already ended at ${prev.phase}${prev.detail ? ` (${prev.detail})` : ""} \u2014 start a new run with --new-run`);
+      return 2;
+    }
+  }
   const status = (w) => {
     try {
       writeStatus(statusBase, w);

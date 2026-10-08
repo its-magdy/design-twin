@@ -156,6 +156,7 @@ in practice: a pass that ran ~25 minutes with the caller unable to distinguish p
 So **report status as you go**, through the tool, never by hand-writing the file:
 `node <scripts>/verify-screen.js --status <screen> --phase <p> --run <id> [--detail "<one line>"]`
 (first call `--new-run`; it prints `run <id> rev <n>`; without `--run` it only continues a run that has not ended).
+A run that already ended (`done`, `failed`, `blocked`) refuses further writes, from `--status` and from the probe's `--run` (exit 2): start a new run with `--new-run`.
 The tool owns the status (`designtwin/verify-status@2`: `runId`, `rev`, `phase`, `detail`, `at`, and the shas of
 the expectation, measured and evidence files), so `at` is never a hand-written clock. The LIVE status is in the run
 cache, `node_modules/.cache/designtwin-verify/<screen>.status.json` (the project's own, beside the nearest

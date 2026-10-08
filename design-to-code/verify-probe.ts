@@ -81,7 +81,7 @@ import { CLOSE_STEP_CAP_MS, CUT_SETTLE_MS, PS_CAP_MS, WRITE_MARGIN_MS, behaviour
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
-import { RunCacheUnwritable, liveStatusFile, sha256Of, stageDirOf, writeFileAtomic, writeStatus } from "./verify-run.ts";
+import { RunCacheUnwritable, TERMINAL_PHASES, liveStatusFile, readStatus, sha256Of, stageDirOf, writeFileAtomic, writeStatus } from "./verify-run.ts";
 import type { StatusWrite } from "./verify-run.ts";
 import type { Expectation } from "./verify-screen.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
@@ -1023,7 +1023,8 @@ const USAGE =
   "      --out defaults to the .expected.json path minus `.expected`; --viewport to the frame's w×h; --project to cwd.\n" +
   "      --run <id> (from verify-screen --status … --new-run): writes the run's LIVE status (the run cache,\n" +
   "      node_modules/.cache/designtwin-verify/<Screen>.status.json — never the project tree a dev server watches) — `measuring`\n" +
-  "      before the browser starts, `measured` (+ the measured file's sha256) after it is closed; an exit 3/4 bumps its rev.\n" +
+  "      before the browser starts, `measured` (+ the measured file's sha256) after it is closed; an exit 3/4 bumps its rev. A run that\n" +
+  "      already ended (done/failed/blocked) is refused before anything starts (exit 2: start a --new-run).\n" +
   "      --max-time bounds the whole run (default 180000 ms): past it the browser is closed and nothing is written (exit 4).\n" +
   "      --steps: a JSON list of steps (or a plan whose `navigate` holds them) replayed after every page load, before --ready,\n" +
   "      to reach a screen that is a section of the app (not a URL): {\"click\": \"<selector>\"} | {\"waitFor\": \"<selector>\"} |\n" +
@@ -1140,6 +1141,15 @@ export async function main(argv: string[]): Promise<number> {
   const statusBase = f.expected ? path.join(path.dirname(f.expected), path.basename(outBase)) : "";
   const expSha = expBytes ? sha256Of(expBytes) : undefined;
   const runId = f.run !== undefined && !f.check && statusBase ? f.run : undefined;
+  // live F4 (s19): an ended run (done/failed/blocked) takes no more writes — a probe with its --run would reopen it
+  // (phase back to measuring) and lose the verifier's `blocked` the same way a --status write would
+  if (runId !== undefined) {
+    const prev = readStatus(statusBase);
+    if (prev && prev !== "v1" && prev.runId === runId && TERMINAL_PHASES.includes(prev.phase)) {
+      console.error(`verify-probe: run ${runId} already ended at ${prev.phase}${prev.detail ? ` (${prev.detail})` : ""} — start a new run with --new-run`);
+      return 2;
+    }
+  }
   // M-a: a status write the run cache refuses (the sandbox's write scope) is a warning — the probe keeps its exit
   // contract (0/2/3/4) and never crashes on it. Returns false when the write was refused.
   const status = (w: StatusWrite): boolean => {

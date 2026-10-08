@@ -549,6 +549,11 @@ function statusRun(screen, f, usage) {
     return 2;
   }
   const sameRun = prevV2 && prevV2.runId === runId ? prevV2 : null;
+  if (sameRun && TERMINAL_PHASES.includes(sameRun.phase)) {
+    console.error(`run ${runId} already ended at ${sameRun.phase}${sameRun.detail ? ` (${sameRun.detail})` : ""} \u2014 start a new run with --new-run
+` + usage);
+    return 2;
+  }
   const S = path3.basename(base), dir = path3.dirname(base);
   const cache = runCacheDir(dir);
   inRunCache(dir, () => {
@@ -1093,7 +1098,17 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
   v.artifacts = artifacts;
   const hand = Array.isArray(v.deltas) ? v.deltas.filter((d) => !isRecordedDelta(d)) : [];
   if (hand.length) notes.push(`${hand.length} row(s) in verification.deltas were not written by --record-plan and are replaced by the report's open deltas (${hand.map((d) => isJsonObject(d) && typeof d.nodeId === "string" ? `${d.nodeId}${typeof d.field === "string" ? ` ${d.field}` : ""}` : JSON.stringify(d).slice(0, 40)).join(", ")}) \u2014 put builder-chosen residuals in deviations[] (with the why), never in verification.deltas`);
+  else if (v.deltas !== void 0 && !Array.isArray(v.deltas)) notes.push(`verification.deltas was a hand-written ${v.deltas === null ? "null" : typeof v.deltas} (${JSON.stringify(v.deltas).slice(0, 60)}), replaced by the report's open deltas (an array) \u2014 the counts are in verification.recorded.counts; put builder-chosen residuals in deviations[] (with the why)`);
   v.deltas = compact;
+  const handText = (x) => typeof x === "string" ? x.trim() : isJsonObject(x) && typeof x.verdict === "string" ? x.verdict.trim() : null;
+  const stale = [];
+  const handHeadline = "headline" in v ? handText(v.headline) : null;
+  if (handHeadline !== null && handHeadline !== recorded.headline.trim()) stale.push(`verification.headline ("${handHeadline.slice(0, 60)}")`);
+  for (const k of ["verdict", "verifyScreenVerdict"]) {
+    const t = handText(v[k]);
+    if (t !== null && t.toLowerCase() !== recorded.verdict.toLowerCase()) stale.push(`verification.${k} ("${t.slice(0, 40)}")`);
+  }
+  if (stale.length) notes.push(`${stale.join(" and ")} \u2014 hand-written, and not what this report says (verdict "${recorded.verdict}"); stale beside verification.recorded, which is the record \u2014 update or remove ${stale.length > 1 ? "them" : "it"} by hand`);
   if (b.ran) {
     const tool = b.axe && "version" in b.axe ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks";
     v.a11y = { tool, violations: b.summary.fail, warnings: b.summary.warn, report: reportAt };
@@ -3204,9 +3219,10 @@ function compare(expectation, measured, opts) {
       ...ifDefined("revealedBy", str(hit.revealedBy)),
       ...ifDefined("overridden", overridden)
     } : {};
+    const saidBy = fromProbe ? "probe said" : "agent evidence said";
     const scoped = descopeFor(i);
     if (scoped) return Object.assign(row, { result: "descoped", detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`, ...worked ? { note: "descoped but works \u2014 the probe drove it successfully; drop the descope?" } : {} });
-    if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned", detail: `destination ${i.destinationId} is not in this Figma file's export \u2014 nothing designed to check it against${hit && hit.detail ? `; probe said: ${hit.detail}` : ""}` });
+    if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned", detail: `destination ${i.destinationId} is not in this Figma file's export \u2014 nothing designed to check it against${hit && hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}` });
     if (!hit) return Object.assign(row, { result: "not-probed", detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
     if (hit.result === "not-probed" || hit.ok === null || hit.ok === void 0) return Object.assign(row, { result: "not-probed", ...ifDefined("detail", hit.detail), ...probeBound ? said : {} });
@@ -3215,7 +3231,7 @@ function compare(expectation, measured, opts) {
       return Object.assign(row, { result: "not-probed", detail: `probe pass without the destination tag inside the opened element (D41) \u2014 tag the root of what opens with data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
     if (!worked || !hit.selector) {
-      return Object.assign(row, { result: "not-probed", detail: `reported ok without evidence \u2014 ${(gaps || []).join("; ")}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
+      return Object.assign(row, { result: "not-probed", detail: `reported ok without evidence \u2014 ${(gaps || []).join("; ")}${hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
     return Object.assign(row, { result: "pass", ...ifDefined("detail", hit.detail), selector: hit.selector, selectorCount: count, ...said });
   });
@@ -3414,7 +3430,7 @@ function compare(expectation, measured, opts) {
   const buildNow = isBuildIdentity(buildRaw) ? buildRaw : void 0;
   if (buildRaw !== void 0 && !buildNow && !inputNotes.some((n) => n.startsWith("measured.build "))) inputNotes.push("measured.build is not a build identity; ignored (build: unknown)");
   if (opts.status && opts.status.status === "v1") inputNotes.push(`${opts.status.file} is an older hand-written status (no run id, no shas) \u2014 not checked; write it with verify-screen --status`);
-  const runId = typeof measured.runId === "string" && measured.runId ? measured.runId : st ? st.runId : void 0;
+  const runId = measuredRun ?? (st && unboundNote === void 0 ? st.runId : void 0);
   if (probeRaw !== void 0 && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
   const inputs = {
     expectationSchema: expectation.schema || "(none)",
@@ -4094,7 +4110,7 @@ function main(argv) {
       workspace root its dependencies are hoisted to, never past .git; the OS temp dir, not shared between sandboxed and unsandboxed
       commands, with no package.json or Yarn PnP) \u2014 <dir> resolves against the cwd \u2014 outside every dev-server
       watch, so a heartbeat never reloads the page being measured \u2014 and prints \`run <id> rev <n>\` (stdout), the live file and the run's
-      stage dir (stderr). Without --run it continues only a run that has not ended (else exit 2). \`done\` checks first \u2014 refuses (exit 1)
+      stage dir (stderr). A run that has ended (done/failed/blocked) takes no more writes, with or without --run (exit 2: start a --new-run). \`done\` checks first \u2014 refuses (exit 1)
       a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or
       not the one the probe recorded in this run \u2014 then publishes, records the sha256 of <Screen>.expected/.measured.json (and
       .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every

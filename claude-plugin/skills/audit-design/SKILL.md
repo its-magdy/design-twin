@@ -82,8 +82,13 @@ stops the run):
 
 ```
 find design/export/pages -name '*.json' ! -name '*.vars.json' ! -name '*.assets.json' ! -name index.json -print0 | \
-  xargs -0 node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" --design-system design/export/design-system
+  xargs -0 node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" --design-system design/export/design-system \
+  --out design/audit/<name>.cross
 ```
+
+Without `--out` the cross-check report only prints; `--out <base>` writes `<base>.json` and `<base>.md`. For one screen use
+`--out design/audit/<Screen>__<id>.cross` — the name a plan's `auditGate.crossCheckFile` points at; for this whole-export run
+pick a name that says so (`design/audit/export.cross`). Where `xargs` is not allowed, pass the screen files as arguments.
 
 Its `token-pair-contrast` table lists each failing token pair once, with the screens and nodes that draw it:
 report the pair once, not once per screen.
@@ -147,6 +152,12 @@ report the pair once, not once per screen.
    one node ended up with `people.md`/`members.md` byte-identical, and the same node twice as
    `team-rules.md`/`Team_Settings.md`). Pass `--out` explicitly only if the user asks for
    a specific filename.
+
+   **If it refuses** ("node … already has an audit report at <file> — refusing to also write …"), a report
+   for this node already exists under another name (a legacy name, or one a person typed). Read the message
+   and take its first option: write to that existing name (pass it as `--out`, minus the extension), so the
+   screen keeps one report pair; or pass `--force` to write the default name anyway, and then retire the old
+   pair (and re-point the plan's `auditGate.auditFile` / `crossCheckFile`), or the node ends up with two reports.
 
    **`--design-system` is what makes this a real audit rather than a self-consistent one.** Without
    it every check reasons inside the screen's own JSON, and the token-binding table means "this node

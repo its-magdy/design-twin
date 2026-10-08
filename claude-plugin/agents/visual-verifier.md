@@ -62,11 +62,12 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Screen> --phase 
 ```
 
 Use the run id the caller gave you; with none, your first call uses `--new-run` instead of `--run` and
-prints `run <id> rev <n>`. Phases, in order: `queued` → `starting` → `renderer-found` → `renderer-ready` →
+prints `run <id> rev <n>`. A run id is good for ONE pass: once it ended (`done`, `failed`, `blocked`) every write to it
+is refused (exit 2) — if the id you were given has already ended, start a new run with `--new-run` and say so. Phases, in order: `queued` → `starting` → `renderer-found` → `renderer-ready` →
 `measuring` → `measured` → `driving` → `done` (or `failed`, or `blocked`). On web the probe writes
 `measuring` and `measured` itself when you pass it `--run <id>`. `measured` (and `done`) checks the file: `<Screen>.measured.json`
 must exist and name the current expectation (on native, write it before sending `measured`). Without `--run` a call only continues a
-run that has not ended; after `done`/`failed`/`blocked` pass `--run <id>` or `--new-run` (exit 2 otherwise).
+run that has not ended; a run that ended (`done`/`failed`/`blocked`) takes no more writes, with or without `--run <id>` (exit 2): an ended `blocked` stays `blocked` — the orchestrator reports its detail and never overwrites it with `done`; to retry, the next attempt starts a new run with `--new-run`.
 Write `failed` with the reason if you give up, so the last phase is never left hanging. The caller waits with
 `verify-screen.js --wait <Screen> --run <id>` (exit 0 done, 1 failed/blocked, 5 timeout or no progress, 6 run cache not accessible), which
 is why the status must move at every step.
@@ -115,6 +116,7 @@ elsewhere), suggest `server.watch.ignored: ['**/design/**']` (Vite) or a Tailwin
 **Scratch files go in the run cache too.** Any throwaway script or probe you write to look at something goes in
 `node_modules/.cache/designtwin-verify/scratch/` (project-local, writable from the project root, created on demand) —
 never under `src/` or `design/`, where the project's linter, type-checker and dev server pick it up. Delete it when done.
+Write a script with the Write tool (e.g. `scratch/drive.cjs`), never a shell heredoc (`cat <<EOF`) or `node -e`: Claude Code asks for approval of those for a script with braces and quotes, while the Write tool is allowed under this directory by `Edit(node_modules/.cache/designtwin-verify/**)` (Claude Code checks file writes against `Edit(...)` rules only; a `Write(...)` path rule is never consulted).
 
 ## 2a. Process, permission and time limits
 
@@ -133,7 +135,8 @@ never under `src/` or `design/`, where the project's linter, type-checker and de
     to get round it.
   Either way, after that write status phase `blocked` (detail = the denied command) and hand back "blocked on
   permissions: done / remaining", suggesting the owner approve it or add a narrow allow rule for
-  `node …/verify-probe.js` / `node …/verify-screen.js`.
+  `node …/verify-probe.js` / `node …/verify-screen.js`, and `Edit(node_modules/.cache/designtwin-verify/**)` when it was
+  your own scratch script or staged evidence that was denied.
 - **Bounded runs.** The probe stops itself at `--max-time` (default 180000 ms) with exit 4 and nothing written.
   Re-run it ONCE after an exit 4 (with `--run` its exit 3/4 bumps the status, phase still `measuring`), then write
   status `failed` with the navigation log — never a loop.
