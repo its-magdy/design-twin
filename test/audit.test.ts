@@ -11,7 +11,10 @@ import type { AuditInput, AuditOptions } from "../design-to-code/audit.ts";
 import type { AuditFinding, CatalogComponent, ComponentsCatalog, CrossCheckFinding, IrNode, ScreenAssetsDoc, TokensDoc } from "../design-to-code/types.ts";
 import { locateAuditFile, auditGateStatus } from "../design-to-code/audit-gate.ts";
 import { check, report } from "./assert.ts";
-import { catalog as catalog1, codeMap, malformed, must, node, parseAs, readFixture, screenExport } from "./fixtures.ts";
+import { catalog as catalog1, codeMap, malformed, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
+import { findExportNeighbours } from "../design-to-code/design-system-dir.ts";
+import type { ExportNeighbours } from "../design-to-code/design-system-dir.ts";
+import { isDisabledLayer, outermostControl } from "../design-to-code/control-kind.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
 import { isAuditReport, isComponentsCatalog, isScreenAssetsDoc } from "../design-to-code/doc-guards.ts";
@@ -946,6 +949,261 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   const p = (n: string) => props.find((x) => x.name === n);
   check(`[F47 audit] the audit's cross-file proposals are labelled: Sidebar alreadyMapped + shared with 1, Card shared with 1, Tile screen-only (got ${JSON.stringify(props.map((x) => [x.name, x.alreadyMapped, x.sharedWith]))})`,
     r.status === 0 && p("Sidebar")?.alreadyMapped === true && p("Sidebar")?.sharedWith === 1 && p("Card")?.sharedWith === 1 && p("Tile")?.sharedWith === 0 && p("Tile")?.alreadyMapped === undefined);
+}
+
+// ================================================================ field tests, group 18 (G18-A: audit design-data checks)
+console.log("field-test group 18:");
+{
+  // T1 DT-37: one component's text layer — its own copy on one instance, the component's default on another.
+  const mc = { name: "Type=Default", key: "k-card-v", setKey: "k-card", setName: "Field Card" };
+  const card = (id: string, text: string, extra: Partial<NodeInput> = {}, textExtra: Partial<NodeInput> = {}): NodeInput =>
+    ({ id, type: "INSTANCE", name: "Field Card", mainComponent: mc, component: "Type=Default", ...extra, children: [{ id: `I${id};9:2`, type: "TEXT", name: "Label", text, autoResize: "height", ...textExtra }] });
+  const own = { overrides: [{ id: "I31:2;9:2", fields: ["characters", "styledTextSegments"] }] };
+  const run = (nodes: NodeInput[]) => audit(g4([{ id: "31:1", type: "FRAME", name: "Details", children: nodes }], "Details"), { platform: "web" });
+  const res = run([card("31:2", "Sizes", own), card("31:3", "Summary")]);
+  const f = codes(res, "default-copy-in-instance");
+  check("[T1 DT-37] an instance still showing the default copy beside one with its own → ONE info naming both copies",
+    f.length === 1 && f[0]?.severity === "info" && f[0].nodeId === "I31:3;9:2" && JSON.stringify(f[0].nodeIds) === JSON.stringify(["I31:3;9:2"])
+    && f[0].copies?.default === "Summary" && JSON.stringify(f[0].copies.overridden) === JSON.stringify(["Sizes"]) && /'Field Card' > 'Label'/.test(f[0].message));
+  check("[T1 DT-37] …and asks the designer", res.questions.some((q) => /still says "Summary" \(the component's default\)/.test(q)));
+  check("[T1 DT-37] negative: no instance overrides the layer → nothing to compare against", codes(run([card("31:3", "Summary"), card("31:4", "Summary")]), "default-copy-in-instance").length === 0);
+  const prop = { propRefs: { characters: "Label#1:0" } };
+  check("[T1 DT-37] negative: a text a TEXT property drives (propRefs.characters) is not judged by overrides",
+    codes(run([card("31:2", "Sizes", own, prop), card("31:3", "Summary", {}, prop)]), "default-copy-in-instance").length === 0);
+  const capped = { overrides: [{ id: "I31:2;9:2", fields: ["characters"] }, ...Array.from({ length: 99 }, (_, i) => ({ id: `I31:2;8:${i}`, fields: ["fills"] }))] };
+  check("[T1 DT-37] negative: an instance whose override list hit the plugin's 100-entry cap is not judged",
+    codes(run([card("31:2", "Sizes", capped), card("31:3", "Summary")]), "default-copy-in-instance").length === 0);
+  check("[T1 DT-37] negative: a default copy equal to an overridden one is a real value",
+    codes(run([card("31:2", "Sizes", own), card("31:3", "Sizes")]), "default-copy-in-instance").length === 0);
+}
+{
+  // T2 F-55: a prototype target that was never exported.
+  const opener = (dest: string, navigation: string, extra: Partial<NodeInput> = {}): NodeInput => ({ id: "40:2", type: "FRAME", name: "Export button", ...extra,
+    reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: dest, destination: "Export Dialog", navigation }] }] });
+  const neighbours = (ids: string[], shots: string[] = []) => ({ layers: [{ id: "40:1", name: "Reports", file: "pages/Main/Reports__40_1.json" }], unexportedShots: shots, exportedIds: new Set(ids) });
+  const run = (kids: NodeInput[], nb: ExportNeighbours | null) => audit(g4([{ id: "40:1", type: "FRAME", name: "Reports", children: kids }], "Reports"), { platform: "web", neighbours: nb });
+  const overlay = run([opener("9:9", "overlay")], neighbours(["40:1"]));
+  const w = codes(overlay, "prototype-target-not-exported");
+  const row = codes(overlay, "prototype-navigation")[0];
+  check("[T2 F-55] an overlay target in no index → ONE warning naming it and the opener", w.length === 1 && w[0]?.severity === "warning" && /'Export Dialog' \(9:9\) opened by 'Export button'/.test(w[0].message) && JSON.stringify(w[0].ids) === JSON.stringify(["9:9"]));
+  check("[T2 F-55] …and its prototype-navigation row says NOT exported (exported:false)", row?.exported === false && / — NOT exported$/.test(row.message));
+  const nav = run([opener("9:9", "navigate")], neighbours(["40:1"]));
+  check("[T2 F-55] a navigate-only target: no warning, the row is annotated", codes(nav, "prototype-target-not-exported").length === 0 && codes(nav, "prototype-navigation")[0]?.exported === false);
+  const listed = run([opener("9:9", "overlay")], neighbours(["40:1", "9:9"]));
+  check("[T2 F-55] a target some index lists → nothing", codes(listed, "prototype-target-not-exported").length === 0 && codes(listed, "prototype-navigation")[0]?.exported === undefined);
+  const drawn = run([opener("40:5", "overlay"), { id: "40:5", type: "FRAME", name: "Export Dialog", hidden: true }], neighbours(["40:1"]));
+  check("[T2 F-55] a target drawn inside this tree (even hidden) → nothing", codes(drawn, "prototype-target-not-exported").length === 0);
+  const shot = run([opener("9:9", "swap")], neighbours(["40:1"], ["9:9"]));
+  check("[T2 F-55] a swap target screenshotted but not exported → the warning says so", /screenshotted only \(assets\/9_9_ref\.png\)/.test(codes(shot, "prototype-target-not-exported")[0]?.message ?? ""));
+  const none = run([opener("9:9", "overlay")], null);
+  check("[T2 F-55] no index beside the screen → no claim either way", codes(none, "prototype-target-not-exported").length === 0 && codes(none, "prototype-navigation")[0]?.exported === undefined);
+  // End to end: the page index (pages/<dir>/index.json) lists the dialog the root index does not.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "audit-f55-"));
+  const put = (rel: string, body: object): void => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(body)); };
+  put("design/export/pages/index.json", { pageDirs: [{ page: "Main", dir: "Main", index: "pages/Main/index.json", layers: 2 }], layers: [{ id: "40:1", name: "Reports", page: "Main", file: "pages/Main/Reports__40_1.json" }] });
+  put("design/export/pages/Main/index.json", { page: "Main", layers: [{ id: "40:1", name: "Reports", file: "pages/Main/Reports__40_1.json" }, { id: "9:9", name: "Export Dialog", file: "pages/Main/Export_Dialog__9_9.json" }] });
+  put("design/export/pages/Main/Reports__40_1.json", screenExport([{ id: "40:1", type: "FRAME", name: "Reports", children: [opener("9:9", "overlay"), opener("9:8", "overlay", { id: "40:3", name: "Share button" })] }], { screen: "Reports" }));
+  const nb = findExportNeighbours(path.join(root, "design/export/pages/Main/Reports__40_1.json"));
+  check("[T2 F-55] findExportNeighbours: exportedIds = the root index's rows ∪ every page index's; layers stay the root's", !!nb?.exportedIds?.has("9:9") && nb.layers.length === 1);
+  const cliOut = parseAs(execFileSync(process.execPath, [cli, "design/export/pages/Main/Reports__40_1.json", "--platform", "web", "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isAuditReport, "audit --json");
+  const cw = codes(cliOut, "prototype-target-not-exported");
+  check("[T2 F-55 CLI] a target only the page index lists is exported; the other is the one warned about", cw.length === 1 && JSON.stringify(cw[0]?.ids) === JSON.stringify(["9:8"]));
+}
+{
+  // T3 DT-63: a control's border against the colour AROUND it (WCAG 1.4.11), one finding per stroke/backdrop pair.
+  const field = (id: string, opts: { fill?: string; stroke?: string; variant?: string; text?: string } = {}): NodeInput => ({
+    id, type: "INSTANCE", name: "input Field", component: opts.variant ?? "Status=Default",
+    mainComponent: { name: opts.variant ?? "Status=Default", key: "k-in-v", setKey: "k-in", setName: "input Field" },
+    children: [{ id: `I${id};63:14`, type: "FRAME", name: "Text Input", box: { w: 320, h: 40 },
+      strokes: { colors: [opts.stroke ?? "#46464f"], weight: 1, align: "inside" }, tokens: { strokes: "border/default", fills: "surface/input" },
+      fills: [{ type: "solid", color: opts.fill ?? "#292931", tokens: { color: "surface/input" } }],
+      children: [{ id: `I${id};63:15`, type: "TEXT", name: "Option 1", text: opts.text ?? "Enter a name", autoResize: "height", font: { size: 14, color: "#d4d4d4" } }] }],
+  });
+  const page = (kids: NodeInput[], fill: string | null = "#121319") => audit(g4([{ id: "41:1", type: "FRAME", name: "Settings",
+    ...(fill ? { fills: [{ type: "solid" as const, color: fill, tokens: { color: "surface/page" } }] } : {}), children: kids }], "Settings"), { platform: "web" });
+  const one = page([field("41:2")]);
+  const f = codes(one, "non-text-contrast");
+  const want = contrastRatio(must(parseHex("#46464f"), "stroke"), must(parseHex("#121319"), "page"));
+  check(`[T3 DT-63] #46464f border on a #121319 page (fill #292931 does not rescue it) → one warning ≈${want.toFixed(2)}:1, required 3, tokens named`,
+    f.length === 1 && f[0]?.severity === "warning" && f[0].nodeId === "I41:2;63:14" && Math.abs((f[0].ratio ?? 0) - want) < 0.01 && f[0].required === 3
+    && f[0].stroke === "#46464f" && f[0].backdrop === "#121319" && f[0].strokeToken === "border/default" && f[0].backdropToken === "surface/page" && /1\.4\.11/.test(f[0].message));
+  check("[T3 DT-63] visible text inside the field does not exempt it (the finding above has a placeholder)", f.length === 1);
+  const two = codes(page([field("41:2"), field("41:3")]), "non-text-contrast");
+  check("[T3 DT-63] two fields with the same pair → ONE finding listing both", two.length === 1 && JSON.stringify(two[0]?.nodeIds) === JSON.stringify(["I41:2;63:14", "I41:3;63:14"]));
+  check("[T3 DT-63] a fill that reaches 3:1 against the page marks the boundary → nothing", codes(page([field("41:2", { fill: "#ffffff" })]), "non-text-contrast").length === 0);
+  check("[T3 DT-63] a disabled variant is exempt (inactive components)", codes(page([field("41:2", { variant: "Status=Disabled" })]), "non-text-contrast").length === 0);
+  const assumed = codes(page([field("41:2", { stroke: "#d4d4d8", fill: "#fafafa" })], null), "non-text-contrast");
+  check("[T3 DT-63] nothing painted behind → measured on an assumed white page, info", assumed.length === 1 && assumed[0]?.severity === "info" && /assumed white page/.test(assumed[0].message));
+  check("[T3 DT-63] a stroked layer that is no control (a card) is not judged",
+    codes(page([{ id: "41:9", type: "FRAME", name: "Summary Card", strokes: { colors: ["#46464f"], weight: 1 }, fills: [{ type: "solid", color: "#292931" }] }]), "non-text-contrast").length === 0);
+  // The backdrop refactor keeps text contrast as it was: the placeholder's low-contrast is still measured on the composited fill.
+  const lc = codes(page([field("41:2", { text: "Enter a name" })], "#121319"), "low-contrast");
+  check("[T3 DT-63] text contrast still composites the same backdrop (#d4d4d4 on #292931 passes — no low-contrast)", lc.length === 0);
+}
+{
+  // T4 F-48: selects.
+  check("[T4 F-48] controlKind: Dropdown / Select / Date Picker / Combo box are selects; Text Field stays an input",
+    controlKind("Dropdown") === "select" && controlKind("Select Field") === "select" && controlKind("Date Picker") === "select" && controlKind("Combo box") === "select" && controlKind("Text Field") === "input" && controlKind("Search") === "input");
+  const input = (id: string, kids: NodeInput[]): NodeInput => ({ id, type: "INSTANCE", name: "input Field", component: "Status=Default",
+    mainComponent: { name: "Status=Default", key: "k-in-v", setKey: "k-in", setName: "input Field" }, children: [{ id: `I${id};1`, type: "FRAME", name: "Text Input", children: kids }] });
+  const prompt = (id: string, text: string): NodeInput => ({ id, type: "TEXT", name: "Option 1", text, autoResize: "height" });
+  const run = (kids: NodeInput[], cat?: ComponentsCatalog) => audit(g4([{ id: "42:1", type: "FRAME", name: "Add Item Dialog", children: kids }], "Add Item"), { platform: "web", ...(cat ? { designSystem: { components: cat } } : {}) });
+  const res = run([input("42:2", [prompt("42:3", "Select a size")])]);
+  const f = codes(res, "undesigned-open-state");
+  check("[T4 F-48] a generic input showing \"Select a size\" → info + one question", f.length === 1 && f[0]?.severity === "info" && f[0].nodeId === "42:2" && /\("Select a size"\) reads like a select\/picker/.test(f[0].message)
+    && res.questions.some((q) => /'input Field' 42:2 \("Select a size"\) reads like a select\/picker/.test(q)));
+  const chevron = run([input("42:2", [prompt("42:3", "Sizes"), { id: "42:4", type: "INSTANCE", name: "chevron-down", mainComponent: { name: "chevron-down", key: "k-chev" }, asset: "assets/chev.svg" }])]);
+  check("[T4 F-48] …or one with a visible chevron layer", codes(chevron, "undesigned-open-state").length === 1);
+  const hiddenChevron = run([input("42:2", [prompt("42:3", "Sizes"), { id: "42:4", type: "INSTANCE", name: "chevron-down", hidden: true }])]);
+  check("[T4 F-48] a hidden chevron and a plain prompt → nothing", codes(hiddenChevron, "undesigned-open-state").length === 0);
+  const withOpen = catalog1([{ name: "input Field", type: "COMPONENT_SET", key: "k-in", props: { Status: { type: "VARIANT", options: ["Default", "Focus", "Error", "Disabled", "Open"] } } }]);
+  check("[T4 F-48] the component's variants already draw it open (Status=Open) → nothing", codes(run([input("42:2", [prompt("42:3", "Select a size")])], withOpen), "undesigned-open-state").length === 0);
+  const dd = run([{ id: "42:5", type: "INSTANCE", name: "Dropdown", mainComponent: { name: "State=Default", key: "k-dd-v", setKey: "k-dd", setName: "Dropdown" } }],
+    catalog1([{ name: "Dropdown", type: "COMPONENT_SET", key: "k-dd", props: { State: { type: "VARIANT", options: ["Default", "Hover", "Focus", "Disabled"] } } }]));
+  check("[T4 F-48 / L-3] a catalog Dropdown with no open or error variant → missing-component-states lists `error` and `open` (a select in a form validates)",
+    dd.components.find((c) => c.name === "Dropdown")?.kind === "select" && JSON.stringify(codes(dd, "missing-component-states")[0]?.missing) === JSON.stringify(["error", "open"]));
+}
+{
+  // T5 F-83: an unbound colour a hair off a token.
+  const vars = tokens({ collections: [{ name: "Colors", modes: ["Dark"], default: "Dark", key: "c-col" }],
+    variables: [{ name: "gray/900", collection: "Colors", key: "v-g900", type: "COLOR", values: { Dark: "#121319" } }] });
+  const run = (hex: string) => audit(g4([{ id: "43:1", type: "FRAME", name: "Footer page", children: [{ id: "43:2", type: "FRAME", name: "Footer", fills: [{ type: "solid", color: hex }] }] }], "Footer page"), { platform: "web", variables: vars });
+  const near = codes(run("#121318"), "near-token-color");
+  check("[T5 F-83] raw #121318 beside token #121319 → info naming the token", near.length === 1 && near[0]?.severity === "info" && near[0].token === "gray/900" && near[0].nodeId === "43:2" && /ΔE 0\.\d+ from token 'gray\/900' \(#121319\)/.test(near[0].message));
+  check("[T5 F-83] a raw colour EQUAL to a token value is not this finding", codes(run("#121319"), "near-token-color").length === 0);
+  const mid = "#16171d", d = deltaE(must(parseHex(mid), "mid"), must(parseHex("#121319"), "token"));
+  check(`[T5 F-83] ΔE ${d.toFixed(2)} (between 1 and 3) is a different colour → nothing`, d >= 1 && d < 3 && codes(run(mid), "near-token-color").length === 0);
+}
+{
+  // T6 DT-58: the markdown names where a finding sits — the last three layers of its path.
+  const res = audit(g4([{ id: "44:1", type: "FRAME", name: "A", children: [{ id: "44:2", type: "FRAME", name: "B", children: [{ id: "44:3", type: "FRAME", name: "C", children: [
+    { id: "44:4", type: "TEXT", name: "D", text: "Deep" }] }] }, { id: "44:5", type: "TEXT", name: "E", text: "Shallow" }] }], "A"), { platform: "web" });
+  const md = toMarkdown(res).split("\n");
+  const deep = md.find((l) => l.includes("`fixed-size-text`") && l.includes("`44:4`")) ?? "";
+  const shallow = md.find((l) => l.includes("`fixed-size-text`") && l.includes("`44:5`")) ?? "";
+  check(`[T6 DT-58] a deep finding's line ends with the path tail (got ${JSON.stringify(deep.slice(-40))})`, deep.endsWith(" in A (… > B > C > D)"));
+  check("[T6 DT-58] a short path is printed whole", shallow.endsWith(" in A (A > E)"));
+  const bareMd = toMarkdown({ ...res, findings: [{ severity: "info", code: "near-duplicate-colors", id: "near-duplicate-colors", message: "m", nodeId: "44:9", screen: "A" }] });
+  check("[T6 DT-58] a finding with no path gains nothing", bareMd.split("\n").includes("- `near-duplicate-colors` m — node `44:9` in A"));
+  check("[T6 DT-58] the JSON keeps the full path", codes(res, "fixed-size-text").find((f) => f.nodeId === "44:4")?.path === "A > B > C > D");
+}
+{
+  // T7 F-87: a stray absolute copy laid over the frame.
+  const footer = (id: string, extra: Partial<NodeInput> = {}, w = 1160): NodeInput => ({ id, type: "FRAME", name: "Footer", box: { w, h: 60 }, ...extra,
+    children: [{ id: `${id}t`, type: "TEXT", name: "Copyright", text: "© 2026 Sample App", autoResize: "width_and_height" }] });
+  const run = (kids: NodeInput[]) => audit(g4([{ id: "45:1", type: "FRAME", name: "Settings", box: { x: 100, y: 0, w: 1440, h: 1300 }, layout: { display: "flex", flexDirection: "column" }, children: [
+    { id: "45:2", type: "FRAME", name: "Main", box: { w: 1160, h: 1240 }, children: [footer("45:3")] }, ...kids] }], "Settings"), { platform: "web" });
+  const stray = codes(run([footer("45:9", { absolute: true, box: { x: 380, y: 1182, w: 1160, h: 60 } })]), "duplicate-root-subtree");
+  check("[T7 F-87] an absolute root child with the same texts and size as an in-flow node → warning with twinId and position",
+    stray.length === 1 && stray[0]?.severity === "warning" && stray[0].nodeId === "45:9" && stray[0].twinId === "45:3" && /at 280,1182 duplicates 'Footer' \(45:3\)/.test(stray[0].message));
+  check("[T7 F-87] a hidden copy → nothing", codes(run([footer("45:9", { absolute: true, hidden: true, box: { x: 380, y: 1182, w: 1160, h: 60 } })]), "duplicate-root-subtree").length === 0);
+  check("[T7 F-87] an in-flow copy (not absolute) → nothing", codes(run([footer("45:9")]), "duplicate-root-subtree").length === 0);
+  check("[T7 F-87] an absolute copy of another size → nothing", codes(run([footer("45:9", { absolute: true, box: { x: 380, y: 1182, w: 900, h: 60 } }, 900)]), "duplicate-root-subtree").length === 0);
+}
+// ================================================================ review 1 of groups 18+19, fix pass 1 (D127)
+console.log("field-test group 18 — fix pass 1:");
+{
+  // Fixtures: an input instance (its fill on the instance, or none) holding an inner frame that carries the border.
+  const field = (id: string, o: { instFill?: string; innerFill?: string; stroke?: string[]; variant?: string; props?: Record<string, string | boolean>; inner?: Partial<NodeInput> } = {}): NodeInput => ({
+    id, type: "INSTANCE", name: "input Field", ...(o.props ? { props: o.props } : {}),
+    mainComponent: { name: o.variant ?? "State=Default", key: "k-fx-v", setKey: "k-fx", setName: "input Field" },
+    ...(o.instFill ? { fills: [{ type: "solid" as const, color: o.instFill }] } : {}),
+    children: [{ id: `I${id};2`, type: "FRAME", name: "Container", box: { w: 320, h: 40 }, strokes: { colors: o.stroke ?? ["#3a3a3a"], weight: 1, align: "inside" },
+      ...(o.innerFill ? { fills: [{ type: "solid" as const, color: o.innerFill }] } : {}), ...(o.inner || {}) }],
+  });
+  const page = (kids: NodeInput[], fill = "#121212", extra: Partial<NodeInput> = {}) => audit(g4([{ id: "50:1", type: "FRAME", name: "Profile", fills: [{ type: "solid", color: fill, tokens: { color: "surface/page" } }], ...extra, children: kids }], "Profile"), { platform: "web" });
+  const ntc = (kids: NodeInput[], fill?: string) => codes(page(kids, fill), "non-text-contrast");
+
+  // M-2: the stroke is measured against the colour OUTSIDE the control, also when fill and border sit on different layers.
+  const split = ntc([field("50:2", { instFill: "#2a2a2a", stroke: ["#6b6b6b"] })], "#ffffff");
+  check("[M-2] fill on the instance, border on an inner frame: #6b6b6b passes 5.3:1 against the white page around the control → nothing (never measured against the control's own #2a2a2a)", split.length === 0);
+  const splitFail = ntc([field("50:2", { instFill: "#2a2a2a", stroke: ["#3a3a3a"] })]);
+  check("[M-2] …and a border that fails is measured against the page (#121212, 1.65:1), not the instance's fill (#2a2a2a)",
+    splitFail.length === 1 && splitFail[0]?.backdrop === "#121212" && Math.abs((splitFail[0].ratio ?? 0) - 1.65) < 0.01 && splitFail[0].backdropToken === "surface/page");
+  check("[M-2] a faint #f0f0f0 border (1.1:1 on the white page) around an instance filled #1f1f1f: the instance's fill draws the boundary (the rescue reads the control's layers down to the border)",
+    ntc([field("50:2", { instFill: "#1f1f1f", stroke: ["#f0f0f0"] })], "#ffffff").length === 0);
+  check("[M-2] same colours on one layer → same verdict; with no fill at all → a finding",
+    ntc([field("50:2", { innerFill: "#1f1f1f", stroke: ["#f0f0f0"] })], "#ffffff").length === 0 && ntc([field("50:2", { stroke: ["#f0f0f0"] })], "#ffffff").length === 1);
+
+  // M-5: a disabled variant modelled as a True/False property is exempt, like State=Disabled.
+  check("[M-5] 'Size=M, Disabled=True' is a disabled variant → exempt", ntc([field("50:2", { variant: "Size=M, Disabled=True", props: { Size: "M", Disabled: "True" } })]).length === 0);
+  check("[M-5] a BOOLEAN prop `Disabled: true` → exempt", ntc([field("50:2", { variant: "Size=M", props: { Size: "M", Disabled: true } })]).length === 0);
+  check("[M-5] negative: 'Disabled=False', and a TEXT prop whose copy says \"Inactive\", are not disabled",
+    ntc([field("50:2", { variant: "Size=M, Disabled=False", props: { Label: "Inactive" } })]).length === 1);
+  check("[M-5] isDisabledLayer: one rule for audit and cross-check",
+    isDisabledLayer({ mainComponent: { name: "State=Disabled" } }) && isDisabledLayer({ mainComponent: { name: "Disabled=Yes, Size=S" } }) && isDisabledLayer({ props: { "Is Disabled": "on" } })
+    && !isDisabledLayer({ mainComponent: { name: "Disabled=Off" } }) && !isDisabledLayer({ props: { Status: "Inactive" } }));
+
+  // L-2: a fully transparent stroke paints no border.
+  check("[L-2] a 0-opacity stroke (#46464f00) is not reported as a 1:1 border", ntc([field("50:2", { stroke: ["#46464f00"] })]).length === 0);
+  const second = ntc([field("50:2", { stroke: ["#46464f00", "#3a3a3a"] })]);
+  check("[L-2] …the first VISIBLE stroke colour is the one measured", second.length === 1 && second[0]?.stroke === "#3a3a3a");
+
+  // L-6: a LINE is a divider, never a control's boundary (as in cross-check).
+  check("[L-6] a LINE inside an input is not measured", ntc([field("50:2", { inner: { type: "LINE", name: "Divider" } })]).length === 0);
+
+  // L-1 / M14: a translucent layer over the page names no backdrop token (the composite is no token's value).
+  const scrim = ntc([{ id: "50:5", type: "FRAME", name: "Scrim", fills: [{ type: "solid", color: "#ffffff1a", tokens: { color: "overlay/scrim" } }], children: [field("50:2")] }]);
+  check("[L-1 M14] under a translucent token-bound scrim the finding names no backdropToken",
+    scrim.length === 1 && scrim[0]?.backdropToken === undefined && !/overlay\/scrim/.test(scrim[0]?.message ?? ""));
+
+  // L-4: toggle words win over select; "Select All" is no select.
+  check("[L-4] controlKind: 'Select All Checkbox' / 'Dropdown Switch' are toggles; 'Select All' is no select; 'Select Field' still is",
+    controlKind("Select All Checkbox") === "toggle" && controlKind("Dropdown Switch") === "toggle" && controlKind("Select All") === null && controlKind("Select Field") === "select");
+
+  // L-1 / M15 + M16: the picker heuristic dedupes nested pickers and skips search fields.
+  const inputInst = (id: string, setName: string, kids: NodeInput[]): NodeInput => ({ id, type: "INSTANCE", name: setName, mainComponent: { name: "State=Default", key: `k-${id}`, setKey: `k-${setName}-${id}`, setName }, children: kids });
+  const prompt = (id: string): NodeInput => ({ id, type: "TEXT", name: "Value", text: "Select a size", autoResize: "height" });
+  const pick = (kids: NodeInput[]) => codes(audit(g4([{ id: "51:1", type: "FRAME", name: "Add Item Dialog", children: kids }], "Add Item"), { platform: "web" }), "undesigned-open-state");
+  const nested = pick([inputInst("51:2", "input Field", [inputInst("51:3", "Text Field", [prompt("51:4")])])]);
+  check("[L-1 M15] an input instance nested in another that reads like a picker is ONE finding (the outer one)", nested.length === 1 && JSON.stringify(nested[0]?.nodeIds) === JSON.stringify(["51:2"]));
+  check("[L-1 M16] a Search field with a chevron / a \"Select …\" prompt is no picker",
+    pick([inputInst("51:2", "Search Field", [prompt("51:4"), { id: "51:5", type: "INSTANCE", name: "chevron-down", mainComponent: { name: "chevron-down", key: "k-chev" } }])]).length === 0);
+
+  // M-4: a stray copy is sizeable and has an in-flow twin.
+  const btn = (id: string, extra: Partial<NodeInput> = {}, texts = ["Save"]): NodeInput => ({ id, type: "INSTANCE", name: "Button", mainComponent: { name: "Type=Primary", key: "kb", setKey: "kbs", setName: "Button" }, box: { w: 120, h: 40 }, ...extra,
+    children: texts.map((t, i) => ({ id: `${id}t${i}`, type: "TEXT" as const, name: "Label", text: t, autoResize: "width_and_height" as const })) });
+  const dup = (kids: NodeInput[]) => codes(audit(g4([{ id: "52:1", type: "FRAME", name: "Edit", box: { x: 0, y: 0, w: 390, h: 1600 }, layout: { display: "flex", flexDirection: "column" }, children: kids }], "Edit"), { platform: "web" }), "duplicate-root-subtree");
+  check("[M-4] a small pinned 'Save' button (one text, under half the root's width) beside the form's own is no stray copy",
+    dup([{ id: "52:2", type: "FRAME", name: "Form", box: { w: 390, h: 1500 }, children: [btn("52:3")] }, btn("52:9", { absolute: true, box: { x: 250, y: 1540, w: 120, h: 40 } })]).length === 0);
+  const badge = (id: string, y: number, w = 60): NodeInput => ({ id, type: "FRAME", name: "Badge", absolute: true, box: { x: 10, y, w, h: 24 }, children: [{ id: id + "t", type: "TEXT", name: "t", text: "Beta" }, { id: id + "u", type: "TEXT", name: "u", text: "New" }] });
+  check("[M-4] two identical absolute badges are not each other's in-flow twin", dup([badge("52:4", 10), badge("52:5", 300)]).length === 0);
+  const two = dup([{ id: "52:2", type: "FRAME", name: "Form", box: { w: 390, h: 1500 }, children: [btn("52:3", {}, ["Save", "Draft"])] }, btn("52:9", { absolute: true, box: { x: 250, y: 1540, w: 120, h: 40 } }, ["Save", "Draft"])]);
+  check("[M-4] a small copy with two texts or more is still one (the in-flow twin named)", two.length === 1 && two[0]?.twinId === "52:3");
+}
+{
+  // L-8: an unindexed target may be nested in a SECTION — the warning says where to look before pulling.
+  const res = audit(g4([{ id: "53:1", type: "FRAME", name: "Reports", children: [{ id: "53:2", type: "FRAME", name: "Export button",
+    reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: "9:9", destination: "Export Dialog", navigation: "overlay" }] }] }] }], "Reports"),
+  { platform: "web", neighbours: { layers: [{ id: "53:1", name: "Reports", file: "pages/Main/Reports__53_1.json" }], unexportedShots: [], exportedIds: new Set(["53:1"]) } });
+  check("[L-8] prototype-target-not-exported says 'in no index' and that a SECTION-nested frame has no index row",
+    /are in no index of the export/.test(codes(res, "prototype-target-not-exported")[0]?.message ?? "") && /nested in a SECTION or another frame has no index row/.test(codes(res, "prototype-target-not-exported")[0]?.message ?? ""));
+  // L-5 / L-6 / L-8 docs
+  const skill = readRepo("claude-plugin/skills/audit-design/SKILL.md"), cl = readRepo("claude-plugin/skills/audit-design/references/checklist.md");
+  check("[L-5] audit-design: the loop skips page indexes, and the cross-check run is a runnable command over the screen files only",
+    /case "\$f" in \*\.vars\.json\|\*\.assets\.json\|\*\/index\.json\) continue;; esac/.test(skill)
+    && /find design\/export\/pages -name '\*\.json' ! -name '\*\.vars\.json' ! -name '\*\.assets\.json' ! -name index\.json -print0 \| \\\n\s+xargs -0 node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/cross-check\.js"/.test(skill) && !/<every screen json>/.test(skill));
+  check("[L-6] checklist: the TEXT-property sentence is an instruction (the audit does not judge it); dividers are LINE layers",
+    /The audit does not judge a text\s+driven by a TEXT property/.test(cl) && !/is judged by its `props` value/.test(cl) && /Dividers \(LINE layers\)/.test(cl));
+  check("[L-8] audit-design + checklist: a SECTION-nested target has no index row — search design/export/pages first",
+    /SECTION or in another frame has no index row of its own/.test(skill) && /nested in a SECTION or another frame has no index row/.test(cl));
+}
+{
+  // T8: the skill names the new cross-file codes it merges / reads.
+  const skill = readRepo("claude-plugin/skills/audit-design/SKILL.md");
+  check("[T8 G18 docs] audit-design names `mixed-mode-bindings` (merged) and the cross-check's `token-pair-contrast` table", /`mixed-mode-bindings`/.test(skill) && /`token-pair-contrast`/.test(skill));
+  const qs = readRepo("claude-plugin/skills/audit-design/references/questions.md");
+  check("[T8 G18 docs] questions.md covers the new designer questions (default copy, open state, near-token colour, stray copy, non-text contrast)",
+    ["default-copy-in-instance", "undesigned-open-state", "near-token-color", "duplicate-root-subtree", "non-text-contrast"].every((c) => qs.includes(`\`${c}\``)));
+  // review 2 (D128): a TEXT property's copy never makes a control disabled; a wrapper named like a control is not it
+  check("[D128 M-1] a radio button whose TEXT property reads \"Disabled\" is not a disabled variant; State=Disabled still is",
+    !isDisabledLayer({ mainComponent: { name: "State=Default, Checked=False" }, props: { Text: "Disabled" } })
+    && isDisabledLayer({ mainComponent: { name: "State=Disabled, Checked=False" }, props: { Text: "Label" } })
+    && isDisabledLayer({ props: { State: "Disabled" } }));
+  check("[D128 M-2] the nearest INSTANCE named a control is the control, not a farther wrapper named like one",
+    outermostControl([{ name: "Border", type: "FRAME" }, { name: "Input Field", type: "INSTANCE" }, { name: "Search Panel", type: "FRAME" }]) === 1
+    && outermostControl([{ name: "Border", type: "FRAME" }, { name: "Input Field", type: "FRAME" }, { name: "Search Panel", type: "FRAME" }]) === 2);
+  check("[T8 G18 docs] extract says an audit names the overlays to pull too", /`prototype-target-not-exported`/.test(readRepo("claude-plugin/skills/extract/SKILL.md")));
 }
 
 report();

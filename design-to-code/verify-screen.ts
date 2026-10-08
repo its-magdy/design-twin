@@ -33,12 +33,13 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { walkWithHidden } from "./hidden.ts";
-import { exportContentSha256, fileHashes, gitHead } from "./content-hash.ts";
+import { exportContentSha256, fileHashes, gitHead, planCodeFiles, planCodeSkippedNote } from "./content-hash.ts";
+import { recordPlan, writePlan } from "./plan-record.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
 import { isBuildIdentity, isInteractionEvidenceList, isMeasuredBehaviour, isMeasuredComponentList, isMeasuredVisual, isVisualRegion, isPageIndex, isPageOverflow, isPagesRootIndex, isPlan, isPlanDescope, isPlanWaiver, isProbeIdentity, isProbeReach, isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "./doc-guards.ts";
 import { isPassingVerdict, planInteractionsSha256, waiversHash } from "./plan-waivers.ts";
 import { actionForExpect, isPlanExpect, parseSteps, stepsSha256 } from "./probe-steps.ts";
-import { MEASURED_PHASES, STATUS_PHASES, readStatusAt, statusFile, statusMain, waitMain, writeFileAtomic } from "./verify-run.ts";
+import { MEASURED_PHASES, STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusFile, statusMain, waitMain, writeFileAtomic } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
 import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
@@ -50,7 +51,7 @@ import { CANONICAL_MATCHED_BY } from "./probe-match.ts";
 import type { MatchedBy } from "./probe-match.ts";
 import type {
   Action, ArtifactCheck, BehaviourCheck, BehaviourStatus, BehaviourSummary, Box, CodeInputs, DeltaSeverity, DrawnState, IndexRow, InteractionEvidence, IrNode, JsonValue, LayoutSpec, MeasuredComponent, MeasuredNode, MeasuredStyles,
-  NotComparable, PageOverflowCoverage, Paint, Plan, PlanAnchor, PlanDescope, PlanWaiver, ProbeFrame, Reaction, ReactionTrigger, ReportBehaviour, ReportVisual, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
+  InferredRow, NotComparable, PageOverflowCoverage, Paint, PaintedBy, Plan, PlanAnchor, PlanDescope, PlanWaiver, ProbeFrame, Reaction, ReactionTrigger, ReportBehaviour, ReportVisual, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
   VerifyInteractionResult, VerifyMeasured, VerifyFrame, VerifyReferenceImage, VerifyReferenceUnusable, VerifyAgainst, VerifyReport, VerifyReportV2, VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -354,8 +355,15 @@ function paddingNotShown(n: IrNode, L: LegacyLayout, pad: readonly number[]): Ar
   return out;
 }
 
-/** The drawn state a node inherits from an ancestor that was drawn in one. */
-export interface InheritedState { state: DrawnState; why: string; from: string }
+// F-119 (D112): the notComparable field a line box taller than its fixed text box is listed under; --compare hangs the
+// same why on a line-height delta of that node.
+const TEXT_BOX_HEIGHT = "text box height";
+const lineBoxWhy = (lh: number, h: number): string =>
+  `the line box (${r2(lh)}px) is taller than the fixed text box (${r2(h)}px): Figma lets the line overflow the box — the build chooses: line-height ${r2(lh)} (the text overflows its box, as in Figma) or ${r2(h)} (the glyphs sit about ${r2((lh - h) / 2)}px higher); the TEXT height is not compared`;
+
+/** The drawn state a node inherits from an ancestor that was drawn in one. `from` = the owner's name (for the why),
+ *  `fromId` = its id (F-74, D111: the probe hovers the OWNER, not this node — spec.drawnStateFrom). */
+export interface InheritedState { state: DrawnState; why: string; from: string; fromId: string }
 /** expectNode()'s context: the node's path, its frame (for positions), and any inherited drawn state. */
 export interface ExpectContext { path?: string; frame?: Partial<VerifyFrame> | null; inheritedState?: InheritedState; frameId?: string }
 /** expectNode()'s row: a VerifySpec plus the design values it could not compare, on a NON-enumerable
@@ -379,6 +387,12 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
 
   // `text` is where the producer writes a TEXT node's content (text.ts); the export never carries `characters`.
   if (n.text != null) spec.text = n.text;
+  // F-69 (D114): Figma stores the typed string and applies the text case at render time (font.case) — `text` stays the
+  // stored string, `textCase` says how it renders; --compare judges the RENDERED strings (renderedText). Small caps are
+  // a font variant (smaller capitals), not different characters: not compared.
+  const fcase = n.font ? n.font.case : undefined;
+  if (n.text != null && (fcase === "upper" || fcase === "lower" || fcase === "title")) spec.textCase = fcase;
+  else if (n.text != null && (fcase === "small_caps" || fcase === "small_caps_forced")) skip("text case", fcase, "small caps (font-variant) not compared — Figma draws the stored characters as small capitals; the build's font-variant is not measured");
 
   if (n.font) {
     if (n.font.family !== undefined) spec.fontFamily = n.font.family;
@@ -513,6 +527,13 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
         spec.widthFrom = "renderBox";
         skip("width (text box)", n.box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, so the ink width (renderBox) is compared instead`);
       } else spec.width = n.box.w;
+      // F-119 (D112): a FIXED-height text box shorter than its line box (a 28px line in a 24px box). Figma lets the line
+      // overflow the box; CSS has no such box, so the build picks one — say so instead of letting a later height or
+      // line-height delta read as a bug. Where Figma puts the glyphs inside the overflowing line is unverified (facts P7).
+      const lh = spec.lineHeight;
+      if (num(lh) && num(n.box.h) && lh > n.box.h + 0.5 && n.autoResize !== "width_and_height" && n.autoResize !== "height") {
+        skip(TEXT_BOX_HEIGHT, n.box.h, lineBoxWhy(lh, n.box.h));
+      }
     } else {
       if (typeof n.box.w === "number") spec.width = n.box.w;
       if (typeof n.box.h === "number") spec.height = n.box.h;
@@ -533,7 +554,10 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
 
   const own = drawnStateOf(n);
   if (own) { spec.drawnState = own.state; spec.drawnStateWhy = own.why; spec.drawnStateOwn = true; }
-  else if (ctx.inheritedState) { spec.drawnState = ctx.inheritedState.state; spec.drawnStateWhy = `inside '${ctx.inheritedState.from}', which ${ctx.inheritedState.why}`; }
+  else if (ctx.inheritedState) {
+    spec.drawnState = ctx.inheritedState.state; spec.drawnStateWhy = `inside '${ctx.inheritedState.from}', which ${ctx.inheritedState.why}`;
+    spec.drawnStateFrom = ctx.inheritedState.fromId; // F-74 (D111): the owner the probe puts in that state
+  }
 
   // The token NAME, carried through for the report. A mismatch whose spec value is bound to a token is
   // a token bug, not a number bug, and that distinction is what tells a reader where to look.
@@ -764,7 +788,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
         const sibs = par && Array.isArray(par.children) ? par.children : [];
         const nFixed = par && typeof par.fixedChildren === "number" ? par.fixedChildren : 0;
         if (par && (fixedNodes.has(par) || (nFixed > 0 && sibs.indexOf(n) >= sibs.length - nFixed))) { fixedNodes.add(n); spec.fixed = true; }
-        if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
+        if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id, fromId: n.id });
         if (checkable(spec)) nodes.push(spec);
         else {
           // review M2: a group-11 exclusion (radius on a layer that draws nothing, padding the box cannot show) took the
@@ -1139,16 +1163,27 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
 // more: a key in FIELDS that is present in zero measurements is printed in the headline, and keys this
 // file does not read are listed (finding 182 — a probe wrote `radius`, the comparer read
 // `borderRadius`, and a whole category of values passed untested for a phase).
-const KNOWN_MEASURED_KEYS = new Set([
+// F-67 (D112): two sets. A measured node's OWN keys (beside `styles`) and the keys INSIDE `styles` — a `styles.states`
+// block is a misplaced key (unknown, with a hint), never read; the flat form (no `styles`) carries both on the node.
+const KNOWN_NODE_KEYS = new Set([
   "nodeId", "styles", "states", "matchedBy", "note", "notes", "selector", "selectorCount", "unmeasured", "textFrom", "textFromMixed", "fillSource",
+]);
+const KNOWN_STYLE_KEYS = new Set([
   "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color", "backgroundColor", "fill", "borderColor",
   "borderWidth", "borderRadius", "gap", "gapVisual", "width", "height", "x", "y", "opacity", "padding", "text",
   "placeholderText", "placeholderColor", "tag", "textBox", "display", "transform", "rotate", "visible",
   // D34: where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
   "strokeFrom", "strokeAlign",
+  // F-69 (D114): a TEXT's computed text-transform; F-74 (D111): who paints a transparent element (optional keys)
+  "textTransform", "paintedBy",
+  // free text, never read for a judgement — tolerated on either level
+  "note", "notes",
 ]);
+const KNOWN_MEASURED_KEYS = new Set([...KNOWN_NODE_KEYS, ...KNOWN_STYLE_KEYS]);
 // Suggestions only — the key is NEVER silently accepted (design note: a wrong key must be loud).
-const KEY_HINTS: Record<string, string> = { radius: "borderRadius", borderTopLeftRadius: "borderRadius", background: "backgroundColor", bg: "backgroundColor", w: "width", h: "height", svgFill: "fill", placeholder: "placeholderText", rowGap: "gapVisual", columnGap: "gap" };
+const KEY_HINTS: Record<string, string> = { radius: "borderRadius", borderTopLeftRadius: "borderRadius", background: "backgroundColor", bg: "backgroundColor", w: "width", h: "height", svgFill: "fill", placeholder: "placeholderText", rowGap: "gapVisual", columnGap: "gap",
+  // F-67: a node-level key written INSIDE styles is not read there (a styles.fillSource "img" would not exempt the fill)
+  ...Object.fromEntries([...KNOWN_NODE_KEYS].filter((k) => k !== "nodeId" && k !== "styles" && k !== "note" && k !== "notes").map((k) => [k, `nodes[].${k} (beside styles, not inside)`])) };
 
 /** The spec fields compared one-to-one against a measured style of the same name. */
 type FieldKey = "fontFamily" | "fontSize" | "fontWeight" | "lineHeight" | "letterSpacing" | "color" | "backgroundColor" | "fill" | "placeholderColor"
@@ -1199,7 +1234,10 @@ const MEASURED_KEYS_DOC: Record<string, string> = {
   "nodes[].styles.gapVisual": "the rendered distance between consecutive children — required for a <table> (border-spacing, not gap)",
   "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
   "nodes[].styles.tag": "the element's tagName, lower-case",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured WITH the element in that state — required for a node whose spec has drawnState",
+  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) — optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
+  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} — optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
+  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) — required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
+  "inferred[]": "{nodeId?, state, built, why?} — something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
   "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} — `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
   "components[]": "{setName|nodeId, present: true|false} — present:false is an explicit claim of absence",
   "notMeasured[]": "{nodeId, why} for every spec the probe could not find — the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
@@ -1274,6 +1312,42 @@ const inlineWhy = (tag: string): string => `the id sits on an inline <${tag || "
 // (box-shadow spread, outline) is not snapped — it is compared with the raw design width.
 const cssBorderWidth = (d: number): number => (d <= 0 ? 0 : d < 1 ? 1 : Math.floor(d));
 const normText = (t: unknown): string => String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+// F-74 (D111): the probe's paintedBy block (a hand-written probe's free-form value is ignored)
+const isPaintedBy = (x: unknown): x is PaintedBy => isJsonObject(x) && typeof x.backgroundColor === "string" && (x.via === "ancestor" || x.via === "child")
+  && typeof x.tag === "string" && typeof x.depth === "number" && (x.dt === undefined || typeof x.dt === "string");
+// ---- F-69 (D114): text as it RENDERS. Figma keeps the typed string and applies font.case when drawing; CSS keeps the DOM
+// string and applies text-transform when drawing (textContent never carries it — facts P2).
+/** Figma's TextCase on a stored string. TITLE = "the first character of each word is upper case and all other characters
+ *  are in lower case" (Plugin API, TextCase) — words split on white space. */
+function applyFigmaCase(t: string, c: VerifySpec["textCase"]): string {
+  if (c === "upper") return t.toUpperCase();
+  if (c === "lower") return t.toLowerCase();
+  if (c === "title") return t.toLowerCase().replace(/(^|\s)(\S)/gu, (_m, sp: string, ch: string) => sp + ch.toUpperCase());
+  return t;
+}
+/** CSS text-transform on a DOM string, or null for a value this does not model (full-width, math-auto…). `capitalize`
+ *  upper-cases the first letter or digit of each word (a hyphen starts a word, an apostrophe does not, leading
+ *  punctuation is skipped) and KEEPS the rest (MDN; facts P1: "hello wORLD-foo it's 3d" → "Hello WORLD-Foo It's 3d"). */
+function applyCssTransform(t: string, tt: string): string | null {
+  const v = tt.trim().toLowerCase();
+  if (v === "none") return t;
+  if (v === "uppercase") return t.toUpperCase();
+  if (v === "lowercase") return t.toLowerCase();
+  if (v === "capitalize") return t.replace(/(^|[\s\-\u2010-\u2015])([^\p{L}\p{N}\s\-]*)([\p{L}\p{N}])/gu, (_m, b: string, punct: string, ch: string) => b + punct + ch.toUpperCase());
+  return null;
+}
+/** The two strings a TEXT compare judges — ONE rule for the copy compare and the DT-75 width gate, so they agree.
+ *  want = the design as rendered (stored text + textCase); have = the build as rendered (its text + textTransform). A
+ *  build whose transform is unknown (a hand-written probe reports none) passes with EITHER the stored or the rendered
+ *  design string — it may have typed either one. `norm` is the caller's own normalisation. */
+function renderedText(stored: string, textCase: VerifySpec["textCase"], built: string, transform: unknown, norm: (t: string) => string): { want: string; have: string; same: boolean; transform: string | null } {
+  const designed = applyFigmaCase(stored, textCase);
+  const tt = typeof transform === "string" ? transform : null;
+  const shown = tt !== null ? applyCssTransform(built, tt) : null;
+  if (shown !== null) return { want: designed, have: shown, same: norm(designed) === norm(shown), transform: tt };
+  const want = norm(built) === norm(stored) ? stored : designed;
+  return { want, have: built, same: norm(want) === norm(built), transform: null };
+}
 // A TEXT node's id on an element that is NOT the text's own box (a <th> with padding, a <button>,
 // a <label>) — its width/height/x describe the container, not the text (finding 194: `height 24 → 56`
 // on a Status header that is typographically exact).
@@ -1296,11 +1370,13 @@ const isContainer = (got: MeasuredStyles): boolean => !!((got.tag && CONTAINER_T
 const LIMITS = [
   "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, so they are compared only if the probe reports them under the node's id.",
   "::placeholder colour is compared only when the probe reports placeholderColor (getComputedStyle(el,'::placeholder') or the stylesheet rule); otherwise it is listed under `unverifiable`, never passed.",
+  "A <table> with border-spacing (border-collapse: separate) also puts that spacing between its edge and the outer rows — above the first and below the last (CSS 2.1 §17.6.1): a container-height delta of twice the spacing is the table model, not a layout bug (F-108).",
   "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) — read `rotate` too before calling a rotation missing (finding 198).",
   "An icon drawn by an <img> (or <canvas>, <object>) has no readable fill: the SVG inside is a separate document, so its fill is listed under `unverifiable` — compare the asset file instead.",
   "Numbers are read as px: a number or a px string (\"20px\"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; so is a value CSS cannot produce (a negative gap, padding or size).",
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared.",
   "A TEXT node's height is not compared (neither a Range nor its element gives the line box Figma's text box has), and the width of text the design truncates is not either (a Range spans the unclipped string). A fixed- or fill-width text is compared at its ink width within 3px — an empirical bound (field runs: −0.6…+2.4px); heavy italics or overhanging glyphs may exceed it.",
+  "A transparent element's background is compared through the element that paints it (paintedBy, F-74): its only same-box child, else its nearest painting ancestor that holds it. A sibling or an absolutely positioned overlay painting over it is not seen — when the ancestor's colour is the designed one the node may PASS although the overlay shows another; a transparent element whose own children paint all of it gets no painter (compared as transparent).",
   "Border widths are compared as CSS draws them: Chromium floors a computed border width to whole px, at least 1 (a 1.5px stroke is a 1px border). A ring (box-shadow spread, outline) is compared with the design's own width.",
   "Severity follows the match (D30/D31): a node matched by position or a non-canonical rule is at most low, by text-ordinal or another screen's id (tag-alias) at most medium; a matched element far from the design's size gets one 'match (size)' row and its other deltas are capped at low (cappedFrom keeps the original, cappedBy says which cap). D39: an open capped delta blocks a plain pass (verdict incomplete, never fail on its own); a waiver on 'match (size)' lifts only the size cap — a match-confidence cap stays.",
 ];
@@ -1338,6 +1414,9 @@ export interface CompareOptions {
   /** review-2 M-b: the plan file the expectation merged interactions from (planInteractions.plan) could not be used at
    *  --compare — why ("no longer exists" / "is not a readable plan now: …"); the re-run advice then names both plans */
   recordedPlanGone?: string | null;
+  /** F-121 (D113): the --interactions evidence file's `inferred` value, unchecked — compare keeps the well-formed
+   *  {nodeId?, state, built, why?} rows (listed under Inferred, not designed) and notes the rest */
+  inferred?: unknown;
 }
 
 // ---- D5 waivers: does a waiver's recorded value still describe this round's delta?
@@ -1367,6 +1446,7 @@ const INTEGRITY_PHRASES = {
   unfinished: "— the verifier had not finished",
   otherMeasured: "names a different measured file",
   unrecorded: "no status of that run records it",
+  measuredBefore: "was measured before that run ended",
 } as const;
 const isIntegrityReason = (w: string): boolean => Object.values(INTEGRITY_PHRASES).some((p) => w.includes(p));
 interface CoverageNow {
@@ -1441,7 +1521,6 @@ function deltaChanges(prev: VerifyDelta[], cur: VerifyDelta[], now: CoverageNow)
   }
   return nowUnverifiable.length ? { ...out, nowUnverifiable } : out;
 }
-const sortKeys = (o: Record<string, string | null>): Array<[string, string | null]> => Object.entries(o).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
 const NUM_IN_TEXT = /-?\d+(?:\.\d+)?/g;
 /** Equal within `tol`: numbers by distance, lists item by item, strings exactly — or, with a tolerance, with
@@ -1497,6 +1576,8 @@ const MEASURED_TOP_KEYS = {
 } as const satisfies Record<keyof VerifyMeasured, true>;
 // (a hand-written probe's top-level `navEvents` object is its page-wide navigation log — the canonical key is
 // `navigation`; the per-interaction count F-102 reads lives on each interactions[] row, never up here)
+// F-121 (D113): top-level keys read untyped (not in VerifyMeasured) — the verifier's own `inferred[]` rows
+const MEASURED_UNTYPED_TOP_KEYS = new Set(["inferred"]);
 const TOP_KEY_HINTS: Record<string, string> = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes", navEvents: "navigation" };
 
 // ---- F-102 (D24): what counts as evidence that an interaction worked. `ok:true` is a claim; a pass needs the one
@@ -1566,7 +1647,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (byId.has(id)) { duplicateNodeIds++; continue; }
     byId.set(id, m);
     const s = m.styles || m;
-    for (const k of Object.keys(s)) { keysSeen.add(k); if (!KNOWN_MEASURED_KEYS.has(k)) unknownKeys.set(k, (unknownKeys.get(k) || 0) + 1); }
+    // F-67: inside `styles` only style keys are known (a `styles.states` is misplaced — listed, never read)
+    const known = m.styles ? KNOWN_STYLE_KEYS : KNOWN_MEASURED_KEYS;
+    for (const k of Object.keys(s)) { keysSeen.add(k); if (!known.has(k)) unknownKeys.set(k, (unknownKeys.get(k) || 0) + 1); }
   }
   // A shared implementation (one AppShell rendered on two routes) carries the node ids of the frame it
   // was built from: `I10970:111588;1910:23337` on Jet Roles is `I10970:109860;1910:23337` here — the
@@ -1606,6 +1689,12 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   // previous delta; every other gap is the compare declining a value it has (a method gap, not lost coverage)
   const absentGaps = new Set<string>();
   const placementGaps = new Map<string, { absent: boolean; why: string }>(); // L-3: placement's inputs, per node
+  // F-67 / F-121: states measured on a node whose design draws none — never compared, listed under Inferred
+  const undrawnStates: Array<{ spec: VerifySpec; state: string }> = [];
+  // F-74 (D111): backgrounds compared through the element that paints them (paintedBy) — one input note
+  const paintedVia: Array<{ nodeId: string; how: string }> = [];
+  // F-119 (D112): nodes whose line box is taller than their fixed text box (the expectation's notComparable rows)
+  const lineBoxWhyOf = new Map((expectation.notComparable || []).filter((g) => g.field === TEXT_BOX_HEIGHT).map((g) => [g.nodeId, g.why]));
   const gap = (spec: VerifySpec, field: string, why: string, absent = false): number => {
     if (absent) absentGaps.add(`${spec.nodeId}\u0000${field}`);
     return fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field, why });
@@ -1671,6 +1760,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const base: MeasuredStyles = m.styles || m;
     let got: MeasuredStyles = base, measuredIn = "rest";
     const state = spec.drawnState;
+    if (!state && m.states && isJsonObject(m.states)) for (const s of Object.keys(m.states)) undrawnStates.push({ spec, state: s });
     const st = state && m.states && m.states[state];
     // A null in the state's styles OVERRIDES the resting value (Object.assign copies it): the hovered value
     // could not be read, and the resting one is not a stand-in for it.
@@ -1701,7 +1791,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const rowTag = ROW_TAGS.has(tagLc);
     const inline = CONTAINER_TYPES.has(spec.type) && typeof got.display === "string" && got.display.trim() === "inline";
     // DT-75: copy that differs renders a different width (and a centred/right-aligned start) — judge the copy first
-    const textDiffers = isText && spec.text !== undefined && typeof got.text === "string" && normText(spec.text) !== normText(got.text);
+    // (F-69: the RENDERED strings — the same rule as the copy compare below)
+    const textDiffers = isText && spec.text !== undefined && typeof got.text === "string" && !renderedText(spec.text, spec.textCase, got.text, got.textTransform, normText).same;
     const firstDelta = deltas.length; // this node's deltas: deltas.slice(firstDelta) (D30/D31 caps below)
 
     for (const f0 of FIELDS) {
@@ -1798,13 +1889,27 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
         const worst = c.map((r) => clampRadius(r, W, H)).reduce((a, r) => (Math.abs(r - target) > Math.abs(a - target) ? r : a), clampRadius(c[0], W, H));
         have = worst;
       }
+      // F-74 / DT-48 (D111): a transparent element whose background another element paints (a hovered <tr> behind its
+      // <td>, a same-box child) — the painted colour is the one the user sees. Only the probe's paintedBy says so; read
+      // from the same pass as the background (a state's own, never the resting one).
+      let paintNote: string | undefined;
+      if (f.key === "backgroundColor" && normColor(have) === "transparent" && normColor(want) !== "transparent") {
+        const stBag: unknown = st ? st.styles || st : undefined;
+        const pb: unknown = isJsonObject(stBag) && stBag.backgroundColor !== undefined ? stBag.paintedBy : base.paintedBy;
+        if (isPaintedBy(pb)) {
+          have = pb.backgroundColor;
+          paintNote = pb.via === "child" ? `background painted by its same-box child <${pb.tag}> — the element itself is transparent`
+            : `background painted by its <${pb.tag}>${pb.depth > 1 ? ` (${pb.depth} levels up)` : ""} — the element itself is transparent`;
+          paintedVia.push({ nodeId: spec.nodeId, how: `${pb.via === "child" ? "child" : "ancestor"} <${pb.tag}>` });
+        }
+      }
       const bad = compareField(f, want, have);
       if (bad) {
         push(spec, f.label, f.high ? "high" : "medium", bad, {
           ...ifDefined("unit", f.unit), ...ifDefined("token", tokenFor(spec, f.key)), ...(measuredIn !== "rest" ? { measuredIn } : {}),
           ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || undefined : undefined),
           ...(f.key === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}×${spec.height} box draws ${want}` } : {}),
-          ...ifDefined("note", strokeNote),
+          ...ifDefined("note", [strokeNote, paintNote, f.key === "lineHeight" ? lineBoxWhyOf.get(spec.nodeId) : undefined].filter((x): x is string => x !== undefined).join("; ") || undefined),
         });
       }
     }
@@ -1858,7 +1963,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       else if (got.placeholderText === null) gapNull("placeholder text", "placeholderText");
       else {
         fieldsChecked++;
-        if (String(got.placeholderText).trim() !== String(spec.placeholderText).trim()) push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
+        // (F-69: a cased placeholder may be built with either the stored or the rendered string — its transform is not read)
+        if (!renderedText(String(spec.placeholderText), spec.textCase, String(got.placeholderText), undefined, (t) => t.trim()).same) push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
       }
     }
     if (spec.text !== undefined) {
@@ -1870,11 +1976,16 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       else if (got.text === undefined) absentGaps.add(`${spec.nodeId}\u0000text`);
       else if (got.text !== undefined) {
         fieldsChecked++;
-        // Compare the literal characters. Figma's text-transform renders "NO. Of" from a stored "NO. of"
-        // — so the STORED string is the truth and a case-only difference the CSS explains is not a bug.
-        const w = String(spec.text).replace(/ /g, " ").trim();
-        const g = String(got.text).replace(/ /g, " ").trim();
-        if (w !== g) {
+        // F-69 (D114): compare the RENDERED strings — the stored string with the design's text case against the build's
+        // string with its computed text-transform (renderedText). Without a reported transform either design form passes.
+        const rt = renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, (t) => t.replace(/ /g, " ").trim());
+        const w = rt.want.replace(/ /g, " ").trim();
+        const g = rt.have.replace(/ /g, " ").trim();
+        // the stored strings behind the rendered ones, named when a case or a transform changed either side
+        const caseShown = spec.textCase !== undefined || (rt.transform !== null && rt.transform.trim().toLowerCase() !== "none");
+        const renderNote = !caseShown ? undefined
+          : `the design renders '${w}' (stored '${String(spec.text).trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
+        if (!rt.same) {
           const caseOnly = w.toLowerCase() === g.toLowerCase();
           // "Jet Role▲": the designed string plus glyphs that are not letters or digits (a sort caret,
           // an icon font) — the copy is intact; name the extra glyphs rather than calling it a copy bug.
@@ -1889,11 +2000,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
           const distinct = rowTexts ? new Set(rowTexts).size : 0;
           const asDesigned = rowTexts ? rowTexts.filter((t) => t === w).length : 0;
           const realData = !caseOnly && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
-          push(spec, "text", caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.text, got: got.text, delta: null }, {
-            ...ifDefined("note", caseOnly ? "differs only in case — check for a text-transform, which Figma applies at render time while storing the original"
-              : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)`
-              : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) — check the copy is the data the design means`
-              : undefined),
+          const why = caseOnly ? (caseShown ? "differs only in case, as rendered" : "differs only in case — check for a text-transform, which Figma applies at render time while storing the original")
+            : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)`
+            : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) — check the copy is the data the design means`
+            : undefined;
+          const note = [why, renderNote].filter((x): x is string => x !== undefined).join(" — ");
+          push(spec, "text", caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.textCase ? rt.want : spec.text, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null }, {
+            ...(note ? { note } : {}),
           });
         }
         if (/ /.test(String(spec.text))) {
@@ -2123,6 +2236,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const st = opts.status && opts.status.status !== "v1" ? opts.status.status : null;
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const integrity: string[] = [];
+  let unboundNote: string | undefined;
   // D26 (F-72): the run's integrity, ranked FIRST. When any of these holds, the numbers below belong to an unverified
   // run (another expectation, no expectation, an unfinished run, another measured file) — so the verdict is
   // `incomplete` even with high mismatches (L-6): a `fail` would grade numbers nothing ties to this design and run.
@@ -2135,10 +2249,20 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : undefined;
   if (measuredRun !== undefined && opts.status !== undefined && (st === null || st.runId !== measuredRun)) {
     integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} — ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run — re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
+  } else if (st && measuredRun === undefined && TERMINAL_PHASES.includes(st.phase) && Date.parse(String(measured.measuredAt)) > Date.parse(st.at)) {
+    // H1 (s19): a measured file that names no run (a probe without --run) and was measured AFTER the run ended is not
+    // part of any run — that run's status says nothing about it; it is graded unbound (D41: its interaction rows are
+    // agent evidence). An older unbound file (no or unreadable measuredAt included) stays judged by the run below.
+    unboundNote = `${opts.status ? opts.status.file : "status.json"} is run ${st.runId} (${st.phase}); this measured file names no run — graded as an unbound measurement`;
   } else if (st) {
     const stFile = opts.status ? opts.status.file : "status.json";
-    if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
-    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}…, this one ${opts.measuredSha256.slice(0, 12)}…) — measured again outside run ${st.runId}?`);
+    // an unbound measured file beside a run still open: say how to end that run (only if nobody is still running it)
+    const endHint = measuredRun === undefined ? ` — wait for it, or if nobody is running it any more, end it: --status ${shellArg(st.screen)} --phase failed --run ${shellArg(st.runId)}` : "";
+    // r2 (s19): an unbound measured file that is NOT newer than an ENDED run (failed/blocked) — the run cannot be "ended"
+    // again (that would only rewrite its status, and a blocked run's detail with it): the file is stale, measure again
+    if (measuredRun === undefined && TERMINAL_PHASES.includes(st.phase) && st.phase !== "done") integrity.push(`this measured file names no run and ${INTEGRITY_PHRASES.measuredBefore} (${stFile}: run ${st.runId} ${st.phase} at ${st.at}) — measure again`);
+    else if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}${endHint}`);
+    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}…, this one ${opts.measuredSha256.slice(0, 12)}…) — measured again outside run ${st.runId}?${st.phase === "done" ? "" : endHint}`);
   }
 
   // ---- interactions: the export says what each control does; did it? Three states, not two:
@@ -2183,6 +2307,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "design re-exported: the export content changed since it was descoped" });
     return live;
   };
+  if (unboundNote !== undefined) inputNotes.push(unboundNote);
   if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length) inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) — graded as agent evidence (D41)");
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i): VerifyInteractionResult => {
     const key = String(i.nodeId) + "|" + i.trigger;
@@ -2211,11 +2336,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const said = hit ? { ...ifDefined("outcome", typeof hit.outcome === "string" ? hit.outcome : undefined), ...ifDefined("navEvents", typeof hit.navEvents === "number" ? hit.navEvents : undefined),
       ...(probeBound ? { evidenceFrom: fromProbe ? "probe" as const : "agent" as const } : {}),
       ...ifDefined("activation", str(hit.activation)), ...ifDefined("detectedBy", str(hit.detectedBy)), ...ifDefined("revealedBy", str(hit.revealedBy)), ...ifDefined("overridden", overridden) } : {};
+    // F8: whose words a detail quotes — the run-bound probe's, else agent evidence (D41: an unbound file's rows too)
+    const saidBy = fromProbe ? "probe said" : "agent evidence said";
     // D20: removed from the graded set before grading; evidence that it works anyway is noted, never graded.
     const scoped = descopeFor(i);
     if (scoped) return Object.assign(row, { result: "descoped" as const, detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`, ...(worked ? { note: "descoped but works — the probe drove it successfully; drop the descope?" } : {}) });
     // D22: its destination was never exported — nothing designed to arrive at. A probe showing it working still passes.
-    if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned" as const, detail: `destination ${i.destinationId} is not in this Figma file's export — nothing designed to check it against${hit && hit.detail ? `; probe said: ${hit.detail}` : ""}` });
+    if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned" as const, detail: `destination ${i.destinationId} is not in this Figma file's export — nothing designed to check it against${hit && hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}` });
     if (!hit) return Object.assign(row, { result: "not-probed" as const, detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
     if (hit.result === "not-probed" || hit.ok === null || hit.ok === undefined) return Object.assign(row, { result: "not-probed" as const, ...ifDefined("detail", hit.detail), ...(probeBound ? said : {}) });
@@ -2227,7 +2354,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     // An agent once credited two hidden popup rows with hovers it performed on unrelated controls (187).
     // F-102: the outcome and the navigation count too — a reload once read as "the dialog opened".
     if (!worked || !hit.selector) {
-      return Object.assign(row, { result: "not-probed" as const, detail: `reported ok without evidence — ${(gaps || []).join("; ")}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
+      return Object.assign(row, { result: "not-probed" as const, detail: `reported ok without evidence — ${(gaps || []).join("; ")}${hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
     return Object.assign(row, { result: "pass" as const, ...ifDefined("detail", hit.detail), selector: hit.selector, selectorCount: count, ...said });
   });
@@ -2261,6 +2388,51 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const interactionsUndesigned = interactions.filter((i) => i.result === "undesigned");
   const interactionsDescoped = interactions.filter((i) => i.result === "descoped");
   for (const d of descopeRows) if (!descopeUsed.has(d)) unused.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "no designed interaction with this node and trigger this round" });
+
+  // ---- F-121 (D113): "Inferred, not designed" — what the build does that the design never drew: an interaction only the
+  // plan declares, a destination never exported (what opens is the build's reading), a state measured on a node whose
+  // design draws none (F-67), and the verifier's own rows (measured.inferred[] / the evidence file's inferred[]). Judged
+  // against best practice and the design's intent, never "matched" — listed and counted, NEVER a verdict reason (D4 style).
+  const inferred: InferredRow[] = [];
+  // L11: the headline counts each thing once — an interaction already counted "undesigned" is not counted again, and
+  // one interaction with two rows (plan-declared AND an unexported destination) counts once
+  let inferredHead = 0, inferredUndesigned = 0;
+  for (const i of interactions) {
+    if (i.source === "plan" || i.destinationExported === false) { if (i.result === "undesigned") inferredUndesigned++; else inferredHead++; }
+    if (i.source === "plan") inferred.push({ kind: "plan-interaction", nodeId: i.nodeId, ...ifDefined("name", i.name), trigger: i.trigger, built: i.result,
+      why: `declared by the plan (expect ${i.expect ?? "?"}) — the export carries no prototype link for it; graded as an interaction, but what it does was never drawn` });
+    if (i.destinationExported === false) inferred.push({ kind: "undesigned-interaction", nodeId: i.nodeId, ...ifDefined("name", i.name), trigger: i.trigger, built: i.result,
+      why: `its destination ${i.destinationId ?? "?"} was never exported — what it opens is the build's own reading of the design` });
+  }
+  const undrawnBy = new Map<string, number>();
+  for (const u of undrawnStates) {
+    undrawnBy.set(u.state, (undrawnBy.get(u.state) ?? 0) + 1);
+    inferredHead++;
+    inferred.push({ kind: "undrawn-state", nodeId: u.spec.nodeId, ...ifDefined("name", u.spec.name), state: u.state,
+      why: `measured in its ${u.state} state, but the design draws no ${u.state} state for this node — the build's ${u.state} look is its own (not compared)` });
+  }
+  for (const [st0, n] of undrawnBy) inputNotes.push(`states.${st0} measured on ${n} node(s) whose design draws no ${st0} state — not compared (listed under Inferred, not designed)`);
+  const specName = new Map(specs.map((sp) => [String(sp.nodeId), sp.name]));
+  const unknownIds = new Set<string>();
+  const agentRows = (raw: unknown, from: string): void => {
+    if (raw === undefined) return;
+    if (!Array.isArray(raw)) { inputNotes.push(`${from} inferred is not a list of {nodeId?, state, built, why?}; ignored`); return; }
+    raw.forEach((r: unknown, k) => {
+      const bad = (): void => { inputNotes.push(`${from} inferred[${k}] is not {nodeId?, state, built, why?} (state and built: non-empty strings); ignored`); };
+      if (!isJsonObject(r)) return bad();
+      const { nodeId, state: rs, built, why } = r;
+      if (typeof rs !== "string" || !rs.trim() || typeof built !== "string" || !built.trim() || (nodeId !== undefined && typeof nodeId !== "string") || (why !== undefined && typeof why !== "string")) return bad();
+      if (nodeId !== undefined && !specName.has(nodeId)) unknownIds.add(nodeId);
+      inferredHead++;
+      inferred.push({ kind: "agent", ...ifDefined("nodeId", nodeId), ...ifDefined("name", nodeId !== undefined ? specName.get(nodeId) : undefined), state: rs.trim(), built: built.trim(),
+        why: why !== undefined && why.trim() ? why.trim() : "reported by the verifier: built, but the design draws no such state" });
+    });
+  };
+  agentRows("inferred" in measured ? measured.inferred : undefined, "measured.json");
+  agentRows(opts.inferred, "the --interactions evidence file's");
+  if (unknownIds.size) inputNotes.push(`inferred[] row(s) name ${unknownIds.size} node id(s) not in this expectation: ${[...unknownIds].slice(0, 5).join(", ")}${unknownIds.size > 5 ? ", …" : ""} — listed as written (another screen's id, or a typo?)`);
+  // F-74 (D111): backgrounds compared through the element that paints them
+  if (paintedVia.length) inputNotes.push(`background compared through the element that paints it on ${paintedVia.length} node(s) whose own background is transparent (paintedBy): ${paintedVia.slice(0, 5).map((p) => `${p.nodeId} by its ${p.how}`).join(", ")}${paintedVia.length > 5 ? `, …and ${paintedVia.length - 5} more` : ""}`);
 
   // ---- D5: the plan's waivers. A waiver accepts ONE delta (node + field) while the design is the one it was
   // accepted against (whole-export hash, D21), the designed value is the same and the built value has not moved
@@ -2385,7 +2557,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const buildNow = isBuildIdentity(buildRaw) ? buildRaw : undefined;
   if (buildRaw !== undefined && !buildNow && !inputNotes.some((n) => n.startsWith("measured.build "))) inputNotes.push("measured.build is not a build identity; ignored (build: unknown)");
   if (opts.status && opts.status.status === "v1") inputNotes.push(`${opts.status.file} is an older hand-written status (no run id, no shas) — not checked; write it with verify-screen --status`);
-  const runId = typeof measured.runId === "string" && measured.runId ? measured.runId : st ? st.runId : undefined;
+  // F3: an unbound measured file (no run, measured after that run ended) is no run's — the ended run is named in its
+  // input note only, never as the report's own run
+  const runId = measuredRun ?? (st && unboundNote === undefined ? st.runId : undefined);
   if (probeRaw !== undefined && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
   const inputs: VerifyReportV2["inputs"] = {
     expectationSchema: expectation.schema || "(none)",
@@ -2492,7 +2666,11 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   }
   // DT-81: the same build served although the code changed → the preview/dist was not rebuilt (never the verdict)
   const prevCode = opts.against && opts.against.report.inputs ? opts.against.report.inputs.code : undefined;
-  const codeChanged = prevCode && opts.code ? (Object.keys(prevCode.files).length && Object.keys(opts.code.files).length ? JSON.stringify(sortKeys(prevCode.files)) !== JSON.stringify(sortKeys(opts.code.files))
+  // M3: only the files BOTH reports hashed — a key the previous report never recorded (D117's mapped modules, a file just
+  // added to files[]) says nothing about whether the code changed; none in common → the git commits, as before
+  const codeNow = opts.code ? opts.code.files : {};
+  const common = prevCode ? Object.keys(prevCode.files).filter((f) => Object.hasOwn(codeNow, f)) : [];
+  const codeChanged = prevCode && opts.code ? (common.length ? common.some((f) => prevCode.files[f] !== codeNow[f])
     : !!(prevCode.gitHead && opts.code.gitHead && prevCode.gitHead !== opts.code.gitHead)) : false;
   const sameBuildServed = !!(against && against.sameBuild === true && codeChanged);
   const lost = against && against.deltas ? against.deltas.lostCoverage.length : 0;
@@ -2519,9 +2697,28 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     (against && against.probeChanged === true ? " · probe changed" : "") +
     // group 10 — informational, never the verdict
     (unmatchedCount ? ` · ${unmatchedCount} probe result(s) matched no designed interaction` : "") +
+    (inferredHead ? ` · ${inferredHead} inferred (not designed${inferredUndesigned ? `; the ${inferredUndesigned} undesigned interaction(s) are counted above` : ""})` : "") +
     (lost ? ` · LOST COVERAGE on ${lost} earlier delta(s)` : "") +
     (foreignTags ? ` · ${foreignTags.total} foreign tag(s) (${foreignTags.prefixDrift} prefix drift, ${foreignTags.alias} alias, ${foreignTags.unknown} unknown)` : "") +
     (sameBuildServed && against ? ` · SAME BUILD SERVED as ${against.report} although the code changed (stale preview/dist?)` : "");
+
+  // ---- DT-55 (D116): the plan's deviations with field "reference" — the reference PNG is illustrative for those nodes
+  // (the designer drew a stand-in there). Shown on the VISUAL line and in the input notes; it never waives or changes a
+  // delta (D5: only an owner's waiver does).
+  const visual = visualReport(measured.visual, opts.visualMalformed === true, { diff: opts.visualDiff ?? null, against: opts.against ?? null, noProbe: !isProbeIdentity(measured.probe) });
+  const devs: unknown[] = planNow && Array.isArray(planNow.plan.deviations) ? planNow.plan.deviations : [];
+  const illustrative: NonNullable<ReportVisual["illustrative"]> = [];
+  for (const d of devs) {
+    if (!isJsonObject(d) || d.field !== "reference") continue;
+    const ids = [...(typeof d.nodeId === "string" && d.nodeId ? [d.nodeId] : []), ...(Array.isArray(d.nodeIds) ? d.nodeIds.filter((x): x is string => typeof x === "string" && x !== "") : [])];
+    const reason = typeof d.reason === "string" && d.reason ? d.reason : typeof d.what === "string" ? d.what : "";
+    for (const id of ids.length ? ids : typeof rootF.nodeId === "string" ? [rootF.nodeId] : []) illustrative.push({ nodeId: id, reason });
+  }
+  if (illustrative.length && planNow) {
+    visual.illustrative = illustrative;
+    visual.headline += ` (the plan marks the reference illustrative for ${illustrative.length} node(s))`;
+    inputNotes.push(`${planNow.file} marks the reference PNG illustrative (deviations field "reference") for ${illustrative.map((r) => r.nodeId).join(", ")} — the visual diff there shows a stand-in; no delta is waived or changed`);
+  }
 
   return {
     schema: REPORT_SCHEMA,
@@ -2531,23 +2728,26 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     renderer: measured.renderer || "unknown",
     ...ifDefined("viewport", measured.viewport),
     artifacts: artifactCheck || (Array.isArray(measured.artifacts) ? measured.artifacts : []),
+    // M2 (s19): --record-plan records a static-only run as static-only, with its why
+    ...(staticOnly ? { mode: "static-only" as const, ...ifDefined("reason", measured.reason || undefined) } : {}),
     inputs,
     verdict,
     headline,
     // 12b (D4): copied and counted, read by nothing above
     behaviour: behaviourReport(measured.behaviour, opts.behaviourMalformed === true),
     // 12c (D4, D40(3)): copied, read by nothing above
-    visual: visualReport(measured.visual, opts.visualMalformed === true, { diff: opts.visualDiff ?? null, against: opts.against ?? null, noProbe: !isProbeIdentity(measured.probe) }),
+    visual,
     why: reasons,
     integrity,
     coverage,
     summary: { high, medium, low: open.filter((d) => d.severity === "low").length, componentsAbsent: componentsAbsent.length, interactionsFailed: interactionsFailed.length, interactionsNotProbed: interactionsNotProbed.length,
-      accepted, descoped: interactionsDescoped.length, undesigned: interactionsUndesigned.length, highCauses, lowConfidence },
+      accepted, descoped: interactionsDescoped.length, undesigned: interactionsUndesigned.length, inferred: inferred.length, highCauses, lowConfidence },
     deltas: deltas.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]),
     componentsAbsent,
     untaggedInstanceSets: untaggedOnScreen,
     ...(untaggedInstanceSetsInShell.length ? { untaggedInstanceSetsInShell } : {}),
     interactions,
+    ...(inferred.length ? { inferred } : {}),
     notMeasured,
     fieldsNotMeasured,
     unverifiable,
@@ -2556,7 +2756,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     folded,
     probe: {
       unknownKeys: [...unknownKeys].map(([key, count]) => ({ key, count, ...ifDefined("canonical", KEY_HINTS[key]) })),
-      unknownTopLevelKeys: Object.keys(measured).filter((k) => !Object.hasOwn(MEASURED_TOP_KEYS, k)).map((key) => ({ key, ...ifDefined("canonical", TOP_KEY_HINTS[key]) })),
+      unknownTopLevelKeys: Object.keys(measured).filter((k) => !Object.hasOwn(MEASURED_TOP_KEYS, k) && !MEASURED_UNTYPED_TOP_KEYS.has(k)).map((key) => ({ key, ...ifDefined("canonical", TOP_KEY_HINTS[key]) })),
       duplicateNodeIds,
       interactionEvidenceOnHiddenLayers: interactionEvidenceOnHidden,
       interactionEvidenceNotInExpectation: unexpectedInteractionEvidence,
@@ -2945,6 +3145,16 @@ function reportToMarkdown(r: VerifyReportV2): string {
     for (const i of ungraded) L.push(`- \`${i.nodeId}\` ${i.name || ""} — ${i.trigger} → ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}: **${i.result}**${i.detail ? ` — ${i.detail}` : ""}${i.note ? ` — ${i.note}` : ""}`);
     L.push("");
   }
+  const inf = r.inferred || [];
+  if (inf.length) {
+    L.push(`## Inferred, not designed (${inf.length})`, "", "*What the build does that the design never drew — judged against best practice and the design's intent, never 'matched'. Not part of the verdict.*", "");
+    for (const x of inf.slice(0, 40)) {
+      const what = [x.trigger, x.state ? `state ${x.state}` : undefined].filter((v): v is string => !!v).join(", ");
+      L.push(`- ${x.nodeId ? `\`${x.nodeId}\` ` : ""}${x.name ? `${mdText(x.name)} ` : ""}[${x.kind}]${what ? ` ${mdText(what)}` : ""}${x.built ? ` — built: ${mdText(x.built)}` : ""} — ${mdText(x.why)}`);
+    }
+    if (inf.length > 40) L.push(`- …and ${inf.length - 40} more`);
+    L.push("");
+  }
   if (r.notMeasured.length) {
     L.push(`## Not measured (${r.notMeasured.length} node specs)`, "", "*Gaps in the probe, not clean results.*", "");
     for (const n of r.notMeasured.slice(0, 40)) L.push(`- \`${n.nodeId}\` ${n.name || ""} — ${n.why}`);
@@ -2994,6 +3204,27 @@ const withUnit = (v: unknown, unit: string | undefined): string => { const t = f
 // Scans a directory's own `*.expected.json` files (never a subdirectory — one screen, one flat
 // design/verify/) for one whose `frame.nodeId` already matches, at a DIFFERENT basename than the one
 // about to be written. Returns that file's path, or null.
+// DT-45 (D102): what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
+// failed/blocked: its measured/report files are partial; a non-terminal phase older than --wait's stall (300 s): it never
+// finished; younger: a run is measuring right now; v1: a hand-written status, not checked. done (or none): nothing to say.
+const STATUS_STALL_MS = 300_000;
+function runStatusNote(base: string, now = Date.now()): string | null {
+  const found = readStatusAt(base);
+  if (!found) return null;
+  const st = found.status, name = path.basename(base);
+  if (st === "v1") return `${found.file} is a hand-written status (no run id) — not checked`;
+  const detail = st.detail ? ` (${st.detail})` : "";
+  if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} — its measured/report files are partial; this expectation is safe to re-measure against`;
+  if (TERMINAL_PHASES.includes(st.phase)) return null;
+  const age = now - Date.parse(st.at);
+  if (Number.isFinite(age) && age >= STATUS_STALL_MS) return `the last run of ${name} (run ${st.runId}) never finished — still at phase ${st.phase}${detail}, ${Math.round(age / 1000)} s ago; its measured/report files are partial`;
+  return `a run of ${name} (run ${st.runId}) is in progress — phase ${st.phase}${detail}${Number.isFinite(age) ? `, ${Math.round(age / 1000)} s ago` : ""}; it measures against the expectation it started with`;
+}
+
+// DT-45: a replaced expectation's previous bytes, one generation (overwritten). Never `*.expected.json`, so no scan
+// (findExistingExpectedFor, verify-build's report lookup, the run's expectation) ever takes it for a live one.
+const PREV_EXPECTED_SUFFIX = ".expected.prev.json";
+
 function findExistingExpectedFor(dir: string, nodeId: string | undefined, ownTarget: string): string | null {
   if (!nodeId || !fs.existsSync(dir)) return null;
   for (const f of fs.readdirSync(dir)) {
@@ -3082,12 +3313,15 @@ function main(argv: string[]): number | Promise<number> {
     "      be graded is dropped with why. Their hash binds the expectation: change them → re-run --expect.\n" +
     "      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.\n" +
     "      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this\n" +
-    "      directory — pass --force to write a second one anyway.\n" +
-    `  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] --out design/verify/<Screen>\n` +
+    "      directory — pass --force to write a second one anyway. Replacing one that differs keeps the old bytes as\n" +
+    "      <Screen>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export\n" +
+    "      content). It notes a last run of <Screen> that failed, was blocked or never finished (its files are partial).\n" +
+    `  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] --out design/verify/<Screen>\n` +
     "      writes <Screen>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares\n" +
     "      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n" +
-    "      (a JSON array, or {interactions:[…], components:[…]}, of {nodeId, trigger, ok, selector, selectorCount, detail};\n" +
-    "      components[] rows {setName|nodeId, present} are merged with measured.json's).\n" +
+    "      (a JSON array, or {interactions:[…], components:[…], inferred:[…]}, of {nodeId, trigger, ok, selector, selectorCount, detail};\n" +
+    "      components[] rows {setName|nodeId, present} are merged with measured.json's; inferred[] rows {nodeId?, state, built, why?}\n" +
+    "      — what the build does that the design never drew — are listed under 'Inferred, not designed', never graded).\n" +
     "      --out defaults to design/verify/<the .expected.json file's own basename>.\n" +
     "      Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes\n" +
     "      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.\n" +    "      Integrity first: a measured file naming no or another expectation, or a run status not finished / naming another\n" +
@@ -3095,6 +3329,10 @@ function main(argv: string[]): number | Promise<number> {
     "      The plan for this frame (--plan <plan.json>; else the plan file --expect merged interactions from, while it exists;\n" +
     "      else design/plan/ as at --expect) supplies waivers[] and descopes[]: an accepted\n" +
     "      delta stays listed but leaves the counts; with nothing else open the verdict is 'pass-with-deviations' (exit 0).\n" +
+    "      --record-plan: then writes the tool-owned keys of that plan's verification block from the report (mode, renderer,\n" +
+    "      artifacts, open high/medium deltas, a11y, recorded{report sha, verdict, counts}); hand keys (coverage, notes) stay.\n" +
+    "      No plan, or several and no --plan: exit 2 before comparing. A failed record — e.g. a report outside the project\n" +
+    "      (the plan records project-relative paths only) — leaves the report written (exit 1).\n" +
     `  ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]\n` +
     "      writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed\n" +
     "      and the built value (any change reopens it). Only on the owner's explicit word. Refuses a node with no delta:\n" +
@@ -3105,7 +3343,7 @@ function main(argv: string[]): number | Promise<number> {
     "      workspace root its dependencies are hoisted to, never past .git; the OS temp dir, not shared between sandboxed and unsandboxed\n" +
     "      commands, with no package.json or Yarn PnP) — <dir> resolves against the cwd — outside every dev-server\n" +
     "      watch, so a heartbeat never reloads the page being measured — and prints `run <id> rev <n>` (stdout), the live file and the run's\n" +
-    "      stage dir (stderr). Without --run it continues only a run that has not ended (else exit 2). `done` checks first — refuses (exit 1)\n" +
+    "      stage dir (stderr). A run that has ended (done/failed/blocked) takes no more writes, with or without --run (exit 2: start a --new-run). `done` checks first — refuses (exit 1)\n" +
     "      a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or\n" +
     "      not the one the probe recorded in this run — then publishes, records the sha256 of <Screen>.expected/.measured.json (and\n" +
     "      .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every\n" +
@@ -3123,6 +3361,7 @@ function main(argv: string[]): number | Promise<number> {
     accept: { type: "boolean" }, node: { type: "string" }, field: { type: "string" }, group: { type: "string" }, reason: { type: "string" }, by: { type: "string" }, plan: { type: "string" }, "all-fields": { type: "boolean" },
     status: { type: "string" }, wait: { type: "string" }, phase: { type: "string" }, run: { type: "string" }, "new-run": { type: "boolean" }, detail: { type: "string" },
     dir: { type: "string" }, publish: { type: "string" }, timeout: { type: "string" }, stall: { type: "string" }, interval: { type: "string" },
+    "record-plan": { type: "boolean" },
     help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
@@ -3130,7 +3369,7 @@ function main(argv: string[]): number | Promise<number> {
   const runFlags = ["phase", "run", "new-run", "detail", "dir", "publish", "timeout", "stall", "interval"] as const;
   if (flags.status !== undefined || flags.wait !== undefined) {
     if (flags.status !== undefined && flags.wait !== undefined) { console.error("pass --status or --wait, not both\n" + USAGE); return 2; }
-    const other = (["expect", "compare", "accept", "out", "interactions", "against", "force", "node", "field", "group", "reason", "plan", "all-fields"] as const).filter((k) => flags[k] !== undefined);
+    const other = (["expect", "compare", "accept", "out", "interactions", "against", "force", "node", "field", "group", "reason", "plan", "all-fields", "record-plan"] as const).filter((k) => flags[k] !== undefined);
     if (other.length || files.length) { console.error(`--${flags.status !== undefined ? "status" : "wait"} takes none of ${[...other.map((k) => `--${k}`), ...files].join(", ")}\n` + USAGE); return 2; }
     if (flags.wait !== undefined) {
       const bad = (["phase", "new-run", "detail", "publish", "by"] as const).filter((k) => flags[k] !== undefined);
@@ -3149,6 +3388,8 @@ function main(argv: string[]): number | Promise<number> {
   if (doAccept) return acceptMain(files, flags, USAGE);
   if (interactionsFile !== undefined && !doCompare) { console.error("--interactions only applies to --compare\n" + USAGE); return 2; }
   if (againstFile !== undefined && !doCompare) { console.error("--against only applies to --compare\n" + USAGE); return 2; }
+  const recordPlanFlag = !!flags["record-plan"];
+  if (recordPlanFlag && !doCompare) { console.error("--record-plan only applies to --compare\n" + USAGE); return 2; }
 
   const write = (base: string | undefined, obj: unknown, md?: string): void => {
     if (!base) { process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); return; }
@@ -3236,6 +3477,9 @@ function main(argv: string[]): number | Promise<number> {
       const dir = path.dirname(dup), stemOld = path.basename(oldBase);
       const oldFiles = fs.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path.join(dir, f));
       const canonical = path.join(path.dirname(target), path.basename(firstFile, ".json"));
+      // DT-45: the old set's last run, when it says something (a failed run under the nickname is partial evidence)
+      const oldStatus = runStatusNote(oldBase);
+      if (oldStatus) console.error(`note  ${oldStatus}`);
       if (stemOld === path.basename(canonical)) {
         console.error(
           `error  node ${exp.frame.nodeId} already has an expectation at ${dup} — refusing to also write ${target} ` +
@@ -3257,24 +3501,37 @@ function main(argv: string[]): number | Promise<number> {
     }
     const next = JSON.stringify(exp, null, 2) + "\n";
     const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
-    write(outBase, exp);
     const h = crypto.createHash("sha256").update(next).digest("hex");
     let prevContent: JsonValue | undefined = null;
     try { if (prev !== null) { const prevDoc: unknown = JSON.parse(prev); prevContent = isJsonObject(prevDoc) ? prevDoc.exportContentSha256 : null; } } catch { /* unreadable */ }
-    if (prev !== null && prev === next) console.error(`note  ${target} was already identical (sha256 ${h.slice(0, 12)}…) — unchanged`);
-    else if (prev !== null && prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "")) {
+    const onlyExportedAt = prev !== null && prev !== next && !!prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "");
+    // DT-45: a REPLACED expectation keeps its previous bytes (one generation) — written before the new one
+    const prevFile = outBase + PREV_EXPECTED_SUFFIX;
+    if (prev !== null && prev !== next && !onlyExportedAt) writeFileAtomic(prevFile, prev);
+    write(outBase, exp);
+    // DT-45: what the last run beside this expectation says (failed/blocked, never finished, in progress, hand-written)
+    const runNote = runStatusNote(outBase);
+    if (runNote) console.error(`note  ${runNote}`);
+    if (prev !== null && prev === next) console.error(`note  ${target} is byte-identical to the expectation on disk (same export inputs, sha256 ${h.slice(0, 12)}…) — unchanged; this says nothing about the build: re-measure to check the code`);
+    else if (onlyExportedAt) {
       // Finding 314: a re-pull with nothing changed rewrites only exportedAt. Same design, same specs —
       // the measurements and report beside it still describe it.
       console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}… unchanged) — existing measurements and report still apply`);
     } else if (prev !== null) {
-      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto.createHash("sha256").update(prev).digest("hex").slice(0, 12)}… → ${h.slice(0, 12)}…)`);
+      // DT-45: say WHY it differs — the same export content means verify-screen itself changed (an upgrade)
+      const why = typeof prevContent === "string" && prevContent === exp.exportContentSha256 ? "same export content — the expectation generator changed (verify-screen upgrade)"
+        : typeof prevContent === "string" ? `the export changed (content sha ${prevContent.slice(0, 12)}… → ${exp.exportContentSha256.slice(0, 12)}…)`
+        // L6: an expectation written before exportContentSha256 — whether the export or the generator changed is unknown
+        : `the expectation recorded no export hash (exportContentSha256) — cannot tell whether the export or the expectation generator changed`;
+      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto.createHash("sha256").update(prev).digest("hex").slice(0, 12)}… → ${h.slice(0, 12)}…): ${why}; the previous one is kept as ${prevFile}`);
       const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation — re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
     const hc = exp.counts.hidden;
+    const lineBoxes = exp.notComparable.filter((g) => g.field === TEXT_BOX_HEIGHT).length; // F-119
     console.error(`${exp.counts.nodes} node spec(s), ${exp.counts.instances} instance(s), ${exp.counts.interactions} designed interaction(s) — visible layers only; ` +
       `skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ` +
-      `${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable) · expectation sha256 ${h.slice(0, 12)}…`);
+      `${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable${lineBoxes ? `; ${lineBoxes} a line box taller than its fixed text box — the build chooses its line-height` : ""}) · expectation sha256 ${h.slice(0, 12)}…`);
     const ri = exp.referenceImage;
     if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}×${ri.png.h} at ${ri.scale}x (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` — ${ri.colorProfile}: colours are compared without colour management` : ""}`
       : `note  no visual diff for this screen: ${ri.why}`);
@@ -3295,14 +3552,17 @@ function main(argv: string[]): number | Promise<number> {
   for (const n of readable.notes) console.error(`note  ${measuredFile}: ${n}`);
   let extra: InteractionEvidence[] | undefined;
   let extraComponents: MeasuredComponent[] | undefined;
+  let extraInferred: unknown;
   if (interactionsFile) {
     const raw = readJsonFile(interactionsFile, "interaction evidence", "Write a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}.");
-    // The object form ({interactions:[…], components:[…]}, the verifier's evidence.json) may carry either list.
+    // The object form ({interactions:[…], components:[…], inferred:[…]}, the verifier's evidence.json) may carry any of
+    // the lists; `inferred` (F-121) is checked row by row in compare (a malformed row is an input note, not a refusal).
     const obj = isJsonObject(raw) ? raw : null;
     const list = isInteractionEvidenceList(raw) ? raw : obj && isInteractionEvidenceList(obj.interactions) ? obj.interactions
-      : obj && obj.interactions === undefined && obj.components !== undefined ? [] : null;
+      : obj && obj.interactions === undefined && (obj.components !== undefined || obj.inferred !== undefined) ? [] : null;
+    if (obj && obj.inferred !== undefined) extraInferred = obj.inferred;
     const comps = obj && obj.components !== undefined ? (isMeasuredComponentList(obj.components) ? obj.components : null) : [];
-    if (!list || !comps) { console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[…], components:[…]}`); return 2; }
+    if (!list || !comps) { console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[…], components:[…], inferred:[…]}`); return 2; }
     extra = list;
     if (comps.length) extraComponents = comps;
   }
@@ -3350,8 +3610,19 @@ function main(argv: string[]): number | Promise<number> {
       }
     }
     if (!planHit && all.length > 1) console.error(`note  ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) — no waivers/descopes applied; pass --plan <plan.json>`);
+    // F-100 (D115): --record-plan writes into the plan this compare uses — none, or several and no way to choose, is a
+    // usage error BEFORE anything is compared or written
+    if (recordPlanFlag && !planHit) {
+      console.error(all.length > 1 ? `--record-plan: ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) — pass --plan <plan.json> to say which one records the run`
+        : "--record-plan: no plan in design/plan/ describes this frame (run from the project root) — pass --plan <plan.json>");
+      return 2;
+    }
     if (onlyHit && onlyHit.plan.files) {
-      code = { plan: onlyHit.file, files: fileHashes(onlyHit.plan.files, process.cwd()), gitHead: gitHead(process.cwd()) };
+      // FU-shared-shell (D117): files[] and every module the plan's anchors/components map (a shared shell)
+      code = { plan: onlyHit.file, files: fileHashes(planCodeFiles(onlyHit.plan, process.cwd()), process.cwd()), gitHead: gitHead(process.cwd()) };
+      // L12 (D119 addendum): what the code hashes leave out, beside them in the report's input notes
+      const skipped = planCodeSkippedNote(onlyHit.plan, process.cwd());
+      if (skipped) { compareNotes.push(`${onlyHit.file}: ${skipped}`); console.error(`note  ${compareNotes[compareNotes.length - 1]}`); }
     } else {
       console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.file).join(", ")}) — the report records no code hashes, so its status cannot be tied to the code`
         : all.length ? `note  ${all.map((h) => h.file).join(", ")} list${all.length === 1 ? "s" : ""} no files[] — the report records no code hashes, so verify-build --status cannot tie it to the code`
@@ -3397,7 +3668,7 @@ function main(argv: string[]): number | Promise<number> {
     const beside = path.join(path.dirname(measuredFile), path.basename(vd));
     visualDiff = fs.existsSync(vd) ? { path: vd, exists: true } : fs.existsSync(beside) ? { path: beside.split(path.sep).join("/"), exists: true } : { path: vd, exists: false };
   }
-  const rep = compare(expectation, measured, { ...statusOpt, ...(readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}), ...(readable.dropped.includes("visual") ? { visualMalformed: true } : {}), ...(visualDiff ? { visualDiff } : {}), ...(readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
+  const rep = compare(expectation, measured, { ...statusOpt, ...(readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}), ...(readable.dropped.includes("visual") ? { visualMalformed: true } : {}), ...(visualDiff ? { visualDiff } : {}), ...(readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...(extraInferred !== undefined ? { inferred: extraInferred } : {}), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
   const md = reportToMarkdown(rep);
   write(compareBase, rep, md);
   console.error(rep.headline);
@@ -3408,6 +3679,22 @@ function main(argv: string[]): number | Promise<number> {
   if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) — measured against another screen or an older expectation?`);
   for (const w of rep.waivers.reopened) console.error(`warn  waiver REOPENED ${w.nodeId} (${w.field}): ${w.why}`);
   if (rep.waivers.unused.length) console.error(`note  ${rep.waivers.unused.length} plan waiver(s)/descope(s) match nothing this round: ${rep.waivers.unused.map((w) => `${w.nodeId} (${w.field})`).join(", ")} — fixed? drop them`);
+  // F-100 (D115): the report just written → the tool-owned keys of plan.verification (plan-record.ts). A failure leaves
+  // the report in place and says so (exit 1): the plan then still holds the previous record.
+  if (recordPlanFlag && planHit) {
+    // D129: relative to the project by REAL paths — an absolute --out through a symlink (macOS /tmp → /private/tmp) is
+    // still inside the project
+    const realOf = (p: string): string => { try { return fs.realpathSync(p); } catch { return p; } };
+    const reportRel = path.relative(realOf(process.cwd()), realOf(path.resolve(compareBase + ".report.json"))).split(path.sep).join("/");
+    try {
+      const r = recordPlan(planHit.file, rep, reportRel, { cwd: process.cwd() });
+      for (const n of r.notes) console.error(`note  ${n}`);
+      console.error(r.written ? `recorded ${reportRel} in ${planHit.file} (plan.verification)` : `${planHit.file}: plan.verification already records ${reportRel} — unchanged`);
+    } catch (e) {
+      console.error(`error  --record-plan: ${e instanceof Error ? e.message : String(e)} — ${reportRel} is written; ${planHit.file} was not updated`);
+      return 1;
+    }
+  }
   return isPassingVerdict(rep.verdict) ? 0 : 1;
 }
 
@@ -3455,9 +3742,7 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
     wrote.push(`${at >= 0 ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
   }
   plan.waivers = waivers;
-  const tmp = `${planFile}.${process.pid}.tmp`; // write-then-rename: a crash never leaves half a plan
-  fs.writeFileSync(tmp, JSON.stringify(plan, null, 2) + "\n");
-  fs.renameSync(tmp, planFile);
+  writePlan(planFile, plan); // L5: atomic (a crash never leaves half a plan), in the plan file's own format
   console.error(`wrote ${wrote.length} waiver(s) to ${planFile} (decided by ${by}: ${reason})`);
   for (const w of wrote) console.error(`  ${w}`);
   console.error(`re-run --compare to apply ${wrote.length === 1 ? "it" : "them"}: an accepted delta stays listed, leaves the counts, and reopens if the design is re-exported or the built value moves.`);

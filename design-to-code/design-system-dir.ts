@@ -8,7 +8,7 @@ import type { ComponentsCatalog, IndexRow, IrNode, TextStylesDoc, TokensDoc } fr
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
 import { readOptionalDoc, readSplitFile } from "./catalog-input.ts";
 import { readJsonOrNull } from "./read-json.ts";
-import { isComponentsCatalog, isLibrariesIndex, isPagesRootIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
+import { isComponentsCatalog, isLibrariesIndex, isPageIndex, isPagesRootIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
 
 // `--design-system <dir>` names one of TWO layouts (bridge/src/design-system-layout.ts and
 // library-layout.ts): a design file's design-system/ (components.local.json + the sampled
@@ -161,6 +161,9 @@ export interface ExportNeighbours {
   textsOf?: (row: IndexRow) => FrameTexts | null;
   /** node ids of frames screenshotted into assets/ (<id>_ref.png / <id>_shot@Nx.png) with no index row */
   unexportedShots: string[];
+  /** F-55: the id of every exported frame — the root index's rows and every page index's (pages/<dir>/index.json),
+   *  which can list frames the root's `layers` does not. Absent: read `layers` alone. */
+  exportedIds?: Set<string>;
 }
 // Disk only — the audit-design skill runs without Figma by default (D12), and "is this state drawn
 // somewhere else?" is mostly answerable from the index's titles/texts and the orphan screenshots.
@@ -201,7 +204,14 @@ function findExportNeighbours(screenFile: string): ExportNeighbours | null {
     const m = /^(\d+_\d+)(?:_ref(?:-[0-9A-Za-z]+(?:_\d+)?)?|_shot@[\d.]+x)\.png$/.exec(f);
     if (m && m[1] && !known.has(m[1])) shots.add(m[1].replace("_", ":"));
   }
-  return { layers, unexportedShots: [...shots].sort(), textsOf };
+  // F-55: a prototype target is "exported" when ANY index lists it. Page rows are not added to `layers` (the
+  // same-page state sweep above reads those, and a page index's rows would change what it offers).
+  const exportedIds = new Set(layers.map((l) => l.id));
+  for (const pd of index.pageDirs) {
+    if (!pd.dir || /[\\/]/.test(pd.dir) || pd.dir === "..") continue; // a directory inside pages/ only
+    for (const l of readJsonOrNull(path.join(pages, pd.dir, "index.json"), isPageIndex)?.layers ?? []) exportedIds.add(l.id);
+  }
+  return { layers, unexportedShots: [...shots].sort(), textsOf, exportedIds };
 }
 
 export { readDesignSystemDir, findLibraryExports, findExportNeighbours, discoverCatalogs, readCatalogSet, unionCatalog, catalogSetLine };

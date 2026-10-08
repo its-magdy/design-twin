@@ -38,6 +38,7 @@ import { isPageIndex, isPagesRootIndex } from "./doc-guards.ts";
 // hidden.ts's one predicate: `hidden: true` on the node or an ancestor. Both walks below return at a
 // hidden node, so its whole subtree is skipped — ancestry is carried by not descending.
 import { hiddenSelf } from "./hidden.ts";
+import { outermostControl, isDisabledLayer } from "./control-kind.ts";
 import { parseHex, contrastRatio, composeAlpha, compositeOver } from "./color.ts";
 import type { Rgba } from "./color.ts";
 import { readDocFile } from "./catalog-input.ts";
@@ -48,7 +49,7 @@ import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import type {
-  CatalogComponent, CodeConnectMap, ComponentProposal, ComponentsCatalog, ContrastFailure, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
+  CatalogComponent, CodeConnectMap, ComponentProposal, ComponentsCatalog, ContrastFailure, TokenPairRow, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
   BlockerCode, IndexRow, IrNode, MatchResult, MatchRow, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -91,9 +92,11 @@ export interface CrossCheckInput {
 }
 
 // D1: "blocker" only with a BlockerCode — any other blocker is a compile error.
+// `nodeId` (a Finding field, not an extra): the node a finding is about, when there is one.
+type PushExtra = FindingExtras & { nodeId?: string };
 interface Push {
-  (severity: "blocker", code: BlockerCode & CrossCheckFindingCode, message: string, extra?: FindingExtras): void;
-  (severity: "warning" | "info", code: CrossCheckFindingCode, message: string, extra?: FindingExtras): void;
+  (severity: "blocker", code: BlockerCode & CrossCheckFindingCode, message: string, extra?: PushExtra): void;
+  (severity: "warning" | "info", code: CrossCheckFindingCode, message: string, extra?: PushExtra): void;
 }
 
 // Visible layers only: a token bound on a layer the designer switched off is not built, so it is not
@@ -136,7 +139,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
 
   const findings: CrossCheckFinding[] = [];
   const notChecked: string[] = [];
-  const push: Push = (severity: Severity, code: CrossCheckFindingCode, message: string, extra?: FindingExtras): void => { findings.push(Object.assign({ severity, code, message }, extra || {})); };
+  const push: Push = (severity: Severity, code: CrossCheckFindingCode, message: string, extra?: PushExtra): void => { findings.push(Object.assign({ severity, code, message }, extra || {})); };
 
   // ---------------------------------------------------------------- what the screens actually use
   const usedTokenNames = new Map<string, UsedAt[]>(); // name -> [{screen, nodeId, field}]
@@ -191,7 +194,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     if (c.name) dsCollByName.set(norm(c.name), c);
   }
   const screenColls = (variables && variables.collections) || [];
-  let foreignPatch: { foreign: Array<{ name: string }>; head: string; tail: string; at: number } | null = null;
+  let foreignPatch: { foreign: Array<{ name: string; key?: string }>; head: string; tail: string; at: number } | null = null;
 
   if (!tokens) {
     notChecked.push(
@@ -324,19 +327,30 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   }
 
   // DT-07: classify the screen's variables in the flagged foreign collections against the design system BY
-  // NAME (collection-blind, K-4): agree / differ / undecidable / absent — the offline answer to "can I map by name?".
-  // Collections are matched by NAME too: when the screen uses two collections of one name (two `Spacing`,
-  // different keys) and only one is flagged, the other's variables are counted in as well (K-4).
+  // NAME (collection-blind): agree / differ / undecidable / absent — the offline answer to "can I map by name?".
+  // Which variables are IN a foreign collection is decided by the collection's KEY when the row carries one
+  // (`collectionKey`, FU-namemap: names repeat — two `Spacing`, one of them the design system's own). An
+  // export from before collection keys has only the collection NAME: those rows are matched by name as
+  // before, and counted in `ambiguous` when a non-foreign collection of the screen has that name too (the
+  // row may belong to either of them).
   if (foreignPatch) {
     const fp = foreignPatch;
     const foreignNames = new Set(fp.foreign.map((f) => f.name));
+    const foreignKeys = new Set(fp.foreign.map((f) => f.key).filter((k): k is string => !!k));
+    const screenKeys = new Set(screenColls.map((c) => c.key).filter((k): k is string => !!k));
+    const sharedNames = new Set(screenColls.filter((c) => c.key && dsCollByKey.has(c.key) && foreignNames.has(c.name)).map((c) => c.name));
     const nameMap = { agree: 0, differ: 0, undecidable: 0, absent: 0 };
+    let ambiguous = 0;
     const seen = new Set<string>();
     for (const v of screenVars) {
-      if (!v || !v.name || !v.collection || !foreignNames.has(v.collection)) continue;
+      if (!v || !v.name || !v.collection) continue;
+      // A key the screen's collection list does not know cannot select anything: fall back to the name.
+      const byKey = !!v.collectionKey && screenKeys.has(v.collectionKey);
+      if (byKey ? !foreignKeys.has(v.collectionKey ?? "") : !foreignNames.has(v.collection)) continue;
       const id = v.key || `${v.collection}\u0000${v.name}`;
       if (seen.has(id)) continue;
       seen.add(id);
+      if (!byKey && sharedNames.has(v.collection)) ambiguous++;
       const dv = dsVarByName.get(v.name);
       if (!dv) { nameMap.absent++; continue; }
       const r = sameResolution(v, dv);
@@ -354,10 +368,13 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           : "") +
         (nameMap.agree === 0 && nameMap.absent === n
           ? `None of them exists here by name — this is not the screen's library; pull the one it uses. `
+          : "") +
+        (ambiguous
+          ? `(${ambiguous} of them come from a collection whose name a design-system collection also has — this export predates collection keys on variables; re-pull to tell them apart.) `
           : "");
     }
     const f = findings[fp.at];
-    if (f) { f.message = fp.head + offline + fp.tail; f.nameMap = nameMap; }
+    if (f) { f.message = fp.head + offline + fp.tail; f.nameMap = ambiguous ? { ...nameMap, ambiguous } : nameMap; }
   }
 
   if (tokens && screenVarByName.size) {
@@ -832,6 +849,13 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     }
   }
 
+  // ---------------------------------------------------------------- F-126: one screen, two modes
+  // Every collection in the file appears in a root's resolvedModes (Figma lists them all, each in the mode
+  // it inherits), so "the root resolves collections in different modes" is true of every real screen. The
+  // signal is narrower: the collections the screen binds a COLOUR from, sharing a mode vocabulary, resolve
+  // to different mode names — a Dark screen whose two tags bind a starter-kit collection still in Light.
+  mixedModeBindings(screens, variables, tokens, push);
+
   // ---------------------------------------------------------------- contrast in the modes nobody drew
   //
   // When only the Dark frame was exported, every other mode is DERIVED from variable values and has
@@ -844,6 +868,9 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   // bound to, its ancestors carry the token their background is bound to, and the variable file gives
   // both tokens' value in EVERY mode. So resolve the pair per mode and do the contrast arithmetic.
   contrastPerMode(screens, variables, tokens, push, resolvedModes);
+  // DT-63: …and in the modes that WERE rendered, one table for the whole run (info: the per-screen audit
+  // does not merge cross-file info, so this is never doubled into each screen's own findings).
+  contrastRendered(screens, variables, tokens, push);
 
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
   // F-44: every finding carries the id a plan's auditGate.overridden names (finding-id.ts) — the same
@@ -971,6 +998,36 @@ function composedRgba(color: Rgba | null, opacity: number | null): Rgba | null {
   return { ...color, a: composeAlpha(color.a, opacity) };
 }
 
+const aliasName = (val: unknown): string | null =>
+  val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
+// A FLOAT token's number, following aliases (the opacity half of a composed colour). `valueOf` is the
+// token's raw value in whatever mode the caller resolves in.
+function resolveNumberWith(valueOf: (name: string) => VariableValue | undefined, name: string, depth: number): number | null {
+  if (depth > 8) return null;
+  const val = valueOf(name);
+  if (typeof val === "number") return Number.isFinite(val) ? val : null;
+  const next = aliasName(val);
+  return next ? resolveNumberWith(valueOf, next, depth + 1) : null;
+}
+// A token's colour, following aliases. Depth-limited rather than cycle-tracked: a Figma alias chain is
+// two or three links in practice, and a malformed file must not hang the check.
+function resolveColourWith(valueOf: (name: string) => VariableValue | undefined, name: string, depth: number): Rgba | null {
+  if (depth > 8) return null;
+  const val = valueOf(name);
+  if (typeof val === "string") return parseHex(val);
+  const next = aliasName(val);
+  if (next) return resolveColourWith(valueOf, next, depth + 1);
+  // A composed colour (doc-types ComposedColor): the colour half (alias -> resolved, hex -> parsed)
+  // and the opacity half (a number, or an alias -> that FLOAT's number), folded by composedRgba.
+  if (val && typeof val === "object" && "composed" in val) {
+    const { color, opacity } = val.composed;
+    const c = typeof color === "string" ? parseHex(color) : resolveColourWith(valueOf, color.aliasOf, depth + 1);
+    const o = typeof opacity === "number" ? opacity : resolveNumberWith(valueOf, opacity.aliasOf, depth + 1);
+    return composedRgba(c, o);
+  }
+  return null;
+}
+
 function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | null, tokens: TokensDoc | null, push: Push, resolvedModes: Map<string, Set<string>>): void {
   const defs = new Map<string, Variable>(); // token name -> variable record (the screen's own library wins: it is what the screen binds)
   for (const v of (tokens && tokens.variables) || []) if (v.name) defs.set(v.name, v);
@@ -987,34 +1044,7 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
     const [onlyKey] = keys;
     return keys.length === 1 && onlyKey !== undefined ? v.values[onlyKey] : undefined; // several modes and none of them is this one — do not guess
   }
-  const aliasName = (val: unknown): string | null =>
-    val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
-  // A FLOAT token's number in one mode, following aliases (the opacity half of a composed colour).
-  function resolveNumber(name: string, mode: string, depth: number): number | null {
-    if (depth > 8) return null;
-    const val = valueIn(name, mode);
-    if (typeof val === "number") return Number.isFinite(val) ? val : null;
-    const next = aliasName(val);
-    return next ? resolveNumber(next, mode, depth + 1) : null;
-  }
-  // A token's hex in one mode, following aliases. Depth-limited rather than cycle-tracked: a Figma
-  // alias chain is two or three links in practice, and a malformed file must not hang the check.
-  function resolve(name: string, mode: string, depth: number): Rgba | null {
-    if (depth > 8) return null;
-    const val = valueIn(name, mode);
-    if (typeof val === "string") return parseHex(val);
-    const next = aliasName(val);
-    if (next) return resolve(next, mode, depth + 1);
-    // A composed colour (doc-types ComposedColor): the colour half (alias -> resolved, hex -> parsed)
-    // and the opacity half (a number, or an alias -> that FLOAT's number), folded by composedRgba.
-    if (val && typeof val === "object" && "composed" in val) {
-      const { color, opacity } = val.composed;
-      const c = typeof color === "string" ? parseHex(color) : resolve(color.aliasOf, mode, depth + 1);
-      const o = typeof opacity === "number" ? opacity : resolveNumber(opacity.aliasOf, mode, depth + 1);
-      return composedRgba(c, o);
-    }
-    return null;
-  }
+  const resolve = (name: string, mode: string, depth: number): Rgba | null => resolveColourWith((n) => valueIn(n, mode), name, depth);
 
   // Which modes to check: every mode of every collection that actually defines one of the tokens in
   // play. Names are per-collection, so this is a union of names, not a cross-product.
@@ -1094,12 +1124,268 @@ function walkWithBg(node: IrNode | null | undefined, bgToken: string | null, fn:
   // Was `node.visible === false`, which the export never uses — so every hidden layer's text was
   // contrast-checked. `hidden` (and, by not descending, its ancestry) is the flag.
   if (hiddenSelf(node)) return;
-  let bg = bgToken;
-  const own = (node.tokens && node.tokens.fills) ||
-    ((node.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean));
-  if (own && typeof own === "string" && node.type !== "TEXT") bg = own;
+  const bg = backdropTokenAfter(node, bgToken);
   fn(node, bg);
   for (const c of node.children || []) walkWithBg(c, bg, fn);
+}
+// The backdrop TOKEN a node leaves for its subtree (H-1 of review 1). A token-bound opaque solid fill names it; anything
+// else the node paints — a gradient / image / video / pattern / shader, a raw solid, a translucent fill — leaves a
+// colour no token names, so the backdrop is UNKNOWN (null: no pair is judged under it; the audit's contrast-manual /
+// low-contrast measure what renders). No fill, or a fully transparent one, leaves it as it was; a TEXT's fill is its
+// glyph colour. A node-level `tokens.fills` with no `fills[]` (older exports, hand-written inputs) still names it.
+function backdropTokenAfter(n: IrNode, above: string | null): string | null {
+  if (n.type === "TEXT") return above;
+  const fills = (n.fills || []).filter(Boolean);
+  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+  if (!fills.length) return nodeTok ?? above;
+  let cur = above;
+  for (const f of fills) {
+    if (f.opacity === 0) continue;
+    if (f.type !== "solid") { cur = null; continue; }
+    const c = parseHex(f.color);
+    if (c && c.a <= 0) continue;
+    const t = f.tokens && f.tokens.color;
+    const tok = typeof t === "string" && t ? t : fills.length === 1 ? nodeTok : null;
+    cur = tok && (!c || c.a >= 1) ? tok : null;
+  }
+  return cur;
+}
+// The colour token a node's fill is bound to (the node-level binding, else the first bound fill paint).
+function fillToken(n: IrNode): string | null {
+  const own = (n.tokens && n.tokens.fills) || ((n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean));
+  return own && typeof own === "string" ? own : null;
+}
+// A text node's colour token: its fill binding, a uniform run binding, or the text-level one.
+function textToken(n: IrNode): string | null {
+  const t = n.tokens || {}, tt = n.textTokens || {};
+  for (const x of [t.fills, t.textRangeFills, fillToken(n), tt.fills]) if (typeof x === "string" && x) return x;
+  return null;
+}
+// Every COLOUR binding on a node, for F-126: fill / stroke keys of `tokens`, bound fill paints, text fills.
+function colourBindings(n: IrNode): string[] {
+  const out: string[] = [];
+  const add = (x: unknown): void => { for (const s of Array.isArray(x) ? x : [x]) if (typeof s === "string" && s && !out.includes(s)) out.push(s); };
+  for (const [k, v] of Object.entries(n.tokens || {})) if (/fill|stroke/i.test(k)) add(v);
+  for (const f of n.fills || []) add(f && f.tokens && f.tokens.color);
+  add((n.textTokens || {}).fills);
+  return out;
+}
+
+// ---------------------------------------------------------------- F-126: mixed-mode colour bindings
+// Per screen root: each visible colour binding's variable -> its collection (the screen's own .vars.json,
+// else the merged variables.json, else the design system's tokens). Only multi-mode collections the root
+// resolves (resolvedModes) count. They are grouped by shared mode vocabulary (a collection joins a group
+// when it declares a mode name some member declares); in each group the majority mode is the one with the most
+// bindings, and a collection bound in another mode is a mix only when it ALSO declares the majority mode
+// (Dark/Light). A breakpoint collection on Desktop beside a theme on Dark is not a mix, a Brand 1/Brand 2
+// collection never outvotes a theme, and a collection the screen resolves but binds nothing from is not counted
+// (every collection in the file is in resolvedModes). One warning per mixed group; `bindings` rows carry at
+// most 20 tokens and 8 nodes each.
+/** One bound colour collection on one screen root: the mode it resolves in and what binds it. */
+interface ModeUse { coll: VariableCollection; mode: string; count: number; tokens: string[]; nodes: string[]; samples: string[] }
+function mixedModeBindings(screens: CrossCheckScreen[], variables: TokensDoc | null, tokens: TokensDoc | null, push: Push): void {
+  for (const s of screens) {
+    const label = s.label || screenExportOf(s.doc)?.screen || "screen";
+    const defs = new Map<string, Variable>();
+    for (const doc of [tokens, variables, s.vars || null]) for (const v of (doc && doc.variables) || []) if (v.name) defs.set(v.name, v);
+    const colls: VariableCollection[] = [...((s.vars && s.vars.collections) || []), ...((variables && variables.collections) || []), ...((tokens && tokens.collections) || [])];
+    // Same-named collections exist (a one-mode and a three-mode `Spacing`): the row's `collectionKey` picks one
+    // when both sides carry a key (L6); else the one declaring every mode the variable has values for.
+    const collOf = (v: Variable): VariableCollection | undefined => {
+      const keyed = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && Array.isArray(c.modes)) : undefined;
+      if (keyed) return keyed;
+      const named = colls.filter((c) => c.name === v.collection && Array.isArray(c.modes));
+      const modes = Object.keys(v.values || {});
+      return named.find((c) => modes.every((m) => c.modes.includes(m))) ?? named[0];
+    };
+    for (const root of screenRoots(s.doc)) {
+      const rm = root.resolvedModes;
+      if (!rm) continue;
+      const use = new Map<string, ModeUse>();
+      walk(root, (n) => {
+        for (const name of colourBindings(n)) {
+          const v = defs.get(name);
+          if (!v || v.type !== "COLOR") continue;
+          const c = collOf(v);
+          const mode = c ? rm[c.name] : undefined;
+          if (!c || c.modes.length < 2 || mode === undefined) continue;
+          const u = getOrInit(use, c.name, () => ({ coll: c, mode, count: 0, tokens: [], nodes: [], samples: [] }));
+          u.count++;
+          if (!u.tokens.includes(name) && u.tokens.length < 20) u.tokens.push(name);
+          if (!u.nodes.includes(n.id) && u.nodes.length < 8) u.nodes.push(n.id);
+          if (u.samples.length < 3) u.samples.push(`'${name}' on '${n.name}'`);
+        }
+      });
+      // M-1: the majority is chosen per group of collections that share a mode vocabulary (connected by "declares a
+      // mode name of the other"): a Brand 1 / Brand 2 collection never outvotes Theme=Dark vs Kit=Light.
+      const groups: ModeUse[][] = [];
+      for (const u of use.values()) {
+        const joined = groups.filter((g) => g.some((o) => o.coll.modes.some((m) => u.coll.modes.includes(m))));
+        const merged = [...joined.flat(), u];
+        for (const g of joined) groups.splice(groups.indexOf(g), 1);
+        groups.push(merged);
+      }
+      for (const group of groups) {
+        const perMode = new Map<string, number>();
+        for (const u of group) perMode.set(u.mode, (perMode.get(u.mode) || 0) + u.count);
+        if (perMode.size < 2) continue;
+        const [major] = [...perMode].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] ?? [];
+        if (major === undefined) continue;
+        const majority = group.filter((u) => u.mode === major);
+        const minority = group.filter((u) => u.mode !== major && u.coll.modes.includes(major));
+        const first = minority[0];
+        if (!first) continue;
+        const names = (list: typeof minority): string => list.map((u) => `'${u.coll.name}'`).join(", ");
+        const minModes = [...new Set(minority.map((u) => `'${u.mode}'`))].join("/");
+        push(
+          "warning",
+          "mixed-mode-bindings",
+          `'${label}' renders ${names(majority)} in '${major}' (×${perMode.get(major)} bindings) but ` +
+            minority.map((u) => `'${u.coll.name}' in '${u.mode}' (×${u.count}: ${u.samples.join(", ")}${u.count > u.samples.length ? " …" : ""})`).join(", ") +
+            ` — ${minority.length > 1 ? "tokens from these collections show their" : `a token from '${first.coll.name}' shows its`} ${minModes} value in a '${major}' screen. ` +
+            `Pin ${names(minority)} to '${major}' in Figma (the frame's variable mode), or alias these tokens under a role name in code — a theme built from one mode per collection gives them their '${major}' value, which nobody drew.`,
+          {
+            ...ifDefined("nodeId", first.nodes[0]), // the first node binding a minority-mode token
+            bindings: [...majority, ...minority].map((u) => ({ collection: u.coll.name, mode: u.mode, tokens: u.tokens, nodes: u.nodes })),
+            confirm: `'${label}' binds ${minority.reduce((k, u) => k + u.count, 0)} colour token(s) from ${names(minority)} in ${minModes} while the rest of the screen is '${major}' — intended, or should they follow '${major}'? Until confirmed, build what was drawn (the ${minModes} values).`,
+          }
+        );
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- DT-63: token pairs in the RENDERED modes
+// contrastPerMode covers the modes nobody drew; this covers the ones that WERE drawn, deduplicated over the
+// run — the same input-border token on the same field background fails on every screen that has a form,
+// and the designer is asked once per pair, not once per screen. Per screen root, each token resolves in the
+// mode the root renders its collection in (resolvedModes; else the collection's exported default; a
+// one-mode variable's only value). Pairs:
+//   * text: the text's colour token on the token-bound background around it — 4.5:1, 3:1 for large text
+//     (≥ 24px, or ≥ 18.66px bold — WCAG 2.2's 18pt / 14pt bold);
+//   * non-text (WCAG 1.4.11): a CONTROL's stroke token (D126: the audit's non-text-contrast name rule —
+//     the layer or its nearest 3 ancestors named an input / select / toggle; a badge's border is decoration)
+//     against the background ABOVE the control's outermost layer — the colour outside the control, never its
+//     own fill, even when the fill is on the instance and the border on an inner frame — at 3:1; skipped when
+//     what the control paints inside already contrasts 3:1 with that background (the fill draws the boundary).
+// The background is known only while every fill between it and the node is a token-bound opaque solid: a
+// gradient / image / raw or translucent fill in between makes it unknown and the pair is not judged (H-1 — the
+// audit's contrast-manual / low-contrast cover it). Disabled variants (control-kind.ts isDisabledLayer, and
+// everything inside them) are exempt under both SCs. LINE nodes (dividers) and transparent strokes are not checked.
+const LARGE_TEXT_PX = 24, LARGE_BOLD_TEXT_PX = 18.66, NON_TEXT_CONTRAST = 3;
+function isLargeText(n: IrNode): boolean {
+  const f = n.font;
+  const size = f && typeof f.size === "number" ? f.size : 0;
+  const bold = !!f && (typeof f.weightValue === "number" ? f.weightValue >= 700 : /(^|\s)(extra\s*)?(bold|black|heavy)/i.test(f.weight || "") && !/semi|demi/i.test(f.weight || ""));
+  return size >= LARGE_TEXT_PX || (size >= LARGE_BOLD_TEXT_PX && bold);
+}
+// M-5: the audit's rule (control-kind.ts) — "State=Disabled", "Disabled=True", a BOOLEAN `Disabled` prop.
+const isDisabledVariant = (n: IrNode): boolean => n.type === "INSTANCE" && isDisabledLayer(n);
+function contrastRendered(screens: CrossCheckScreen[], variables: TokensDoc | null, tokens: TokensDoc | null, push: Push): void {
+  const rows = new Map<string, TokenPairRow>();
+  for (const s of screens) {
+    const label = s.label || screenExportOf(s.doc)?.screen || "screen";
+    const defs = new Map<string, Variable>(); // the screen's own variables win: they are what it binds
+    for (const doc of [tokens, variables, s.vars || null]) for (const v of (doc && doc.variables) || []) if (v.name) defs.set(v.name, v);
+    if (!defs.size) continue;
+    const colls: VariableCollection[] = [...((s.vars && s.vars.collections) || []), ...((variables && variables.collections) || []), ...((tokens && tokens.collections) || [])];
+    for (const root of screenRoots(s.doc)) {
+      const rm = root.resolvedModes || {};
+      // The mode a variable renders in on this root; undefined = several modes and no way to pick one.
+      const modeOf = (v: Variable): string | undefined => {
+        const keys = Object.keys(v.values || {});
+        const coll = v.collection;
+        const r = coll !== undefined ? rm[coll] : undefined;
+        if (r !== undefined && keys.includes(r)) return r;
+        // The collection's default: by `collectionKey` when both sides carry one (same-named collections — L6),
+        // else by name. resolvedModes above is keyed by name only, so that half cannot tell them apart.
+        const hasDefault = (c: VariableCollection): boolean => c.default !== undefined && keys.includes(c.default);
+        const byKey = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && hasDefault(c)) : undefined;
+        const def = (byKey ?? colls.find((c) => c.name === coll && hasDefault(c)))?.default;
+        if (def !== undefined) return def;
+        return keys.length === 1 ? keys[0] : undefined;
+      };
+      const valueOf = (name: string): VariableValue | undefined => {
+        const v = defs.get(name);
+        const m = v ? modeOf(v) : undefined;
+        return v && m !== undefined ? v.values[m] : undefined;
+      };
+      const resolve = (name: string): Rgba | null => resolveColourWith(valueOf, name, 0);
+      // the mode label a row is keyed by: the modes of the pair's multi-mode variables
+      const modeLabel = (...names: string[]): string => {
+        const ms: string[] = [];
+        for (const nm of names) {
+          const v = defs.get(nm);
+          const m = v && Object.keys(v.values || {}).length > 1 ? modeOf(v) : undefined;
+          if (m !== undefined && !ms.includes(m)) ms.push(m);
+        }
+        return ms.join("/") || "single mode";
+      };
+      const check = (kind: TokenPairRow["kind"], fgTok: string, bgTok: string, required: number, nodeId: string): void => {
+        const fg = resolve(fgTok), bg = resolve(bgTok);
+        if (!fg || !bg) return; // not defined in the rendered mode — say nothing rather than guess
+        if (kind === "non-text" && fg.a <= 0) return; // a fully transparent border paints nothing to measure
+        const r = contrastRatio(fg.a < 1 ? compositeOver(fg, bg) : fg, bg);
+        if (r >= required) return;
+        const mode = modeLabel(fgTok, bgTok);
+        const row = getOrInit(rows, [kind, fgTok, bgTok, mode].join("\u0000"), () => ({ kind, fg: fgTok, bg: bgTok, mode, ratio: Number(r.toFixed(2)), required, screens: [], nodes: [] }));
+        if (!row.screens.includes(label)) row.screens.push(label);
+        if (row.nodes.length < 4 && !row.nodes.includes(nodeId)) row.nodes.push(nodeId);
+      };
+      // `above`: the backdrop token around n (null = unknown, H-1); `aboves[i]`: the one around ancestors[i].
+      const visit = (n: IrNode, above: string | null, disabled: boolean, ancestors: IrNode[], aboves: Array<string | null>): void => {
+        if (hiddenSelf(n)) return;
+        const off = disabled || isDisabledVariant(n);
+        const next = backdropTokenAfter(n, above);
+        if (!off && n.type === "TEXT") {
+          const fg = textToken(n);
+          if (fg && above) check("text", fg, above, isLargeText(n) ? NON_TEXT_CONTRAST : MIN_CONTRAST, n.id);
+        } else if (!off && n.type !== "LINE") {
+          const st = n.tokens && n.tokens.strokes;
+          const w = n.strokes ? Math.max(n.strokes.weight || 0, ...Object.values(n.strokes.weights || {}).map((x) => x || 0)) : 0;
+          const colours = (n.strokes && n.strokes.colors) || [];
+          const painted = !colours.length || colours.some((c) => { const x = parseHex(c); return !x || x.a > 0; });
+          // M-2: the colour outside the control is the backdrop above its OUTERMOST layer (the fill may sit on the
+          // instance and the border on an inner frame); the fills from that layer down to n may draw the boundary.
+          const outer = typeof st === "string" && st && w > 0 && painted ? outermostControl([n, ...ancestors.slice(-3).reverse()]) : -1;
+          const outside = outer < 0 ? null : outer === 0 ? above : aboves[ancestors.length - outer] ?? null;
+          const bg = outside ? resolve(outside) : null;
+          if (typeof st === "string" && outside && bg) {
+            // what the control paints inside, from its outermost layer down to n, over the backdrop — the rendered
+            // hex (the exported mode's value); a gradient / image in there leaves the rescue unknown: no row
+            let inner: Rgba | null = null, unknown = false;
+            for (const l of [...ancestors.slice(ancestors.length - outer), n]) {
+              const fills = (l.fills || []).filter(Boolean);
+              const lt = !fills.length && l.tokens && typeof l.tokens.fills === "string" ? resolve(l.tokens.fills) : null;
+              if (lt) inner = compositeOver(lt, inner || bg);
+              for (const f of fills) {
+                if (f.opacity === 0) continue;
+                if (f.type !== "solid") { unknown = true; break; }
+                const c = parseHex(f.color);
+                if (c && c.a > 0) inner = compositeOver(c, inner || bg);
+              }
+            }
+            const rescued = !!inner && contrastRatio(inner, bg) >= NON_TEXT_CONTRAST;
+            if (!rescued && !unknown) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
+          }
+        }
+        const chain = [...ancestors, n], chainAbove = [...aboves, above];
+        for (const c of n.children || []) visit(c, next, off, chain, chainAbove);
+      };
+      visit(root, null, false, [], []);
+    }
+  }
+  if (!rows.size) return;
+  const list = [...rows.values()].sort((a, b) => b.screens.length - a.screens.length || a.ratio - b.ratio || a.fg.localeCompare(b.fg));
+  push(
+    "info",
+    "token-pair-contrast",
+    `${list.length} token pair(s) fail WCAG in the rendered mode(s) — ask the designer once per pair: ` +
+      list.slice(0, 8).map((p) => `${p.kind === "text" ? "" : "stroke "}'${p.fg}' on '${p.bg}' (${p.mode}) ${p.ratio}:1 < ${p.required}:1 — ${p.screens.length} screen(s)`).join("; ") +
+      (list.length > 8 ? `; … (${list.length} in all — see tokenPairs)` : "") +
+      `. Token-level: the token-bound background (a gradient / image / raw or translucent fill in between is not judged), no compositing — the per-screen audit's low-contrast / non-text-contrast / contrast-manual measure what renders.`,
+    { tokenPairs: list }
+  );
 }
 
 function toMarkdown(res: CrossCheckReport): string {
@@ -1163,6 +1449,16 @@ function toMarkdown(res: CrossCheckReport): string {
     if (!fs.length) continue;
     L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs.length})`, "");
     for (const f of fs) L.push(`- \`${f.code}\` ${f.message}`);
+    L.push("");
+  }
+  // DT-63: the run's failing token pairs, one row each — the question to ask the designer once.
+  const pairs = res.findings.find((f) => f.code === "token-pair-contrast")?.tokenPairs || [];
+  if (pairs.length) {
+    L.push("## Token pairs below WCAG in the rendered modes — ask once per pair", "");
+    L.push("| kind | foreground | background | mode | ratio | needs | screens | nodes |", "|---|---|---|---|--:|--:|---|---|");
+    for (const p of pairs) {
+      L.push(`| ${p.kind} | \`${p.fg}\` | \`${p.bg}\` | ${p.mode} | ${p.ratio}:1 | ${p.required}:1 | ${p.screens.length}: ${p.screens.slice(0, 4).join(", ")}${p.screens.length > 4 ? ", …" : ""} | ${p.nodes.join(", ")} |`);
+    }
     L.push("");
   }
   if (res.notChecked.length) {

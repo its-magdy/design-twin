@@ -38,7 +38,8 @@ Field names are exact; units and shapes are in `../../build-screen/references/ir
 ## 2. Tokens and design-system binding
 - **Colors bound?** `fills[].tokens`, `strokes` tokens, `styles.fill`, text `textTokens.fills` /
   `runs[].tokens`. Report the binding % from the audit; list unbound literals that are near an
-  existing token (likely drift) vs genuinely new values (ask: new token or one-off?).
+  existing token (likely drift — `near-token-color` names any within ΔE 1 of a token's value) vs
+  genuinely new values (ask: new token or one-off?). Either way the build uses the literal until answered.
 - **Semantic vs primitive.** Bindings should hit semantic tokens (`tier:"semantic"` in
   `design-system/tokens.json`); a node bound straight to a primitive (`blue/600`) won't theme.
 - **Spacing and radius bound?** `tokens.itemSpacing`/`padding*`/`*Radius`. Unbound values off the
@@ -83,7 +84,9 @@ Field names are exact; units and shapes are in `../../build-screen/references/ir
 - **Scroll + sticky.** `clip`, `scroll` (direction), `fixedChildren` (the LAST N of `children[]` — pinned header/footer).
   Which region scrolls? Does the header collapse? Pull-to-refresh? Ask if a long list has no scroll
   container marked.
-- **Z-order.** `layout.reverseZ`, overlapping absolute children.
+- **Z-order.** `layout.reverseZ`, overlapping absolute children. An absolute root child with the same
+  texts and size as an in-flow node (`duplicate-root-subtree`) is a stray copy pasted over the frame —
+  build the in-flow one.
 
 ## 5. Sizing and responsiveness
 - **Hug / fill / fixed.** `widthMode`/`heightMode` (`fill`|`hug`, absent = fixed). A fixed width on a
@@ -104,6 +107,11 @@ Field names are exact; units and shapes are in `../../build-screen/references/ir
   Ask when the drawing deviates from the platform look.
 - **Props.** `props` on instances (variant values, booleans, text, instance swaps) → the code API.
   Many `overrides` on one instance or a `detachedFrom` → a missing variant or a one-off fork; ask.
+- **Default copy left in.** An instance text with no `characters` override still shows the component's
+  copy; when another instance of the same component overrides that layer (`default-copy-in-instance`),
+  the default one may be a placeholder ("Description", "Label") — ask. The audit does not judge a text
+  driven by a TEXT property (`propRefs.characters`): compare the instance's `props` value with the
+  component's default yourself.
 - **Variant explosion** (>30 combos in hygiene) → the code API should be props, not one component per
   combo.
 
@@ -115,6 +123,10 @@ name), check the component's variant options in `components.local.json` — stat
   access), hover (web/iPad pointer/desktop only), loading (async actions), selected (toggles).
 - **Inputs:** default, focused, filled, error (+ message placement), disabled, read-only, with
   helper text, with character counter.
+- **Selects / dropdowns / date pickers:** also the OPEN state — the list or calendar. Real selects are
+  often the generic input component with a "Select …" prompt or a chevron/calendar icon; the audit's
+  `undesigned-open-state` names those whose component draws no open variant. Ask: native picker or a
+  designed list (and which frame draws it).
 - **Toggles/checkbox/radio:** on, off, indeterminate, disabled, focus.
 - **Tabs/nav items/chips:** selected, unselected, pressed, disabled, badge.
 - **Missing state →** ask; default: derive from the design system's existing state tokens (e.g.
@@ -160,7 +172,9 @@ Ask for rules (or state defaults) for data-driven content:
   `scroll_to`, or `type` `back`/`close`/`url`/`set_variable`/`conditional`) → destination. Dead ends: tappable-looking elements with no reaction
   → ask where they go.
 - `overlay` frames: presentation (sheet, dialog, popover, full-screen), scrim, dismiss (tap outside,
-  swipe, Esc, back button).
+  swipe, Esc, back button). A target no index lists (`prototype-target-not-exported`; a navigate row
+  says `NOT exported`) was probably never pulled — extract it before building, don't design it (a frame
+  nested in a SECTION or another frame has no index row: search `design/export/pages` for its id first).
 - Transitions: `transition.type`, `duration` (seconds), `easing`/`cubicBezier`/`spring`. Smart-animate
   implies shared-element/matched-geometry work — confirm it's worth it.
 - Gestures Figma can't express: swipe actions, long press, drag-to-reorder, pull-to-refresh, pinch;
@@ -194,6 +208,11 @@ For each: the profile's approximation, and whether the designer accepts it.
 ## 14. Accessibility
 - **Contrast:** text 4.5:1 (normal) / 3:1 (≥24px or ≥18.66px bold); UI component boundaries and
   meaningful icons 3:1 — in every state and theme. Text on images/gradients needs a manual check.
+  `non-text-contrast` measures an input/select/toggle border against the colour AROUND the control
+  (WCAG 1.4.11's adjacent colour, not its own inside — also when the fill is on the instance and the
+  border on an inner frame); a fill that reaches 3:1 against it is a boundary too. Placeholder text
+  inside does not excuse the border; a disabled variant (`State=Disabled`, `Disabled=True`) is exempt.
+  Dividers (LINE layers), icons and gradient/image backdrops are not measured — check them by eye.
 - **Touch targets:** 44×44pt iOS, 48×48dp Android, 24×24 CSS px minimum web (WCAG 2.5.8 AA; 44
   recommended). Visual can be smaller if the hit area is padded.
 - **Semantics:** what each element is (button vs link, heading levels, list, image vs decorative),

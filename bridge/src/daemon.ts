@@ -273,7 +273,37 @@ export function installCrashHandlers(log: (m: string) => void, cleanup?: () => v
 // state (serializeRun in bridge.ts) — two concurrent exports interleave badly. One queue here means
 // the daemon behaves exactly like a sequence of one-shot CLI runs, which is the behaviour every
 // existing caller was written against.
-export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true, crashHandlers = signals }: ServeOptions = {}): Promise<{ sock: string; shutdown: () => void }> {
+/** The idle window a daemon uses when its host names none: FIGMA_DAEMON_IDLE_MIN minutes (default 120), in
+ *  ms. 0 — and an unparsable value, as it always was — disables the idle shutdown. The ONE spelling of the
+ *  rule: serve() reads it, and so does the MCP server once its own client has gone (figma-mcp.ts). */
+export function idleMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  return minutesToMs(env.FIGMA_DAEMON_IDLE_MIN ?? 120);
+}
+const minutesToMs = (min: unknown): number => Math.max(0, Number(min)) * 60000 || 0;
+
+/** An idle window for a log line: whole minutes from one minute up, else whole seconds. The ONE spelling
+ *  (serve()'s idle shutdown line and figma-mcp.ts's after-the-client-left lines). */
+export function humanMs(ms: number): string {
+  return ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.round(ms / 1000)}s`;
+}
+
+/** What the served socket has seen so far — read by a host that has to decide whether OTHER processes
+ *  use it (figma-mcp.ts, after its own client went away). `frames` counts every frame received since
+ *  serve() started, control frames (`__ping`/`__status`) included; `inFlight` is forwarded requests
+ *  queued or running; `lastActivity` is the epoch ms of the last frame or finished request. */
+export interface DaemonActivity { frames: number; inFlight: number; lastActivity: number }
+
+/** serve()'s handle. `idleOut(ms)` (re)arms the idle shutdown with a window of `ms` (0 disarms it): an
+ *  unref'd check every min(30 s, ms) that shuts down once nothing is in flight and the socket has been
+ *  quiet for `ms` — and it checks once AT ONCE, so a socket already quiet that long shuts down now. */
+export interface ServeHandle {
+  sock: string;
+  shutdown: () => void;
+  activity(): DaemonActivity;
+  idleOut(ms: number): void;
+}
+
+export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true, crashHandlers = signals }: ServeOptions = {}): Promise<ServeHandle> {
   return assertNoDaemon(port).then((sock) => {
     try { fs.unlinkSync(sock); } catch { /* nothing to clean up */ }
 
@@ -286,25 +316,36 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     // --all-pages export must never be shot in the back by its own daemon). 0 disables it.
     // `idleMin` lets a host that has its OWN lifetime (the MCP server lives as long as its Claude
     // session) serve the socket without being reaped from under that session.
-    const idleMs = Math.max(0, Number(idleMin ?? process.env.FIGMA_DAEMON_IDLE_MIN ?? 120)) * 60000;
+    // `idleOut` (the handle) may change the window later: the MCP server switches from 0 (its session's
+    // lifetime) to FIGMA_DAEMON_IDLE_MIN once its own client has gone and only others use the socket.
+    let stopped = false;
+    let idleMs = idleMin === undefined ? idleMsFromEnv() : minutesToMs(idleMin);
     let lastActivity = Date.now();
     let inFlight = 0;
+    let frames = 0;
     const touch = () => { lastActivity = Date.now(); };
     let idleTimer: ReturnType<typeof setInterval> | null = null;
-    if (idleMs) {
+    const check = () => {
+      if (stopped || !idleMs) return;
+      if (inFlight === 0 && Date.now() - lastActivity >= idleMs) {
+        if (log) log(`idle for ${humanMs(idleMs)} — shutting down (set FIGMA_DAEMON_IDLE_MIN=0 to disable).`);
+        shutdown();
+      }
+    };
+    const armIdle = (ms: number) => {
+      if (idleTimer) clearInterval(idleTimer);
+      idleTimer = null;
+      idleMs = ms;
+      if (!ms || stopped) return;
       // Checked on an interval rather than a rearmed timeout: one timer, and `inFlight` is consulted
-      // at fire time instead of having to cancel/rearm around every request.
-      idleTimer = setInterval(() => {
-        if (inFlight === 0 && Date.now() - lastActivity >= idleMs) {
-          const forHuman = idleMs >= 60000 ? `${Math.round(idleMs / 60000)} min` : `${Math.round(idleMs / 1000)}s`;
-          if (log) log(`idle for ${forHuman} — shutting down (set FIGMA_DAEMON_IDLE_MIN=0 to disable).`);
-          shutdown();
-        }
-      }, 30000);
+      // at fire time instead of having to cancel/rearm around every request. Never coarser than the
+      // window itself, so a short window (a test's, or the MCP server's after its client left) is honoured.
+      idleTimer = setInterval(check, Math.min(30000, ms));
       // unref: the idle CHECK must not be the thing keeping the process alive — the socket server and
       // the WS server are. Otherwise a daemon whose servers closed would linger for the interval.
       if (idleTimer.unref) idleTimer.unref();
-    }
+    };
+    armIdle(idleMs);
 
     let queue: Promise<void> = Promise.resolve();
     // CANCEL (live finding 2026-09-25): every forwarded request, queued or in flight, has an
@@ -330,6 +371,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
       conn.on("error", abandon);
       conn.on("data", framer((line) => {
         touch(); // any client contact counts as activity, including the probe
+        frames++; // …and is counted: every frame here comes from ANOTHER process (activity() above)
         let parsed: unknown;
         try { parsed = JSON.parse(line) as unknown; } catch (e) { return reply(conn, { ok: false, error: "bad request frame: " + errMsg(e) }); }
         // The frame is checked BEFORE anything reads it: a `{}` used to forward `cmd: undefined` to
@@ -337,6 +379,10 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
         const bad = daemonRequestError(parsed);
         if (bad !== null || !isDaemonRequest(parsed)) return reply(conn, { ok: false, error: "bad request frame: " + (bad ?? "malformed") });
         const msg = parsed;
+        // A frame that lands after shutdown() (an idle shutdown, `dtwin stop`, the MCP host leaving) on a
+        // connection opened before it: server.close() does not end live connections, and the bridge is
+        // closed — refuse it here instead of forwarding it to a closed bridge.
+        if (stopped) return reply(conn, { ok: false, ...ifDefined("id", msg.id), error: "the shared bridge daemon has shut down — run the command again (it starts or finds a bridge of its own)" });
         if (isControl(msg)) return control(conn, msg);
         // Chain onto the queue so requests run one at a time, in arrival order.
         inFlight++; // counted OUTSIDE the queue: work that is queued but not yet started still
@@ -427,8 +473,12 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     }
 
     let forgetExit: (() => void) | null = null;
+    // Idempotent: the idle check, `__shutdown`, a signal and a host's own shutdown can all race.
     function shutdown() {
+      if (stopped) return;
+      stopped = true;
       if (idleTimer) clearInterval(idleTimer);
+      idleTimer = null;
       try { server.close(); } catch { /* already closed */ }
       try { fs.unlinkSync(sock); } catch { /* already gone */ }
       if (forgetExit) { forgetExit(); forgetExit = null; }
@@ -452,10 +502,16 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     // "synchronous cleanup" the Node docs allow an uncaughtException handler before it exits.
     if (crashHandlers) installCrashHandlers(log ?? ((m) => console.error("[dtwin] " + m)), shutdown);
 
-    return new Promise<{ sock: string; shutdown: () => void }>((resolve, reject) => {
+    const handle: ServeHandle = {
+      sock,
+      shutdown,
+      activity: () => ({ frames, inFlight, lastActivity }),
+      idleOut: (ms: number) => { armIdle(Math.max(0, ms) || 0); check(); },
+    };
+    return new Promise<ServeHandle>((resolve, reject) => {
       const onListening = () => {
         if (log) log(`daemon listening on ${sock} (pid ${process.pid}) — stop it with: dtwin --stop`);
-        resolve({ sock, shutdown });
+        resolve(handle);
       };
       // The probe-then-unlink-then-listen window is a race: another `--serve` can bind between our
       // probe and our listen. EADDRINUSE from listen() is that case — re-probe, and either refuse

@@ -1050,6 +1050,7 @@
   }
   var GRID_SELF = { MIN: "start", CENTER: "center", MAX: "end" };
   function layout(node) {
+    if (!("children" in node)) return void 0;
     const n = node;
     if (!("layoutMode" in node) || n.layoutMode === "NONE") {
       if ("inferredAutoLayout" in node && n.inferredAutoLayout) {
@@ -1270,10 +1271,13 @@
         }
         values[modeName[modeId] || modeId] = value;
       }
+      const coll = collOf(v.variableCollectionId);
+      const collKey = coll ? coll.key : void 0;
       const rec = {
         name: v.name,
         type: v.resolvedType,
-        collection: (collOf(v.variableCollectionId) || {}).name,
+        collection: (coll || {}).name,
+        ...ifDefined("collectionKey", typeof collKey === "string" && collKey ? collKey : void 0),
         // tier: alias => semantic; raw+meaningfully-scoped => semantic leaf; raw+unscoped => primitive.
         // ALL_SCOPES is Figma's default catch-all (it pollutes every picker — see the hygiene flag below),
         // so it does NOT count as a meaningful scope; otherwise almost every variable would read semantic.
@@ -2760,7 +2764,7 @@
     }
     putNonEmpty(out, "sourceTransform", st);
   }
-  async function serialize(node, depth, parentControlsLayout, underHidden) {
+  async function serialize(node, depth, parentControlsLayout, underHidden, inGrid) {
     checkCancelled();
     if (depth > MAX_DEPTH) {
       stats.truncated++;
@@ -2795,12 +2799,14 @@
     if ("layoutSizingHorizontal" in node && node.layoutSizingHorizontal && node.layoutSizingHorizontal !== "FIXED") out.widthMode = lower(node.layoutSizingHorizontal);
     if ("layoutSizingVertical" in node && node.layoutSizingVertical && node.layoutSizingVertical !== "FIXED") out.heightMode = lower(node.layoutSizingVertical);
     if ("overflowDirection" in node && node.overflowDirection && node.overflowDirection !== "NONE") out.scroll = lower(node.overflowDirection);
-    if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
-    if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
-    if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number") out.gridColumnStart = node.gridColumnAnchorIndex;
-    if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number") out.gridRowStart = node.gridRowAnchorIndex;
-    if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
-    if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
+    if (inGrid && !absoluteInParent) {
+      if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
+      if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
+      if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number" && node.gridColumnAnchorIndex >= 0) out.gridColumnStart = node.gridColumnAnchorIndex;
+      if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number" && node.gridRowAnchorIndex >= 0) out.gridRowStart = node.gridRowAnchorIndex;
+      if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
+      if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
+    }
     if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof node.x === "number") {
       out.x = round(node.x);
       out.y = round(node.y);
@@ -3007,10 +3013,15 @@
     }
     const children = "children" in node ? node.children : void 0;
     if (children && children.length) {
-      const controlsChildren = "layoutMode" in node && node.layoutMode && node.layoutMode !== "NONE";
+      const controlsChildren = "layoutMode" in node && !!node.layoutMode && node.layoutMode !== "NONE";
+      const grid = "layoutMode" in node && node.layoutMode === "GRID";
+      const nFixed = "numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" ? node.numberOfFixedChildren : 0;
+      const pinnedFrom = children.length - nFixed;
       const kids = [];
-      for (const c of children) {
-        const s = await serialize(c, depth + 1, controlsChildren, hidden);
+      for (let i = 0; i < children.length; i++) {
+        const c = children[i];
+        if (!c) continue;
+        const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid);
         if (s) kids.push(s);
       }
       if (kids.length) out.children = kids;
@@ -3097,50 +3108,105 @@
   var TITLE_VISIT_CAP = 5e3;
   var TitleCapReached = class extends Error {
   };
-  function titleOf(node) {
-    let visits = 0;
-    const visit = () => {
-      if (++visits > TITLE_VISIT_CAP) throw new TitleCapReached();
+  function spend(b, fresh) {
+    if (b.listing && b.listing.spent) return false;
+    if (++b.visits > b.cap) {
+      if (!b.soft) throw new TitleCapReached();
+      b.capped = true;
+      return false;
+    }
+    if (fresh && b.listing && ++b.listing.reads > b.listing.cap) {
+      b.listing.spent = true;
+      return false;
+    }
+    return true;
+  }
+  function liveWalkNode(n, ref) {
+    let src;
+    const kids = [];
+    const children = {
+      [Symbol.iterator]: () => {
+        let i = 0;
+        return {
+          next: () => {
+            if (!src) src = "children" in n ? n.children : [];
+            const c = src[i];
+            if (!c || !spend(ref.budget, !kids[i])) return { done: true, value: void 0 };
+            const w = kids[i] || (kids[i] = liveWalkNode(c, ref));
+            i++;
+            return { done: false, value: w };
+          }
+        };
+      }
     };
-    const wrap = (n) => {
-      let src;
-      const kids = [];
-      const children = {
-        [Symbol.iterator]: () => {
-          let i = 0;
-          return {
-            next: () => {
-              if (!src) src = "children" in n ? n.children : [];
-              const c = src[i];
-              if (!c) return { done: true, value: void 0 };
-              visit();
-              const w = kids[i] || (kids[i] = wrap(c));
-              i++;
-              return { done: false, value: w };
-            }
-          };
-        }
-      };
-      return {
-        name: n.name,
-        type: n.type,
-        hidden: "visible" in n && n.visible === false,
-        get text() {
-          return n.type === "TEXT" ? n.characters : "";
-        },
-        // read only when a walker hits a TEXT
-        children
-      };
+    return {
+      name: n.name,
+      type: n.type,
+      hidden: "visible" in n && n.visible === false,
+      get text() {
+        return n.type === "TEXT" ? n.characters : "";
+      },
+      // read only when a walker hits a TEXT
+      children
     };
-    visit();
-    const root = wrap(node);
+  }
+  function rowWalk(node) {
+    const ref = { budget: { visits: 0, cap: TITLE_VISIT_CAP } };
+    return { root: liveWalkNode(node, ref), ref };
+  }
+  function titleOf(w) {
+    w.ref.budget = { visits: 1, cap: TITLE_VISIT_CAP };
     try {
-      return deriveTitle(root);
+      return deriveTitle(w.root);
     } catch (e) {
       if (!(e instanceof TitleCapReached)) throw e;
     }
-    visits = 1;
-    return firstText(root) || void 0;
+    w.ref.budget.visits = 1;
+    return firstText(w.root) || void 0;
+  }
+  var DISTINCT_TEXTS = 3;
+  var DISTINCT_TEXT_CHARS = 60;
+  var DISTINCT_TEXT_SCAN = 200;
+  var DISTINCT_TEXT_LISTING_READS = 2e4;
+  var oneLine = (t) => t.replace(/\s+/g, " ").trim();
+  function titlesTellApart(g) {
+    const titles = g.map((r) => r.title);
+    return titles.every((t) => !!t) && new Set(titles).size === g.length;
+  }
+  function addDistinctTexts(g, walks, listing, sink) {
+    let skipped = 0;
+    const textsOf = g.map((row) => {
+      const w = walks.get(row.id);
+      if (!w) return { texts: /* @__PURE__ */ new Set(), cut: false };
+      if (listing.spent) {
+        skipped++;
+        return void 0;
+      }
+      const budget = { visits: 1, cap: TITLE_VISIT_CAP, soft: true, listing };
+      w.ref.budget = budget;
+      const texts = collectTexts(w.root, DISTINCT_TEXT_SCAN).map(oneLine).filter((t) => t && !PLACEHOLDER_TEXT.has(t.toLowerCase()));
+      if (listing.spent) {
+        skipped++;
+        return { texts: new Set(texts), cut: true };
+      }
+      if (budget.capped) sink("`distinctTexts` for '" + row.name + "' (" + row.id + ") read only its first " + TITLE_VISIT_CAP + " nodes");
+      return { texts: new Set(texts), cut: false };
+    });
+    if (skipped) return g.filter((row) => walks.has(row.id)).map((row) => row.id);
+    g.forEach((row, i) => {
+      const mine = textsOf[i];
+      if (!mine || mine.cut) return;
+      const others = textsOf.filter((o, j) => j !== i && !!o).map((o) => o.texts);
+      const unique = [];
+      const notCommon = [];
+      for (const t of mine.texts) {
+        if (others.every((o) => !o.has(t))) unique.push(t);
+        else if (others.some((o) => !o.has(t))) notCommon.push(t);
+      }
+      const picked = unique.concat(notCommon).slice(0, DISTINCT_TEXTS).map((t) => Array.from(t).slice(0, DISTINCT_TEXT_CHARS).join(""));
+      if (picked.length) row.distinctTexts = picked;
+    });
+    return [];
   }
   async function loadPageSafely(page2, sink, what) {
     if (typeof page2.loadAsync !== "function") return false;
@@ -3385,20 +3451,27 @@
       if (c.childCount !== void 0) c.hasChildren = c.childCount > 0;
       children.push(c);
     }
+    const listing = { reads: 0, cap: DISTINCT_TEXT_LISTING_READS };
+    const noDistinct = [];
     for (const g of collisionGroups(children)) {
+      const walks = /* @__PURE__ */ new Map();
       for (const row of g) {
         const nd = kids.find((k) => k.id === row.id);
         if (!nd) continue;
+        const w = rowWalk(nd);
+        walks.set(row.id, w);
         try {
-          const t = titleOf(nd);
+          const t = titleOf(w);
           if (t) row.title = t;
         } catch (e) {
           if (!(e instanceof TitleCapReached)) throw e;
           sink("no title for '" + row.name + "' (" + row.id + "): more than " + TITLE_VISIT_CAP + " nodes to search");
         }
       }
-      sink(collisionNote(g, "children", "`title`/`childCount`"));
+      if (!titlesTellApart(g)) noDistinct.push(...addDistinctTexts(g, walks, listing, sink));
+      sink(collisionNote(g, "children", "`title`/`childCount`/`distinctTexts`"));
     }
+    if (noDistinct.length) sink("`distinctTexts` skipped for " + noDistinct.length + " row(s) (" + noDistinct.slice(0, 6).join(", ") + (noDistinct.length > 6 ? ", \u2026" : "") + "): the listing's budget of " + DISTINCT_TEXT_LISTING_READS + " node reads ran out, and a group with a row not read in full gets none");
     return {
       exportedAt: exportedAt(),
       id: node.id,
@@ -3672,7 +3745,7 @@
           page: figma.currentPage.name,
           pageId: figma.currentPage.id,
           editorType: figma.editorType,
-          // Finding 327: baked in at build time (build.js's esbuild `define`) from
+          // Finding 327: baked in at build time (build.ts's esbuild `define`) from
           // figma-plugin/package.json — the one way to tell a stale plugin in Figma apart from a
           // freshly reloaded one, since neither startedAt nor code.js's mtime can. Reused verbatim by
           // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,

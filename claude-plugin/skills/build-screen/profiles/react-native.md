@@ -105,6 +105,8 @@ platform components; a name like "Tab Bar" is a hint, never the decision.
 `keyboardType`/`secureTextEntry`/`returnKeyType` inferred from the field), Slider→`@react-native-community/
 slider`, Spinner→`ActivityIndicator`, Progress→`ProgressBarAndroid`/a bar lib, pull-to-refresh→
 `RefreshControl`, Picker→`@react-native-picker/picker`, Segmented→`SegmentedControl` (iOS) or tabs.
+A picker draws its own text: set the picker's text colour explicitly to the drawn token (`Picker.Item`'s `color`,
+and the `Picker`'s `style` `color` on Android).
 Anything tappable → `Pressable` (not `TouchableOpacity`) so pressed/disabled state comes from its
 `({pressed})` style callback rather than a custom gesture.
 

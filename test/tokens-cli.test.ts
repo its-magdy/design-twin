@@ -191,5 +191,37 @@ console.log("\ntokens CLI — DT-08: all-remote catalog warns:");
   ok("[DT08-2 rv] a screen's own all-remote .vars.json (the documented theme input on a consuming file) prints no such warn", !/--as-library/.test(run(dir, slice, "outs").err));
 }
 
+// ---------- F-126 (D121): :root takes each collection's DEFAULT mode — warn when those disagree ----------
+console.log("\ntokens CLI — F-126: :root mixes modes:");
+{
+  const dir = path.join(tmp, "f126"); fs.mkdirSync(dir);
+  type C = { name: string; modes: string[]; default?: string };
+  const doc = (collections: C[], type: "COLOR" | "FLOAT" = "COLOR"): string => JSON.stringify({
+    collections: collections.map((c) => ({ ...c, theming: true })),
+    variables: collections.map((c, i) => ({ name: `${c.name}/Surface`, type, collection: c.name, tier: "semantic", key: `m${i}`,
+      values: Object.fromEntries(c.modes.map((m, j) => [m, type === "COLOR" ? (j ? "#ffffff" : "#121319") : 8 * (j + 1)])) })),
+  });
+  const warnOf = (name: string, collections: C[], type?: "COLOR" | "FLOAT"): string[] => {
+    const f = path.join(dir, name + ".json");
+    fs.writeFileSync(f, doc(collections, type));
+    const r = run(dir, f, "out-" + name, "--web", "tailwind");
+    return r.status === 0 ? r.err.split("\n").filter((l) => /^warn {2}:root mixes modes/.test(l)) : [`<exit ${r.status}: ${r.err}>`];
+  };
+  const mixed = warnOf("mixed", [{ name: "Theme", modes: ["Dark", "Light"], default: "Dark" }, { name: "Kit", modes: ["Light", "Dark"], default: "Light" }]);
+  ok(`[F126-T1] two COLOR collections sharing Dark/Light with different defaults -> one ':root mixes modes' warn naming both defaults (got ${mixed.length})`,
+    mixed.length === 1 && /'Theme' defaults to 'Dark'; 'Kit' to 'Light'|'Kit' defaults to 'Light'; 'Theme' to 'Dark'/.test(mixed[0] ?? ""));
+  ok("[F126-T1] the same two collections with the same default -> silent",
+    warnOf("same", [{ name: "Theme", modes: ["Dark", "Light"], default: "Dark" }, { name: "Kit", modes: ["Dark", "Light"], default: "Dark" }]).length === 0);
+  ok("[F126-T1] the default is the export's `default`, not modes[0]: [Dark, Light] and [Light, Dark] both defaulting to Dark -> silent",
+    warnOf("order", [{ name: "Theme", modes: ["Dark", "Light"], default: "Dark" }, { name: "Kit", modes: ["Light", "Dark"], default: "Dark" }]).length === 0);
+  const assumed = warnOf("nodefault", [{ name: "Theme", modes: ["Dark", "Light"], default: "Dark" }, { name: "Kit", modes: ["Light", "Dark"] }]);
+  ok("[F126-T1] no `default` in the export -> the first mode, and the warn says it was assumed",
+    assumed.length === 1 && /'Kit' \(the export names no default mode — its first mode assumed\)/.test(assumed[0] ?? ""));
+  ok("[F126-T1] FLOAT-only collections (breakpoints, not a theme) -> silent",
+    warnOf("float", [{ name: "Spacing", modes: ["Desktop", "Mobile"], default: "Desktop" }, { name: "Sizes", modes: ["Mobile", "Desktop"], default: "Mobile" }], "FLOAT").length === 0);
+  ok("[F126-T1] no shared mode name (Dark/Light vs Brand 1/Brand 2) -> silent",
+    warnOf("vocab", [{ name: "Theme", modes: ["Dark", "Light"], default: "Dark" }, { name: "Brand", modes: ["Brand 1", "Brand 2"], default: "Brand 1" }]).length === 0);
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 report();

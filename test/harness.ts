@@ -38,7 +38,7 @@ interface FakeVariable {
   /** raw Plugin API values: RGBA, number, or a VARIABLE_ALIAS — code.js decodes them */
   valuesByMode: Record<string, unknown>;
 }
-interface FakeCollection { id: string; name: string; modes: Array<{ modeId: string; name: string }>; defaultModeId: string }
+interface FakeCollection { id: string; name: string; modes: Array<{ modeId: string; name: string }>; defaultModeId: string; key?: unknown }
 interface FakeImage { getSizeAsync(): Promise<{ width: number; height: number }>; getBytesAsync(): Promise<Uint8Array> }
 /** What the plugin posts to its UI (progress.ts): run-begin / progress / run-end frames. */
 interface PostedMessage {
@@ -112,7 +112,7 @@ interface DesignSystemResult extends DesignSystemReply { designSystem: DesignSys
  *  never emitted — an index is not an export (the [LIST]/[CHILDREN] checks assert exactly that). */
 interface NodeSummary {
   name: string; id: string; type: string; w?: number; h?: number; hidden?: true; hasChildren?: boolean;
-  childCount?: number; title?: string;
+  childCount?: number; title?: string; distinctTexts?: string[];
   children?: undefined; fills?: undefined; layout?: undefined; tokens?: undefined;
 }
 interface ListPagesResult {
@@ -529,7 +529,6 @@ const sandbox: Sandbox = context;
   const abs = await sandbox.serialize(absNode, 0, false);
   ok("hidden node kept + flagged", abs.hidden === true && abs.name === "Overlay");
   ok("absolute x/y captured", abs.x === 12.4 && abs.y === 40);
-  ok("grid column span", abs.gridColumnSpan === 2);
   ok("frame layoutGrids captured", Array.isArray(abs.layoutGrids) && abs.layoutGrids[0]?.pattern === "columns" && abs.layoutGrids[0]?.count === 12);
   ok("COLUMNS grid keeps its sectionSize as `size` (only GRID's cell size was read after the de-any)", abs.layoutGrids?.[0]?.size === 60);
   ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0]?.label === "Use spacing token md");
@@ -764,8 +763,82 @@ const sandbox: Sandbox = context;
   ok("grid track sizes (fixed px + flex fr)", gfLayout.display === "grid" && Array.isArray(gfLayout.columnSizes) && gfLayout.columnSizes[0]?.type === "fixed" && gfLayout.columnSizes[0]?.value === 200 && gfLayout.columnSizes[1]?.type === "flex");
   const gfCol2 = must(gfLayout.columnSizes?.[2], "gf.layout.columnSizes[2]");
   ok("grid HUG track (value-less) handled", gfCol2.type === "hug" && gfCol2.value === undefined);
-  ok("grid child anchor index (start cell)", abs.gridColumnStart === 1 && abs.gridRowStart === 0);
-  ok("grid child cell align (justify/align-self)", abs.gridJustifySelf === "center" && abs.gridAlignSelf === "end");
+
+  // ---- [G21-X03] grid-child fields only on an IN-FLOW child of a GRID frame, anchors >= 0 ----
+  // Off a grid every node reads gridColumnAnchorIndex/gridRowAnchorIndex -1 (observed on all 7,882 nodes of
+  // the field exports) — not a track index. A root never gets them (its parent is not exported): the
+  // `absNode` root above carries span 2 / anchors 1,0 / CENTER,MAX in its fake and must emit none of it.
+  {
+    const gridKid = (id: string, extra: Record<string, unknown>) => ({ type: "FRAME", name: "Cell", visible: true, id, width: 10, height: 10,
+      x: 3, y: 4, layoutMode: "NONE", children: [], ...extra });
+    const gA = gridKid("g21g:a", { gridColumnAnchorIndex: 1, gridRowAnchorIndex: 0, gridColumnSpan: 2, gridRowSpan: 1,
+      gridChildHorizontalAlign: "CENTER", gridChildVerticalAlign: "MAX" });
+    const gB = gridKid("g21g:b", { gridColumnAnchorIndex: 0, gridRowAnchorIndex: 1, gridColumnSpan: 1, gridRowSpan: 1 });
+    const gC = gridKid("g21g:c", { layoutPositioning: "ABSOLUTE", gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0, gridColumnSpan: 2 });
+    const gE = gridKid("g21g:e", { gridColumnAnchorIndex: -1, gridRowAnchorIndex: 0 }); // in flow, column anchor not a track index
+    const gD = gridKid("g21g:d", { gridColumnAnchorIndex: -1, gridRowAnchorIndex: -1, gridColumnSpan: 1, gridRowSpan: 1, gridChildHorizontalAlign: "MIN",
+      children: [gridKid("g21g:d1", { gridColumnAnchorIndex: -1, gridRowAnchorIndex: -1 })] });
+    const g21Grid = { type: "FRAME", name: "Gallery", visible: true, id: "g21g:0", width: 100, height: 100, layoutMode: "GRID",
+      gridColumnCount: 2, gridRowCount: 2, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+      gridColumnAnchorIndex: 1, gridRowAnchorIndex: 1, children: [gA, gB, gC, gE] };
+    const g21Plain = { type: "FRAME", name: "Plain", visible: true, id: "g21g:p", width: 100, height: 100, layoutMode: "NONE", children: [gD] };
+    const gOut = await sandbox.serialize(g21Grid, 0, false);
+    const [oA, oB, oC, oE] = must(gOut.children, "g21 grid children");
+    const pOut = await sandbox.serialize(g21Plain, 0, false);
+    const oD = must(pOut.children?.[0], "g21 plain child");
+    const gridKeys = ["gridColumnStart", "gridRowStart", "gridColumnSpan", "gridRowSpan", "gridJustifySelf", "gridAlignSelf"] as const;
+    const noGrid = (n: IrNode | undefined): boolean => !!n && gridKeys.every((k) => !(k in n));
+    ok("[G21-X03] an in-flow grid child carries its span (grid column span)", oA?.gridColumnSpan === 2 && oA.gridRowSpan === undefined);
+    ok("[G21-X03] grid child anchor index (start cell) on an in-flow child of a GRID frame",
+      oA?.gridColumnStart === 1 && oA.gridRowStart === 0 && oB?.gridColumnStart === 0 && oB.gridRowStart === 1);
+    ok("[G21-X03] grid child cell align (justify/align-self)", oA?.gridJustifySelf === "center" && oA.gridAlignSelf === "end");
+    ok("[G21-X03] an ABSOLUTE child of the grid is not a grid item: no anchors/span (its x/y instead)", noGrid(oC) && oC?.absolute === true && oC.x === 3);
+    ok("[G21-X03] an anchor of -1 is not a track index: dropped, the valid one kept", !!oE && !("gridColumnStart" in oE) && oE.gridRowStart === 0);
+    ok("[G21-X03] a child of a non-grid frame (anchors -1) carries no grid fields, nor does its own child", noGrid(oD) && noGrid(oD.children?.[0]));
+    ok("[G21-X03] a root carries no grid-child fields (its parent is not exported)", noGrid(gOut) && noGrid(pOut) && noGrid(abs));
+  }
+
+  // ---- [G21-X04] `layout` = how a node lays out ITS OWN children: only on nodes that can hold children ----
+  // TEXT/shapes/vectors carried {mode:"absolute",width,height} (a copy of box.w/h) on every node.
+  {
+    const leafBox = { visible: true, width: 40, height: 12, absoluteBoundingBox: { x: 0, y: 0, width: 40, height: 12 } };
+    const xText = { ...leafBox, type: "TEXT", name: "Label", id: "g21x:t", characters: "Hi", fontName: { family: "Inter", style: "Regular" }, fontSize: 12,
+      getStyledTextSegments: () => [] };
+    const xRect = { ...leafBox, type: "RECTANGLE", name: "Bg", id: "g21x:r" };
+    const xVec = { ...leafBox, type: "VECTOR", name: "Line", id: "g21x:v" };
+    const xEmpty = { ...leafBox, type: "FRAME", name: "Spacer", id: "g21x:f", layoutMode: "NONE", children: [] };
+    const xGroup = { ...leafBox, type: "GROUP", name: "Bits", id: "g21x:g", children: [] };
+    const xHost = { type: "FRAME", name: "Host", visible: true, id: "g21x:0", width: 200, height: 100, layoutMode: "NONE",
+      children: [xText, xRect, xVec, xEmpty, xGroup] };
+    const xOut = await sandbox.serialize(xHost, 0, false);
+    const [oT, oR, oV, oF, oG] = must(xOut.children, "g21 x04 children");
+    ok("[G21-X04] TEXT, RECTANGLE and VECTOR children carry no `layout` key",
+      !!oT && !!oR && !!oV && !("layout" in oT) && !("layout" in oR) && !("layout" in oV) && oT.box?.w === 40);
+    ok("[G21-X04] a childless FRAME (layoutMode NONE) keeps {mode:\"absolute\",width,height}", JSON.stringify(oF?.layout) === '{"mode":"absolute","width":40,"height":12}');
+    ok("[G21-X04] a GROUP keeps its layout too", JSON.stringify(oG?.layout) === '{"mode":"absolute","width":40,"height":12}');
+  }
+
+  // ---- [G21-L8] a PINNED child (one of the LAST numberOfFixedChildren) always carries x/y + box.x/y ----
+  // Figma lets only an absolute child of an auto-layout frame be fixed; this guards a pinned child that is
+  // still in flow (a frame given auto layout after its children were fixed). Figma counts the LAST N over ALL
+  // children, hidden ones included: with N = 2 and a hidden child among the last two, the hidden one and the
+  // last are pinned and the visible one before them is not (counting only visible children would pin it).
+  // (Indexing by the serialized kids instead of all children is equivalent here: serialize returns null for a
+  // child only past MAX_DEPTH, which hits every sibling at once.)
+  {
+    const pin = (id: string, y: number) => ({ type: "FRAME", name: "Bar", visible: true, id, x: 0, y, width: 375, height: 60,
+      layoutPositioning: "AUTO", layoutMode: "NONE", absoluteBoundingBox: { x: 0, y, width: 375, height: 60 }, children: [] });
+    const lScreen = { type: "FRAME", name: "Feed", visible: true, id: "g21l:0", width: 375, height: 800, layoutMode: "VERTICAL",
+      itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, overflowDirection: "VERTICAL",
+      numberOfFixedChildren: 2, children: [pin("g21l:a", 0), pin("g21l:b", 60), { ...pin("g21l:h", 680), visible: false }, pin("g21l:c", 740)] };
+    const lOut = await sandbox.serialize(lScreen, 0, false);
+    const [la, lb, lh, lc] = must(lOut.children, "g21 l8 children");
+    ok("[G21-L8] the pinned LAST child carries x/y and box.x/y although it is in flow", lc?.x === 0 && lc.y === 740 && lc.box?.x === 0 && lc.box.y === 740);
+    ok("[G21-L8] a HIDDEN child among the last N is pinned too (Figma counts all children)", lh?.hidden === true && lh.y === 680 && lh.box?.y === 680);
+    ok("[G21-L8] the in-flow, unpinned children carry none (the visible one just before the pinned ones included)", !!la && !!lb && la.x === undefined && la.box?.y === undefined &&
+      lb.x === undefined && lb.box?.y === undefined);
+    ok("[G21-L8] fixedChildren still counts them", lOut.fixedChildren === 2);
+  }
 
   const absFill3 = abs.fills?.[3];
   ok("shader paint id captured", absFill3 !== undefined && absFill3.type === "shader" && absFill3.shaderId === "shader_1");
@@ -1242,6 +1315,45 @@ const sandbox: Sandbox = context;
   sandbox.figma.variables.getVariableByIdAsync = prevGetVar;
   sandbox.figma.variables.getVariableCollectionByIdAsync = prevGetColl;
   sandbox.figma.currentPage.selection = [scrollFrame];
+
+  // ---- [G21-NM] every variable row carries its collection's KEY: collection names repeat ----
+  // Two local collections both named "Spacing" (keys K1/K2) plus a library one also named "Spacing" reached
+  // through a remote variable: the name cannot tell the rows apart, `collectionKey` can. A collection whose
+  // key is not a non-empty string (the typings promise it only on local and published collections) -> omitted.
+  {
+    const nmMode = [{ modeId: "nm_m", name: "Value" }];
+    const nmColls: FakeCollection[] = [
+      { id: "nm_c1", name: "Spacing", key: "K1", modes: nmMode, defaultModeId: "nm_m" },
+      { id: "nm_c2", name: "Spacing", key: "K2", modes: nmMode, defaultModeId: "nm_m" },
+      { id: "nm_c4", name: "Radius", key: "", modes: nmMode, defaultModeId: "nm_m" },
+      { id: "nm_c5", name: "Sizing", key: 42, modes: nmMode, defaultModeId: "nm_m" },
+      { id: "nm_c6", name: "Motion", key: { id: "K6" }, modes: nmMode, defaultModeId: "nm_m" },
+    ];
+    const nmRemoteColl: FakeCollection = { id: "nm_c3", name: "Spacing", key: "K3", modes: nmMode, defaultModeId: "nm_m" };
+    const nmVar = (id: string, cid: string, remote = false): FakeVariable => ({ id, name: "space/4", resolvedType: "FLOAT", variableCollectionId: cid,
+      scopes: ["GAP"], codeSyntax: {}, remote, valuesByMode: { nm_m: 4 } });
+    const nmLocal = [nmVar("nm_v1", "nm_c1"), nmVar("nm_v2", "nm_c2"), { ...nmVar("nm_v4", "nm_c4"), name: "radius/2" },
+      { ...nmVar("nm_v5", "nm_c5"), name: "size/2" }, { ...nmVar("nm_v6", "nm_c6"), name: "motion/2" }];
+    const nmRemote = nmVar("nm_v3", "nm_c3", true);
+    const nmPrev = { ...sandbox.figma.variables };
+    sandbox.figma.variables.getLocalVariablesAsync = async () => nmLocal;
+    sandbox.figma.variables.getLocalVariableCollectionsAsync = async () => nmColls;
+    sandbox.figma.variables.getVariableByIdAsync = async (id: string) => (id === "nm_v3" ? nmRemote : nmLocal.find((v) => v.id === id) || null);
+    sandbox.figma.variables.getVariableCollectionByIdAsync = async (id: string) => (id === "nm_c3" ? nmRemoteColl : nmColls.find((c) => c.id === id) || null);
+    sandbox.figma.currentPage.selection = [{ type: "FRAME", name: "Gap", visible: true, id: "nm:1", width: 10, height: 10, layoutMode: "HORIZONTAL",
+      itemSpacing: 4, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, boundVariables: { itemSpacing: { type: "VARIABLE_ALIAS", id: "nm_v3" } }, children: [] }];
+    const nmSel = await sandbox.collectSelection({ css: false });
+    const spacingRows = nmSel.variables.variables.filter((v) => v.collection === "Spacing");
+    ok("[G21-NM] three 'Spacing' rows (two local, one library), each with its own collection's key",
+      spacingRows.length === 3 && JSON.stringify(spacingRows.map((r) => r.collectionKey).sort()) === '["K1","K2","K3"]' &&
+      spacingRows.find((r) => r.remote)?.collectionKey === "K3");
+    ok("[G21-NM] a collection whose key is empty, a number or an object gives its rows no collectionKey", (() => {
+      const rows = ["radius/2", "size/2", "motion/2"].map((n) => nmSel.variables.variables.find((v) => v.name === n));
+      return rows.every((r) => !!r && !("collectionKey" in r)) && rows.map((r) => r?.collection).join() === "Radius,Sizing,Motion";
+    })());
+    Object.assign(sandbox.figma.variables, nmPrev);
+    sandbox.figma.currentPage.selection = [scrollFrame];
+  }
 
   // ---- source-image container format (magic bytes, not a hardcoded ".img") ----
   const prevGetImage = sandbox.figma.getImageByHash;
@@ -1856,6 +1968,7 @@ const sandbox: Sandbox = context;
     ok("[QK-3] `clip` rides along with it", qk.clip === true && named("clip"));
     ok("[QK-3] `hidden` sits on the switched-off layer only, not on its child", qkH?.hidden === true && qkHK.hidden === undefined && named("hidden"));
     ok("[QK-3] an absolute child carries `absolute` + its own `x`", qkA.absolute === true && qkA.x === 7 && named("absolute") && named("x"));
+    ok("[QK-3] the TEXT has no `layout` key (only a node that holds children has one)", !!qkT && !("layout" in qkT));
     const qkWalk = (n: IrNode, f: (n: IrNode) => void): void => { f(n); (n.children || []).forEach((c) => qkWalk(c, f)); };
     const qkGuessed: string[] = [];
     qkWalk(qk, (n) => {
@@ -3020,6 +3133,96 @@ const sandbox: Sandbox = context;
     const notes = lc.manifest.warnings.filter((w) => /share name/.test(w));
     ok("[G13-children] one manifest warning per collision group, naming the group and its ids",
       notes.length === 2 && notes.some((w) => /^2 children share name 'Screen A' and size 1440×1236 — told apart by `title`\/`childCount`.*dtwin screenshot.*g13s:1, g13s:2/.test(w)));
+
+    // [G21-K6] colliding rows whose titles match too: `distinctTexts` — <= 3 texts that row shows and its twins
+    // do not. Texts NO twin has come first (U), then those not on EVERY row (N∖U); placeholders and hidden
+    // texts are skipped; each cut to 60 chars. The unique text sits late, behind the shared chrome.
+    const chrome = (id: string) => [
+      { type: "FRAME", name: "Page Title", id: id + ":pt", visible: true, width: 10, height: 10, children: [{ ...txt(id + ":pt:t", "Shared heading"), name: "Title" }] },
+      ...["Home", "Reports", "Settings", "Help", "Sign out"].map((t, i) => txt(id + ":c" + i, t)),
+    ];
+    const k6Screen = (id: string, extra: FakeNode[]) => ({ type: "FRAME", name: "Screen", id, width: 1440, height: 900, children: [...chrome(id), ...extra] });
+    const longText = "A very long status line that goes on well past the sixty character cut";
+    const k6Rows = [
+      k6Screen("g21k:1", [txt("g21k:1a", "Gamma shared"), txt("g21k:1h", "Draft only", false), txt("g21k:1b", "Alpha only")]),
+      k6Screen("g21k:2", [txt("g21k:2p", "Label"), txt("g21k:2a", "Beta only"), txt("g21k:2b", longText)]),
+      k6Screen("g21k:3", [txt("g21k:3a", "Gamma shared"), txt("g21k:3b", "Line one\n  Line\ttwo ")]),
+    ];
+    const k6Titled = (id: string, title: string) => ({ type: "FRAME", name: "Card", id, width: 300, height: 200, children: [txt(id + ":t", title), txt(id + ":u", "Only " + title)] });
+    // Too big to read whole: the shared first text is the title of both; the walk ends at the cap (soft), so
+    // the early unique text is found and the late one is not — no throw.
+    const k6Huge = (id: string, early: string) => ({ type: "FRAME", name: "Huge", id, width: 50, height: 50, children: [txt(id + ":s", "Shared top"), txt(id + ":e", early),
+      ...Array.from({ length: 5001 }, (_, i) => ({ type: "FRAME", name: "f", id: id + ":" + i, width: 1, height: 1, children: [] })), txt(id + ":l", "Late " + early)] });
+    const k6Section = { type: "SECTION", name: "Flows", id: "g21k:0", children: [...k6Rows, k6Titled("g21k:4", "One"), k6Titled("g21k:5", "Two"),
+      k6Huge("g21k:6", "First huge"), k6Huge("g21k:7", "Second huge")] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g21k:0" ? k6Section : null);
+    let k6: ListChildrenResult | null = null;
+    let k6Err: Thrown | null = null;
+    try { k6 = await sandbox.listChildren("g21k:0"); } catch (e) { k6Err = thrown(e); }
+    const k6Row = (id: string) => k6?.children.find((c) => c.id === id);
+    ok("[G21-K6] listChildren over a too-big colliding pair does not throw (" + (k6Err ? k6Err.message : "") + ")", !!k6 && !k6Err);
+    ok("[G21-K6] the three 'Screen' rows share their title", ["g21k:1", "g21k:2", "g21k:3"].every((id) => k6Row(id)?.title === "Shared heading"));
+    ok("[G21-K6] a row's own text comes first, ahead of a text only some twins share",
+      JSON.stringify(k6Row("g21k:1")?.distinctTexts) === '["Alpha only","Gamma shared"]');
+    ok("[G21-K6] a placeholder is skipped and each text is cut to 60 chars",
+      JSON.stringify(k6Row("g21k:2")?.distinctTexts) === JSON.stringify(["Beta only", longText.slice(0, 60)]));
+    ok("[G21-K6] a multi-line text is one line (whitespace and line breaks collapsed), ahead of a text only some twins share",
+      JSON.stringify(k6Row("g21k:3")?.distinctTexts) === '["Line one Line two","Gamma shared"]');
+    ok("[G21-K6] rows whose titles already differ get no distinctTexts", k6Row("g21k:4")?.title === "One" && k6Row("g21k:4")?.distinctTexts === undefined &&
+      k6Row("g21k:5")?.distinctTexts === undefined);
+    ok("[G21-K6] a pair past the visit cap gets partial lists (the early text, never the late one) and a warning",
+      JSON.stringify(k6Row("g21k:6")?.distinctTexts) === '["First huge"]' && JSON.stringify(k6Row("g21k:7")?.distinctTexts) === '["Second huge"]' &&
+      !!k6?.manifest.warnings.some((w) => /`distinctTexts` for 'Huge' \(g21k:6\) read only its first 5000 nodes/.test(w)));
+    ok("[G21-K6] no row lists more than 3 texts",
+      !!k6 && k6.children.every((c) => (c.distinctTexts || []).length <= 3));
+    ok("[G21-K6] the collision note names `distinctTexts`",
+      !!k6?.manifest.warnings.some((w) => /^3 children share name 'Screen' .*told apart by `title`\/`childCount`\/`distinctTexts`/.test(w)));
+
+    // [G21-K6] ONE budget of 20000 extra node reads for the whole listing, shared across collision groups: two
+    // groups of four 3000-node twins (a cheap "Page Title" title each, so the reads are distinctTexts'). Six rows
+    // fit (18000), the 7th runs it out mid-walk, the 8th is never read: D149 — then NO row of that group gets any (a
+    // "unique" text cannot be claimed against unread twins), one warning names them, no throw, and the listing reads no
+    // more than the budget plus the title walks (counted on every node's `name`). A cheap pair after the heavy groups
+    // is still titled (the title search never depends on the spent budget).
+    let k6Reads = 0;
+    const counted = <T extends object>(n: T, name: string): T => Object.defineProperty(n, "name", { get: () => { k6Reads++; return name; }, enumerable: true });
+    const k6Big = (id: string, name: string, slot = true) => counted({ type: "FRAME", id, width: 800, height: 600, visible: true, children: [
+      slot ? counted({ type: "FRAME", id: id + ":pt", visible: true, width: 10, height: 10, children: [counted({ ...txt(id + ":pt:t", "Same heading") }, "Title")] }, "Page Title")
+        : counted({ ...txt(id + ":pt:t", "Same heading") }, "Heading"),
+      counted({ ...txt(id + ":u", "Own " + id) }, "t"),
+      ...Array.from({ length: 2997 }, (_, i) => counted({ type: "FRAME", id: id + ":" + i, width: 1, height: 1, visible: true, children: [] }, "f")),
+    ] }, name);
+    const k6BigSection = { type: "SECTION", name: "Explorations", id: "g21b:0", children: [
+      ...[1, 2, 3, 4].map((i) => k6Big("g21b:a" + i, "Big A")), ...[1, 2, 3, 4].map((i) => k6Big("g21b:b" + i, "Big B")),
+      ...["Alpha", "Beta"].map((t, i) => ({ type: "FRAME", name: "Small", id: "g21b:s" + i, width: 20, height: 20, visible: true,
+        children: [{ type: "FRAME", name: "Page Title", id: "g21b:s" + i + ":pt", width: 10, height: 10, visible: true, children: [{ ...txt("g21b:s" + i + ":t", t), name: "Title" }] }] }))] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g21b:0" ? k6BigSection : null);
+    let k6b: ListChildrenResult | null = null;
+    let k6bErr: Thrown | null = null;
+    k6Reads = 0;
+    try { k6b = await sandbox.listChildren("g21b:0"); } catch (e) { k6bErr = thrown(e); }
+    const k6bRow = (id: string) => k6b?.children.find((c) => c.id === id);
+    ok("[G21-K6] a listing of many big colliding frames does not throw (" + (k6bErr ? k6bErr.message : "") + ")", !!k6b && !k6bErr);
+    ok("[G21-K6] reads stay within the listing budget (20000) plus the title walks (" + k6Reads + ")", k6Reads <= 20000 + 200);
+    ok("[G21-K6] a group read in full before the budget ran out gets its own texts",
+      ["g21b:a1", "g21b:a2", "g21b:a3", "g21b:a4"].every((id) => k6bRow(id)?.distinctTexts?.[0] === "Own " + id));
+    ok("[G21-K6] D149: the group the budget ran out in gets NO distinctTexts — not even its fully read rows (twins unread)",
+      ["g21b:b1", "g21b:b2", "g21b:b3", "g21b:b4"].every((id) => k6bRow(id)?.distinctTexts === undefined) && k6bRow("g21b:b4")?.title === "Same heading");
+    ok("[G21-K6] D149: a cheap pair AFTER the spent budget is still titled",
+      k6bRow("g21b:s0")?.title === "Alpha" && k6bRow("g21b:s1")?.title === "Beta");
+    ok("[G21-K6] ONE warning names the listing budget and the rows it skipped",
+      k6b?.manifest.warnings.filter((w) => /distinctTexts/.test(w) && /budget/.test(w)).length === 1 &&
+      !!k6b.manifest.warnings.some((w) => /^`distinctTexts` skipped for 4 row\(s\) \(g21b:b1, g21b:b2, g21b:b3, g21b:b4\): the listing's budget of 20000 node reads ran out/.test(w)));
+    // The same walk feeds both: with no "Page Title" slot the title search reads every node of each frame, and
+    // distinctTexts then walks those SAME (memoised) nodes for free — all eight rows get theirs, no budget warning,
+    // and the listing reads each node about once (a second walk per row would read ~2 × 8 × 3000).
+    const k6WalkedSection = { type: "SECTION", name: "Explorations", id: "g21w:0", children: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => k6Big("g21w:" + i, "Walked", false)) };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g21w:0" ? k6WalkedSection : null);
+    k6Reads = 0;
+    const k6w = await sandbox.listChildren("g21w:0");
+    ok("[G21-K6] nodes the title search already read cost distinctTexts nothing: every row gets its own text, no budget warning, ~one read per node (" + k6Reads + ")",
+      k6w.children.every((c) => c.title === "Same heading" && c.distinctTexts?.[0] === "Own " + c.id) && k6Reads <= 8 * 3000 + 200 &&
+      !k6w.manifest.warnings.some((w) => /budget/.test(w)));
     sandbox.figma.getNodeByIdAsync = prevGetNodeG;
 
     // listPages depth 2: childCount through the same summarize(), plus the per-page note (no titles).

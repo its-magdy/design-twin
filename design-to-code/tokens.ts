@@ -1483,6 +1483,41 @@ function lookupColor(ds: TokensDoc, query: string): ColorHit[] | null {
   return hits;
 }
 
+// F-126 (D121): `:root` holds every collection's DEFAULT-mode value. When two multi-mode COLOR collections
+// share a mode name (both have Dark and Light) but default to different modes, :root is a mix — on a Dark
+// screen, the tokens of the Light-default collection render their Light values until the element sets that
+// collection's mode. The default is the export's `default` (Figma's defaultModeId — never modes[0] by
+// assumption); a collection without one falls back to its first mode, and the warning says so.
+// Null = nothing mixes (FLOAT-only collections never do: breakpoints are not a theme).
+function mixedRootModes(ds: TokensDoc): string | null {
+  const collections = ds.collections || [];
+  const colour = new Set<VariableCollection>();
+  for (const v of ds.variables || []) {
+    if (v.type !== "COLOR") continue;
+    const c = collectionOf(v, collections);
+    if (c && (c.modes || []).length > 1) colour.add(c);
+  }
+  const list = [...colour];
+  const assumed = (c: VariableCollection): boolean => c.default === undefined || !c.modes.includes(c.default);
+  const defOf = (c: VariableCollection): string => (assumed(c) ? c.modes[0] ?? "?" : c.default ?? "?");
+  const mixed = new Set<VariableCollection>();
+  for (const a of list) {
+    for (const b of list) {
+      if (a !== b && defOf(a) !== defOf(b) && a.modes.some((m) => b.modes.includes(m))) { mixed.add(a); mixed.add(b); }
+    }
+  }
+  if (!mixed.size) return null;
+  const byDefault = new Map<string, VariableCollection[]>();
+  for (const c of list) if (mixed.has(c)) getOrInit(byDefault, defOf(c), () => []).push(c);
+  const groups = [...byDefault].sort((x, y) => y[1].length - x[1].length || cmpStr(x[0], y[0]));
+  const named = (cs: VariableCollection[]): string =>
+    cs.map((c) => `'${c.name}'${assumed(c) ? " (the export names no default mode — its first mode assumed)" : ""}`).join(", ");
+  return `:root mixes modes: ` +
+    groups.map(([mode, cs], i) => `${named(cs)} ${i ? "" : cs.length > 1 ? "default " : "defaults "}to '${mode}'`).join("; ") +
+    ` — :root takes each collection's DEFAULT mode, so a screen drawn in one of these modes shows the other mode's values for the other collections' tokens. ` +
+    `Set each collection's mode on the screen's root element (its export's resolvedModes says which), or have the designer give these collections one default`;
+}
+
 // `--check`: 0 current, 1 stale, 2 no source line (or unreadable). Writes nothing.
 function checkGenerated(ds: TokensDoc, input: string, generated: string, cmd: string): number {
   let head: string;
@@ -1614,6 +1649,8 @@ function main(args: string[]): number {
   if (!slice && vars.length && vars.every((v) => v.remote === true)) {
     warnings.push(`all ${vars.length} variable(s) in ${input} are remote:true — this is a design-system pull of a file that CONSUMES a library (only the library variables it references), not the library's catalog; open the library file and run \`dtwin pull --as-library "<name>"\` for the catalog`);
   }
+  const mixedRoot = mixedRootModes(ds);
+  if (mixedRoot) warnings.push(mixedRoot);
   warnings.forEach((w) => console.error("warn  " + w));
   // DT-79 (D9): a suggestion only, printed — not written into theme.css, which the user moves into the app.
   if (webFile !== undefined) console.error("note  " + TAILWIND_SOURCE_NOT_NOTE);

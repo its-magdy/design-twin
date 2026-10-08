@@ -404,6 +404,26 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   t("[CLI] --url without --expected → exit 2 (usage)", () => usage.status === 2);
   const badVp = spawnSync(process.execPath, [PROBE_CLI, "--expected", path.join(tmp, "missing.expected.json"), "--url", "http://127.0.0.1:1/"], { encoding: "utf8" });
   t("[CLI] an unreadable --expected → exit 2 before any browser work", () => badVp.status === 2 && /does not exist/.test(badVp.stderr));
+
+  // DT-30 (D112): --browser-path is checked first — before the project's Playwright is resolved (`none` has none) or a browser
+  // launched: a missing path, a directory (a macOS .app), a file that is not executable → exit 3, one line, no stack
+  const notExec = path.join(tmp, "not-executable");
+  fs.writeFileSync(notExec, "#!/bin/sh\n", { mode: 0o644 });
+  const app = path.join(tmp, "Invented Browser.app");
+  fs.mkdirSync(app, { recursive: true });
+  const bp = (p: string) => spawnSync(process.execPath, [PROBE_CLI, "--check", "--project", none, "--browser-path", p], { encoding: "utf8" });
+  const oneLine = (r: { status: number | null; stderr: string }, p: string): boolean => r.status === 3 && r.stderr.trim().split("\n").length === 1 && !/\n\s+at /.test(r.stderr)
+    && r.stderr.trim() === `verify-probe: renderer unavailable — --browser-path ${p} is not an executable file (on macOS pass the binary inside the .app: …/Contents/MacOS/…) — nothing was measured or written.`;
+  const missing = path.join(tmp, "nonexistent", "chrome");
+  t("[DT-30] --browser-path <missing> → exit 3 before resolving Playwright: one line naming the path and the macOS inner-binary hint, no stack", () => oneLine(bp(missing), missing));
+  t("[DT-30] --browser-path <an .app directory> / <a file without the execute bit> → the same exit 3", () => oneLine(bp(app), app) && (process.platform === "win32" || oneLine(bp(notExec), notExec)));
+  const help = spawnSync(process.execPath, [PROBE_CLI, "--help"], { encoding: "utf8" });
+  t("[DT-30] --help: --browser-path, only guaranteed with the bundled Chromium, the inner binary on macOS, executable \"custom\"", () =>
+    /\[--browser-path <executable>\]/.test(help.stdout) && /only\s+guaranteed with the bundled Chromium/.test(help.stdout) && /Contents\/MacOS/.test(help.stdout) && /executable says "custom"/.test(help.stdout));
+  t("[DT-30] browserPathError: null for an executable file (this node binary)", () => {
+    const f = (VP as Partial<typeof VP>).browserPathError;
+    return f !== undefined && f(process.execPath) === null && typeof f(missing) === "string";
+  });
 }
 
 // ---------------------------------------------------------------- matching (F-57, F-63, D17)
@@ -572,6 +592,14 @@ t("[M3] 'Target page, context or browser has been closed' (or a closed page) →
   errorKind("page.evaluate: Target page, context or browser has been closed", false) === "gone" && errorKind("anything", true) === "gone");
 t("[M3] a destroyed execution context → navigated", () => errorKind("page.evaluate: Execution context was destroyed, most likely because of a navigation", false) === "navigated");
 t("[M3] an unrelated message that merely says 'navigating' is not a reload", () => errorKind("locator.hover: element is navigating away? (invented)", false) === "other");
+// D135 (ABORT-2): a failed load's cause in plain words — a 204 and a download both end net::ERR_ABORTED; the thrown message
+// tells them apart; another cause is Playwright's first line, as before
+t("[D135 ABORT-2] loadFailureWhy: net::ERR_ABORTED → no document (e.g. 204 No Content) or the page stopped its own load",
+  () => /^the browser cancelled the navigation before any page arrived \(net::ERR_ABORTED\) — the URL answered with no document \(e\.g\. 204 No Content\) or the page stopped its own load; point it at the page that renders the screen$/.test(VP.loadFailureWhy("page.goto: net::ERR_ABORTED at http://h/none\nCall log:\n  - navigating")));
+t("[D135 ABORT-2] loadFailureWhy: 'Download is starting' → a file download, not a page",
+  () => VP.loadFailureWhy("page.goto: Download is starting\nCall log:\n  - navigating") === "the URL started a file download, not a page — point it at the page that renders the screen");
+t("[D135 ABORT-2] loadFailureWhy: another cause → its first line, unchanged",
+  () => VP.loadFailureWhy("page.goto: net::ERR_CONNECTION_REFUSED at http://h/\nCall log:") === "page.goto: net::ERR_CONNECTION_REFUSED at http://h/");
 
 // real expected.json rows (buildExpectation), not hand-typed specs
 {
@@ -739,6 +767,56 @@ console.log("verify-probe — group 11 (tag-alias, display, rings, foreign tags)
   t("[D34] shapeNode carries strokeFrom/strokeAlign through to measured.json", () => ringNode?.styles?.strokeFrom === "box-shadow" && ringNode.styles.strokeAlign === "inside");
   const noStroke = isMatch(ma) ? shapeNode(sh, ma, { nodeId: sh.nodeId, found: true, styles: {}, unmeasured: {} }, STYLE_KEYS) : null;
   t("[D34] … and adds neither key (no null to explain) when the page read no stroke", () => noStroke !== null && noStroke.styles !== undefined && !("strokeFrom" in noStroke.styles) && !("strokeAlign" in noStroke.styles));
+}
+
+// ---------------------------------------------------------------- group 17: owner hover (F-74), paintedBy / textTransform (F-74, F-69)
+console.log("verify-probe — group 17 (owner hover, paintedBy, textTransform):");
+{
+  type OwnerHoverFn = (spec: VerifySpec, m: { path: string }, byTag: ReadonlyMap<string, Candidate[]>) => { kind: string; id?: string; path?: string; owner?: string; next?: Array<{ id: string; path: string }> };
+  const ohRaw: unknown = ({ ...PM } as Record<string, unknown>).ownerHover;
+  const isOh = (f: unknown): f is OwnerHoverFn => typeof f === "function";
+  const oh = (sp: VerifySpec, mPath: string, tagged: Candidate[]): ReturnType<OwnerHoverFn> | null => {
+    if (!isOh(ohRaw)) return null;
+    const byTag = new Map<string, Candidate[]>();
+    for (const c of tagged) if (c.dt !== null) byTag.set(c.dt, [...(byTag.get(c.dt) || []), c]);
+    return ohRaw(sp, { path: mPath }, byTag);
+  };
+  const row = cand({ dt: "71:3", tag: "tr" }), cell = cand({ dt: "71:5", tag: "td" }), btn = cand({ dt: "71:6", tag: "button" }), table = cand({ dt: "71:2", tag: "table" });
+  const hiddenRow = cand({ dt: "71:3", tag: "tr", flags: { visible: false } });
+  const inherited = spec({ nodeId: "71:6", type: "INSTANCE", drawnState: "hover", drawnStateFrom: "71:3", ancestorIds: ["71:5", "71:3", "71:2"] });
+  t("[F-74] ownerHover: drawnStateFrom names a visible tagged owner → hover it (its path)", () => { const r = oh(inherited, btn.path, [row, cell, btn, table]); return r?.kind === "owner" && r.id === "71:3" && r.path === row.path; });
+  t("[F-74] …the owner not rendered → the nearest visible tagged ancestor BELOW it (the cell), never one above it (the table)", () => {
+    const r = oh(inherited, btn.path, [hiddenRow, cell, btn, table]), r2 = oh(inherited, btn.path, [hiddenRow, btn, table]);
+    return r?.kind === "owner" && r.id === "71:5" && r.path === cell.path && r2?.kind === "untagged" && r2.owner === "71:3";
+  });
+  t("[F-74] …an own state, or an expectation written before drawnStateFrom → none (hovered as before)", () =>
+    oh(spec({ nodeId: "71:3", type: "FRAME", drawnState: "hover", ancestorIds: ["71:2"] }), row.path, [row])?.kind === "none"
+    && oh(spec({ nodeId: "71:6", type: "INSTANCE", drawnState: "hover", ancestorIds: ["71:5", "71:3"] }), btn.path, [row, btn])?.kind === "none"
+    && oh(spec({ nodeId: "71:3", drawnState: "hover", drawnStateFrom: "71:3" }), row.path, [row])?.kind === "none");
+  t("[F-74] …a label written straight into the owner's tagged element (the measured element IS the owner's) → none", () =>
+    oh(spec({ nodeId: "71:7", drawnState: "hover", drawnStateFrom: "71:3", ancestorIds: ["71:3"] }), row.path, [row])?.kind === "none");
+  // L1 (fix pass 1): the first candidate may have no free point (a same-box <span> around the control) — the rest follow
+  t("[L1] ownerHover lists the other visible tagged candidates below the owner in `next` (same order), never the measured element nor one above the owner", () => {
+    const wrap = cand({ dt: "71:8", tag: "span" });
+    const r = oh(spec({ nodeId: "71:6", type: "INSTANCE", drawnState: "hover", drawnStateFrom: "71:3", ancestorIds: ["71:8", "71:5", "71:3", "71:2"] }), btn.path, [hiddenRow, wrap, cell, btn, table]);
+    const r2 = oh(inherited, btn.path, [row, cell, btn, table]);
+    return r?.kind === "owner" && r.id === "71:8" && JSON.stringify(r.next) === JSON.stringify([{ id: "71:5", path: cell.path }])
+      && r2?.kind === "owner" && r2.id === "71:3" && JSON.stringify(r2.next) === JSON.stringify([{ id: "71:5", path: cell.path }]);
+  });
+  t("[F-74] …the owner is the frame root (not among ancestorIds) → every tagged ancestor may stand in, nearest first", () => {
+    const r = oh(spec({ nodeId: "71:6", drawnState: "hover", drawnStateFrom: "71:1", ancestorIds: ["71:5", "71:2"] }), btn.path, [cell, table, btn]);
+    return r?.kind === "owner" && r.id === "71:5";
+  });
+
+  const sm = spec({ nodeId: "71:4", type: "FRAME", backgroundColor: "#46464fff" });
+  const mm: Match = { nodeId: "71:4", matchedBy: "tag", selector: '[data-dt-node="71:4"]', selectorCount: 1, path: "html > body > td", cand: null };
+  const pbv = { backgroundColor: "rgb(70, 70, 79)", via: "ancestor", tag: "tr", depth: 1, dt: "71:3" };
+  const shaped = shapeNode(sm, mm, { nodeId: "71:4", found: true, styles: { backgroundColor: "rgba(0, 0, 0, 0)", paintedBy: pbv, textTransform: "capitalize" }, unmeasured: {} }, STYLE_KEYS);
+  t("[F-74/F-69] shapeNode carries the page's paintedBy and textTransform into measured styles (optional keys, beside the STYLE_KEYS)", () =>
+    JSON.stringify(shaped.styles?.paintedBy) === JSON.stringify(pbv) && shaped.styles?.textTransform === "capitalize" && !STYLE_KEYS.includes("paintedBy") && !STYLE_KEYS.includes("textTransform"));
+  const bad = shapeNode(sm, mm, { nodeId: "71:4", found: true, styles: { paintedBy: { backgroundColor: "rgb(1, 2, 3)", via: "sibling", tag: "div", depth: 1 }, textTransform: "" }, unmeasured: {} }, STYLE_KEYS);
+  t("[F-74/F-69] …and adds neither when the page read none (a malformed paintedBy, an empty transform) — never a null to explain", () =>
+    bad.styles !== undefined && !("paintedBy" in bad.styles) && !("textTransform" in bad.styles) && !("paintedBy" in (bad.unmeasured || {})));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
@@ -1803,5 +1881,7 @@ if (process.platform !== "win32") {
   if (!gone) child.kill("SIGKILL");
   check(`[O-1] closeCapped: a browser child still running after the close (the handle already disconnected) is SIGKILLed (${gone ? "gone" : "still running after 3 s"}${threw ? ", closeCapped threw" : ""})`, gone && !threw);
 }
+
+check("[LAUNCH_ARGS] the probe's chromium flags include --disable-lcd-text (grayscale text AA; the e2e suites that render references import the same list)", VP.LAUNCH_ARGS.includes("--disable-lcd-text"));
 
 report();

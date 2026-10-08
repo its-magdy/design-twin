@@ -20,6 +20,11 @@
 //                            on whichever field happened to be checked first.
 //   4b. a carried id      — only when the union is empty: the id a `<Layer>__<a>_<b>` basename (or a
 //                            path to its .json) or a dash/URL form carries (stage "node id").
+//   4c. the folded union  — only when 2–4b found nothing: the same three fields compared with ALL
+//                            whitespace removed and case folded, so a plan file's name (`CropPlans`,
+//                            `SeedSwaps`) finds the screen named "Crop Plans" / "Seed Swaps".
+//                            Two or more rows are still AMBIGUOUS (listed with their node ids); an
+//                            exact match always wins because this stage never runs after one.
 //   5. text search        — query is a case-insensitive substring of row.name, row.title, or any of
 //                            row.texts (the first N deduped text strings on the frame).
 //
@@ -142,6 +147,8 @@ function describe(row: IndexRow, matchedVia?: string[]): ScreenCandidate {
 }
 
 const fold = (s: unknown): string => String(s || "").trim().toLowerCase();
+// The 4c comparison: every whitespace run dropped, case folded ("SeedSwaps" === "Seed Swaps").
+const foldCompact = (s: unknown): string => String(s || "").replace(/\s+/g, "").toLowerCase();
 
 // Returns one of:
 //   { status: "resolved", row, stage }                          — node id alone, or exactly one row
@@ -215,6 +222,36 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
     if (hit) return { status: "resolved", row: hit, stage: "node id" };
   }
 
+  // Stage 4c: the same three fields, whitespace-insensitive. Nothing exact matched (or carried an id), so a
+  // query such as a plan file's name (`CropPlans.json` -> "CropPlans") can still find "Crop Plans". One row
+  // resolves; two or more stop and list (G18: two frames named "Crop Plans").
+  const qCompact = foldCompact(q);
+  if (qCompact) {
+    const planCompactIds = new Set(
+      plans.filter((p) => foldCompact(p.screenName) === qCompact || foldCompact(p.route) === qCompact).map((p) => p.nodeId).filter((id): id is string => !!id)
+    );
+    const compact = new Map<string, { row: IndexRow; via: Set<string> }>();
+    const joinCompact = (row: IndexRow, via: string): void => {
+      const key = row.id || row.file || JSON.stringify(row);
+      getOrInit(compact, key, () => ({ row, via: new Set<string>() })).via.add(via);
+    };
+    for (const r of rows) {
+      if (foldCompact(r.name) === qCompact) joinCompact(r, "layer name ignoring spaces");
+      if (r.title && foldCompact(r.title) === qCompact) joinCompact(r, "indexed title ignoring spaces");
+      if (planCompactIds.has(r.id)) joinCompact(r, "plan screenName/route ignoring spaces");
+    }
+    const compactRows = [...compact.values()];
+    const one = compactRows.length === 1 ? compactRows[0] : undefined;
+    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + ") };
+    if (compactRows.length > 1) {
+      return {
+        status: "ambiguous",
+        stage: "whitespace-insensitive match (layer name / title / plan header)",
+        candidates: compactRows.map((u) => describe(u.row, [...u.via])),
+      };
+    }
+  }
+
   // Stage 5: text search. A hit here is a CANDIDATE, never a result — see the file header. This is
   // what closes finding 70 for real: the pre-fix version resolved a single substring hit outright.
   const textMatches = rows.filter(
@@ -238,9 +275,11 @@ export { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
 // CLI: node <plugin>/scripts/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]
 // (the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
 function main(argv: string[]): number {
+  const usage = `usage: ${scriptCmd("resolve-screen")} <design/export dir> <name-or-id> [design/plan dir]`;
+  if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
   const [exportDir, query, planDir] = argv;
   if (!exportDir || !query) {
-    console.error(`usage: ${scriptCmd("resolve-screen")} <design/export dir> <name-or-id> [design/plan dir]`);
+    console.error(usage);
     return 2;
   }
   const NOTITLES_NOTE =
