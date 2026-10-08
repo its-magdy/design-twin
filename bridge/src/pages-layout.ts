@@ -371,8 +371,8 @@ export interface MergedRootIndex {
   layers?: unknown[];
 }
 
-// Not json-util's isRecord: an array counts here, so a previous index that is an array is merged over as before
-// (its elements land on the result under their indices) instead of being replaced by {}.
+// Not json-util's isRecord: an array counts here, so a previous index that is an array is merged over (its
+// elements land on the result under their indices) instead of being replaced by {}.
 const isObjectLike = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object";
 
 // Keeps a previous row unless it is the one being replaced — `l && l.file !== file` in plain JS

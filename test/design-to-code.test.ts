@@ -25,7 +25,10 @@ import { isRecord } from "../bridge/src/json-util.ts";
 import { mergeScreenIndex } from "../bridge/src/pages-layout.ts";
 import { NUMERIC_TEXT, isAlias, isComposed } from "../design-to-code/doc-guards.ts";
 import { alnumKey } from "../design-to-code/map-util.ts";
-import { CUT_SETTLE_MS, raceBudget } from "../design-to-code/probe-drive.ts";
+import { CUT_SETTLE_MS, driveInteractions, holdContext, raceBudget } from "../design-to-code/probe-drive.ts";
+import type { Held } from "../design-to-code/probe-drive.ts";
+import type { BrowserContext } from "playwright";
+import { driveOutcome } from "../design-to-code/verify-probe.ts";
 import { PAINT_TYPES, idSuffix, normText } from "../design-to-code/probe-match.ts";
 import fs from "node:fs";
 import os from "node:os";
@@ -1655,19 +1658,87 @@ console.log("map — SLOT props:");
   check("[shared] NUMERIC_TEXT: signed decimals as text; not an exponent, a unit or an empty string", NUMERIC_TEXT.test("40") && NUMERIC_TEXT.test("-5") && NUMERIC_TEXT.test("12.5") && !NUMERIC_TEXT.test("1e3") && !NUMERIC_TEXT.test("40px") && !NUMERIC_TEXT.test(""));
   check("[shared] probe-match exports: PAINT_TYPES, idSuffix, normText (U+00A0 and runs of space folded)",
     PAINT_TYPES.has("VECTOR") && !PAINT_TYPES.has("FRAME") && idSuffix("I1:2;3:4;5:6") === "3:4;5:6" && idSuffix("1:2") === null && normText(" a\u00a0 b\n c ") === "a b c");
-  // pages-layout keeps its own array-accepting guard: a previous index that is an array is still merged over, as before
+  // pages-layout's guard accepts arrays: a previous index that is an array is merged over, its elements landing under their indices
   const merged = mergeScreenIndex(["x"], { name: "A", id: "2:1", page: "P", pageId: "1:1", file: "a.json" });
   check("[shared] mergeScreenIndex over an array index keeps its elements (its guard accepts arrays, unlike isRecord)", merged["0"] === "x" && Array.isArray(merged.layers) && merged.layers.length === 1);
-  // raceBudget: the result of work that beats the deadline; "cut" (onCut first, then a settle for work) when it does not
+  // raceBudget: the value of work that beats the deadline; a cut (onCut first, then a settle for the close and work) when it
+  // does not — settled false when the settle window runs out (a wedged browser), true when a slow close still returns
   const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const never = <T>(): Promise<T> => new Promise<T>(() => undefined);
   let cuts = 0;
   const fast = await raceBudget(sleepMs(5).then(() => 7), 500, {}, () => { cuts++; });
-  check("[shared] raceBudget: work that finishes inside the deadline returns its value and never calls onCut", fast === 7 && cuts === 0);
+  check("[shared] raceBudget: work that finishes inside the deadline returns its value and never calls onCut", !fast.cut && fast.value === 7 && cuts === 0);
+  const cutLike = await raceBudget(Promise.resolve("cut"), 500, {});
+  check("[shared] raceBudget: work whose value is the string 'cut' is its value, not a cut", !cutLike.cut && cutLike.value === "cut");
   let settled = false;
   const t0 = Date.now();
   const slow = await raceBudget(sleepMs(120).then(() => { settled = true; return 1; }), 30, {}, () => { cuts++; });
-  check("[shared] raceBudget: past the deadline it returns 'cut', has called onCut once, and waited for work to settle (well under CUT_SETTLE_MS)",
-    slow === "cut" && cuts === 1 && settled && Date.now() - t0 < CUT_SETTLE_MS);
+  check("[shared] raceBudget: past the deadline it returns a settled cut, has called onCut once, and waited for work to settle (well under CUT_SETTLE_MS)",
+    slow.cut && slow.settled && cuts === 1 && settled && Date.now() - t0 < CUT_SETTLE_MS);
+  // the wedge paths, a slow-but-alive close and a context that arrives after the cut run side by side: one CUT_SETTLE_MS wait for all
+  const SLOW_CLOSE_MS = 2_000;
+  let closes = 0;
+  // the settle wait is unref'd (in the probe the browser's pipe keeps the process alive): this interval stands in for it
+  const keepAlive = setInterval(() => undefined, 1000);
+  const tw = Date.now();
+  // a context created after the cut (a loaded browser's slow newContext), as openReached does it: holdContext gets it, then the
+  // unit waits in it (a page load) until the context closes — nobody else closes it
+  let lateClosed = false;
+  const late: Held = {};
+  const lateWork = (async (): Promise<string> => {
+    await sleepMs(200);
+    let closedNow: () => void = () => undefined;
+    const closedP = new Promise<void>((r) => { closedNow = r; });
+    holdContext(late)({ close: async () => { lateClosed = true; closedNow(); } });
+    await Promise.race([closedP, sleepMs(30_000)]);
+    return lateClosed ? "closed" : "ran on";
+  })();
+  // the same through driveInteractions: newContext answers 200 ms after a 100 ms budget; its page waits until the context closes
+  let driveCtxClosed = false;
+  const isContext = (x: unknown): x is BrowserContext => typeof x === "object" && x !== null && "close" in x && "newPage" in x;
+  const slowContext = async (): Promise<BrowserContext> => {
+    await sleepMs(200);
+    let closedNow: () => void = () => undefined;
+    const closedP = new Promise<void>((r) => { closedNow = r; });
+    const fake = { close: async (): Promise<void> => { driveCtxClosed = true; closedNow(); },
+      newPage: async (): Promise<never> => { await Promise.race([closedP, sleepMs(30_000)]); throw new Error("Target page, context or browser has been closed"); } };
+    if (!isContext(fake)) throw new Error("fake context");
+    return fake;
+  };
+  const [wedge, alive, noCtx, timed, closeHung, lateCut, straddle] = await Promise.all([
+    raceBudget(never<number>(), 20, { ctx: { close: () => { closes++; return never<void>(); } } }).then((r) => ({ ...r, ms: Date.now() - tw })),
+    (async () => { let open = true; const work = (async (): Promise<number> => { while (open) await sleepMs(20); return 1; })();
+      const r = await raceBudget(work, 20, { ctx: { close: async () => { await sleepMs(SLOW_CLOSE_MS); open = false; } } });
+      return { ...r, ms: Date.now() - tw }; })(),
+    raceBudget(never<number>(), 20, {}).then((r) => ({ ...r, ms: Date.now() - tw })),
+    driveInteractions({ newContext: () => never() }, { rows: [{ nodeId: "1:1", name: "Open", trigger: "ON_CLICK" }, { nodeId: "1:2", name: "More", trigger: "ON_CLICK" }], viewport: { w: 100, h: 100 }, timeout: 100, initScript: "", budgetMs: 20, reach: async () => undefined })
+      .then((r) => ({ ...r, ms: Date.now() - tw })),
+    raceBudget(sleepMs(100).then(() => 1), 20, { ctx: { close: () => never<void>() } }),
+    raceBudget(lateWork, 100, late).then((r) => ({ ...r, ms: Date.now() - tw })),
+    driveInteractions({ newContext: slowContext }, { rows: [{ nodeId: "2:1", name: "Open", trigger: "ON_CLICK" }], viewport: { w: 100, h: 100 }, timeout: 30_000, initScript: "", budgetMs: 100, reach: async () => undefined })
+      .then((r) => ({ ...r, ms: Date.now() - tw })),
+  ]);
+  clearInterval(keepAlive);
+  check("[shared] raceBudget: a hung close and hung work → a cut that did not settle, returned at CUT_SETTLE_MS (not later)",
+    wedge.cut && !wedge.settled && closes === 1 && wedge.ms >= CUT_SETTLE_MS && wedge.ms < CUT_SETTLE_MS + 3_000);
+  check("[shared] raceBudget: a slow close that returns inside CUT_SETTLE_MS → a settled cut, not a wedge", alive.cut && alive.settled && alive.ms >= SLOW_CLOSE_MS && alive.ms < CUT_SETTLE_MS);
+  check("[shared] raceBudget: no context and work that never ends → a cut that did not settle", noCtx.cut && !noCtx.settled);
+  check("[shared] raceBudget: a close that never returns is a wedge even when work itself ended", closeHung.cut && !closeHung.settled);
+  check("[shared] holdContext: a context that arrives after the cut is closed as it arrives, so the cut settles (no wedge) well inside CUT_SETTLE_MS",
+    lateCut.cut && lateCut.settled && lateClosed && lateCut.ms < CUT_SETTLE_MS);
+  check("[shared] driveInteractions: a newContext that answers after the row's cut → its context is closed, not wedged, the row time budget",
+    !straddle.wedged && driveCtxClosed && straddle.ms < CUT_SETTLE_MS && straddle.evidence[0]?.cut === "budget");
+  check("[shared] driveInteractions: a browser that never answers → wedged, by about budget + CUT_SETTLE_MS; the cut row is time budget, the rest not driven",
+    timed.wedged && timed.ms < CUT_SETTLE_MS + 3_000 && timed.evidence.length === 2
+    && timed.evidence[0]?.cut === "budget" && timed.evidence[1]?.detail === "not-run: the browser stopped answering");
+  const outW = driveOutcome({ evidence: timed.evidence, wedged: true }), outOk = driveOutcome({ evidence: timed.evidence, wedged: false });
+  check("[shared] driveOutcome: a wedged drive keeps no evidence, sets wedged and says the browser stopped answering; an unwedged one keeps its evidence",
+    outW.wedged && outW.driven === null && /the browser stopped answering/.test(outW.driveNote ?? "") && !outOk.wedged && outOk.driven === timed.evidence && outOk.driveNote === null);
+  // a rejecting work propagates, and its deadline timer is cleared (otherwise this ref'd 60 s timer would hold the process open)
+  const refTimers = (): number => process.getActiveResourcesInfo().filter((t) => t === "Timeout").length;
+  const timersBefore = refTimers();
+  const rejected = await raceBudget(Promise.reject(new Error("boom")), 60_000, {}).then(() => "resolved", (e: unknown) => errMsg(e));
+  check("[shared] raceBudget: a work that rejects propagates the rejection and leaves no ref'd deadline timer behind", rejected === "boom" && refTimers() === timersBefore);
 }
 
 report();

@@ -56,8 +56,9 @@ import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
 import type { BuildIdentity, InteractionEvidence, MeasuredBehaviour, MeasuredComponent, MeasuredVisual, MeasuredNode, PageOverflow, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, ProbeStep, VerifyMeasured, VerifySpec } from "./types.ts";
 import { describeStep, parseSteps, stepsSha256 } from "./probe-steps.ts";
-import { CLOSED, CUT_SETTLE_MS, NAVIGATED, StepError, drivable, driveBudget, driveInteractions, raf2, readPageOverflow, submitGuard } from "./probe-drive.ts";
-import { CLOSE_STEP_CAP_MS, PS_CAP_MS, WRITE_MARGIN_MS, behaviourBudget, runBehaviour } from "./probe-behaviour.ts";
+import { CLOSED, NAVIGATED, StepError, drivable, driveBudget, driveInteractions, raf2, readPageOverflow, submitGuard } from "./probe-drive.ts";
+import type { DriveResult } from "./probe-drive.ts";
+import { CLOSE_STEP_CAP_MS, PS_CAP_MS, behaviourBudget, runBehaviour } from "./probe-behaviour.ts";
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
@@ -979,6 +980,13 @@ export async function runProbe(browser: Browser, o: ProbeOptions): Promise<Probe
   }
 }
 
+/** What the probe keeps of a drive: its evidence, or — when the browser stopped answering — none, a note, and
+ *  wedged (no visual capture or behaviour; the browser is killed at once). */
+export function driveOutcome(r: DriveResult): { driven: InteractionEvidence[] | null; driveNote: string | null; wedged: boolean } {
+  if (r.wedged) return { driven: null, driveNote: "driving the interactions did not finish within its budget (the browser stopped answering) — none recorded", wedged: true };
+  return { driven: r.evidence, driveNote: null, wedged: false };
+}
+
 /** The probe's one-line behaviour summary (stderr) — never the verdict. */
 export function behaviourLine(b: MeasuredBehaviour): string {
   if (!b.ran) return `behaviour not run (${b.why})`;
@@ -1197,18 +1205,13 @@ export async function main(argv: string[]): Promise<number> {
     const rows = run.kind === "ok" ? drivable(expectation) : [];
     if (rows.length) {
       try {
-        // The drive's own budget (its evidence never depends on the behaviour checks). A drive that has not returned by its budget + a cut row's
-        // settle + 1 s — or by what the deadline leaves for killing a wedged browser and writing — means the browser stopped
-        // answering: the finished measurement is still written (exit 0), with no interaction evidence and a note
-        const driveMs = driveBudget(Date.now(), runDeadline);
-        const hung = Symbol("drive hung");
-        const hungAt = Math.max(0, Math.min(driveMs + CUT_SETTLE_MS + 1000, runDeadline - Date.now() - PS_CAP_MS - WRITE_MARGIN_MS));
-        const r = await Promise.race([driveInteractions(browser, {
-          rows, viewport, timeout, initScript: INIT_SCRIPT, budgetMs: driveMs,
+        // The drive's own budget (its evidence never depends on the behaviour checks). The drive returns by its budget +
+        // a cut row's settle (CUT_SETTLE_MS); a cut row whose close and wind-down did not fit that settle means the browser
+        // stopped answering: the finished measurement is still written (exit 0), with no interaction evidence and a note
+        ({ driven, driveNote, wedged } = driveOutcome(await driveInteractions(browser, {
+          rows, viewport, timeout, initScript: INIT_SCRIPT, budgetMs: driveBudget(Date.now(), runDeadline),
           reach: async (page) => { await reachPage(page, attachNavLog(page), probeOpts); },
-        }), sleep(hungAt, hung, { ref: false })]);
-        if (r === hung) { wedged = true; driveNote = "driving the interactions did not finish within its budget (the browser stopped answering) — none recorded"; }
-        else driven = r;
+        })));
       } catch (e) {
         driveNote = `driving the interactions failed (${firstLine(e)}) — none recorded`;
       }
