@@ -23,18 +23,18 @@
 // still the Playwright / project root for everything else.
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
+import { sha256Hex } from "../bridge/src/hash.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
-import { StepError, openReached } from "./probe-drive.ts";
-import { BEHAVIOUR_RESERVE_MS, CUT_SETTLE_MS } from "./probe-behaviour.ts";
+import { StepError, openReached, raceBudget, raf2 } from "./probe-drive.ts";
+import { BEHAVIOUR_RESERVE_MS } from "./probe-behaviour.ts";
 import { PngError, decodePng, encodePng } from "./png.ts";
 import type { Rgba } from "./png.ts";
 import { attribute, crop, diffOptionsFor, diffPixels, planGrid, referenceCrop, renderDiff, resampleBox } from "./visual-diff.ts";
 import type { MeasuredVisual, ProbeFrame, Rect4, VerifyExpectation, VerifyReferenceImage } from "./types.ts";
 import { isVerifyReferenceImage } from "./doc-guards.ts";
 import { pctText, resolveInside } from "./verify-screen.ts";
-import { errMsg } from "../bridge/src/errmsg.ts";
+import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 
 // ---------------------------------------------------------------- budget
@@ -74,7 +74,7 @@ export function prepareVisual(exp: Partial<Pick<VerifyExpectation, "referenceIma
   if (file === null) return { ok: false, why: `the reference path ${ri.path} is outside design/export — re-run --expect` };
   let bytes: Buffer;
   try { bytes = fs.readFileSync(file); } catch { return { ok: false, why: `the reference PNG ${ri.path} is missing — re-pull the screen, then re-run --expect` }; }
-  if (crypto.createHash("sha256").update(bytes).digest("hex") !== ri.sha256) return { ok: false, why: `the reference PNG changed since --expect (${ri.path}) — re-run --expect` };
+  if (sha256Hex(bytes) !== ri.sha256) return { ok: false, why: `the reference PNG changed since --expect (${ri.path}) — re-run --expect` };
   const notes: string[] = [];
   if (exp.frames && exp.frames.length > 1) notes.push(`the expectation has ${exp.frames.length} frames — only the first (${exp.frame?.nodeId ?? "?"}) is diffed`);
   if (ri.colorProfile !== undefined) notes.push(`the reference's colour profile is ${ri.colorProfile} — colours are compared as raw samples, without colour management (a colour difference may be the profile's)`);
@@ -123,7 +123,6 @@ function readBuilt(arg: { nodes: Array<{ id: string; selector: string }>; frame:
   }
   return out;
 }
-const raf2 = (page: Page): Promise<unknown> => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 
 export interface VisualCapture {
   png: Buffer;
@@ -196,17 +195,11 @@ export async function captureVisual(browser: Browser, o: CaptureOptions): Promis
       await context.close().catch(() => undefined);
     }
   })().catch((e: unknown): { why: string } => ({ why: /Execution context was destroyed|frame was detached|navigation/i.test(errMsg(e)) ? "the page loaded a new document during the visual capture" : `the visual capture failed — ${firstLine(e)}` }));
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const cutP = new Promise<"cut">((resolve) => { timer = setTimeout(() => resolve("cut"), o.budgetMs); });
-  const r = await Promise.race([work, cutP]);
-  clearTimeout(timer);
-  if (r !== "cut") return r;
   // the context exists from before the screen was reached: closing it ends whatever the capture waits on — ≤ CUT_SETTLE_MS
-  const ctx = held.ctx;
-  await Promise.race([(async (): Promise<void> => { if (ctx) await ctx.close().catch(() => undefined); await work; })(), sleep(CUT_SETTLE_MS, undefined, { ref: false })]);
+  const r = await raceBudget(work, o.budgetMs, held);
+  if (r !== "cut") return r;
   return { why: `the visual capture did not finish within its budget (${Math.round(o.budgetMs / 1000)} s)` };
 }
-const firstLine = (e: unknown): string => errMsg(e).split("\n")[0] ?? "";
 
 // ---------------------------------------------------------------- after the browser is closed: diff + diff image (Node)
 const pct = (n: number, of: number): number => (of > 0 ? Math.round((n / of) * 10000) / 100 : 0);

@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { ParseArgsOptionsConfig } from "node:util";
+import { errCode, errMsg } from "../bridge/src/errmsg.ts";
 
 /**
  * The command a usage line or a printed hint gives for another script: its REAL path, so the model can copy
@@ -34,10 +35,6 @@ const shellQuote = (p: string): string => /["$`\\!]/.test(p) ? `'${p.replaceAll(
  *  specially (a path like design/verify/Plots.json), else quoted as above — a project path may hold a space. */
 export const shellArg = (a: string): string => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 export const scriptCmd = (name: string): string => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
-
-function errCode(e: unknown): string | undefined {
-  return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : undefined;
-}
 
 /** `--flag -3` → `--flag=-3` for every value-taking `--flag` in `options`; everything after `--` is left alone. */
 function joinNegativeValues(argv: string[], options: ParseArgsOptionsConfig): string[] {
@@ -73,7 +70,7 @@ export function cliParse<R>(tool: string, argv: string[], options: ParseArgsOpti
       const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
       console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}\n${usage}`);
     } else {
-      console.error(`${tool}: ${e instanceof Error ? e.message : String(e)}\n${usage}`);
+      console.error(`${tool}: ${errMsg(e)}\n${usage}`);
     }
     process.exit(exitCode);
   }

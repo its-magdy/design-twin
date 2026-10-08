@@ -24,6 +24,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { writeFileAtomic } from "./atomic-write.ts";
+import { sha256Hex } from "./hash.ts";
 
 /** Where the token in play came from. "ephemeral" = minted for this run only, never stored. */
 export type TokenSource = "token-file" | "env" | "file" | "ephemeral";
@@ -90,7 +91,7 @@ export const tokenPath = (): string => path.join(configDir(), FILE);
 
 // A stable, non-secret way to say "the same token?" in logs, `--token-status`, and a 401 hint.
 // Truncated SHA-256, never the token itself — the whole point of persisting is to stop printing it.
-export const fingerprint = (tok: unknown): string | null => (tok ? crypto.createHash("sha256").update(String(tok)).digest("hex").slice(0, 8) : null);
+export const fingerprint = (tok: unknown): string | null => (tok ? sha256Hex(String(tok)).slice(0, 8) : null);
 
 // Read one token from a path. Trims: a token written with `echo tok > file` carries a trailing
 // newline, which would otherwise fail the handshake with a "bad token" that looks nothing like the

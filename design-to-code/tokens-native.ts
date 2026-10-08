@@ -38,6 +38,7 @@
 // clamp(opacity)/100 (color.ts composeAlpha — the multiply is an inference, see there), each half
 // resolved through the same alias resolution as a plain colour.
 import type { TokensDoc, Variable, VariableAlias, VariableCollection, VariableValue } from "./types.ts";
+import { NUMERIC_TEXT } from "./doc-guards.ts";
 import { normHex, parseHex, formatHex, composeAlpha, clampOpacityPct } from "./color.ts";
 
 /** The px-vs-unitless override every emitter honours (tokens.ts unitDecision): the names a caller declared unitless. */
@@ -130,7 +131,9 @@ function kindOf(v: Variable, opts?: NativeOpts): NativeKind | null {
   return null;
 }
 
-const isComposed = (x: unknown): boolean => !!x && typeof x === "object" && "composed" in x;
+// Loose on purpose (not doc-guards' isComposed): a value with a `composed` key picks the "composed colour" skip note,
+// including a malformed one.
+const hasComposedKey = (x: unknown): boolean => !!x && typeof x === "object" && "composed" in x;
 const isNativeScalar =(x: unknown): x is string | number | boolean => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
 function resolve(byName: Map<string, Variable>, collections: VariableCollection[], v: Variable, mode: string, seen?: Set<string>): string | number | boolean | undefined {
   const values = v.values || {};
@@ -161,7 +164,6 @@ function resolve(byName: Map<string, Variable>, collections: VariableCollection[
   return follow(raw);
 }
 // An opacity FLOAT's resolved number (a number, or a string-number FLOAT); null when it is neither.
-const NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function opacityNumber(r: string | number | boolean): number | null {
   const n = typeof r === "number" ? r : typeof r === "string" && NUMERIC_TEXT.test(r) ? Number(r) : NaN;
   return Number.isFinite(n) ? n : null;
@@ -208,7 +210,7 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
       }
       // A composed colour (colour + separate opacity) whose halves did not both resolve to a hex and a
       // number here (an alias to a variable that was not exported?) has no native literal.
-      if (!ok && Object.values(v.values || {}).some(isComposed)) {
+      if (!ok && Object.values(v.values || {}).some(hasComposedKey)) {
         warnings.push(`${v.name}: skipped — a composed colour (colour + separate opacity) whose colour or opacity could not be resolved inside this file has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
         continue;
       }

@@ -13,8 +13,8 @@ import type { Duplex } from "node:stream";
 import crypto from "node:crypto";
 import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
-import { errMsg } from "./errmsg.ts";
-import { ifDefined } from "./json-util.ts";
+import { errCode, errMsg } from "./errmsg.ts";
+import { ifDefined, isRecord } from "./json-util.ts";
 import { TIMEOUTS, exportTimeout, HEARTBEAT_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS } from "./ports.ts";
@@ -223,7 +223,6 @@ type PluginFrame =
   | { type: "reply"; id: string; ok: boolean; result: unknown; error: unknown };
 
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
-const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
 function parseTick(m: Record<string, unknown>): ProgressTick {
@@ -632,7 +631,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     return sock ? ` A dtwin daemon from an earlier version may be holding it (socket ${sock}) — \`dtwin --stop\` stops it.` : "";
   };
   server.on("error", (e) => {
-    if (e && (e as NodeJS.ErrnoException).code === "EADDRINUSE") {
+    if (errCode(e) === "EADDRINUSE") {
       const msg =
         `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. ` +
         `Stop it first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports ` +

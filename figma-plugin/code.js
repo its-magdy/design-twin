@@ -2,6 +2,9 @@
 "use strict";
 (() => {
   // ../bridge/src/json-util.ts
+  function isRecord(x) {
+    return typeof x === "object" && x !== null && !Array.isArray(x);
+  }
   function isUnknownArray(x) {
     return Array.isArray(x);
   }
@@ -914,9 +917,6 @@
     return Object.prototype.hasOwnProperty.call(COMMAND_SET, x);
   }
   var COMMANDS = Object.keys(COMMAND_SET).filter(isCmd);
-  function isRecord(x) {
-    return typeof x === "object" && x !== null && !Array.isArray(x);
-  }
   var NO_NODE_ID = "No node id provided.";
   var isBool = (v) => typeof v === "boolean";
   var isStr = (v) => typeof v === "string";

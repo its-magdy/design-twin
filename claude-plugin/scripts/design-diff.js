@@ -45,6 +45,7 @@ import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
 // design-to-code/read-json.ts
 var anyJson = (_x) => true;
@@ -315,9 +316,6 @@ import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
-function errCode(e) {
-  return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
-}
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -352,7 +350,7 @@ ${usage}`);
       console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
 ${usage}`);
     } else {
-      console.error(`${tool}: ${e instanceof Error ? e.message : String(e)}
+      console.error(`${tool}: ${errMsg(e)}
 ${usage}`);
     }
     process.exit(exitCode);

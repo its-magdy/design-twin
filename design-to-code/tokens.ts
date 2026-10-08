@@ -40,20 +40,20 @@
 // Defensive by construction: a collision or missing value is skipped + reported, never silently
 // producing an illegal DTCG node or `--x: undefined;`. See docs/design-to-code-spec.md.
 import fs from "node:fs";
-import { createHash } from "node:crypto";
 import path from "node:path";
-import type { TokensDoc, Variable, VariableAlias, VariableCollection, VariableType, VariableValue } from "./types.ts";
+import type { TokensDoc, Variable, VariableCollection, VariableType, VariableValue } from "./types.ts";
 import { readSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
-import { isTokensDoc } from "./doc-guards.ts";
+import { NUMERIC_TEXT, isAlias, isComposed, isTokensDoc } from "./doc-guards.ts";
 import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { sourcesOf, type SliceSources } from "./slice-sources.ts";
 import { normHex, clampOpacityPct } from "./color.ts";
 import nativeEmitter, { type UnitDecision, type UnitOpts } from "./tokens-native.ts";
+import { errMsg } from "../bridge/src/errmsg.ts";
+import { sha256Hex } from "../bridge/src/hash.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
-import type { VariableComposedColor } from "../bridge/src/doc-types.ts";
 import { TAILWIND_SOURCE_NOT_NOTE } from "../bridge/src/project-layout.ts";
 
 /** The options every emitter shares (opts.unitless is honoured by the ONE unitDecision below). */
@@ -347,18 +347,6 @@ const webNumber = (v: Variable, raw: VariableValue): VariableValue => (isSentine
 // --- color: color.ts normHex (optional #, 3/4/6/8 digits -> "#rrggbb" / "#rrggbbaa"). ---
 const isHexish = (v: unknown): v is string => typeof v === "string" && /^#/.test(v);
 const isScalar = (v: unknown): v is string | number | boolean => typeof v === "string" || typeof v === "number" || typeof v === "boolean";
-const isAlias = (v: unknown): v is VariableAlias => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
-// A composed colour {composed:{color, opacity}} (doc-types ComposedColor). Each half is checked, so a
-// hand-written token file with a malformed `composed` object is a non-scalar value (skipped + reported),
-// never a half-read one.
-const isComposed = (v: unknown): v is VariableComposedColor => {
-  if (!v || typeof v !== "object" || !("composed" in v)) return false;
-  const c = v.composed;
-  if (!c || typeof c !== "object" || !("color" in c) || !("opacity" in c)) return false;
-  const colorOk = typeof c.color === "string" || isAlias(c.color);
-  const opacityOk = typeof c.opacity === "number" || isAlias(c.opacity);
-  return colorOk && opacityOk && (isAlias(c.color) || isAlias(c.opacity));
-};
 // The alias names a value references: a top-level alias, or a composed colour's nested alias(es).
 function aliasNames(v: unknown): string[] {
   if (isAlias(v)) return [v.aliasOf];
@@ -727,7 +715,6 @@ function numberUnit(variable: Variable, opts?: UnitOpts): string {
 const pctOutOfRange = (n: number): boolean => n < 0 || n > 100;
 // `s` is a number's CSS text ("40", "-5", "12.5"); in range it is kept verbatim.
 const cssPercent = (s: string): string => (pctOutOfRange(Number(s)) ? String(clampOpacityPct(Number(s))) : s) + "%";
-const NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 // Does v's custom property hold a percentage in EVERY mode? An opacity-scoped FLOAT whose values are
 // numbers, or aliases to such a FLOAT (followed through the SAME plan the emitter named them with).
 // A composed colour may only put `var(--x)` in color-mix()'s <percentage> slot when this holds —
@@ -1410,7 +1397,7 @@ function catalogProvenance(ds: TokensDoc): { count: number; sha: string } {
   const variables = (ds.variables || [])
     .map((v) => ({ sort: [v.collection ?? "", v.name, v.key ?? ""].join("\u0000"), json: canonJson(v) }))
     .sort((a, b) => cmpStr(a.sort, b.sort) || cmpStr(a.json, b.json)).map((v) => v.json);
-  const sha = createHash("sha256").update(`{"collections":[${collections.join(",")}],"variables":[${variables.join(",")}]}`).digest("hex").slice(0, 12);
+  const sha = sha256Hex(`{"collections":[${collections.join(",")}],"variables":[${variables.join(",")}]}`).slice(0, 12);
   return { count: (ds.variables || []).length, sha };
 }
 const PROVENANCE_RE = /designtwin-source: (.+?) · (\d+) variables · sha256 ([0-9a-f]{12})/;
@@ -1499,7 +1486,7 @@ function mixedRootModes(ds: TokensDoc): string | null {
 function checkGenerated(ds: TokensDoc, input: string, generated: string, cmd: string): number {
   let head: string;
   try { head = fs.readFileSync(generated, "utf8").slice(0, 4096); } catch (e) {
-    console.error(`error  --check: '${generated}' could not be read (${e instanceof Error ? e.message : String(e)}).`);
+    console.error(`error  --check: '${generated}' could not be read (${errMsg(e)}).`);
     return 2;
   }
   const m = PROVENANCE_RE.exec(head);

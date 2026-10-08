@@ -10,11 +10,9 @@
 // `verification.hook.files`.
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
+import { sha256Hex } from "../bridge/src/hash.ts";
 import { spawnSync } from "node:child_process";
-import { isUnknownArray } from "../bridge/src/json-util.ts";
-
-const sha256 = (s: string | Uint8Array): string => crypto.createHash("sha256").update(s).digest("hex");
+import { isRecord, isUnknownArray } from "../bridge/src/json-util.ts";
 
 // Deep copy without the pull's timestamps. Key order is kept (the exporter writes it deterministically).
 // Takes and returns `unknown`: this walks whatever JSON document it is handed (a screen export, an
@@ -34,7 +32,7 @@ function stripPullTimes(v: unknown, parentKey?: string): unknown {
 // One export document or several (an expectation built from several frames) -> hex sha256.
 function exportContentSha256(docs: unknown): string {
   const list = isUnknownArray(docs) ? docs : [docs];
-  return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
+  return sha256Hex(JSON.stringify(list.map((d) => stripPullTimes(d))));
 }
 
 // { "<rel path>": "<sha256 16-hex>" | null } for every file listed — null when it is not on disk.
@@ -44,7 +42,7 @@ function exportContentSha256(docs: unknown): string {
 function fileHashes(files: unknown, cwd: string, cached?: (rel: string) => Uint8Array | undefined): Record<string, string | null> {
   const out: Record<string, string | null> = {};
   for (const rel of isUnknownArray(files) ? files.map(String) : []) {
-    try { out[rel] = sha256(cached?.(rel) ?? fs.readFileSync(path.join(cwd, rel))).slice(0, 16); } catch { out[rel] = null; }
+    try { out[rel] = sha256Hex(cached?.(rel) ?? fs.readFileSync(path.join(cwd, rel))).slice(0, 16); } catch { out[rel] = null; }
   }
   return out;
 }
@@ -67,7 +65,6 @@ function gitHead(cwd: string): string | null {
 // under the project root. A path with no file extension (an import specifier, `src/shell/Sidebar`) is resolved the way a
 // bundler would, under `cwd`: <path>.tsx/.ts/.jsx/.js, then <path>/index.{tsx,ts,jsx,js} — the first FILE found is
 // hashed; none found (or no cwd given) → skipped. planCodeSkipped() names what was skipped (verify-build warns once).
-const isRec = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
 const RESOLVE_EXT = ["tsx", "ts", "jsx", "js"];
 const isFile = (abs: string): boolean => { try { return fs.statSync(abs).isFile(); } catch { return false; } };
 function mappedModulePath(raw: unknown, cwd?: string): string | null {
@@ -88,8 +85,8 @@ function mappedModulePath(raw: unknown, cwd?: string): string | null {
 // every mapModule string of a plan (anchors{} values, then components[]), as written
 function mapModules(plan: { anchors?: unknown; components?: unknown }): unknown[] {
   const out: unknown[] = [];
-  if (isRec(plan.anchors)) for (const a of Object.values(plan.anchors)) if (isRec(a)) out.push(a.mapModule);
-  if (isUnknownArray(plan.components)) for (const c of plan.components) if (isRec(c)) out.push(c.mapModule);
+  if (isRecord(plan.anchors)) for (const a of Object.values(plan.anchors)) if (isRecord(a)) out.push(a.mapModule);
+  if (isUnknownArray(plan.components)) for (const c of plan.components) if (isRecord(c)) out.push(c.mapModule);
   return out;
 }
 // `cwd`: the project root extensionless mapModules resolve under (absent: they are skipped).
@@ -125,19 +122,19 @@ function planCodeSkippedNote(plan: { anchors?: unknown; components?: unknown }, 
 function planHash(plan: object | null | undefined): string {
   const copy: Record<string, unknown> = { ...(plan || {}) };
   delete copy.status; delete copy.waivers; delete copy.descopes; delete copy.verification;
-  return sha256(JSON.stringify(copy)).slice(0, 16);
+  return sha256Hex(JSON.stringify(copy)).slice(0, 16);
 }
 // The older formula: `verification` minus only `verification.hook`. Still ACCEPTED (verify-build isOpen /
 // computeStatus) so no plan the hook closed under it reopens on upgrade.
 function legacyPlanHash(plan: object | null | undefined): string {
   const copy: Record<string, unknown> = structuredClone({ ...(plan || {}) });
   delete copy.status; delete copy.waivers; delete copy.descopes;
-  if (isRec(copy.verification)) {
+  if (isRecord(copy.verification)) {
     const v: Record<string, unknown> = { ...copy.verification };
     delete v.hook;
     if (Object.keys(v).length) copy.verification = v; else delete copy.verification;
   }
-  return sha256(JSON.stringify(copy)).slice(0, 16);
+  return sha256Hex(JSON.stringify(copy)).slice(0, 16);
 }
 
 export { stripPullTimes, exportContentSha256, fileHashes, gitHead, planCodeFiles, planCodeSkipped, planCodeSkippedNote, planHash, legacyPlanHash };

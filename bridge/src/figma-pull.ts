@@ -1203,8 +1203,7 @@ async function cli(argv: string[]): Promise<void> {
     // Hide the subcommand from the MCP entry: it should see the argv of a plain `figma-mcp.ts` run.
     process.argv.splice(2, 1);
     import("./figma-mcp.ts").catch((e: unknown) => {
-      const m = e && (e as { message?: unknown }).message;
-      console.error("[dtwin mcp] failed to start the MCP server: " + (m ? String(m) : String(e)));
+      console.error("[dtwin mcp] failed to start the MCP server: " + errMsg(e));
       process.exit(1);
     });
     return;

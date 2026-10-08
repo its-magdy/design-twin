@@ -31,7 +31,7 @@
 // reported as not measured / not probed — never as passed, and never as failed.
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
+import { sha256Hex } from "../bridge/src/hash.ts";
 import { walkWithHidden } from "./hidden.ts";
 import { exportContentSha256, fileHashes, gitHead, planCodeFiles, planCodeSkippedNote } from "./content-hash.ts";
 import { recordPlan, writePlan } from "./plan-record.ts";
@@ -48,7 +48,7 @@ import { parseArgs } from "node:util";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
-import { CANONICAL_MATCHED_BY } from "./probe-match.ts";
+import { CANONICAL_MATCHED_BY, PAINT_TYPES, idSuffix, normText } from "./probe-match.ts";
 import type { MatchedBy } from "./probe-match.ts";
 import type {
   Action, ArtifactCheck, BehaviourCheck, BehaviourStatus, BehaviourSummary, Box, CodeInputs, DeltaSeverity, DrawnState, IndexRow, InteractionEvidence, IrNode, JsonValue, LayoutSpec, MeasuredComponent, MeasuredNode, MeasuredStyles,
@@ -56,6 +56,7 @@ import type {
   VerifyInteractionResult, VerifyMeasured, VerifyFrame, VerifyReferenceImage, VerifyReferenceUnusable, VerifyAgainst, VerifyReport, VerifyReportV2, VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { errMsg } from "../bridge/src/errmsg.ts";
 import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
@@ -213,7 +214,6 @@ function drawnStateOf(n: IrNode): DrawnStateOf | null {
 
 // An inline SVG's colour is its `fill`, not a CSS background. Comparing a vector's fills against
 // `background-color` produced the other recurring false high (the moon glyph, the Union icon).
-const PAINT_TYPES = new Set<string>(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
 const isPaintNode = (n: IrNode): boolean => PAINT_TYPES.has(n.type) || (typeof n.asset === "string" && /\.svg$/i.test(n.asset));
 
 // A text layer that IS an input's placeholder. Its colour lives on `::placeholder`, which
@@ -657,7 +657,6 @@ function shellIndex(roots: readonly IrNode[]): ShellIndex {
   for (const r of roots) walk(r);
   return out;
 }
-const idSuffix = (id: string): string | null => { const i = id.indexOf(";"); return i === -1 ? null : id.slice(i + 1); };
 
 // the shape a sibling row is recognised by — the same component, or the same tree of node types.
 function rowSignature(n: IrNode): string {
@@ -1141,7 +1140,7 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   const crop = { x, y, w: Math.max(0, Math.min(Math.round(box.w * scale), png.w - x)), h: Math.max(0, Math.min(Math.round(box.h * scale), png.h - y)) };
   const profiles = [o.colorProfile === "display_p3" ? "display_p3" : null, png.iccp !== null ? `iCCP:${png.iccp}` : null].filter((v): v is string => v !== null);
   return {
-    usable: true, path: p, sha256: crypto.createHash("sha256").update(bytes).digest("hex"), png: { w: png.w, h: png.h },
+    usable: true, path: p, sha256: sha256Hex(bytes), png: { w: png.w, h: png.h },
     scale, offset, from: row ? "index" : "export", crop, ...(profiles.length ? { colorProfile: profiles.join(" + ") } : {}),
   };
 }
@@ -1300,7 +1299,6 @@ const inlineWhy = (tag: string): string => `the id sits on an inline <${tag || "
 // width (0.5 → 1, 1.5 → 1, 2.7 → 2, at DPR 1/2/3). A design's stroke is compared as the border CSS can draw. A ring
 // (box-shadow spread, outline) is not snapped — it is compared with the raw design width.
 const cssBorderWidth = (d: number): number => (d <= 0 ? 0 : d < 1 ? 1 : Math.floor(d));
-const normText = (t: unknown): string => String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 // the probe's paintedBy block (a hand-written probe's free-form value is ignored)
 const isPaintedBy = (x: unknown): x is PaintedBy => isJsonObject(x) && typeof x.backgroundColor === "string" && (x.via === "ancestor" || x.via === "child")
   && typeof x.tag === "string" && typeof x.depth === "number" && (x.dt === undefined || typeof x.dt === "string");
@@ -2490,7 +2488,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   for (const d of deltas) if (!d.group) getOrInit(sameKey, JSON.stringify([d.field, d.expected, d.actual]), () => []).push(d);
   for (const [k, list] of sameKey) {
     if (list.length < 2) continue;
-    const gid = `same:${crypto.createHash("sha256").update(k).digest("hex").slice(0, 8)}`;
+    const gid = `same:${sha256Hex(k).slice(0, 8)}`;
     for (const d of list) d.group = gid;
   }
 
@@ -3290,7 +3288,7 @@ export { buildExpectation, compare, reportToMarkdown, selectForAccept, probeLine
 
 // ---------------------------------------------------------------- CLI
 function main(argv: string[]): number | Promise<number> {
-  const sha = (file: string): string => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  const sha = (file: string): string => sha256Hex(fs.readFileSync(file));
   const USAGE =
     "usage:\n" +
     `  ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force] [--plan <plan.json>]\n` +
@@ -3488,7 +3486,7 @@ function main(argv: string[]): number | Promise<number> {
     }
     const next = JSON.stringify(exp, null, 2) + "\n";
     const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
-    const h = crypto.createHash("sha256").update(next).digest("hex");
+    const h = sha256Hex(next);
     let prevContent: JsonValue | undefined = null;
     try { if (prev !== null) { const prevDoc: unknown = JSON.parse(prev); prevContent = isJsonObject(prevDoc) ? prevDoc.exportContentSha256 : null; } } catch { /* unreadable */ }
     const onlyExportedAt = prev !== null && prev !== next && !!prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "");
@@ -3510,7 +3508,7 @@ function main(argv: string[]): number | Promise<number> {
         : typeof prevContent === "string" ? `the export changed (content sha ${prevContent.slice(0, 12)}… → ${exp.exportContentSha256.slice(0, 12)}…)`
         // an expectation written before exportContentSha256 — whether the export or the generator changed is unknown
         : `the expectation recorded no export hash (exportContentSha256) — cannot tell whether the export or the expectation generator changed`;
-      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto.createHash("sha256").update(prev).digest("hex").slice(0, 12)}… → ${h.slice(0, 12)}…): ${why}; the previous one is kept as ${prevFile}`);
+      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${sha256Hex(prev).slice(0, 12)}… → ${h.slice(0, 12)}…): ${why}; the previous one is kept as ${prevFile}`);
       const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation — re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
@@ -3678,7 +3676,7 @@ function main(argv: string[]): number | Promise<number> {
       for (const n of r.notes) console.error(`note  ${n}`);
       console.error(r.written ? `recorded ${reportRel} in ${planHit.file} (plan.verification)` : `${planHit.file}: plan.verification already records ${reportRel} — unchanged`);
     } catch (e) {
-      console.error(`error  --record-plan: ${e instanceof Error ? e.message : String(e)} — ${reportRel} is written; ${planHit.file} was not updated`);
+      console.error(`error  --record-plan: ${errMsg(e)} — ${reportRel} is written; ${planHit.file} was not updated`);
       return 1;
     }
   }
@@ -3739,5 +3737,5 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const code = main(process.argv.slice(2));
   if (typeof code === "number") process.exitCode = code;
-  else code.then((c) => { process.exitCode = c; }, (e: unknown) => { console.error(`verify-screen: ${e instanceof Error ? e.message : String(e)}`); process.exitCode = 1; });
+  else code.then((c) => { process.exitCode = c; }, (e: unknown) => { console.error(`verify-screen: ${errMsg(e)}`); process.exitCode = 1; });
 }

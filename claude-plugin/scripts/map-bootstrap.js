@@ -92,6 +92,9 @@ var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exp
 function nullProto() {
   return /* @__PURE__ */ Object.create(null);
 }
+function isRecord(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
@@ -396,7 +399,6 @@ var KEYS = {
 };
 var PROP_KINDS = Object.keys(KEYS.prop);
 var isStr = (v) => typeof v === "string";
-var isObj2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 var isBool = (v) => typeof v === "boolean";
 var noExtra = (obj, allowed, at, err) => {
   if (!Array.isArray(allowed)) return;
@@ -408,39 +410,39 @@ var optStrings = (obj, keys, at, err) => {
 function validateMap(map) {
   const errors = [];
   const err = (path4, message) => errors.push({ path: path4, message });
-  if (!isObj2(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
   if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
-  if (!isObj2(map.components)) {
+  if (!isRecord(map.components)) {
     err("components", "must be an object");
     return { ok: false, errors };
   }
   for (const key of Object.keys(map.components)) {
     const e = map.components[key];
     const at = `components.${key}`;
-    if (!isObj2(e)) {
+    if (!isRecord(e)) {
       err(at, "entry must be an object");
       continue;
     }
     noExtra(e, KEYS.entry, at, err);
-    if (!isObj2(e.figma)) err(`${at}.figma`, "required object");
+    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
     else {
       noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
       if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
       optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
       if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
     }
-    if (!isObj2(e.code)) err(`${at}.code`, "required object");
+    if (!isRecord(e.code)) err(`${at}.code`, "required object");
     else {
       noExtra(e.code, KEYS.code, `${at}.code`, err);
       if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
       if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
       if (e.code.targets !== void 0) {
-        if (!isObj2(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
         else for (const t of Object.keys(e.code.targets)) {
           const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
-          if (!isObj2(tv)) err(ta, "must be an object");
+          if (!isRecord(tv)) err(ta, "must be an object");
           else {
             noExtra(tv, KEYS.target, ta, err);
             optStrings(tv, ["module", "export"], ta, err);
@@ -451,21 +453,21 @@ function validateMap(map) {
     if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
     optStrings(e, ["note"], at, err);
     if (e.props !== void 0) {
-      if (!isObj2(e.props)) err(`${at}.props`, "must be an object");
+      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
       else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
     }
     if (e.variantOverrides !== void 0) {
       if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
       else e.variantOverrides.forEach((vo, i) => {
         const va = `${at}.variantOverrides[${i}]`;
-        if (!isObj2(vo)) {
+        if (!isRecord(vo)) {
           err(va, "must be an object");
           return;
         }
         noExtra(vo, KEYS.vo, va, err);
-        if (!isObj2(vo.when)) err(`${va}.when`, "required object");
+        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
         else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
-        if (!isObj2(vo.code)) err(`${va}.code`, "required object");
+        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
         else {
           noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
           if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
@@ -474,7 +476,7 @@ function validateMap(map) {
       });
     }
     if (e.childrenByLayer !== void 0) {
-      if (!isObj2(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
       else {
         noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
         optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
@@ -484,7 +486,7 @@ function validateMap(map) {
   return { ok: errors.length === 0, errors };
 }
 function validateProp(p, at, err) {
-  if (!isObj2(p)) {
+  if (!isRecord(p)) {
     err(at, "prop must be an object");
     return;
   }
@@ -498,8 +500,8 @@ function validateProp(p, at, err) {
   if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
   if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
   if (p.kind === "enum") {
-    if (p.values !== void 0 && !isObj2(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
-    else if (isObj2(p.values)) for (const k of Object.keys(p.values)) {
+    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
       const t = typeof p.values[k];
       if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
     }

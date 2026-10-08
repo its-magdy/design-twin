@@ -15,8 +15,7 @@ import { legacyBlockerIds } from "./finding-id.ts";
 import { isAuditReport } from "./doc-guards.ts";
 import { readJson } from "./read-json.ts";
 import { AUDIT_DIR } from "../bridge/src/project-layout.ts";
-
-function slug(s: unknown): string { return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, ""); }
+import { alnumKey } from "./map-util.ts";
 
 function locateAuditFile(cwd: string, screenFile: string | null | undefined, screenName: string | null | undefined): string | null {
   const dir = path.join(cwd, AUDIT_DIR);
@@ -29,7 +28,7 @@ function locateAuditFile(cwd: string, screenFile: string | null | undefined, scr
   // dot in its stem, which a report basename never does (safe() folds every non-alphanumeric to "_").
   try { entries = fs.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes(".")); } catch { entries = []; }
   for (const c of candidates) if (fs.existsSync(c)) return path.relative(cwd, c).split(path.sep).join("/");
-  const wantSlug = slug(screenName);
+  const wantSlug = alnumKey(screenName);
   if (wantSlug) {
     // EXACT slug only. A prefix match either way handed "Jet Roles" the audit of "Jet Roles Detail"
     // (and "Jet Roles Detail" the audit of "Jet Roles") — a wrong screen's blockers gating this build.
@@ -41,8 +40,8 @@ function locateAuditFile(cwd: string, screenFile: string | null | undefined, scr
     // (safe("9:9") = 9_9) never contains a double underscore.
     const stem = (f: string): string => f.replace(/\.json$/, "");
     const nameOf = (f: string): string | null => { const s = stem(f); const i = s.lastIndexOf("__"); return i > 0 ? s.slice(0, i) : null; };
-    const hit = entries.find((f) => slug(stem(f)) === wantSlug)
-      ?? entries.find((f) => { const n = nameOf(f); return n !== null && slug(n) === wantSlug; });
+    const hit = entries.find((f) => alnumKey(stem(f)) === wantSlug)
+      ?? entries.find((f) => { const n = nameOf(f); return n !== null && alnumKey(n) === wantSlug; });
     if (hit) return path.relative(cwd, path.join(dir, hit)).split(path.sep).join("/");
   }
   return null;
@@ -71,4 +70,4 @@ function auditGateStatus(cwd: string, screenFile: string | null | undefined, scr
   return { auditFile: rel, blockers: blockerIds(r.doc), legacyBlockers: legacyBlockerIds(reportFindings(r.doc)) };
 }
 
-export { locateAuditFile, auditGateStatus, blockerIds, slug };
+export { locateAuditFile, auditGateStatus, blockerIds };

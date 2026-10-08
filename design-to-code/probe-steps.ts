@@ -7,7 +7,7 @@
 // and every interaction-driving page. Because they are replayed many times, a step must be IDEMPOTENT and NAVIGATION-ONLY:
 // click (a link, a tab, a sidebar button), waitFor (a selector to be visible), goto (a same-origin path). No fill,
 // press or hover: a typed value or a key press may submit a form, and a replay would submit it again.
-import crypto from "node:crypto";
+import { sha256Hex } from "../bridge/src/hash.ts";
 import { canonical } from "./plan-waivers.ts";
 import { isJsonObject } from "./types.ts";
 import type { PlanInteractionExpect, ProbeStep } from "./types.ts";
@@ -73,7 +73,7 @@ export function parseSteps(x: unknown): { steps: ProbeStep[] } | { error: string
 
 /** sha256 (hex) of the steps' canonical JSON — the same steps hash the same whatever the file's formatting. */
 export function stepsSha256(steps: readonly ProbeStep[]): string {
-  return crypto.createHash("sha256").update(canonical(steps)).digest("hex");
+  return sha256Hex(canonical(steps));
 }
 
 /** The plan `expect` values. */

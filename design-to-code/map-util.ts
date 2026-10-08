@@ -1,4 +1,9 @@
-// map-util.ts — the "get, or insert a fresh value and get it" idiom, typed, so callers never need `m.get(k)!`.
+// map-util.ts — small Map / name helpers shared by the checkers: the "get, or insert a fresh value and get it" idiom,
+// typed, so callers never need `m.get(k)!`, and the loose name key.
+
+/** A name folded for near-miss comparison: lower-cased, every run of non-alphanumerics dropped ("Primary / Fill" and
+ *  "primary-fill" share a key). Only ASCII letters and digits survive. */
+export const alnumKey = (s: unknown): string => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
 /**
  * `m.get(k)`, after first doing `m.set(k, init())` when `k` has no value yet. Returns the existing or the

@@ -53,12 +53,12 @@ import type {
   BlockerCode, IndexRow, IrNode, MatchResult, MatchRow, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
-import { getOrInit } from "./map-util.ts";
+import { alnumKey, getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { findMapFile, findExportDir } from "../bridge/src/project-layout.ts";
 import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 
-const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
+export const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
 // Figma's "fully rounded" idiom exports as a literal 1e9 (seen in live exports). Anything at or past this
 // is not a designed number, it is a sentinel, and it must never reach generated CSS as `1000000000px`.
@@ -115,7 +115,6 @@ function walk(node: IrNode | null | undefined, fn: (n: IrNode) => void): void {
 // Nothing is ever auto-bound on a normalised name — `Medium/14 Medium` vs `Medium/14 medium`
 // (seen in a live run) is precisely the near-miss a name-based mapper gets wrong silently, so it is
 // surfaced as a question rather than resolved.
-const norm = (s: unknown): string => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
 interface UsedAt { screen: string; nodeId: string; field: string }
 interface ScreenInstance { screen: string; nodeId: string; name: string; key?: string; setKey?: string; setName: string; propNames: string[] }
@@ -193,7 +192,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   const dsCollByName = new Map<string, VariableCollection>();
   for (const c of (tokens && tokens.collections) || []) {
     if (c.key) dsCollByKey.set(c.key, c);
-    if (c.name) dsCollByName.set(norm(c.name), c);
+    if (c.name) dsCollByName.set(alnumKey(c.name), c);
   }
   const screenColls = (variables && variables.collections) || [];
   let foreignPatch: { foreign: Array<{ name: string; key?: string }>; head: string; tail: string; at: number } | null = null;
@@ -213,7 +212,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     const foreign: Array<{ name: string; key?: string; twinKey?: string; twinName?: string }> = [];
     for (const c of screenColls) {
       if (c.key && dsCollByKey.has(c.key)) continue;
-      const twin = dsCollByName.get(norm(c.name));
+      const twin = dsCollByName.get(alnumKey(c.name));
       foreign.push({ name: c.name, ...ifDefined("key", c.key), ...ifDefined("twinKey", twin && twin.key), ...ifDefined("twinName", twin && twin.name) });
     }
     if (foreign.length) {
@@ -387,7 +386,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
         // A near-miss on the name is worth more than a flat "missing": it is where a name-based
         // mapper silently binds to the wrong token.
         let near: string | null = null;
-        for (const dname of dsVarByName.keys()) if (norm(dname) === norm(name) && dname !== name) { near = dname; break; }
+        for (const dname of dsVarByName.keys()) if (alnumKey(dname) === alnumKey(name) && dname !== name) { near = dname; break; }
         if (usedTokenNames.has(name) || near) missing.push({ name, near });
         continue;
       }
@@ -404,12 +403,12 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     // slugger maps them onto the same CSS custom property.
     const dsByNorm = new Map<string, Array<{ name: string; v: Variable }>>();
     for (const [dname, dv] of dsVarByName) {
-      const k = norm(dname);
+      const k = alnumKey(dname);
       getOrInit(dsByNorm, k, () => []).push({ name: dname, v: dv });
     }
     for (const [name, list] of screenVarsByName) {
       if (dsVarByName.has(name)) continue;
-      for (const cand of dsByNorm.get(norm(name)) || []) {
+      for (const cand of dsByNorm.get(alnumKey(name)) || []) {
         for (const sv of list) {
           if (sameResolution(sv, cand.v) === false) {
             collisions.push({ name, ...ifDefined("key", sv.key), twins: list, sv, alsoKnownAs: cand.name, screen: flatten(sv), designSystem: flatten(cand.v), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
@@ -544,7 +543,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     // to map, not six, and counting variants would flatter the coverage number.
     const distinct = new Map<string, ScreenInstance & { count: number }>();
     for (const i of instances) {
-      const id = i.setKey || i.key || "name:" + norm(i.setName);
+      const id = i.setKey || i.key || "name:" + alnumKey(i.setName);
       getOrInit(distinct, id, () => Object.assign({ count: 0 }, i)).count++;
     }
     coverage.distinct = distinct.size;
@@ -570,8 +569,8 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
         coverage.matchedByName++;
         // how many of the instance's prop names the matched entry declares (informational)
         const cat = localComps.find((c) => (matched.key ? c.key === matched.key : matched.id !== undefined && c.id === matched.id));
-        const props = Object.keys((cat && cat.props) || {}).map((p) => norm(String(p).split("#")[0]));
-        const hit = i.propNames.filter((p) => props.includes(norm(String(p).split("#")[0]))).length;
+        const props = Object.keys((cat && cat.props) || {}).map((p) => alnumKey(String(p).split("#")[0]));
+        const hit = i.propNames.filter((p) => props.includes(alnumKey(String(p).split("#")[0]))).length;
         coverage.entries.push({
           setName: i.setName,
           ...ifDefined("key", i.setKey || i.key),
@@ -622,13 +621,13 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     coverage.buckets = buckets; // sums to coverage.distinct, by construction
     // Components used ONLY on hidden layers: not built, so not in any bucket — but said, so the gap
     // between "instances in the file" and "components to build" is explained rather than silent.
-    const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + norm(i.setName)));
+    const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + alnumKey(i.setName)));
     const hiddenOnly = new Set<string>();
     // (`walk` skips hidden layers, so this one count walks everything itself.)
     const everyInstance = (n: IrNode | null | undefined): void => {
       if (!n || typeof n !== "object") return;
       if (n.type === "INSTANCE" && n.mainComponent) {
-        const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + norm(mc.setName || mc.name);
+        const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + alnumKey(mc.setName || mc.name);
         if (!visibleSets.has(id)) hiddenOnly.add(id);
       }
       for (const c of n.children || []) everyInstance(c);
@@ -759,11 +758,11 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   if (stylesText && stylesText.styles && textStyles.size) {
     const dsByName = new Map((stylesText.styles || []).map((s): [string, TextStyle] => [s.name, s]));
     const dsNorm = new Map<string, string>();
-    for (const s of stylesText.styles || []) dsNorm.set(norm(s.name), s.name);
+    for (const s of stylesText.styles || []) dsNorm.set(alnumKey(s.name), s.name);
     const absent: string[] = [], nearMiss: Array<{ name: string; near: string }> = [];
     for (const name of textStyles.keys()) {
       if (dsByName.has(name)) continue;
-      const near = dsNorm.get(norm(name));
+      const near = dsNorm.get(alnumKey(name));
       if (near) nearMiss.push({ name, near });
       else absent.push(name);
     }

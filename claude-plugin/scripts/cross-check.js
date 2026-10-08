@@ -38,6 +38,9 @@ function screenExportOf(doc) {
 function nullProto() {
   return /* @__PURE__ */ Object.create(null);
 }
+function isRecord(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
@@ -48,6 +51,7 @@ function ifDefined(key, v) {
 }
 
 // design-to-code/map-util.ts
+var alnumKey = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 function getOrInit(m, k, init) {
   const have = m.get(k);
   if (have !== void 0) return have;
@@ -275,12 +279,15 @@ function findingIds(findings) {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+
+// bridge/src/errmsg.ts
+var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+
+// design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
-function errCode(e) {
-  return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
-}
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -315,7 +322,7 @@ ${usage}`);
       console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
 ${usage}`);
     } else {
-      console.error(`${tool}: ${e instanceof Error ? e.message : String(e)}
+      console.error(`${tool}: ${errMsg(e)}
 ${usage}`);
     }
     process.exit(exitCode);
@@ -327,11 +334,6 @@ import fs2 from "node:fs";
 
 // design-to-code/read-json.ts
 import fs from "node:fs";
-
-// bridge/src/errmsg.ts
-var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
-
-// design-to-code/read-json.ts
 function readFailure(e) {
   const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
   if (code === "ENOENT") return { error: "does not exist", missing: true };
@@ -412,7 +414,6 @@ var KEYS = {
 };
 var PROP_KINDS = Object.keys(KEYS.prop);
 var isStr = (v) => typeof v === "string";
-var isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 var isBool = (v) => typeof v === "boolean";
 var noExtra = (obj, allowed, at, err) => {
   if (!Array.isArray(allowed)) return;
@@ -424,39 +425,39 @@ var optStrings = (obj, keys, at, err) => {
 function validateMap(map) {
   const errors = [];
   const err = (path6, message) => errors.push({ path: path6, message });
-  if (!isObj(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
   if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
-  if (!isObj(map.components)) {
+  if (!isRecord(map.components)) {
     err("components", "must be an object");
     return { ok: false, errors };
   }
   for (const key of Object.keys(map.components)) {
     const e = map.components[key];
     const at = `components.${key}`;
-    if (!isObj(e)) {
+    if (!isRecord(e)) {
       err(at, "entry must be an object");
       continue;
     }
     noExtra(e, KEYS.entry, at, err);
-    if (!isObj(e.figma)) err(`${at}.figma`, "required object");
+    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
     else {
       noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
       if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
       optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
       if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
     }
-    if (!isObj(e.code)) err(`${at}.code`, "required object");
+    if (!isRecord(e.code)) err(`${at}.code`, "required object");
     else {
       noExtra(e.code, KEYS.code, `${at}.code`, err);
       if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
       if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
       if (e.code.targets !== void 0) {
-        if (!isObj(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
         else for (const t of Object.keys(e.code.targets)) {
           const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
-          if (!isObj(tv)) err(ta, "must be an object");
+          if (!isRecord(tv)) err(ta, "must be an object");
           else {
             noExtra(tv, KEYS.target, ta, err);
             optStrings(tv, ["module", "export"], ta, err);
@@ -467,21 +468,21 @@ function validateMap(map) {
     if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
     optStrings(e, ["note"], at, err);
     if (e.props !== void 0) {
-      if (!isObj(e.props)) err(`${at}.props`, "must be an object");
+      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
       else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
     }
     if (e.variantOverrides !== void 0) {
       if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
       else e.variantOverrides.forEach((vo, i) => {
         const va = `${at}.variantOverrides[${i}]`;
-        if (!isObj(vo)) {
+        if (!isRecord(vo)) {
           err(va, "must be an object");
           return;
         }
         noExtra(vo, KEYS.vo, va, err);
-        if (!isObj(vo.when)) err(`${va}.when`, "required object");
+        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
         else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
-        if (!isObj(vo.code)) err(`${va}.code`, "required object");
+        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
         else {
           noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
           if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
@@ -490,7 +491,7 @@ function validateMap(map) {
       });
     }
     if (e.childrenByLayer !== void 0) {
-      if (!isObj(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
       else {
         noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
         optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
@@ -500,7 +501,7 @@ function validateMap(map) {
   return { ok: errors.length === 0, errors };
 }
 function validateProp(p, at, err) {
-  if (!isObj(p)) {
+  if (!isRecord(p)) {
     err(at, "prop must be an object");
     return;
   }
@@ -514,8 +515,8 @@ function validateProp(p, at, err) {
   if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
   if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
   if (p.kind === "enum") {
-    if (p.values !== void 0 && !isObj(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
-    else if (isObj(p.values)) for (const k of Object.keys(p.values)) {
+    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
       const t = typeof p.values[k];
       if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
     }
@@ -539,103 +540,103 @@ function isPlanExpect(x) {
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
 }
-var isObj2 = isJsonObject;
-var optObj = (x) => x === void 0 || isObj2(x);
+var isObj = isJsonObject;
+var optObj = (x) => x === void 0 || isObj(x);
 var optStr = (x) => x === void 0 || typeof x === "string";
-var anyObject = (x) => isObj2(x);
+var anyObject = (x) => isObj(x);
 function isVariable(x) {
-  return isObj2(x) && typeof x.name === "string" && typeof x.type === "string" && isObj2(x.values) && optStr(x.collection);
+  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
 }
 function isVariableCollection(x) {
-  return isObj2(x) && typeof x.name === "string" && isStringArray(x.modes);
+  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
 }
 function isTokensDoc(x) {
-  return isObj2(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
 }
 isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
 function isCatalogComponent(x) {
-  return isObj2(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
 }
 function isComponentsCatalog(x) {
-  return isObj2(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
 }
 isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
 function isComponentDetailFile(x) {
-  return isObj2(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
 }
 isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
 function isTextStylesDoc(x) {
-  return isObj2(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj2(s) && typeof s.name === "string");
+  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
 function isScreenAssetsDoc(x) {
-  return isObj2(x) && optArrayOf(x.heavy, (h) => isObj2(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj2(f) && typeof f.file === "string" && optStr(f.node));
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
 }
 isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
 function isLibrariesIndex(x) {
-  return isObj2(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj2(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
 }
 isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
 var SEVERITIES = ["blocker", "warning", "info"];
 function isAuditOverridesDoc(x) {
-  return isObj2(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj2(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
 }
 isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
 function isAuditReport(x) {
-  return isObj2(x) && isObj2(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj2(f) && typeof f.severity === "string" && typeof f.code === "string");
+  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
 isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
-  return isObj2(x) && typeof x.name === "string";
+  return isObj(x) && typeof x.name === "string";
 }
 function isProposalList(x) {
   return Array.isArray(x) && x.every(isProposal);
 }
 isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
 function isIndexRowLike(x) {
-  return isObj2(x) && typeof x.id === "string" && typeof x.name === "string";
+  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
 }
 function isPagesRootIndex(x) {
-  return isObj2(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj2(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
 }
 isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
 function isPageIndex(x) {
-  return isObj2(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
 }
 isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
 function isVerifyExpectation(x) {
-  return isObj2(x) && isObj2(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj2(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
 isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
-var isNameVersion = (x) => isObj2(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
 function isProbeIdentity(x) {
-  return isObj2(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
 }
 function isBuildIdentity(x) {
-  return isObj2(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
 }
-var isProbeFrame = (x) => isObj2(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj2(x.rect);
-var isCountMap = (x) => isObj2(x) && Object.values(x).every((v) => typeof v === "number");
-var isNavigation = (x) => isObj2(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
-var isTagsNotInExpectation = (x) => isObj2(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj2(r) && typeof r.id === "string" && typeof r.elements === "number");
-var isReasonMap = (x) => isObj2(x) && Object.values(x).every((v) => typeof v === "string");
+var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
+var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
 var isNum = (x) => typeof x === "number" && Number.isFinite(x);
 function isProbeReach(x) {
-  return isObj2(x) && Array.isArray(x.steps) && x.steps.every(isObj2) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
 }
 function isPageOverflow(x) {
-  return isObj2(x) && isObj2(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj2(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
 }
 var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
 var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
 function isBehaviourCheck(x) {
-  return isObj2(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
 }
 function isMeasuredBehaviour(x) {
-  return isObj2(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
 }
 function isMeasuredVisual(x) {
-  return isObj2(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
 }
 var MEASURED_EXTRAS = [
   ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
@@ -657,48 +658,48 @@ var MEASURED_EXTRAS = [
   ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
 ];
 function isMeasuredCore(x) {
-  return isObj2(x) && optArrayOf(x.nodes, (n) => isObj2(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
 function isVerifyMeasured(x) {
-  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj2(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
 }
 isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
 function isEvidence(x) {
-  return isObj2(x) && typeof x.nodeId === "string";
+  return isObj(x) && typeof x.nodeId === "string";
 }
 function isInteractionEvidenceList(x) {
   return Array.isArray(x) && x.every(isEvidence);
 }
 isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
 function isMeasuredComponentList(x) {
-  return Array.isArray(x) && x.every((c) => isObj2(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
+  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
 }
 isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
 function isVerifyReport(x) {
-  return isObj2(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
-  if (!isObj2(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
   for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
-  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj2(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
   for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
-    if (Array.isArray(list) && !list.every(isObj2)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj2(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
-  if (Array.isArray(x.components) && !x.components.every((c) => isObj2(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
-  if (isObj2(x.anchors) && !Object.values(x.anchors).every(isObj2)) return "is not a valid plan: every `anchors` entry must be an object";
-  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj2(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
-  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj2(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
-  if (x.tagging !== void 0 && x.tagging !== null && !(isObj2(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj2(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
-  if (isObj2(x.verification) && x.verification.hook !== void 0 && !isObj2(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
+  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
   for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
@@ -708,19 +709,19 @@ function isPlan(x) {
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
 function isPlanWaiver(x) {
-  return isObj2(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
 }
 isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
 function isPlanDescope(x) {
-  return isObj2(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
 function isPlanInteraction(x) {
-  return isObj2(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
 }
 isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
-  return isObj2(x) && Object.values(x).every((v) => typeof v === "string");
+  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
 
@@ -964,18 +965,18 @@ function looksLikeExportDir(dir) {
 }
 function findExportDir(cwd) {
   const modern = path4.join(cwd, EXPORT_DIR);
-  const legacy = path4.join(cwd, DESIGN_DIR);
+  const legacy2 = path4.join(cwd, DESIGN_DIR);
   const modernExists = looksLikeExportDir(modern);
-  const legacyExists = looksLikeExportDir(legacy);
+  const legacyExists = looksLikeExportDir(legacy2);
   if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
-  if (legacyExists) return { dir: legacy, layout: "legacy-flat", rel: DESIGN_DIR };
+  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
   return { dir: modern, layout: "none", rel: EXPORT_DIR };
 }
 function findMapFile(cwd) {
   const modern = path4.join(cwd, MAP_FILE);
   if (fs6.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
-  const legacy = path4.join(cwd, LEGACY_MAP_FILE);
-  if (fs6.existsSync(legacy)) return { file: legacy, rel: LEGACY_MAP_FILE, legacy: true };
+  const legacy2 = path4.join(cwd, LEGACY_MAP_FILE);
+  if (fs6.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
   return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
 }
 
@@ -989,7 +990,6 @@ function walk(node, fn) {
   fn(node);
   for (const c of node.children || []) walk(c, fn);
 }
-var norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 function crossCheck(input) {
   const screens = input.screens || [];
   const variables = input.variables || null;
@@ -1047,7 +1047,7 @@ function crossCheck(input) {
   const dsCollByName = /* @__PURE__ */ new Map();
   for (const c of tokens && tokens.collections || []) {
     if (c.key) dsCollByKey.set(c.key, c);
-    if (c.name) dsCollByName.set(norm(c.name), c);
+    if (c.name) dsCollByName.set(alnumKey(c.name), c);
   }
   const screenColls = variables && variables.collections || [];
   let foreignPatch = null;
@@ -1063,7 +1063,7 @@ function crossCheck(input) {
     const foreign = [];
     for (const c of screenColls) {
       if (c.key && dsCollByKey.has(c.key)) continue;
-      const twin = dsCollByName.get(norm(c.name));
+      const twin = dsCollByName.get(alnumKey(c.name));
       foreign.push({ name: c.name, ...ifDefined("key", c.key), ...ifDefined("twinKey", twin && twin.key), ...ifDefined("twinName", twin && twin.name) });
     }
     if (foreign.length) {
@@ -1181,7 +1181,7 @@ function crossCheck(input) {
       const dv = dsVarByName.get(name);
       if (!dv) {
         let near = null;
-        for (const dname of dsVarByName.keys()) if (norm(dname) === norm(name) && dname !== name) {
+        for (const dname of dsVarByName.keys()) if (alnumKey(dname) === alnumKey(name) && dname !== name) {
           near = dname;
           break;
         }
@@ -1196,12 +1196,12 @@ function crossCheck(input) {
     }
     const dsByNorm = /* @__PURE__ */ new Map();
     for (const [dname, dv] of dsVarByName) {
-      const k = norm(dname);
+      const k = alnumKey(dname);
       getOrInit(dsByNorm, k, () => []).push({ name: dname, v: dv });
     }
     for (const [name, list] of screenVarsByName) {
       if (dsVarByName.has(name)) continue;
-      for (const cand of dsByNorm.get(norm(name)) || []) {
+      for (const cand of dsByNorm.get(alnumKey(name)) || []) {
         for (const sv of list) {
           if (sameResolution(sv, cand.v) === false) {
             collisions.push({ name, ...ifDefined("key", sv.key), twins: list, sv, alsoKnownAs: cand.name, screen: flatten(sv), designSystem: flatten(cand.v), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
@@ -1282,7 +1282,7 @@ function crossCheck(input) {
     const rowByName = new Map((rekey ? rekey.rows : []).map((r) => [r.name, r]));
     const distinct = /* @__PURE__ */ new Map();
     for (const i of instances) {
-      const id = i.setKey || i.key || "name:" + norm(i.setName);
+      const id = i.setKey || i.key || "name:" + alnumKey(i.setName);
       getOrInit(distinct, id, () => Object.assign({ count: 0 }, i)).count++;
     }
     coverage.distinct = distinct.size;
@@ -1301,8 +1301,8 @@ function crossCheck(input) {
       if (row && matched) {
         coverage.matchedByName++;
         const cat = localComps.find((c) => matched.key ? c.key === matched.key : matched.id !== void 0 && c.id === matched.id);
-        const props = Object.keys(cat && cat.props || {}).map((p) => norm(String(p).split("#")[0]));
-        const hit = i.propNames.filter((p) => props.includes(norm(String(p).split("#")[0]))).length;
+        const props = Object.keys(cat && cat.props || {}).map((p) => alnumKey(String(p).split("#")[0]));
+        const hit = i.propNames.filter((p) => props.includes(alnumKey(String(p).split("#")[0]))).length;
         coverage.entries.push({
           setName: i.setName,
           ...ifDefined("key", i.setKey || i.key),
@@ -1342,12 +1342,12 @@ function crossCheck(input) {
       buckets[b]++;
     }
     coverage.buckets = buckets;
-    const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + norm(i.setName)));
+    const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + alnumKey(i.setName)));
     const hiddenOnly = /* @__PURE__ */ new Set();
     const everyInstance = (n) => {
       if (!n || typeof n !== "object") return;
       if (n.type === "INSTANCE" && n.mainComponent) {
-        const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + norm(mc.setName || mc.name);
+        const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + alnumKey(mc.setName || mc.name);
         if (!visibleSets.has(id)) hiddenOnly.add(id);
       }
       for (const c of n.children || []) everyInstance(c);
@@ -1432,11 +1432,11 @@ function crossCheck(input) {
   if (stylesText && stylesText.styles && textStyles.size) {
     const dsByName = new Map((stylesText.styles || []).map((s) => [s.name, s]));
     const dsNorm = /* @__PURE__ */ new Map();
-    for (const s of stylesText.styles || []) dsNorm.set(norm(s.name), s.name);
+    for (const s of stylesText.styles || []) dsNorm.set(alnumKey(s.name), s.name);
     const absent = [], nearMiss = [];
     for (const name of textStyles.keys()) {
       if (dsByName.has(name)) continue;
-      const near = dsNorm.get(norm(name));
+      const near = dsNorm.get(alnumKey(name));
       if (near) nearMiss.push({ name, near });
       else absent.push(name);
     }
@@ -2072,6 +2072,7 @@ function main(argv) {
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   ABSURD_NUMBER,
+  SEVERITY_ORDER,
   WRONG_CATALOG_PCT,
   composedRgba,
   crossCheck,

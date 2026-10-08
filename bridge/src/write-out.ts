@@ -25,7 +25,7 @@ import { isRasterShell } from "./svg-normalize.ts";
 import { collectGraphics, reuseHiddenAssets, usesByPointer } from "./asset-owners.ts";
 import type { AssetContext, AssetOwner, Graphic, ReuseResult } from "./asset-owners.ts";
 import { EXPORT_DIR as DEFAULT_OUT_DIR } from "./project-layout.ts";
-import { ifDefined } from "./json-util.ts";
+import { ifDefined, isRecord } from "./json-util.ts";
 import { QUICK_KEYS, SCHEMA_DOC_NAME, SCHEMA_MARKER } from "./quick-keys.ts";
 import type { Asset, DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, VariablesDoc, LibraryCounts } from "./doc-types.ts";
 import type { DesignSystemReply, ExportReply, FullExportReply, ScreenReply, ScreenshotReply } from "./commands.ts";
@@ -860,10 +860,6 @@ function keepPrevCopy(file: string, next: string): string | undefined {
   const prev = file + ".prev";
   fs.copyFileSync(file, prev);
   return prev;
-}
-
-function isRecord(x: unknown): x is Record<string, unknown> {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
 }
 
 // A JSON document re-serialised without its stamps, or null when it is not a JSON object: the top-level

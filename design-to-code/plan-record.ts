@@ -18,7 +18,7 @@
 // Known miss: a read-modify-write — a Stop hook writing the same plan between the read and the rename is lost.
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
+import { sha256Hex } from "../bridge/src/hash.ts";
 import { formatJsonLike, writeJsonLike } from "../bridge/src/json-file.ts";
 import { parsePlan } from "./doc-guards.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
@@ -86,10 +86,10 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
   const s = report.summary;
   const notMeasured = typeof report.coverage.nodesNotMeasured === "number" ? report.coverage.nodesNotMeasured : report.notMeasured.length;
   let reportSha256: string;
-  try { reportSha256 = crypto.createHash("sha256").update(fs.readFileSync(path.resolve(cwd, reportAt))).digest("hex"); }
+  try { reportSha256 = sha256Hex(fs.readFileSync(path.resolve(cwd, reportAt))); }
   catch {
     // not on disk (a caller recording before writing): the bytes --compare writes for this object
-    reportSha256 = crypto.createHash("sha256").update(JSON.stringify(report, null, 2) + "\n").digest("hex");
+    reportSha256 = sha256Hex(JSON.stringify(report, null, 2) + "\n");
     notes.push(`${reportAt} is not on disk — recorded the sha256 of the report as --compare writes it`);
   }
   const b = report.behaviour;

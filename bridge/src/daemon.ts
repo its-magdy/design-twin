@@ -18,7 +18,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { errMsg } from "./errmsg.ts";
-import { ifDefined } from "./json-util.ts";
+import { ifDefined, isRecord } from "./json-util.ts";
 import { NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
@@ -65,10 +65,6 @@ export type DaemonRequest = DaemonCommandRequest | DaemonControlRequest;
 
 const CONTROL = new Set<string>(["__ping", "__status", "__shutdown"]);
 const isControl = (m: DaemonRequest): m is DaemonControlRequest => CONTROL.has(m.cmd);
-
-function isRecord(x: unknown): x is Record<string, unknown> {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
-}
 
 /** A client row as relayed over the socket: the one field routing needs (`connId`) is checked, the rest
  *  is read as the bridge's own describe() wrote it. */

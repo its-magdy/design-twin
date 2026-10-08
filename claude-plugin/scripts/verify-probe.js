@@ -4,7 +4,12 @@
 // design-to-code/verify-probe.ts
 import fs6 from "node:fs";
 import path7 from "node:path";
-import crypto5 from "node:crypto";
+
+// bridge/src/hash.ts
+import crypto from "node:crypto";
+var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
+
+// design-to-code/verify-probe.ts
 import { createRequire } from "node:module";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { parseArgs as parseArgs2 } from "node:util";
@@ -923,10 +928,10 @@ function gitHead(cwd) {
 }
 
 // bridge/src/atomic-write.ts
-import crypto from "node:crypto";
+import crypto2 from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-var tmpSuffix = () => `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
 function writeFileAtomic(file, data, opts = {}) {
   fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
   const tmp = file + tmpSuffix();
@@ -947,9 +952,6 @@ function writeFileAtomic(file, data, opts = {}) {
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
-
-// design-to-code/probe-steps.ts
-import crypto2 from "node:crypto";
 
 // design-to-code/plan-waivers.ts
 function canonical(v) {
@@ -1004,7 +1006,7 @@ function parseSteps(x) {
   return { steps };
 }
 function stepsSha256(steps) {
-  return crypto2.createHash("sha256").update(canonical(steps)).digest("hex");
+  return sha256Hex(canonical(steps));
 }
 function isPlanExpect(x) {
   return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
@@ -1210,6 +1212,8 @@ import fs2 from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var firstLine = (e) => errMsg(e).split("\n")[0] ?? "";
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
 // design-to-code/read-json.ts
 var anyJson = (_x) => true;
@@ -1251,7 +1255,6 @@ function readJsonOrNull(file, guard) {
 import fs3 from "node:fs";
 import os from "node:os";
 import path4 from "node:path";
-import crypto3 from "node:crypto";
 
 // design-to-code/cli-args.ts
 import path2 from "node:path";
@@ -1261,9 +1264,6 @@ var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `node ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
-function errCode(e) {
-  return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
-}
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -1298,7 +1298,7 @@ ${usage}`);
       console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
 ${usage}`);
     } else {
-      console.error(`${tool}: ${e instanceof Error ? e.message : String(e)}
+      console.error(`${tool}: ${errMsg(e)}
 ${usage}`);
     }
     process.exit(exitCode);
@@ -1330,9 +1330,8 @@ function isVerifyStatusV2(x) {
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
-var sha256Of = (data) => crypto3.createHash("sha256").update(data).digest("hex");
 var CACHE_NAME = "designtwin-verify";
-var shortSha = (s) => sha256Of(s).slice(0, 16);
+var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
     return fs3.statSync(p).isDirectory();
@@ -1401,7 +1400,6 @@ function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
 }
 var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
-var errCode2 = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 var RunCacheUnwritable = class extends Error {
   cacheDir;
   root;
@@ -1418,7 +1416,7 @@ function inRunCache(verifyDir, fn) {
   try {
     return fn();
   } catch (e) {
-    const code = errCode2(e);
+    const code = errCode(e);
     if (code !== void 0 && UNWRITABLE_CODES.has(code)) {
       const c = runCacheOf(verifyDir);
       throw new RunCacheUnwritable(c.dir, c.root, code);
@@ -1706,7 +1704,7 @@ if (false) {
   else code.then((c) => {
     process.exitCode = c;
   }, (e) => {
-    console.error(`verify-screen: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`verify-screen: ${errMsg(e)}`);
     process.exitCode = 1;
   });
 }
@@ -1751,7 +1749,7 @@ function decodePng(b) {
   try {
     raw = inflateSync(Buffer.concat(cs.filter((c) => c.type === "IDAT").map((c) => c.data)), { maxOutputLength: (stride + 1) * h });
   } catch (e) {
-    throw new PngError(`bad image data (${e instanceof Error ? e.message : String(e)})`);
+    throw new PngError(`bad image data (${errMsg(e)})`);
   }
   if (raw.length < (stride + 1) * h) throw new PngError("truncated image data");
   const px = new Uint8Array(stride * h);
@@ -2797,7 +2795,23 @@ var StepError = class extends Error {
 var raf2 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 var CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i;
 var NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
-var firstLine = (e) => errMsg(e).split("\n")[0] ?? "";
+var CUT_SETTLE_MS = 5e3;
+async function raceBudget(work, ms, held, onCut) {
+  let timer;
+  const cutP = new Promise((resolve) => {
+    timer = setTimeout(() => resolve("cut"), ms);
+  });
+  const r = await Promise.race([work, cutP]);
+  clearTimeout(timer);
+  if (r !== "cut") return r;
+  onCut?.();
+  const ctx = held.ctx;
+  await Promise.race([(async () => {
+    if (ctx) await ctx.close().catch(() => void 0);
+    await work;
+  })(), sleep(CUT_SETTLE_MS, void 0, { ref: false })]);
+  return "cut";
+}
 var notRun = (row, detail, extra) => ({ nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `not-run: ${detail}`, ...extra });
 function shapeDistance(q, px, py) {
   const hw = (q.right - q.x) / 2, hh = (q.bottom - q.y) / 2, dx = px - (q.x + hw), dy = py - (q.y + hh);
@@ -3040,7 +3054,6 @@ async function driveRow(browser, o, row, hooks, onContext) {
     await context.close().catch(() => void 0);
   }
 }
-var CUT_SETTLE_MS = 5e3;
 async function driveInteractions(browser, o, hooks) {
   const out = [];
   const end = Date.now() + o.budgetMs;
@@ -3051,21 +3064,14 @@ async function driveInteractions(browser, o, hooks) {
       continue;
     }
     const held = {};
-    let timer;
-    const cut = new Promise((resolve) => {
-      timer = setTimeout(() => resolve("cut"), left);
-    });
     const work = driveRow(browser, o, row, hooks, (c) => {
       held.ctx = c;
     }).catch((e) => {
       if (CLOSED.test(errMsg(e))) return notRun(row, `the browser closed while driving \u2014 ${firstLine(e)}`);
       return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
     });
-    const r = await Promise.race([work, cut]);
-    clearTimeout(timer);
+    const r = await raceBudget(work, left, held);
     if (r === "cut") {
-      if (held.ctx) await held.ctx.close().catch(() => void 0);
-      await Promise.race([work, sleep(CUT_SETTLE_MS, void 0, { ref: false })]);
       out.push(notRun(row, "time budget", { cut: "budget" }));
       continue;
     }
@@ -3076,12 +3082,11 @@ async function driveInteractions(browser, o, hooks) {
 
 // design-to-code/probe-behaviour.ts
 import { setTimeout as sleep2 } from "node:timers/promises";
-var CUT_SETTLE_MS2 = 5e3;
 var CLOSE_STEP_CAP_MS = 5e3;
 var PS_CAP_MS = 3e3;
 var WRITE_MARGIN_MS = 2e3;
 var BEHAVIOUR_CAP_MS = 9e4;
-var BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS2 + 2 * CLOSE_STEP_CAP_MS + PS_CAP_MS + WRITE_MARGIN_MS;
+var BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS + 2 * CLOSE_STEP_CAP_MS + PS_CAP_MS + WRITE_MARGIN_MS;
 function behaviourBudget(now, deadline, capMs = BEHAVIOUR_CAP_MS, reserveMs = BEHAVIOUR_RESERVE_MS) {
   return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
 }
@@ -4271,8 +4276,6 @@ function scrimRead(_arg) {
   return { backdrop, cover, point, hitDesc, unreadable };
 }
 var WALK_CAP = 150;
-var NAVIGATED2 = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
-var firstLine2 = (e) => errMsg(e).split("\n")[0] ?? "";
 var UnitNavigated = class extends Error {
 };
 var AxeTimeout = class extends Error {
@@ -4281,10 +4284,9 @@ var AXE_CAP_MS = 2e4;
 var AXE_TIMED_OUT = /* @__PURE__ */ Symbol("axe timed out");
 var BatteryStop = class extends Error {
 };
-var raf22 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 var park = async (page) => {
   await page.mouse.move(0, 0);
-  await raf22(page);
+  await raf2(page);
 };
 async function markOpenerSeen(page, id, act) {
   await page.evaluate(tipPreMark, null).catch(() => false);
@@ -4506,10 +4508,6 @@ async function runUnits(browser, o, block, t0) {
     });
     const blocked = () => blockedOf(tried, taintedPhases(trace));
     block.unit(net);
-    let timer;
-    const cutP = new Promise((resolve) => {
-      timer = setTimeout(() => resolve("cut"), left);
-    });
     const work = (async () => {
       let reached;
       try {
@@ -4517,7 +4515,7 @@ async function runUnits(browser, o, block, t0) {
           held.ctx = c;
         }, net);
       } catch (e) {
-        return e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine2(e)}`;
+        return e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine(e)}`;
       }
       try {
         loadsAt = reached.loads();
@@ -4536,20 +4534,15 @@ async function runUnits(browser, o, block, t0) {
         await reached.context.close().catch(() => void 0);
       }
     })().catch((e) => {
-      if (e instanceof UnitNavigated || NAVIGATED2.test(errMsg(e))) return "the page loaded a new document";
+      if (e instanceof UnitNavigated || NAVIGATED.test(errMsg(e))) return "the page loaded a new document";
       if (e instanceof BatteryStop) return e.message;
-      return `the check could not run \u2014 ${firstLine2(e)}`;
+      return `the check could not run \u2014 ${firstLine(e)}`;
     });
-    const r = await Promise.race([work, cutP]);
-    clearTimeout(timer);
-    if (r === "cut") {
+    const r = await raceBudget(work, left, held, () => {
       closed = true;
       cut = true;
-      const ctx = held.ctx;
-      await Promise.race([(async () => {
-        if (ctx) await ctx.close().catch(() => void 0);
-        await work;
-      })(), sleep2(CUT_SETTLE_MS2, void 0, { ref: false })]);
+    });
+    if (r === "cut") {
       block.unit(null);
       checks.push(...judgeWrites(produced, blocked()));
       fill(checks, produced, unit.declared, left < budgetLeft ? `time budget (this unit's share: ${Math.round(left / 1e3)} s)` : "time budget");
@@ -4575,7 +4568,7 @@ async function runUnits(browser, o, block, t0) {
       try {
         yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(o.timeout, 1e4) });
       } catch (e) {
-        if (NAVIGATED2.test(errMsg(e))) throw e;
+        if (NAVIGATED.test(errMsg(e))) throw e;
       }
       const tree = yaml === null ? null : parseAriaLandmarkTree(yaml);
       landmarks = tree ? tree.landmarks : null;
@@ -4600,8 +4593,8 @@ async function runUnits(browser, o, block, t0) {
             u.add({ id: "a11y.axe", status: st, detail: st === "pass" ? `axe-core ${parsed.version}: no violations (main frame; iframes not scanned)` : `axe-core ${parsed.version}: ${parsed.violations.length} violation(s) \u2014 ${list} (critical/serious = fail, moderate/minor = warn; main frame; iframes not scanned)`, evidence: { version: parsed.version, violations: parsed.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes, help: v.help, targets: v.targets })) } });
           }
         } catch (e) {
-          if (NAVIGATED2.test(errMsg(e))) throw e;
-          axe = { ran: false, why: e instanceof AxeTimeout ? e.message : `axe-core ${o.axe.version} failed in the page: ${firstLine2(e)}` };
+          if (NAVIGATED.test(errMsg(e))) throw e;
+          axe = { ran: false, why: e instanceof AxeTimeout ? e.message : `axe-core ${o.axe.version} failed in the page: ${firstLine(e)}` };
           u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${axe.why}` });
         }
       }
@@ -4679,12 +4672,12 @@ async function runUnits(browser, o, block, t0) {
         }
         u.act();
         await page.keyboard.press("Tab");
-        await raf22(page);
+        await raf2(page);
         let f = await page.evaluate(focusedStop, { i });
         for (let k = 0; k < 10 && !f.ok && f.onPrev; k++) {
           u.act();
           await page.keyboard.press("Tab");
-          await raf22(page);
+          await raf2(page);
           f = await page.evaluate(focusedStop, { i });
         }
         if (!f.ok) {
@@ -4705,7 +4698,7 @@ async function runUnits(browser, o, block, t0) {
         const clip = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
         const focusedPng = await shot(clip);
         await page.evaluate(blurActive, null);
-        await raf22(page);
+        await raf2(page);
         const blurredPng = await shot(clip);
         const evidence = { outlineStyle: f.outlineStyle, outlineWidth: f.outlineWidth, boxShadow: f.boxShadow, focusVisible: f.focusVisible };
         if (focusedPng.equals(blurredPng)) fvRes.push({ i, status: "fail", detail: `no visible focus indicator: focused and unfocused look identical (\xB18 px around it) \u2014 outline-style ${f.outlineStyle || "?"}, box-shadow ${f.boxShadow || "?"}; a utility that hides the outline needs a visible replacement on :focus-visible (e.g. Tailwind v4 focus-visible:outline-solid, or a ring)`, evidence });
@@ -4737,8 +4730,8 @@ async function runUnits(browser, o, block, t0) {
         try {
           snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2e3 });
         } catch (e) {
-          if (NAVIGATED2.test(errMsg(e))) throw e;
-          nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `not-run: no accessibility snapshot (${firstLine2(e)})` });
+          if (NAVIGATED.test(errMsg(e))) throw e;
+          nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
           continue;
         }
         const n = nameStatus(snap, s);
@@ -4773,13 +4766,13 @@ async function runUnits(browser, o, block, t0) {
           u.act();
           const r = await page.evaluate(maskShow, { i });
           if (!r) return null;
-          await raf22(page);
+          await raf2(page);
           const x0 = Math.max(0, Math.floor(r.x)), y0 = Math.max(0, Math.floor(r.y)), x1 = Math.min(r.vw, Math.ceil(r.x + r.w)), y1 = Math.min(r.vh, Math.ceil(r.y + r.h));
           if (x1 - x0 < 1 || y1 - y0 < 1) return null;
           const clip = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
           const a = await page.screenshot({ clip, animations: "disabled", caret: "hide" });
           await page.evaluate(maskHide, { i, hide: true });
-          await raf22(page);
+          await raf2(page);
           const b = await page.screenshot({ clip, animations: "disabled", caret: "hide" });
           await page.evaluate(maskHide, { i, hide: false });
           return { differs: !a.equals(b), clip };
@@ -4792,7 +4785,7 @@ async function runUnits(browser, o, block, t0) {
         u.act();
         await page.emulateMedia({ forcedColors: "active" });
         await page.evaluate(scrollToY, { y: 0 });
-        await raf22(page);
+        await raf2(page);
         forced = await page.screenshot({ animations: "disabled", caret: "hide" });
         const rows = [];
         let okN = 0, total = 0;
@@ -4816,7 +4809,7 @@ async function runUnits(browser, o, block, t0) {
           else okN++;
         }
         await page.emulateMedia({ forcedColors: "none" });
-        await raf22(page);
+        await raf2(page);
         for (const c of perElement("forced-colors.visible", rows, okN, total, "CSS-mask icon(s) stay visible under forced colours")) u.add(c);
         if (!cands.length) u.add({ id: "forced-colors.visible", status: "not-run", detail: "not-run: no CSS-mask icon on the screen (the only kind this check tests: SVG fill/stroke, <img> and url() backgrounds are not forced; plain background-colour boxes become Canvas by design)" });
       }
@@ -4838,7 +4831,7 @@ async function runUnits(browser, o, block, t0) {
       const settleResize = async (w) => {
         u.act();
         await page.setViewportSize({ width: w, height: designH });
-        await raf22(page);
+        await raf2(page);
         const t = Date.now();
         let last = "", stable = 0;
         for (; ; ) {
@@ -4923,7 +4916,7 @@ async function runUnits(browser, o, block, t0) {
             await page.mouse.move(0, 0);
             u.act();
             await page.locator(st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
-            await raf22(page);
+            await raf2(page);
             st = await page.evaluate(openerState, { id: row.nodeId });
           }
           if (!st.visible || st.path === null) return { opened: null, why: "the opener is not visible even on hover" };
@@ -5027,7 +5020,7 @@ async function runUnits(browser, o, block, t0) {
         const closedAfter = async () => {
           const t = Date.now();
           for (; ; ) {
-            await raf22(page);
+            await raf2(page);
             if (!await page.evaluate(dialogOpenNow, null)) return true;
             if (Date.now() - t >= 1e3) return false;
             await sleep2(100);
@@ -5094,9 +5087,9 @@ async function runUnits(browser, o, block, t0) {
             else {
               u.act();
               await page.keyboard.press("Escape");
-              await raf22(page);
+              await raf2(page);
               await sleep2(150);
-              await raf22(page);
+              await raf2(page);
               const dlgOpen = await page.evaluate(dialogOpenNow, null);
               const ctl = await page.evaluate(expanderState, null);
               stillOpen = dlgOpen;
@@ -5154,7 +5147,7 @@ async function runUnits(browser, o, block, t0) {
           if (!p.visible && p.hover && p.hover.inViewport) {
             u.act();
             await page.mouse.move(p.hover.x, p.hover.y);
-            await raf22(page);
+            await raf2(page);
             p = await markOpenerSeen(page, row.nodeId, u.act);
           }
           if (p.visible && p.inViewport && p.hits) {
@@ -5175,7 +5168,7 @@ async function runUnits(browser, o, block, t0) {
         const closedAfter = async () => {
           const t = Date.now();
           for (; ; ) {
-            await raf22(page);
+            await raf2(page);
             if (!await page.evaluate(dialogOpenNow, null)) return true;
             if (Date.now() - t >= 1e3) return false;
             await sleep2(100);
@@ -5195,7 +5188,7 @@ async function runUnits(browser, o, block, t0) {
           }
           u.act();
           await page.evaluate(scrollToY, { y });
-          await raf22(page);
+          await raf2(page);
           const y0 = await page.evaluate(effScroll, null);
           const op2 = await openStill();
           if ("why" in op2) {
@@ -5220,7 +5213,7 @@ async function runUnits(browser, o, block, t0) {
           u.act();
           await page.keyboard.press("Escape");
           const closed = await closedAfter();
-          await raf22(page);
+          await raf2(page);
           const after = await page.evaluate(effScroll, null);
           if (closed && Math.abs(after - y0) > 1) problems.push(`closing it scrolled the page from y=${Math.round(y0)} to y=${Math.round(after)}`);
           if (!closed && !await closeAny()) stuck = true;
@@ -5250,7 +5243,7 @@ async function runUnits(browser, o, block, t0) {
         }
         u.act();
         await page.evaluate(scrollToY, { y: 0 });
-        await raf22(page);
+        await raf2(page);
         const op = await openStill();
         if ("why" in op || !op.opened) {
           for (const id of ["dialog.scrim", "dialog.click-outside"]) add({ id, status: "not-run", detail: `not-run: ${"why" in op ? op.why : "nothing opened"}` });
@@ -5320,7 +5313,6 @@ function readAxeResult(x, fallbackVersion) {
 // design-to-code/probe-visual.ts
 import fs5 from "node:fs";
 import path6 from "node:path";
-import crypto4 from "node:crypto";
 import { setTimeout as sleep3 } from "node:timers/promises";
 
 // design-to-code/visual-diff.ts
@@ -5578,7 +5570,7 @@ function prepareVisual(exp, root) {
   } catch {
     return { ok: false, why: `the reference PNG ${ri.path} is missing \u2014 re-pull the screen, then re-run --expect` };
   }
-  if (crypto4.createHash("sha256").update(bytes).digest("hex") !== ri.sha256) return { ok: false, why: `the reference PNG changed since --expect (${ri.path}) \u2014 re-run --expect` };
+  if (sha256Hex(bytes) !== ri.sha256) return { ok: false, why: `the reference PNG changed since --expect (${ri.path}) \u2014 re-run --expect` };
   const notes = [];
   if (exp.frames && exp.frames.length > 1) notes.push(`the expectation has ${exp.frames.length} frames \u2014 only the first (${exp.frame?.nodeId ?? "?"}) is diffed`);
   if (ri.colorProfile !== void 0) notes.push(`the reference's colour profile is ${ri.colorProfile} \u2014 colours are compared as raw samples, without colour management (a colour difference may be the profile's)`);
@@ -5615,7 +5607,6 @@ function readBuilt(arg) {
   }
   return out;
 }
-var raf23 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 async function captureVisual(browser, o) {
   if (o.budgetMs <= 0) return { why: "no time left within --max-time after measuring and driving" };
   const held = {};
@@ -5626,13 +5617,13 @@ async function captureVisual(browser, o) {
         held.ctx = c;
       } });
     } catch (e) {
-      return { why: e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine3(e)}` };
+      return { why: e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine(e)}` };
     }
     const { context, page, loads } = reached;
     try {
       const loads0 = loads();
       await Promise.race([page.evaluate("document.fonts.ready.then(() => true)"), sleep3(FONTS_CAP_MS, void 0, { ref: false })]);
-      await raf23(page);
+      await raf2(page);
       const notes = [];
       const fr = o.frame;
       const sel = fr && fr.via !== "viewport" ? fr.selector : null;
@@ -5665,22 +5656,11 @@ async function captureVisual(browser, o) {
     } finally {
       await context.close().catch(() => void 0);
     }
-  })().catch((e) => ({ why: /Execution context was destroyed|frame was detached|navigation/i.test(errMsg(e)) ? "the page loaded a new document during the visual capture" : `the visual capture failed \u2014 ${firstLine3(e)}` }));
-  let timer;
-  const cutP = new Promise((resolve) => {
-    timer = setTimeout(() => resolve("cut"), o.budgetMs);
-  });
-  const r = await Promise.race([work, cutP]);
-  clearTimeout(timer);
+  })().catch((e) => ({ why: /Execution context was destroyed|frame was detached|navigation/i.test(errMsg(e)) ? "the page loaded a new document during the visual capture" : `the visual capture failed \u2014 ${firstLine(e)}` }));
+  const r = await raceBudget(work, o.budgetMs, held);
   if (r !== "cut") return r;
-  const ctx = held.ctx;
-  await Promise.race([(async () => {
-    if (ctx) await ctx.close().catch(() => void 0);
-    await work;
-  })(), sleep3(CUT_SETTLE_MS2, void 0, { ref: false })]);
   return { why: `the visual capture did not finish within its budget (${Math.round(o.budgetMs / 1e3)} s)` };
 }
-var firstLine3 = (e) => errMsg(e).split("\n")[0] ?? "";
 var pct = (n, of) => of > 0 ? Math.round(n / of * 1e4) / 100 : 0;
 function designedRects(exp) {
   const first = exp.frame?.nodeId;
@@ -5754,7 +5734,7 @@ function finishVisual(o) {
     };
     return { visual, diffPng };
   } catch (e) {
-    return { visual: { version: 1, ran: false, why: `the visual diff failed (${e instanceof PngError ? e.message : firstLine3(e)})` }, diffPng: null };
+    return { visual: { version: 1, ran: false, why: `the visual diff failed (${e instanceof PngError ? e.message : firstLine(e)})` }, diffPng: null };
   }
 }
 function visualLine(v) {
@@ -5802,7 +5782,7 @@ function resolvePlaywright(dir) {
     try {
       mod = req(name);
     } catch (e) {
-      tried.push(`${name}: failed to load (${errMsg(e).split("\n")[0]})`);
+      tried.push(`${name}: failed to load (${firstLine(e)})`);
       continue;
     }
     if (!isPlaywrightModule(mod)) {
@@ -5832,7 +5812,7 @@ function resolveAxe(dir) {
   try {
     mod = req("axe-core");
   } catch (e) {
-    return { ok: false, why: `axe-core failed to load (${errMsg(e).split("\n")[0]})` };
+    return { ok: false, why: `axe-core failed to load (${firstLine(e)})` };
   }
   if (typeof mod !== "object" || mod === null || !("source" in mod) || typeof mod.source !== "string") return { ok: false, why: "axe-core resolved, but it exports no source" };
   let version = "version" in mod && typeof mod.version === "string" ? mod.version : "unknown";
@@ -5880,11 +5860,11 @@ function probeVersion() {
   }
   return null;
 }
-var selfSha256 = () => crypto5.createHash("sha256").update(fs6.readFileSync(SELF2)).digest("hex");
+var selfSha256 = () => sha256Hex(fs6.readFileSync(SELF2));
 var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
 function buildFrom(url, served, viteClient, unhashed = 0) {
   const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
-  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Of(lines.join("\n")), ...unhashed > 0 ? { unhashed } : {} };
+  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Hex(lines.join("\n")), ...unhashed > 0 ? { unhashed } : {} };
 }
 function gitState(dir) {
   const head = gitHead(dir);
@@ -5909,11 +5889,9 @@ var INIT_SCRIPT = `(() => {
 var QUIET_MS = 500;
 var QUIET_CAP_MS = 1e4;
 var POLL_MS = 100;
-var NAV_ERROR = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
-var CLOSED_ERROR = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i;
 function errorKind(message, pageClosed) {
-  if (pageClosed || CLOSED_ERROR.test(message)) return "gone";
-  return NAV_ERROR.test(message) ? "navigated" : "other";
+  if (pageClosed || CLOSED.test(message)) return "gone";
+  return NAVIGATED.test(message) ? "navigated" : "other";
 }
 var NavigatedError = class extends Error {
 };
@@ -5921,7 +5899,7 @@ var StepStateLostError = class extends NavigatedError {
 };
 var BrowserGoneError = class extends Error {
 };
-var gone = (e) => new BrowserGoneError(`the browser closed or crashed during measurement (${errMsg(e).split("\n")[0]})`);
+var gone = (e) => new BrowserGoneError(`the browser closed or crashed during measurement (${firstLine(e)})`);
 var KeptNavigatingError = class extends Error {
 };
 var UnreachableError = class extends Error {
@@ -6023,7 +6001,7 @@ async function settle(page, log, ready, timeout) {
         await sleep4(POLL_MS);
         continue;
       }
-      throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${errMsg(e).split("\n")[0]}` : errMsg(e).split("\n")[0]);
+      throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${firstLine(e)}` : firstLine(e));
     }
     let mark = log.docLoads;
     let last = "", since = Date.now();
@@ -6076,7 +6054,7 @@ async function oneVisible(page, sel, wait, name, atLeastOne = false) {
     } catch (e) {
       const kind = errorKind(errMsg(e), page.isClosed());
       if (kind === "gone") throw gone(e);
-      if (kind === "other") throw new StepError(`${name}: ${errMsg(e).split("\n")[0]}`);
+      if (kind === "other") throw new StepError(`${name}: ${firstLine(e)}`);
     }
     if (Date.now() >= deadline) {
       throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1e3)}s \u2014 ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
@@ -6201,7 +6179,7 @@ async function runSteps(page, log, o) {
           if (e instanceof StepError) throw e;
           const kind = errorKind(errMsg(e), page.isClosed());
           if (kind === "gone") throw gone(e);
-          if (kind === "other") throw new StepError(`${name} could not be clicked: ${errMsg(e).split("\n")[0]}`);
+          if (kind === "other") throw new StepError(`${name} could not be clicked: ${firstLine(e)}`);
         }
       }
     }
@@ -6271,7 +6249,6 @@ function foreignTags(tagged, expectedIds, frameIds) {
   const ids = [...n.keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0).slice(0, 50).map((id) => ({ id, elements: n.get(id) ?? 0 }));
   return { count: n.size, ids };
 }
-var raf24 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 var docToken = async (page) => {
   const v = await page.evaluate("window.__dtProbeDoc || ''");
   return String(v);
@@ -6376,7 +6353,7 @@ async function pass(page, log, o) {
             continue;
           }
         }
-        await raf24(page);
+        await raf2(page);
         const [r] = await page.evaluate(measureElements, measureIn(spec, [item(spec, m)]));
         if (r) {
           const shaped = shapeNode(spec, m, r, STYLE_KEYS);
@@ -6384,13 +6361,13 @@ async function pass(page, log, o) {
         }
       } catch (e) {
         if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
-        node.note = `${state} state not measured: ${errMsg(e).split("\n")[0]}`;
+        node.note = `${state} state not measured: ${firstLine(e)}`;
       } finally {
         if (state === "hover") await page.mouse.move(0, 0).catch(() => void 0);
         else if (focusPath !== null) await page.locator(focusPath).first().blur({ timeout: 2e3 }).catch(() => void 0);
       }
     }
-    if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf24(page);
+    if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf2(page);
     const png = await page.screenshot({ animations: "disabled", caret: "hide" });
     const { compatMode, ...overflow } = await page.evaluate(readPageOverflow, null);
     const pageOverflow = { ...overflow, compatMode };
@@ -6418,7 +6395,7 @@ async function pass(page, log, o) {
   } catch (e) {
     if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError || e instanceof StepError) throw e;
     if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-    if (errorKind(errMsg(e), false) === "navigated") throw new NavigatedError(errMsg(e).split("\n")[0]);
+    if (errorKind(errMsg(e), false) === "navigated") throw new NavigatedError(firstLine(e));
     throw e;
   }
 }
@@ -6440,7 +6417,7 @@ async function hoverDrawnState(page, spec, m, own, byTag) {
         return { hovered: c.path, note: null };
       } catch (e) {
         if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
-        covered ??= `the free point on ${c.id} was covered (${errMsg(e).split("\n")[0]})`;
+        covered ??= `the free point on ${c.id} was covered (${firstLine(e)})`;
         await page.mouse.move(0, 0);
       }
     }
@@ -6496,7 +6473,7 @@ async function runProbe(browser, o) {
     const g = gen;
     const read = { path: u.pathname, state: "pending", done: Promise.resolve() };
     const body = res.body().then((b) => {
-      if (g === gen) served.set(u.pathname, sha256Of(b));
+      if (g === gen) served.set(u.pathname, sha256Hex(b));
       read.state = "hashed";
     }, () => {
       read.state = "no body";
@@ -6723,7 +6700,7 @@ ${USAGE}`);
   }
   const outBase = f.out ?? (f.expected ? path7.join(path7.dirname(f.expected), path7.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
   const statusBase = f.expected ? path7.join(path7.dirname(f.expected), path7.basename(outBase)) : "";
-  const expSha = expBytes ? sha256Of(expBytes) : void 0;
+  const expSha = expBytes ? sha256Hex(expBytes) : void 0;
   const runId = f.run !== void 0 && !f.check && statusBase ? f.run : void 0;
   const endedRun = () => {
     if (runId === void 0) return false;
@@ -6794,7 +6771,7 @@ ${USAGE}`);
         return 4;
       }
       if (/Timeout .*exceeded/i.test(errMsg(e))) {
-        console.error(`verify-probe: timed out \u2014 ${errMsg(e).split("\n")[0]} \u2014 nothing written.`);
+        console.error(`verify-probe: timed out \u2014 ${firstLine(e)} \u2014 nothing written.`);
         return 4;
       }
       throw e;
@@ -6806,7 +6783,7 @@ ${USAGE}`);
       try {
         const driveMs = driveBudget(Date.now(), runDeadline);
         const hung = /* @__PURE__ */ Symbol("drive hung");
-        const hungAt = Math.max(0, Math.min(driveMs + CUT_SETTLE_MS2 + 1e3, runDeadline - Date.now() - PS_CAP_MS - WRITE_MARGIN_MS));
+        const hungAt = Math.max(0, Math.min(driveMs + CUT_SETTLE_MS + 1e3, runDeadline - Date.now() - PS_CAP_MS - WRITE_MARGIN_MS));
         const r2 = await Promise.race([driveInteractions(browser, {
           rows,
           viewport,
@@ -6822,7 +6799,7 @@ ${USAGE}`);
           driveNote2 = "driving the interactions did not finish within its budget (the browser stopped answering) \u2014 none recorded";
         } else driven2 = r2;
       } catch (e) {
-        driveNote2 = `driving the interactions failed (${errMsg(e).split("\n")[0]}) \u2014 none recorded`;
+        driveNote2 = `driving the interactions failed (${firstLine(e)}) \u2014 none recorded`;
       }
     }
     let prep2 = { ok: false, why: "not measured" };
@@ -6830,7 +6807,7 @@ ${USAGE}`);
       try {
         prep2 = prepareVisual(expectation, referenceRoot(f.expected, project));
       } catch (e) {
-        prep2 = { ok: false, why: `the reference could not be read (${errMsg(e).split("\n")[0]})` };
+        prep2 = { ok: false, why: `the reference could not be read (${firstLine(e)})` };
       }
     }
     const visualAt = Date.now();
@@ -6881,7 +6858,7 @@ ${USAGE}`);
           behaviour2 = r2.behaviour;
           forcedPng2 = r2.forcedPng;
         } catch (e) {
-          behaviour2 = { version: 1, ran: false, why: `the behaviour checks failed (${errMsg(e).split("\n")[0]})` };
+          behaviour2 = { version: 1, ran: false, why: `the behaviour checks failed (${firstLine(e)})` };
         }
       }
     }
@@ -6949,15 +6926,15 @@ ${USAGE}`);
     if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
     else if (fs6.existsSync(diffPath)) fs6.rmSync(diffPath, { force: true });
   } catch (e) {
-    console.error(`warning  ${diffPath}: ${errMsg(e).split("\n")[0]} \u2014 the visual diff image is not written`);
-    if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${errMsg(e).split("\n")[0]})`] };
+    console.error(`warning  ${diffPath}: ${firstLine(e)} \u2014 the visual diff image is not written`);
+    if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
   }
   const measured = {
     measuredAt: (/* @__PURE__ */ new Date()).toISOString(),
     renderer: "playwright-chromium",
     viewport: `${viewport.w}x${viewport.h}`,
     artifacts: [png.split(path7.sep).join("/")],
-    expectationSha256: sha256Of(expBytes),
+    expectationSha256: sha256Hex(expBytes),
     probe: identity,
     ...firstFrame ? { frame: frameOut(firstFrame) } : {},
     ...r.frames.length > 1 ? { frames: r.frames.map(frameOut) } : {},
@@ -6985,7 +6962,7 @@ ${USAGE}`);
     if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
     else if (fs6.existsSync(forcedPath)) fs6.rmSync(forcedPath, { force: true });
   } catch (e) {
-    console.error(`warning  ${forcedPath}: ${errMsg(e).split("\n")[0]} \u2014 the behaviour screenshot is not written`);
+    console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
   }
   writeFileAtomic(outBase + ".measured.json", measuredText);
   const statusRefused = runId !== void 0 && !status({
@@ -6994,7 +6971,7 @@ ${USAGE}`);
     by: "verify-probe",
     detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
     ...expSha ? { expectationSha256: expSha } : {},
-    measuredSha256: sha256Of(measuredText)
+    measuredSha256: sha256Hex(measuredText)
   });
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);

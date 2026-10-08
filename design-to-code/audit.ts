@@ -44,7 +44,7 @@ import { isHidden, hiddenSelf } from "./hidden.ts";
 import { parseHex, contrastRatio, compositeOver, colorKey, formatHex, normHex } from "./color.ts";
 import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
 import type { Rgba } from "./color.ts";
-import { crossCheck, exportSiblings } from "./cross-check.ts";
+import { SEVERITY_ORDER, crossCheck, exportSiblings } from "./cross-check.ts";
 import { controlKind, outermostControl, isDisabledLayer, DISABLED_WORD } from "./control-kind.ts";
 import type { CrossCheckScreen } from "./cross-check.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
@@ -65,11 +65,11 @@ import type {
   ScreenStateKey, ScreenStateValue, Severity, TextStylesDoc, TokenMap, TokensDoc, Variable, JsonValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { alnumKey } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule
 import { AUDIT_DIR, findMapFile } from "../bridge/src/project-layout.ts";
 
-const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
 
 // Minimum hit-area per platform. web = WCAG 2.5.8 AA (24 CSS px); 44 is the recommended AAA target.
@@ -1043,12 +1043,11 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   // is not this screen's empty state: the same on-screen title, or the same layer name when that name is
   // unique on the page and the titles don't disagree (frames named "Popup" ×11 say nothing), or state
   // copy that names the screen ("No items added yet." for "Items"). Ranked by that, then same size.
-  const slugOf = (t: unknown): string => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   const auditedRows = layers.filter((l) => auditedIds.has(l.id));
-  const ownTitles = new Set(auditedRows.map((l) => slugOf(l.title)).filter((x) => x.length >= 3));
-  const ownNames = new Set(roots.map((r) => slugOf(r.tree.name)).filter((x) => x.length >= 3));
+  const ownTitles = new Set(auditedRows.map((l) => alnumKey(l.title)).filter((x) => x.length >= 3));
+  const ownNames = new Set(roots.map((r) => alnumKey(r.tree.name)).filter((x) => x.length >= 3));
   const nameCount = new Map<string, number>();
-  for (const l of layers) if (l.pageId !== undefined && pageIds.has(l.pageId)) nameCount.set(slugOf(l.name), (nameCount.get(slugOf(l.name)) ?? 0) + 1);
+  for (const l of layers) if (l.pageId !== undefined && pageIds.has(l.pageId)) nameCount.set(alnumKey(l.name), (nameCount.get(alnumKey(l.name)) ?? 0) + 1);
   const ownPhrases = [...roots.map((r) => r.tree.name), ...auditedRows.map((l) => l.title)].map((t) => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()).filter((t) => t.length >= 4);
   const sameSize = (l: { w?: number; h?: number }): boolean => auditedRows.some((a) => a.w === l.w && a.h === l.h);
   for (const s of STATE_KEYS) {
@@ -1059,10 +1058,10 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       .map((l) => { const own = opts.neighbours?.textsOf?.(l); return { l, text: [l.title, ...((own && (s === "empty" ? own.all : own.shallow)) ?? l.texts ?? [])].find((t): t is string => !!t && STATE_WORDS[s].test(t)) }; })
       .filter((c): c is { l: (typeof layers)[number]; text: string } => c.text !== undefined)
       .map((c) => {
-        const t = slugOf(c.l.title);
+        const t = alnumKey(c.l.title);
         const titleMatch = t.length >= 3 && (ownTitles.has(t) || ownNames.has(t));
         const titlesDisagree = t.length >= 3 && ownTitles.size > 0 && !ownTitles.has(t);
-        const nameMatch = ownNames.has(slugOf(c.l.name)) && (nameCount.get(slugOf(c.l.name)) ?? 0) <= 2 && !titlesDisagree; // itself + this one
+        const nameMatch = ownNames.has(alnumKey(c.l.name)) && (nameCount.get(alnumKey(c.l.name)) ?? 0) <= 2 && !titlesDisagree; // itself + this one
         const named = titleMatch || nameMatch ? 3 : 0;
         const said = ownPhrases.some((p) => c.text.toLowerCase().replace(/[^a-z0-9]+/g, " ").includes(p)) ? 2 : 0;
         return { id: c.l.id, name: c.l.name, text: c.text, score: named + said + (sameSize(c.l) ? 1 : 0), related: named + said > 0 };

@@ -12,8 +12,9 @@
 import { isJsonObject } from "./types.ts";
 import type { JsonObject } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
+import type { VariableComposedColor } from "../bridge/src/doc-types.ts";
 import type {
-  AuditOverridesDoc, AuditReport, BehaviourCheck, BehaviourStatus, BuildIdentity, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
+  AuditOverridesDoc, VariableAlias, AuditReport, BehaviourCheck, BehaviourStatus, BuildIdentity, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
   PageOverflow, PlanDescope, PlanInteraction, PlanWaiver, ProbeFrame, ProbeReach, ProbeIdentity, MeasuredBehaviour, MeasuredVisual, Rect4, ReportBehaviour, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReferenceImage, VerifyReferenceUnusable, VerifyReport, VisualRegion,
 } from "./types.ts";
 import type { Expectation } from "./verify-screen.ts";
@@ -33,6 +34,21 @@ const optStr = (x: unknown): boolean => x === undefined || typeof x === "string"
 const anyObject = (x: unknown): x is object => isObj(x);
 
 // ---------------------------------------------------------------- tokens.json / variables.json / <Screen>.vars.json
+/** A variable value that points at another variable: `{ aliasOf: "<name>" }`. */
+export const isAlias = (v: unknown): v is VariableAlias => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
+/** A composed colour `{composed:{color, opacity}}` (doc-types ComposedColor). Each half is checked, so a
+ *  hand-written token file with a malformed `composed` object is a non-scalar value (skipped + reported),
+ *  never a half-read one. At least one half must be an alias — a composed colour with two literals is not one. */
+export const isComposed = (v: unknown): v is VariableComposedColor => {
+  if (!v || typeof v !== "object" || !("composed" in v)) return false;
+  const c = v.composed;
+  if (!c || typeof c !== "object" || !("color" in c) || !("opacity" in c)) return false;
+  const colorOk = typeof c.color === "string" || isAlias(c.color);
+  const opacityOk = typeof c.opacity === "number" || isAlias(c.opacity);
+  return colorOk && opacityOk && (isAlias(c.color) || isAlias(c.opacity));
+};
+/** A number written as text ("40", "-5", "12.5") — a string-number FLOAT value. */
+export const NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function isVariable(x: unknown): x is Variable {
   return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
 }

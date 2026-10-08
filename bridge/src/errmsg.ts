@@ -5,3 +5,10 @@
 // reports something — so this coercion has to hold everywhere, not per module system.
 export const errMsg = (e: unknown): string =>
   typeof e === "string" ? e : String((e && (e as { message?: unknown }).message) || e);
+
+/** The first line of a thrown value's message — a Playwright or fs error carries its call log after it. */
+export const firstLine = (e: unknown): string => errMsg(e).split("\n")[0] ?? "";
+
+/** A thrown value's string `code` (an fs / Node error's ENOENT, ERR_PARSE_ARGS_…), else undefined. */
+export const errCode = (e: unknown): string | undefined =>
+  e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : undefined;
