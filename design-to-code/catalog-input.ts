@@ -77,6 +77,6 @@ function readSplitFile<T>(file: string, what: string, guard: DocGuard<T>, payloa
 // which differs per tool (the map tools can proceed without a map; tokens.ts has variables.json).
 const NO_DESIGN_SYSTEM_HINT =
   "A single-screen pull (`dtwin pull --node <id>`) exports only that screen — it does not\n" +
-  "       write design/design-system/. Run `dtwin pull --design-system` to create it.";
+  "       write design/export/design-system/. Run `dtwin pull --design-system` to create it.";
 
 export { assertNotManifest, isManifest, readJsonFile, readDocFile, readOptionalDoc, readSplitFile, NO_DESIGN_SYSTEM_HINT };

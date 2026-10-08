@@ -820,6 +820,7 @@ import fs4 from "node:fs";
 import path2 from "node:path";
 
 // bridge/src/design-system-layout.ts
+var DIR = "design-system";
 var COMPONENTS_DIR = "components";
 var TOKENS = "tokens.json";
 var STYLES_PAINT = "styles.paint.json";
@@ -830,6 +831,7 @@ var COMPONENTS_LOCAL = "components.local.json";
 var COMPONENTS_LIBRARY = "components.library.json";
 var HYGIENE = "hygiene.json";
 var MANIFEST = "design-system.json";
+var DESIGN_SYSTEM_DIR = DIR;
 var DESIGN_SYSTEM_FILES = {
   TOKENS,
   STYLES_PAINT,
@@ -942,6 +944,24 @@ var VERIFY_DIR = path4.join(DESIGN_DIR, "verify");
 var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
 var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
 var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", "variables.json", "assets", "libraries"];
+function looksLikeExportDir(dir) {
+  try {
+    if (!fs6.statSync(dir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return EXPORT_MARKERS.some((m) => fs6.existsSync(path4.join(dir, m)));
+}
+function findExportDir(cwd) {
+  const modern = path4.join(cwd, EXPORT_DIR);
+  const legacy = path4.join(cwd, DESIGN_DIR);
+  const modernExists = looksLikeExportDir(modern);
+  const legacyExists = looksLikeExportDir(legacy);
+  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
+  if (legacyExists) return { dir: legacy, layout: "legacy-flat", rel: DESIGN_DIR };
+  return { dir: modern, layout: "none", rel: EXPORT_DIR };
+}
 function findMapFile(cwd) {
   const modern = path4.join(cwd, MAP_FILE);
   if (fs6.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
@@ -1994,7 +2014,7 @@ function main(argv) {
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) return 2;
   const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path5.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
-  const dsBase = dsDir || "design/design-system";
+  const dsBase = dsDir || path5.join(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
   const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);
   if (ctx.staleLegacy) {

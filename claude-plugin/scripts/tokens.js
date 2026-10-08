@@ -85,7 +85,7 @@ function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
   console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
   process.exit(2);
 }
-var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
+var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/export/design-system/. Run `dtwin pull --design-system` to create it.";
 
 // bridge/src/json-util.ts
 function nullProto() {

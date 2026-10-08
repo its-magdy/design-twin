@@ -58,8 +58,7 @@ export const INDEX = "index.json"; // per-directory self-description; also the n
 const { TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, HYGIENE } = DESIGN_SYSTEM_FILES;
 export const COMPONENTS = "components.json";
 
-// Filesystem-safe, stable, lowercase. Same spirit as pages-layout.ts's `safe`, kept local so this
-// module stays dependency-free.
+// Filesystem-safe, stable, lowercase. Same spirit as pages-layout.ts's `safe`.
 function slug(s: unknown): string {
   return String(s || "library")
     .toLowerCase()

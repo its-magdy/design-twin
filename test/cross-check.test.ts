@@ -1020,4 +1020,26 @@ console.log("cross-check — token pairs, fix pass 1 (unknown backdrops, the col
   ok("[L-2] a 0-opacity border (#46464f00) is no row", pairs(scr("Form", [field("4:6", "#1d1d1f", "Bg/Input", "Border", "#46464f00")])).length === 0);
 }
 
+// ---------- no --design-system: the project's own design-system dir is found, current or legacy layout ----------
+{
+  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts");
+  const inst: NodeInput = { type: "INSTANCE", id: "1:2", name: "Card", props: {}, mainComponent: { name: "Card", key: "s-card" } };
+  const doc = screenExport([{ type: "FRAME", id: "1:1", name: "A", children: [inst] }], { screen: "A", nodeId: "1:1" });
+  const CAT = catalog([{ name: "Card", id: "9:3", key: "cat-card", type: "COMPONENT", props: {} }]);
+  const project = (exportRel: string) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cc-dsdefault-"));
+    const put = (rel: string, d: unknown) => { const f = path.join(tmp, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(d)); return f; };
+    const screenFile = put(`${exportRel}/pages/P/A__1_1.json`, doc);
+    put(`${exportRel}/design-system/components.local.json`, CAT);
+    const r = spawnSync(process.execPath, [CLI, screenFile, "--json"], { encoding: "utf8", cwd: tmp });
+    fs.rmSync(tmp, { recursive: true, force: true });
+    return { res: tryParse(r.stdout, isCrossCheckReport) };
+  };
+  const cur = project("design/export");
+  ok("[ds-default] current layout, no flag: design/export/design-system is read (the screen's instance matches the catalog entry)",
+    cur.res?.coverage?.entries?.[0]?.catalogKey === "cat-card");
+  const leg = project("design");
+  ok("[ds-default] legacy flat layout, no flag: design/design-system is still read", leg.res?.coverage?.entries?.[0]?.catalogKey === "cat-card");
+}
+
 report();
