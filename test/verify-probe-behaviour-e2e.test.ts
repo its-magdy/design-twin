@@ -466,7 +466,7 @@ const mE12 = read(projBare, out("Edge12"));
 if (rE12.status !== 0) console.log(rE12.stderr);
 // review 8 H-1 (fix 9): a <progress> is now counted by the DOM's media rule first (no pixel shot), the dot still by the pixels
 const notOwnPx = (id: string, ctl: string, byPx: boolean): boolean => ix(mE12, id)?.ok === null && (ix(mE12, id)?.detail ?? "").startsWith(`the opener's click point is another control inside it (<button type="button" aria-label="${ctl}">)`)
-  && /D52/.test(ix(mE12, id)?.detail ?? "") === byPx
+  && /paints something of its own beside it/.test(ix(mE12, id)?.detail ?? "") === byPx
   && statusOf(mE12, "keyboard.reachable", id) === "not-run" && new RegExp(`the opener is a container; Tab reaches <button[^>]*${ctl}[^>]*> inside it`).test(row(mE12, "keyboard.reachable", id)?.detail ?? "");
 check(`[fix8 D52/fix9] a card with a <progress> (80:18: by the DOM's media rule) or its own ::before status dot (80:23: by the pixels) around its centred Delete: the drive refuses it, keyboard.reachable not-run 'the opener is a container; Tab reaches <button …> inside it' (saw: ${statusOf(mE12, "keyboard.reachable", "80:18")} / ${statusOf(mE12, "keyboard.reachable", "80:23")}; was: pass, the Delete taken for the card's control)`,
   rE12.status === 0 && notOwnPx("80:18", "Unstack crate", false) && notOwnPx("80:23", "Unship crate", true));

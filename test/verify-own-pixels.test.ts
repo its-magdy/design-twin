@@ -96,7 +96,7 @@ const hug = (wrap: string): string => `${BASE}</style><div class="row"><div clas
 for (const [what, wrap] of [["a 14-px box-shadow ring (review 8 L-3)", "padding:2px;box-shadow:0 0 0 14px #22aa77"], ["an outline 6 px out", "padding:2px;outline:3px solid #22aa77;outline-offset:3px"],
   ["a 3-px inset shadow in another colour", "padding:4px;background:#eeeeff;box-shadow:inset 0 0 0 3px #dd3333"], ["a 2-px border in another colour", "padding:2px;background:#eeeeff;border:2px solid #dd3333"]] as const) {
   check(`[review 8 L-3/D53] a cell whose sole button sits in a wrapper hugging it with ${what} → refused by the plain-paint test`,
-    await one(hug(wrap), async (p) => { const r = await drive(p); return r.dom === null && /D53/.test(r.why ?? ""); }));
+    await one(hug(wrap), async (p) => { const r = await drive(p); return r.dom === null && /alone it must paint one uniform colour/.test(r.why ?? ""); }));
 }
 check("[D47/D53] a cell whose sole button sits in a filled wrapper (one colour), a rounded one (radius 6 px), and a cell under a whole-cell tint inside a rounded clipping cell → driven",
   await one(hug("padding:4px;background:#eeeeff"), async (p) => driven(await drive(p)))
@@ -202,8 +202,8 @@ check("[D53 plainKept] one colour over the box, the backdrop outside → plain; 
 // a hug wrapper drawn as a progress ring (border-radius 50%, border sides in two colours) has a core again
 const ringCell = (borders: string): string => `${BASE}</style><div class="row"><div class="cell" id="c"><span style="display:inline-block;margin-top:4px;padding:2px;border-radius:50%;${borders};background:#16a34a;background-clip:padding-box;line-height:0"><button id="d" aria-label="Cancel upload" style="margin:0;width:28px;height:28px;border-radius:50%;border:0;background:#16a34a;color:#ffffff">x</button></span></div></div>`;
 check("[review 9 H-1] a round Cancel in a 75 % / 50 % progress RING (a 50 %-radius hug wrapper, border sides in two colours) → refused by the plain-paint test (was: pressed — the corner squares covered the whole box)",
-  await one(ringCell("border:4px solid #16a34a;border-left-color:rgba(22,163,74,.25)"), async (p) => { const r = await drive(p); return r.dom === null && /D53/.test(r.why ?? ""); })
-  && await one(ringCell("border:4px solid rgba(22,163,74,.25);border-top-color:#16a34a;border-right-color:#16a34a"), async (p) => { const r = await drive(p); return r.dom === null && /D53/.test(r.why ?? ""); }));
+  await one(ringCell("border:4px solid #16a34a;border-left-color:rgba(22,163,74,.25)"), async (p) => { const r = await drive(p); return r.dom === null && /alone it must paint one uniform colour/.test(r.why ?? ""); })
+  && await one(ringCell("border:4px solid rgba(22,163,74,.25);border-top-color:#16a34a;border-right-color:#16a34a"), async (p) => { const r = await drive(p); return r.dom === null && /alone it must paint one uniform colour/.test(r.why ?? ""); }));
 check("[review 9 H-1] the same ring in ONE colour (its background under the border too), a pill wrapper (9999px), an ELLIPTICAL wrapper (50 % on a 48 × 34 box) and a rounded cover inside a bordered rounded clipping cell → driven",
   await one(ringCell("border:4px solid #16a34a").replace("background-clip:padding-box", "background-clip:border-box"), async (p) => driven(await drive(p)))
   && await one(hug("padding:4px;background:#eeeeff;border-radius:9999px"), async (p) => driven(await drive(p)))

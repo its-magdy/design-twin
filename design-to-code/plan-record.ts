@@ -107,7 +107,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
   const hook = v.hook;
   if (hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan)) {
     hook.planHash = planHash(plan);
-    notes.push("the hook's record held the pre-F-100 plan hash (it covered verification) — re-stamped with the current one, so this record does not reopen the plan");
+    notes.push("the hook's record held an older plan hash that also covered verification — re-stamped with the current one, so this record does not reopen the plan");
   }
   const prev = v.recorded;
   // the same report recorded again: keep its time, so an unchanged plan is not rewritten

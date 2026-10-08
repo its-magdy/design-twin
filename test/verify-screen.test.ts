@@ -92,7 +92,7 @@ console.log("verify-screen — the spec as data:");
 {
   // DT-50 (old exports): an asset leaf carried an inferred `layout` whose padding/gap is the inset already baked into the
   // exported file — never a spec to compare. Real shapes: asset = "assets/<name>", layout.padding = [t,r,b,l].
-  const BAKED = "inset baked into the exported asset (DT-50)";
+  const BAKED = "inset baked into the exported asset";
   const leaf = (id: string, extra: Record<string, unknown>): NodeInput => malformed<NodeInput>({ type: "FRAME", id, name: "Mark", box: { w: 24, h: 24 }, layout: { display: "flex", padding: [3.33, 3.33, 3.33, 3.33], gap: 2 }, ...extra });
   const exp = buildExpectation([doc([
     leaf("4:1", { asset: "assets/mark.svg" }),

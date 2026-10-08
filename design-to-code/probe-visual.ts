@@ -177,7 +177,7 @@ export async function captureVisual(browser: Browser, o: CaptureOptions): Promis
       else { origin = { x: fr.rect.x, y: fr.rect.y }; notes.push(`the frame's selector matched ${read.count} element(s) on the capture page — the measurement pass's position was used`); }
       const built0 = fr && fr.via !== "viewport" && read.rect !== null ? read.rect : fr ? fr.rect : null;
       if (built0 !== null && fr && fr.via !== "viewport" && (Math.abs(built0.h - o.frameSize.h) > 1 || Math.abs(built0.w - o.frameSize.w) > 1)) {
-        notes.push(`the built frame is ${Math.round(built0.w)}×${Math.round(built0.h)} CSS px and the design ${o.frameSize.w}×${o.frameSize.h} — only the design-size window at the built frame's top-left is compared (D48)`);
+        notes.push(`the built frame is ${Math.round(built0.w)}×${Math.round(built0.h)} CSS px and the design ${o.frameSize.w}×${o.frameSize.h} — only the design-size window at the built frame's top-left is compared`);
       }
       const clip: Rect4 = { x: Math.round(origin.x), y: Math.round(origin.y), w: Math.floor(o.frameSize.w), h: Math.floor(o.frameSize.h) };
       // fullPage: the clip is trimmed to the DOCUMENT (not the viewport, facts-12c §1); what lies outside it is not compared

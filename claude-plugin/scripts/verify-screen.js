@@ -578,7 +578,7 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
   const hook = v.hook;
   if (hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan)) {
     hook.planHash = planHash(plan);
-    notes.push("the hook's record held the pre-F-100 plan hash (it covered verification) \u2014 re-stamped with the current one, so this record does not reopen the plan");
+    notes.push("the hook's record held an older plan hash that also covered verification \u2014 re-stamped with the current one, so this record does not reopen the plan");
   }
   const prev = v.recorded;
   if (prev && typeof prev.at === "string" && JSON.stringify({ ...prev, at: "" }) === JSON.stringify({ ...recorded, at: "" })) recorded.at = prev.at;
@@ -924,7 +924,7 @@ function prepareStaged(stageDir, destDir) {
   } catch (e) {
     return { error: `--publish ${stageDir}: ${errMsg(e).split("\n")[0]}` };
   }
-  if (canonical2(stageDir) === canonical2(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project (D9)` };
+  if (canonical2(stageDir) === canonical2(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
   const owned = files.filter((f) => TOOL_OWNED.test(f));
   if (owned.length) return { error: `--publish refuses ${owned.join(", ")} \u2014 expected/report/status files are written by verify-screen itself, never copied in` };
@@ -1526,7 +1526,7 @@ function expectNodeRow(n, ctxOrPath) {
   }
   const L = n.layout;
   if (L && typeof L === "object" && (n.asset || n.geometry || n.assetSkipped)) {
-    const BAKED = "inset baked into the exported asset (DT-50)";
+    const BAKED = "inset baked into the exported asset";
     const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : void 0;
     if (g !== void 0) skip("gap", g, BAKED);
     const pad = Array.isArray(L.padding) ? L.padding.slice(0, 4) : PAD_KEYS.some((k) => typeof L[k] === "number") ? PAD_KEYS.map((k) => L[k]) : null;
@@ -2049,7 +2049,7 @@ function referenceImageFor(o) {
   if (!offset) return unusable(p, "the export root has render bounds but no position (box.x/y) \u2014 where the reference sits over the frame is unknown");
   const s0 = figmaReferenceScale(box.w, box.h), onDisk = png.w / (rb ? rb.w : box.w);
   if (![scale, onDisk].every((v) => Math.abs(v - s0) <= REFERENCE_SCALE_SLACK * s0))
-    return unusable(p, `the reference is a ${png.w} px image, not the export reference (a discovery thumbnail, F-08) \u2014 re-pull the screen`);
+    return unusable(p, `the reference is a ${png.w} px image, not the export reference (a discovery thumbnail) \u2014 re-pull the screen`);
   const refW = rb ? rb.w : box.w, refH = rb && num(rb.h) && rb.h > 0 ? rb.h : box.h;
   const ew = Math.round(refW * scale), eh = Math.round(refH * scale), tolH = 2 + Math.floor(refH * (1 / refW + 5e-5));
   if (Math.abs(png.w - ew) > 2 || Math.abs(png.h - eh) > tolH)
@@ -2279,15 +2279,15 @@ var isContainer = (got) => !!(got.tag && CONTAINER_TAGS.has(String(got.tag).toLo
 var LIMITS = [
   "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, so they are compared only if the probe reports them under the node's id.",
   "::placeholder colour is compared only when the probe reports placeholderColor (getComputedStyle(el,'::placeholder') or the stylesheet rule); otherwise it is listed under `unverifiable`, never passed.",
-  "A <table> with border-spacing (border-collapse: separate) also puts that spacing between its edge and the outer rows \u2014 above the first and below the last (CSS 2.1 \xA717.6.1): a container-height delta of twice the spacing is the table model, not a layout bug (F-108).",
-  "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) \u2014 read `rotate` too before calling a rotation missing (finding 198).",
+  "A <table> with border-spacing (border-collapse: separate) also puts that spacing between its edge and the outer rows \u2014 above the first and below the last (CSS 2.1 \xA717.6.1): a container-height delta of twice the spacing is the table model, not a layout bug.",
+  "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) \u2014 read `rotate` too before calling a rotation missing.",
   "An icon drawn by an <img> (or <canvas>, <object>) has no readable fill: the SVG inside is a separate document, so its fill is listed under `unverifiable` \u2014 compare the asset file instead.",
   'Numbers are read as px: a number or a px string ("20px"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; so is a value CSS cannot produce (a negative gap, padding or size).',
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared.",
   "A TEXT node's height is not compared (neither a Range nor its element gives the line box Figma's text box has), and the width of text the design truncates is not either (a Range spans the unclipped string). A fixed- or fill-width text is compared at its ink width within 3px \u2014 an empirical bound (field runs: \u22120.6\u2026+2.4px); heavy italics or overhanging glyphs may exceed it.",
-  "A transparent element's background is compared through the element that paints it (paintedBy, F-74): its only same-box child, else its nearest painting ancestor that holds it. A sibling or an absolutely positioned overlay painting over it is not seen \u2014 when the ancestor's colour is the designed one the node may PASS although the overlay shows another; a transparent element whose own children paint all of it gets no painter (compared as transparent).",
+  "A transparent element's background is compared through the element that paints it (paintedBy): its only same-box child, else its nearest painting ancestor that holds it. A sibling or an absolutely positioned overlay painting over it is not seen \u2014 when the ancestor's colour is the designed one the node may PASS although the overlay shows another; a transparent element whose own children paint all of it gets no painter (compared as transparent).",
   "Border widths are compared as CSS draws them: Chromium floors a computed border width to whole px, at least 1 (a 1.5px stroke is a 1px border). A ring (box-shadow spread, outline) is compared with the design's own width.",
-  "Severity follows the match (D30/D31): a node matched by position or a non-canonical rule is at most low, by text-ordinal or another screen's id (tag-alias) at most medium; a matched element far from the design's size gets one 'match (size)' row and its other deltas are capped at low (cappedFrom keeps the original, cappedBy says which cap). D39: an open capped delta blocks a plain pass (verdict incomplete, never fail on its own); a waiver on 'match (size)' lifts only the size cap \u2014 a match-confidence cap stays."
+  "Severity follows the match: a node matched by position or a non-canonical rule is at most low, by text-ordinal or another screen's id (tag-alias) at most medium; a matched element far from the design's size gets one 'match (size)' row and its other deltas are capped at low (cappedFrom keeps the original, cappedBy says which cap). An open capped delta blocks a plain pass (verdict incomplete, never fail on its own); a waiver on 'match (size)' lifts only the size cap \u2014 a match-confidence cap stays."
 ];
 function fieldTolerance(label) {
   const f = FIELDS.find((x) => x.label === label);
@@ -3222,7 +3222,7 @@ function compare(expectation, measured, opts) {
     return live;
   };
   if (unboundNote !== void 0) inputNotes.push(unboundNote);
-  if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length) inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) \u2014 graded as agent evidence (D41)");
+  if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length) inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) \u2014 graded as agent evidence");
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i) => {
     const key = String(i.nodeId) + "|" + i.trigger;
     const p = probeRows.get(key), a = exercised.get(key);
@@ -3238,7 +3238,7 @@ function compare(expectation, measured, opts) {
     const gaps = fromProbe ? insideMiss ? [] : pGaps : gapsOf(hit);
     const worked = fromProbe ? pPass : gaps !== null && gaps.length === 0;
     const overridden = fromProbe && pPass && a && !(a.ok === true && (gapsOf(a) ?? []).length === 0) ? `agent row ok: ${a.ok === void 0 ? "(none)" : String(a.ok)}${a.detail ? ` \u2014 ${a.detail}` : ""}` : void 0;
-    if (overridden) inputNotes.push(`${i.nodeId} (${i.trigger}): the run-bound probe's pass overrides the agent's row (${overridden}) \u2014 D41`);
+    if (overridden) inputNotes.push(`${i.nodeId} (${i.trigger}): the run-bound probe's pass overrides the agent's row (${overridden})`);
     const row = {
       nodeId: i.nodeId,
       name: i.name,
@@ -3267,7 +3267,7 @@ function compare(expectation, measured, opts) {
     if (hit.result === "not-probed" || hit.ok === null || hit.ok === void 0) return Object.assign(row, { result: "not-probed", ...ifDefined("detail", hit.detail), ...probeBound ? said : {} });
     if (hit.ok === false) return Object.assign(row, { result: "fail", ...ifDefined("detail", hit.detail), ...ifDefined("selector", hit.selector), ...said });
     if (insideMiss) {
-      return Object.assign(row, { result: "not-probed", detail: `probe pass without the destination tag inside the opened element (D41) \u2014 tag the root of what opens with data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
+      return Object.assign(row, { result: "not-probed", detail: `probe pass without the destination tag inside the opened element \u2014 tag the root of what opens with data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
     if (!worked || !hit.selector) {
       return Object.assign(row, { result: "not-probed", detail: `reported ok without evidence \u2014 ${(gaps || []).join("; ")}${hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
@@ -3368,8 +3368,8 @@ function compare(expectation, measured, opts) {
   if (paintedVia.length) inputNotes.push(`background compared through the element that paints it on ${paintedVia.length} node(s) whose own background is transparent (paintedBy): ${paintedVia.slice(0, 5).map((p) => `${p.nodeId} by its ${p.how}`).join(", ")}${paintedVia.length > 5 ? `, \u2026and ${paintedVia.length - 5} more` : ""}`);
   const notWaivable = /* @__PURE__ */ new Map();
   for (const n of notMeasured) notWaivable.set(n.nodeId, "the node was not measured \u2014 only a measured delta can be accepted");
-  for (const i of interactionsFailed) notWaivable.set(i.nodeId, "a failed interaction is never waivable (D5) \u2014 descope it (plan.descopes, owner-only) if it is deliberately inert");
-  for (const c of componentsAbsent) for (const id of c.nodeIds) notWaivable.set(id, `component set '${c.setName}' is reported ABSENT \u2014 a missing component is never waivable (D5)`);
+  for (const i of interactionsFailed) notWaivable.set(i.nodeId, "a failed interaction is never waivable \u2014 descope it (plan.descopes, owner-only) if it is deliberately inert");
+  for (const c of componentsAbsent) for (const id of c.nodeIds) notWaivable.set(id, `component set '${c.setName}' is reported ABSENT \u2014 a missing component is never waivable`);
   let applied = 0;
   (Array.isArray(opts.waivers) ? opts.waivers : []).forEach((w, i) => {
     if (!isPlanWaiver(w)) {
@@ -3733,7 +3733,7 @@ function visualReport(v, malformed = false, o) {
 var VISUAL_MD_ROWS = 10;
 function visualMarkdown(v) {
   const L = ["## Visual diff \u2014 informational, not part of the verdict", ""];
-  L.push("*The pixel diff never changes the fidelity verdict above (D4, D40(3)). Font rasterisation alone differs 1\u20133% on text-heavy screens (Figma's renderer vs Chromium), so read the regions, not the percentage.*", "");
+  L.push("*The pixel diff never changes the fidelity verdict above. Font rasterisation alone differs 1\u20133% on text-heavy screens (Figma's renderer vs Chromium), so read the regions, not the percentage.*", "");
   if (!v.ran) {
     L.push(v.why === VISUAL_NOT_APPLICABLE ? "Not applicable (no web probe)." : `Not run (${mdText(v.why) || "no reason recorded"}).`, "");
     return L;
@@ -3821,7 +3821,7 @@ var behaviourWhere = (c) => [c.nodeId ? mdText(c.nodeId) : "", c.trigger ? `(${m
 var BEHAVIOUR_MD_ROWS = 80;
 function behaviourMarkdown(b) {
   const L = ["## Behaviour and accessibility \u2014 not part of the verdict", ""];
-  L.push("*These checks never change the fidelity verdict above (D4). A failed check is still a measurable accessibility failure: fix it or raise a designer question.*", "");
+  L.push("*These checks never change the fidelity verdict above. A failed check is still a measurable accessibility failure: fix it or raise a designer question.*", "");
   if (!b.ran) {
     L.push(`Not run (${mdText(b.why) || "no reason recorded"}).`, "");
     return L;
@@ -3967,7 +3967,7 @@ function reportToMarkdown(r) {
   }
   const inShell = r.untaggedInstanceSetsInShell || [];
   if (inShell.length) {
-    L.push(`## Instance sets with no evidence, inside the shared shell (${inShell.length})`, "", "*Built once for every screen (F-96): listed apart, not this screen's work. Not a failure on its own.*", "");
+    L.push(`## Instance sets with no evidence, inside the shared shell (${inShell.length})`, "", "*Built once for every screen \u2014 listed apart, not this screen's work. Not a failure on its own.*", "");
     for (const m of inShell.slice(0, 40)) L.push(`- ${m.setName} \u2014 ${m.instances} instance(s), e.g. \`${m.nodeIds[0]}\``);
     if (inShell.length > 40) L.push(`- \u2026and ${inShell.length - 40} more`);
     L.push("");
@@ -4101,8 +4101,8 @@ function selectForAccept(rep, sel) {
     return { error: `no delta in the report belongs to group '${sel.group}'${gs.length ? ` (groups: ${gs.join(", ")})` : " (the report has no groups)"}` };
   }
   const id = sel.node;
-  if ((rep.componentsAbsent || []).some((c) => c.nodeIds.includes(String(id)))) return { error: `${id} belongs to a component set reported ABSENT \u2014 a missing component is never waivable (D5); build it` };
-  if ((rep.interactions || []).some((i) => i.nodeId === id && i.result === "fail")) return { error: `${id} is a failed interaction \u2014 never waivable (D5); fix it, or have the owner descope it in plan.descopes (D20)` };
+  if ((rep.componentsAbsent || []).some((c) => c.nodeIds.includes(String(id)))) return { error: `${id} belongs to a component set reported ABSENT \u2014 a missing component is never waivable; build it` };
+  if ((rep.interactions || []).some((i) => i.nodeId === id && i.result === "fail")) return { error: `${id} is a failed interaction \u2014 never waivable; fix it, or have the owner descope it in plan.descopes` };
   if ((rep.notMeasured || []).some((n) => n.nodeId === id)) return { error: `${id} was not measured \u2014 there is no delta to accept; measure it (or fold it, plan anchor foldedInto) first` };
   if (sel.field !== void 0 && (rep.fieldsNotMeasured || []).some((n) => n.nodeId === id && n.field === sel.field)) return { error: `${id} (${sel.field}) was not measured \u2014 there is no delta to accept` };
   const fields = deltas.filter((d) => d.nodeId === id).map((d) => d.field);

@@ -167,9 +167,9 @@ console.log("[11] --expect: an F-08 thumbnail or an unreadable file is refused w
   const thumb = refOf(expect({ index: { layers: [noScaleRow()] }, readReference: reader({ [REF]: png(360, 309) }) }, without(FIRINGS, "renderBox")));
   safe("[11] a 360×309 discovery thumbnail of a 1440 frame → usable:false, the F-08 why (never diffed at 0.25)", () =>
     !!thumb && thumb.usable === false && thumb.path === "design/export/" + REF
-    && thumb.why === "the reference is a 360 px image, not the export reference (a discovery thumbnail, F-08) — re-pull the screen");
+    && thumb.why === "the reference is a 360 px image, not the export reference (a discovery thumbnail) — re-pull the screen");
   const thumbRow = refOf(expect({ index: { layers: [indexRow({ referenceScale: 0.25, referenceOffset: { x: 0, y: 0 } })] }, readReference: reader({ [REF]: png(360, 309) }) }, without(FIRINGS, "renderBox")));
-  safe("[11] …also when an index row states the thumbnail's scale", () => !!thumbRow && thumbRow.usable === false && /discovery thumbnail, F-08/.test(thumbRow.why));
+  safe("[11] …also when an index row states the thumbnail's scale", () => !!thumbRow && thumbRow.usable === false && /discovery thumbnail\)/.test(thumbRow.why));
   const missing = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({}) }));
   safe("[11] the file missing on disk → usable:false, 'missing on disk — re-pull the screen'", () =>
     !!missing && missing.usable === false && missing.path === "design/export/" + REF && /missing on disk — re-pull the screen/.test(missing.why));

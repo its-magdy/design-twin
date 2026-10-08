@@ -388,7 +388,7 @@ check("[D117] planCodeFiles = files[] (as written, in order) then the mapped mod
   const old = computeStatus(planOf(root), { cwd: root, planFile });
   check(`[M2] a pre-D117 hook record (shell not hashed) → NOT stale, not open; a note "src/shell/Shell.tsx (now hashed: mapped module)" (got ${old.status}: ${old.reasons.join(" | ")})`,
     old.status === "static-only" && !verifyBuild.isOpen({ file: planFile, plan: planOf(root) }, root)
-    && old.reasons.some((x) => /^hook: not hashed by the hook's last check \(its record predates D117\), so not a change: src\/shell\/Shell\.tsx \(now hashed: mapped module\)/.test(x))
+    && old.reasons.some((x) => /^hook: not hashed by the hook's last check \(its record predates hashing of mapped modules\), so not a change: src\/shell\/Shell\.tsx \(now hashed: mapped module\)/.test(x))
     && !old.reasons.some((x) => /file\(s\) changed since/.test(x)));
   check("[M2] …the Stop hook's fast path stays silent on it (closed)", (() => { const r = runHook(root); return r.status === 0 && r.stderr === "" && hookOf(root).files?.["src/shell/Shell.tsx"] === undefined; })());
   // a files[] entry the old record never hashed is still a change

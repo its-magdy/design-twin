@@ -276,7 +276,7 @@ console.log("fix pass 1 — recording a plan the old hook closed (M1), project-r
     r.written && !openOf(root) && !st.reasons.some((x) => /plan changed after the hook/.test(x)));
   check("[M1] …the hook's planHash is now the current formula's, the rest of the hook record is untouched, and a note says so",
     after.verification?.hook?.planHash === verifyBuild.planHash(after) && after.verification.hook.result === "pass"
-    && JSON.stringify(after.verification.hook.files) === JSON.stringify(hook.files) && r.notes.some((n) => /pre-F-100 plan hash/.test(n) && /re-stamped/.test(n)));
+    && JSON.stringify(after.verification.hook.files) === JSON.stringify(hook.files) && r.notes.some((n) => /an older plan hash that also covered verification/.test(n) && /re-stamped/.test(n)));
   const quiet = spawnSync(process.execPath, [HOOK], { cwd: root, input: JSON.stringify({ cwd: root }), encoding: "utf8" });
   check("[M1] …and the Stop hook's fast path stays silent on it", quiet.status === 0 && quiet.stderr === "");
   // a hash that matches NEITHER formula (the plan changed after the hook) is never re-stamped: the plan stays pending

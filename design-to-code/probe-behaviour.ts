@@ -151,12 +151,12 @@ export function unitCap(leftMs: number, unitsLeft: number, floorMs = UNIT_FLOOR_
 export const WRITE_BLOCK_SCOPE = "per unit, from its first key press, click, scroll, hover or resize on, no request but GET/HEAD/OPTIONS leaves the browser " +
   "(the page, its frames, workers, shared workers and service workers alike), no WebSocket message leaves the page and a WebSocket the page " +
   "opens then never reaches the server — a blocked write makes every check of that unit from its first action on not-run; not blocked: " +
-  "the page's load and --steps (D50), a GET with a side effect, a WebSocket opened inside a worker, and the 12a drive of the interactions " +
+  "the page's load and --steps, a GET with a side effect, a WebSocket opened inside a worker, and the drive of the interactions " +
   "(no write block there: it never clicks an opener that would submit, nor one whose click point is another activating control (also under a " +
   "focusable glyph or editable label inside it), a label's control or a nested page (an iframe, object or embed) — open shadow roots included — " +
   "unless it is the sole button-like control of a container showing nothing of its own (no text, image, icon, CSS mask, generated content, " +
   "filled block, progress bar, meter or list marker; a label at opacity 0 in flow counts, an out-of-flow tooltip at opacity 0 does not) by " +
-  "its DOM nor by its pixels (D52-D54: the container with only that control hidden against it with all its content hidden — the content of " +
+  "its DOM nor by its pixels (the container with only that control hidden against it with all its content hidden — the content of " +
   "its open shadow roots, its own marker and its other pseudo-elements (a first letter, a placeholder, a file button, a details' content, scroll " +
   "buttons and markers) too — everything outside it, its ancestors included, hidden in both, the opener hovered first so a control shown on hover " +
   "is at its click point — any painted difference counts, a stripe or a 1-px divider too; decoration: its own background colour, a border in one " +
@@ -171,10 +171,10 @@ export const WRITE_BLOCK_SCOPE = "per unit, from its first key press, click, scr
   "the container still outside the viewport once scrolled in, content revealed after a delay, a generated label of an element lying elsewhere; " +
   "the probe's init CSS is lost when a page replaces document.adoptedStyleSheets after load under a strict style CSP; an sr-only label at " +
   "right:-9999px in a right-to-left page counts, so that cell is refused; the hover runs on every opener, so a mouseenter side effect also " +
-  "fires on one it then refuses); D55, the same exemption: content too — its own inset box-shadow offset 2 px or more or blurred (a stripe, a fill, a glow), sharp " +
-  "box-shadow ring layers in more than one colour (D56: not its border, not a layer in its own background colour where that cannot show — an " +
-  "outer one, a ring-offset, or, D57, an inset one over an opaque border-box / padding-box background) and its own " +
-  "paint under a mask or a clip-path other than a rounded inset(0); never foreign — a tooltip revealed by the probe's hover (D56: a " +
+  "fires on one it then refuses); the same exemption, content too — its own inset box-shadow offset 2 px or more or blurred (a stripe, a fill, a glow), sharp " +
+  "box-shadow ring layers in more than one colour (not its border, not a layer in its own background colour where that cannot show — an " +
+  "outer one, a ring-offset, or an inset one over an opaque border-box / padding-box background) and its own " +
+  "paint under a mask or a clip-path other than a rounded inset(0); never foreign — a tooltip revealed by the probe's hover (a " +
   "[role=tooltip] element, or the control's aria-describedby target, not shown before the hover; one already on screen is its own label and " +
   "refuses) and a label at effective opacity 0; " +
   "under it only with no opacity below 1 or blend mode on it or above it; an element the page mounts in it during the screenshots refuses; " +
@@ -182,8 +182,8 @@ export const WRITE_BLOCK_SCOPE = "per unit, from its first key press, click, scr
   "framework re-creates, marks a morphdom-style patch strips, a placeholder mounted on mouseleave; it can differ between runs), an opener " +
   "inside a shadow root, a role-less tooltip or other popover laid over it " +
   "(with a show delay the result can differ between runs), a cell whose sole control has a tooltip pre-mounted but hidden by transform " +
-  "scale(0) or moved off-screen (D57: it counts as shown before the hover), a label under an oklch() / lab() / color() background (never " +
-  "proven opaque); not seen (D57: known misses, the drive can write): a sibling's relative ::before shifted over it from elsewhere, text " +
+  "scale(0) or moved off-screen (it counts as shown before the hover), a label under an oklch() / lab() / color() background (never " +
+  "proven opaque); not seen (known misses, the drive can write): a sibling's relative ::before shifted over it from elsewhere, text " +
   "overflowing a 0-height wrapper beside it, a display: contents [role=tooltip] or aria-describedby target laid over it, a label the page " +
   "re-creates as a new element on the hover with tooltip semantics (role=tooltip, or the control's aria-describedby target), and a page " +
   "that defines window.__dtTipPre itself first turns the record of what was shown before the hover off (an adversarial page); the focused element " +
@@ -422,7 +422,7 @@ export function focusReturnStatus(r: FocusReturnRead): { status: BehaviourStatus
   if (r.onOpener && r.openerVisible && !r.opacity0) return { status: "pass", detail: "focus returned to the opener" };
   if (r.onOpener && r.openerVisible) return { status: "warn", detail: "focus returned to the opener, but it is invisible (opacity 0) while focused with the pointer away — reveal it on focus too (e.g. group-focus-within:opacity-100), never only on hover" };
   if (r.onOpener) return { status: "fail", detail: "focus returned to the opener, but it is hidden (visibility/display) with the pointer away — a keyboard user sees no focus; reveal hover-only actions with opacity + :focus-within, never visibility:hidden" };
-  return { status: "fail", detail: `focus went to ${r.activeIsBody ? "<body>" : r.activeDesc}, not back to the opener${r.openerVisible ? "" : " (the opener is hidden with the pointer away — hover-only visibility:hidden; DT-60)"}` };
+  return { status: "fail", detail: `focus went to ${r.activeIsBody ? "<body>" : r.activeDesc}, not back to the opener${r.openerVisible ? "" : " (the opener is hidden with the pointer away — hover-only visibility:hidden)"}` };
 }
 
 const STATUS_ORDER: Record<BehaviourStatus, number> = { fail: 0, warn: 1, "not-run": 2, unsupported: 3, pass: 4 };
@@ -449,19 +449,19 @@ export function batteryRows(exp: Pick<VerifyExpectation, "interactions" | "hidde
   for (const row of drivable(exp)) {
     const ev = (driven || []).find((e) => e.nodeId === row.nodeId && e.trigger === row.trigger);
     let why: string | null = null;
-    if (!ev) why = "the overlay was not driven (no 12a evidence)";
-    else if (ev.cut === "budget") why = "the 12a drive was cut by its time budget";
+    if (!ev) why = "the overlay was not driven (no drive evidence)";
+    else if (ev.cut === "budget") why = "the drive was cut by its time budget";
     else if (ev.activation === "synthetic") why = "the opener opened only on a synthetic click (headless) — never used for the battery";
-    else if (!ev.opened) why = `the 12a drive opened nothing (${(ev.detail ?? "").replace(/^not-run: /, "") || "no detail"})`;
-    else if ((ev.navEvents ?? 0) !== 0) why = "the 12a drive saw a document load";
+    else if (!ev.opened) why = `the drive opened nothing (${(ev.detail ?? "").replace(/^not-run: /, "") || "no detail"})`;
+    else if ((ev.navEvents ?? 0) !== 0) why = "the drive saw a document load";
     // M3: a destination-tag detection is NOT skipped — the tagged panel may sit inside a 0-px modal root (Headless UI); the
     // battery's own modality check (markDialog, through ancestors) decides. A popover is never a modal dialog.
-    else if (ev.detectedBy === ":popover-open") why = `the 12a drive opened a popover, not a modal dialog — ${NOT_MODAL}`;
+    else if (ev.detectedBy === ":popover-open") why = `the drive opened a popover, not a modal dialog — ${NOT_MODAL}`;
     if (why === null) battery.push(row); else skipped.push({ row, why });
   }
   return { battery, skipped };
 }
-const NOT_MODAL = "the battery runs only on a modal dialog (:modal / dialog[open] / aria-modal=true, D40(1))";
+const NOT_MODAL = "the battery runs only on a modal dialog (:modal / dialog[open] / aria-modal=true)";
 export const DIALOG_IDS: readonly BehaviourCheckId[] = ["dialog.focus-on-open", "dialog.focus-trap", "dialog.escape-closes", "dialog.focus-return", "dialog.nested-escape", "dialog.scroll-open", "dialog.scrim", "dialog.click-outside"];
 
 // ---------------------------------------------------------------- page-side functions (SELF-CONTAINED)
@@ -2099,7 +2099,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       // widths
       u.phase("layout.subpixel", "overflow.mid", "overflow.narrow");
       const subRows = (variant: string, list: BehaviourWidth["subpixel"]): void => {
-        const rows: BehaviourCheck[] = list.map((s) => ({ id: "layout.subpixel" as const, status: "warn" as const, variant, ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `<${s.tag}>${s.text ? ` "${s.text}"` : ""} renders ${s.width}px wide — a collapsed ${s.tag === "td" || s.tag === "th" ? "table column" : "text box"} (D42: a behaviour warning, not a fidelity delta)`, evidence: { width: s.width } }));
+        const rows: BehaviourCheck[] = list.map((s) => ({ id: "layout.subpixel" as const, status: "warn" as const, variant, ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `<${s.tag}>${s.text ? ` "${s.text}"` : ""} renders ${s.width}px wide — a collapsed ${s.tag === "td" || s.tag === "th" ? "table column" : "text box"} (a behaviour warning, not a fidelity delta)`, evidence: { width: s.width } }));
         if (rows.length) for (const c of perElement("layout.subpixel", rows, 0, 0, "", variant)) u.add(c);
         else u.add({ id: "layout.subpixel", status: "pass", variant, detail: "no table cell or text renders under 1px wide" });
       };
@@ -2228,7 +2228,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         u.guard();
         let opened: DetectorRead["opened"] = null;
         let via: "Enter" | " " | null = null;
-        const notSelf = (what: string): string => `not-run: the Tab stop at the opener is not the opener itself (${what}) — no key is pressed there (D40(8))`;
+        const notSelf = (what: string): string => `not-run: the Tab stop at the opener is not the opener itself (${what}) — no key is pressed there`;
         if (!reachedOpener) add({ id: "keyboard.activation", status: "not-run", detail: insideStop !== null ? notSelf(`the opener is a container; its focusable child ${insideStop} is not pressed${marked.why !== null ? ` — ${marked.why}` : ""}`)
           : ancestorStop !== null ? notSelf(`${ancestorStop}, an ancestor of it`) : "not-run: Tab never reaches the opener (keyboard.reachable reports it)" });
         else {
@@ -2349,7 +2349,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         const x = await page.evaluate(expanderFind, null);
         let stillOpen = true;
         if (x.path === null) {
-          add(x.nativePicker ? { id: "dialog.nested-escape", status: "not-run", synthetic: true, detail: "not-run: native picker: synthetic (headless), not a real-browser observation — the dialog holds only a native <select>/date control, whose popup headless Chromium does not open (F-122)" }
+          add(x.nativePicker ? { id: "dialog.nested-escape", status: "not-run", synthetic: true, detail: "not-run: native picker: synthetic (headless), not a real-browser observation — the dialog holds only a native <select>/date control, whose popup headless Chromium does not open" }
             : { id: "dialog.nested-escape", status: "not-run", detail: "not-run: no expandable control ([aria-expanded]) in the dialog" });
         } else {
           const loc = page.locator(x.path).first();
@@ -2370,7 +2370,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
               const dlgOpen = await page.evaluate(dialogOpenNow, null);
               const ctl = await page.evaluate(expanderState, null);
               stillOpen = dlgOpen;
-              add(!dlgOpen ? { id: "dialog.nested-escape", status: "fail", detail: `Escape on the open ${x.desc} closed the whole dialog — the inner control must handle Escape (collapse it, preventDefault + stopPropagation) so the dialog stays open (DT-66)` }
+              add(!dlgOpen ? { id: "dialog.nested-escape", status: "fail", detail: `Escape on the open ${x.desc} closed the whole dialog — the inner control must handle Escape (collapse it, preventDefault + stopPropagation) so the dialog stays open` }
                 : ctl === "true" ? { id: "dialog.nested-escape", status: "warn", detail: `Escape left ${x.desc} expanded (the dialog stayed open) — Escape should collapse it first` }
                 : { id: "dialog.nested-escape", status: "pass", detail: `Escape collapsed ${x.desc} and the dialog stayed open` });
             }

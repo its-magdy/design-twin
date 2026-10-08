@@ -534,7 +534,7 @@ check("[review 6 H-3/D47] a cell with an out-of-flow opacity-0 ::after tooltip (
 // fix 8 (owner D52): the container's OWN ::before / ::after are hidden in the all-content shot — a tint the cell paints with its
 // own ::after over the whole cell is a painted pseudo of its own: its sole button is no longer taken for the opener's (was: driven)
 check("[fix8 D52] a cell painting a tint with its own empty ::after over the whole cell (70:46) → not driven by D52's pixels, ok:null naming its button",
-  notDrivenFor(mO3, "70:46", "<button aria-label=\"Open bed\">") && /D52/.test(ix(mO3, "70:46")?.detail ?? ""));
+  notDrivenFor(mO3, "70:46", "<button aria-label=\"Open bed\">") && /paints something of its own beside it/.test(ix(mO3, "70:46")?.detail ?? ""));
 check(`[review 6 L-1] a card whose label is 8000 elements deep (70:48) → a clean refusal naming the Delete, no 'driving failed' (saw: ${ix(mO3, "70:48")?.detail ?? "no row"})`,
   notDrivenFor(mO3, "70:48", "<button aria-label=\"Delete bed\">"));
 const wO3 = writesOf(edge("own-content-3"));
@@ -567,7 +567,7 @@ const ownPx = async (mode: string, pending: Promise<Run>): Promise<{ m: VerifyMe
   return { m: read(ownPxOut(mode)), status: r.status, writes: writesOf(edge(mode)) };
 };
 const DEL = "<button aria-label=\"Delete bed\">";
-const byPixels = (m: VerifyMeasured | null, id: string): boolean => notDrivenFor(m, id, DEL) && /D52/.test(ix(m, id)?.detail ?? "");
+const byPixels = (m: VerifyMeasured | null, id: string): boolean => notDrivenFor(m, id, DEL) && /paints something of its own beside it/.test(ix(m, id)?.detail ?? "");
 const drivenOk = (m: VerifyMeasured | null, ids: string[]): boolean => ids.every((id) => ix(m, id)?.ok === true && ix(m, id)?.activation === "mouse");
 const p1 = await ownPx("own-pixels-1", P.px1);
 check("[review 7 H-1] a labelled card whose centred Delete shows only on :hover — by visibility (70:44), display (70:45), opacity + pointer-events (70:46) → not driven, ok:null naming the Delete (was: pressed)",
@@ -581,7 +581,7 @@ const p2 = await ownPx("own-pixels-2", P.px2);
 check("[review 7 H-2b–d/D52] a dot drawn by a border (70:46), a swatch drawn by a box-shadow (70:47), a band across the centre (70:48), a colour tile holding the Delete (70:49) → not driven by the pixels, naming the Delete (was: pressed)",
   ["70:46", "70:47", "70:48", "70:49"].every((id) => byPixels(p2.m, id)));
 check("[review 7 H-2b/review 8 H-1] a <progress> (70:44), a <meter> (70:45) → not driven, naming the Delete — now by the DOM's media rule, before the pixels (was: pressed)",
-  ["70:44", "70:45"].every((id) => notDrivenFor(p2.m, id, DEL) && !/D52/.test(ix(p2.m, id)?.detail ?? "")));
+  ["70:44", "70:45"].every((id) => notDrivenFor(p2.m, id, DEL) && !/paints something of its own beside it/.test(ix(p2.m, id)?.detail ?? "")));
 check("[D47/D52] a cell with a Tailwind sr-only label (70:53), a cell with a transform:scale(0) aria-hidden tooltip (70:50) → still driven, ok:true, mouse",
   drivenOk(p2.m, ["70:53", "70:50"]));
 check(`[review 7 H-2b–d] the drive pressed no Delete (server saw: ${p2.writes.join(", ") || "nothing"})`, p2.status === 0 && p2.m !== null && p2.writes.length === 0);
