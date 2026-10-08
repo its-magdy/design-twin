@@ -2427,8 +2427,10 @@ void (async () => {
     ok("[atomic] no .tmp-* file is left behind", fs.readdirSync(path.dirname(target)).join() === "doc.json");
     ok("[atomic] the log line is unchanged (the final path, not the temp one)", logged.join() === "wrote " + target);
     let threw = false;
-    try { wo.writeJson(dir, "missing-dir/doc.json", doc, true); } catch { threw = true; }
-    ok("[atomic] a failed write still throws, and leaves no temp file", threw && !fs.existsSync(path.join(dir, "missing-dir")));
+    fs.writeFileSync(path.join(dir, "not-a-dir"), "x"); // a file where the parent directory would go: the write cannot succeed
+    try { wo.writeJson(dir, "not-a-dir/doc.json", doc, true); } catch { threw = true; }
+    ok("[atomic] a failed write still throws, and leaves no temp file",
+      threw && fs.readdirSync(dir).filter((f) => f.includes(".tmp-")).length === 0 && fs.readFileSync(path.join(dir, "not-a-dir"), "utf8") === "x");
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
@@ -2561,10 +2563,10 @@ void (async () => {
       fs.chmodSync(f, 0o644);
       return store.loosePerms(f) === true;
     }));
-  ok("[token] the write is atomic — no .tmp is left behind",
+  ok("[token] the write is atomic — no tmp file is left behind",
     withStore((d: string) => {
       store.write("tok", path.join(d, "bridge-token"));
-      return !fs.existsSync(path.join(d, "bridge-token.tmp"));
+      return fs.readdirSync(d).join() === "bridge-token";
     }));
   ok("[token] writing twice REPLACES rather than appending",
     withStore((d: string) => {

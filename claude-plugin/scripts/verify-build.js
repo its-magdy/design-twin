@@ -2,9 +2,9 @@
 
 
 // design-to-code/verify-build.ts
-import fs6 from "node:fs";
+import fs7 from "node:fs";
 import path5 from "node:path";
-import crypto3 from "node:crypto";
+import crypto4 from "node:crypto";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -586,8 +586,30 @@ function auditGateStatus(cwd, screenFile, screenName) {
 }
 
 // bridge/src/json-file.ts
+import fs5 from "node:fs";
+
+// bridge/src/atomic-write.ts
+import crypto2 from "node:crypto";
 import fs4 from "node:fs";
 import path3 from "node:path";
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
+function writeFileAtomic(file, data, opts = {}) {
+  fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
+  const tmp = file + tmpSuffix();
+  try {
+    fs4.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.mode !== void 0) fs4.chmodSync(tmp, opts.mode);
+    fs4.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs4.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+
+// bridge/src/json-file.ts
 var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
 function formatJsonLike(value, raw) {
   if (raw === null) return JSON.stringify(value, null, 2) + "\n";
@@ -599,32 +621,21 @@ function formatJsonLike(value, raw) {
 function writeJsonLike(file, value, raw) {
   let was = raw ?? null;
   if (raw === void 0) try {
-    was = fs4.readFileSync(file, "utf8");
+    was = fs5.readFileSync(file, "utf8");
   } catch {
     was = null;
   }
   const out = formatJsonLike(value, was);
   if (out === was) return false;
-  fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  try {
-    fs4.writeFileSync(tmp, out);
-    fs4.renameSync(tmp, file);
-  } catch (e) {
-    try {
-      fs4.rmSync(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
+  writeFileAtomic(file, out);
   return true;
 }
 
 // design-to-code/content-hash.ts
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 import path4 from "node:path";
-import crypto2 from "node:crypto";
-var sha256 = (s) => crypto2.createHash("sha256").update(s).digest("hex");
+import crypto3 from "node:crypto";
+var sha256 = (s) => crypto3.createHash("sha256").update(s).digest("hex");
 function stripPullTimes(v, parentKey) {
   if (isUnknownArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
   if (!v || typeof v !== "object") return v;
@@ -644,7 +655,7 @@ function fileHashes(files, cwd, cached) {
   const out = {};
   for (const rel of isUnknownArray(files) ? files.map(String) : []) {
     try {
-      out[rel] = sha256(cached?.(rel) ?? fs5.readFileSync(path4.join(cwd, rel))).slice(0, 16);
+      out[rel] = sha256(cached?.(rel) ?? fs6.readFileSync(path4.join(cwd, rel))).slice(0, 16);
     } catch {
       out[rel] = null;
     }
@@ -655,7 +666,7 @@ var isRec = (x) => !!x && typeof x === "object" && !Array.isArray(x);
 var RESOLVE_EXT = ["tsx", "ts", "jsx", "js"];
 var isFile = (abs) => {
   try {
-    return fs5.statSync(abs).isFile();
+    return fs6.statSync(abs).isFile();
   } catch {
     return false;
   }
@@ -809,7 +820,7 @@ function readHookInput() {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st;
   try {
-    st = fs6.fstatSync(0);
+    st = fs7.fstatSync(0);
   } catch {
     return Promise.resolve({ payload: {}, source: "closed" });
   }
@@ -824,7 +835,7 @@ function readHookInput() {
   };
   if (st.isFile() || st.isCharacterDevice()) {
     try {
-      return Promise.resolve({ payload: parse(fs6.readFileSync(0, "utf8")), source: "file" });
+      return Promise.resolve({ payload: parse(fs7.readFileSync(0, "utf8")), source: "file" });
     } catch {
       return Promise.resolve({ payload: {}, source: "unreadable" });
     }
@@ -869,7 +880,7 @@ function isStale(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs6.statSync(file).mtimeMs > cutoff;
+    return now - fs7.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
@@ -883,8 +894,8 @@ function readPlan(file) {
 var isPlanFile = (p) => "plan" in p;
 function findPlans(cwd) {
   const dir = path5.join(cwd, "design", "plan");
-  if (!fs6.existsSync(dir)) return { plans: [], bad: [] };
-  const read = fs6.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path5.join(dir, f)));
+  if (!fs7.existsSync(dir)) return { plans: [], bad: [] };
+  const read = fs7.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path5.join(dir, f)));
   return { plans: read.filter(isPlanFile), bad: read.filter((p) => !isPlanFile(p)) };
 }
 function rootOfPlan(file, fallback) {
@@ -1132,7 +1143,7 @@ function moduleImported(mapModule, byFile, cwd) {
 }
 function exportDirOf(cwd) {
   const e = path5.join(cwd, "design", "export");
-  return fs6.existsSync(path5.join(e, "pages")) ? e : path5.join(cwd, "design");
+  return fs7.existsSync(path5.join(e, "pages")) ? e : path5.join(cwd, "design");
 }
 var idFromStem = (s) => {
   const m = /__(I?\d+)_(\d+)$/.exec(String(s || ""));
@@ -1251,7 +1262,7 @@ function checkVerification(plan, cwd) {
     if (wrongShape.length) return v.deltas === void 0 ? [...wrongShape, "verification.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)"] : wrongShape;
     const artifacts = Array.isArray(v.artifacts) ? v.artifacts : [];
     if (!artifacts.length) return ['verification.mode is "rendered" but `artifacts` is empty \u2014 list the screenshot(s)/report the render produced'];
-    const missing = artifacts.filter((a) => !fs6.existsSync(path5.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs7.existsSync(path5.join(cwd, String(a))));
     if (missing.length) return [`verification artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(v.deltas)) return ["verification.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)"];
     return [];
@@ -1275,11 +1286,11 @@ function recordedReportWarnings(plan, cwd) {
   if (!rec || typeof rec !== "object" || typeof rec.report !== "string" || !rec.report) return [];
   let bytes;
   try {
-    bytes = fs6.readFileSync(path5.resolve(cwd, rec.report));
+    bytes = fs7.readFileSync(path5.resolve(cwd, rec.report));
   } catch {
     return [];
   }
-  const now = crypto3.createHash("sha256").update(bytes).digest("hex");
+  const now = crypto4.createHash("sha256").update(bytes).digest("hex");
   return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} \u2014 re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
 }
 var newestOwn = (reports) => {
@@ -1446,8 +1457,8 @@ function readFiles(rels, cwd, bytes) {
   for (const rel of rels) {
     const abs = path5.join(cwd, rel);
     try {
-      if (!fs6.statSync(abs).isFile()) continue;
-      const buf = fs6.readFileSync(abs);
+      if (!fs7.statSync(abs).isFile()) continue;
+      const buf = fs7.readFileSync(abs);
       out.push({ rel, text: buf.toString("utf8") });
       bytes?.set(rel, buf);
     } catch {
@@ -1555,7 +1566,7 @@ var SKIP_DIRS = /* @__PURE__ */ new Set([
 var TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
 var hasTwConfig = (dir) => {
   try {
-    return fs6.readdirSync(dir).some((n) => TW_CONFIG.test(n));
+    return fs7.readdirSync(dir).some((n) => TW_CONFIG.test(n));
   } catch {
     return false;
   }
@@ -1563,7 +1574,7 @@ var hasTwConfig = (dir) => {
 function packageDirOf(cwd, rel) {
   const root = path5.resolve(cwd);
   for (let d = path5.dirname(path5.resolve(cwd, rel)); d.startsWith(root); d = path5.dirname(d)) {
-    if (fs6.existsSync(path5.join(d, "package.json"))) return d;
+    if (fs7.existsSync(path5.join(d, "package.json"))) return d;
     if (d === root) break;
   }
   return root;
@@ -1574,7 +1585,7 @@ function projectScan(cwd, limit = 2e3) {
   const walk = (dir) => {
     let entries;
     try {
-      entries = fs6.readdirSync(dir, { withFileTypes: true });
+      entries = fs7.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -1586,7 +1597,7 @@ function projectScan(cwd, limit = 2e3) {
       } else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
       else if (e.isFile() && /\.css$/i.test(e.name)) {
         try {
-          css.push({ rel: path5.relative(cwd, abs).split(path5.sep).join("/"), text: fs6.readFileSync(abs, "utf8") });
+          css.push({ rel: path5.relative(cwd, abs).split(path5.sep).join("/"), text: fs7.readFileSync(abs, "utf8") });
         } catch {
         }
       }
@@ -1675,7 +1686,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed = plan.files || [];
-  const absent = listed.filter((f) => !fs6.existsSync(path5.join(cwd, f)));
+  const absent = listed.filter((f) => !fs7.existsSync(path5.join(cwd, f)));
   if (!listed.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
   let built = null;
@@ -1683,12 +1694,12 @@ function checkPlan({ plan, file }, cwd, opts) {
   const g = graph();
   const isFileNow = (rel) => {
     try {
-      return fs6.statSync(path5.join(cwd, rel)).isFile();
+      return fs7.statSync(path5.join(cwd, rel)).isFile();
     } catch {
       return false;
     }
   };
-  const byFile = listed.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs6.readFileSync(path5.join(cwd, rel), "utf8") });
+  const byFile = listed.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs7.readFileSync(path5.join(cwd, rel), "utf8") });
   const code = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
@@ -1856,7 +1867,7 @@ function behaviourRef(x) {
 }
 function locateReports(plan, planFile, cwd, exp) {
   const dir = path5.join(cwd, "design", "verify");
-  if (!fs6.existsSync(dir)) return [];
+  if (!fs7.existsSync(dir)) return [];
   const e = exp === void 0 ? locateExport(plan, planFile, cwd) : exp;
   const stems = new Set([
     plan.file ? path5.basename(String(plan.file)).replace(/\.json$/i, "") : null,
@@ -1867,33 +1878,33 @@ function locateReports(plan, planFile, cwd, exp) {
   const nodeId = plan.nodeId || e && e.nodeId || idFromStem(plan.screen) || (planFile ? idFromStem(path5.basename(planFile, ".json")) : null);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
-  for (const f of fs6.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+  for (const f of fs7.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
     const abs = path5.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
     let by = null;
     const expFile = path5.join(dir, stem + ".expected.json");
-    if (!fs6.existsSync(expFile) && fs6.existsSync(expFile + ".retired")) continue;
+    if (!fs7.existsSync(expFile) && fs7.existsSync(expFile + ".retired")) continue;
     const expFrame = () => {
       const x = readJsonOrNull(expFile, isJsonObject);
       return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null;
     };
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
-    else if (nodeId && fs6.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
+    else if (nodeId && fs7.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try {
-      mtimeMs = fs6.statSync(abs).mtimeMs;
+      mtimeMs = fs7.statSync(abs).mtimeMs;
     } catch {
     }
     const want = r.inputs && r.inputs.expectationSha256;
     let expectationChanged = false;
-    if (want && fs6.existsSync(expFile)) {
+    if (want && fs7.existsSync(expFile)) {
       try {
-        expectationChanged = crypto3.createHash("sha256").update(fs6.readFileSync(expFile)).digest("hex") !== want;
+        expectationChanged = crypto4.createHash("sha256").update(fs7.readFileSync(expFile)).digest("hex") !== want;
       } catch {
       }
     }
@@ -2019,12 +2030,12 @@ var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:
 var mayHoldToolUse = (line) => line.includes('"tool_use"') || line.includes("\\u") && TOOL_USE_ESCAPED.test(line);
 var LINE_CHUNK = 1 << 20;
 function forEachLine(file, onLine, chunk = LINE_CHUNK) {
-  const fd = fs6.openSync(file, "r");
+  const fd = fs7.openSync(file, "r");
   try {
     const buf = Buffer.allocUnsafe(chunk);
     let carry = [];
     for (; ; ) {
-      const n = fs6.readSync(fd, buf, 0, chunk, null);
+      const n = fs7.readSync(fd, buf, 0, chunk, null);
       if (n === 0) break;
       const cut = buf.subarray(0, n).lastIndexOf(10);
       if (cut < 0) {
@@ -2038,7 +2049,7 @@ function forEachLine(file, onLine, chunk = LINE_CHUNK) {
     }
     onLine(Buffer.concat(carry).toString("utf8"));
   } finally {
-    fs6.closeSync(fd);
+    fs7.closeSync(fd);
   }
 }
 function transcriptActions(file, ownOnly) {
@@ -2268,13 +2279,13 @@ function checkAndRecord(p, cwd, graph) {
   };
   let times = null;
   try {
-    const s = fs6.statSync(p.file);
+    const s = fs7.statSync(p.file);
     times = [s.atime, s.mtime];
   } catch {
   }
   writePlan(p.file, plan);
   if (times) try {
-    fs6.utimesSync(p.file, times[0], times[1]);
+    fs7.utimesSync(p.file, times[0], times[1]);
   } catch {
   }
   if (graph) graph().rewrote(p.file);

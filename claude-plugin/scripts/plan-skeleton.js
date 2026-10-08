@@ -2,7 +2,7 @@
 
 
 // design-to-code/plan-skeleton.ts
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 import path4 from "node:path";
 
 // design-to-code/types.ts
@@ -797,8 +797,30 @@ function auditGateStatus(cwd, screenFile, screenName) {
 import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/json-file.ts
+import fs5 from "node:fs";
+
+// bridge/src/atomic-write.ts
+import crypto from "node:crypto";
 import fs4 from "node:fs";
 import path3 from "node:path";
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+function writeFileAtomic(file, data, opts = {}) {
+  fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
+  const tmp = file + tmpSuffix();
+  try {
+    fs4.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.mode !== void 0) fs4.chmodSync(tmp, opts.mode);
+    fs4.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs4.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+
+// bridge/src/json-file.ts
 var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
 function formatJsonLike(value, raw) {
   if (raw === null) return JSON.stringify(value, null, 2) + "\n";
@@ -810,24 +832,13 @@ function formatJsonLike(value, raw) {
 function writeJsonLike(file, value, raw) {
   let was = raw ?? null;
   if (raw === void 0) try {
-    was = fs4.readFileSync(file, "utf8");
+    was = fs5.readFileSync(file, "utf8");
   } catch {
     was = null;
   }
   const out = formatJsonLike(value, was);
   if (out === was) return false;
-  fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  try {
-    fs4.writeFileSync(tmp, out);
-    fs4.renameSync(tmp, file);
-  } catch (e) {
-    try {
-      fs4.rmSync(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
+  writeFileAtomic(file, out);
   return true;
 }
 
@@ -1194,7 +1205,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     const g = auditGateStatus(base, screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
       const cross = g.auditFile.replace(/\.json$/, ".cross.json");
-      const crossCheckFile = cross !== g.auditFile && fs5.existsSync(path4.join(base, cross)) ? cross : null;
+      const crossCheckFile = cross !== g.auditFile && fs6.existsSync(path4.join(base, cross)) ? cross : null;
       auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
   } catch {
@@ -1352,7 +1363,7 @@ function main(argv) {
   const varsRead = readJson(varsFile, isTokensDoc);
   if (!("doc" in varsRead)) return cannotRead("the screen's variables", varsFile, varsRead.error);
   const doc = screen.doc, vars = varsRead.doc;
-  const hasDs = dsDir && fs5.existsSync(dsDir) && fs5.statSync(dsDir).isDirectory();
+  const hasDs = dsDir && fs6.existsSync(dsDir) && fs6.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const optional = (file, guard) => {
     if (!hasDs) return { doc: null };
@@ -1363,7 +1374,7 @@ function main(argv) {
   if ("error" in dsRead) return cannotRead("the design system's tokens", path4.join(dsDir, "tokens.json"), dsRead.error);
   if ("error" in catRead) return cannotRead("the component catalog", path4.join(dsDir, "components.local.json"), catRead.error);
   if ("error" in libRead) return cannotRead("the library component catalog", path4.join(dsDir, "components.library.json"), libRead.error);
-  const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs5.existsSync(f));
+  const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs6.existsSync(f));
   let mapKeys = /* @__PURE__ */ new Map();
   if (mapFile) {
     const m = readJson(mapFile, isCodeConnectMap);
@@ -1402,7 +1413,7 @@ function main(argv) {
     seedAll(plan);
     if (!writePlan(out, plan)) {
       const now = /* @__PURE__ */ new Date();
-      fs5.utimesSync(out, now, now);
+      fs6.utimesSync(out, now, now);
     }
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }

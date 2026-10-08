@@ -29,31 +29,6 @@ console.log("verify-run.ts — the interface:");
 safe("STATUS_SCHEMA and STATUS_PHASES are exported with the interface's values", () => VR.STATUS_SCHEMA === "designtwin/verify-status@2"
   && VR.STATUS_PHASES.join(",") === "queued,starting,renderer-found,renderer-ready,measuring,measured,driving,done,failed,blocked");
 
-console.log("writeFileAtomic — a reader sees the old file or the new one:");
-await block("writeFileAtomic — a reader sees the old file or the new one:", async () => {
-  const d = mk("dt-run-atomic-");
-  const f = path.join(d, "Plots.measured.json");
-  VR.writeFileAtomic(f, "{\"v\":1}\n");
-  VR.writeFileAtomic(f, "{\"v\":2}\n");
-  safe("writes and replaces; no tmp left", () => fs.readFileSync(f, "utf8") === "{\"v\":2}\n" && fs.readdirSync(d).length === 1);
-  // the rename fails (the target is a non-empty directory): the tmp file is removed, the error surfaces
-  const blocked = path.join(d, "Plots.report.json");
-  fs.mkdirSync(blocked); fs.writeFileSync(path.join(blocked, "keep"), "x");
-  let threw = false;
-  try { VR.writeFileAtomic(blocked, "new"); } catch { threw = true; }
-  safe("a failed rename throws and leaves no tmp file beside the target", () => threw && !fs.readdirSync(d).some((n) => n.includes(".tmp-")));
-  // the tmp write fails (read-only directory): the old file is left exactly as it was
-  const ro = path.join(d, "ro");
-  fs.mkdirSync(ro);
-  const old = path.join(ro, "Plots.png");
-  fs.writeFileSync(old, "old picture");
-  fs.chmodSync(ro, 0o555);
-  let threw2 = false;
-  try { VR.writeFileAtomic(old, "new picture"); } catch { threw2 = true; }
-  fs.chmodSync(ro, 0o755);
-  safe("a failed write leaves the old file intact and no tmp file", () => threw2 && fs.readFileSync(old, "utf8") === "old picture" && fs.readdirSync(ro).length === 1);
-});
-
 console.log("writeStatus / readStatus:");
 await block("writeStatus / readStatus:", async () => {
   const d = mk("dt-run-status-");

@@ -2,7 +2,7 @@
 
 
 // design-to-code/map-bootstrap.ts
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -585,8 +585,30 @@ function unionCatalog(sources) {
 var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + sources.map((s) => `${s.file} [${s.role}, ${s.catalog.components.length} component(s)]`).join(", ");
 
 // bridge/src/json-file.ts
+import fs5 from "node:fs";
+
+// bridge/src/atomic-write.ts
+import crypto from "node:crypto";
 import fs4 from "node:fs";
 import path3 from "node:path";
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+function writeFileAtomic(file, data, opts = {}) {
+  fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
+  const tmp = file + tmpSuffix();
+  try {
+    fs4.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.mode !== void 0) fs4.chmodSync(tmp, opts.mode);
+    fs4.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs4.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+
+// bridge/src/json-file.ts
 var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
 function formatJsonLike(value, raw) {
   if (raw === null) return JSON.stringify(value, null, 2) + "\n";
@@ -598,24 +620,13 @@ function formatJsonLike(value, raw) {
 function writeJsonLike(file, value, raw) {
   let was = raw ?? null;
   if (raw === void 0) try {
-    was = fs4.readFileSync(file, "utf8");
+    was = fs5.readFileSync(file, "utf8");
   } catch {
     was = null;
   }
   const out = formatJsonLike(value, was);
   if (out === was) return false;
-  fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  try {
-    fs4.writeFileSync(tmp, out);
-    fs4.renameSync(tmp, file);
-  } catch (e) {
-    try {
-      fs4.rmSync(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
+  writeFileAtomic(file, out);
   return true;
 }
 
@@ -848,7 +859,7 @@ ${usage}`);
   const others = { components: unionCatalog(sources.slice(1)).components.filter((c) => !!c.key && !catalog.components.some((n) => n.key === c.key)).map(({ id: _foreignId, ...c }) => c) };
   if (screenFile || proposalsFile) console.error(`map-bootstrap: ${catalogSetLine(sources)}`);
   const existingFile = existingArg || outFile;
-  const existingRaw = existingFile && fs5.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  const existingRaw = existingFile && fs6.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
   let existing = null;
   if (existingRaw !== null) {
     const valid = validateMap(existingRaw);
@@ -872,7 +883,7 @@ ${usage}`);
       return 1;
     }
     const out = JSON.stringify(map, null, 2) + "\n";
-    if (outFile) fs5.writeFileSync(outFile, out);
+    if (outFile) fs6.writeFileSync(outFile, out);
     else process.stdout.write(out);
     for (const sk of report.skipped) console.error(`warn  ${sk}`);
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) \u2192 ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` \u2014 wrote ${outFile}` : ""}`);
