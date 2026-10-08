@@ -35,6 +35,7 @@ import type { MeasuredVisual, ProbeFrame, Rect4, VerifyExpectation, VerifyRefere
 import { isVerifyReferenceImage } from "./doc-guards.ts";
 import { pctText, resolveInside } from "./verify-screen.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
+import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 
 // ---------------------------------------------------------------- budget
 /** The capture's own cap; what --max-time leaves is shared with behaviour, whose reserve (settle, capped close, write) it keeps. */
@@ -55,7 +56,7 @@ export type VisualPrep =
  *  design/verify/ when the expectation file sits in one, else `project` (--project / cwd). */
 export function referenceRoot(expected: string, project: string): string {
   const dir = path.resolve(path.dirname(expected));
-  return path.basename(dir) === "verify" && path.basename(path.dirname(dir)) === "design" ? path.dirname(path.dirname(dir)) : project;
+  return dir.endsWith(path.sep + VERIFY_DIR) ? path.dirname(path.dirname(dir)) : project;
 }
 export const REFERENCE_MALFORMED = "the expectation's referenceImage is malformed — re-run --expect";
 /** Is there a usable, unchanged reference for the expectation's first frame? Reads the PNG under `root` (referenceRoot; no
@@ -69,7 +70,7 @@ export function prepareVisual(exp: Partial<Pick<VerifyExpectation, "referenceIma
   if (!ri.usable) return { ok: false, why: ri.why };
   const fw = exp.frame?.w, fh = exp.frame?.h;
   if (typeof fw !== "number" || typeof fh !== "number" || fw < 1 || fh < 1) return { ok: false, why: "the expectation states no frame size" };
-  const file = resolveInside(root, ri.path, path.join(root, "design", "export"));
+  const file = resolveInside(root, ri.path, path.join(root, EXPORT_DIR));
   if (file === null) return { ok: false, why: `the reference path ${ri.path} is outside design/export — re-run --expect` };
   let bytes: Buffer;
   try { bytes = fs.readFileSync(file); } catch { return { ok: false, why: `the reference PNG ${ri.path} is missing — re-pull the screen, then re-run --expect` }; }

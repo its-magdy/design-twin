@@ -14,11 +14,12 @@ import { blockerIds, reportFindings } from "./audit.ts";
 import { legacyBlockerIds } from "./finding-id.ts";
 import { isAuditReport } from "./doc-guards.ts";
 import { readJson } from "./read-json.ts";
+import { AUDIT_DIR } from "../bridge/src/project-layout.ts";
 
 function slug(s: unknown): string { return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, ""); }
 
 function locateAuditFile(cwd: string, screenFile: string | null | undefined, screenName: string | null | undefined): string | null {
-  const dir = path.join(cwd, "design", "audit");
+  const dir = path.join(cwd, AUDIT_DIR);
   if (!fs.existsSync(dir)) return null;
   const base = screenFile ? path.basename(screenFile, ".json") : null;
   const candidates: string[] = [];

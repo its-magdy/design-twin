@@ -41,6 +41,7 @@ import { isJsonObject } from "./types.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
+import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
 
 export const STATUS_SCHEMA = "designtwin/verify-status@2";
 /** Every phase a status v2 can be in, in the order a run normally passes through them. */
@@ -152,7 +153,7 @@ export function runCacheOf(verifyDir: string): { dir: string; root: string } {
   if (root !== null) {
     const cache = path.join(root, "node_modules", ".cache", CACHE_NAME);
     const rel = path.relative(root, v).split(path.sep).join("/");
-    return { dir: rel === "design/verify" ? cache : path.join(cache, "dirs", shortSha(rel)), root };
+    return { dir: rel === VERIFY_DIR.split(path.sep).join("/") ? cache : path.join(cache, "dirs", shortSha(rel)), root };
   }
   return { dir: path.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
 }
@@ -320,7 +321,7 @@ export function publishStaged(stageDir: string, destDir: string): { published: s
 /** `<dir>/<S>`: S is a screen name (`--dir` defaults to design/verify); a path with a separator is taken as-is. */
 export function runBase(screen: string, dir: string | undefined): string {
   const s = screen.replace(/\.(status|measured|expected|evidence)\.json$/, "");
-  return /[\\/]/.test(s) && dir === undefined ? s : path.join(dir ?? path.join("design", "verify"), s);
+  return /[\\/]/.test(s) && dir === undefined ? s : path.join(dir ?? VERIFY_DIR, s);
 }
 
 /** The measured file's expectationSha256 (and runId, when it names one), or why it has none. */

@@ -9,6 +9,10 @@ import { isScreenDoc, screenRoots } from "./export-shape.ts";
 import { readOptionalDoc, readSplitFile } from "./catalog-input.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { isComponentsCatalog, isLibrariesIndex, isPageIndex, isPagesRootIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
+import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
+import { COMPONENTS as LIBRARY_COMPONENTS, INDEX as LIBRARIES_INDEX, ROOT as LIBRARIES_DIR } from "../bridge/src/library-layout.ts";
+
+const { TOKENS, STYLES_TEXT, COMPONENTS_LOCAL, COMPONENTS_LIBRARY } = DESIGN_SYSTEM_FILES;
 
 // `--design-system <dir>` names one of TWO layouts (bridge/src/design-system-layout.ts and
 // library-layout.ts): a design file's design-system/ (components.local.json + the sampled
@@ -27,15 +31,15 @@ export interface DesignSystemDir {
   isLibrary: boolean;
 }
 function readDesignSystemDir(dir: string): DesignSystemDir {
-  const local = path.join(dir, "components.local.json");
+  const local = path.join(dir, COMPONENTS_LOCAL);
   // a --as-library export: components.json and no components.local.json
-  const isLibrary = !fs.existsSync(local) && fs.existsSync(path.join(dir, "components.json"));
+  const isLibrary = !fs.existsSync(local) && fs.existsSync(path.join(dir, LIBRARY_COMPONENTS));
   return {
-    tokens: readOptionalDoc(path.join(dir, "tokens.json"), "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(isLibrary ? path.join(dir, "components.json") : local, "component catalog", isComponentsCatalog),
-    componentsLibrary: readOptionalDoc(path.join(dir, "components.library.json"), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path.join(dir, "styles.text.json"), "text styles", isTextStylesDoc),
-    componentsFile: isLibrary ? "components.json" : "components.local.json",
+    tokens: readOptionalDoc(path.join(dir, TOKENS), "design-system tokens", isTokensDoc),
+    components: readOptionalDoc(isLibrary ? path.join(dir, LIBRARY_COMPONENTS) : local, "component catalog", isComponentsCatalog),
+    componentsLibrary: readOptionalDoc(path.join(dir, COMPONENTS_LIBRARY), "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(path.join(dir, STYLES_TEXT), "text styles", isTextStylesDoc),
+    componentsFile: isLibrary ? LIBRARY_COMPONENTS : COMPONENTS_LOCAL,
     isLibrary,
   };
 }
@@ -60,22 +64,22 @@ function exportRootOf(screenFile: string | undefined, dsDir: string | undefined)
   }
   if (dsDir) {
     const parent = path.dirname(path.normalize(dsDir));
-    roots.push(path.basename(parent) === "libraries" ? path.dirname(parent) : parent);
+    roots.push(path.basename(parent) === LIBRARIES_DIR ? path.dirname(parent) : parent);
   }
-  return roots.find((r) => fs.existsSync(path.join(r, "libraries", "index.json"))) ?? null;
+  return roots.find((r) => fs.existsSync(path.join(r, LIBRARIES_DIR, LIBRARIES_INDEX))) ?? null;
 }
 // Every library the index lists. Read-only discovery: a missing or malformed index or catalog is
 // "no library", never an exit — the audit must still run on a project that has none.
 function findLibraryExports(screenFile: string | undefined, dsDir: string | undefined): LibraryExport[] {
   const root = exportRootOf(screenFile, dsDir);
   if (!root) return [];
-  const index = readJsonOrNull(path.join(root, "libraries", "index.json"), isLibrariesIndex);
+  const index = readJsonOrNull(path.join(root, LIBRARIES_DIR, LIBRARIES_INDEX), isLibrariesIndex);
   if (!index) return [];
   return index.libraries
     .filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)) // a directory NAME, never a path out of libraries/
     .map((r) => {
-      const rel = path.join(root, "libraries", r.dir);
-      return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path.join(rel, "components.json"), isComponentsCatalog) };
+      const rel = path.join(root, LIBRARIES_DIR, r.dir);
+      return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path.join(rel, LIBRARY_COMPONENTS), isComponentsCatalog) };
     });
 }
 
@@ -109,8 +113,8 @@ function discoverCatalogs(namedFile: string, screenFile?: string): DiscoveredCat
     seen.add(path.resolve(file));
     out.push({ file, role, catalog });
   };
-  for (const lib of findLibraryExports(screenFile, dir)) add(path.join(lib.rel, "components.json"), "library", lib.components);
-  const sample = path.join(dir, "components.library.json");
+  for (const lib of findLibraryExports(screenFile, dir)) add(path.join(lib.rel, LIBRARY_COMPONENTS), "library", lib.components);
+  const sample = path.join(dir, COMPONENTS_LIBRARY);
   add(sample, "library-sample", readJsonOrNull(sample, isComponentsCatalog));
   return out;
 }

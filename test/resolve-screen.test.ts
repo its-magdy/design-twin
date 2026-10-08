@@ -28,6 +28,7 @@ import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { check as ok, report } from "./assert.ts";
 import { deriveTitle, collectTexts } from "../bridge/src/pages-layout.ts";
+import { listPlans } from "../bridge/src/project-layout.ts";
 import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import type { ResolveScreenResult, PagesRootIndex } from "../design-to-code/types.ts";
 import type { TextWalkNode } from "../bridge/src/pages-layout.ts";
@@ -454,6 +455,17 @@ console.log("\nresolve-screen — DT-41: a non-root dir says so; <Layer>__<a>_<b
     const r = resolveScreen(dir, "  ", { planDir: path.join(dir, "plan") });
     return r.status !== "resolved";
   })());
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ---- listPlans: the one plan-directory listing (resolve-screen, verify-screen and verify-build all read through it)
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-listplans-"));
+  for (const f of ["b.json", "a.json", "notes.md", "c.json.bak", ".hidden.json"]) fs.writeFileSync(path.join(dir, f), "{}");
+  fs.mkdirSync(path.join(dir, "sub"));
+  ok("[listPlans] every *.json name, sorted; other files and subdirectories are left out",
+    JSON.stringify(listPlans(dir)) === JSON.stringify([".hidden.json", "a.json", "b.json"]));
+  ok("[listPlans] a directory that does not exist holds no plans", listPlans(path.join(dir, "missing")).length === 0);
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

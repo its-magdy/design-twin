@@ -508,6 +508,7 @@ var FileKeyCache = class {
 var fileKeyCache = new FileKeyCache();
 
 // bridge/src/design-system-layout.ts
+var DIR = "design-system";
 var COMPONENTS_DIR = "components";
 var TOKENS = "tokens.json";
 var STYLES_PAINT = "styles.paint.json";
@@ -518,6 +519,7 @@ var COMPONENTS_LOCAL = "components.local.json";
 var COMPONENTS_LIBRARY = "components.library.json";
 var HYGIENE = "hygiene.json";
 var MANIFEST = "design-system.json";
+var DESIGN_SYSTEM_DIR = DIR;
 var DESIGN_SYSTEM_FILES = {
   TOKENS,
   STYLES_PAINT,
@@ -992,7 +994,7 @@ function siblingFilesOf(f) {
     const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path2.dirname(dir);
     for (const name of DS_FILE_NAMES) {
       if (name === base) continue;
-      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path2.join(dsRoot, "design-system");
+      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path2.join(dsRoot, DESIGN_SYSTEM_DIR);
       out.push(path2.relative(process.cwd(), path2.join(siblingDir, name)));
     }
     return out;

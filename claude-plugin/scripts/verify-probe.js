@@ -3,7 +3,7 @@
 
 // design-to-code/verify-probe.ts
 import fs6 from "node:fs";
-import path6 from "node:path";
+import path7 from "node:path";
 import crypto5 from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -540,9 +540,9 @@ function freeHoverPoint(arg) {
   }
   return null;
 }
-function focusablePath(path7) {
+function focusablePath(path8) {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
-  const el = document.querySelector(path7);
+  const el = document.querySelector(path8);
   const f = el ? el.closest(FOCUSABLE) : null;
   if (!f) return null;
   const parts = [];
@@ -556,8 +556,8 @@ function focusablePath(path7) {
   parts.unshift("html");
   return parts.join(" > ");
 }
-function focusInfo(path7) {
-  const el = document.querySelector(path7);
+function focusInfo(path8) {
+  const el = document.querySelector(path8);
   const focused = !!el && document.activeElement === el;
   return { focused, focusVisible: focused && !!el && el.matches(":focus-visible") };
 }
@@ -821,7 +821,7 @@ function census(nodes, notMeasured) {
 }
 
 // design-to-code/verify-screen.ts
-import path4 from "node:path";
+import path5 from "node:path";
 
 // design-to-code/content-hash.ts
 import { spawnSync } from "node:child_process";
@@ -1170,7 +1170,7 @@ function readJsonOrNull(file, guard) {
 // design-to-code/verify-run.ts
 import fs3 from "node:fs";
 import os from "node:os";
-import path3 from "node:path";
+import path4 from "node:path";
 import crypto3 from "node:crypto";
 
 // design-to-code/cli-args.ts
@@ -1225,6 +1225,20 @@ ${usage}`);
   }
 }
 
+// bridge/src/project-layout.ts
+import path3 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+
 // design-to-code/verify-run.ts
 var STATUS_SCHEMA = "designtwin/verify-status@2";
 var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
@@ -1257,39 +1271,39 @@ function realpath(p) {
   return fs3.realpathSync(p);
 }
 function canonical2(p) {
-  const abs = path3.resolve(p);
+  const abs = path4.resolve(p);
   try {
     return realpath(abs);
   } catch {
-    const parent = path3.dirname(abs);
-    return parent === abs ? abs : path3.join(canonical2(parent), path3.basename(abs));
+    const parent = path4.dirname(abs);
+    return parent === abs ? abs : path4.join(canonical2(parent), path4.basename(abs));
   }
 }
-var hasPnp = (d) => exists(path3.join(d, ".pnp.cjs")) || exists(path3.join(d, ".pnp.js"));
+var hasPnp = (d) => exists(path4.join(d, ".pnp.cjs")) || exists(path4.join(d, ".pnp.js"));
 function isWorkspaceRoot(d) {
-  if (exists(path3.join(d, "pnpm-workspace.yaml"))) return true;
-  const r = readJson(path3.join(d, "package.json"), anyJson);
+  if (exists(path4.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path4.join(d, "package.json"), anyJson);
   return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
 }
 function installRootOf(dir) {
   let P = null;
-  for (let d = dir; ; d = path3.dirname(d)) {
-    if (exists(path3.join(d, "package.json"))) {
+  for (let d = dir; ; d = path4.dirname(d)) {
+    if (exists(path4.join(d, "package.json"))) {
       P = d;
       break;
     }
-    if (exists(path3.join(d, ".git")) || path3.dirname(d) === d) return null;
+    if (exists(path4.join(d, ".git")) || path4.dirname(d) === d) return null;
   }
-  if (isDir(path3.join(P, "node_modules"))) return P;
+  if (isDir(path4.join(P, "node_modules"))) return P;
   let ws = null;
-  for (let d = P; ; d = path3.dirname(d)) {
+  for (let d = P; ; d = path4.dirname(d)) {
     if (isWorkspaceRoot(d)) {
       ws = d;
       break;
     }
-    if (exists(path3.join(d, ".git")) || path3.dirname(d) === d) break;
+    if (exists(path4.join(d, ".git")) || path4.dirname(d) === d) break;
   }
-  if (ws !== null && isDir(path3.join(ws, "node_modules"))) return ws;
+  if (ws !== null && isDir(path4.join(ws, "node_modules"))) return ws;
   if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
   return P;
 }
@@ -1297,11 +1311,11 @@ function runCacheOf(verifyDir) {
   const v = canonical2(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
-    const cache = path3.join(root, "node_modules", ".cache", CACHE_NAME);
-    const rel = path3.relative(root, v).split(path3.sep).join("/");
-    return { dir: rel === "design/verify" ? cache : path3.join(cache, "dirs", shortSha(rel)), root };
+    const cache = path4.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path4.relative(root, v).split(path4.sep).join("/");
+    return { dir: rel === VERIFY_DIR.split(path4.sep).join("/") ? cache : path4.join(cache, "dirs", shortSha(rel)), root };
   }
-  return { dir: path3.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+  return { dir: path4.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
 }
 function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
@@ -1332,8 +1346,8 @@ function inRunCache(verifyDir, fn) {
     throw e;
   }
 }
-var liveStatusFile = (base) => path3.join(runCacheDir(path3.dirname(base)), path3.basename(base) + ".status.json");
-var stageDirOf = (base, runId) => path3.join(runCacheDir(path3.dirname(base)), "stage", runId);
+var liveStatusFile = (base) => path4.join(runCacheDir(path4.dirname(base)), path4.basename(base) + ".status.json");
+var stageDirOf = (base, runId) => path4.join(runCacheDir(path4.dirname(base)), "stage", runId);
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
@@ -1368,7 +1382,7 @@ function writeStatus(base, p) {
   const published = p.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...p.published || []])].sort() : void 0;
   const doc = {
     schema: STATUS_SCHEMA,
-    screen: path3.basename(base),
+    screen: path4.basename(base),
     runId: p.runId,
     rev: same ? same.rev + 1 : 1,
     phase: p.phase,
@@ -1381,7 +1395,7 @@ function writeStatus(base, p) {
     ...published !== void 0 ? { published } : {}
   };
   const live = liveStatusFile(base);
-  inRunCache(path3.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+  inRunCache(path4.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
   return doc;
 }
 
@@ -1501,8 +1515,8 @@ function normFamily(v) {
   return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
 function resolveInside(base, rel, within = base) {
-  const root = path4.resolve(within), file = path4.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path4.sep) ? file : null;
+  const root = path5.resolve(within), file = path5.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path5.sep) ? file : null;
 }
 var KNOWN_NODE_KEYS = /* @__PURE__ */ new Set([
   "nodeId",
@@ -2273,8 +2287,8 @@ function ownClear(_arg) {
   window.__dtOwn = null;
   return true;
 }
-function syntheticClick(path7) {
-  const el = document.querySelector(path7);
+function syntheticClick(path8) {
+  const el = document.querySelector(path8);
   if (!el) return false;
   el.click();
   return true;
@@ -5285,7 +5299,7 @@ function readAxeResult(x, fallbackVersion) {
 
 // design-to-code/probe-visual.ts
 import fs5 from "node:fs";
-import path5 from "node:path";
+import path6 from "node:path";
 import crypto4 from "node:crypto";
 import { setTimeout as sleep3 } from "node:timers/promises";
 
@@ -5523,8 +5537,8 @@ function visualBudget(now, deadline, cap = VISUAL_CAP_MS, reserve = BEHAVIOUR_RE
 var FONTS_CAP_MS = 5e3;
 var BUILT_CAP = 2e3;
 function referenceRoot(expected, project) {
-  const dir = path5.resolve(path5.dirname(expected));
-  return path5.basename(dir) === "verify" && path5.basename(path5.dirname(dir)) === "design" ? path5.dirname(path5.dirname(dir)) : project;
+  const dir = path6.resolve(path6.dirname(expected));
+  return dir.endsWith(path6.sep + VERIFY_DIR) ? path6.dirname(path6.dirname(dir)) : project;
 }
 var REFERENCE_MALFORMED = "the expectation's referenceImage is malformed \u2014 re-run --expect";
 function prepareVisual(exp, root) {
@@ -5536,7 +5550,7 @@ function prepareVisual(exp, root) {
   if (!ri.usable) return { ok: false, why: ri.why };
   const fw = exp.frame?.w, fh = exp.frame?.h;
   if (typeof fw !== "number" || typeof fh !== "number" || fw < 1 || fh < 1) return { ok: false, why: "the expectation states no frame size" };
-  const file = resolveInside(root, ri.path, path5.join(root, "design", "export"));
+  const file = resolveInside(root, ri.path, path6.join(root, EXPORT_DIR));
   if (file === null) return { ok: false, why: `the reference path ${ri.path} is outside design/export \u2014 re-run --expect` };
   let bytes;
   try {
@@ -5736,24 +5750,24 @@ function isPlaywrightModule(x) {
   return typeof c === "object" && c !== null && "launch" in c && typeof c.launch === "function";
 }
 function installHint(dir) {
-  const has = (f) => fs6.existsSync(path6.join(dir, f));
+  const has = (f) => fs6.existsSync(path7.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm add -D playwright && pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn add -D playwright && yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bun add -d playwright && bunx playwright install chromium";
   return "npm i -D playwright && npx playwright install chromium";
 }
 function browserHint(dir) {
-  const has = (f) => fs6.existsSync(path6.join(dir, f));
+  const has = (f) => fs6.existsSync(path7.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bunx playwright install chromium";
   return "npx playwright install chromium";
 }
 function projectRequire(dir) {
-  return createRequire(path6.join(path6.resolve(dir), "package.json"));
+  return createRequire(path7.join(path7.resolve(dir), "package.json"));
 }
 function resolvePlaywright(dir) {
-  const abs = path6.resolve(dir);
+  const abs = path7.resolve(dir);
   const req = projectRequire(abs);
   const tried = [];
   for (const name of PLAYWRIGHT_PACKAGES) {
@@ -5783,8 +5797,8 @@ function resolvePlaywright(dir) {
     }
     return { ok: true, pkg: name, version, mod, file };
   }
-  const pnp = fs6.existsSync(path6.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
-  return { ok: false, reason: `no playwright package resolvable from ${path6.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
+  const pnp = fs6.existsSync(path7.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
+  return { ok: false, reason: `no playwright package resolvable from ${path7.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
 }
 function resolveAxe(dir) {
   const req = projectRequire(dir);
@@ -5840,7 +5854,7 @@ function browserPathError(p) {
 }
 var SELF2 = fileURLToPath3(import.meta.url);
 function probeVersion() {
-  for (const p of [path6.join(path6.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path6.join(path6.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
+  for (const p of [path7.join(path7.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path7.join(path7.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
     const doc = readJsonOrNull(p, isJsonObject);
     if (doc && typeof doc.version === "string") return doc.version;
   }
@@ -6607,7 +6621,7 @@ async function main(argv) {
     "browser-path": { type: "string" }
   };
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: false }));
-  const project = path6.resolve(f.project ?? ".");
+  const project = path7.resolve(f.project ?? ".");
   const timeout = f.timeout === void 0 ? 3e4 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) {
     console.error(`verify-probe: --timeout must be a positive number of milliseconds
@@ -6662,7 +6676,7 @@ ${USAGE}`);
       return 2;
     }
     steps = parsed.steps;
-    stepsSource = `--steps ${(path6.relative(process.cwd(), path6.resolve(f.steps)) || f.steps).split(path6.sep).join("/")}`;
+    stepsSource = `--steps ${(path7.relative(process.cwd(), path7.resolve(f.steps)) || f.steps).split(path7.sep).join("/")}`;
   }
   let expectation = null, expBytes = null;
   let viewport = { w: 1280, h: 800 };
@@ -6687,8 +6701,8 @@ ${USAGE}`);
     } else if (typeof fr.w === "number" && typeof fr.h === "number") viewport = { w: Math.round(fr.w), h: Math.round(fr.h) };
     else notes.push("the expectation states no frame size \u2014 measured at 1280x800; pass --viewport");
   }
-  const outBase = f.out ?? (f.expected ? path6.join(path6.dirname(f.expected), path6.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
-  const statusBase = f.expected ? path6.join(path6.dirname(f.expected), path6.basename(outBase)) : "";
+  const outBase = f.out ?? (f.expected ? path7.join(path7.dirname(f.expected), path7.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
+  const statusBase = f.expected ? path7.join(path7.dirname(f.expected), path7.basename(outBase)) : "";
   const expSha = expBytes ? sha256Of(expBytes) : void 0;
   const runId = f.run !== void 0 && !f.check && statusBase ? f.run : void 0;
   const endedRun = () => {
@@ -6746,7 +6760,7 @@ ${USAGE}`);
     const browserLine = `chromium ${identity2.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`;
     if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
       await browser.close();
-      console.log(`ok  ${res.pkg} ${res.version} (from ${path6.relative(project, res.file) || res.file}) \xB7 ${browserLine} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
+      console.log(`ok  ${res.pkg} ${res.version} (from ${path7.relative(project, res.file) || res.file}) \xB7 ${browserLine} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
       return 0;
     }
     let run2;
@@ -6842,7 +6856,7 @@ ${USAGE}`);
               await reachPage(page, attachNavLog(page), probeOpts);
             },
             axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
-            forcedPng: (outBase + ".forced-colors.png").split(path6.sep).join("/")
+            forcedPng: (outBase + ".forced-colors.png").split(path7.sep).join("/")
           });
           behaviour2 = r2.behaviour;
           forcedPng2 = r2.forcedPng;
@@ -6910,7 +6924,7 @@ ${USAGE}`);
   const diffPath = outBase + ".diff.png";
   let visual = { version: 1, ran: false, why: prep.ok ? "not captured" : prep.why };
   let diffPng = null;
-  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path6.sep).join("/"), captureMs }));
+  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path7.sep).join("/"), captureMs }));
   try {
     if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
     else if (fs6.existsSync(diffPath)) fs6.rmSync(diffPath, { force: true });
@@ -6922,7 +6936,7 @@ ${USAGE}`);
     measuredAt: (/* @__PURE__ */ new Date()).toISOString(),
     renderer: "playwright-chromium",
     viewport: `${viewport.w}x${viewport.h}`,
-    artifacts: [png.split(path6.sep).join("/")],
+    artifacts: [png.split(path7.sep).join("/")],
     expectationSha256: sha256Of(expBytes),
     probe: identity,
     ...firstFrame ? { frame: frameOut(firstFrame) } : {},
@@ -6976,9 +6990,9 @@ ${USAGE}`);
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`);
   if (statusRefused && runId !== void 0) {
-    const outDir = path6.resolve(path6.dirname(outBase)), verifyDir = path6.resolve(path6.dirname(statusBase));
-    const findable = outDir === verifyDir || outDir === path6.resolve(stageDirOf(statusBase, runId));
-    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path6.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
+    const outDir = path7.resolve(path7.dirname(outBase)), verifyDir = path7.resolve(path7.dirname(statusBase));
+    const findable = outDir === verifyDir || outDir === path7.resolve(stageDirOf(statusBase, runId));
+    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path7.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
   }
   if (endedMeanwhile) return 2;
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);

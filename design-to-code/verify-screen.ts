@@ -58,6 +58,7 @@ import type {
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 
 // ---------------------------------------------------------------- tolerances
 //
@@ -1107,7 +1108,7 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   if (!reference) return unusable(null, "the export has no reference PNG for this screen — re-pull it with its reference");
   const p = "design/export/" + reference;
   // confined to design/export (lexically — the root used here is any absolute one)
-  if (resolveInside(path.resolve("design", "export"), reference) === null) return unusable(p, `the reference pointer ${reference} leads outside design/export — re-pull the screen`);
+  if (resolveInside(path.resolve(EXPORT_DIR), reference) === null) return unusable(p, `the reference pointer ${reference} leads outside design/export — re-pull the screen`);
   if (!root || root.reference !== reference) return unusable(p, "the reference PNG belongs to another frame than the first one — only the first frame is diffed");
   const box = root.box;
   if (!box || !(num(box.w) && box.w > 0) || !(num(box.h) && box.h > 0)) return unusable(p, "the frame has no size in the export (box.w/h) — the reference cannot be placed");
@@ -3236,15 +3237,14 @@ function findExistingExpectedFor(dir: string, nodeId: string | undefined, ownTar
 // The plan(s) under design/plan/ (relative to the working directory) that describe this frame: by the frame's
 // node id (plan.nodeId, or a `<Layer>__<id>` file name) or by name (the plan's own stem, or its export's).
 function plansFor(frameId: string | undefined, stem: string): Array<{ file: string; plan: Plan }> {
-  const planDir = path.join("design", "plan");
   const hits: Array<{ file: string; plan: Plan }> = [];
-  for (const f of fs.existsSync(planDir) ? fs.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
+  for (const f of listPlans(PLAN_DIR)) {
     // a plan under design/plan/ (plan-skeleton.ts); one that is not a readable plan describes nothing
-    const p = readJsonOrNull(path.join(planDir, f), isPlan);
+    const p = readJsonOrNull(path.join(PLAN_DIR, f), isPlan);
     if (!p) continue;
     const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path.basename(f, ".json")));
     const byName = path.basename(f, ".json") === stem || (p.file && path.basename(String(p.file), ".json") === stem);
-    if (byId || byName) hits.push({ file: path.join(planDir, f).split(path.sep).join("/"), plan: p });
+    if (byId || byName) hits.push({ file: path.join(PLAN_DIR, f).split(path.sep).join("/"), plan: p });
   }
   return hits;
 }
@@ -3399,13 +3399,13 @@ function main(argv: string[]): number | Promise<number> {
     if (firstFile === undefined) { console.error("--expect needs at least one screen export\n" + USAGE); return 2; }
     const docs: ExpectInput[] = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json") }));
     // the export's own index (relative to the project root) tells which destinations were exported
-    const indexFile = path.join("design", "export", "pages", "index.json");
+    const indexFile = path.join(EXPORT_DIR, "pages", "index.json");
     const idx = readJson(indexFile, isPagesRootIndex);
     if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} — interaction destinations are checked against the given export(s) only`);
     // The root index is REPLACED by a page walk (only single-screen pulls merge into it), so the frames an earlier
     // walk exported live on only in their page's own pages/<dir>/index.json: read every one on disk too, or a
     // destination exported by the first walk reads as "never exported" after the second.
-    const pagesDir = path.join("design", "export", "pages");
+    const pagesDir = path.join(EXPORT_DIR, "pages");
     const pageRows: IndexRow[] = [];
     let dirs: string[] = [];
     try { dirs = fs.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { /* no pages dir */ }
@@ -3418,9 +3418,9 @@ function main(argv: string[]): number | Promise<number> {
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\u0000${l.sourceFile ?? ""}`))];
     // (rows only: the root index's own top-level sourceFile names its last walk, not the page-dir rows merged in)
     // sibling screen exports (aliases for a shared shell's nodes) — read lazily, only the same file's rows
-    const exportRoot = path.join("design", "export");
+    const exportRoot = EXPORT_DIR;
     const readSibling = (file: string): ScreenDoc | null => readJsonOrNull(path.join(exportRoot, file), isScreenDoc);
-    const outBase0 = out || path.join("design", "verify", path.basename(firstFile, ".json"));
+    const outBase0 = out || path.join(VERIFY_DIR, path.basename(firstFile, ".json"));
     // the plan's interactions[] — the plan --compare will pick too (choosePlan)
     let flagged: { file: string; plan: Plan } | undefined;
     if (planFlag !== undefined) {
@@ -3631,7 +3631,7 @@ function main(argv: string[]): number | Promise<number> {
   // Same rule as --expect: default to the EXPECTATION file's own basename (stripping the
   // `.expected` suffix it was written with), so `--compare <Screen>.expected.json <measured.json>`
   // always reports under `<Screen>.report.*`, never a second name for the same screen.
-  const compareBase = out || path.join("design", "verify", path.basename(expFile, ".json").replace(/\.expected$/, ""));
+  const compareBase = out || path.join(VERIFY_DIR, path.basename(expFile, ".json").replace(/\.expected$/, ""));
   // the report this run is about to overwrite is the coverage baseline — read BEFORE writing.
   // --against names another one. An explicit file that cannot be read is an error; an unreadable implicit
   // one is only noted (it is about to be replaced anyway).

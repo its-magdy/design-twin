@@ -36,6 +36,7 @@ export const EXPORT_SUBDIR = "export";
 export const EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
 export const TARGET_FILE = path.join(DESIGN_DIR, "target.json");
 export const MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
+export const LEGACY_MAP_FILE = "codeconnect.local.json"; // the repo-root map of projects that predate design/
 export const PLAN_DIR = path.join(DESIGN_DIR, "plan");
 export const AUDIT_DIR = path.join(DESIGN_DIR, "audit");
 export const VERIFY_DIR = path.join(DESIGN_DIR, "verify");
@@ -116,9 +117,16 @@ export interface MapFileInfo {
 export function findMapFile(cwd: string): MapFileInfo {
   const modern = path.join(cwd, MAP_FILE);
   if (fs.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
-  const legacy = path.join(cwd, "codeconnect.local.json");
-  if (fs.existsSync(legacy)) return { file: legacy, rel: "codeconnect.local.json", legacy: true };
+  const legacy = path.join(cwd, LEGACY_MAP_FILE);
+  if (fs.existsSync(legacy)) return { file: legacy, rel: LEGACY_MAP_FILE, legacy: true };
   return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
+}
+
+// The plan files in a plan directory (PLAN_DIR, or one a caller names): every `*.json` name, sorted so every
+// reader walks them in the same order. A directory that does not exist holds none.
+export function listPlans(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
 }
 
 // Shipped into design/ by `dtwin init`, because the one thing this layout has to communicate is which

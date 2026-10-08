@@ -2,8 +2,8 @@
 
 
 // design-to-code/plan-skeleton.ts
-import fs6 from "node:fs";
-import path4 from "node:path";
+import fs7 from "node:fs";
+import path5 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -235,18 +235,18 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path5, parent, depth) {
+  (function go(node, parentHidden, path6, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path5, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path6, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path5 ? path5 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path6 ? path6 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
 // design-to-code/audit-gate.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
+import fs4 from "node:fs";
+import path3 from "node:path";
 
 // design-to-code/color.ts
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
@@ -430,7 +430,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path5, message) => errors.push({ path: path5, message });
+  const err = (path6, message) => errors.push({ path: path6, message });
   if (!isObj(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -734,6 +734,59 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
+// bridge/src/design-system-layout.ts
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var STYLES_PAINT = "styles.paint.json";
+var STYLES_TEXT = "styles.text.json";
+var STYLES_EFFECT = "styles.effect.json";
+var STYLES_GRID = "styles.grid.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var DESIGN_SYSTEM_FILES = {
+  TOKENS,
+  STYLES_PAINT,
+  STYLES_TEXT,
+  STYLES_EFFECT,
+  STYLES_GRID,
+  COMPONENTS_LOCAL,
+  COMPONENTS_LIBRARY,
+  COMPONENTS_DIR,
+  HYGIENE,
+  MANIFEST
+};
+
+// bridge/src/library-layout.ts
+var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+
+// design-to-code/design-system-dir.ts
+var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
+
+// bridge/src/project-layout.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path2.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path2.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path2.join(DESIGN_DIR, "codeconnect.local.json");
+var LEGACY_MAP_FILE = "codeconnect.local.json";
+var PLAN_DIR = path2.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path2.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path2.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+function findMapFile(cwd) {
+  const modern = path2.join(cwd, MAP_FILE);
+  if (fs3.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  const legacy = path2.join(cwd, LEGACY_MAP_FILE);
+  if (fs3.existsSync(legacy)) return { file: legacy, rel: LEGACY_MAP_FILE, legacy: true };
+  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
+}
+
 // design-to-code/cross-check.ts
 if (false) process.exitCode = main(process.argv.slice(2));
 
@@ -757,18 +810,18 @@ function slug(s) {
   return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 function locateAuditFile(cwd, screenFile, screenName) {
-  const dir = path2.join(cwd, "design", "audit");
-  if (!fs3.existsSync(dir)) return null;
-  const base = screenFile ? path2.basename(screenFile, ".json") : null;
+  const dir = path3.join(cwd, AUDIT_DIR);
+  if (!fs4.existsSync(dir)) return null;
+  const base = screenFile ? path3.basename(screenFile, ".json") : null;
   const candidates = [];
-  if (base) candidates.push(path2.join(dir, base + ".json"));
+  if (base) candidates.push(path3.join(dir, base + ".json"));
   let entries = [];
   try {
-    entries = fs3.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes("."));
+    entries = fs4.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes("."));
   } catch {
     entries = [];
   }
-  for (const c of candidates) if (fs3.existsSync(c)) return path2.relative(cwd, c).split(path2.sep).join("/");
+  for (const c of candidates) if (fs4.existsSync(c)) return path3.relative(cwd, c).split(path3.sep).join("/");
   const wantSlug = slug(screenName);
   if (wantSlug) {
     const stem = (f) => f.replace(/\.json$/, "");
@@ -781,14 +834,14 @@ function locateAuditFile(cwd, screenFile, screenName) {
       const n = nameOf(f);
       return n !== null && slug(n) === wantSlug;
     });
-    if (hit) return path2.relative(cwd, path2.join(dir, hit)).split(path2.sep).join("/");
+    if (hit) return path3.relative(cwd, path3.join(dir, hit)).split(path3.sep).join("/");
   }
   return null;
 }
 function auditGateStatus(cwd, screenFile, screenName) {
   const rel = locateAuditFile(cwd, screenFile, screenName);
   if (!rel) return { auditFile: null, blockers: [], legacyBlockers: [] };
-  const r = readJson(path2.join(cwd, rel), isAuditReport);
+  const r = readJson(path3.join(cwd, rel), isAuditReport);
   if (!("doc" in r)) return { auditFile: rel, blockers: [], legacyBlockers: [], unreadable: true, error: r.error };
   return { auditFile: rel, blockers: blockerIds(r.doc), legacyBlockers: legacyBlockerIds(reportFindings(r.doc)) };
 }
@@ -797,23 +850,23 @@ function auditGateStatus(cwd, screenFile, screenName) {
 import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/json-file.ts
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 
 // bridge/src/atomic-write.ts
 import crypto from "node:crypto";
-import fs4 from "node:fs";
-import path3 from "node:path";
+import fs5 from "node:fs";
+import path4 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
 function writeFileAtomic(file, data, opts = {}) {
-  fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
+  fs5.mkdirSync(path4.dirname(path4.resolve(file)), { recursive: true });
   const tmp = file + tmpSuffix();
   try {
-    fs4.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
-    if (opts.mode !== void 0) fs4.chmodSync(tmp, opts.mode);
-    fs4.renameSync(tmp, file);
+    fs5.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.mode !== void 0) fs5.chmodSync(tmp, opts.mode);
+    fs5.renameSync(tmp, file);
   } catch (e) {
     try {
-      fs4.rmSync(tmp, { force: true });
+      fs5.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -832,7 +885,7 @@ function formatJsonLike(value, raw) {
 function writeJsonLike(file, value, raw) {
   let was = raw ?? null;
   if (raw === void 0) try {
-    was = fs5.readFileSync(file, "utf8");
+    was = fs6.readFileSync(file, "utf8");
   } catch {
     was = null;
   }
@@ -1197,7 +1250,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };
   const nodeId = exp && exp.nodeId || root && root.id || null;
   const title = indexRow && indexRow.title;
-  const rel = screenFile ? path4.relative(cwd || process.cwd(), path4.resolve(screenFile)).split(path4.sep).join("/") : null;
+  const rel = screenFile ? path5.relative(cwd || process.cwd(), path5.resolve(screenFile)).split(path5.sep).join("/") : null;
   const screenName = String(title || exp && exp.screen || root && root.name || "").trim() || null;
   let auditGate = null;
   try {
@@ -1205,14 +1258,14 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     const g = auditGateStatus(base, screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
       const cross = g.auditFile.replace(/\.json$/, ".cross.json");
-      const crossCheckFile = cross !== g.auditFile && fs6.existsSync(path4.join(base, cross)) ? cross : null;
+      const crossCheckFile = cross !== g.auditFile && fs7.existsSync(path5.join(base, cross)) ? cross : null;
       auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
   } catch {
   }
   return {
     schema: "designtwin/plan@2",
-    screen: screenFile ? path4.basename(screenFile).replace(/\.json$/, "") : null,
+    screen: screenFile ? path5.basename(screenFile).replace(/\.json$/, "") : null,
     screenName,
     nodeId,
     route: route || null,
@@ -1332,8 +1385,8 @@ function seed(plan, from, label) {
 }
 var isIndexDoc = (x) => isPagesRootIndex(x) || isPageIndex(x);
 function findIndexRow(screenFile, nodeId) {
-  const dir = path4.dirname(path4.resolve(screenFile));
-  for (const idx of [path4.join(dir, "..", "index.json"), path4.join(dir, "index.json")]) {
+  const dir = path5.dirname(path5.resolve(screenFile));
+  for (const idx of [path5.join(dir, "..", "index.json"), path5.join(dir, "index.json")]) {
     const d = readJsonOrNull(idx, isIndexDoc);
     const hit = (d && d.layers || []).find((r) => r.id === nodeId);
     if (hit) return hit;
@@ -1363,18 +1416,20 @@ function main(argv) {
   const varsRead = readJson(varsFile, isTokensDoc);
   if (!("doc" in varsRead)) return cannotRead("the screen's variables", varsFile, varsRead.error);
   const doc = screen.doc, vars = varsRead.doc;
-  const hasDs = dsDir && fs6.existsSync(dsDir) && fs6.statSync(dsDir).isDirectory();
+  const hasDs = dsDir && fs7.existsSync(dsDir) && fs7.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const optional = (file, guard) => {
     if (!hasDs) return { doc: null };
-    const r = readJson(path4.join(dsDir, file), guard);
+    const r = readJson(path5.join(dsDir, file), guard);
     return "doc" in r ? r : r.missing ? { doc: null } : { error: r.error };
   };
-  const dsRead = optional("tokens.json", isTokensDoc), catRead = optional("components.local.json", isComponentsCatalog), libRead = optional("components.library.json", isComponentsCatalog);
-  if ("error" in dsRead) return cannotRead("the design system's tokens", path4.join(dsDir, "tokens.json"), dsRead.error);
-  if ("error" in catRead) return cannotRead("the component catalog", path4.join(dsDir, "components.local.json"), catRead.error);
-  if ("error" in libRead) return cannotRead("the library component catalog", path4.join(dsDir, "components.library.json"), libRead.error);
-  const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs6.existsSync(f));
+  const { TOKENS: TOKENS4, COMPONENTS_LOCAL: COMPONENTS_LOCAL3, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY3 } = DESIGN_SYSTEM_FILES;
+  const dsRead = optional(TOKENS4, isTokensDoc), catRead = optional(COMPONENTS_LOCAL3, isComponentsCatalog), libRead = optional(COMPONENTS_LIBRARY3, isComponentsCatalog);
+  if ("error" in dsRead) return cannotRead("the design system's tokens", path5.join(dsDir, TOKENS4), dsRead.error);
+  if ("error" in catRead) return cannotRead("the component catalog", path5.join(dsDir, COMPONENTS_LOCAL3), catRead.error);
+  if ("error" in libRead) return cannotRead("the library component catalog", path5.join(dsDir, COMPONENTS_LIBRARY3), libRead.error);
+  const mapAt = findMapFile(process.cwd());
+  const mapFile = mapFlag || (mapAt.missing ? void 0 : mapAt.rel);
   let mapKeys = /* @__PURE__ */ new Map();
   if (mapFile) {
     const m = readJson(mapFile, isCodeConnectMap);
@@ -1390,7 +1445,7 @@ function main(argv) {
   }
   const seedAll = (plan) => {
     for (const sd of seeds) {
-      const n = seed(plan, sd.plan, path4.basename(sd.file));
+      const n = seed(plan, sd.plan, path5.basename(sd.file));
       console.error(`plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " \u2014 review them (seededFrom)" : ""));
     }
   };
@@ -1413,7 +1468,7 @@ function main(argv) {
     seedAll(plan);
     if (!writePlan(out, plan)) {
       const now = /* @__PURE__ */ new Date();
-      fs6.utimesSync(out, now, now);
+      fs7.utimesSync(out, now, now);
     }
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }

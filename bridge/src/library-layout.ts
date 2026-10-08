@@ -27,6 +27,7 @@
 
 import type { PageLayoutFile } from "./pages-layout.ts";
 import { ifDefined } from "./json-util.ts";
+import { DESIGN_SYSTEM_FILES } from "./design-system-layout.ts";
 import type {
   TokensDoc, PaintStylesDoc, TextStylesDoc, EffectStylesDoc, GridStylesDoc, HygieneDoc, CatalogComponent,
   ComponentsCatalog, DesignSystemStyles, DesignSystemDoc, LibraryStamp, LibraryCounts, LibraryManifest,
@@ -52,13 +53,10 @@ export interface LibraryLayout {
 
 export const ROOT = "libraries";
 export const INDEX = "index.json"; // per-directory self-description; also the name of the libraries/ index
-const TOKENS = "tokens.json";
-const STYLES_PAINT = "styles.paint.json";
-const STYLES_TEXT = "styles.text.json";
-const STYLES_EFFECT = "styles.effect.json";
-const STYLES_GRID = "styles.grid.json";
-const COMPONENTS = "components.json";
-const HYGIENE = "hygiene.json";
+// The token, style and hygiene parts keep design-system/'s file names; the catalog differs: a library's own full
+// definitions are components.json (design-system/ splits local and library-sampled components).
+const { TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, HYGIENE } = DESIGN_SYSTEM_FILES;
+export const COMPONENTS = "components.json";
 
 // Filesystem-safe, stable, lowercase. Same spirit as pages-layout.ts's `safe`, kept local so this
 // module stays dependency-free.
