@@ -344,7 +344,7 @@ console.log("build-screen docs (group 12b):");
     /\*\*Behaviour and accessibility\b/.test(verifySkill) && /never change the verdict/.test(verifySkill) && /Stop hook/.test(verifySkill)
     && /a measurable accessibility failure is never waived/.test(verifySkill) && /raise a designer question/.test(verifySkill));
   check("[12b] verify skill: copy report.behaviour.summary into plan.verification.a11y (tool, violations = fail, warnings = warn)",
-    /copies `report\.behaviour\.summary` into `plan\.verification\.a11y`/.test(verifySkill) && /tool: "verify-probe\[\+axe-core x\.y\]"/.test(verifySkill)
+    /copies `report\.behaviour\.summary` into `plan\.verification\.a11y`/.test(verifySkill) && /`tool` being `"axe-core <version>"` when axe-core ran, else\s+`"verify-probe behaviour checks"`/.test(verifySkill) // L4: the strings plan-record writes
     && /violations: summary\.fail/.test(verifySkill) && /warnings: summary\.warn/.test(verifySkill));
   check("[12b fix1] verify skill: a11y.report names the report copied from; summary.fail counts a +N more row's elements; keys only on a button-like opener, outside clicks only on a backdrop, the safe close never a link, closed-menu openers not-run",
     /report: "<the report\.json you copied it from>"/.test(verifySkill) && /`summary\.fail` counts the elements behind a "\+N more" row/.test(verifySkill)
@@ -632,7 +632,7 @@ console.log("build-screen docs (group 15, quick keys + export docs):");
   const libFirst = ([["README", readme], ["ARCHITECTURE", arch], ["TESTING", testing], ["extract", ext], ["help", help]] as const)
     .filter(([, d]) => /is the step \*before\* that|intended order is `listLibraries`|dtwin list libraries\s+# 1\.|then scope by library|Before any pull, run `node bridge\/src\/figma-pull\.ts --list-libraries`|\(do this first\)/.test(d)).map(([n]) => n);
   check("[M5-1] README, ARCHITECTURE, TESTING, extract, help: list libraries is never the default first step" + (libFirst.length ? " (" + libFirst.join(", ") + ")" : ""),
-    libFirst.length === 0 && /`figma_list_libraries` \(no arguments\) is a side step/.test(readme) && /`listLibraries` is a side step, never the default first one/.test(arch) && /Not a default first step/.test(testing));
+    libFirst.length === 0 && /`figma_list_libraries` \(optional `client`, like every Figma tool\) is a side step/.test(readme) && /`listLibraries` is a side step, never the default first one/.test(arch) && /Not a default first step/.test(testing));
   const oneAtATime = ([["README", readme], ["extract", ext], ["help", help]] as const).filter(([, d]) => /variable collections one at a time|collections one at a time/.test(d)).map(([n]) => n);
   check("[L5-1] README, extract, help: one Figma call per enabled library collection, never \"one at a time\"" + (oneAtATime.length ? " (" + oneAtATime.join(", ") + ")" : ""),
     oneAtATime.length === 0 && [readme, ext, help].every((d) => /one Figma call per enabled library (variable )?collection/.test(d)));
@@ -645,7 +645,7 @@ console.log("build-screen docs (group 15, quick keys + export docs):");
     /`design\/export\/SCHEMA\.md` holds the scripting quick keys/.test(exportLayout) && /SCHEMA\.md \(scripting quick keys\)/.test(arch) && /under another registration key the prefix differs/.test(help));
   // F2 LOW-2: the extract index paragraph — a page-walk row carries `bytes` and `nodes` (a single-screen row has `nodes` too), no w/h.
   check("[F2 L2] extract index paragraph: a page-walk row carries `bytes` (and `nodes`) but no `w`/`h`; no \"paths to all three sibling files\"",
-    /a page-walk row \(`--page`, `--all-pages`, `pull design`\) carries `bytes` \(and `nodes`\) but no `w`\/`h`; its `reference` sits in the layer file/.test(ext) &&
+    /a page-walk row \(`--page`, `--all-pages`, a bare `dtwin pull`\) carries `bytes` \(and `nodes`\) but no `w`\/`h`; its `reference` sits in the layer file/.test(ext) &&
     !/paths to all\s+three sibling files/.test(ext) && !/carries `nodes`\/`bytes` instead/.test(ext));
   // F-42 / F-05 / DT-05 / DT-07
   check("[F42-1] extract names --variant-visuals and variantVisuals (design-system pulls to build from; the library's pull needs it)", /--variant-visuals/.test(ext) && /`variantVisuals: true`/.test(ext) && /`--as-library` pull/.test(ext));
@@ -680,8 +680,13 @@ console.log("build-screen docs (group 19):");
 {
   const date = (d: string): boolean => /`::placeholder` never applies to `<input type="date">`/.test(d) && /`::-webkit-datetime-edit`/.test(d)
     && /Chromium\/WebKit, non-standard — check in the browser/.test(d) && /Firefox:.{0,120}check it in the browser/.test(d)
-    && /`color-scheme`.{0,80}usually matches/.test(d) && /`select:invalid`/.test(d);
-  check("[DT52-1] both web profiles: ::placeholder does not apply to a date input; ::-webkit-datetime-edit is labelled Chromium/WebKit non-standard, Firefox hedged, color-scheme `usually`", date(tw) && date(cssm));
+    && /`color-scheme`.{0,80}usually matches/.test(d) && /`select:invalid`/.test(d)
+    // review 18 MED-3: a disabled first option is skipped by the selectedness algorithm, so it must be `selected`
+    // (React: defaultValue="" / value=""), else the first enabled option is chosen and the placeholder never shows
+    && /`<option value="">` on a `required` select \(the spec's placeholder label option\)/.test(d)
+    && /If you make it `disabled hidden`, also mark it `selected`/.test(d) && /`defaultValue=""` or a controlled `value=""`/.test(d)
+    && /the first enabled option is selected, the field is valid, and the placeholder never shows/.test(d);
+  check("[DT52-1] both web profiles: ::placeholder does not apply to a date input; ::-webkit-datetime-edit is labelled Chromium/WebKit non-standard, Firefox hedged, color-scheme `usually`; a select placeholder is `selected` / defaultValue=\"\"", date(tw) && date(cssm));
   check("[DT52-2] SKILL: a drawn field that becomes a native control carries the drawn colour onto it, is recorded in the plan and verified on the element's own text",
     /Native control substitution/.test(skill) && /carry the drawn placeholder\/value colour onto it/.test(skill) && /record the\s+substitution in the plan/.test(skill) && /verify it on the element's own text/.test(skill));
   check("[DT62-1] web-tailwind: tailwind-merge for a caller's className, the sizes registered with extendTailwindMerge, colour+size drops one of the two, size-vs-size not merged unregistered",
@@ -691,14 +696,38 @@ console.log("build-screen docs (group 19):");
   check("[F56-1] both web profiles: column x/widths come from the BODY cells; a header/body x disagreement is a designer question",
     [tw, cssm].every((d) => /column x\/widths from the BODY cells/.test(d) && /designer question/.test(d)));
   check("[DT69-1] SKILL: tags are dev evidence, stripped at build time; Next.js needs properties: ['^data-dt-node$'] (plain `true` strips only ^data-test), never in the source",
-    /reactRemoveProperties: \{ properties: \['\^data-dt-node\$'\] \}/.test(skill) && /plain `true` strips only\s+`\^data-test`/.test(skill) && /never in the source/.test(skill));
+    /\{ properties: \['\^data-dt-node\$'\] \}/.test(skill) && /plain `true` strips only\s+`\^data-test`/.test(skill) && /Never strip them in the source/.test(skill));
+  // review 18 LOW-5: an unconditional (or NODE_ENV-keyed) strip removes the tags from the preview build verify measures
+  check("[R18-LOW5] SKILL: the strip is an explicit opt-in env set only by the deploy build, never NODE_ENV; verify measures a build that keeps the tags",
+    /reactRemoveProperties: process\.env\.DT_STRIP_TAGS === '1' \? \{ properties: \['\^data-dt-node\$'\] \} : false/.test(skill)
+    && /only on an explicit opt-in env that the deploy build alone sets/.test(skill) && /Babel the same way/.test(skill)
+    && /Never key it on `NODE_ENV`/.test(skill) && /verify measures a build that keeps the tags/.test(skill)
+    && !/reactRemoveProperties: \{ properties/.test(skill));
   check("[F34-1] SKILL: anchorsSuggested is named in the plan-skeleton paragraph and step 3 says to fill those ids first, the rest covered by the nearest mapped ancestor",
     /`anchorsSuggested\[\]`/.test(skill) && /the `anchorsSuggested` ids first, the rest is covered by its nearest mapped ancestor/.test(skill));
+  // review 18 MED-2: the frame has no ancestor to cover it, so the plan suggests it and step 3 names it
+  check("[R18-MED2] SKILL: anchorsSuggested starts with the screen frame (\"screen\"; an instance frame is the whole list) and step 3 fills the frame itself plus the suggested ids",
+    /the screen frame itself, first, as `"screen"` — a frame that is an instance is the whole list/.test(skill)
+    && /step 3: the frame itself plus the `anchorsSuggested` ids first/.test(skill) && /the dividers between its rows go with it/.test(skill));
+  // review 18 LOW-7: a named field for the substitution, a native line in every native profile, reusedFrom allowed
+  const natives = ["swiftui", "android-compose", "flutter", "react-native"].map((n) => flat(read(`claude-plugin/skills/build-screen/profiles/${n}.md`)));
+  check("[R18-LOW7] SKILL + both web profiles: the native-control substitution is a deviations[] row {nodeId, field: \"control\", designed, built, reason}",
+    [skill, tw, cssm].every((d) => /`deviations\[\]` row `\{nodeId, field: "control", designed, built, reason\}`/.test(d)));
+  check("[R18-LOW7] SwiftUI, Compose, Flutter and React Native profiles: set the picker's text colour explicitly",
+    natives.every((d) => /set the picker's text colour explicitly/.test(d)));
+  check("[R18-LOW7] SKILL: a `reusedFrom` row is listed in this screen's .assets.json, so the this-screen-only rule allows it",
+    /never substitute it \(a row with `reusedFrom` is listed here, so it is fine\)/.test(skill));
+  // review 18 LOW-3/LOW-4: the tailwind-merge major per Tailwind major, ask before adding it, every figma- namespace registered
+  check("[R18-LOW3] web-tailwind: tailwind-merge v3 is for Tailwind v4, v2.6 (classGroups font-size) for Tailwind v3; the project's cn first, ask before adding",
+    /tailwind-merge v3 is for Tailwind v4; on Tailwind v3 use v2\.6/.test(tw) && /`classGroups: \{ 'font-size': \[\.\.\.\] \}`/.test(tw)
+    && /Use the project's existing `cn` if it has one; ask before adding `tailwind-merge`\/`clsx`/.test(tw));
+  check("[R18-LOW4] web-tailwind: text, spacing and radius are all registered for the generated figma- namespaces",
+    /theme: \{ text: \['figma-body-1', …\], spacing: \['figma-space-4', …\], radius: \['figma-md', …\] \}/.test(tw) && /`p-figma-space-4` against `p-figma-space-6`/.test(tw));
   // review 1 of groups 18+19 (L-6, M-3)
   check("[L-6] SKILL: the this-screen-only asset rule is about the EXPORTED files, so reusing a matching project icon still reads as allowed",
     /Reuse a project icon only if the glyph clearly matches/.test(skill) && /Of the exported files, import only those listed in THIS screen's `\.assets\.json`/.test(skill) && !/ Import only files listed in THIS screen's/.test(skill));
   check("[L-6] web-tailwind: the registered sizes drop the --text- prefix (text: ['figma-body-1', …], like tailwind-merge's text: ['huge'])",
-    /theme: \{ text: \['figma-body-1', …\] \}/.test(tw) && /without the `--text-` prefix/.test(tw) && /`text: \['huge'\]`/.test(tw));
+    /theme: \{ text: \['figma-body-1', …\]/.test(tw) && /names without its prefix \(`--text-`/.test(tw) && /`text: \['huge'\]`/.test(tw));
   check("[M-3] SKILL: a list is a container whose children are MOSTLY one shape; its other children (a search bar) are listed on their own",
     /children are mostly rows of one shape — three or more/.test(skill) && /a search bar above the rows, are listed on their own/.test(skill));
 }
@@ -754,9 +783,30 @@ console.log("build-screen docs (group 17):");
   const audit20 = flat(read("claude-plugin/skills/audit-design/SKILL.md"));
   check("[DOC-1a] README + help: an owning MCP server exits when its client goes away, unless its socket was used, then idles out on FIGMA_DAEMON_IDLE_MIN",
     [readme20, help20].every((d) => /exits when its client goes away/.test(d) && /FIGMA_DAEMON_IDLE_MIN/.test(d) && /unless another process has used/.test(d)));
-  check("[DOC-1b] extract + README: the implicit page/full spill keeps <file>.json.prev (wrote.prevKept) AND a screen spill keeps <screen>.json.prev (wrote.prev) — D137",
-    [readme20, extract20].every((d) => /page\/full\/design-system\/library spill/.test(d) && /\.json\.prev/.test(d) && /prevKept/.test(d)
-      && /screen spill keeps `<screen>\.json\.prev` \(`wrote\.prev`\)|screen spill as `<screen>\.json\.prev` \(`wrote\.prev`\)/.test(d)));
+  // s19 L2: narrowed to what write-out keeps — a screen spill ONLY <screen>.json.prev (its sidecars, the index and
+  // variables.json are replaced with no copy), and no MCP tool pulls a library, so there is no "library spill".
+  check("[DOC-1b / s19 L2] extract + README: the implicit page/full/design-system spill keeps a .prev per changed JSON (wrote.prevKept); a screen spill ONLY <screen>.json.prev (wrote.prev) — sidecars replaced with no copy; no library spill",
+    [readme20, extract20].every((d) => /page\/full\/design-system spill/.test(d) && !/library spill/.test(d) && /prevKept/.test(d)
+      && /screen spill( \([^)]*\))? keeps ONLY `<screen>\.json\.prev` \(`wrote\.prev`/.test(d) && /replaced with no copy/.test(d)));
+  // s19 M3: no doc tells you to pull into bare `design` — that is the outDir trap (a second export tree beside
+  // design/export/ that doctor, cross-check, audit and build-screen never read). `dtwin pull` defaults to design/export.
+  {
+    const trapDocs = ["bridge/README.md", "claude-plugin/skills/help/SKILL.md", "claude-plugin/skills/extract/SKILL.md", "ARCHITECTURE.md", "README.md"];
+    // A command line or inline-code span: `dtwin design …`, `dtwin pull design …`, `figma-pull.ts design …` — the trap
+    // is named only in a sentence that says never to (e.g. "never `dtwin pull design …`").
+    const trap = /(?:dtwin|figma-pull\.ts)(?: pull)? \.?\/?design(?:\/)?(?=[\s`"']|$)/;
+    const bad = trapDocs.flatMap((f) => read(f).split("\n").map((l, i) => [f + ":" + (i + 1), l] as const))
+      .filter(([, l]) => trap.test(l) && !/\bnever\b|\btrap\b|parallel/i.test(l)).map(([w]) => w);
+    check("[s19 M3] README, help, extract, ARCHITECTURE: no doc tells you to pull into bare `design` (the default is design/export)" + (bad.length ? " (" + bad.join(", ") + ")" : ""),
+      bad.length === 0 && /defaults to `design\/export`/.test(help20) && /defaults to `design\/export`/.test(extract20) && /Never pull into bare `design`/.test(readme20));
+  }
+  // s19 L1: a held port — the CLI exits with EADDRINUSE; an MCP server stays up and only that call errors (retry).
+  check("[s19 L1] README + help: on a held port an MCP tool call errors and a retry works — the server never exits with EADDRINUSE",
+    [readme20, help20].every((d) => /stays up/.test(d) && /retry/.test(d) && !/an MCP server\s+or second pull started while it runs exits/.test(d) && !/anything else that needs the port exits/.test(d)));
+  check("[s19 L1] README: the MCP tool list names all 15 tools",
+    ["figma_status", "figma_list_clients", "figma_whoami", "figma_get_selection", "figma_list_libraries", "figma_list_pages", "figma_list_children", "figma_export_full",
+      "figma_export_design_system", "figma_export_selection", "figma_export_url", "figma_screenshot", "figma_write", "design_get_component", "design_drift_lint"]
+      .every((t) => readme20.includes("`" + t + "`")) && /Tools \(15\):/.test(readme20));
   check("[DOC-1c] build-screen + audit-design: the legacy code#i id is accepted with a warning",
     [skill, audit20].every((d) => /`code#i` is still accepted,? \(?with a warning/.test(d)));
   check("[DOC-1d] README + extract: outDir is checked before the export", [readme20, extract20].every((d) => /before the export/.test(d)));

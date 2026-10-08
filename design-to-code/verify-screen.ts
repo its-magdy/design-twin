@@ -34,7 +34,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { walkWithHidden } from "./hidden.ts";
 import { exportContentSha256, fileHashes, gitHead, planCodeFiles, planCodeSkippedNote } from "./content-hash.ts";
-import { recordPlan } from "./plan-record.ts";
+import { recordPlan, writePlan } from "./plan-record.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
 import { isBuildIdentity, isInteractionEvidenceList, isMeasuredBehaviour, isMeasuredComponentList, isMeasuredVisual, isVisualRegion, isPageIndex, isPageOverflow, isPagesRootIndex, isPlan, isPlanDescope, isPlanWaiver, isProbeIdentity, isProbeReach, isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "./doc-guards.ts";
 import { isPassingVerdict, planInteractionsSha256, waiversHash } from "./plan-waivers.ts";
@@ -1446,6 +1446,7 @@ const INTEGRITY_PHRASES = {
   unfinished: "— the verifier had not finished",
   otherMeasured: "names a different measured file",
   unrecorded: "no status of that run records it",
+  measuredBefore: "was measured before that run ended",
 } as const;
 const isIntegrityReason = (w: string): boolean => Object.values(INTEGRITY_PHRASES).some((p) => w.includes(p));
 interface CoverageNow {
@@ -2235,6 +2236,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const st = opts.status && opts.status.status !== "v1" ? opts.status.status : null;
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const integrity: string[] = [];
+  let unboundNote: string | undefined;
   // D26 (F-72): the run's integrity, ranked FIRST. When any of these holds, the numbers below belong to an unverified
   // run (another expectation, no expectation, an unfinished run, another measured file) — so the verdict is
   // `incomplete` even with high mismatches (L-6): a `fail` would grade numbers nothing ties to this design and run.
@@ -2247,10 +2249,20 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : undefined;
   if (measuredRun !== undefined && opts.status !== undefined && (st === null || st.runId !== measuredRun)) {
     integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} — ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run — re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
+  } else if (st && measuredRun === undefined && TERMINAL_PHASES.includes(st.phase) && Date.parse(String(measured.measuredAt)) > Date.parse(st.at)) {
+    // H1 (s19): a measured file that names no run (a probe without --run) and was measured AFTER the run ended is not
+    // part of any run — that run's status says nothing about it; it is graded unbound (D41: its interaction rows are
+    // agent evidence). An older unbound file (no or unreadable measuredAt included) stays judged by the run below.
+    unboundNote = `${opts.status ? opts.status.file : "status.json"} is run ${st.runId} (${st.phase}); this measured file names no run — graded as an unbound measurement`;
   } else if (st) {
     const stFile = opts.status ? opts.status.file : "status.json";
-    if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
-    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}…, this one ${opts.measuredSha256.slice(0, 12)}…) — measured again outside run ${st.runId}?`);
+    // an unbound measured file beside a run still open: say how to end that run (only if nobody is still running it)
+    const endHint = measuredRun === undefined ? ` — wait for it, or if nobody is running it any more, end it: --status ${shellArg(st.screen)} --phase failed --run ${shellArg(st.runId)}` : "";
+    // r2 (s19): an unbound measured file that is NOT newer than an ENDED run (failed/blocked) — the run cannot be "ended"
+    // again (that would only rewrite its status, and a blocked run's detail with it): the file is stale, measure again
+    if (measuredRun === undefined && TERMINAL_PHASES.includes(st.phase) && st.phase !== "done") integrity.push(`this measured file names no run and ${INTEGRITY_PHRASES.measuredBefore} (${stFile}: run ${st.runId} ${st.phase} at ${st.at}) — measure again`);
+    else if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}${endHint}`);
+    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}…, this one ${opts.measuredSha256.slice(0, 12)}…) — measured again outside run ${st.runId}?${st.phase === "done" ? "" : endHint}`);
   }
 
   // ---- interactions: the export says what each control does; did it? Three states, not two:
@@ -2295,6 +2307,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "design re-exported: the export content changed since it was descoped" });
     return live;
   };
+  if (unboundNote !== undefined) inputNotes.push(unboundNote);
   if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length) inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) — graded as agent evidence (D41)");
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i): VerifyInteractionResult => {
     const key = String(i.nodeId) + "|" + i.trigger;
@@ -2711,6 +2724,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     renderer: measured.renderer || "unknown",
     ...ifDefined("viewport", measured.viewport),
     artifacts: artifactCheck || (Array.isArray(measured.artifacts) ? measured.artifacts : []),
+    // M2 (s19): --record-plan records a static-only run as static-only, with its why
+    ...(staticOnly ? { mode: "static-only" as const, ...ifDefined("reason", measured.reason || undefined) } : {}),
     inputs,
     verdict,
     headline,
@@ -3723,9 +3738,7 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
     wrote.push(`${at >= 0 ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
   }
   plan.waivers = waivers;
-  const tmp = `${planFile}.${process.pid}.tmp`; // write-then-rename: a crash never leaves half a plan
-  fs.writeFileSync(tmp, JSON.stringify(plan, null, 2) + "\n");
-  fs.renameSync(tmp, planFile);
+  writePlan(planFile, plan); // L5: atomic (a crash never leaves half a plan), in the plan file's own format
   console.error(`wrote ${wrote.length} waiver(s) to ${planFile} (decided by ${by}: ${reason})`);
   for (const w of wrote) console.error(`  ${w}`);
   console.error(`re-run --compare to apply ${wrote.length === 1 ? "it" : "them"}: an accepted delta stays listed, leaves the counts, and reopens if the design is re-exported or the built value moves.`);

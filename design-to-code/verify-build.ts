@@ -90,6 +90,7 @@ import type {
   PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyReport,
 } from "./types.ts";
 import { getOrInit } from "./map-util.ts";
+import { writePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // ================================================================ input / timeouts
@@ -1614,7 +1615,7 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
   // write must not reset it, or a blocked leftover plan would stay "fresh" (and nag) forever.
   let times: [Date, Date] | null = null;
   try { const s = fs.statSync(p.file); times = [s.atime, s.mtime]; } catch { /* new file */ }
-  fs.writeFileSync(p.file, JSON.stringify(plan, null, 2) + "\n");
+  writePlan(p.file, plan); // L5: atomic, in the plan file's own format (BOM, indentation, line endings)
   if (times) try { fs.utimesSync(p.file, times[0], times[1]); } catch { /* ignore */ }
   const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports });
   return { blocking, warnings, cleared, status: st };

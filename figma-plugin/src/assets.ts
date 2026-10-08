@@ -32,9 +32,9 @@ const ASSET_DIR = "assets/";
 // the design, comes back with different floating-point path coordinates (measured ≤0.002px drift —
 // findings 25/222). Hashing the raw SVG text made every re-pull with zero design changes report a
 // fresh batch of "changed" assets, and made two genuinely identical icons dedupe-fail (finding 24).
-// `normalizeSvgText` (bridge/svg-normalize.js, re-exported via ./util — see its header for why 1
+// `normalizeSvgText` (bridge/src/svg-normalize.ts, re-exported via ./util — see its header for why 1
 // decimal place, not 2) is the ONE shared definition of "same SVG, modulo export noise", used here AND
-// by bridge/write-out.js AND design-to-code/design-diff.js so the three cannot silently disagree.
+// by bridge/src/write-out.ts AND design-to-code/design-diff.ts so the three cannot silently disagree.
 // PNG/base64 assets are untouched: they have no textual coordinate space to normalise, and their
 // pixels really do change when Figma recompresses them, which is legitimate signal, not noise.
 
@@ -102,7 +102,7 @@ function register(a: { id: string; name: string; format: AssetFormat; base64?: s
   let file = base + "." + fmt;
   // Fold case for the UNIQUENESS check, not for the name written to disk: `angle-left.svg` and
   // `Angle-left.svg` are two different Figma layers that collide into ONE path on a case-insensitive
-  // filesystem (macOS default) — write-out.js writes both into the same shared assets/ dir, so
+  // filesystem (macOS default) — write-out.ts writes both into the same shared assets/ dir, so
   // whichever pull ran second silently clobbered the first (finding 124). Comparing case-folded keys
   // here means the SECOND name is treated as "taken" even though it differs only in case, so it gets
   // the same content-hash suffix a same-name-different-content collision gets — both files end up with

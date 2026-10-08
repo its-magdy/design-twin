@@ -603,7 +603,7 @@ void (async () => {
           ok("[SPILL-1] fixture: the reply is past the inline cap, so it spilled implicitly", /WITHOUT being asked/.test(note));
           ok("[SPILL-1] the replaced layer file is kept as <layer>.json.prev with the hand-edited text", read(layer + ".prev") === edited && prevsUnder(out).length === 1);
           ok(`[SPILL-1] …wrote.prevKept lists it (got ${JSON.stringify(kept)})`, Array.isArray(kept) && kept.length === 1 && kept[0] === layer + ".prev");
-          ok("[SPILL-1] …and the note names the count and the .prev", /previous version of each changed file — 1 file\(s\) under pages\/, design-system\/ or libraries\/, e\.g\. /.test(note) && note.includes(layer + ".prev") && /\.prev \(one level/.test(note));
+          ok("[SPILL-1] …and the note names the count and the .prev", /previous version of each changed file — 1 file\(s\) under pages\/ or design-system\/ \(or design-system\.json\), e\.g\. /.test(note) && note.includes(layer + ".prev") && /\.prev \(one level/.test(note));
           const lw = rec(rec((await s.call("figma_status", {}))?.json).lastWrite);
           ok(`[SPILL-1] figma_status.lastWrite.prevKept === 1 (implicit) (got ${JSON.stringify(lw)})`, lw.prevKept === 1 && lw.implicit === true && lw.tool === "figma_export_full");
           const again = await s.call("figma_export_full", {});

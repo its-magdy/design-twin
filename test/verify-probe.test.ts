@@ -1882,4 +1882,6 @@ if (process.platform !== "win32") {
   check(`[O-1] closeCapped: a browser child still running after the close (the handle already disconnected) is SIGKILLed (${gone ? "gone" : "still running after 3 s"}${threw ? ", closeCapped threw" : ""})`, gone && !threw);
 }
 
+check("[LAUNCH_ARGS] the probe's chromium flags include --disable-lcd-text (grayscale text AA; the e2e suites that render references import the same list)", VP.LAUNCH_ARGS.includes("--disable-lcd-text"));
+
 report();

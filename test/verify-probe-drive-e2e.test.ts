@@ -33,14 +33,16 @@
 // wrapper's shadow ring, a layered !important, a control mounted on hover, a foreign ticker, transition:all under a strict CSP.
 //
 // Concurrency (test/pool.ts): every independent probe / verify-screen run is queued up front (P, the longest first) and runs
-// poolSize() at a time (DT_E2E_POOL overrides; 2 under CI=true) — each still its own `node verify-probe.js` + chromium with its
+// poolSize() at a time (DT_E2E_POOL overrides; 2 under CI) — each still its own `node verify-probe.js` + chromium with its
 // own --out; the checks stay in file order, each awaiting its run. An ordered chain (--status --new-run → probe --run → --status
-// done → --compare; a run → its --compare) is one queued task. The cases whose outcome rides on a wall-clock window of a few
-// seconds (a --max-time budget, a reload / navigation / replaceState N ms after a load or a click, a load answered just past the
-// 10 s cap or the --timeout, the token-switch poll spacing, the scroll-restore cap) are the serial tail (T): run one at a time
-// once the pool has drained, so concurrent chromiums' CPU cannot flip them; their checks print after the pool's. A write is
-// charged to the run whose page made it (the POST's Referer query, when it is a launched --url's); any other write (no Referer,
-// an <object> / <embed> subframe's own URL) is charged to every run's check, and a final check wants none across every run.
+// done → --compare; a run → its --compare) is one queued task. The serial tail (T) holds the cases with POSITIVE timing
+// assertions — a --max-time budget that must be honoured, a reload / navigation / replaceState N ms after a load or a click, a
+// load answered just past the 10 s cap or the --timeout, the token-switch poll spacing, the scroll-restore cap: they run one at a
+// time once the pool has drained, so concurrent chromiums' CPU cannot flip them; their checks print after the pool's. The
+// gotoSteps and wide runs stay pooled: their --max-time caps (25 s, 30 s) leave wide margins over a run that takes a few seconds
+// under load. A write is charged to the run whose page made it (the POST's Referer query, when it is a launched --url's); any
+// other write (no Referer, an <object> / <embed> subframe's own URL) is charged to every run's check, and a final check wants
+// none across every run.
 //
 // D3: needs the repo's devDependency `playwright` + chromium. Locally an unavailable renderer prints SKIPPED; in CI
 // (CI=true) that is a failure.  Run with:  node test/verify-probe-drive-e2e.test.ts
@@ -49,7 +51,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
@@ -155,11 +157,13 @@ const url = (mode?: string): string => `http://127.0.0.1:${port}/plot-ledger.htm
 const edge = (mode: string): string => `http://127.0.0.1:${port}/plot-ledger-edge.html?mode=${mode}`;
 
 // async spawn: the server lives in THIS process, so a spawnSync would block it from answering. ms: spawn → close (never the
-// time a run waited in the pool's queue); a spawn that fails (EAGAIN under load) resolves as status null, never hangs the suite
+// time a run waited in the pool's queue); a spawn that fails (EAGAIN under load, a synchronous throw) resolves as status null — run never rejects, never hangs the suite
 interface Run { status: number | null; stdout: string; stderr: string; ms: number }
 const run = (script: string, args: string[]): Promise<Run> => new Promise((resolve) => {
   const t0 = Date.now();
-  const p = spawn(process.execPath, [script, ...args], { cwd: proj });
+  let p: ChildProcessWithoutNullStreams;
+  try { p = spawn(process.execPath, [script, ...args], { cwd: proj }); }
+  catch (e) { resolve({ status: null, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}\n`, ms: Date.now() - t0 }); return; }
   let stdout = "", stderr = "";
   p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
   p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });

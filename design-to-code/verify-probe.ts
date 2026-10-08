@@ -164,12 +164,16 @@ function rendererUnavailable(reason: string, hint: string | null): number {
   return 3;
 }
 
+/** The chromium flags the probe launches with; the tests that render a reference or a page for the probe use the same ones. */
+export const LAUNCH_ARGS: readonly string[] = ["--disable-lcd-text"];
+
 /** DT-30 (D112): `executablePath` = --browser-path (validated by browserPathError first); absent → Playwright's own chromium. */
 async function launch(r: Extract<Resolution, { ok: true }>, dir: string, executablePath?: string): Promise<{ browser: Browser } | { error: string; hint: string }> {
-  // --disable-lcd-text: grayscale text antialiasing, as Figma's renderer and macOS draw it. Linux chromium's default LCD
-  // (subpixel RGB) text has colour fringes that depend on each glyph's sub-pixel phase, so unchanged text at the reference's
-  // 4-decimal scale came out as hot regions in the visual diff (the e2e's correct twin, on CI). It changes no layout.
-  try { return { browser: await r.mod.chromium.launch({ headless: true, args: ["--disable-lcd-text"], ...(executablePath !== undefined ? { executablePath } : {}) }) }; } catch (e) {
+  // --disable-lcd-text: no layout or measured geometry; only how text is rasterised (and which layers Chromium may composite) —
+  // grayscale AA, which Figma's PNG exports use and macOS Chromium uses by default. Linux chromium's default LCD (subpixel RGB)
+  // text has colour fringes that depend on each glyph's sub-pixel phase, so unchanged text at the reference's 4-decimal scale
+  // came out as hot regions in the visual diff (the e2e's correct twin, on CI).
+  try { return { browser: await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...(executablePath !== undefined ? { executablePath } : {}) }) }; } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
     return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch${executablePath !== undefined ? ` from --browser-path ${executablePath} (only guaranteed with the bundled Chromium)` : ""}: ${first}`, hint: browserHint(dir) };
   }

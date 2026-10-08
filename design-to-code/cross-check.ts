@@ -1189,8 +1189,11 @@ function mixedModeBindings(screens: CrossCheckScreen[], variables: TokensDoc | n
     const defs = new Map<string, Variable>();
     for (const doc of [tokens, variables, s.vars || null]) for (const v of (doc && doc.variables) || []) if (v.name) defs.set(v.name, v);
     const colls: VariableCollection[] = [...((s.vars && s.vars.collections) || []), ...((variables && variables.collections) || []), ...((tokens && tokens.collections) || [])];
-    // Same-named collections exist (a one-mode and a three-mode `Spacing`): the one declaring every mode the variable has values for.
+    // Same-named collections exist (a one-mode and a three-mode `Spacing`): the row's `collectionKey` picks one
+    // when both sides carry a key (L6); else the one declaring every mode the variable has values for.
     const collOf = (v: Variable): VariableCollection | undefined => {
+      const keyed = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && Array.isArray(c.modes)) : undefined;
+      if (keyed) return keyed;
       const named = colls.filter((c) => c.name === v.collection && Array.isArray(c.modes));
       const modes = Object.keys(v.values || {});
       return named.find((c) => modes.every((m) => c.modes.includes(m))) ?? named[0];
@@ -1294,7 +1297,11 @@ function contrastRendered(screens: CrossCheckScreen[], variables: TokensDoc | nu
         const coll = v.collection;
         const r = coll !== undefined ? rm[coll] : undefined;
         if (r !== undefined && keys.includes(r)) return r;
-        const def = colls.find((c) => c.name === coll && c.default !== undefined && keys.includes(c.default))?.default;
+        // The collection's default: by `collectionKey` when both sides carry one (same-named collections — L6),
+        // else by name. resolvedModes above is keyed by name only, so that half cannot tell them apart.
+        const hasDefault = (c: VariableCollection): boolean => c.default !== undefined && keys.includes(c.default);
+        const byKey = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && hasDefault(c)) : undefined;
+        const def = (byKey ?? colls.find((c) => c.name === coll && hasDefault(c)))?.default;
         if (def !== undefined) return def;
         return keys.length === 1 ? keys[0] : undefined;
       };

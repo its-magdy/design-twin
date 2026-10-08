@@ -80,7 +80,8 @@
 //                                                   # every variable with full per-mode values, every
 //                                                   # style, every component. Run it with the LIBRARY
 //                                                   # file open, not the design file that consumes it.
-//                                                   # Writes design/libraries/<slug>-<fileKey8>/ and
+//                                                   # Writes <outDir>/libraries/<slug>-<fileKey8>/ (by
+//                                                   # default design/export/libraries/…) and
 //                                                   # never touches design-system/.
 //   dtwin [outDir] --timeout N  # seconds to wait for the export (default: 300,
 //                                            # 900 with --all-pages, 120 for --selection); also
@@ -845,7 +846,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     // Fields an OLDER daemon may not report (daemon.ts DaemonStatusView) print as "?", never as a guess.
     console.error("[dtwin] " + (st
       ? `daemon up (pid ${st.pid ?? "?"}, port ${st.port ?? "?"}) — plugin ${st.pluginConnected ? "CONNECTED" : "not connected"}` +
-        (st.idleMs ? `, idle ${Math.round((st.idleForMs ?? 0) / 60000)}/${Math.round(st.idleMs / 60000)} min before auto-shutdown.` : ", no idle shutdown.")
+        (st.idleMs ? `, idle ${daemon.humanMs(st.idleForMs ?? 0)}/${daemon.humanMs(st.idleMs)} before auto-shutdown.` : ", no idle shutdown.")
       : "no daemon is running — start one with --serve."));
     return;
   }

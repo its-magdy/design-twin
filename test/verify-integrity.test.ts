@@ -249,8 +249,8 @@ safe("a status v2 of this run still at 'measuring' → incomplete '… (run run-
   const r = run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
   return r.verdict === "incomplete" && r.why.some((w) => /Garden\.status\.json \(run run-7, rev 3\) is at phase measuring — the verifier had not finished/.test(w));
 });
-safe("a status 'done' naming another measured sha → incomplete 'names a different measured file'", () => {
-  const r = run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
+safe("a status 'done' of the measured file's own run naming another measured sha → incomplete 'names a different measured file'", () => {
+  const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-7" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
   return r.verdict === "incomplete" && r.why.some((w) => /names a different measured file \(sha ffffffffffff…/.test(w));
 });
 // L-6: an integrity reason outranks the grades — a high mismatch in an unverified run is incomplete, never fail
@@ -280,7 +280,7 @@ safe("[L-c] --accept on a report whose run had not finished (a high delta listed
 });
 safe("[L-c] …a report whose measured file names no expectation, or a status naming another measured file → refused too", () => {
   const noExp = run(measure({ "2:1": { fontSize: 30 } }), { expectationSha256: SHA_E, measuredSha256: SHA_M });
-  const other = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
+  const other = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E, runId: "run-7" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
   const otherExp = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: "d".repeat(64) }), { expectationSha256: SHA_E, measuredSha256: SHA_M });
   return [noExp, other, otherExp].every((r) => { const sel = acceptSel(r, "2:1", "font-size"); return "error" in sel && /the report's run is unverified/.test(sel.error); });
 });
@@ -293,6 +293,38 @@ safe("an older v1 status is never trusted nor judged: pass, with a note", () => 
   const r = run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: { file: "Garden.status.json", status: "v1" } });
   return r.verdict === "pass" && (r.probe.inputNotes || []).some((n) => /older hand-written status/.test(n));
 });
+
+// H1 (s19): a measured file that names NO run (build-screen's probe without --run), measured AFTER an ENDED run's status
+const statusEnded = (phase: "done" | "failed" | "blocked") => ({ file: "Garden.status.json", status: { ...status("done", "f".repeat(64)).status, phase } });
+const LATER = { expectationSha256: SHA_E, measuredAt: "2026-09-30T02:00:00Z" }; // the status above is at 01:00
+safe("[H1] an unbound measured file taken after an earlier run's done (another measured sha) → pass, with a note naming the run", () => {
+  const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
+  return r.verdict === "pass" && !(r.integrity || []).length && (r.probe.inputNotes || []).some((n) => /is run run-7 \(done\); this measured file names no run/.test(n));
+});
+safe("[H1] …taken after an ended run at failed or blocked → pass (an ended run is not 'unfinished')", () =>
+  (["failed", "blocked"] as const).every((p) => run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) }).verdict === "pass"));
+safe("[H1] …an unbound file NOT newer than the ended run (a stale file left behind, or no measuredAt) is still judged by that run → incomplete", () => {
+  const stale = (["done", "failed", "blocked"] as const).every((p) => run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) }).verdict === "incomplete");
+  const untimed = measure({}, LATER);
+  delete untimed.measuredAt;
+  const noTime = run(untimed, { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded("failed") }).verdict === "incomplete";
+  return stale && noTime;
+});
+safe("[r2] …a stale unbound file beside a run that ended failed/blocked: 'measured before that run ended — measure again', never the end-it hint (the run is over)", () =>
+  (["failed", "blocked"] as const).every((p) => {
+    const r = run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) });
+    return r.verdict === "incomplete" && r.why.some((w) => new RegExp(`names no run and was measured before that run ended \\(Garden\\.status\\.json: run run-7 ${p} at .*\\) — measure again`).test(w)) && !r.why.some((w) => /end it:|had not finished/.test(w));
+  }));
+safe("[H1] …beside a run still in flight (measuring) → still incomplete, and the reason says how to end it", () => {
+  const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
+  return r.verdict === "incomplete" && r.why.some((w) => /the verifier had not finished.*--status Garden --phase failed --run run-7/.test(w));
+});
+safe("[H1] …beside a run at measured (another sha, not yet done) → incomplete, with the same end-it hint", () => {
+  const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measured", "f".repeat(64)) });
+  return r.verdict === "incomplete" && r.why.some((w) => /measured again outside run run-7\? — wait for it, or if nobody is running it any more, end it: --status Garden --phase failed --run run-7/.test(w));
+});
+safe("[H1] …a high mismatch in an unbound measurement taken after an ended run is a plain fail (graded, not hidden as incomplete)", () =>
+  run(measure({ "2:1": { fontSize: 30 } }, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) }).verdict === "fail");
 
 // M-1: a measured file that names its run, with no status of that run beside it — nothing recorded it as that run's
 safe("[M-1] measured.runId set, compare looked for a status and found none → incomplete 'no status of that run records it'", () => {
@@ -376,6 +408,17 @@ console.log("CLI --compare with the run status beside the measured file:");
   const rep4 = readJsonOrNull(path.join(stageDir, "Garden.report.json"), isVerifyReport);
   safe("[M-1] CLI: a staged measured file naming its run finds the run's status by the expectation's dir (at measuring → 'had not finished', not 'unrecorded')", () =>
     rec.status === 0 && c4.status === 1 && (rep4?.why || []).some((w) => /is at phase measuring/.test(w)) && !(rep4?.why || []).some((w) => /no status of that run records it/.test(w)));
+  // H1 (s19): build-screen's recipe — probe without --run — after an earlier run ended: a fresh unbound measured file
+  cli("--status", "Garden", "--phase", "failed", "--run", "run-staged"); // end the in-flight run above
+  const st5 = cli("--status", "Garden", "--phase", "starting", "--new-run");
+  const run5 = st5.stdout.trim().split(" ")[1] ?? "";
+  fs.writeFileSync(path.join(dir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, runId: run5, artifacts: ["design/verify/Garden.png"] })));
+  const done5 = cli("--status", "Garden", "--phase", "done", "--run", run5);
+  fs.writeFileSync(path.join(dir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, measuredAt: new Date(Date.now() + 1000).toISOString(), artifacts: ["design/verify/Garden.png"] })));
+  const c5 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
+  const rep5 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
+  safe("[H1] CLI: a fresh measured file with no runId after an earlier run's done → exit 0, pass (not 'names a different measured file')", () =>
+    done5.status === 0 && c5.status === 0 && rep5?.verdict === "pass" && !(rep5.integrity || []).length);
   fs.rmSync(path.dirname(liveStatusFile(path.join(dir, "Garden"))), { recursive: true, force: true }); // the run cache (OS temp dir: no node_modules here)
   fs.rmSync(cwd, { recursive: true, force: true });
 }

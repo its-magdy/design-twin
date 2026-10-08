@@ -322,10 +322,10 @@ console.log("F-34 — anchorsSuggested names the anchors worth filling first:");
   const sug = (p: SkeletonPlan) => (p.anchorsSuggested ?? []).map((a) => `${a.id}:${a.why}:${a.covers}`);
   const r34 = run([sf, vf, ds], { cwd: dir });
   const p34 = planOf(r34.stdout);
-  // covers = the node + its visible descendants (Body: itself, a text, List 9, Short list 3, Footer 2)
-  const want = ["2:1:section:3", "2:2:section:16", "2:3:repeat:9", "4:1:instance:1", "4:2:instance:1", "2:5:instance:2"];
+  // covers = the node + its visible descendants (Body: itself, a text, List 9, Short list 3, Footer 2; Page: itself, Header 3, Body 16)
+  const want = ["1:1:screen:20", "2:1:section:3", "2:2:section:16", "2:3:repeat:9", "4:1:instance:1", "4:2:instance:1", "2:5:instance:2"];
   const got = sug(p34);
-  check(`[F34-1] sections, the repeated list (rows not listed one by one), and the outermost instances, in tree order (got ${JSON.stringify(got)})`,
+  check(`[F34-1] the screen frame first, sections, the repeated list (rows not listed one by one), and the outermost instances, in tree order (got ${JSON.stringify(got)})`,
     r34.status === 0 && JSON.stringify(got) === JSON.stringify(want));
   check("[F34-1] a list's rows are covered by it: none of 3:1..3:4 nor their texts is suggested; a hidden twin does not make a list",
     (p34.anchorsSuggested ?? []).every((a) => !a.id.startsWith("3:")) && (p34.anchorsSuggested ?? []).some((a) => a.id === "4:1") && !(p34.anchorsSuggested ?? []).some((a) => a.id === "4:3" || a.id === "2:4"));
@@ -356,6 +356,80 @@ console.log("F-34 — anchorsSuggested names the anchors worth filling first:");
     why("7:1") === undefined && ["7:5", "7:6", "7:7", "7:8"].every((id) => why(id) === "instance"));
   check("[F34-1 / M-3] a row variant that keeps the rows' layer name is a row: the table is a repeat and nothing inside its five rows is suggested",
     why("8:1") === "repeat" && !(pm3.anchorsSuggested ?? []).some((a) => /^8:[5-9]/.test(a.id)) && why("8:2") === undefined);
+
+  // review 18 (group 19): full coverage, divided lists, the screen frame, nested instances, empty and INSTANCE roots.
+  const plan = (name: string, nodes: NodeInput[]) => {
+    const r = run([put(name + ".json", screenExport(nodes, { screen: "Sample" })), put(name + ".vars.json", { collections: [], variables: [] }), ds], { cwd: dir });
+    return { status: r.status, plan: r.status === 0 ? planOf(r.stdout) : null };
+  };
+  // the visible anchors that are neither a suggestion nor under one
+  const uncovered = (p: SkeletonPlan | null): string[] => {
+    if (!p) return ["<no plan>"];
+    const ids = new Set((p.anchorsSuggested ?? []).map((a) => a.id));
+    return Object.keys(p.anchors).filter((id) => {
+      for (let cur: string | null = id; cur; cur = p.anchors[cur]?.parent ?? null) if (ids.has(cur)) return false;
+      return true;
+    });
+  };
+  const line = (id: string): NodeInput => ({ id, type: "LINE", name: "Divider" });
+  const divider = (id: string): NodeInput => ({ id, type: "INSTANCE", name: "Divider", mainComponent: { name: "Divider", key: "k-div", setKey: "set-k-div" }, children: [] });
+  const body = (kids: NodeInput[]): NodeInput[] => [{ id: "1:1", type: "FRAME", name: "Page", children: [{ id: "2:1", type: "FRAME", name: "Body", children: kids }] }];
+  // [title TEXT, row, LINE, row, LINE, row, LINE, row]: leaves do not vote, so 4 rows of 4 shaped children are the majority
+  const divided = plan("Divided", body([{ id: "3:1", type: "FRAME", name: "List", children: [
+    text("3:2"), inst("4:1", "k-row", [text("4:10")]), line("5:1"), inst("4:2", "k-row", [text("4:20")]), line("5:2"),
+    inst("4:3", "k-row", [text("4:30")]), line("5:3"), inst("4:4", "k-row", [text("4:40")])] }]));
+  const gotDivided = divided.plan ? sug(divided.plan) : null;
+  check(`[R18-MED1] a list divided by LINEs under a title is ONE repeat, not one instance per row (got ${JSON.stringify(gotDivided)})`,
+    JSON.stringify(gotDivided) === JSON.stringify(["1:1:screen:15", "2:1:section:14", "3:1:repeat:13"]));
+  // divider INSTANCEs between the rows and a shaped FRAME heading: the dividers ride along with the rows and do not vote
+  const dividedI = plan("DividedI", body([{ id: "3:1", type: "FRAME", name: "List", children: [
+    { id: "3:2", type: "FRAME", name: "Heading", children: [text("3:3"), text("3:4")] }, inst("4:1", "k-row"), divider("5:1"), inst("4:2", "k-row"), divider("5:2"),
+    inst("4:3", "k-row"), divider("5:3"), inst("4:4", "k-row")] }]));
+  const gotDividedI = dividedI.plan ? sug(dividedI.plan) : null;
+  check(`[R18-MED1] a list divided by Divider INSTANCEs is ONE repeat; neither a row nor a divider is suggested (got ${JSON.stringify(gotDividedI)})`,
+    JSON.stringify(gotDividedI) === JSON.stringify(["1:1:screen:13", "2:1:section:12", "3:1:repeat:11"]));
+
+  // review-19 MED-2: a form — three text fields with a checkbox, a select and a button between/after them — is no list:
+  // shaped children between rows are separators only when they share one shape and fill every gap
+  const form = plan("Form", body([{ id: "3:1", type: "FRAME", name: "Fields", children: [
+    inst("4:1", "k-field"), inst("4:2", "k-check"), inst("4:3", "k-field"), inst("4:4", "k-select"), inst("4:5", "k-field"), inst("4:6", "k-button")] }]));
+  const gotForm = form.plan ? sug(form.plan).map((x) => x.split(":").slice(0, 3).join(":")) : null;
+  check(`[R19-MED2] a form's mixed fields are not row separators: no repeat, every field instance suggested (got ${JSON.stringify(gotForm)})`,
+    !!gotForm && !gotForm.includes("3:1:repeat") && ["4:1", "4:2", "4:3", "4:4", "4:5", "4:6"].every((id) => gotForm.includes(`${id}:instance`)));
+
+  // review-19 r2 LOW: alternating pairs [Q, A, Q, A, Q, A] are pairs — the A after the last Q is not in a gap, so no A
+  // is a separator, and 3 of 6 is no majority
+  const qa = plan("Pairs", body([{ id: "3:1", type: "FRAME", name: "Faq", children: [
+    inst("4:1", "k-q"), inst("4:2", "k-a"), inst("4:3", "k-q"), inst("4:4", "k-a"), inst("4:5", "k-q"), inst("4:6", "k-a")] }]));
+  const gotQa = qa.plan ? sug(qa.plan).map((x) => x.split(":").slice(0, 3).join(":")) : null;
+  check(`[R19-r2] alternating Q/A pairs are no repeat with separators: every Q and A instance suggested (got ${JSON.stringify(gotQa)})`,
+    !!gotQa && !gotQa.includes("3:1:repeat") && ["4:1", "4:2", "4:3", "4:4", "4:5", "4:6"].every((id) => gotQa.includes(`${id}:instance`)));
+
+  check("[R18-MED2] the screen frame is suggested first, as \"screen\", covering every visible node",
+    [p34, pm3, divided.plan, dividedI.plan].every((p) => !!p && p.anchorsSuggested?.[0]?.why === "screen" && p.anchorsSuggested[0].id === "1:1" && p.anchorsSuggested[0].covers === Object.keys(p.anchors).length));
+  check(`[R18-MED2] every visible anchor is a suggestion or under one, the root included (uncovered: ${JSON.stringify([p34, pm3, divided.plan, dividedI.plan].map(uncovered))})`,
+    [p34, pm3, divided.plan, dividedI.plan].every((p) => uncovered(p).length === 0));
+
+  // a section instance holding a nested instance and a 3-row list: its internals belong to the component
+  const nested = plan("Nested", body([inst("6:1", "k-card", [inst("6:2", "k-avatar"),
+    { id: "6:3", type: "FRAME", name: "Items", children: ["6:4", "6:5", "6:6"].map((id): NodeInput => ({ id, type: "FRAME", name: "item", children: [text(id + "0"), text(id + "1")] })) }])]));
+  const gotNested = nested.plan ? sug(nested.plan) : null;
+  check(`[R18-MED4] an outermost instance covers its nested instance and inner list; neither is suggested (got ${JSON.stringify(gotNested)})`,
+    JSON.stringify(gotNested) === JSON.stringify(["1:1:screen:14", "2:1:section:13", "6:1:instance:12"]) && uncovered(nested.plan).length === 0);
+  // a root whose only child is hidden: just the frame, exit 0
+  const empty = plan("Empty", [{ id: "1:1", type: "FRAME", name: "Page", children: [{ id: "2:1", type: "FRAME", name: "Gone", hidden: true, children: [text("2:2")] }] }]);
+  check(`[R18-MED4] a root with only hidden children: exit 0, the frame alone is suggested (got ${JSON.stringify(empty.plan && sug(empty.plan))})`,
+    empty.status === 0 && JSON.stringify(empty.plan && sug(empty.plan)) === JSON.stringify(["1:1:screen:1"]));
+  // LOW-1: a screen frame that is a template INSTANCE: its internals are the component's, not sections
+  const tpl = plan("Template", [inst("1:1", "k-tpl", [inst("7:1", "k-nav", [text("7:2")]), { id: "7:3", type: "FRAME", name: "Slot", children: [inst("7:4", "k-btn")] }])]);
+  check(`[R18-LOW1] a screen frame that is an INSTANCE is the only suggestion (got ${JSON.stringify(tpl.plan && sug(tpl.plan))})`,
+    tpl.status === 0 && JSON.stringify(tpl.plan && sug(tpl.plan)) === JSON.stringify(["1:1:screen:5"]));
+  // the real export: the frame, its two sections, the outermost instances and one repeated list (7 before the frame was added)
+  const real = planOf(r.stdout).anchorsSuggested ?? [];
+  check(`[R18-MED4] the real fixture's suggestions are pinned: 8, the frame first and every visible anchor covered (got ${real.length})`,
+    real.length === 8 && real[0]?.why === "screen" && real[0].id === planOf(r.stdout).nodeId && uncovered(planOf(r.stdout)).length === 0);
+  check("[R18-LOW7] a plan's anchorsSuggested must be an array of objects (parsePlan names it)",
+    !isPlan({ anchorsSuggested: {} }) && !isPlan({ anchorsSuggested: ["1:1"] }) && isPlan({ anchorsSuggested: [] }));
 
   // merge: skeleton-owned, so it is REFRESHED (a stale list is replaced), while a filled mapModule survives
   const planFile = path.join(dir, "plan.json");

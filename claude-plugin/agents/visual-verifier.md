@@ -39,7 +39,8 @@ build-screen skill's `references/verify.md`
 (`${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md`) has the per-stack table — read it.
 
 Nothing available → write a `measured.json` with `{"mode": "static-only", "reason": "<exactly what
-you looked for>"}` and return. Do not install tooling or add dependencies without the caller saying so.
+you looked for>"}` and return (the caller's `--compare … --record-plan` records the plan as `static-only` with that
+reason). Do not install tooling or add dependencies without the caller saying so.
 
 **Web:** check with `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --check` (run from the web app's
 folder, or pass `--project <dir>`). It resolves the project's Playwright and launches Chromium once;
