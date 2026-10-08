@@ -81,7 +81,7 @@ import { CLOSE_STEP_CAP_MS, CUT_SETTLE_MS, PS_CAP_MS, WRITE_MARGIN_MS, behaviour
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
-import { RunCacheUnwritable, TERMINAL_PHASES, liveStatusFile, readStatus, sha256Of, stageDirOf, writeFileAtomic, writeStatus } from "./verify-run.ts";
+import { RunCacheUnwritable, RunEnded, TERMINAL_PHASES, liveStatusFile, readStatus, sha256Of, stageDirOf, writeFileAtomic, writeStatus } from "./verify-run.ts";
 import type { StatusWrite } from "./verify-run.ts";
 import type { Expectation } from "./verify-screen.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
@@ -1152,8 +1152,12 @@ export async function main(argv: string[]): Promise<number> {
   }
   // M-a: a status write the run cache refuses (the sandbox's write scope) is a warning — the probe keeps its exit
   // contract (0/2/3/4) and never crashes on it. Returns false when the write was refused.
+  let endedMeanwhile = false;
   const status = (w: StatusWrite): boolean => {
     try { writeStatus(statusBase, w); return true; } catch (e) {
+      // the run was ended (failed/blocked by the orchestrator) while this probe ran: the ended status stays — not a
+      // refused write, so no "record it with --status" recovery either
+      if (e instanceof RunEnded) { endedMeanwhile = true; console.error(`warning  ${e.message} — it ended while this probe ran; its status is left as it is`); return true; }
       if (!(e instanceof RunCacheUnwritable)) throw e;
       console.error(`warning  ${e.message}`);
       return false;
@@ -1173,6 +1177,7 @@ export async function main(argv: string[]): Promise<number> {
   if (!res.ok) return ended(rendererUnavailable(res.reason, res.hint));
   // written BEFORE the browser starts, and outside the project tree (F-91/H1); false when refused (or no --run)
   const measuringRecorded = runId !== undefined && status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...(expSha ? { expectationSha256: expSha } : {}) });
+  if (endedMeanwhile) return 2; // ended between the check above and this write: launch nothing for a finished run
   if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
 
   // F-107: one bound over launch → measure → close. Past it the browser is closed (at most 10 s more) and nothing is written.

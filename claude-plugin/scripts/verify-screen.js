@@ -415,9 +415,16 @@ function readStatus(base) {
   const r = readStatusAt(base);
   return r ? r.status : null;
 }
+var RunEnded = class extends Error {
+  constructor(runId, phase, detail) {
+    super(`run ${runId} already ended at ${phase}${detail ? ` (${detail})` : ""} \u2014 start a new run with --new-run`);
+    this.name = "RunEnded";
+  }
+};
 function writeStatus(base, p) {
   const prev = readStatus(base);
   const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+  if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
   const pick = (k) => {
     const v = p[k] ?? (same ? same[k] : void 0);
     return v !== void 0 ? { [k]: v } : {};
@@ -507,6 +514,10 @@ function statusMain(screen, f, usage) {
       console.error(e.message);
       return EXIT_RUN_CACHE;
     }
+    if (e instanceof RunEnded) {
+      console.error(e.message + "\n" + usage);
+      return 2;
+    }
     throw e;
   }
 }
@@ -576,6 +587,8 @@ function statusRun(screen, f, usage) {
   }
   let published;
   if (f.publish !== void 0) {
+    const now = readStatus(base);
+    if (now && now !== "v1" && now.runId === runId && TERMINAL_PHASES.includes(now.phase)) throw new RunEnded(now.runId, now.phase, now.detail);
     const r = publishStaged(f.publish, dir);
     if ("error" in r) {
       console.error(`refused  ${r.error}`);

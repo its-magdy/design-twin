@@ -142,6 +142,13 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
     again.status === 0 && /merged into/.test(again.stderr) && m.tokens.find((t) => t.figmaName === "Space 4")?.codeToken === "spacing-figma-space-4"
     && m.components[0]?.mapModule === "app/src/layout/Sidebar.tsx" && mAnchor?.mapModule?.endsWith("JetRolesScreen.tsx") === true
     && m.files?.length === 1 && m.route === "/jet-roles" && m.verification?.mode === "static-only" && m.tokens.length === 45);
+  // PR #1 review: --out merges through the one plan writer (plan-record.ts writePlan) — atomic, in the file's own format
+  fs.writeFileSync(out, JSON.stringify(m, null, 4).split("\n").join("\r\n") + "\r\n");
+  const crlf = run([screen(JR), vars(JR), DS, "--out", out]);
+  const crlfText = fs.readFileSync(out, "utf8");
+  // pre-change: fails — rewritten as LF with 2-space indentation
+  check("re-running --out keeps a hand-edited plan's own format (CRLF, 4-space indent) and leaves no temp file beside it",
+    crlf.status === 0 && crlfText.includes("\r\n    \"") && !/[^\r]\n/.test(crlfText) && fs.readdirSync(dir).join() === "plan.json");
   fs.writeFileSync(out, "{ not json");
   check("an existing plan that is not JSON is never overwritten", run([screen(JR), vars(JR), DS, "--out", out]).status === 1 && fs.readFileSync(out, "utf8") === "{ not json");
 }

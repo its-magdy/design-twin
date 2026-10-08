@@ -585,6 +585,164 @@ function auditGateStatus(cwd, screenFile, screenName) {
   return { auditFile: rel, blockers: blockerIds(r.doc), legacyBlockers: legacyBlockerIds(reportFindings(r.doc)) };
 }
 
+// design-to-code/plan-record.ts
+import fs6 from "node:fs";
+
+// design-to-code/verify-run.ts
+import fs4 from "node:fs";
+import path3 from "node:path";
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+function writeFileAtomic(file, data) {
+  fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  try {
+    fs4.writeFileSync(tmp, data);
+    fs4.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs4.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+
+// design-to-code/content-hash.ts
+import fs5 from "node:fs";
+import path4 from "node:path";
+import crypto2 from "node:crypto";
+var sha256 = (s) => crypto2.createHash("sha256").update(s).digest("hex");
+function stripPullTimes(v, parentKey) {
+  if (isUnknownArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
+  if (!v || typeof v !== "object") return v;
+  const out = {};
+  for (const [k, x] of Object.entries(v)) {
+    if (k === "exportedAt") continue;
+    if (k === "at" && parentKey === "_slices") continue;
+    out[k] = stripPullTimes(x, k);
+  }
+  return out;
+}
+function exportContentSha256(docs) {
+  const list = isUnknownArray(docs) ? docs : [docs];
+  return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
+}
+function fileHashes(files, cwd) {
+  const out = {};
+  for (const rel of isUnknownArray(files) ? files.map(String) : []) {
+    try {
+      out[rel] = sha256(fs5.readFileSync(path4.join(cwd, rel))).slice(0, 16);
+    } catch {
+      out[rel] = null;
+    }
+  }
+  return out;
+}
+var isRec = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+var RESOLVE_EXT = ["tsx", "ts", "jsx", "js"];
+var isFile = (abs) => {
+  try {
+    return fs5.statSync(abs).isFile();
+  } catch {
+    return false;
+  }
+};
+function mappedModulePath(raw, cwd) {
+  if (typeof raw !== "string") return null;
+  const s = (raw.split("#")[0] ?? "").trim().split("\\").join("/");
+  if (!s || s.startsWith("/") || /^[A-Za-z]:/.test(s) || /^[@~]/.test(s) || s.includes(":")) return null;
+  const rel = path4.posix.normalize(s).replace(/\/+$/, "");
+  if (rel === ".." || rel.startsWith("../") || rel === "." || !rel) return null;
+  const dotted = /\.[A-Za-z0-9]+$/.test(path4.posix.basename(rel));
+  if (cwd === void 0) return dotted ? rel : null;
+  if (dotted && isFile(path4.join(cwd, rel))) return rel;
+  const tries = [...RESOLVE_EXT.map((e) => `${rel}.${e}`), ...RESOLVE_EXT.map((e) => `${rel}/index.${e}`)];
+  return tries.find((t) => isFile(path4.join(cwd, t))) ?? (dotted ? rel : null);
+}
+function mapModules(plan) {
+  const out = [];
+  if (isRec(plan.anchors)) {
+    for (const a of Object.values(plan.anchors)) if (isRec(a)) out.push(a.mapModule);
+  }
+  if (isUnknownArray(plan.components)) {
+    for (const c of plan.components) if (isRec(c)) out.push(c.mapModule);
+  }
+  return out;
+}
+function planCodeFiles(plan, cwd) {
+  const listed = isUnknownArray(plan.files) ? plan.files.map(String) : [];
+  const seen = new Set(listed.map((f) => path4.posix.normalize(f.trim().split("\\").join("/"))));
+  const extra = /* @__PURE__ */ new Set();
+  for (const m of mapModules(plan)) {
+    const rel = mappedModulePath(m, cwd);
+    if (rel !== null && !seen.has(rel)) extra.add(rel);
+  }
+  return [...listed, ...[...extra].sort()];
+}
+function planCodeSkipped(plan, cwd) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of mapModules(plan)) {
+    if (typeof m !== "string" || !m.trim()) continue;
+    const rel = mappedModulePath(m, cwd);
+    if (rel === null || !isFile(path4.join(cwd, rel))) out.add(m.trim());
+  }
+  return [...out].sort();
+}
+function planCodeSkippedNote(plan, cwd) {
+  const s = planCodeSkipped(plan, cwd);
+  return s.length ? `mapModule path(s) not hashed with this plan's code: ${s.slice(0, 6).join(", ")}${s.length > 6 ? `, +${s.length - 6} more` : ""} \u2014 not a file under the project (an \`@/\`/\`~/\` alias, a package, a path outside the project, or a path that names no file even with .tsx/.ts/.jsx/.js or /index added), so an edit to it does not reopen the plan; for code this project owns write the project-relative file path` : null;
+}
+function planHash(plan) {
+  const copy = { ...plan || {} };
+  delete copy.status;
+  delete copy.waivers;
+  delete copy.descopes;
+  delete copy.verification;
+  return sha256(JSON.stringify(copy)).slice(0, 16);
+}
+function legacyPlanHash(plan) {
+  const copy = structuredClone({ ...plan || {} });
+  delete copy.status;
+  delete copy.waivers;
+  delete copy.descopes;
+  if (isRec(copy.verification)) {
+    const v = { ...copy.verification };
+    delete v.hook;
+    if (Object.keys(v).length) copy.verification = v;
+    else delete copy.verification;
+  }
+  return sha256(JSON.stringify(copy)).slice(0, 16);
+}
+
+// design-to-code/plan-record.ts
+var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+function formatPlan(value, raw) {
+  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
+  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const text = raw.slice(bom.length);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
+}
+function writePlan(file, value, raw) {
+  let was = raw ?? null;
+  if (raw === void 0) try {
+    was = fs6.readFileSync(file, "utf8");
+  } catch {
+    was = null;
+  }
+  const out = formatPlan(value, was);
+  if (out === was) return false;
+  writeFileAtomic(file, out);
+  return true;
+}
+
 // design-to-code/plan-skeleton.ts
 var USAGE = [
   `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
@@ -649,164 +807,6 @@ function visibility(doc) {
   return { visible, hidden, hiddenRoots };
 }
 if (false) process.exitCode = main(process.argv.slice(2));
-
-// design-to-code/content-hash.ts
-import fs4 from "node:fs";
-import path3 from "node:path";
-import crypto2 from "node:crypto";
-var sha256 = (s) => crypto2.createHash("sha256").update(s).digest("hex");
-function stripPullTimes(v, parentKey) {
-  if (isUnknownArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
-  if (!v || typeof v !== "object") return v;
-  const out = {};
-  for (const [k, x] of Object.entries(v)) {
-    if (k === "exportedAt") continue;
-    if (k === "at" && parentKey === "_slices") continue;
-    out[k] = stripPullTimes(x, k);
-  }
-  return out;
-}
-function exportContentSha256(docs) {
-  const list = isUnknownArray(docs) ? docs : [docs];
-  return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
-}
-function fileHashes(files, cwd) {
-  const out = {};
-  for (const rel of isUnknownArray(files) ? files.map(String) : []) {
-    try {
-      out[rel] = sha256(fs4.readFileSync(path3.join(cwd, rel))).slice(0, 16);
-    } catch {
-      out[rel] = null;
-    }
-  }
-  return out;
-}
-var isRec = (x) => !!x && typeof x === "object" && !Array.isArray(x);
-var RESOLVE_EXT = ["tsx", "ts", "jsx", "js"];
-var isFile = (abs) => {
-  try {
-    return fs4.statSync(abs).isFile();
-  } catch {
-    return false;
-  }
-};
-function mappedModulePath(raw, cwd) {
-  if (typeof raw !== "string") return null;
-  const s = (raw.split("#")[0] ?? "").trim().split("\\").join("/");
-  if (!s || s.startsWith("/") || /^[A-Za-z]:/.test(s) || /^[@~]/.test(s) || s.includes(":")) return null;
-  const rel = path3.posix.normalize(s).replace(/\/+$/, "");
-  if (rel === ".." || rel.startsWith("../") || rel === "." || !rel) return null;
-  const dotted = /\.[A-Za-z0-9]+$/.test(path3.posix.basename(rel));
-  if (cwd === void 0) return dotted ? rel : null;
-  if (dotted && isFile(path3.join(cwd, rel))) return rel;
-  const tries = [...RESOLVE_EXT.map((e) => `${rel}.${e}`), ...RESOLVE_EXT.map((e) => `${rel}/index.${e}`)];
-  return tries.find((t) => isFile(path3.join(cwd, t))) ?? (dotted ? rel : null);
-}
-function mapModules(plan) {
-  const out = [];
-  if (isRec(plan.anchors)) {
-    for (const a of Object.values(plan.anchors)) if (isRec(a)) out.push(a.mapModule);
-  }
-  if (isUnknownArray(plan.components)) {
-    for (const c of plan.components) if (isRec(c)) out.push(c.mapModule);
-  }
-  return out;
-}
-function planCodeFiles(plan, cwd) {
-  const listed = isUnknownArray(plan.files) ? plan.files.map(String) : [];
-  const seen = new Set(listed.map((f) => path3.posix.normalize(f.trim().split("\\").join("/"))));
-  const extra = /* @__PURE__ */ new Set();
-  for (const m of mapModules(plan)) {
-    const rel = mappedModulePath(m, cwd);
-    if (rel !== null && !seen.has(rel)) extra.add(rel);
-  }
-  return [...listed, ...[...extra].sort()];
-}
-function planCodeSkipped(plan, cwd) {
-  const out = /* @__PURE__ */ new Set();
-  for (const m of mapModules(plan)) {
-    if (typeof m !== "string" || !m.trim()) continue;
-    const rel = mappedModulePath(m, cwd);
-    if (rel === null || !isFile(path3.join(cwd, rel))) out.add(m.trim());
-  }
-  return [...out].sort();
-}
-function planCodeSkippedNote(plan, cwd) {
-  const s = planCodeSkipped(plan, cwd);
-  return s.length ? `mapModule path(s) not hashed with this plan's code: ${s.slice(0, 6).join(", ")}${s.length > 6 ? `, +${s.length - 6} more` : ""} \u2014 not a file under the project (an \`@/\`/\`~/\` alias, a package, a path outside the project, or a path that names no file even with .tsx/.ts/.jsx/.js or /index added), so an edit to it does not reopen the plan; for code this project owns write the project-relative file path` : null;
-}
-function planHash(plan) {
-  const copy = { ...plan || {} };
-  delete copy.status;
-  delete copy.waivers;
-  delete copy.descopes;
-  delete copy.verification;
-  return sha256(JSON.stringify(copy)).slice(0, 16);
-}
-function legacyPlanHash(plan) {
-  const copy = structuredClone({ ...plan || {} });
-  delete copy.status;
-  delete copy.waivers;
-  delete copy.descopes;
-  if (isRec(copy.verification)) {
-    const v = { ...copy.verification };
-    delete v.hook;
-    if (Object.keys(v).length) copy.verification = v;
-    else delete copy.verification;
-  }
-  return sha256(JSON.stringify(copy)).slice(0, 16);
-}
-
-// design-to-code/plan-record.ts
-import fs6 from "node:fs";
-
-// design-to-code/verify-run.ts
-import fs5 from "node:fs";
-import path4 from "node:path";
-var STATUS_SCHEMA = "designtwin/verify-status@2";
-var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
-var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
-}
-isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-function writeFileAtomic(file, data) {
-  fs5.mkdirSync(path4.dirname(path4.resolve(file)), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  try {
-    fs5.writeFileSync(tmp, data);
-    fs5.renameSync(tmp, file);
-  } catch (e) {
-    try {
-      fs5.rmSync(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
-}
-
-// design-to-code/plan-record.ts
-var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
-function formatPlan(value, raw) {
-  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
-  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
-  const text = raw.slice(bom.length);
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
-}
-function writePlan(file, value, raw) {
-  let was = raw ?? null;
-  if (raw === void 0) try {
-    was = fs6.readFileSync(file, "utf8");
-  } catch {
-    was = null;
-  }
-  const out = formatPlan(value, was);
-  if (out === was) return false;
-  writeFileAtomic(file, out);
-  return true;
-}
 
 // design-to-code/verify-build.ts
 var HOOK_TIMEOUT_MS = () => Number(process.env.DTWIN_HOOK_TIMEOUT_MS) || 6e4;

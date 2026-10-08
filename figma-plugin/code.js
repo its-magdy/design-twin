@@ -816,9 +816,9 @@
       return await fn();
     } catch (e) {
       abandoned = isAbandonment(e);
-      releaseAssets();
       throw e;
     } finally {
+      releaseAssets();
       endRun(abandoned);
     }
   }
@@ -3854,7 +3854,6 @@
     }
     const { files, layerFiles, summary, warnings: warnings2 } = toFiles(r);
     figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary, warnings: warnings2 ? warnings2.length : 0 });
-    releaseAssets();
   }
   var runSelection = () => runExport("current selection", () => collectSelection(), (r) => ({
     files: [
@@ -3937,7 +3936,6 @@
           error = errMsg(e);
         }
         figma.ui.postMessage({ type: "bridge-result", id: raw.id, ok: !error, result, error });
-        releaseAssets();
         break;
       }
       default: {

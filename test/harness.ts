@@ -2852,6 +2852,29 @@ const sandbox: Sandbox = context;
     ok("[LIVE-5] …and without an abandon the same node exports in full",
       !!resL2 && resL2.ok === true && readAfter >= 2);
 
+    // [ASSET-RACE] (PR #1 review) an UNQUEUED command answered during an export must not drop that export's
+    // assets. main.ts released the module asset array after EVERY bridge reply, so a `ping` that landed
+    // mid-walk emptied the array the export was filling: the result lost the icons collected before it,
+    // while the node tree still pointed at their files.
+    posted.length = 0;
+    let pingP: Promise<void> | null = null;
+    const raceIcon = (id: string, body: string, gate?: () => Promise<unknown>): FakeNode => ({ type: "VECTOR", name: "glyph-" + id, visible: true, id, width: 16, height: 16,
+      fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
+      exportAsync: async () => { if (gate) await gate(); return body; } });
+    const pingTrap: FakeNode = { type: "FRAME", name: "PingTrap", id: "ar:t", visible: true, width: 10, height: 10, layoutMode: "NONE",
+      get children() { pingP ??= handler({ type: "bridge", id: "ar-ping", cmd: "ping", args: {} }); return []; } };
+    const raceRoot: FakeNode = { type: "FRAME", name: "Race", id: "ar:1", visible: true, width: 100, height: 100, layoutMode: "NONE",
+      exportAsync: async () => new Uint8Array([137, 80, 78, 71]),
+      children: [raceIcon("ar:a", "<svg>first</svg>"), pingTrap, raceIcon("ar:b", "<svg>second</svg>", () => must(pingP, "ping sent"))] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "ar:1" ? raceRoot : null);
+    await handler({ type: "bridge", id: "ar-req", cmd: "exportNode", args: { nodeId: "ar:1", css: false } });
+    const resPing = posted.find((m) => m.type === "bridge-result" && m.id === "ar-ping");
+    const resRace = posted.find((m) => m.type === "bridge-result" && m.id === "ar-req");
+    const raceSvgs = resRace && resRace.ok ? (resRace.result as { assets: { format: string; from?: string[]; id: string }[] }).assets.filter((a) => a.format === "svg").map((a) => a.id).sort() : [];
+    // pre-change: fails — raceSvgs is ["ar:b"]: the ping's reply released "ar:a" mid-export.
+    ok("[ASSET-RACE] a ping answered mid-export leaves the export's earlier assets in its result",
+      !!resPing && resPing.ok === true && JSON.stringify(raceSvgs) === '["ar:a","ar:b"]');
+
     // [LIVE-5] inside the catalog's variant walk: each variant's serialize is wrapped in a catch that
     // WARNS and moves on (components.ts), so the per-node throw is swallowed there — the collector's
     // backstop must still refuse to deliver, and the walk's toggles must be restored by their finally.
