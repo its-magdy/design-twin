@@ -224,6 +224,7 @@ function stripAssets(r: ExportReply): object {
 // running, because both call createBridge() and bind port 8787 — the second to start hits EADDRINUSE
 // and exits (server-core.ts). Before this, an MCP-only session had no way to get assets at all.
 import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
+import { prettyJsonWithin } from "./json-size.ts";
 import { findExportDir, findMapFile } from "./project-layout.ts";
 import type { Stamped } from "./write-out.ts";
 import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./doc-types.ts";
@@ -472,10 +473,12 @@ function exportResult(tool: string, a: WriteArgs, p: Pulled, opts?: { scale?: nu
   let spilled = "";
   if (!a || !a.writeToDisk) {
     // The clock rides along inline too (top level); `write` is 0 — nothing was written.
-    const inline = textResult({ ...stripAssets(r), durationMs: { total: Date.now() - t0, request: requestMs, write: 0 } });
-    const size = inline.content[0].text.length, limit = inlineLimitChars();
-    if (size <= limit) return inline;
-    const why = `this export is ${size.toLocaleString("en-US")} characters (~${Math.round(size / 4000)}k tokens), past what the client accepts inline (~${Math.round(limit / 4000)}k tokens; Claude Code keeps larger results out of the conversation, and MAX_MCP_OUTPUT_TOKENS can only lower this)`;
+    const payload = { ...stripAssets(r), durationMs: { total: Date.now() - t0, request: requestMs, write: 0 } };
+    const limit = inlineLimitChars();
+    // The text only when it fits: a real export is tens of megabytes, so the size is measured without serialising it.
+    const text = prettyJsonWithin(payload, limit);
+    if (text !== null) return textResult(text);
+    const why = `this export is past the ${limit.toLocaleString("en-US")} characters (~${Math.round(limit / 4000)}k tokens) the client accepts inline (Claude Code keeps larger results out of the conversation, and MAX_MCP_OUTPUT_TOKENS can only lower this)`;
     if (a && a.writeToDisk === false) throw new Error(`${why}, and writeToDisk:false was passed. Omit it (or pass true) to get the files plus a compact index, or narrow the scope (a node id instead of a page, a lower depth).`);
     spilled = `Written to disk WITHOUT being asked: ${why}, so returning it inline would have been cut off mid-JSON. `;
   }
