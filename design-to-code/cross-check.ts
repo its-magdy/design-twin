@@ -24,7 +24,7 @@
 //   variables    design/export/variables.json                — the tokens the SCREENS bind (their library)
 //   tokens       design/export/design-system/tokens.json    — the tokens the DESIGN SYSTEM defines
 //   components   design/export/design-system/components.local.json   (+ .library.json, optional)
-//   stylesText   design/design-system/styles.text.json        (optional)
+//   stylesText   design/export/design-system/styles.text.json        (optional)
 // Every input is optional: with only screens it still reports the within-screen absurdities (a radius
 // of a billion, font strays), and says plainly which cross-file checks it could not run.
 
@@ -55,7 +55,8 @@ import type {
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
-import { findMapFile } from "../bridge/src/project-layout.ts";
+import { findMapFile, findExportDir } from "../bridge/src/project-layout.ts";
+import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
@@ -1472,7 +1473,7 @@ function toMarkdown(res: CrossCheckReport): string {
 
 export { crossCheck, toMarkdown, composedRgba, exportSiblings, ABSURD_NUMBER, WRONG_CATALOG_PCT };
 
-// CLI: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system]
+// CLI: node design-to-code/cross-check.ts <screen.json>... [--design-system design/export/design-system]
 //        [--variables design/export/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]
 // Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
 // document it should be is a one-line error and exit 2.
@@ -1500,7 +1501,8 @@ function main(argv: string[]): number {
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) return 2;
   const screens: CrossCheckScreen[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) })); // own[i] is set: own is files.map(...)
-  const dsBase = dsDir || "design/design-system";
+  // Without the flag: the design-system dir of this project's export, current layout or legacy flat one (findExportDir).
+  const dsBase = dsDir || path.join(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
   const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);
   // A stale legacy-layout `design/variables.json` next to `design/export/` is
