@@ -253,15 +253,26 @@ export interface StatusWrite {
   evidenceSha256?: string;
   published?: string[];
 }
+/** A status write for a run that has already ended (done/failed/blocked): refused by writeStatus itself, so a writer
+ *  that checked at its start (the probe, up to its time budget earlier) cannot reopen the run with a late write. */
+export class RunEnded extends Error {
+  constructor(runId: string, phase: StatusPhase, detail: string) {
+    super(`run ${runId} already ended at ${phase}${detail ? ` (${detail})` : ""} — start a new run with --new-run`);
+    this.name = "RunEnded";
+  }
+}
 /**
  * Write the LIVE status of `<base>` atomically (never into the project's watched tree). rev = the previous rev + 1
  * when it is the same run, else 1. Within one run the shas and the published list carry forward (a `driving`
  * write after the probe's `measured` still names the measured file the probe wrote; published is the run's union).
- * Throws RunCacheUnwritable when the run cache refuses the write (sandbox write scope, read-only mount).
+ * Throws RunCacheUnwritable when the run cache refuses the write (sandbox write scope, read-only mount), RunEnded when
+ * the same run has already ended.
  */
 export function writeStatus(base: string, p: StatusWrite): VerifyStatusV2 {
   const prev = readStatus(base);
   const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+  // an ended run stays ended (live F4): checked HERE, at the write, not only by the caller at its start
+  if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
   const pick = (k: "expectationSha256" | "measuredSha256" | "evidenceSha256"): { [K in typeof k]?: string } => {
     const v = p[k] ?? (same ? same[k] : undefined);
     return v !== undefined ? { [k]: v } : {};
@@ -360,6 +371,7 @@ export interface StatusFlags { phase?: string | undefined; run?: string | undefi
 export function statusMain(screen: string | undefined, f: StatusFlags, usage: string): number {
   try { return statusRun(screen, f, usage); } catch (e) {
     if (e instanceof RunCacheUnwritable) { console.error(e.message); return EXIT_RUN_CACHE; }
+    if (e instanceof RunEnded) { console.error(e.message + "\n" + usage); return 2; } // it ended while this write was checked
     throw e;
   }
 }
@@ -417,6 +429,10 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   }
   let published: string[] | undefined;
   if (f.publish !== undefined) {
+    // re-checked right before publishing: a run ended while the measured file was checked publishes nothing
+    // (writeStatus below refuses it too, but only after the files would be in the verify dir)
+    const now = readStatus(base);
+    if (now && now !== "v1" && now.runId === runId && TERMINAL_PHASES.includes(now.phase)) throw new RunEnded(now.runId, now.phase, now.detail);
     const r = publishStaged(f.publish, dir);
     if ("error" in r) { console.error(`refused  ${r.error}`); return 1; }
     published = r.published;

@@ -1087,9 +1087,16 @@ function readStatus(base) {
   const r = readStatusAt(base);
   return r ? r.status : null;
 }
+var RunEnded = class extends Error {
+  constructor(runId, phase, detail) {
+    super(`run ${runId} already ended at ${phase}${detail ? ` (${detail})` : ""} \u2014 start a new run with --new-run`);
+    this.name = "RunEnded";
+  }
+};
 function writeStatus(base, p) {
   const prev = readStatus(base);
   const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+  if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
   const pick = (k) => {
     const v = p[k] ?? (same ? same[k] : void 0);
     return v !== void 0 ? { [k]: v } : {};
@@ -6728,11 +6735,17 @@ ${USAGE}`);
       return 2;
     }
   }
+  let endedMeanwhile = false;
   const status = (w) => {
     try {
       writeStatus(statusBase, w);
       return true;
     } catch (e) {
+      if (e instanceof RunEnded) {
+        endedMeanwhile = true;
+        console.error(`warning  ${e.message} \u2014 it ended while this probe ran; its status is left as it is`);
+        return true;
+      }
       if (!(e instanceof RunCacheUnwritable)) throw e;
       console.error(`warning  ${e.message}`);
       return false;
@@ -6752,6 +6765,7 @@ ${USAGE}`);
   const res = resolvePlaywright(project);
   if (!res.ok) return ended(rendererUnavailable(res.reason, res.hint));
   const measuringRecorded = runId !== void 0 && status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...expSha ? { expectationSha256: expSha } : {} });
+  if (endedMeanwhile) return 2;
   if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
   const held = {};
   let timer;

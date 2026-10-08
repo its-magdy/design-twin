@@ -2,8 +2,8 @@
 
 
 // design-to-code/plan-skeleton.ts
-import fs4 from "node:fs";
-import path3 from "node:path";
+import fs6 from "node:fs";
+import path4 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -235,12 +235,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path4, parent, depth) {
+  (function go(node, parentHidden, path5, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path4, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path5, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path4 ? path4 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path5 ? path5 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -430,7 +430,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path4, message) => errors.push({ path: path4, message });
+  const err = (path5, message) => errors.push({ path: path5, message });
   if (!isObj(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -795,6 +795,59 @@ function auditGateStatus(cwd, screenFile, screenName) {
 
 // design-to-code/plan-skeleton.ts
 import { parseArgs as parseArgs2 } from "node:util";
+
+// design-to-code/plan-record.ts
+import fs5 from "node:fs";
+
+// design-to-code/verify-run.ts
+import fs4 from "node:fs";
+import path3 from "node:path";
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+function writeFileAtomic(file, data) {
+  fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  try {
+    fs4.writeFileSync(tmp, data);
+    fs4.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs4.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+
+// design-to-code/plan-record.ts
+var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+function formatPlan(value, raw) {
+  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
+  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const text = raw.slice(bom.length);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
+}
+function writePlan(file, value, raw) {
+  let was = raw ?? null;
+  if (raw === void 0) try {
+    was = fs5.readFileSync(file, "utf8");
+  } catch {
+    was = null;
+  }
+  const out = formatPlan(value, was);
+  if (out === was) return false;
+  writeFileAtomic(file, out);
+  return true;
+}
+
+// design-to-code/plan-skeleton.ts
 var USAGE = [
   `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
   "",
@@ -1146,7 +1199,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };
   const nodeId = exp && exp.nodeId || root && root.id || null;
   const title = indexRow && indexRow.title;
-  const rel = screenFile ? path3.relative(cwd || process.cwd(), path3.resolve(screenFile)).split(path3.sep).join("/") : null;
+  const rel = screenFile ? path4.relative(cwd || process.cwd(), path4.resolve(screenFile)).split(path4.sep).join("/") : null;
   const screenName = String(title || exp && exp.screen || root && root.name || "").trim() || null;
   let auditGate = null;
   try {
@@ -1154,14 +1207,14 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     const g = auditGateStatus(base, screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
       const cross = g.auditFile.replace(/\.json$/, ".cross.json");
-      const crossCheckFile = cross !== g.auditFile && fs4.existsSync(path3.join(base, cross)) ? cross : null;
+      const crossCheckFile = cross !== g.auditFile && fs6.existsSync(path4.join(base, cross)) ? cross : null;
       auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
   } catch {
   }
   return {
     schema: "designtwin/plan@2",
-    screen: screenFile ? path3.basename(screenFile).replace(/\.json$/, "") : null,
+    screen: screenFile ? path4.basename(screenFile).replace(/\.json$/, "") : null,
     screenName,
     nodeId,
     route: route || null,
@@ -1281,8 +1334,8 @@ function seed(plan, from, label) {
 }
 var isIndexDoc = (x) => isPagesRootIndex(x) || isPageIndex(x);
 function findIndexRow(screenFile, nodeId) {
-  const dir = path3.dirname(path3.resolve(screenFile));
-  for (const idx of [path3.join(dir, "..", "index.json"), path3.join(dir, "index.json")]) {
+  const dir = path4.dirname(path4.resolve(screenFile));
+  for (const idx of [path4.join(dir, "..", "index.json"), path4.join(dir, "index.json")]) {
     const d = readJsonOrNull(idx, isIndexDoc);
     const hit = (d && d.layers || []).find((r) => r.id === nodeId);
     if (hit) return hit;
@@ -1312,18 +1365,18 @@ function main(argv) {
   const varsRead = readJson(varsFile, isTokensDoc);
   if (!("doc" in varsRead)) return cannotRead("the screen's variables", varsFile, varsRead.error);
   const doc = screen.doc, vars = varsRead.doc;
-  const hasDs = dsDir && fs4.existsSync(dsDir) && fs4.statSync(dsDir).isDirectory();
+  const hasDs = dsDir && fs6.existsSync(dsDir) && fs6.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const optional = (file, guard) => {
     if (!hasDs) return { doc: null };
-    const r = readJson(path3.join(dsDir, file), guard);
+    const r = readJson(path4.join(dsDir, file), guard);
     return "doc" in r ? r : r.missing ? { doc: null } : { error: r.error };
   };
   const dsRead = optional("tokens.json", isTokensDoc), catRead = optional("components.local.json", isComponentsCatalog), libRead = optional("components.library.json", isComponentsCatalog);
-  if ("error" in dsRead) return cannotRead("the design system's tokens", path3.join(dsDir, "tokens.json"), dsRead.error);
-  if ("error" in catRead) return cannotRead("the component catalog", path3.join(dsDir, "components.local.json"), catRead.error);
-  if ("error" in libRead) return cannotRead("the library component catalog", path3.join(dsDir, "components.library.json"), libRead.error);
-  const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs4.existsSync(f));
+  if ("error" in dsRead) return cannotRead("the design system's tokens", path4.join(dsDir, "tokens.json"), dsRead.error);
+  if ("error" in catRead) return cannotRead("the component catalog", path4.join(dsDir, "components.local.json"), catRead.error);
+  if ("error" in libRead) return cannotRead("the library component catalog", path4.join(dsDir, "components.library.json"), libRead.error);
+  const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs6.existsSync(f));
   let mapKeys = /* @__PURE__ */ new Map();
   if (mapFile) {
     const m = readJson(mapFile, isCodeConnectMap);
@@ -1339,7 +1392,7 @@ function main(argv) {
   }
   const seedAll = (plan) => {
     for (const sd of seeds) {
-      const n = seed(plan, sd.plan, path3.basename(sd.file));
+      const n = seed(plan, sd.plan, path4.basename(sd.file));
       console.error(`plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " \u2014 review them (seededFrom)" : ""));
     }
   };
@@ -1360,8 +1413,8 @@ function main(argv) {
     const prev = parsed && "plan" in parsed ? parsed.plan : null;
     const { plan, dropped } = merge(fresh, prev);
     seedAll(plan);
-    fs4.mkdirSync(path3.dirname(path3.resolve(out)), { recursive: true });
-    fs4.writeFileSync(out, JSON.stringify(plan, null, 2) + "\n");
+    fs6.mkdirSync(path4.dirname(path4.resolve(out)), { recursive: true });
+    writePlan(out, plan);
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }
   console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded, ${fresh.anchorsSuggested.length} suggested anchor root(s) (anchorsSuggested)`);

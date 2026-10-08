@@ -65,6 +65,7 @@ import type {
 import { parseHex, formatHex, composeAlpha } from "./color.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
+import { writePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const USAGE = [
@@ -728,7 +729,9 @@ function main(argv: string[]): number {
     const { plan, dropped } = merge(fresh, prev);
     seedAll(plan); // after the own-plan merge: this plan's own answers always win
     fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
-    fs.writeFileSync(out, JSON.stringify(plan, null, 2) + "\n");
+    // the one plan writer (plan-record.ts): atomic, so a kill mid-write cannot truncate a hand-answered plan, and in
+    // the file's own format (indent, CRLF, BOM), so a merge is not a whole-file diff
+    writePlan(out, plan);
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }
   console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded, ${fresh.anchorsSuggested.length} suggested anchor root(s) (anchorsSuggested)`);

@@ -15,7 +15,7 @@ import { ifDefined } from "../../bridge/src/json-util.ts";
 // esbuild inlines here — see bridge/src/pages-layout.ts.
 import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
 import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";
-import { cancelBridgeRequest, cancelBridgeRuns, releaseAssets, serializeRun, type Asset } from "./state";
+import { cancelBridgeRequest, cancelBridgeRuns, serializeRun, type Asset } from "./state";
 import { requestCancel } from "./progress";
 import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, collectScreenshot, listPages, listChildren, type ScreenResult, type FullResult } from "./collect";
 import { serialize } from "./serialize";
@@ -64,10 +64,9 @@ async function runExport<T extends { assets: Asset[] }>(
   // The warning COUNT, not the warnings themselves. They already ride to disk inside the doc's own
   // manifest and a real export produces dozens, so the plugin window's job is only to say the list is
   // non-empty and name where to read it — otherwise "Ready: …" reads as a clean export and nobody looks.
-  // Post the collector's OWN asset list (it already returned a copy), then drop the module-level one.
-  // Otherwise every base64 PNG/SVG of this export stays resident until the next run's resetRun().
+  // Post the collector's OWN asset list (it returned a copy; the module-level one was dropped when the
+  // run settled — state.ts bracket).
   figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary, warnings: warnings ? warnings.length : 0 });
-  releaseAssets();
 }
 
 const runSelection = (): Promise<void> =>
@@ -182,8 +181,9 @@ figma.ui.onmessage = async (raw: unknown) => {
         // bridge itself abandoned fails the same way with ABANDONED_MESSAGE (usually to nobody).
         error = errMsg(e);
       }
+      // No releaseAssets() here: a queued run drops its assets when it settles (state.ts bracket), and
+      // this reply may be an unqueued command answering DURING an export that is still filling them.
       figma.ui.postMessage({ type: "bridge-result", id: raw.id, ok: !error, result, error });
-      releaseAssets(); // the result carries its own assets.slice() — don't hold the bytes past the reply
       break;
     }
     default: {

@@ -259,13 +259,15 @@ async function bracket<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
     return await fn();
   } catch (e) {
     abandoned = isAbandonment(e);
-    // A run that THREW — cancelled or crashed — still allocated asset payloads (tens of MB of base64
-    // PNG/SVG), and nobody downstream takes them off our hands: only a SUCCESSFUL collector returns
-    // assets.slice() for the caller to post. Dropping them here is what keeps "state is fully reset
-    // after a cancel" true, rather than leaving the whole aborted export resident until the next run.
-    releaseAssets();
     throw e;
   } finally {
+    // Drop the run's asset payloads (tens of MB of base64 PNG/SVG) the moment it settles: a successful
+    // collector has already returned its own assets.slice(), and a run that THREW — cancelled or
+    // crashed — hands them to nobody. Here, inside the run, and not after the caller posts its reply:
+    // an UNQUEUED bridge command (ping, whoami, listPages, …) answers DURING a queued export, so a
+    // release on every reply emptied the array that export was still filling — and the next queued
+    // run may already have started by the time a caller's continuation runs.
+    releaseAssets();
     // In `finally`, so the cancellation flag is cleared even on the path that threw BECAUSE of it.
     // (The other per-run toggle a cancel could strand — figma.skipInvisibleInstanceChildren, set by
     // the component-catalog and library walks — is already restored by their own `finally` blocks,

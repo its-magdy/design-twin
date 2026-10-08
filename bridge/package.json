@@ -36,13 +36,13 @@
     "mcp": "node src/figma-mcp.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "ws": "^8.21.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "typescript": "^7.0.2",
     "@types/node": "^24.0.0",
-    "@types/ws": "^8.18.1"
+    "@types/ws": "^8.18.1",
+    "typescript": "^7.0.2"
   }
 }

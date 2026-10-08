@@ -403,6 +403,18 @@ await block("verify-screen --status after an ended run:", async () => {
   cli("--status", "Plots", "--phase", "blocked", "--run", "run-blk2", "--detail", "blocked again");
   const n = cli("--status", "Plots", "--phase", "starting", "--new-run");
   safe("[F4] …a new run after a blocked one is written (exit 0, rev 1, phase starting)", () => n.status === 0 && /^run \S+ rev 1$/m.test(n.stdout) && readStatusFile(live)?.phase === "starting");
+  // PR #1 review: the refusal lives in writeStatus itself — a writer that checked at its start (the probe, whose
+  // `measured` write comes up to its time budget later) cannot reopen a run that was ended meanwhile.
+  const base = path.join(dir, "Plots");
+  VR.writeStatus(base, { runId: "run-late", phase: "measuring", by: "verify-probe" });
+  VR.writeStatus(base, { runId: "run-late", phase: "failed", by: "orchestrator", detail: "verifier gone" });
+  const failedDoc = fs.readFileSync(live, "utf8");
+  let late: unknown = null;
+  try { VR.writeStatus(base, { runId: "run-late", phase: "measured", by: "verify-probe", measuredSha256: "0".repeat(64) }); } catch (e) { late = e; }
+  // pre-change: fails — the late write returned rev 3, phase measured
+  safe("[F4] writeStatus refuses a late write to an ended run (RunEnded naming the phase and detail); the failed status is unchanged",
+    () => late instanceof VR.RunEnded && late.message.startsWith("run run-late already ended at failed (verifier gone)") && fs.readFileSync(live, "utf8") === failedDoc);
+  safe("[F4] …a write for another run id still goes through", () => VR.writeStatus(base, { runId: "run-next", phase: "starting", by: "agent" }).rev === 1);
 });
 
 // ---------------------------------------------------------------- CLI --wait
