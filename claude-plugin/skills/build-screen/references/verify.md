@@ -128,7 +128,8 @@ Render at least once each, when the stack supports it:
 
 Record what you covered in the plan's `verification.coverage` — `{rendered:[…], notChecked:[{what,
 why}]}` (yours to write) — and, on web, let `verify-screen.js --compare … --record-plan` write the rest of `verification`
-(`mode`, `renderer`, `artifacts`, open `deltas`, `a11y` from `report.behaviour.summary`, `recorded`); elsewhere, when an
+(`mode` — `static-only` + its `reason` for a static-only measured file —, `renderer`, `artifacts`, open `deltas`, `a11y` from
+`report.behaviour.summary`, `recorded`); elsewhere, when an
 accessibility check ran, `verification.a11y` — `{tool, violations, warnings, report}`, copied from `report.behaviour.summary`. One
 rendered frame is a legitimate result; an unstated one is not, because the report would then read as
 "verified" for states nobody looked at. The Stop hook only warns when these are missing.
@@ -143,7 +144,8 @@ rendered frame is a legitimate result; an unstated one is not, because the repor
   split the component, or report it.
 - Never trade maintainability for pixels: a round that adds absolute positioning, a fixed size or a
   magic offset to a node the export lays out with auto layout, or replaces a token with a literal,
-  is a regression even when the screenshot got closer. Report the residual in `deltas` instead.
+  is a regression even when the screenshot got closer. Record the residual in `deviations[]` (with a reason) instead —
+  `verification.deltas` belongs to `--record-plan`, which replaces any row it did not write.
 - After two approaches fail on the same issue, stop and re-read the IR and profile for that node; you're
   probably misreading a unit or a sizing mode.
 

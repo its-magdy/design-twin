@@ -659,6 +659,7 @@ console.log("P2b [155/189] acceptance 6 — the live plans and reports: neither 
     fxPlan(JR).status === "verified" && fxPlan(GP).status === "verified" && before.every((s) => s.status === "pending" && /not confirmed by the current hook and is ignored/.test(s.reasons[0] ?? "")));
   const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
   const after = { jr: readFixture(planFile(JR), isPlan), gp: readFixture(planFile(GP), isPlan) };
+  const jrText = fs.readFileSync(planFile(JR), "utf8"); // (the hook keeps the plan file's own format, L5)
   check("[155] the hook actively clears the stored \"verified\" from both plans", after.jr.status === undefined && after.gp.status === undefined && /removed the stored "status": "verified"/.test(r.stderr));
   const jr = st(JR), gp = st(GP);
   check(`[155/316] Jet Roles: not verified — its report (JetRoles.report.json, schema @1) is flagged as predating @2, and its false "31 component(s) … never built" is NOT repeated (got ${jr.status})`,
@@ -668,7 +669,7 @@ console.log("P2b [155/189] acceptance 6 — the live plans and reports: neither 
   const cli = spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" });
   const rows = parseAs(cli.stdout, isStatusRows, "--status --json");
   check("[155] `verify-build.js --status --json` reports the same, and writes nothing", cli.status === 0 && rows.length === 2 && rows.every((x) => x.status !== "verified")
-    && fs.readFileSync(planFile(JR), "utf8") === JSON.stringify(after.jr, null, 2) + "\n");
+    && fs.readFileSync(planFile(JR), "utf8") === jrText);
   // make GP pass its hook: status must STILL not be verified, because its report says fail
   const gpFixed = readFixture(planFile(GP), isPlan);
   must(gpFixed.anchors, "gpFixed.anchors")["1359:21457"] = { omitted: "duplicate footer" };

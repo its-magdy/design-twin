@@ -78,9 +78,12 @@ placeholder/value colours do not arrive by themselves. `::placeholder` never app
 (and its `-fields-wrapper` / `-text` parts) with the placeholder token while the field is empty (`:invalid` on a
 `required` field, else a `data-empty` attribute you toggle) and the value token once set. Firefox: no such
 pseudo-elements that we know of — set `color` on the input itself and check it in the browser. Set `color-scheme`
-(dark) so the native picker usually matches the theme. A `<select>` placeholder is a disabled, hidden first
-`<option value="">` plus a `select:invalid` colour (the field `required`). Record the substitution in the plan and
-verify the colour on the element's own text.
+(dark) so the native picker usually matches the theme. A `<select>` placeholder is a first
+`<option value="">` on a `required` select (the spec's placeholder label option), coloured with `select:invalid`.
+If you make it `disabled hidden`, also mark it `selected`; in React, use `defaultValue=""` or a controlled
+`value=""` on the `<select>`. Otherwise the first enabled option is selected, the field is valid, and the
+placeholder never shows. Record the substitution in the plan as a `deviations[]` row
+`{nodeId, field: "control", designed, built, reason}` and verify the colour on the element's own text.
 
 **Idiomatic web (patterns by structure)** — decide from the node's STRUCTURE; its name is only a hint.
 - Full-width bar pinned to the top of the root frame (`fixedChildren`, or first child with logo/title/

@@ -820,6 +820,55 @@ console.log("cross-check — F-126: colour bindings from collections resolved in
   }
 }
 
+// ---------------------------------------------------------------- L6: same-named collections, told apart by collectionKey
+console.log("cross-check — L6: two collections with one name are matched by collectionKey first:");
+{
+  // The design system's own `Colors` (Light/Dark, default Light) is listed first; a library's `Colors` beside it.
+  const solid = (color: string, token: string) => ({ type: "solid" as const, color, tokens: { color: token } });
+  // mixed-mode-bindings: a ONE-mode library `Colors` variable (values only in 'Light') is not a multi-mode binding,
+  // although the design system's same-named `Colors` declares Light and Dark — by name it was matched there.
+  const mixVars = tokens({
+    collections: [
+      { name: "Theme", key: "k-theme", modes: ["Dark", "Light"], default: "Dark" },
+      { name: "Colors", key: "k-sys", modes: ["Light", "Dark"], default: "Light" },
+      { name: "Colors", key: "k-lib", modes: ["Light"], default: "Light" },
+    ],
+    variables: [
+      { name: "Surface/Page", collection: "Theme", collectionKey: "k-theme", key: "t1", type: "COLOR", values: { Dark: "#121319", Light: "#ffffff" } },
+      { name: "Text/Main", collection: "Theme", collectionKey: "k-theme", key: "t2", type: "COLOR", values: { Dark: "#ffffff", Light: "#121319" } },
+      { name: "Lib/Ink", collection: "Colors", collectionKey: "k-lib", key: "l1", type: "COLOR", values: { Light: "#e6e0e9" } },
+    ],
+  });
+  const inkText: NodeInput = { type: "TEXT", id: "3:1", name: "Btn Text", text: "Save", font: { family: "Inter", size: 14 }, fills: [solid("#e6e0e9", "Lib/Ink")] };
+  const mixDoc = screenExport([
+    { type: "FRAME", id: "1:1", name: "Settings", resolvedModes: { Theme: "Dark", Colors: "Light" }, tokens: { fills: "Surface/Page" }, children: [text("2:1", "Inter", null, "Text/Main"), inkText] },
+  ], { screen: "Settings" });
+  ok("[L6-1] mixed-mode-bindings: a variable whose collectionKey names the ONE-mode `Colors` is not read as the two-mode `Colors` (no mix)",
+    !has(crossCheck({ screens: [{ doc: mixDoc, label: "Settings" }], variables: mixVars }), "mixed-mode-bindings"));
+
+  // token-pair-contrast: no resolvedModes entry, so each variable renders in its collection's default — the
+  // LIBRARY `Colors` (default Dark) for k-lib rows, not the design system's (default Light).
+  const pairVars = (collectionKey: string) => tokens({
+    collections: [
+      { name: "Colors", key: "k-sys", modes: ["Light", "Dark"], default: "Light" },
+      { name: "Colors", key: "k-lib", modes: ["Light", "Dark"], default: "Dark" },
+    ],
+    variables: [
+      { name: "Bg/Page", collection: "Colors", collectionKey, key: "v1", type: "COLOR", values: { Light: "#ffffff", Dark: "#121319" } },
+      { name: "Text/Soft", collection: "Colors", collectionKey, key: "v2", type: "COLOR", values: { Light: "#c0c0c8", Dark: "#ffffff" } },
+    ],
+  });
+  const pairDoc = screenExport([
+    { type: "FRAME", id: "1:1", name: "Profile", tokens: { fills: "Bg/Page" }, fills: [solid("#121319", "Bg/Page")],
+      children: [{ type: "TEXT", id: "2:1", name: "Label", text: "Roles", font: { family: "Inter", size: 14 }, tokens: { fills: "Text/Soft" } }] },
+  ], { screen: "Profile" });
+  const pairsWith = (key: string) => crossCheck({ screens: [{ doc: pairDoc, label: "Profile" }], variables: pairVars(key) }).findings.find((x) => x.code === "token-pair-contrast")?.tokenPairs ?? [];
+  ok("[L6-2] token-pair-contrast: rows keyed to the library `Colors` render in ITS default (Dark: white on near-black passes) — no row",
+    pairsWith("k-lib").length === 0);
+  ok("[L6-2] …and the same rows keyed to the design system's `Colors` render in Light (#c0c0c8 on #ffffff fails) — one row in 'Light'",
+    (() => { const p = pairsWith("k-sys"); return p.length === 1 && p[0]?.fg === "Text/Soft" && p[0].mode === "Light"; })());
+}
+
 // ---------------------------------------------------------------- DT-63: token pairs in the rendered mode
 console.log("cross-check — DT-63: failing token pairs in the RENDERED mode, one table per run:");
 {

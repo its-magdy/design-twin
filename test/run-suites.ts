@@ -8,7 +8,8 @@
 // --fast: the name filters (if any) pick the suites first, then FAST_SKIP is dropped from that pick. The dropped suites
 // stay in the SUMMARY as `not run` (why `--fast`) and do NOT make the exit code 1 — `not run` otherwise means an
 // interruption, which does — but the run ends with a loud line saying it was not the full suite (CI runs it as one
-// leg of a matrix whose other legs name the skipped suites; under CI=true --fast is still allowed and still prints it).
+// leg of a matrix whose other legs name the skipped suites; under CI --fast is still allowed and still prints it).
+// If --fast drops EVERY picked suite (e.g. only a slow one was named) nothing runs: that is exit 2, not a green 0.
 // A FAST_SKIP name that is not in SUITES exits 1, so a rename cannot silently drop a suite from the skip list.
 //
 // It replaced a 40-link `a && b && c` chain: the first non-zero exit skipped every later suite, there was no
@@ -21,7 +22,7 @@
 // (DT_SUITE_TIMEOUT_MS, default 30 min — the slowest suite, the drive e2e, takes ~12), exits 0 WITHOUT a checks
 // line (it ended before its summary) or with `0/0` (it asserted nothing). It is never re-run: the only retry is for a spawn that never ran
 // (EAGAIN/ENOMEM), once, after DT_SPAWN_RETRY_MS (default 5 s). A suite that prints `SKIPPED (no playwright…)`
-// and exits 0 is `skipped`: a warning locally, a FAILURE under CI=true (D103 — the browser suites already exit
+// and exits 0 is `skipped`: a warning locally, a FAILURE under CI (any CI value but "", "0" or "false"; D103 — the browser suites already exit
 // non-zero in CI; this is belt and braces over their own rule).
 //
 // SIGINT / SIGTERM / SIGHUP to the runner stop the running suite's process group (TERM, then KILL after the grace)
@@ -38,8 +39,8 @@
 // `command()` is exported for the self-test (the runner itself only runs when executed directly).
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { isCI } from "./pool.ts";
 
 type Kind = "lint" | "node";
 interface Suite { name: string; kind: Kind; file: string }
@@ -54,11 +55,13 @@ const TIMEOUT_MS = num(process.env.DT_SUITE_TIMEOUT_MS, 30 * 60_000);
 const RETRY_MS = num(process.env.DT_SPAWN_RETRY_MS, 5_000);
 const KILL_GRACE_MS = num(process.env.DT_KILL_GRACE_MS, 10_000);
 const DRAIN_MS = num(process.env.DT_DRAIN_MS, 2_000);
-const CI = process.env.CI === "true";
+const CI = isCI(process.env); // the same rule as the probe pool (test/pool.ts)
 // The suites spawn hundreds of short `node` children; Node's module compile cache (NODE_COMPILE_CACHE, stable in Node 24.15,
 // covers TypeScript modules; https://nodejs.org/docs/latest-v24.x/api/module.html#module-compile-cache) cuts a spawn-heavy
 // suite's time by about a third (cli-help 3.5 s -> 1.7 s). A user-set NODE_COMPILE_CACHE wins; NODE_DISABLE_COMPILE_CACHE=1 still disables it.
-const SUITE_ENV: NodeJS.ProcessEnv = process.env.NODE_COMPILE_CACHE === undefined ? { ...process.env, NODE_COMPILE_CACHE: path.join(os.tmpdir(), "designtwin-node-compile-cache") } : process.env;
+// The directory is per checkout and per user (under this repo's node_modules, which only its owner writes), not a shared
+// /tmp path: another user, or another checkout, can neither plant entries in it nor have its own entries read back.
+const SUITE_ENV: NodeJS.ProcessEnv = process.env.NODE_COMPILE_CACHE === undefined ? { ...process.env, NODE_COMPILE_CACHE: path.join(ROOT, "node_modules", ".cache", "designtwin-node-compile-cache") } : process.env;
 
 // The exact order the old `npm test` chain ran in (the lints first, then the plugin extractor, the bridge, the rest).
 const NODE_SUITES: readonly string[] = [
@@ -209,7 +212,7 @@ async function runSuite(s: Suite): Promise<Result> {
   else if (o.code !== 0) { status = "FAIL"; why = `exit ${o.code}`; }
   else if (o.pass !== null && o.total !== null && o.pass < o.total) { status = "FAIL"; why = `${o.pass}/${o.total} checks passed`; }
   else if (s.kind === "node" && o.skipped !== null) {
-    if (CI) { status = "FAIL"; why = "SKIPPED under CI=true (CI runs these)"; } else status = "skipped";
+    if (CI) { status = "FAIL"; why = "SKIPPED under CI (CI runs these)"; } else status = "skipped";
   }
   else if (s.kind === "node" && o.total === null) { status = "FAIL"; why = "exit 0 but it ended without its `N/N checks passed` line"; }
   else if (s.kind === "node" && o.total === 0) { status = "FAIL"; why = "0/0 checks: it asserted nothing"; }
@@ -241,7 +244,7 @@ function summary(results: readonly Result[], t0: number, fast: boolean): number 
     console.log(`SKIPPED (no playwright): ${skipped.map((r) => r.name).join(", ")}`);
     console.log("  warning: CI runs these (D3) — install a browser to run them here: npx playwright install chromium");
   }
-  if (fast) console.log(`\n--fast: skipped the probe e2e suites (${fastSkipped.map((r) => r.name).join(", ") || "none picked"}) — this is NOT the full suite: run \`npm test\` before committing; CI runs everything`);
+  if (fast) console.log(`\n--fast: skipped ${fastSkipped.length} of the probe e2e suites (${fastSkipped.map((r) => r.name).join(", ") || "none picked"}) — this is NOT the full suite: run \`npm test\` before committing; CI's other matrix legs run them`);
   return failed.length || interruptedNotRun.length ? 1 : 0;
 }
 
@@ -277,6 +280,8 @@ async function main(): Promise<number> {
     for (const s of picked.filter((x) => !dropped(x))) console.log(s.kind === "lint" ? `${s.name}  (npm run ${s.file})` : `${s.name}  ${custom ? s.file : "test/" + path.basename(s.file)}`);
     return 0;
   }
+
+  if (fast && picked.length > 0 && picked.every(dropped)) { console.error("run-suites: nothing to run — every picked suite is a --fast skip"); return 2; }
 
   const t0 = Date.now();
   const results: Result[] = [];

@@ -678,7 +678,7 @@ function isVerifyReport(x) {
   return isObj2(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -687,7 +687,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj2(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "waivers", "descopes"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj2)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -1670,6 +1670,8 @@ function mixedModeBindings(screens, variables, tokens, push) {
     for (const doc of [tokens, variables, s.vars || null]) for (const v of doc && doc.variables || []) if (v.name) defs.set(v.name, v);
     const colls = [...s.vars && s.vars.collections || [], ...variables && variables.collections || [], ...tokens && tokens.collections || []];
     const collOf = (v) => {
+      const keyed = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && Array.isArray(c.modes)) : void 0;
+      if (keyed) return keyed;
       const named = colls.filter((c) => c.name === v.collection && Array.isArray(c.modes));
       const modes = Object.keys(v.values || {});
       return named.find((c) => modes.every((m) => c.modes.includes(m))) ?? named[0];
@@ -1751,7 +1753,9 @@ function contrastRendered(screens, variables, tokens, push) {
         const coll = v.collection;
         const r = coll !== void 0 ? rm[coll] : void 0;
         if (r !== void 0 && keys.includes(r)) return r;
-        const def = colls.find((c) => c.name === coll && c.default !== void 0 && keys.includes(c.default))?.default;
+        const hasDefault = (c) => c.default !== void 0 && keys.includes(c.default);
+        const byKey = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && hasDefault(c)) : void 0;
+        const def = (byKey ?? colls.find((c) => c.name === coll && hasDefault(c)))?.default;
         if (def !== void 0) return def;
         return keys.length === 1 ? keys[0] : void 0;
       };

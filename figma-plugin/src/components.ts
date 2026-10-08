@@ -486,7 +486,7 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
   // all resolved, and dumpVariables uses it to include library variables this file merely consumes.
   const vars = await dumpVariables(opts);
 
-  // PROVENANCE. `exportedAt`/`file` stay top-level — snapshot-meta.js and drift-lint.js read them
+  // PROVENANCE. `exportedAt`/`file` stay top-level — snapshot-meta.ts and drift-lint.ts read them
   // off whatever catalog they are handed, and `file` must keep answering "which ONE Figma file is
   // this?". `source` is purely additive: role tells a consumer whether it is holding the design file's
   // own catalog or a library's, and collectionKeys is the join back to --list-libraries, which reports

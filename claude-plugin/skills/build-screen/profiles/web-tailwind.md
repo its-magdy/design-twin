@@ -127,9 +127,12 @@ placeholder/value colours do not arrive by themselves. `::placeholder` never app
 `required` field, else a `data-empty` attribute you toggle) and the value token once set; with Tailwind, an
 arbitrary variant such as `[&::-webkit-datetime-edit]:text-figma-…`. Firefox: no such pseudo-elements that
 we know of — style `color` on the input itself and check it in the browser. Set `color-scheme` (dark) so the
-native picker usually matches the theme. A `<select>` placeholder is a disabled, hidden first
-`<option value="">` plus a `select:invalid` colour (the field `required`). Record the substitution in the plan and
-verify the colour on the element's own text.
+native picker usually matches the theme. A `<select>` placeholder is a first
+`<option value="">` on a `required` select (the spec's placeholder label option), coloured with `select:invalid`.
+If you make it `disabled hidden`, also mark it `selected`; in React, use `defaultValue=""` or a controlled
+`value=""` on the `<select>`. Otherwise the first enabled option is selected, the field is valid, and the
+placeholder never shows. Record the substitution in the plan as a `deviations[]` row
+`{nodeId, field: "control", designed, built, reason}` and verify the colour on the element's own text.
 
 **Idiomatic web (patterns by structure)** — decide from the node's STRUCTURE; its name is only a hint.
 - Full-width bar pinned to the top of the root frame (`fixedChildren`, or first child with logo/title/
@@ -266,11 +269,16 @@ exists, use an arbitrary value over the variable, e.g. `bg-[var(--color-figma-pr
 **Components** — import per `design/codeconnect.local.json`; pass Figma `props` through to component props (see
 **Component reuse** above before generating any markup for an instance's sublayer). A component that takes a
 `className` next to its own variant classes merges them with `tailwind-merge` (`cn = (...c) => twMerge(clsx(c))`):
-in Tailwind the stylesheet order decides a conflict, not the order in `class`. Register the generated font sizes
-(every `--text-figma-*` in theme.css) with `extendTailwindMerge({ extend: { theme: { text: ['figma-body-1', …] } } })`
-— the theme key's names without the `--text-` prefix, as in tailwind-merge's own `text: ['huge']`: unregistered,
-twMerge reads `text-figma-<size>` as a colour, so a colour plus a size drops one of the two, and a size against
-another size (`text-sm`) is not merged. Or don't accept conflicting utilities: expose a prop.
+in Tailwind the stylesheet order decides a conflict, not the order in `class`. Use the project's existing `cn` if it
+has one; ask before adding `tailwind-merge`/`clsx`. tailwind-merge v3 is for Tailwind v4; on Tailwind v3 use v2.6,
+which has no `text` theme key: register the sizes there as `classGroups: { 'font-size': [...] }` (spacing and radii
+under its `spacing` / `borderRadius` theme keys). With tailwind-merge v3, register every generated `figma-`
+namespace — the font sizes (every `--text-figma-*` in theme.css), the spacing and the radii — with `extendTailwindMerge({ extend: { theme: { text: ['figma-body-1', …], spacing: ['figma-space-4', …], radius: ['figma-md', …] } } })`
+— each theme key's names without its prefix (`--text-`, `--spacing-`, `--radius-`), as in tailwind-merge's own
+`text: ['huge']`. Unregistered, twMerge reads `text-figma-<size>` as a colour, so a colour plus a size drops one of
+the two, and a size against another size (`text-sm`) is not merged; `p-figma-space-4` against `p-figma-space-6`, or
+`rounded-figma-md` against `rounded-figma-lg`, keeps both, so the stylesheet order decides and the caller's override
+can lose. Or don't accept conflicting utilities: expose a prop.
 
 **Assets** — use the exported files in `design/export/assets/`: `<img src>` (or `next/image`) for PNG, and for a
 vector either `<img src="….svg">` or an `<Icon/>` wrapper around that file / an SVGR import of it. **Never

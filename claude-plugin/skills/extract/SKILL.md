@@ -68,7 +68,8 @@ dtwin list libraries          # which design libraries this file draws on — SL
 
 Every command answers `--help` with its own page (`dtwin screenshot --help`, `dtwin whoami --help`,
 `dtwin list --help`), and none of them does anything else while doing so. The output directory is
-positional (`dtwin pull design`, never `--out`); the port is chosen only by `FIGMA_BRIDGE_PORT`
+positional and defaults to `design/export` (`dtwin pull` writes there; never `--out`, and never bare
+`design`, which makes a parallel export tree nothing else reads); the port is chosen only by `FIGMA_BRIDGE_PORT`
 (8787/8788/8789). A direct run ends with `done in Xs — waited Ys for the plugin to connect · export Zs ·
 write Ws`: a long "waited" is the plugin re-dialling a fresh bridge, not a slow export, and
 `dtwin serve` (another terminal) keeps the plugin connected so later commands skip it. `dtwin screenshot`
@@ -159,8 +160,10 @@ so, but asking for it up front is cheaper than discovering it — and asset byte
 inline at all, so it's the only way to get `assets/`. The inline cap is also never above 48,000
 characters. Every export result (written or inline) carries `sourceFile` — the Figma file it came from —
 and `durationMs`; when an implicit spill replaces a file whose content differs (the `exportedAt`/`generatedAt` stamps aside), the old one is
-kept one level and the `note` names it — a screen spill as `<screen>.json.prev` (`wrote.prev`), a
-page/full/design-system/library spill as `<file>.json.prev` per changed JSON file (`wrote.prevKept`). `figma_status` shows `lastScreenExport` and `lastWrite`.
+kept one level and the `note` names it — a screen spill keeps ONLY `<screen>.json.prev` (`wrote.prev`;
+its `.vars.json`/`.assets.json`, `pages/index.json` and `variables.json` are replaced with no copy), a
+page/full/design-system spill a `<file>.prev` per changed JSON under `pages/`, `design-system/` and
+`design-system.json` (`wrote.prevKept`). `figma_status` shows `lastScreenExport` and `lastWrite`.
 With `writeToDisk`/`outDir`, a bad `outDir` is refused before the export runs.
 A cancelled tool call cancels the read in the plugin.
 
@@ -207,7 +210,7 @@ directory's own `index.json` one hop down — it carries a row per screen with t
 the visible `title` (the text on the frame's own title slot, NOT a sidebar/nav label that repeats on
 every sibling screen), a `texts[]` fingerprint, `page`, `pageId`, `id` and the screen `file`. A
 `--node`/selection row also carries `w`/`h` and, when written, `reference` and the paths to its
-`.vars.json` / `.assets.json` siblings; a page-walk row (`--page`, `--all-pages`, `pull design`) carries `bytes` (and `nodes`)
+`.vars.json` / `.assets.json` siblings; a page-walk row (`--page`, `--all-pages`, a bare `dtwin pull`) carries `bytes` (and `nodes`)
 but no `w`/`h`; its `reference` sits in the layer file, and it has no `.vars.json`/`.assets.json`.
 
 **Resolving a screen by the name a user types (not the layer name Figma gave it):** the visible title

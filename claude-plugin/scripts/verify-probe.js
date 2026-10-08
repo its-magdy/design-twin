@@ -1324,7 +1324,7 @@ function isVerifyReport(x) {
   return isObj(x) && optStr2(x.schema) && optStr2(x.verdict) && optStr2(x.screen) && optStr2(x.nodeId) && optStr2(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -1333,7 +1333,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "waivers", "descopes"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -5849,9 +5849,10 @@ function rendererUnavailable(reason, hint) {
   (verify-probe never installs a package or downloads a browser itself.)`);
   return 3;
 }
+var LAUNCH_ARGS = ["--disable-lcd-text"];
 async function launch(r, dir, executablePath) {
   try {
-    return { browser: await r.mod.chromium.launch({ headless: true, args: ["--disable-lcd-text"], ...executablePath !== void 0 ? { executablePath } : {} }) };
+    return { browser: await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...executablePath !== void 0 ? { executablePath } : {} }) };
   } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
     return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch${executablePath !== void 0 ? ` from --browser-path ${executablePath} (only guaranteed with the bundled Chromium)` : ""}: ${first}`, hint: browserHint(dir) };
@@ -7005,6 +7006,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
 export {
   BODY_WAIT_MS,
   INIT_SCRIPT,
+  LAUNCH_ARGS,
   PLAYWRIGHT_PACKAGES,
   behaviourLine,
   browserPathError,

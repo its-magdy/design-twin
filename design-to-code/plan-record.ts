@@ -1,14 +1,16 @@
 // plan-record.ts — F-100 (D115): `verify-screen --compare --record-plan` writes the tool-owned keys of
 // plan.verification from the report it just wrote, so no agent copies a report into the plan by hand.
 //
-// Tool-owned (replaced every run): mode "rendered", renderer, artifacts (the report .json/.md and the report's own
+// Tool-owned (replaced every run): mode "rendered" + renderer — or, for a static-only measured file (M2, s19),
+// mode "static-only" + the report's reason and no renderer —, artifacts (the report .json/.md and the report's own
 // artifacts that exist on disk), deltas (the OPEN high + medium deltas, compact — lows and accepted ones are only
-// counted), a11y (report.behaviour.summary, when the behaviour checks ran) and `recorded` {by, at, report,
+// counted; rows it did not write are replaced with a note, M1 s19: a builder's residual belongs in deviations[]),
+// a11y (report.behaviour.summary, when the behaviour checks ran) and `recorded` {by, at, report,
 // reportSha256, verdict, headline, behaviourHeadline, counts}. Everything else in verification (coverage, notes, the
 // hook record) and in the plan is left exactly as it was — never deviations[] (a deviation needs a person's why),
-// waivers[], descopes[] or status. The file keeps its indentation, key order and line endings; it is written
-// (atomically: verify-run.ts writeFileAtomic) only when its bytes change, and a re-record of the same report keeps the
-// old `recorded.at`. verify-build's planHash leaves `verification` out, so recording never reopens a plan — and a hook
+// waivers[], descopes[] or status. The file keeps its indentation, key order and line endings (writePlan, below — the
+// one plan writer, also used by --accept and the verify-build hook, L5 s19); it is written only when its bytes
+// change, and a re-record of the same report keeps the old `recorded.at`. verify-build's planHash leaves `verification` out, so recording never reopens a plan — and a hook
 // record still holding the pre-F-100 formula (which DID cover verification) is re-stamped with the current one in the
 // same write (M1), only when it matched the plan as it was: what the hook checked is exactly what the new hash covers.
 // Paths are written project-relative only (L7): a report outside the project is refused (throws — the plan could not
@@ -20,13 +22,42 @@ import crypto from "node:crypto";
 import { writeFileAtomic } from "./verify-run.ts";
 import { parsePlan } from "./doc-guards.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
-import type { JsonObject, PlanVerification, PlanVerificationRecord, VerifyReportV2 } from "./types.ts";
+import { isJsonObject } from "./types.ts";
+import type { JsonObject, JsonValue, PlanVerification, PlanVerificationRecord, VerifyReportV2 } from "./types.ts";
 
 export interface RecordPlanResult { written: boolean; notes: string[] }
 
 const slash = (p: string): string => p.split(path.sep).join("/").split("\\").join("/");
 // The file's own indentation: the first indented line's leading whitespace (2 spaces when the file has none).
 const indentOf = (text: string): string => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+
+// L5 (s19): `value` as the text of the plan file it replaces — that file's BOM, indentation, line endings and final
+// newline. `raw` is the file as read; null (no file yet) → 2 spaces, LF, a final newline.
+function formatPlan(value: unknown, raw: string | null): string {
+  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
+  const bom = raw.charCodeAt(0) === 0xfeff ? "\ufeff" : "";
+  const text = raw.slice(bom.length);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
+}
+
+// L5 (s19): the one plan writer — --record-plan, --accept and the verify-build hook. Formats `value` like the file
+// (formatPlan over `raw`, else the file as it is on disk now) and writes it atomically (verify-run.ts
+// writeFileAtomic: tmp beside it + rename, the tmp removed on error) — only when the bytes change. True when written.
+function writePlan(file: string, value: unknown, raw?: string | null): boolean {
+  let was: string | null = raw ?? null;
+  if (raw === undefined) try { was = fs.readFileSync(file, "utf8"); } catch { was = null; }
+  const out = formatPlan(value, was);
+  if (out === was) return false;
+  writeFileAtomic(file, out);
+  return true;
+}
+
+// M1 (s19): a verification.deltas row --record-plan writes — {nodeId, field, severity high|medium, expected, actual}
+// and nothing else. Anything else there was written by hand (a residual, a copied report row).
+const RECORDED_DELTA_KEYS = new Set(["nodeId", "field", "severity", "expected", "actual"]);
+const isRecordedDelta = (d: JsonValue): boolean => isJsonObject(d) && typeof d.nodeId === "string" && typeof d.field === "string"
+  && (d.severity === "high" || d.severity === "medium") && Object.keys(d).every((k) => RECORDED_DELTA_KEYS.has(k));
 
 // `planFile` and `reportRel` are relative to `opts.cwd` (the project root, default process.cwd()) or absolute;
 // `report` is the object --compare wrote to `reportRel`. `opts.now` fixes `recorded.at` (tests). Throws when the plan
@@ -36,9 +67,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
   const abs = path.resolve(cwd, planFile);
   const notes: string[] = [];
   const raw = fs.readFileSync(abs, "utf8");
-  const bom = raw.charCodeAt(0) === 0xfeff ? "\ufeff" : "";
-  const text = raw.slice(bom.length);
-  const parsed: unknown = JSON.parse(text);
+  const parsed: unknown = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
   const pp = parsePlan(parsed);
   if (!("plan" in pp)) throw new Error(`${planFile} ${pp.error}`);
   const plan = pp.plan;
@@ -104,9 +133,20 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
   const prev = v.recorded;
   // the same report recorded again: keep its time, so an unchanged plan is not rewritten
   if (prev && typeof prev.at === "string" && JSON.stringify({ ...prev, at: "" }) === JSON.stringify({ ...recorded, at: "" })) recorded.at = prev.at;
-  v.mode = "rendered";
-  if (typeof report.renderer === "string" && report.renderer) v.renderer = report.renderer;
+  // M2 (s19): a static-only measured file is recorded as such — no render happened, so no renderer is claimed
+  if (report.mode === "static-only") {
+    v.mode = "static-only";
+    if (report.reason) v.reason = report.reason;
+    delete v.renderer;
+  } else {
+    if (v.mode === "static-only") delete v.reason; // rendered now: the "why no render" no longer holds
+    v.mode = "rendered";
+    if (typeof report.renderer === "string" && report.renderer) v.renderer = report.renderer;
+  }
   v.artifacts = artifacts;
+  // M1 (s19): D115 — this field is the report's; a row it did not write is replaced, never silently
+  const hand = Array.isArray(v.deltas) ? v.deltas.filter((d) => !isRecordedDelta(d)) : [];
+  if (hand.length) notes.push(`${hand.length} row(s) in verification.deltas were not written by --record-plan and are replaced by the report's open deltas (${hand.map((d) => isJsonObject(d) && typeof d.nodeId === "string" ? `${d.nodeId}${typeof d.field === "string" ? ` ${d.field}` : ""}` : JSON.stringify(d).slice(0, 40)).join(", ")}) — put builder-chosen residuals in deviations[] (with the why), never in verification.deltas`);
   v.deltas = compact;
   if (b.ran) {
     const tool = b.axe && "version" in b.axe ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks";
@@ -115,12 +155,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
   v.recorded = recorded;
   plan.verification = v;
 
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  const tail = /\n$/.test(text) ? eol : "";
-  const out = bom + JSON.stringify(plan, null, indentOf(text)).split("\n").join(eol) + tail;
-  if (out === raw) return { written: false, notes };
-  writeFileAtomic(abs, out);
-  return { written: true, notes };
+  return { written: writePlan(abs, plan, raw), notes };
 }
 
-export { recordPlan };
+export { formatPlan, recordPlan, writePlan };

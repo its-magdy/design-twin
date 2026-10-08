@@ -580,6 +580,9 @@ export type ProbeStep = { click: string } | { waitFor: string } | { goto: string
 export type PlanInteractionExpect = "dialog" | "url" | `selector:${string}`;
 /** F-95 (D40(7)): a plan.interactions[] row — keyed nodeId + trigger like an export reaction. */
 export interface PlanInteraction { nodeId: string; trigger: string; expect: PlanInteractionExpect; destinationId?: string; name?: string }
+/** F-34: one anchor worth filling `mapModule` on first (plan-skeleton.ts suggestAnchors); `covers` = the visible
+ *  nodes it stands for (itself + descendants). "screen" is the screen frame itself, listed first. */
+export interface AnchorSuggestion { id: string; name: string; why: "screen" | "section" | "instance" | "repeat"; covers: number }
 export interface Plan {
   schema?: "designtwin/plan@2" | (string & {});
   /** the plan's own file stem: <Layer>__<id> */
@@ -601,6 +604,8 @@ export interface Plan {
   components?: PlanComponentRow[];
   anchors?: Record<string, PlanAnchor>;
   hidden?: PlanHiddenRoot[];
+  /** F-34: skeleton-owned, refreshed on every merge, not in counts */
+  anchorsSuggested?: AnchorSuggestion[];
   deviations?: PlanDeviation[];
   /** D5: accepted report deltas (verify-screen --accept); excluded from verify-build's planHash */
   waivers?: PlanWaiver[];
@@ -1211,6 +1216,9 @@ export interface VerifyCoverageV2 extends VerifyCoverage {
  */
 export interface VerifyReportV2 extends Omit<VerifyReport, "artifacts"> {
   artifacts: Array<string | ArtifactCheck | { path?: string }>;
+  /** M2 (s19): the measured file was static-only (nothing rendered) — absent for a rendered one; `reason` is its why */
+  mode?: "static-only";
+  reason?: string;
   verdict: VerifyVerdict;
   headline: string;
   /** 12b: always written (ran:false + why when the measured file has none) — never the verdict (D4) */

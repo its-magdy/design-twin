@@ -2764,8 +2764,17 @@ void (async () => {
 
   // ---------------------------------------------------------------- verbs
   console.log("\nverbs — `dtwin <verb>` is a pure argv → argv translation:");
-  const { translate, VerbError, VERBS } = await import("../bridge/src/verbs.ts");
+  const { translate, VerbError, VERBS, HELP } = await import("../bridge/src/verbs.ts");
   const tr = (...a: string[]) => translate(a).join(" ");
+  // s19 L9: zero scopes is a real pull (the current page) — the help page said "Exactly one scope" and left out --all-pages.
+  ok("[verbs] `dtwin pull --help`: at most one scope, none = the current page, --all-pages listed, default design/export",
+    !/Exactly one scope/.test(HELP.pull ?? "") && /with none it pulls the CURRENT page/.test(HELP.pull ?? "") && /--all-pages/.test(HELP.pull ?? "") && /default design\/export/.test(HELP.pull ?? ""));
+  // s19 L9: the design-to-code scripts an agent probes answer --help with their usage and exit 0 (map-bootstrap said
+  // "unknown option --help" and exited 1).
+  for (const script of ["map-bootstrap", "resolve-screen", "get-component"]) {
+    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", script + ".ts"), "--help"], { encoding: "utf8", timeout: 5000 });
+    ok(`[help] ${script} --help prints its usage to stdout and exits 0`, r.status === 0 && /^usage: /.test(r.stdout) && r.stdout.includes(script));
+  }
   ok("[verbs] flags pass through untouched", tr("--list", "--json") === "--list --json" && tr() === "");
   ok("[verbs] `dtwin design` is still a positional outDir, not a verb", tr("design", "--page", "Screens") === "design --page Screens");
   ok("[verbs] pull strips itself and keeps everything after", tr("pull", "design", "--page", "Screens") === "design --page Screens" && tr("pull") === "");

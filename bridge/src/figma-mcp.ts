@@ -223,6 +223,7 @@ function stripAssets(r: ExportReply): object {
 // running, because both call createBridge() and bind port 8787 — the second to start hits EADDRINUSE
 // and exits (server-core.ts). Before this, an MCP-only session had no way to get assets at all.
 import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
+import { findExportDir, findMapFile } from "./project-layout.ts";
 import type { Stamped } from "./write-out.ts";
 import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./doc-types.ts";
 
@@ -445,7 +446,8 @@ function preflightOut(a: WriteArgs): void {
   if (a.writeToDisk === true || (a.writeToDisk !== false && !!a.outDir)) assertInsideCwd(a.outDir);
 }
 
-// Every `*.prev` under the three trees an implicit full/design-system spill keeps them in.
+// Every `*.prev` an implicit full/design-system spill can keep: under pages/, design-system/ and libraries/,
+// plus the export ROOT's own (design-system.json.prev — the manifest sits at the root, not in a tree).
 function prevFilesUnder(dir: string): string[] {
   const out: string[] = [];
   const walk = (d: string): void => {
@@ -458,6 +460,9 @@ function prevFilesUnder(dir: string): string[] {
     }
   };
   for (const sub of ["pages", "design-system", "libraries"]) walk(path.join(dir, sub));
+  let root: fs.Dirent[] = [];
+  try { root = fs.readdirSync(dir, { withFileTypes: true }); } catch { /* no export dir yet */ }
+  for (const e of root) if (e.isFile() && e.name.endsWith(".prev")) out.push(path.join(dir, e.name));
   return out;
 }
 
@@ -507,7 +512,7 @@ function exportResult(tool: string, a: WriteArgs, p: Pulled, opts?: { scale?: nu
     prevKept = kept.length;
     const replaced = n ? `It replaced ${n} existing screen file(s) under ${path.join(dir, "pages")}` : "";
     if (kept.length) {
-      replacedNote = `${replaced ? replaced + ". The" : "The"} previous version of each changed file — ${kept.length} file(s) under pages/, design-system/ or libraries/, e.g. ${kept[0]} — is kept beside it as <file>.prev (one level — the next implicit spill replaces it). `;
+      replacedNote = `${replaced ? replaced + ". The" : "The"} previous version of each changed file — ${kept.length} file(s) under pages/ or design-system/ (or design-system.json), e.g. ${kept[0]} — is kept beside it as <file>.prev (one level — the next implicit spill replaces it). `;
     } else {
       // L-4's analogue: nothing new kept, but an earlier spill's .prev files still hold what was replaced then.
       const k = prevFilesUnder(dir).length;
@@ -560,7 +565,7 @@ const clientShape = {
 
 const writeShape = {
   writeToDisk: z.boolean().optional().describe("Write the export to disk and return a compact index (counts + file paths) instead of the node payloads. REQUIRED to get asset bytes — they are never returned inline — and the right choice for anything beyond one small frame. Omitted: a result that fits the client's output cap comes back inline, a larger one is written to disk automatically (the note says so). false: never write — a result too large to return is an error."),
-  outDir: z.string().optional().describe("Directory for writeToDisk, relative to the directory this MCP server was started in (i.e. your project). Default: FIGMA_EXPORT_DIR or 'design'."),
+  outDir: z.string().optional().describe("Directory for writeToDisk, relative to the directory this MCP server was started in (i.e. your project). Default: FIGMA_EXPORT_DIR or 'design/export'."),
 };
 
 // ---- read options, shared across the export tools (opt-in; each costs extra Plugin-API work) ----
@@ -1092,8 +1097,10 @@ const dsManifestShape = z.looseObject({ files: z.looseObject({ componentsLocal: 
 
 // Follow design-system.json's `files.componentsLocal` pointer rather than guessing the split layout's
 // filenames — the manifest is the ONE place that records where the export actually landed.
+// No exportDir: the same precedence snapshot-meta.ts reads the export with — FIGMA_EXPORT_DIR, else wherever this
+// project's export actually is (project-layout findExportDir: design/export, or design/ on the older flat layout).
 function componentsLocalPath(exportDir?: string): string {
-  const dir = assertInsideCwd(exportDir, "exportDir");
+  const dir = assertInsideCwd(exportDir || process.env.FIGMA_EXPORT_DIR || findExportDir(process.cwd()).rel, "exportDir");
   const manifestPath = path.join(dir, "design-system.json");
   // The slim design-system.json manifest (JSON from disk — an older export or a hand edit): only its
   // componentsLocal pointer is read, and it is checked before it is followed.
@@ -1128,7 +1135,7 @@ const exportDirShape = {
     .string()
     .optional()
     .describe(
-      "Directory holding the design export, relative to the directory this server was started in. Default: FIGMA_EXPORT_DIR or 'design'."
+      "Directory holding the design export, relative to the directory this server was started in. Default: FIGMA_EXPORT_DIR, else this project's export (design/export, or design/ on the older flat layout)."
     ),
 };
 
@@ -1165,7 +1172,7 @@ server.registerTool(
     description:
       "Check a codeconnect.local.json map against the design export for DRIFT, and report snapshot staleness. Joins on the stable publish `key`, so it catches the case Figma's own Code Connect ships silently (its node-id join misses renamed/republished components — issue #337): orphaned map entries, unmapped components, stale or uncovered props, kind/enum mismatches. Also warns when the export on disk is older than --max-age. Run it before building a screen (so you find out the map is wrong BEFORE generating code against it) and in CI/pre-commit. Needs NO Figma connection.",
     inputSchema: {
-      map: z.string().optional().describe("Path to the map, relative to the server's start directory. Default: 'codeconnect.local.json'."),
+      map: z.string().optional().describe("Path to the map, relative to the server's start directory. Default: design/codeconnect.local.json (or a root codeconnect.local.json an older project still has)."),
       maxAgeHours: z.number().optional().describe("Warn if the export snapshot is older than this many hours. Omit for the built-in default."),
       screens: tolerantStringArray().optional().describe("Screen export JSON file(s) (e.g. design/export/pages/<Page>/<Screen>__<id>.json), relative to the server's start directory — the CLI's --screen. Adds `screenCoverage`: how many of the component sets placed on THOSE screens your map covers (by key), with the same warnings the CLI prints. The number that matters before building a screen."),
       ...exportDirShape,
@@ -1173,7 +1180,9 @@ server.registerTool(
     annotations: READ_ONLY,
   },
   guarded(async (a) => {
-    const mapPath = assertInsideCwd(a.map || "codeconnect.local.json", "map");
+    // The project layout's map (design/codeconnect.local.json), or the root copy an older project still has.
+    const mapRel = a.map || findMapFile(process.cwd()).rel;
+    const mapPath = assertInsideCwd(mapRel, "map");
     // The map and the catalog are untyped JSON from disk. The map goes through validateMap below before
     // driftLint sees it; the catalog is handed over as the shape driftLint reads.
     let map: unknown;
@@ -1182,7 +1191,7 @@ server.registerTool(
     } catch (e) {
       throw new Error(
         `Could not read the map at ${mapPath}: ${errMsg(e)}. Scaffold one with ` +
-          `\`node design-to-code/map-bootstrap.ts <componentsLocal> > codeconnect.local.json\`.`
+          `\`node design-to-code/map-bootstrap.ts <componentsLocal> > ${mapRel}\`.`
       );
     }
     const layer = await driftLintLayer();

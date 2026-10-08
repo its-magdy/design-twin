@@ -144,12 +144,14 @@ export const HELP: Record<string, string> = {
     "  forget   delete the saved token\n\n" +
     "  FIGMA_BRIDGE_TOKEN in the environment overrides the saved file. `dtwin token` says which won.",
   pull:
-    "dtwin pull [outDir] --node <id> | --page <id|name> | --selection | --design-system | --as-library <name>\n\n" +
-    "  Exactly one scope. Everything lands under outDir (default design/export):\n" +
+    "dtwin pull [outDir] [--node <id> | --page <id|name> | --all-pages | --selection | --design-system | --as-library <name>]\n\n" +
+    "  At most one scope; with none it pulls the CURRENT page (its frames, the design system and assets).\n" +
+    "  Everything lands under outDir (default design/export — never bare `design`, a parallel tree nothing reads):\n" +
     "    --node <id>        ONE frame, fully serialized, with its assets. Writes\n" +
     "                       pages/<Page>/<Screen>__<id>.json plus .vars.json and .assets.json beside it,\n" +
     "                       merges its tokens into variables.json, and indexes it in pages/index.json.\n" +
     "    --page <id|name>   every top-level layer on one page (repeatable)\n" +
+    "    --all-pages        every top-level layer on EVERY page (slow on a large file)\n" +
     "    --selection        whatever is selected in Figma right now\n" +
     "    --design-system    tokens, styles and component catalogs — no page walk, no assets\n" +
     "                       On a file that CONSUMES a library it holds that file's own tokens plus only the\n" +

@@ -238,9 +238,11 @@ export { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
 // CLI: node <plugin>/scripts/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]
 // (the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
 function main(argv: string[]): number {
+  const usage = `usage: ${scriptCmd("resolve-screen")} <design/export dir> <name-or-id> [design/plan dir]`;
+  if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
   const [exportDir, query, planDir] = argv;
   if (!exportDir || !query) {
-    console.error(`usage: ${scriptCmd("resolve-screen")} <design/export dir> <name-or-id> [design/plan dir]`);
+    console.error(usage);
     return 2;
   }
   const NOTITLES_NOTE =

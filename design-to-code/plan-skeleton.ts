@@ -24,9 +24,11 @@
 //   anchors{}     every VISIBLE node id → {name, type, parent, mapModule:""}. Fill `mapModule` on
 //                 sections and instances; a node whose own mapModule is empty is covered by its nearest
 //                 mapped ancestor, so a 12-row `.map()` or a reused shell needs one entry, not twelve.
-//   anchorsSuggested[]  where to put those entries (F-34): the root's direct children ("section"), every
-//                 outermost INSTANCE ("instance"), and each container whose children are mostly rows of one
-//                 shape, >= 3 (a list: "repeat", its rows are covered by it; its other children are still suggested).
+//   anchorsSuggested[]  where to put those entries (F-34): the screen frame itself first ("screen"; when it is an
+//                 INSTANCE, that is all), the root's direct children ("section"), every outermost INSTANCE
+//                 ("instance"), and each container whose children are mostly rows of one shape, >= 3 (a list:
+//                 "repeat", its rows and the dividers between them are covered by it; its other children are still
+//                 suggested). Every visible anchor is a suggestion or under one.
 //                 Not part of counts; refreshed on every merge.
 //   hidden[]      the roots of every hidden subtree (`hidden: true`), with how many nodes each hides.
 //
@@ -56,7 +58,7 @@ import { isCodeConnectMap } from "./map-validate.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import type {
-  CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, PageIndex, PagesRootIndex, Plan,
+  AnchorSuggestion, CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, PageIndex, PagesRootIndex, Plan,
   PlanAnchor, PlanAuditGate, PlanComponentMatch, PlanComponentRow, PlanHiddenRoot, PlanTokenRow, PlanTokenVerdict, ScreenDoc, TokenKind, TokensDoc, Variable, VariableAlias,
   MatchInstance, VariableType,
 } from "./types.ts";
@@ -72,7 +74,7 @@ const USAGE = [
   "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
   "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping)",
   "    anchors{}     every VISIBLE node id, mapModule empty — fill it on sections and instances",
-  "    anchorsSuggested[]  the few anchors worth filling first (root sections, outermost instances, repeated lists)",
+  "    anchorsSuggested[]  the few anchors worth filling first (the screen frame, root sections, outermost instances, repeated lists)",
   "    hidden[]      roots of hidden subtrees (hidden: true or a hidden ancestor) — never built, never anchored",
   "    screenName / nodeId / file / route   the header every skill resolves a plan by",
   "",
@@ -413,8 +415,6 @@ export interface SkeletonInput {
   doc: ScreenDoc; vars?: TokensDoc | null; ds?: TokensDoc | null; catalog?: ComponentsCatalog | null; library?: ComponentsCatalog | null;
   mapKeys?: Map<string, MapKeyEntry>; screenFile?: string | null; cwd?: string; route?: string | null; indexRow?: IndexRow | null;
 }
-/** F-34: one anchor worth filling `mapModule` on first; `covers` = the visible nodes it stands for (itself + descendants). */
-export interface AnchorSuggestion { id: string; name: string; why: "section" | "instance" | "repeat"; covers: number }
 /** The plan as this file writes it: every skeleton-owned field is present (Plan leaves them optional). */
 export interface SkeletonPlan extends Plan {
   /** skeleton-owned, refreshed on merge, not in counts */
@@ -426,12 +426,15 @@ export interface SkeletonPlan extends Plan {
 }
 
 // F-34: the boundaries a builder should name, so 12-291 anchor slots need not be filled one by one. Tree order.
-// A suggestion covers its subtree: a root section, an outermost instance (its internals belong to the component),
+// The screen frame comes first (it has no ancestor to cover it; a frame that is an INSTANCE is the whole
+// suggestion, its internals belong to the component). Each suggestion covers its subtree: a root section, an outermost instance (its internals belong to the component),
 // or a list — a `.map()`: a container whose most frequent child shape occurs >= 3 times, when those rows are the
-// MAJORITY of its visible children (a row variant that keeps the rows' layer name — a "Table row" with a badge where
+// MAJORITY of its SHAPED visible children (a row variant that keeps the rows' layer name — a "Table row" with a badge where
 // the others have none — counts as a row). Found by sibling signature, not by code structure. A childless leaf (a
 // TEXT, a vector, a rectangle) has no shape to repeat — a title + description + note is no list — and three fields
-// among six children are a form, not a list. A list's other children (a search bar above the rows) are still
+// among six children are a form, not a list. Leaves do not vote (a title above the rows, a LINE divider), and a
+// shaped child sitting between two rows (a divider instance) is their separator: it rides along with the repeat
+// and does not vote either. A list's other children (a search bar above the rows) are still
 // visited and suggested by the same rules.
 const REPEAT_MIN = 3;
 function suggestAnchors(doc: ScreenDoc | null | undefined, vis: Visibility): AnchorSuggestion[] {
@@ -447,13 +450,23 @@ function suggestAnchors(doc: ScreenDoc | null | undefined, vis: Visibility): Anc
   const listRows = (n: IrNode): Set<IrNode> | null => {
     const all = kids(n);
     const seen = new Map<string, IrNode[]>();
-    for (const c of all) { const g = sig(c); if (g !== null) { const l = seen.get(g); if (l) l.push(c); else seen.set(g, [c]); } }
+    for (const c of all) { const g = sig(c); if (g !== null) getOrInit(seen, g, () => []).push(c); }
     let best: IrNode[] | null = null, bestSig: string | null = null;
     for (const [g, l] of seen) if (l.length >= REPEAT_MIN && (!best || l.length > best.length)) { best = l; bestSig = g; }
     if (!best) return null;
     const names = new Set(best.map((c) => c.type + ":" + c.name));
     const rows = all.filter((c) => { const g = sig(c); return g !== null && (g === bestSig || names.has(c.type + ":" + c.name)); });
-    return rows.length * 2 > all.length ? new Set(rows) : null;
+    // childless leaves (a title, a LINE divider) have no shape, so they do not vote; shaped children between rows are
+    // the rows' separators (divider instances) only when they share ONE shape and fill every gap — a form's mixed
+    // fields between its text fields are not separators
+    const rowSet = new Set(rows);
+    const isRow = (c: IrNode | undefined): boolean => c !== undefined && rowSet.has(c);
+    const between = all.filter((c, i) => !rowSet.has(c) && sig(c) !== null && isRow(all[i - 1]) && isRow(all[i + 1]));
+    const sepSigs = new Set(between.map(sig));
+    // …and nothing of that shape sits outside the gaps ([Q, A, Q, A, Q, A] is pairs, not rows with separators)
+    const seps = between.length === rows.length - 1 && sepSigs.size === 1 && !all.some((c) => !between.includes(c) && sepSigs.has(sig(c))) ? between : [];
+    const shaped = all.filter((c) => sig(c) !== null).length - seps.length;
+    return rows.length * 2 > shaped ? new Set([...rows, ...seps]) : null;
   };
   const visit = (n: IrNode, section: boolean): void => {
     const instance = n.type === "INSTANCE";
@@ -463,7 +476,12 @@ function suggestAnchors(doc: ScreenDoc | null | undefined, vis: Visibility): Anc
     if (instance) return;
     for (const c of kids(n)) if (!rows || !rows.has(c)) visit(c, false);
   };
-  for (const r of screenRoots(doc)) for (const c of kids(r)) visit(c, true);
+  for (const r of screenRoots(doc)) {
+    if (!r.id || !vis.visible.has(r.id)) continue; // a hidden frame is never built
+    out.push({ id: r.id, name: r.name, why: "screen", covers: size(r) });
+    if (r.type === "INSTANCE") continue; // the frame is a template instance: its internals belong to the component
+    for (const c of kids(r)) visit(c, true);
+  }
   return out;
 }
 
@@ -547,7 +565,7 @@ function mergeAuditGate(prev: PlanAuditGate | null | undefined, fresh: Required<
 function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult {
   if (!prev || typeof prev !== "object") return { plan: fresh, dropped: { tokens: 0, components: 0, anchors: 0 } };
   const out: Plan = Object.assign({}, prev, {
-    anchorsSuggested: fresh.anchorsSuggested, // skeleton-owned: refreshed, like hidden[] (Plan does not declare it; the extra key rides through)
+    anchorsSuggested: fresh.anchorsSuggested, // skeleton-owned: refreshed, like hidden[]
     schema: fresh.schema,
     screenName: prev.screenName || fresh.screenName,
     nodeId: fresh.nodeId,

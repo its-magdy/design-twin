@@ -923,7 +923,7 @@ function isVerifyReport(x) {
   return isObj(x) && optStr2(x.schema) && optStr2(x.verdict) && optStr2(x.screen) && optStr2(x.nodeId) && optStr2(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -932,7 +932,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "waivers", "descopes"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -975,14 +975,33 @@ isStringRecord.expected = "an object of strings";
 // design-to-code/plan-record.ts
 var slash = (p) => p.split(path4.sep).join("/").split("\\").join("/");
 var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+function formatPlan(value, raw) {
+  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
+  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const text = raw.slice(bom.length);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
+}
+function writePlan(file, value, raw) {
+  let was = raw ?? null;
+  if (raw === void 0) try {
+    was = fs4.readFileSync(file, "utf8");
+  } catch {
+    was = null;
+  }
+  const out = formatPlan(value, was);
+  if (out === was) return false;
+  writeFileAtomic(file, out);
+  return true;
+}
+var RECORDED_DELTA_KEYS = /* @__PURE__ */ new Set(["nodeId", "field", "severity", "expected", "actual"]);
+var isRecordedDelta = (d) => isJsonObject(d) && typeof d.nodeId === "string" && typeof d.field === "string" && (d.severity === "high" || d.severity === "medium") && Object.keys(d).every((k) => RECORDED_DELTA_KEYS.has(k));
 function recordPlan(planFile, report, reportRel, opts = {}) {
   const cwd = opts.cwd ?? process.cwd();
   const abs = path4.resolve(cwd, planFile);
   const notes = [];
   const raw = fs4.readFileSync(abs, "utf8");
-  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
-  const text = raw.slice(bom.length);
-  const parsed = JSON.parse(text);
+  const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
   const pp = parsePlan(parsed);
   if (!("plan" in pp)) throw new Error(`${planFile} ${pp.error}`);
   const plan = pp.plan;
@@ -1062,9 +1081,18 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
   }
   const prev = v.recorded;
   if (prev && typeof prev.at === "string" && JSON.stringify({ ...prev, at: "" }) === JSON.stringify({ ...recorded, at: "" })) recorded.at = prev.at;
-  v.mode = "rendered";
-  if (typeof report.renderer === "string" && report.renderer) v.renderer = report.renderer;
+  if (report.mode === "static-only") {
+    v.mode = "static-only";
+    if (report.reason) v.reason = report.reason;
+    delete v.renderer;
+  } else {
+    if (v.mode === "static-only") delete v.reason;
+    v.mode = "rendered";
+    if (typeof report.renderer === "string" && report.renderer) v.renderer = report.renderer;
+  }
   v.artifacts = artifacts;
+  const hand = Array.isArray(v.deltas) ? v.deltas.filter((d) => !isRecordedDelta(d)) : [];
+  if (hand.length) notes.push(`${hand.length} row(s) in verification.deltas were not written by --record-plan and are replaced by the report's open deltas (${hand.map((d) => isJsonObject(d) && typeof d.nodeId === "string" ? `${d.nodeId}${typeof d.field === "string" ? ` ${d.field}` : ""}` : JSON.stringify(d).slice(0, 40)).join(", ")}) \u2014 put builder-chosen residuals in deviations[] (with the why), never in verification.deltas`);
   v.deltas = compact;
   if (b.ran) {
     const tool = b.axe && "version" in b.axe ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks";
@@ -1072,12 +1100,7 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
   } else if (v.a11y !== void 0) notes.push(`behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 verification.a11y left as it was`);
   v.recorded = recorded;
   plan.verification = v;
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  const tail = /\n$/.test(text) ? eol : "";
-  const out = bom + JSON.stringify(plan, null, indentOf(text)).split("\n").join(eol) + tail;
-  if (out === raw) return { written: false, notes };
-  writeFileAtomic(abs, out);
-  return { written: true, notes };
+  return { written: writePlan(abs, plan, raw), notes };
 }
 
 // design-to-code/catalog-input.ts
@@ -2229,7 +2252,8 @@ var INTEGRITY_PHRASES = {
   noExpectation: "measured file names no expectation (expectationSha256)",
   unfinished: "\u2014 the verifier had not finished",
   otherMeasured: "names a different measured file",
-  unrecorded: "no status of that run records it"
+  unrecorded: "no status of that run records it",
+  measuredBefore: "was measured before that run ended"
 };
 var isIntegrityReason = (w) => Object.values(INTEGRITY_PHRASES).some((p) => w.includes(p));
 function excludedNow(d, nc) {
@@ -3088,15 +3112,20 @@ function compare(expectation, measured, opts) {
   const st = opts.status && opts.status.status !== "v1" ? opts.status.status : null;
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const integrity = [];
+  let unboundNote;
   if (stale) integrity.push(`${INTEGRITY_PHRASES.otherExpectation} (${String(measured.expectationSha256).slice(0, 12)}\u2026 vs ${String(opts.expectationSha256).slice(0, 12)}\u2026) \u2014 re-measure`);
   if (opts.expectationSha256 && !measured.expectationSha256) integrity.push(`${INTEGRITY_PHRASES.noExpectation} \u2014 nothing ties these numbers to this design; re-measure with the shipped probe`);
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
   if (measuredRun !== void 0 && opts.status !== void 0 && (st === null || st.runId !== measuredRun)) {
     integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
+  } else if (st && measuredRun === void 0 && TERMINAL_PHASES.includes(st.phase) && Date.parse(String(measured.measuredAt)) > Date.parse(st.at)) {
+    unboundNote = `${opts.status ? opts.status.file : "status.json"} is run ${st.runId} (${st.phase}); this measured file names no run \u2014 graded as an unbound measurement`;
   } else if (st) {
     const stFile = opts.status ? opts.status.file : "status.json";
-    if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
-    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?`);
+    const endHint = measuredRun === void 0 ? ` \u2014 wait for it, or if nobody is running it any more, end it: --status ${shellArg(st.screen)} --phase failed --run ${shellArg(st.runId)}` : "";
+    if (measuredRun === void 0 && TERMINAL_PHASES.includes(st.phase) && st.phase !== "done") integrity.push(`this measured file names no run and ${INTEGRITY_PHRASES.measuredBefore} (${stFile}: run ${st.runId} ${st.phase} at ${st.at}) \u2014 measure again`);
+    else if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}${endHint}`);
+    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?${st.phase === "done" ? "" : endHint}`);
   }
   const measuredRows = Array.isArray(measured.interactions) ? measured.interactions : [];
   const allEvidence = [...measuredRows, ...Array.isArray(opts.interactions) ? opts.interactions : []];
@@ -3138,6 +3167,7 @@ function compare(expectation, measured, opts) {
     if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "design re-exported: the export content changed since it was descoped" });
     return live;
   };
+  if (unboundNote !== void 0) inputNotes.push(unboundNote);
   if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length) inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) \u2014 graded as agent evidence (D41)");
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i) => {
     const key = String(i.nodeId) + "|" + i.trigger;
@@ -3519,6 +3549,8 @@ function compare(expectation, measured, opts) {
     renderer: measured.renderer || "unknown",
     ...ifDefined("viewport", measured.viewport),
     artifacts: artifactCheck || (Array.isArray(measured.artifacts) ? measured.artifacts : []),
+    // M2 (s19): --record-plan records a static-only run as static-only, with its why
+    ...staticOnly ? { mode: "static-only", ...ifDefined("reason", measured.reason || void 0) } : {},
     inputs,
     verdict,
     headline,
@@ -4513,9 +4545,7 @@ function acceptMain(files, flags, USAGE) {
     wrote.push(`${at >= 0 ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
   }
   plan.waivers = waivers;
-  const tmp = `${planFile}.${process.pid}.tmp`;
-  fs6.writeFileSync(tmp, JSON.stringify(plan, null, 2) + "\n");
-  fs6.renameSync(tmp, planFile);
+  writePlan(planFile, plan);
   console.error(`wrote ${wrote.length} waiver(s) to ${planFile} (decided by ${by}: ${reason})`);
   for (const w of wrote) console.error(`  ${w}`);
   console.error(`re-run --compare to apply ${wrote.length === 1 ? "it" : "them"}: an accepted delta stays listed, leaves the counts, and reopens if the design is re-exported or the built value moves.`);

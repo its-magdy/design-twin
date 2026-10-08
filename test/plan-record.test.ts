@@ -17,6 +17,7 @@ import { isPlan, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import type { MeasuredBehaviour, MeasuredNode, MeasuredStyles, Plan, PlanVerification, VerifyReportV2 } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 import { must, readFixture, screenExport } from "./fixtures.ts";
+import { isJsonObject } from "../design-to-code/types.ts";
 
 const HOOK = path.join(import.meta.dirname, "..", "design-to-code", "verify-build.ts");
 const VS = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
@@ -81,8 +82,8 @@ const openOf = (root: string): boolean => isOpen({ file: path.join(root, REL), p
 console.log("recordPlan (F-100, D115):");
 {
   const root = project();
-  runHook(root); // the Stop hook closes the plan (it rewrites with 2 spaces) …
-  reindent(root, 4); // … and a person's editor re-saves it with 4 — same content, same planHash
+  runHook(root); // the Stop hook closes the plan …
+  reindent(root, 4); // … and a person's editor re-saves it with 4 spaces — same content, same planHash
   const before = planOf(root);
   const beforeText = fs.readFileSync(path.join(root, REL), "utf8");
   check("setup: the hook passed and the plan is closed (not open, not pending)", before.verification?.hook?.result === "pass" && !openOf(root) && !statusOf(root).reasons.some((r) => /plan changed after the hook/.test(r)));
@@ -90,7 +91,8 @@ console.log("recordPlan (F-100, D115):");
   const text = fs.readFileSync(path.join(root, REL), "utf8");
   const after = planOf(root);
   const v = must(after.verification, "verification");
-  check(`written: true, no notes (got ${JSON.stringify(r)})`, r.written && r.notes.length === 0);
+  check(`written: true, one note — the hand row it replaced in verification.deltas (M1, s19) (got ${JSON.stringify(r)})`,
+    r.written && r.notes.length === 1 && /^1 row\(s\) in verification\.deltas were not written by --record-plan/.test(r.notes[0] ?? ""));
   check("mode \"rendered\", renderer = report.renderer", v.mode === "rendered" && v.renderer === "playwright-chromium");
   check(`artifacts = the report .json + .md + the report's artifact that exists (the missing one is dropped) (got ${JSON.stringify(v.artifacts)})`,
     JSON.stringify(v.artifacts) === JSON.stringify([REPORT, "design/verify/Crates.report.md", "design/verify/Crates.png"]));
@@ -151,6 +153,54 @@ console.log("recordPlan (F-100, D115):");
   check("a recorded plan with deltas [] beside its report's 2 lows → no 'verification.deltas is [] but … lists 2' contradiction",
     verificationContradictions({ verification: { ...v } }, [refRow]).length === 0
     && verificationContradictions({ verification: { mode: "rendered", deltas: [] } }, [refRow]).length === 1);
+}
+
+console.log("review 18 (s19): a hand row in deltas, a static-only run, one format-preserving plan writer:");
+{
+  // M1: verification.deltas is the report's (D115) — a builder's residual there is replaced, never silently
+  const root = project();
+  const p = planOf(root);
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: [{ nodeId: "80:2", field: "boxShadow", note: "platform shadow approximation" }] } }, null, 2) + "\n");
+  const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  check(`[M1] replacing a hand row in verification.deltas says so, names it and points at deviations[] (got ${JSON.stringify(r.notes)})`,
+    r.notes.some((n) => /^1 row\(s\) in verification\.deltas .*not written by --record-plan.*\(80:2 boxShadow\).*deviations\[\]/.test(n)));
+  const again = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  check(`[M1] …re-recording over its own rows adds no note (got ${JSON.stringify(again.notes)})`, !again.written && again.notes.length === 0);
+}
+{
+  // M2: a static-only measured file → the report says so, and the plan records static-only + the why, no renderer
+  const so: VerifyReportV2 = compare(exp, { mode: "static-only", reason: "no dev server, no Playwright", nodes: [] }, {});
+  check(`[M2] compare() of a static-only measured file: report.mode "static-only" + its reason (got ${JSON.stringify({ mode: so.mode, reason: so.reason })}); a rendered one carries no mode`,
+    so.mode === "static-only" && so.reason === "no dev server, no Playwright" && rep.mode === undefined && !("reason" in rep));
+  const root = project();
+  const p = planOf(root);
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, renderer: "playwright-chromium" } }, null, 2) + "\n");
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(so, null, 2) + "\n");
+  recordPlan(REL, so, REPORT, { cwd: root, now: NOW });
+  const v = must(planOf(root).verification, "verification");
+  check(`[M2] --record-plan of it: mode "static-only" + the report's reason, no renderer (got ${JSON.stringify({ mode: v.mode, reason: v.reason, renderer: v.renderer })})`,
+    v.mode === "static-only" && v.reason === "no dev server, no Playwright" && v.renderer === undefined);
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(rep, null, 2) + "\n");
+  recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const v2 = must(planOf(root).verification, "verification");
+  check(`[M2] …a later rendered record: mode "rendered" + renderer, the static-only reason gone (got ${JSON.stringify({ mode: v2.mode, reason: v2.reason, renderer: v2.renderer })})`,
+    v2.mode === "rendered" && v2.renderer === "playwright-chromium" && v2.reason === undefined);
+}
+{
+  // L5: --accept and the verify-build hook write the plan as --record-plan does — BOM, indentation and CRLF kept
+  const crlf4 = (root: string): void => { const f = path.join(root, REL); fs.writeFileSync(f, "\ufeff" + JSON.stringify(readFixture(f, isPlan), null, 4).split("\n").join("\r\n") + "\r\n"); };
+  const sameFormat = (t: string): boolean => t.startsWith("\ufeff{\r\n    \"status\"") && t.endsWith("}\r\n") && !/[^\r]\n/.test(t);
+  const root = project();
+  crlf4(root);
+  const a = spawnSync(process.execPath, [VS, "--accept", REPORT, "--node", "80:2", "--field", "background", "--reason", "brand red agreed", "--by", "Sam Doe", "--plan", REL], { cwd: root, encoding: "utf8" });
+  const text = fs.readFileSync(path.join(root, REL), "utf8");
+  check(`[L5] --accept on a BOM + CRLF + 4-space plan: the waiver is written and the file keeps its format (exit ${a.status}; starts ${JSON.stringify(text.slice(0, 16))})`,
+    a.status === 0 && sameFormat(text) && (planOf(root).waivers ?? []).some((w) => isJsonObject(w) && w.nodeId === "80:2" && w.reason === "brand red agreed")
+    && !fs.readdirSync(path.join(root, "design/plan")).some((f) => /\.tmp/.test(f)));
+  const h = runHook(root);
+  const hooked = fs.readFileSync(path.join(root, REL), "utf8");
+  check(`[L5] …the verify-build hook's record keeps it too (exit ${h.status}; starts ${JSON.stringify(hooked.slice(0, 16))})`,
+    h.status === 0 && planOf(root).verification?.hook?.result !== undefined && hooked !== text && sameFormat(hooked));
 }
 
 console.log("planHash: verification left out, the pre-F-100 formula still accepted (D115):");
