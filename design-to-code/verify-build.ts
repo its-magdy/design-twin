@@ -1,62 +1,32 @@
 // verify-build.ts — the Stop-hook gate for the build-screen skill, and the ONE place a plan's status
-// is computed.
+// is computed. Usage, what blocks and the status precedence are in --help (USAGE below).
 //
 // Registered in two places. build-screen/SKILL.md's frontmatter (Stop): active only for a session
 // that actually invoked build-screen. claude-plugin/hooks/hooks.json (SubagentStop, matched to the
 // screen-builder agent): Claude Code ignores `hooks` in a plugin-shipped agent's frontmatter, so the
 // fan-out builder can only be gated from the plugin level.
 //
-//   node verify-build.js                     hook mode: the hook JSON arrives on stdin
-//   node verify-build.js <plan.json>…        check these plans (no stdin is read)
-//   node verify-build.js --status [<plan>…]  print each plan's COMPUTED status; never writes
+// Only three things BLOCK (exit 2): an unexplained colour literal, a visible design node with no
+// anchor, and (web profiles) no `data-dt-node` tag at all. Everything else is a WARNING (exit 0): a
+// gate that blocks on correct reuse teaches users to lie to it. The colour check is a source check,
+// not a DOM check: only code is scanned (comments, prose strings and non-source files such as an
+// exported SVG's baked-in stroke never reach a painted element as a literal), and the line that
+// DEFINES a token is not a violation. The rendered comparison is verify-screen.ts's job.
 //
-// ---------------------------------------------------------------- what BLOCKS (exit 2)
-// Two things, plus a third on web profiles only:
-//   1. an UNEXPLAINED colour literal: a colour the plan resolved to a real code token, written as a raw
-//      literal (`#5B5FC7`, `0xFF5B5FC7`, `rgb(91, 95, 199)`) in a SOURCE file listed in `files[]`.
-//      Only code is scanned: comments, prose string literals (provenance notes) and every non-source
-//      file (`.svg`, `.json`, `.md`, images …) are skipped — a hex in a doc comment or in
-//      the baked-in stroke of an exported SVG the skill forbids editing never reaches a painted
-//      element as a literal. A value the plan did NOT resolve to a token is not a violation (the
-//      profiles prescribe one-off literals where no token exists), and neither is the line that
-//      DEFINES the token (`--color-figma-brand-600: #5B5FC7`). This is a source check, not a DOM
-//      check: the rendered comparison is verify-screen.ts's job, and its report feeds the status.
-//   2. a VISIBLE design node with no anchor in the plan: a node the export draws (not `hidden`, no
-//      hidden ancestor) that neither it nor any ancestor maps to code in `anchors{}`. The plan is the
-//      map from design to code; a visible subtree missing from it is a piece of the screen nobody
-//      accounted for. `plan-skeleton.ts` lists every visible node, so this is only ever a fill-in.
-//   3. (web profile: the plan's `target`, else design/target.json) NO `data-dt-node` attribute in any
-//      plan's files[]: the verify step then measures nothing by id. Below 50% of anchored visible
-//      nodes tagged is a warning; `"tagging": {"off": true, "reason": …}` opts out.
-// Everything else — token identity merges, a11y/coverage evidence, arbitrary px, file existence,
-// `mapModule` imports, MISSING rows with no decision, the plan header, the verification block's
-// self-consistency, `deviations[]` shape — is a
-// WARNING: printed, exit 0. A gate that blocks on correct reuse teaches users to lie to it.
-//
-// ---------------------------------------------------------------- status is COMPUTED, never stored
-// The hook never writes `plan.status` (a stored status can say "verified" beside a report that says
-// "fail"). It writes `plan.verification.hook`:
+// Status is COMPUTED, never stored. A stored status can say "verified" beside a report that says
+// "fail", so the hook never writes `plan.status`; it writes `plan.verification.hook`
 //   { result: "pass"|"blocked", checkedAt, blocking:[…], warnings:N, planHash, files:{<path>: <sha256/16>|null} }
-// and `computeStatus()` derives the status at read time from THREE facts that must all hold:
-//   hook result "pass"  AND  every file in files[] (and every mapped module) still hashes the same  AND  the verify report
-//   (design/verify/<…>.report.json, schema @2) says "pass" (or "pass-with-deviations") and measured THIS
-//   design and THIS code — by content: its inputs.exportContentSha256 equals the export's (timestamps
-//   stripped), its inputs.code.files equal the files' hashes now, and its inputs.waivers.sha256 equals the
-//   hash of the plan's waivers[]/descopes[] now (absent = none). No clock is consulted.
-// A stored "verified"/"static-only" (written by an older hook) is ignored by computeStatus and
-// deleted the next time the hook checks that plan. `status` keeps only the states a PERSON sets:
-// "pending" (default) · "awaiting-user" (paused on a question — skipped, never closed) ·
-// "abandoned" (retired — skipped). Every reader (verify, sync-design, the next session) runs
+// and `computeStatus()` derives the status at read time from THREE facts that must all hold: hook
+// result "pass"; every file in files[] (and every mapped module) still hashes the same; and the verify
+// report (design/verify/<…>.report.json, schema @2) passes and measured THIS design and THIS code — by
+// content: its inputs.exportContentSha256 equals the export's (timestamps stripped), its
+// inputs.code.files equal the files' hashes now, and its inputs.waivers.sha256 equals the hash of the
+// plan's waivers[]/descopes[] now (absent = none). No clock is consulted. A stored "verified"/
+// "static-only" (written by an older hook) is ignored and deleted the next time the hook checks that
+// plan. `status` keeps only the states a PERSON sets: "pending" (default) · "awaiting-user" (paused on
+// a question — skipped, never closed) · "abandoned" (retired — skipped). Every reader runs
 // `verify-build.js --status` instead of trusting a field.
 //
-// Computed statuses: pending (hook has not checked this version of the plan) · blocked · stale (a
-// file changed since the hook passed) · failed (a verify report exists and says fail) ·
-// unverified (no report; a report that is "incomplete", older than schema @2, or that measured a
-// different design, different code or different waivers) · static-only · verified ·
-// verified-with-deviations (every report passes and ≥1 says "pass-with-deviations": accepted deltas or
-// descoped interactions).
-//
-// ---------------------------------------------------------------- when it runs
 // Fast path: a plan is OPEN when its status is "pending" (or absent/legacy), it was touched within
 // STALE_HOURS, and the hook has not already passed this exact plan + these exact files. No open plan
 // → exit 0 at once. So an edit to a built file re-opens its plan, and a finished build stays quiet.

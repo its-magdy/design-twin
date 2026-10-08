@@ -2,9 +2,9 @@
 //
 // Figma's own SVG export is not bit-reproducible: re-exporting the SAME icon, with NOTHING changed in
 // the design, comes back with different floating-point path coordinates (measured ≤0.004px drift —
-// e.g. `arrow-down-3ea6be.svg` d="…8.77734…4.97401…" vs `arrow-down-ccfd6b.svg`
-// d="…8.7793 …4.97596…", the same icon exported twice), and with def ids that embed the exporting
-// node's id (`clip0_22012_15691` vs `clip0_22012_24907` for one icon reached through two instances).
+// d="…8.77734…4.97401…" vs d="…8.7793 …4.97596…" for one icon exported twice), and with def ids that
+// embed the exporting node's id (`clip0_22012_15691` vs `clip0_22012_24907` for one icon reached through
+// two instances).
 //
 //   1. `normalizeSvgText` (v1, below): round every decimal to 1 place, then hash the text. Used by the
 //      plugin's per-run content hash (figma-plugin/src/assets.ts register(), re-exported crypto-free
@@ -26,25 +26,19 @@
 // bundle never calls that function.
 //
 // ---- v1
-// Rounding to 1 decimal place (~0.1px), not 2 (~0.01px): tried 2 decimals first and it does NOT
-// reliably collapse the drift, because two legitimately identical re-exports can straddle a rounding
-// boundary — 4.97401 rounds to 4.97 but 4.97596 (0.00195 away — well inside the ≤0.002px drift budget)
-// rounds to 4.98, so the "same" icon split into two hashes anyway. Verified against the real eight
-// `arrow-down*.svg` variants (test/fixtures/livetest3/arrow-down/, from a real Figma export) with a
-// small script before choosing this: 1 decimal place is the coarsest rounding that does NOT itself
-// introduce a boundary split on this data, and it correctly separates the THREE genuinely different
-// icons among those eight files. Still two orders of magnitude below anything a human would call
-// "moved" — chosen as the tolerance rather than ~0.01px, because 0.01px empirically fails on this real
-// fixture data.
+// Rounding to 1 decimal place (~0.1px), not 2 (~0.01px): 2 decimals do NOT reliably collapse the
+// drift, because two legitimately identical re-exports can straddle a rounding boundary — 4.97401
+// rounds to 4.97 but 4.97596 (0.00195 away, well inside the ≤0.002px drift budget) rounds to 4.98, so
+// the "same" icon split into two hashes anyway. Checked against eight real exports of one icon
+// (test/fixtures/livetest3/arrow-down/): 1 decimal place is the coarsest rounding that does NOT itself
+// introduce a boundary split on this data, and it still separates the three genuinely different icons
+// among those eight files — two orders of magnitude below anything a human would call "moved".
 // Matches BOTH plain decimals (`-0.000406265`) and scientific notation (`2.09808e-05`) — Figma emits
-// both for a coordinate near zero, sometimes for the SAME logical value across two exports of what is
-// otherwise the identical icon (live evidence: a real `angle-left` chevron came back as
-// `2.09808e-05`/`-0.000406265`/`8.2016e-05` in three different pulls of the same shape). The regex
-// must not stop at the decimal mantissa (`-?\d+\.\d+`): a scientific-notation coordinate like
-// `2.09808e-05` would have only its `2.09808` replaced, leaving the exponent dangling as `2.1e-05` — a
-// corrupted, un-normalised leftover that could never match the plain-decimal form's `0.0`, and the
-// icon would fail to dedup even though every OTHER coordinate in the path matched exactly. A real pull
-// showed this: five `angle-left*.svg` files for what should have been two (a real up/down pair).
+// both for a coordinate near zero, sometimes for the SAME logical value across two exports of one
+// icon. The regex must not stop at the decimal mantissa (`-?\d+\.\d+`): `2.09808e-05` would have only
+// its `2.09808` replaced, leaving the exponent dangling as `2.1e-05` — a corrupted leftover that could
+// never match the plain-decimal form's `0.0`, and the icon would fail to dedup even though every other
+// coordinate matched. A real pull showed this: five files for what should have been two (an up/down pair).
 const NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
 export function normalizeSvgText(svg: string): string {
   return svg.replace(NUM_RE, (m) => {

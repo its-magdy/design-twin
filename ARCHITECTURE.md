@@ -207,196 +207,88 @@ Design decisions worth not re-litigating:
   image-*backed* container (a hero/cover/banner with text + buttons over a background image) keeps its
   structure and recurses instead — the image itself survives in `fills`, so no overlaid content is lost.
 
-## Extended IR (implemented on top of the surface above)
+## What the IR carries (on top of the surface above)
 
-The exporter also reads (all verified fields, all guarded by `in`/`figma.mixed`):
-- **Interactions:** `node.reactions` → `{trigger, actions:[{navigation, destination, transition:{type,
-  easing, duration, direction, matchLayers, cubicBezier, spring}}]}`. FREE via the Plugin API and
-  **unreadable by the paid `get_motion_context`** — the UX/navigation layer is ours. `transition` carries
-  the full free-API motion surface: `matchLayers` (smart-animate) + the exact easing curve
-  (`easingFunctionCubicBezier`→`cubicBezier {x1,y1,x2,y2}`, `easingFunctionSpring`→`spring
-  {mass,stiffness,damping,initialVelocity}`). Verified against developers.figma.com: the free Plugin API
-  exposes **NO keyframe tracks / timeline** — animated-component timelines are a paid `get_motion_context`
-  surface only, so this is as far as free-plan motion extraction goes.
-- **Responsive/scroll:** `clipsContent`→`clip`, `overflowDirection`→`scroll`, `constraints`→`pin`,
-  `minWidth/maxWidth/minHeight/maxHeight`→`sizeLimits`, `layoutGrow`→`grow`, `layoutPositioning:ABSOLUTE`→`absolute`.
-- **Inferred flex:** `node.inferredAutoLayout` upgrades a non-auto-layout frame to flex intent (`layout.inferred:true`)
-  instead of emitting raw coordinates.
-- **Richer paint/geometry:** gradient `stops`, image `scaleMode`, per-side stroke `weights` (mixed fallback),
-  per-corner `radius` (mixed fallback), `rotation`, `blendMode`, `isMask`.
-- **Text:** mixed runs via `getStyledTextSegments` → `runs[]` (no more flattening); unit-aware
-  `lineHeight`/`letterSpacing` (`percent`/`px`/`auto`); `fontName.style` verbatim; `paragraphSpacing`,
-  `leadingTrim`, `textWrap` (Figma's `textWrapStyle`: `BALANCE`/`PRETTY` → CSS `text-wrap: balance|pretty`;
-  the `AUTO` default is skipped), per-run `href`/`list`.
-- **Effects:** full ordered `effects[]`, type-discriminated (`BACKGROUND_BLUR`≠`LAYER_BLUR`≠shadows), with
-  `visible`/`blendMode`/`behindNode`.
-- **Variables:** `tier` (primitive/semantic from alias+scopes), `scopes`, `codeSyntax {WEB,ANDROID,iOS}`
-  (free per-platform token names), `remote`; COLOR values folded to hex so **alpha survives**.
-- **Components:** catalog keeps the real `#uid` prop `key` + `type` + `default` + `options` + `description`
-  + node `id` (the last lets `bridge/src/seed-components.ts` map Code Connect node-ids → names). Every entry
-  also carries `visuals` — the component/variant NODE's own `fills`/`strokes`/`effects`/`radius`/`opacity`/
-  `blendMode`, the same mixins any other node has. Always on: these are plain synchronous property getters
-  (Figma's Plugin API only suffixes the genuinely expensive calls `Async` — `getCSSAsync`, `exportAsync` —
-  and these six aren't among them), so there's no cost to gate. Covers components DEFINED in this file
-  only; `remote:true` entries (consumed from a library) need `--as-library` on the source file instead —
-  no API exposes a library component's paint from a consuming file.
+The field-by-field reference is `claude-plugin/skills/build-screen/references/ir-fields.md`; this section
+records the design decisions behind it. Every read is guarded by `in` / `figma.mixed`.
+
+- **Interactions:** `node.reactions` → `{trigger, actions:[{navigation, destination, transition}]}`.
+  `transition` carries the full free-API motion surface: `matchLayers` (smart-animate) and the exact easing
+  curve (`cubicBezier {x1,y1,x2,y2}` or `spring {mass,stiffness,damping,initialVelocity}`). Prototype actions
+  include `SET_VARIABLE`/`SET_VARIABLE_MODE`/`CONDITIONAL` (recursive)/`UPDATE_MEDIA_RUNTIME`, carry-over
+  flags and overlay settings (`figma-plugin/src/prototype.ts`, `serializeAction`). Animation timelines are
+  read only with the opt-in `--motion` flag (`figma-plugin/src/motion.ts`).
+- **Responsive/scroll:** `clip`, `scroll`, `pin` (constraints), `sizeLimits`, `grow`, `absolute`, and
+  `fixedChildren` (sticky headers/footers). A non-auto-layout frame with `inferredAutoLayout` becomes flex
+  intent (`layout.inferred:true`) instead of raw coordinates.
+- **Geometry:** `box`/`renderBox` are the resolved pixel bounds (`box.x/y` is omitted under auto-layout/grid
+  parents); `rotation`, `skew` (decomposed from `relativeTransform`), `arc` (ellipse arcs/donuts),
+  `shape {points,innerRadius}` (stars/polygons), `booleanOp`; `TABLE` cells are reached through `cellAt()`
+  because tables have no `children`.
+- **Paint:** gradient stops, image `scaleMode`/filters/`intrinsicSize`, pattern paints, per-side stroke
+  `weights`, per-corner `radius`, `blendMode`, `isMask`, and `stroke.variableWidth` for tapered strokes.
+- **Text:** mixed runs from `getStyledTextSegments` → `runs[]` (per-run `href`/`list`, style ids, OpenType
+  features), unit-aware `lineHeight`/`letterSpacing`, `fontName.style` verbatim, paragraph spacing,
+  `leadingTrim`, `textWrap` (`BALANCE`/`PRETTY`; `AUTO` is skipped), and a `missingFont` flag (plus a
+  warning) when a font is substituted.
+- **Effects:** the full ordered `effects[]`, type-discriminated (a background blur is not a layer blur),
+  including noise/glass/texture fields and progressive-blur offsets (Vectors `{x,y}`).
+- **Variables and tokens:** `tier` (primitive/semantic), `scopes`, `codeSyntax {WEB,ANDROID,iOS}`, `remote`,
+  `hiddenFromPublishing`, a durable `key`, and `defaultModeId` per collection; COLOR values are folded to hex
+  so alpha survives. Bindings are resolved beyond node level: text runs (`runs[].tokens`), effects, gradient
+  stops and paints, so they do not degrade to literals. Theme pins: per node `variableModes` (explicit pins,
+  `{collectionName: modeName}`); at the export root `resolvedModes` (the effective modes inherited from any
+  ancestor, including the page, for multi-mode collections only), which a single-node export needs when the
+  theme is pinned above it. `inferredTokens` (value-coincidence matching) does not exist.
+- **Components:** the catalog keeps the real `#uid` prop `key`, `type`, `default`, `options`, `description`,
+  INSTANCE_SWAP/SLOT `preferredValues`, the component `key`, `documentationLinks`, the node `id` (which lets
+  `dtwin seed` map Code Connect node-ids to names) and `visuals` (the component/variant node's own
+  fills/strokes/effects/radius/opacity/blendMode, plain synchronous getters, so always on). Components DEFINED
+  in the file only; `remote:true` entries need `--as-library` on the source file. Per node: `propRefs` (which
+  prop drives a layer), instance `overrides` (direct `overriddenFields`, capped at 100), `detachedFrom`,
+  `exposedInstances`. Every `INSTANCE` also emits `mainComponent {name,id,key,remote,setId,setKey,setName,
+  variant}` beside the `component` name string, the join key back to `components.local.json` /
+  `components.library.json`.
+- **`--variant-visuals` (opt-in):** a `COMPONENT_SET` wrapper's own paint is Figma's selection chrome, not a
+  design value, so the flag walks each set's variants and attaches `entry.variants[]` with each variant's real
+  layout/fills/radius/tokens/css (through the node `serialize()`, injected as a parameter to avoid an import
+  cycle; depth-capped, assets skipped, one `try/catch` per variant). A standalone `COMPONENT` gets `entry.node`
+  instead. `bridge/src/design-system-layout.ts` moves those node trees into
+  `design-system/components/<name>__<id>.json` and leaves a `variantsFile` / `nodeFile` pointer in the slim
+  `components.local.json`; `design-to-code/get-component.ts` follows the pointer. Neither `drift-lint.ts` nor
+  `map-bootstrap.ts` reads the detail files. Flag off, the catalog is unchanged.
+- **Assets and renders:** vector/image export rules are under **Assets** above. Invisible or zero-area vectors
+  are skipped before `exportAsync` and counted as `assetsSkippedInvisible`, not failures; a genuine export
+  failure falls back to `geometry {fills,strokes,w,h}` from `fillGeometry`/`strokeGeometry` (not
+  `vectorPaths`, which Figma documents as incomplete); `isAsset` is OR'd into the icon heuristic. Image
+  source bytes are exported once per hash (asset `kind:"source"`), and the image-fill PNG export uses
+  `useAbsoluteBounds:true` so overhang is not clipped. `collectReference()` renders each top-level frame to a
+  PNG (longest side capped near 2048px) as an asset `{kind:"reference"}` plus a `reference` path, because
+  structural JSON is not ground truth.
+- **On-demand screenshot** (`collectScreenshot()`, bridge command `screenshot`, CLI `--screenshot <id>`, MCP
+  `figma_screenshot`): the same render for ONE node by id, skipping `serialize()` and the asset walk. It
+  exists for visual validation of one component in a dense screen, where the whole-frame reference is too
+  zoomed out; it is deliberately not a bulk pass, which would pay the O(nodes) cost `--no-assets` avoids.
+- **Opt-in readers:** `css` (Figma's `getCSSAsync`, automatic when the exported subtree (a single node or a
+  one-node selection) is at most 60 nodes; an explicit `css:false` wins), `measurements`, `pluginData`, `motion`, `sharedData` (cross-plugin
+  `getSharedPluginData`, which surfaces Tokens Studio applied tokens as `sharedData.tokens.{prop}`) and
+  `variantVisuals`, all registered in `bridge/src/read-opts.ts`. The Tokens Studio document-level
+  `values`/`themes` blob (compressed and chunked) is not decoded.
+- **Handoff and file facts:** dev resources (`getDevResourcesAsync`, batched once per root), annotations
+  (with `categoryId`), export settings, `documentColorProfile`, per-page `layersDoc.pageSettings`
+  (backgrounds), and index entries carry `nodes`/`bytes` so a consumer knows a layer file's size before
+  opening it.
 - **Diagnostics:** every export doc carries a `manifest` (`nodes`/`skipped`/`truncated`/`assetsFailed`/
-  `warnings[]`) — no silent truncation; the design system carries a `hygiene[]` list (ALL_SCOPES,
-  semantic-holds-raw, broken alias, variant-explosion>30, unnamed/duplicate components).
-
-### Tier-1 additions (2026-07-23, all signatures verified vs developers.figma.com; harness 58/58)
-
-- **Theme mode pins → `variableModes` + `resolvedModes`:** per node, `node.explicitVariableModes`
-  (`{collectionId: modeId}`, sync) resolved to `{collectionName: modeName}` via memoized
-  `getVariableCollectionByIdAsync` — the **explicit** pins set on a subtree. At the **export root** we
-  additionally emit `resolvedModes` from `node.resolvedVariableModes` (the **effective** modes inherited
-  from any ancestor, including the PAGE), filtered to multi-mode collections; root-only keeps it out of
-  every descendant. Together these are the missing link for correct light/dark codegen — and `resolvedModes`
-  specifically fixes single-node exports ("paste a link") whose theme is pinned on an ancestor/page, which
-  value-baking targets (SwiftUI/Compose/RN) would otherwise render in the collection default (Light).
-- **Prop-driven components:** `componentPropertyReferences` → `propRefs` (`{visible/characters/mainComponent:
-  propName}`, `#id` suffix stripped) tells codegen which prop drives a nested layer; instance `overrides`
-  (direct `overriddenFields` only, empty-filtered, capped 100) shows what diverges from the main component;
-  design-system prop defs carry INSTANCE_SWAP `preferredValues` (`{type,key}[]` — the allowed swap set →
-  a typed enum) + per-prop `description`.
-- **Full-frame reference render → `reference`:** `collectReference()` renders each top-level frame to PNG
-  (`exportAsync {format:PNG, constraint:{type:SCALE,value}}`, longest side capped ~2048px, downscales below
-  1× for huge canvases). Emitted as an asset `{kind:"reference"}` + a `reference` path on the tree/screen —
-  structural JSON is not ground truth; the codegen agent self-corrects against this image.
-- **On-demand single-node screenshot (`collectScreenshot()`, bridge cmd `screenshot`, CLI `--screenshot
-  <id>`, MCP `figma_screenshot`):** the same `collectReference()` render, called on ONE node addressed
-  by id instead of every exported root — skips `serialize()` and the recursive asset walk entirely, so
-  it stays cheap even on a node buried deep in a large tree. Exists for post-generation visual
-  validation of a specific component in a dense screen, where the one whole-frame reference PNG above is
-  too zoomed-out to be useful. Mirrors Figma's own Dev Mode MCP server (`get_screenshot`: single-node
-  scope, called on demand) rather than pre-rendering every node/instance up front — deliberately NOT a
-  bulk pass, which would pay the same O(nodes) cost `--no-assets` exists to avoid for a much bigger
-  payload (PNG > structural JSON).
-- **Token bindings beyond node level:** generalized `resolveBoundMap()` resolves `boundVariables` on
-  **text runs** (`getStyledTextSegments` + `boundVariables` field → `runs[].tokens`), **effects**
-  (`effect.tokens`), **gradient stops** (`stop.tokens`), and **paints** (`fill.tokens`). Without it these
-  bindings would degrade to hardcoded literals — defeating the whole point of token extraction. (`simplifyFills` /
-  `simplifyEffects` / `serializeText` became async; all call sites awaited, incl. design-system style maps.)
-- **Bug fix + HIGH/MED coverage (2026-07-23, all names verified vs developers.figma.com; harness 89/89):**
-  Fixed a real defect — progressive-blur `startOffset`/`endOffset` are **Vectors `{x,y}`** in normalized
-  object space, but were guarded with `typeof === "number"` and silently dropped. Added: **`box`/`renderBox`**
-  from `absoluteBoundingBox`/`absoluteRenderBounds` (resolved pixel ground-truth — auto-layout/grid children
-  had none); modern prototype actions **`SET_VARIABLE`/`SET_VARIABLE_MODE`/`CONDITIONAL`(recursive)/`UPDATE_MEDIA_RUNTIME`**
-  + NODE carry-over flags (`preserveScroll`/`resetVideo`/…) + **overlay settings** (position/scrim/close-on-click-outside),
-  via extracted `serializeAction()`; **`ImagePaint.filters`** (+video) exposure/contrast/etc; **NOISE/GLASS/TEXTURE**
-  effect fields (were `{type}` only); **`PatternPaint`**; **`VariableCollection.defaultModeId`** (the `:root` base
-  mode); per-run **`textStyleId`/`fillStyleId`/`openTypeFeatures`/`indentation`** + decoration sub-fields;
-  component **`key`** (resolves INSTANCE_SWAP `preferredValues` keys) + **`documentationLinks`**; **`detachedInfo`**,
-  **`exposedInstances`**; **`maskType`/`cornerSmoothing`/`targetAspectRatio`**; **`strokesIncludedInLayout`**
-  (border-box); **`node.getDevResourcesAsync`** (batched once per root, `includeChildren`); **`documentColorProfile`**
-  (P3) + file name; `Variable.description`; `annotation.categoryId`; **`TABLE`** cell traversal via `cellAt()`
-  (tables have no `children` — exported empty before).
-- **Verified NON-gaps (excluded on purpose):** `gradientHandlePositions` (REST-only, not in Plugin-API
-  `GradientPaint`), `SET_STATE` action (doesn't exist), `variantGroupProperties` (deprecated → `componentPropertyDefinitions`).
-- **Gap-audit closeout (2026-07-24, all signatures re-verified vs developers.figma.com; harness 124/124):** a
-  63-agent research pass (Plugin API + OSS tools + paid Dev-Mode MCP) found the read plane at/beyond paid parity;
-  most reported "gaps" were already implemented (`listSpacing`/`hangingList`/`hangingPunctuation`/`paragraphIndent`
-  in text; `itemReverseZIndex`→`reverseZ`; image `imageTransform`/`rotation`/tile `scalingFactor`). The genuine ones
-  are now closed: **`EllipseNode.arcData`** → `arc {start,end,innerRadius}` (arcs/donuts/rings; omitted for a plain full
-  ellipse); **`StarNode.pointCount`/`innerRadius`** + **`PolygonNode.pointCount`** → `shape {points,innerRadius}`;
-  **`BooleanOperationNode.booleanOperation`** → `booleanOp`; variable + collection **`hiddenFromPublishing`** (stops
-  designer-private tokens leaking into the public API) and **`key`** (durable cross-file identity for the `design-to-code/`
-  map, mirroring the component-`key` precedent); **image source bytes + intrinsic size** via
-  `figma.getImageByHash(hash).getBytesAsync()`/`getSizeAsync()` (asset `kind:"source"`, deduped by hash;
-  paint `intrinsicSize {w,h}`); **`useAbsoluteBounds:true`** on the image-fill PNG export (overhang no longer clipped);
-  and an opt-in **cross-plugin shared-data reader** (`getSharedPluginData`) that surfaces **Tokens Studio** applied
-  tokens (`sharedData.tokens.{prop}`) — the semantic layer on files without native Variables. Opt-in flags now:
-  `css`/`measurements`/`pluginData`/`motion`/`sharedData`. Deferred within these: the Tokens Studio document-level
-  `values`/`themes` blob (lz-string-compressed + chunked — needs a decoder); dedicated a11y namespaces (no public,
-  stable namespace to probe).
-- **Audit + fixes (2026-08-08; harness 301/301, tooling 204/204, bridge 109/109):** a 3-agent audit (2 code,
-  1 doc-research) plus a verification pass against official docs closed most of the list above. **Landed:**
-  invisible/zero-area vector nodes are pre-checked and skipped *before* `exportAsync` (counted as
-  `assetsSkippedInvisible`, not `assetsFailed` — a real file produced **807 false failures**); genuine export
-  failures on a painting node fall back to **`geometry {fills,strokes,w,h}`** from `fillGeometry`/`strokeGeometry`
-  (*not* `vectorPaths`, which the docs call "simple, but incomplete") so icons render as inline SVG; **warnings
-  aggregate by kind** (one line + up to 10 example refs, manifest stays a flat `string[]`) instead of ~900 repeats;
-  **`inferredTokens` removed entirely** (was ~20% of payload, matched by value-coincidence, zero consumers);
-  `box.x/y` omitted under auto-layout/grid parents and `layoutSizing*: "FIXED"` treated as a skipped default;
-  **`fixedChildren`** (`numberOfFixedChildren` — sticky headers/footers/FABs), compact **`exportSettings`**,
-  **`skew`** (QR decomposition of `relativeTransform`, degrees, CSS `skewX` convention), **`layersDoc.pageSettings`**
-  (`background`/`prototypeBackground` per page, Figma defaults skipped), and index entries gained **`nodes`/`bytes`**
-  so a consumer knows a layer file's size before opening it (real files reach 5–7 MB).
-- **Still open (lowest value / deferred):** `ShaderPaint`/`ShaderEffect` property detail (only the opaque program
-  `id` is read — note u130 shipped `figma.listAvailableShaders()`/`importShaderById()`, so this is now closable),
-  Motion/animation timelines (u130–u133), `SlotNode` (Slots GA 2026-06). **`prototypeDevice` is not deferred but
-  impossible**: verified absent from the Plugin API and from `@figma/plugin-typings` 1.131.0 — it is a REST-only
-  field, so device/breakpoint context cannot come from the plugin.
-- **Best-practice validation + fixes (2026-07-24; harness 133/133, tooling 126/126):** an adversarial pass
-  (official Figma Dev Mode/MCP + variables/modes + OSS AI-codegen practice) confirmed the read plane at/above
-  parity but caught **one correctness bug**, now fixed: a container with an **image fill + children** was
-  flattened to a flat PNG, silently dropping its text/buttons/tokens — the image-fill export is now guarded
-  (see **Assets** above). Also added: **`resolvedModes`** (effective inherited theme at the export root — see
-  above), a **`missingFont`** flag (+warning) when a text node's font is substituted, and **auto-on `css`** for
-  single-node / small (≤60-node) selections so Figma's `getCSSAsync` oracle is on by default where it's cheap
-  (large trees & multi-select stay opt-in; an explicit `css:false` always wins).
-  **Code Connect** (node→codebase-component + prop transforms) is Org/Ent-gated — **now replicated locally**
-  in `design-to-code/` (DTCG token emitter, schema'd + validated + drift-checked `design/codeconnect.local.json` map,
-  bootstrapper). See `design-to-code/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced
-  ADR); validate on real data via the Layer C checklist in `TESTING.md`. Built and offline-tested; codegen
-  resolver deferred to a target repo.
-- **Competitor sweep + Plugin API cross-check (2026-08-13; harness 306/306):** researched 10+ Figma-to-code
-  tools (FigmaToCode, Anima, Locofy, Builder.io Visual Copilot, TeleportHQ, Figma's own Dev Mode/Code
-  Connect/official MCP, html.to.design, Codia AI, Superflex, v0, Magic Patterns, Uizard, Galileo, Zeroheight,
-  Supernova, Tokens Studio, Figmagic) plus a direct re-check against `developers.figma.com`'s node property
-  docs — confirmed nothing they read is missing here (descriptions, pluginData, variables, auto-layout,
-  variants, motion, dev resources all already captured). Two genuine, doc-verified gaps closed: **`isAsset`**
-  (Figma's own icon/raster-asset heuristic — docs call it out as "particularly useful for code generation
-  plugins"; now OR'd into the `iconLike` check in `assets.ts` as a cross-check alongside the existing
-  name/size heuristic, for containers the regex misses) and **`variableWidthStrokeProperties`** (tapered/
-  brush-style strokes, 14 node types — now captured in `paint.ts` as `stroke.variableWidth {profile,points}`,
-  no flat CSS equivalent but recorded so a consumer can render it as an SVG path with a width gradient).
-  `guides` (frame ruler guides) and `complexStrokeProperties` were checked and NOT added — the former is a
-  designer authoring aid with no rendered/visual effect, the latter's docs page couldn't be confirmed to exist.
-- **Instance → main-component join keys + per-variant visual truth (2026-08-18; harness 371/371):** two gaps
-  found by reviewing a real export: (1) an `INSTANCE`'s `component` field carried only the main component's
-  bare `name` (`getMainComponentAsync()` resolved, then everything but `.name` discarded) — unjoinable with
-  the catalog's `{name,id}` entries, and colliding whenever two components share a name. Every `INSTANCE` now
-  also emits **`mainComponent` `{name,id,key,remote,setId,setKey,setName,variant}`** alongside the unchanged
-  `component` string (`.parent` optional-chained — a *remote* main's `.parent` may be `null`, per
-  `plugin-api.d.ts`); `setId`/`setKey` are the join back to `components.local.json`/`components.library.json`.
-  (2) The component catalog's `visuals` for a `COMPONENT_SET` were the **set wrapper's own** fills/radius —
-  Figma's purple dashed *selection chrome*, not a design value — while every variant was skipped outright
-  (`componentPropertyDefinitions` throws on a variant, so the catalog walk routed around them rather than
-  reading their real paint). New opt-in **`--variant-visuals`** flag (registered once in `bridge/src/read-opts.ts`,
-  so the CLI/MCP schema pick it up for free) walks each set's variants — already found by the same
-  `findAllWithCriteria` pass, no second traversal — and attaches **`entry.variants[]`** with each variant's
-  real `layout`/`fills`/`radius`/`tokens`/`css` via the existing node `serialize()` (injected as a parameter
-  into `buildDesignSystem`/`collectComponentCatalog` to dodge the `serialize.ts` ↔ `components.ts` import
-  cycle — no second serializer). Depth-capped (3 levels), forces `skipAssets` (a design-system pull has no
-  asset-manifest path), and per-variant `try/catch` so one bad variant can't drop the catalog. No per-variant
-  `props` — `componentPropertyDefinitions` still throws on a variant, so the set-level `props` map stays the
-  one source of truth for the prop *schema*; `values` (`{Type:"Default",...}`) comes from `variantProperties`
-  or, failing that, is parsed from the variant name Figma guarantees is `"Prop=Val, ..."`. Off by default;
-  flag-off catalog output is byte-identical (regression-tested).
-- **`components.local.json` index/detail split (2026-08-18):** `--variant-visuals` made the catalog huge
-  on a real design-system file — one real export measured `components.local.json` at 4.3MB, almost
-  entirely `variants[].node` trees an agent doesn't need just to see a component's prop table. Neither
-  `design-to-code/drift-lint.ts` nor `design-to-code/map-bootstrap.ts` ever reads `.node` (both key off
-  `name`/`id`/`key`/`type`/`props`), so `bridge/src/design-system-layout.ts` strips it out of each
-  `COMPONENT_SET` entry into a sibling `design-system/components/<safe(name)>__<safe(id)>.json`, and adds
-  a `variantsFile` pointer on the entry (absent, not null, when the set had no exported node trees — same
-  convention as `pageId`'s absence on pre-pageId exports). Every variant keeps its `id`/`name`/`key`/
-  `values` in the slim catalog. Manifest gained `files.componentsDir`. New `design-to-code/get-component.ts`
-  resolves one entry by key/id/name and follows `variantsFile` to print its full detail — the read path
-  for an agent that DOES want one component's real variant visuals. On that same real export the split
-  took `components.local.json` from 4.3MB to 196KB with drift-lint/map-bootstrap unmodified against it
-  (143/143 mapped, 0 errors). Both writers build off the one shared function, so they cannot drift.
-- **`--variant-visuals` extended to standalone COMPONENTs (2026-08-18; harness 374/374, tooling 222/222):**
-  the flag only ever walked variant children of a `COMPONENT_SET` — a standalone `COMPONENT` (never part
-  of a set) got none of the same treatment, leaving it with only the slim catalog fields and no way to
-  pull its real layout/tokens/css. `collectComponentCatalog` (`figma-plugin/src/components.ts`) also
-  runs `serializeVariant` on a standalone `COMPONENT` (same depth budget, same forced `skipAssets`) and
-  attaches the result as **`entry.node`** (not `entry.variants[]` — there is no set to enumerate variants
-  of). `bridge/src/design-system-layout.ts` splits any local `COMPONENT` entry carrying `.node` into the same
-  `design-system/components/<name>__<id>.json` sibling file, replacing it with a **`nodeFile`** pointer
-  (mirroring `variantsFile`). `design-to-code/get-component.ts` resolves either pointer. Flag-off and
-  `COMPONENT_SET` output are byte-identical (regression-tested).
+  `warnings[]`), so truncation is never silent; warnings aggregate by kind (one line with up to 10 example
+  refs). The design system carries a `hygiene[]` list (ALL_SCOPES, semantic-holds-raw, broken alias,
+  variant explosion above 30, unnamed/duplicate components).
+- **Deliberately not read:** `gradientHandlePositions` (REST-only), a `SET_STATE` action (does not exist),
+  `variantGroupProperties` (deprecated for `componentPropertyDefinitions`), `prototypeDevice` (REST-only,
+  absent from the Plugin API), frame `guides` (authoring aid with no rendered effect).
+- **Code Connect** (node → codebase component plus prop transforms) is Org/Ent-gated on Figma's side; it is
+  replicated locally in `design-to-code/` (DTCG token emitter, a validated and drift-checked
+  `design/codeconnect.local.json` map, a bootstrapper). See `design-to-code/README.md` and
+  `docs/design-to-code-spec.md`; validate on real data via the Layer C checklist in `TESTING.md`.
 
 ## Claude Code integration (verified)
 
@@ -468,6 +360,9 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   Connections without it are rejected at the handshake (401, compared as SHA-256 digests through
   `timingSafeEqual` so neither content nor length leaks), foreign origins 403.
   In-flight requests reject on plugin disconnect; a busy port exits with a clear `EADDRINUSE` message.
+- Daemon socket: unauthenticated, and it forwards every command a bridge takes, writes included, so
+  its only protection is its directory — private to the user (`0700`, owner-checked, never a symlink),
+  and refused otherwise (`daemon.ts` sockDir).
 - **Design content is data, not instructions.** Layer names, text-node characters, annotations,
   component descriptions and variable names are written by whoever can edit the Figma file (or a
   library it pulls in), and every read path hands them to the agent. The skills say so explicitly:

@@ -42,7 +42,7 @@ modes/aliases) — so this layer only adds the **code side** (import paths, prop
 # 1. Export the design system from Figma (existing plugin flow) -> design/export/design-system.json manifest
 #    + design/export/design-system/{tokens,styles.paint,styles.text,styles.effect,styles.grid,
 #                            components.local,components.library,hygiene}.json
-#    NOTE: pass the SPLIT files below, never design-system.json — that is now a slim pointer
+#    NOTE: pass the SPLIT files below, never design-system.json — that is a slim pointer
 #    manifest and carries no variables/components (the tools fail loud if you hand it one).
 # 2. Scaffold the component map (fill in the TODO import paths afterwards):
 node design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json
@@ -81,13 +81,18 @@ executed" design). Full shape is enforced by `map-validate.ts` (and documented h
 }
 ```
 
-## Relationship to the existing `design/` maps
-The repo already had a simpler `design/components.json` (`{import, component, props}`) and `design/tokens.json`,
-plus `bridge/src/seed-components.ts` — `dtwin seed` — (which seeds the component map from *code-side* Code Connect files).
-`design-to-code/` is the **formalized superset**: a schema'd, validated, drift-checked, bootstrappable map plus a
-DTCG token pipeline. `bridge/src/seed-components.ts` (`dtwin seed`) seeds from the code side; `design-to-code/map-bootstrap.ts` seeds
-from the Figma side — they are complementary. Consolidating the codegen skill onto the `design-to-code/` format is
-part of the deferred resolver work (needs a target repo).
+## Relationship to `dtwin seed` and `design/components.json`
+There are two component maps with different jobs. `design/codeconnect.local.json` (this directory's
+format; the path is `MAP_FILE` in `bridge/src/project-layout.ts`) is the schema'd, validated, drift-checked,
+bootstrappable map the tools above read and the `build-screen` skill consults. `dtwin seed`
+(`bridge/src/seed-components.ts`) is a separate, code-side seeder: it reads Code Connect files from your
+codebase and merges Figma component name, import and source into `design/components.json`
+(`{import, component, props}`), fill-missing-only, never clobbering hand-authored fields. Nothing in
+`design-to-code/` reads `design/components.json`. Likewise `design/tokens.json` is the hand-written
+override layer (Figma variable path to your token) that the `build-screen` skill reads; `tokens.ts` never
+does, it emits from `design/export/variables.json` (or the split `design-system/tokens.json`).
+`map-bootstrap.ts` seeds the map from the Figma side, `dtwin seed` from the code side; they are
+complementary.
 
 ## Validating on a real file
 `node test/design-to-code.test.ts` runs on **mock** data. Before trusting the tooling on real

@@ -13,28 +13,6 @@
 //                             unitless ones as "number"; every leaf carries a valid $type).
 //                             Not emitted: composite types (typography/shadow/…). Modes ride in
 //                             $extensions["figma.com"].modes here AND in the resolver below.
-//                             A COMPOSED colour (Figma Update 139: a colour plus a separate opacity,
-//                             one or both of them variable aliases) is a $type "color" token whose
-//                             $value is the colour half (a "{ref}" or a structured colour). DTCG
-//                             2025.10 has no way to put a reference and an opacity in one colour
-//                             value, so the opacity half (a number or a "{ref}") rides in
-//                             $extensions["figma.com"].opacity (per-mode: .modeOpacity), in
-//                             tokens.dtcg.json AND in the resolver set files. The number is Figma's,
-//                             verbatim, on Figma's 0–100 scale: "An opacity percentage from 0 to
-//                             100, or an alias to a FLOAT variable" (REST API variables types,
-//                             VariableComposedColor.opacity —
-//                             https://developers.figma.com/docs/rest-api/variables-types/). DTCG
-//                             `alpha` is 0–1 and cannot hold a reference, so it is not folded in.
-//                             tokens.css/theme.css write the WHOLE value as
-//                             `color-mix(in srgb, <colour> <opacity>%, transparent)` (see cssValue),
-//                             except when the opacity half aliases a FLOAT whose CSS is not a
-//                             percentage — then the colour half only, and lintTokens says so.
-//                             OPACITY / COLOR_OPACITY-scoped FLOATs (the same 0–100 scale — the
-//                             REST page's VariableScope: "OPACITY corresponds to layer opacity, while
-//                             COLOR_OPACITY corresponds to the opacity channel of a color") are
-//                             written to CSS as a clamped percentage (`40%`), and keep their verbatim
-//                             number in DTCG with $extensions["figma.com"].unit: "percent" (in
-//                             tokens.dtcg.json AND in the resolver set files).
 //   toResolver(ds[, warnings, opts]) -> { resolver, files }: a DTCG **Resolver Module** 2025.10
 //                             document (the spec-blessed portable theming mechanism) plus the token
 //                             files it $refs. Each multi-mode collection becomes a modifier whose
@@ -46,6 +24,18 @@
 //   lintTokens(ds[, opts]) -> string[] of problems (never-silent guarantee): group/leaf collisions,
 //                             duplicate names, malformed/missing color, missing default-mode value,
 //                             dangling aliases, CSS var-name collisions, empty names.
+//
+// A COMPOSED colour (a colour plus a separate opacity, either one a variable alias) is a $type "color"
+// token whose $value is the colour half. DTCG 2025.10 cannot put a reference and an opacity in one
+// colour value (`alpha` is 0–1 and cannot hold a reference), so the opacity half rides in
+// $extensions["figma.com"].opacity (per-mode: .modeOpacity), in tokens.dtcg.json AND in the resolver
+// set files — verbatim, on Figma's 0–100 scale (REST API variables types, VariableComposedColor.opacity —
+// https://developers.figma.com/docs/rest-api/variables-types/). tokens.css/theme.css write the WHOLE
+// value as `color-mix(in srgb, <colour> <opacity>%, transparent)` (see cssValue), except when the
+// opacity half aliases a FLOAT whose CSS is not a percentage — then the colour half only, and
+// lintTokens says so. OPACITY / COLOR_OPACITY-scoped FLOATs (the same 0–100 scale) are written to CSS
+// as a clamped percentage (`40%`) and keep their verbatim number in DTCG with
+// $extensions["figma.com"].unit: "percent" (same two places).
 //
 // Defensive by construction: a collision or missing value is skipped + reported, never silently
 // producing an illegal DTCG node or `--x: undefined;`. See docs/design-to-code-spec.md.
@@ -946,28 +936,23 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
 
 // --- Tailwind v4 theme ------------------------------------------------------------------------
 //
-// Why this exists: `--native <profile>` gives a native project ONE checked-in token
-// file every screen imports. A web project needs the equivalent — tokens.css is plain custom properties,
-// which Tailwind does not turn into utilities, so a builder would hand-write an `@theme` block from the
-// bound token names and paste the hexes into the plan's allowedLiterals. Two screens built in
-// separate sessions would then disagree about what `--color-primary` is called. Same fix as native:
-// generate it once.
+// Why this exists: tokens.css is plain custom properties, which Tailwind does not turn into
+// utilities, so without a generated `@theme` file a builder hand-writes one from the bound token names
+// and two screens built in separate sessions disagree about what `--color-primary` is called.
 //
 // Tailwind v4 generates a utility from a theme variable's NAMESPACE (tailwindcss.com/docs/theme):
 // `--color-*` -> bg-/text-/border-, `--spacing-*` -> p-/m-/gap-, `--radius-*` -> rounded-,
-// `--text-*` -> text-<size>, `--font-*` -> font-. So a Figma variable has to be filed under the right
+// `--text-*` -> text-<size>, `--font-*` -> font-. A Figma variable has to be filed under the right
 // namespace or it produces a custom property nobody can reach from a class. A FLOAT that carries no
-// unit (opacity, font-weight) matches no Tailwind namespace at all; it is still emitted, so `var(--x)`
-// works, but it generates no utility — which is the honest outcome, not a silent drop.
+// unit (opacity, font-weight) matches no namespace; it is still emitted, so `var(--x)` works, but it
+// generates no utility — the honest outcome, not a silent drop.
 //
 // Every generated variable sits under a `figma-` sub-namespace (`--radius-figma-xl`, `--spacing-
-// figma-space-4`, `--color-figma-primary-primary`), because Tailwind v4's own scale lives in the SAME
-// namespaces and an `@theme` variable of the same name REPLACES it. Figma's `XL` radius emitted as
-// `--radius-xl: 16px` would silently redefine the framework's `rounded-xl` (12px) in every project pulled
-// through this tool, and `--radius-l`/`--radius-s` would mint `rounded-l`/`rounded-s`, which Tailwind
-// already defines as the LEFT/START-corner shorthands. Figma names are free-form, so
-// no finite list of Tailwind's defaults (`xl`, `4`, `full`, `red-500`, `sans`, a bare `--spacing`)
-// can be relied on; one prefix makes a collision impossible and every design-system utility greppable.
+// figma-space-4`), because Tailwind v4's own scale lives in the SAME namespaces and an `@theme`
+// variable of the same name REPLACES it: Figma's `XL` radius as `--radius-xl: 16px` would silently
+// redefine `rounded-xl` (12px), and `--radius-l`/`--radius-s` would mint `rounded-l`/`rounded-s`,
+// which Tailwind defines as the LEFT/START-corner shorthands. Figma names are free-form, so no finite
+// list of Tailwind's defaults can be relied on; one prefix makes a collision impossible.
 //
 // Modes: `@theme` cannot be nested in a selector, so the default mode's values live there and every
 // other mode reassigns the SAME custom properties in a plain `[data-theme="…"]` block (per collection
@@ -1089,22 +1074,15 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
 }
 
 // --- DTCG Resolver Module (2025.10) -------------------------------------------------------------
-// The spec (designtokens.org/tr/2025.10/resolver/) in the sentences this mapping rests on:
-//   · "The document MUST provide a version at the root level, and it MUST be `2025.10`."
-//   · `resolutionOrder` is the other REQUIRED root key; `name`/`description`/`sets`/`modifiers`/
-//     `$schema` are all optional ("MAY").
-//   · "A set MUST contain a `sources` array with tokens declared directly, or a reference object
-//     pointing to a JSON file containing design tokens, or any combination of the two." Sources merge
-//     in array order, last occurrence wins.
-//   · "A modifier MUST declare a `contexts` map of a `string` value to an array of token sources." It
-//     "SHOULD have two or more contexts, since one is the equivalent of a set" and "MUST NOT have an
-//     empty contexts map". Contexts MAY be empty ARRAYS (the spec's own `"false": []` example).
-//   · "A modifier MAY declare a `default` value that MUST match one of the keys in `contexts`."
-//   · resolutionOrder: "The order is significant, with tokens later in the array overriding any
-//     tokens that came before them, in case of conflict."
-//   · A reference object is `{ "$ref": <RFC6901 JSON pointer / relative URI> }`; only resolutionOrder
-//     may reference a modifier, and sets/modifiers MUST NOT reference another modifier.
-//   · "Users SHOULD use the '.resolver.json' file extension to name resolver documents."
+// The mapping rests on the spec (designtokens.org/tr/2025.10/resolver/):
+//   · the root MUST carry `version: "2025.10"` and `resolutionOrder`; the rest is optional.
+//   · a set's `sources` merge in array order, last occurrence wins; a source is inline tokens or a
+//     `{ "$ref": <RFC6901 JSON pointer / relative URI> }` to a file.
+//   · a modifier MUST declare a `contexts` map (SHOULD have two or more, since one is the equivalent of
+//     a set; MUST NOT be empty; a context MAY be an empty ARRAY) and MAY declare a `default` that MUST
+//     match one of its keys.
+//   · resolutionOrder: later entries override earlier ones; only it may reference a modifier.
+//   · documents SHOULD be named `.resolver.json`.
 //
 // The Figma mapping, chosen to be the most conservative reading of the above:
 //   collection            -> one SET holding that collection's DEFAULT-mode values (a file $ref).
@@ -1115,8 +1093,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
 //                           base) — so resolution = base set then context override, which is what
 //                           "later in the array overrides" gives us. The default mode therefore
 //                           differs in nothing and gets the empty array, no file.
-//   single-mode collection -> set only, no modifier (the spec says one context "is the equivalent of
-//                           a set", and tools SHOULD error on a 1-context modifier).
+//   single-mode collection -> set only, no modifier (a 1-context modifier is a set; tools SHOULD error).
 //   resolutionOrder       -> every set, then every modifier. Sets are unconditional foundations;
 //                           modifiers must be able to override them.
 // Nothing here resolves aliases: "Aliases MUST NOT be resolved until this step" (after ordering), so
@@ -1551,7 +1528,7 @@ function checkGenerated(ds: TokensDoc, input: string, generated: string, cmd: st
 // The input is the SPLIT token file — design-system.json is a slim pointer manifest
 // with no `variables` array (see bridge/src/design-system-layout.ts).
 function main(args: string[]): number {
-  const USAGE = `usage: ${scriptCmd("tokens")} <design-system/tokens.json | design/variables.json> [outDir]\n` +
+  const USAGE = `usage: ${scriptCmd("tokens")} <design/export/design-system/tokens.json | design/export/variables.json> [outDir]\n` +
     "       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n" +
     "       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to\n" +
     "       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).\n" +
@@ -1577,7 +1554,7 @@ function main(args: string[]): number {
   // The SPLIT token file (or a merged variables.json): the manifest is refused with its own message, and
   // anything else that is not a token catalog is a one-line error — never an empty token set.
   const ds = readSplitFile(input, "token catalog", isTokensDoc, "variables", "design-system/tokens.json",
-    NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json — pass that instead.");
+    NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/export/variables.json — pass that instead.");
   // --check / --lookup read the catalog and write nothing.
   const lookups = flags.lookup || [];
   if (flags.check !== undefined || lookups.length) {

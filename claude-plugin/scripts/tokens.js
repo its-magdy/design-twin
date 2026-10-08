@@ -1810,7 +1810,7 @@ function checkGenerated(ds, input, generated, cmd) {
   return 1;
 }
 function main(args) {
-  const USAGE = `usage: ${scriptCmd("tokens")} <design-system/tokens.json | design/variables.json> [outDir]
+  const USAGE = `usage: ${scriptCmd("tokens")} <design/export/design-system/tokens.json | design/export/variables.json> [outDir]
        [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]
        With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to
        additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).
@@ -1852,7 +1852,7 @@ ${USAGE}`);
     isTokensDoc,
     "variables",
     "design-system/tokens.json",
-    NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json \u2014 pass that instead."
+    NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/export/variables.json \u2014 pass that instead."
   );
   const lookups = flags.lookup || [];
   if (flags.check !== void 0 || lookups.length) {

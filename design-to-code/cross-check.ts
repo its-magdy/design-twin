@@ -20,10 +20,10 @@
 // this module is. It reports; it never rewrites anyone's data.
 //
 // Inputs are the shapes the plugin already writes, read as-is:
-//   screens      [{ doc: design/<Screen>.json, label }]
-//   variables    design/variables.json            — the tokens the SCREENS bind (their library)
-//   tokens       design/design-system/tokens.json — the tokens the DESIGN SYSTEM defines
-//   components   design/design-system/components.local.json   (+ .library.json, optional)
+//   screens      [{ doc: design/export/pages/<page>/<Screen>.json, label }]
+//   variables    design/export/variables.json                — the tokens the SCREENS bind (their library)
+//   tokens       design/export/design-system/tokens.json    — the tokens the DESIGN SYSTEM defines
+//   components   design/export/design-system/components.local.json   (+ .library.json, optional)
 //   stylesText   design/design-system/styles.text.json        (optional)
 // Every input is optional: with only screens it still reports the within-screen absurdities (a radius
 // of a billion, font strays), and says plainly which cross-file checks it could not run.
@@ -501,7 +501,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       push(
         "warning",
         "unresolvable-token",
-        `${dangling.length} token name(s) are bound by a node but defined in NEITHER design/variables.json nor the design-system export: ` +
+        `${dangling.length} token name(s) are bound by a node but defined in NEITHER design/export/variables.json nor the design-system export: ` +
           `${dangling.slice(0, 8).map((n) => "'" + n + "'").join(", ")}${dangling.length > 8 ? ", …" : ""}. ` +
           `Re-pull the screen (variables.json now merges, so nothing is lost) or treat the node's raw value as authoritative.`,
         { tokens: dangling }
@@ -1472,13 +1472,13 @@ function toMarkdown(res: CrossCheckReport): string {
 export { crossCheck, toMarkdown, composedRgba, exportSiblings, ABSURD_NUMBER, WRONG_CATALOG_PCT };
 
 // CLI: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system]
-//        [--variables design/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]
+//        [--variables design/export/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]
 // Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
 // document it should be is a one-line error and exit 2.
 function main(argv: string[]): number {
   const USAGE =
     `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/export/design-system | design/export/libraries/<dir>] ` +
-    "[--variables design/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
+    "[--variables design/export/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
   const OPTIONS = {
     "design-system": { type: "string" }, variables: { type: "string" }, map: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, help: { type: "boolean", short: "h" },
   } as const;

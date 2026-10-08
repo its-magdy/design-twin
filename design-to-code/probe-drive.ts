@@ -376,51 +376,42 @@ export function scrollHeld(): boolean {
 // it. That is decided by PIXELS, as a union with the DOM check (clickPointControl / markOpener's ownContent: content
 // when EITHER says so — a label not painted yet, an in-flow opacity-0 reveal, still counts). Shot A: the container with only its
 // control hidden; shot B: with all its content hidden — every descendant, the content of every open shadow root inside it (the
-// container itself as a host too), the container's own ::before / ::after and its own ::marker. Any pixel that differs
-// is content of its own → the control is not the opener's (the drive does not click, the battery presses no key).
-// In every shot everything OUTSIDE the container's subtree is hidden too, so a foreign overlay or toast repainting
-// over the cell between the two shots never decides the result; its ancestors too (their own
-// background, border, text, pseudo-elements — a parent repainted by script never decides), their backgrounds off (the root's
-// would still paint the canvas), the container shown again by its own rule (what it holds keeps the visibility it had); the
-// focused element outside it stays shown on its own (hiding it would blur it — Chromium keeps the focus of an element shown under
-// hidden ancestors). The pseudo-elements beyond ::before / ::after (::first-letter, ::placeholder,
-// ::file-selector-button, ::details-content, ::scroll-button(*), ::scroll-marker, ::scroll-marker-group) are hidden too, each by
-// its own rule, and checked to have taken.
+// container itself as a host too), and the container's own ::before / ::after / ::marker and other pseudo-elements, each by its
+// own rule and checked to have taken. Any pixel that differs is content of its own → the control is not the opener's (the drive
+// does not click, the battery presses no key).
+// In every shot everything OUTSIDE the container's subtree is hidden too (so a foreign overlay or toast repainting over the
+// cell between the two shots never decides the result), and so are its ancestors' own background, border, text and
+// pseudo-elements; the container is shown again by its own rule. The focused element outside it stays shown on its own:
+// hiding it would blur it, and Chromium keeps the focus of an element shown under hidden ancestors.
 // Hidden by the probe's own constructed style sheets (document.adoptedStyleSheets, and adopted into each open shadow root inside
-// the container — a page's CSP blocks an injected <style>; by experiment it does not block a constructed sheet: CSP3 §6.1.13
-// names CSSOM's insertRule / cssText as gated on 'unsafe-eval', MDN says no browser enforces that, and a sheet whose rules did
-// not take refuses) with visibility:hidden !important and transition:none (no layout change; `*` also covers descendants that
+// the container) with visibility:hidden !important and transition:none (no layout change; `*` also covers descendants that
 // set visibility:visible themselves; a transition on visibility would keep it showing), on marker attributes; the sheets and
-// the markers are removed afterwards, and a rule that did not take refuses — every element a shot hides (and its ::before /
-// ::after with content) is checked, so a page's inline !important, or an !important inside a cascade layer (which beats any
-// unlayered one, whatever its specificity), refuses instead of showing in both shots.
+// the markers are removed afterwards. A constructed sheet because a page's CSP blocks an injected <style> and, by experiment,
+// does not block a constructed sheet (CSP3 §6.1.13 names insertRule / cssText as gated on 'unsafe-eval', MDN says no browser
+// enforces that). A rule that did not take refuses: every element a shot hides (and its ::before / ::after with content) is
+// checked, so a page's inline !important, or an !important inside a cascade layer (which beats any unlayered one, whatever its
+// specificity), refuses instead of showing in both shots.
 // Kept in BOTH shots — decoration, but only when the pixels show it PLAIN: the container's own background colour, border
 // in one colour, box-shadow and outline (its own background image, a border in two colours or a stripe are content — the
 // DOM rule, ownContent); a descendant painting only a background colour over the container's whole padding box (a hover tint —
 // the container's own background drawn by a child) and a wrapper of the control within 8 px of it on every side (a filled
-// wrapper — the control's own chrome; what else it holds is still hidden in shot B). CSS pre-filter for those two: not a
-// replaced or form element (img, svg, canvas, video, audio, picture, object, embed, iframe, frame, fencedframe, progress, meter,
-// input, select, textarea), no clip-path, background-clip border-box or padding-box, not a list item, no shadow root (the
-// covering one also: no image, mask, shadow, filter, border or outline). Then the PIXEL test (plainKept): with the container and
-// all its content hidden — and the filters, clip-paths and masks of the container and its ancestors off (a
-// drop-shadow list or a rounded clip-path never decides) — the kept boxes alone must paint ONE uniform colour inside each filled
-// box's real outline (its own rounded corners, elliptical ones too, cut by every box up to the container that clips it: a 50%-radius
-// progress ring has a core) and nothing outside it — only a band 1.5 px either side of that outline may hold
-// a blend of that colour and what is behind (anti-aliasing). A wrapper with its own shadow or a frame in another colour is not
-// plain: refused (an accepted cost). A progress bar, a clip-path flag, a background-clip stripe, a shadow ring, text in a kept box: not
-// plain → content. Anything else that paints counts: text, images, icons, generated content, swatches, dots, borders and
-// shadows of children, form widgets, stripes and 1-px dividers.
-// Not seen by the pixels: the container's own bare text (the DOM's text rule reads it), a label laid over it from outside its
-// subtree (hidden as the outside: the DOM rule reads it), a part of the container outside the viewport once scrolled in, a
-// closed shadow root, foreign content inside an ANCESTOR's shadow root (the probe's document sheet cannot reach it), an open
-// shadow root attached after ownMark that forces visibility:visible in its own sheet (roots are collected once — a
-// late root without that inherits the hidden host), and content revealed only later (a delayed out-of-flow reveal after the
-// check) — the pointer is parked away (the drive) so a hover tint is not counted, and a hover-revealed control is then hidden in
-// both shots (a control the page unmounts once the pointer leaves counts as hidden: the page hid it). An element
-// the page mounts in the container after a shot's marks (a re-render inside the screenshot's own frame) would be hidden as
-// "outside" — checked before shots B / K / N: refused. A container inside a shadow root is refused
-// (the document sheet cannot show it again). The extra pseudo-element rules are put on the container's subtree
-// only, never on "everything outside" (that cost a style pass over every element of the page in every shot).
+// wrapper — the control's own chrome; what else it holds is still hidden in shot B). The CSS pre-filter is plainBox / plainFill
+// in ownMark. Then the PIXEL test (plainKept): with the container and all its content hidden — and the filters, clip-paths and
+// masks of the container and its ancestors off (a drop-shadow list or a rounded clip-path never decides) — the kept boxes alone
+// must paint ONE uniform colour inside each filled box's real outline (its own rounded corners, elliptical ones too, cut by every
+// box up to the container that clips it: a 50%-radius progress ring has a core) and nothing outside it — only a band 1.5 px either
+// side of that outline may hold a blend of that colour and what is behind (anti-aliasing). A wrapper with its own shadow or a frame
+// in another colour is not plain: refused (an accepted cost). Anything else that paints counts as content.
+// Not seen by the pixels: the container's own bare text and a label laid over it from outside its subtree (the DOM rule reads
+// both), a part of the container outside the viewport once scrolled in, a closed shadow root, foreign content inside an ANCESTOR's
+// shadow root (the probe's document sheet cannot reach it), an open shadow root attached after ownMark that forces
+// visibility:visible in its own sheet (roots are collected once — a late root without that inherits the hidden host), and
+// content revealed only later (a delayed out-of-flow reveal after the check). The pointer is parked away (the drive) so a hover
+// tint is not counted, and a hover-revealed control is then hidden in both shots (a control the page unmounts once the pointer
+// leaves counts as hidden: the page hid it). An element the page mounts in the container after a shot's marks (a re-render inside
+// the screenshot's own frame) would be hidden as "outside" — checked before shots B / K / N: refused. A container inside a
+// shadow root is refused (the document sheet cannot show it again). The extra pseudo-element rules are put on the container's
+// subtree only, never on "everything outside" (that cost a style pass over every element of the page in every shot).
 
 /** In the page: mark the pair clickPointControl / markOpener left in window.__dtOwn — the container [data-dt-own], its
  *  control [data-dt-own-ctl], the boxes kept in both shots [data-dt-own-keep] (CSS pre-filter), what stays on screen outside

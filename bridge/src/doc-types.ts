@@ -69,7 +69,6 @@ export interface LayoutSpec {
   /** auto-layout was INFERRED (node.inferredAutoLayout) — not set by the designer. */
   inferred?: true;
   reverseZ?: true;
-  // grid
   columns?: number;
   rows?: number;
   columnGap?: number;
@@ -474,7 +473,6 @@ export interface IrNode extends Partial<TextFields> {
   fixedChildren?: number;
   clip?: true;
 
-  // paint
   fills?: Paint[];
   strokes?: Strokes;
   strokesInLayout?: true;

@@ -1177,7 +1177,7 @@ function crossCheck(input) {
       push(
         "warning",
         "unresolvable-token",
-        `${dangling.length} token name(s) are bound by a node but defined in NEITHER design/variables.json nor the design-system export: ${dangling.slice(0, 8).map((n) => "'" + n + "'").join(", ")}${dangling.length > 8 ? ", \u2026" : ""}. Re-pull the screen (variables.json now merges, so nothing is lost) or treat the node's raw value as authoritative.`,
+        `${dangling.length} token name(s) are bound by a node but defined in NEITHER design/export/variables.json nor the design-system export: ${dangling.slice(0, 8).map((n) => "'" + n + "'").join(", ")}${dangling.length > 8 ? ", \u2026" : ""}. Re-pull the screen (variables.json now merges, so nothing is lost) or treat the node's raw value as authoritative.`,
         { tokens: dangling }
       );
     }
@@ -1915,7 +1915,7 @@ function toMarkdown(res) {
   return L.join("\n") + "\n";
 }
 function main(argv) {
-  const USAGE = `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/export/design-system | design/export/libraries/<dir>] [--variables design/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]`;
+  const USAGE = `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/export/design-system | design/export/libraries/<dir>] [--variables design/export/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]`;
   const OPTIONS = {
     "design-system": { type: "string" },
     variables: { type: "string" },
