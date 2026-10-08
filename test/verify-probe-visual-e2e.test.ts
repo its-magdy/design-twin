@@ -19,9 +19,11 @@ import { spawn } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { LAUNCH_ARGS } from "../design-to-code/verify-probe.ts";
 import { decodePng, encodePng, pngInfo, resampleBox } from "../design-to-code/png.ts";
 import type { MeasuredVisual, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
+import { limit } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROBE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -62,8 +64,8 @@ console.log("verify-probe visual e2e — the built bundles in a real chromium, f
 let refPng: Buffer, ledgerPng: Buffer;
 try {
   const pw = await import("playwright");
-  // grayscale text as Figma renders it — and as the probe launches chromium (verify-probe.ts launch(): --disable-lcd-text)
-  const browser = await pw.chromium.launch({ args: ["--disable-lcd-text"] });
+  // grayscale text as Figma renders it — and as the probe launches chromium (verify-probe.ts LAUNCH_ARGS)
+  const browser = await pw.chromium.launch({ args: [...LAUNCH_ARGS] });
   try {
     const shoot = async (vw: number, vh: number, dsf: number, mode: string): Promise<Buffer> => {
       const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, deviceScaleFactor: dsf });
@@ -174,15 +176,7 @@ fs.writeFileSync(path.join(pMain, "bad-steps.json"), JSON.stringify([{ click: "[
 // e8: a stale diff image from an earlier run at the --out path
 fs.writeFileSync(path.join(pMain, out("Short") + ".diff.png"), thumbPng);
 
-// ---- the probe runs, 2 at a time (each has its own --out)
-const limit = (n: number) => {
-  let active = 0;
-  const waiting: Array<() => void> = [];
-  return <T>(fn: () => Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
-    const go = (): void => { active++; fn().then(resolve, reject).finally(() => { active--; waiting.shift()?.(); }); };
-    if (active < n) go(); else waiting.push(go);
-  });
-};
+// ---- the probe runs, 2 at a time (each has its own --out; a fixed 2, not poolSize(): the checks were validated at 2)
 const q = limit(2);
 const OFF = ["--behaviour", "off"];
 const P = {

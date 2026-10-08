@@ -46,8 +46,12 @@ or MCP once someone's pulling repeatedly or wants Claude to query Figma live.
   second Claude Code session's MCP server work normally — they detect the owner and route through
   it. Nothing changes in how you invoke them. Inside an MCP session, `writeToDisk: true` on the
   export tools is still the simplest way to get files, and the **only** MCP way to get asset bytes.
-- The exception is a plain one-shot `dtwin pull` with no daemon: it does not share, so an MCP server
-  or second pull started while it runs exits with `EADDRINUSE`. Wait for it, or use `dtwin serve`.
+- An MCP server that holds the bridge **exits when its client goes away**, unless another process has used
+  its shared socket; then it keeps serving and idles out after `FIGMA_DAEMON_IDLE_MIN` (default 120 min,
+  `0` = never). SIGINT/SIGTERM cancel in-flight reads, free the socket and exit 0.
+- The exception is a plain one-shot `dtwin pull` with no daemon: it does not share, so a second pull
+  started while it runs exits with `EADDRINUSE`, and an MCP tool call made meanwhile errors (the server
+  stays up; retry the call). Wait for it, or use `dtwin serve`.
 - To run two bridges deliberately, set `FIGMA_BRIDGE_PORT` on one (`8788` or `8789` — the only other
   ports the plugin can dial).
 
@@ -58,8 +62,9 @@ global binary, and only if it is missing are you inside a clone of the Design Tw
 `dtwin` is `node bridge/src/figma-pull.ts`. `dtwin help` prints a quick start, the commands and every
 flag, and each command answers `--help` with its own page (`dtwin screenshot --help`,
 `dtwin list --help`, `dtwin pull --help`, `dtwin whoami --help`, `dtwin mcp --help` — every verb has one)
-without doing anything else while doing so. The output directory is positional (`dtwin pull design`; there
-is no `--out`) and the port comes only from `FIGMA_BRIDGE_PORT` (8787/8788/8789; no `--port`). A mistyped flag is refused, not ignored. Each command is shorthand for a flag (`dtwin list pages`
+without doing anything else while doing so. The output directory is positional and defaults to `design/export` (`dtwin pull`
+writes there; give a path only for somewhere else — there is no `--out`, and never bare `design`, which
+makes a parallel export tree nothing else reads) and the port comes only from `FIGMA_BRIDGE_PORT` (8787/8788/8789; no `--port`). A mistyped flag is refused, not ignored. Each command is shorthand for a flag (`dtwin list pages`
 = `dtwin --list-pages`) and the flag spellings keep working — use either.
 - **Anything not working → `dtwin doctor` first.** It checks the token, the port, the daemon, whether
   the plugin can connect (and whether it has the *right* token) and the project, changes nothing, and
@@ -71,7 +76,7 @@ is no `--out`) and the port comes only from `FIGMA_BRIDGE_PORT` (8787/8788/8789;
   token but is the slowest read there is — a few seconds up to ~15 s (about 2 s on a file with no
   libraries enabled): it walks every instance in the file and makes one Figma call per enabled
   library variable collection. It prints progress while it works.
-- Pull a real export: `dtwin pull design` (current page; `dtwin design` is the same), `--all-pages`,
+- Pull a real export: `dtwin pull` (current page, into `design/export`), `--all-pages`,
   `--selection`, `--page <id>`, `--node <id|figma-url>`, `--design-system` (tokens/styles/components
   only, no page walk), `--as-library "<name>"` (a whole library file's catalog — run with the *library* open).
   On a file that CONSUMES a library, `--design-system` returns that file's OWN tokens, styles and components
@@ -183,7 +188,9 @@ imports the Figma plugin does need one, since the npm package ships no `manifest
   own numbers, checks that every component on the frame was actually built and that every designed
   interaction works, and writes the measurements to `design/verify/`. It returns measurements rather
   than a verdict: `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` computes that, so "pass" is never something anyone
-  asserts. Never edits app code.
+  asserts. Never edits app code. If the probe exits 3 (no usable browser), the install line it prints is the
+  user's call; a Chromium they already have cached works too — `verify-probe.js --browser-path <executable>` (on macOS
+  the binary inside the `.app`, `…/Contents/MacOS/…`; only guaranteed with the bundled Chromium).
 
 ## Related
 

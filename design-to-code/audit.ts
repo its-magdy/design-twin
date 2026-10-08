@@ -41,10 +41,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isHidden, hiddenSelf } from "./hidden.ts";
-import { parseHex, contrastRatio, compositeOver } from "./color.ts";
+import { parseHex, contrastRatio, compositeOver, colorKey, formatHex, normHex } from "./color.ts";
 import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
 import type { Rgba } from "./color.ts";
 import { crossCheck, exportSiblings } from "./cross-check.ts";
+import { controlKind, outermostControl, isDisabledLayer, DISABLED_WORD } from "./control-kind.ts";
 import type { CrossCheckScreen } from "./cross-check.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { readDocFile, readOptionalDoc, readSplitFile } from "./catalog-input.ts";
@@ -60,7 +61,7 @@ import type { SliceSources } from "./slice-sources.ts";
 import { isJsonObject } from "./types.ts";
 import type {
   AuditAnnotation, AuditCategory, AuditComponentRow, AuditFinding, AuditFindingCode, AuditPlatform, AuditReport, Box, CatalogComponent, ComponentsCatalog,
-  AuditCrossFile, AuditOverride, AuditScreenStates, BlockerCode, CodeConnectMap, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenAssetsDoc, ScreenDoc,
+  AuditCrossFile, AuditOverride, AuditScreenStates, BlockerCode, CodeConnectMap, ComponentPropValues, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenAssetsDoc, ScreenDoc,
   ScreenStateKey, ScreenStateValue, Severity, TextStylesDoc, TokenMap, TokensDoc, Variable, JsonValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -135,21 +136,69 @@ function overlaps(a: Box | undefined, b: Box | undefined): boolean {
   if (!a || !b || typeof a.x !== "number" || typeof a.y !== "number" || typeof b.x !== "number" || typeof b.y !== "number") return true;
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
+// What a layer sits on: its ancestors' solid fills composited top-down, each followed by the earlier siblings
+// stacked under the next level (`__beneath`). A gradient/image/video layer makes it `complex` until an opaque
+// solid covers it again; `bg` null = nothing painted (the callers assume a white page). `token`: the variable
+// bound to the topmost opaque solid, when nothing translucent or complex lies over it (DT-63 names it).
+const WHITE: Rgba = { r: 255, g: 255, b: 255, a: 1 };
+interface Backdrop { bg: Rgba | null; complex: boolean; token?: string }
+const paintToken = (p: Paint): string | undefined => { const t = p.tokens && p.tokens.color; return Array.isArray(t) ? t[0] : t; };
+function backdropOf(ancestors: readonly Ancestor[]): Backdrop {
+  let bg: Rgba | null = null, complex = false, token: string | undefined;
+  for (const a of ancestors) {
+    // The ancestor's own fills, then any earlier siblings stacked under the next level down.
+    const layers = [...(Array.isArray(a.fills) ? a.fills : []), ...(a.__beneath || [])];
+    for (const f of layers) {
+      if (f.type === "solid") {
+        const c = parseHex(f.color);
+        if (!c) continue;
+        bg = bg ? over(c, bg) : (c.a >= 1 ? c : over(c, WHITE));
+        if (c.a >= 1) complex = false;
+        token = c.a >= 1 ? paintToken(f) : undefined;
+      } else if (f.type === "gradient" || f.type === "image" || f.type === "video") {
+        complex = true;
+        token = undefined;
+      }
+    }
+  }
+  return { bg, complex, ...ifDefined("token", token) };
+}
+// F-48: what makes an input instance read like a select/picker — a visible "Select …"/"Choose …"/"Pick …" prompt
+// (preferred: it is what a reader sees) or a visible chevron/caret/calendar layer. Null when neither.
+const PICKER_PROMPT = /^(select|choose|pick)\b/i;
+const PICKER_ICON = /chevron|arrow-?down|caret|angle-?down|calendar/i;
+function pickerCue(inst: IrNode): string | null {
+  let icon: string | null = null;
+  const visit = (n: IrNode): string | null => {
+    for (const c of Array.isArray(n.children) ? n.children : []) {
+      if (hiddenSelf(c)) continue;
+      const t = c.type === "TEXT" ? (c.text || "").replace(/\s+/g, " ").trim() : "";
+      if (t && PICKER_PROMPT.test(t)) return `"${t.length > 40 ? t.slice(0, 39) + "…" : t}"`;
+      if (icon === null && PICKER_ICON.test(c.name || "")) icon = `a '${c.name}' layer`;
+      const deeper = visit(c);
+      if (deeper) return deeper;
+    }
+    return null;
+  };
+  return visit(inst) ?? icon;
+}
 const CONTROL_WORD = /\b(button|btn|checkbox|check box|radio|switch|toggle|input|text ?field|textfield|textarea)\b/i;
 const cite = (node: IrNode): string => { const t = textOf(node); return `'${node.name}'${t ? ` ("${t}")` : ""}`; };
 const textExtra = (node: IrNode): { text?: string } => ifDefined("text", textOf(node) ?? undefined);
 // State synonyms, matched against VARIANT option values and BOOLEAN prop names (real files name the
 // property "Property 1" and put the state in the value, so the value is what carries the meaning).
-const CONTROL_STATES = ["hover", "pressed", "focus", "disabled", "error", "selected", "loading"] as const;
+const CONTROL_STATES = ["hover", "pressed", "focus", "disabled", "error", "selected", "loading", "open"] as const;
 const STATE_SYNONYMS: Record<ControlState, RegExp> = {
   hover: /^(hover|hovered|mouse ?over)$/,
   pressed: /^(pressed|press|active|tapped|down)$/,
   focus: /^(focus|focused|focus[- ]visible|keyboard ?focus)$/,
-  disabled: /^(disabled|inactive|is ?disabled)$/,
+  disabled: DISABLED_WORD,
   // Not "danger"/"destructive": those are button STYLE variants (a red button), not an error state.
   error: /^(error|invalid|has ?error|is ?invalid)$/,
   selected: /^(selected|checked|on|active|current|is ?selected)$/,
   loading: /^(loading|busy|in ?progress|is ?loading)$/,
+  // F-48: a select/picker's list (or calendar) drawn as a variant
+  open: /^(open|opened|expanded|is ?open|show ?list|dropdown ?open)$/,
 };
 // Which states each kind of control needs. `hover` only matters where there is a pointer.
 function requiredStates(kind: ControlKind, platform: AuditPlatform): ControlState[] {
@@ -157,21 +206,18 @@ function requiredStates(kind: ControlKind, platform: AuditPlatform): ControlStat
   switch (kind) {
     case "button": return pointer ? ["hover", "pressed", "focus", "disabled"] : ["pressed", "disabled"];
     case "input": return ["focus", "error", "disabled"];
+    // F-48: a select/dropdown/picker also has its open list (or calendar) to design — and, in a form, its error
+    case "select": return pointer ? ["hover", "focus", "disabled", "error", "open"] : ["focus", "disabled", "error", "open"];
     case "toggle": return ["selected", "disabled"];
     case "tab": return ["selected"];
     case "link": return pointer ? ["hover", "focus"] : ["pressed"];
     default: return [];
   }
 }
-function controlKind(name: unknown): ControlKind | null {
-  const s = String(name || "");
-  if (/\b(input|text ?field|textfield|search|select|dropdown|textarea)\b/i.test(s)) return "input";
-  if (/\b(checkbox|check box|radio|switch|toggle)\b/i.test(s)) return "toggle";
-  if (/\b(tab|tabs|segmented|nav ?item|navigation item)\b/i.test(s)) return "tab";
-  if (/\blink\b/i.test(s)) return "link";
-  if (/\b(button|btn|cta|icon ?button|chip)\b/i.test(s)) return "button";
-  return null;
-}
+// A variant's option values, lower-cased ("Type=Primary, Status=Disabled" → ["primary", "disabled"]).
+const variantValuesOf = (mc: MainComponentRef | undefined): string[] => String((mc && mc.name) || "").split(",").map((p) => (p.split("=")[1] || "").trim().toLowerCase());
+// A form field: what a validation state applies to (a select had this kind of its own only since F-48).
+const isField = (k: ControlKind | null): boolean => k === "input" || k === "select";
 
 // ---------------------------------------------------------------- input normalisation
 /** One audited root and the label its findings cite. */
@@ -230,14 +276,17 @@ export interface AuditOptions {
   siblings?: (() => CrossCheckScreen[]) | null;
 }
 
-// What the walk carries about an ancestor: only what descendants read off it.
-interface Ancestor { name: string; hidden?: boolean; fills?: Paint[]; __tappable: boolean; __beneath: Paint[] }
+// What the walk carries about an ancestor: only what descendants read off it (`id`/`type`/`mainComponent`/`component`:
+// which instance a text or a stroked layer sits in — DT-37, DT-63).
+interface Ancestor { name: string; id?: string; type?: string; mainComponent?: MainComponentRef; component?: string; props?: ComponentPropValues; hidden?: boolean; fills?: Paint[]; __tappable: boolean; __beneath: Paint[] }
 // An earlier sibling that may paint under a later one: its fills, and its page-space box when known.
 interface Layer { fills: Paint[]; box?: Box }
 interface WalkCtx { label: string; rootBox?: Box }
 interface Here { label: string; path?: string }
 // `icon`: the instance exported as an asset (an SVG icon) — "search-normal" names an icon, not a search field.
 interface UsedComponent { name: string | undefined; key?: string; variantKey?: string; remote?: boolean; nodeId?: string; icon?: true }
+// One prototype destination of the screen (DT-14(5)): from how many layers, and the first of them.
+interface NavRow { destination: string | undefined; destinationId: string | undefined; navigation: string; count: number; node: IrNode; label: string }
 interface StateHit { nodeId: string; nodeName: string; screen: string; hidden: boolean }
 // A text run as the binding tally reads it: a real `runs[]` entry, or the node's own font/tokens/style.
 interface RunLike { font?: FontSpec; tokens?: TokenMap; textStyle?: string; fillStyle?: string }
@@ -312,7 +361,16 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   const nodesById = new Map<string, IrNode>(); // visible nodes, so a finding raised off-tree (a heavy asset) can cite one
   // Prototype links out of this screen, one row per destination (DT-14(5)): the export has them, and a
   // link copied along with a layer ("every row opens the Details screen") is invisible until clicked.
-  const navigations = new Map<string, { destination: string | undefined; destinationId: string | undefined; navigation: string; count: number; node: IrNode; label: string }>();
+  const navigations = new Map<string, NavRow>();
+  // DT-37: sublayer ids (I<inst>;<layer>) whose `characters` some instance overrides, the instances whose list hit
+  // the plugin's cap (incomplete), and every visible instance text that is not driven by a TEXT property.
+  const charOverridden = new Set<string>();
+  const cappedInstances = new Set<string>();
+  const instanceTexts: Array<{ node: IrNode; here: Here; inst: Ancestor }> = [];
+  // DT-63: failing control boundaries, one entry per screen + stroke + backdrop.
+  const boundaries = new Map<string, { nodes: IrNode[]; here: Here; stroke: string; backdrop: string; ratio: number; assumed: boolean; strokeToken?: string; backdropToken?: string; hasFill: boolean }>();
+  // F-48: input instances that read like a select/picker ("Select …", a chevron/calendar layer).
+  const pickers: Array<{ node: IrNode; here: Here; useKey: string; cue: string }> = [];
 
   for (const root of roots) {
     const m: Partial<Manifest> = root.manifest || {};
@@ -346,10 +404,17 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       }
     }
     // Validation evidence: error copy, or an input instance drawn in its error variant ("Status=Error").
-    const variantValues = String((node.mainComponent && node.mainComponent.name) || "").split(",").map((p) => (p.split("=")[1] || "").trim().toLowerCase());
+    const variantValues = variantValuesOf(node.mainComponent);
     if ((node.type === "TEXT" && VALIDATION_WORDS.test(node.text || "")) || VALIDATION_WORDS.test(node.name || "")
-      || (controlKind((node.mainComponent && node.mainComponent.setName) || node.component) === "input" && variantValues.some((v) => STATE_SYNONYMS.error.test(v)))) {
+      || (isField(controlKind((node.mainComponent && node.mainComponent.setName) || node.component)) && variantValues.some((v) => STATE_SYNONYMS.error.test(v)))) {
       validationHits.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
+    }
+
+    // DT-37: an instance's `overrides` name the sublayers it changed (the plugin keeps the first OVERRIDE_CAP = 100 — a
+    // full list may be cut short, so its instance's texts are not judged). Read before the hidden branch returns.
+    if (Array.isArray(node.overrides)) {
+      if (node.overrides.length >= 100) cappedInstances.add(node.id);
+      for (const o of node.overrides) if (Array.isArray(o.fields) && o.fields.includes("characters")) charOverridden.add(o.id);
     }
 
     // A layer the designer switched off renders nothing, so nothing about it is a finding: the audit
@@ -375,7 +440,13 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       const icon = !!(node.asset || node.geometry || node.assetSkipped) && !CONTROL_WORD.test(String(name || ""));
       if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), ...ifDefined("variantKey", mc.key), remote: !!mc.remote, nodeId: node.id, ...(icon ? { icon: true as const } : {}) });
       // A search box or a filter on a list page has no validation state to ask about (M1 of the review).
-      if (!icon && controlKind(name) === "input" && !/\b(search|filter)/i.test(String(name || ""))) inputsSeen++;
+      if (!icon && isField(controlKind(name)) && !/\b(search|filter)/i.test(String(name || ""))) inputsSeen++;
+      // F-48: real selects are generic input instances — the only tell is a "Select …" prompt or a chevron/calendar.
+      if (!icon && node.type === "INSTANCE" && key && controlKind(name) === "input" && !/\b(search|filter)/i.test(String(name || ""))
+        && !ancestors.some((a) => a.id !== undefined && pickers.some((p) => p.node.id === a.id))) {
+        const cue = pickerCue(node);
+        if (cue) pickers.push({ node, here, useKey: key, cue });
+      }
     }
     for (const r of Array.isArray(node.reactions) ? node.reactions : []) {
       for (const a of Array.isArray(r.actions) ? r.actions : []) {
@@ -466,6 +537,8 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         tally("color", bound);
         if (!bound) noteRaw(c, node);
       }
+      // a LINE is a divider, not a control's boundary (cross-check's token-pair table skips it too)
+      if (node.type !== "TEXT" && node.type !== "LINE") boundaryCheck(node, ancestors, here);
     }
     if (node.type === "TEXT") {
       const runs: RunLike[] = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ ...ifDefined("font", node.font), ...ifDefined("tokens", node.textTokens), ...ifDefined("textStyle", node.styles && node.styles.text) }];
@@ -479,6 +552,12 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         }
       }
       if (!hiddenBranch) textChecks(node, ancestors, here);
+      // DT-37: a text a TEXT property drives (`propRefs.characters`) is never reported as a `characters` override,
+      // so only the others can be judged; an instance whose override list was capped says nothing either way.
+      const inst = [...ancestors].reverse().find((a) => a.type === "INSTANCE");
+      if (inst && !(node.propRefs && node.propRefs.characters) && (node.text || "").trim() && !ancestors.some((a) => a.id !== undefined && cappedInstances.has(a.id))) {
+        instanceTexts.push({ node, here, inst });
+      }
     }
 
     // ---- spacing / radius
@@ -545,7 +624,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       const earlier: Layer[] = [];
       // Only what descendants read off an ancestor. The walk is synchronous and nothing keeps
       // `ancestors`, so `self` is reused — `__beneath` is set per child before that child is walked.
-      const self: Ancestor = { name: node.name, ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: [] };
+      const self: Ancestor = { name: node.name, id: node.id, type: node.type, ...ifDefined("mainComponent", node.mainComponent), ...ifDefined("component", node.component), ...ifDefined("props", node.props), ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: [] };
       const chain = [...ancestors, self];
       for (const child of node.children) {
         self.__beneath = stacks || child.absolute ? earlier.filter((l) => overlaps(l.box, child.box)).flatMap((l) => l.fills) : [];
@@ -586,32 +665,58 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     // Contrast against the composited ancestor background.
     const fg = parseHex(font.color);
     if (!fg) return;
-    let bg: Rgba | null = null, complex = false;
-    for (const a of ancestors) {
-      // The ancestor's own fills, then any earlier siblings stacked under the next level down.
-      const layers = [...(Array.isArray(a.fills) ? a.fills : []), ...(a.__beneath || [])];
-      for (const f of layers) {
-        if (f.type === "solid") {
-          const c = parseHex(f.color);
-          if (!c) continue;
-          bg = bg ? over(c, bg) : (c.a >= 1 ? c : over(c, { r: 255, g: 255, b: 255, a: 1 }));
-          if (c.a >= 1) complex = false;
-        } else if (f.type === "gradient" || f.type === "image" || f.type === "video") {
-          complex = true;
-        }
-      }
-    }
+    const { bg, complex } = backdropOf(ancestors);
     const size = typeof font.size === "number" ? font.size : null;
     const bold = (font.weightValue || 0) >= 700 || /bold|black|heavy/i.test(font.weight || "");
     const large = size != null && (size >= 24 || (size >= 18.66 && bold));
     const need = large ? 3 : 4.5;
     if (complex) { add("info", "contrast-manual", `${cite(node)} sits on a gradient/image — check text contrast manually (needs ${need}:1)`, node, here, textExtra(node)); return; }
     const assumed = !bg;
-    const base = bg || { r: 255, g: 255, b: 255, a: 1 };
+    const base = bg || WHITE;
     const ratio = contrastRatio(over(fg, base), base);
     if (ratio < need) {
       add(assumed ? "info" : "warning", "low-contrast", `${cite(node)} text contrast ${r1(ratio)}:1 is below WCAG AA ${need}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need, ...textExtra(node) });
     }
+  }
+
+  // DT-63: WCAG 1.4.11 asks 3:1 between a control's visual boundary and the colour ADJACENT to it — the colour
+  // around the control, not its own inside (W3C Understanding 1.4.11: a white-inside input with a dark border on
+  // a white page is judged border vs page). So: a stroked layer that is (or sits within 3 levels of) an input,
+  // select or toggle, its stroke over the backdrop vs the backdrop. The backdrop is what lies ABOVE the control's
+  // outermost layer in that window — kits put the fill on the instance and the border on an inner frame, and the
+  // control's own fill is never the adjacent colour. The fills from that layer down to the stroked one reaching 3:1
+  // against the backdrop already mark the boundary (no finding); visible text inside does not. A disabled variant
+  // is exempt (inactive components are). A gradient/image backdrop is not judged (contrast-manual covers text only);
+  // a fully transparent stroke paints nothing (no border to measure).
+  function boundaryCheck(node: IrNode, ancestors: Ancestor[], here: Here): void {
+    const strokes = node.strokes;
+    const hex = strokes && Array.isArray(strokes.colors) ? strokes.colors.find((c) => { const x = parseHex(c); return !!x && x.a > 0; }) : undefined;
+    const sc = parseHex(hex);
+    const weight = strokes ? Math.max(strokes.weight || 0, ...Object.values(strokes.weights || {}).map((w) => w || 0)) : 0;
+    if (!sc || !(weight > 0) || hex === undefined) return;
+    const near: Array<IrNode | Ancestor> = [node, ...ancestors.slice(-3).reverse()];
+    const outer = outermostControl(near);
+    if (outer < 0 || near.some((a) => isDisabledLayer(a))) return;
+    // near[outer] is ancestors[ancestors.length - outer] (outer 0 = the stroked layer itself)
+    const outside = ancestors.slice(0, ancestors.length - outer), inside = ancestors.slice(ancestors.length - outer);
+    const back = backdropOf(outside);
+    if (back.complex) return;
+    const base = back.bg || WHITE;
+    const ratio = contrastRatio(over(sc, base), base);
+    if (ratio >= 3) return;
+    let inner: Rgba | null = null;
+    for (const f of [...inside.flatMap((a) => [...(Array.isArray(a.fills) ? a.fills : []), ...(a.__beneath || [])]), ...(Array.isArray(node.fills) ? node.fills : [])]) {
+      const c = f.type === "solid" ? parseHex(f.color) : null;
+      if (c) inner = over(c, inner || base);
+    }
+    if (inner && contrastRatio(inner, base) >= 3) return;
+    const stroke = normHex(hex) ?? hex, backdrop = formatHex(base), assumed = !back.bg;
+    const k = `${here.label}|${stroke}|${backdrop}|${assumed}`;
+    const row = boundaries.get(k);
+    if (row) { row.nodes.push(node); return; }
+    const st = node.tokens && node.tokens.strokes;
+    const strokeToken = Array.isArray(st) ? st[0] : st;
+    boundaries.set(k, { nodes: [node], here, stroke, backdrop, ratio, assumed, hasFill: !!inner, ...ifDefined("strokeToken", strokeToken), ...ifDefined("backdropToken", assumed ? undefined : back.token) });
   }
 
   // ---- near-duplicate raw colors (likely one token typed twice)
@@ -625,6 +730,107 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       if (!seen.has(rb.hex) && labDist(la, lb) < 3) { cluster.push(rb); seen.add(rb.hex); }
     }
     if (cluster.length > 1) add("info", "near-duplicate-colors", `unbound colors ${cluster.map((c) => `${c.hex}×${c.count}`).join(", ")} are visually indistinguishable (ΔE<3) — probably one token`, null, null, { colors: cluster.map((c) => c.hex) });
+  }
+
+  // ---- F-83: an unbound colour a hair off a token's value — a typo of the token, or a deliberate value. Token values:
+  // every COLOR variable's raw hex in every mode, from the variables union, the design system's tokens and each
+  // screen's own slice (an alias adds no value: its target is a row of its own). ΔE < 1 is below what an eye
+  // tells apart; an EXACT match is a different question (unbound, but the token's value) and is not raised here.
+  const tokenColors = new Map<string, { name: string; hex: string; rgb: Rgba }>(); // colorKey -> first token with that value
+  for (const doc of [opts.variables, opts.designSystem && opts.designSystem.tokens, ...docs.map((d) => d.vars)]) {
+    for (const v of (doc && doc.variables) || []) {
+      if (v.type !== "COLOR") continue;
+      for (const val of Object.values(v.values)) {
+        const k = colorKey(val), rgb = parseHex(val);
+        if (k && rgb && typeof val === "string" && !tokenColors.has(k)) tokenColors.set(k, { name: v.name, hex: normHex(val) ?? val, rgb });
+      }
+    }
+  }
+  const tokenRows = [...tokenColors.values()].filter((t) => t.rgb.a >= 1).map((t) => ({ ...t, lab: toLab(t.rgb) }));
+  const nearToken: string[] = [];
+  for (const x of raws) {
+    if (tokenColors.has(colorKey(x.hex) ?? "")) continue;
+    const lab = toLab(x.rgb);
+    let best: (typeof tokenRows)[number] | null = null, bestD = Infinity;
+    for (const t of tokenRows) { const d = labDist(lab, t.lab); if (d < bestD) { best = t; bestD = d; } }
+    if (!best || !(bestD < 1)) continue;
+    const sample = nodesById.get(x.nodeId) || null;
+    add("info", "near-token-color", `unbound '${x.hex}' ×${x.count} (e.g. '${x.nodeName}') is ΔE ${bestD.toFixed(2)} from token '${best.name}' (${best.hex}) — a typo of the token, or a deliberate value? Use the literal exactly until the designer answers`, sample, null, { token: best.name, colors: [x.hex, best.hex] });
+    nearToken.push(`'${x.hex}' (e.g. '${x.nodeName}' ${x.nodeId}) vs token '${best.name}' ${best.hex}`);
+  }
+
+  // ---- DT-63: one finding per stroke/backdrop pair per screen (the same input border repeats on every field)
+  for (const b of boundaries.values()) {
+    const [first, ...more] = b.nodes;
+    if (!first) continue;
+    add(b.assumed ? "info" : "warning", "non-text-contrast",
+      `'${first.name}'${more.length ? ` and ${more.length} more` : ""}: the control's border ${b.stroke}${b.strokeToken ? ` (${b.strokeToken})` : ""} is ${r1(b.ratio)}:1 against ${b.assumed ? "an assumed white page" : `the colour around it, ${b.backdrop}${b.backdropToken ? ` (${b.backdropToken})` : ""}`} — ` +
+        `below the 3:1 WCAG 1.4.11 asks of a control's boundary, and ${b.hasFill ? "its fill does not set it apart either" : "it has no fill to set it apart"}. Build it to pass (a border or fill that reaches 3:1) and ask the designer — a contrast failure is never kept as designed`,
+      first, b.here, { nodeIds: b.nodes.map((n) => n.id), stroke: b.stroke, backdrop: b.backdrop, ...ifDefined("strokeToken", b.strokeToken), ...ifDefined("backdropToken", b.backdropToken), ratio: r1(b.ratio), required: 3 });
+  }
+
+  // ---- DT-37: one component's text layer, its own copy on some instances and the component's default on others. Same
+  // component (variant key) + the same layer (the id's last segment); the default members must also differ from
+  // every overridden copy (a default that equals one is a real value). Same-screen groups only.
+  const copyGroups = new Map<string, { inst: Ancestor; overridden: Array<{ node: IrNode; here: Here }>; plain: Array<{ node: IrNode; here: Here }> }>();
+  for (const t of instanceTexts) {
+    const mc: Partial<MainComponentRef> = t.inst.mainComponent || {};
+    const k = `${t.here.label}|${mc.key ?? mc.setKey ?? t.inst.name}|${t.node.id.split(";").pop()}`;
+    const g = copyGroups.get(k) || { inst: t.inst, overridden: [], plain: [] };
+    (charOverridden.has(t.node.id) ? g.overridden : g.plain).push(t);
+    copyGroups.set(k, g);
+  }
+  const copyQuestions: string[] = [];
+  for (const g of copyGroups.values()) {
+    const own = [...new Set(g.overridden.map((m) => (m.node.text || "").trim()))];
+    const plain = g.plain.filter((m) => !own.includes((m.node.text || "").trim()));
+    const first = plain[0];
+    if (!own.length || !first) continue;
+    const comp = (g.inst.mainComponent && g.inst.mainComponent.setName) || g.inst.component || g.inst.name;
+    const dflt = textOf(first.node) ?? (first.node.text || "").trim();
+    const eg = own[0] ?? "";
+    add("info", "default-copy-in-instance",
+      `'${comp}' > '${first.node.name}': ${plain.length} instance(s) show the component's default copy ("${dflt}") while ${g.overridden.length} show their own copy (e.g. "${eg.length > 40 ? eg.slice(0, 39) + "…" : eg}") — a placeholder left in, or intended? Build the copy as drawn and ask the designer`,
+      first.node, first.here, { nodeIds: plain.map((m) => m.node.id), copies: { default: (first.node.text || "").trim(), overridden: own } });
+    copyQuestions.push(`'${comp}' > '${first.node.name}' (${first.node.id}) still says "${dflt}" (the component's default) where other instances say "${eg}" — is "${dflt}" the intended copy, or a placeholder? → Default: build "${dflt}" as drawn.`);
+  }
+
+  // ---- F-87: a stray copy laid over the frame — a visible `absolute` direct child of a root whose visible texts and
+  // rounded size equal an IN-FLOW visible node of the same tree that is not inside it (the field case: a footer pasted
+  // over a page that already ends in the same footer). Root-level copies only, and only a sizeable one — two texts
+  // or more, or at least half the root's width: a pinned "Save" button beside the form's own is a deliberate copy.
+  for (const root of roots) {
+    const strays = (Array.isArray(root.tree.children) ? root.tree.children : []).filter((c) => c && c.absolute && !hiddenSelf(c));
+    if (!strays.length || hiddenSelf(root.tree)) continue;
+    const bySig = new Map<string, Array<{ node: IrNode; top: IrNode }>>();
+    const sigOf = new Map<IrNode, string>(), textsOf = new Map<IrNode, number>();
+    // A node's visible texts in reading order (bottom-up, so each subtree is read once); `top` = the root child it is under.
+    const visit = (n: IrNode, top: IrNode | null): string[] => {
+      const texts: string[] = n.type === "TEXT" && (n.text || "").trim() ? [(n.text || "").trim()] : [];
+      for (const c of Array.isArray(n.children) ? n.children : []) if (c && !hiddenSelf(c)) texts.push(...visit(c, top || c));
+      if (top && texts.length && n.box) {
+        const sig = `${texts.join("\u0000")}@${Math.round(n.box.w)}x${Math.round(n.box.h)}`;
+        sigOf.set(n, sig);
+        textsOf.set(n, texts.length);
+        const same = bySig.get(sig);
+        if (same) same.push({ node: n, top }); else bySig.set(sig, [{ node: n, top }]);
+      }
+      return texts;
+    };
+    visit(root.tree, null);
+    const rootW = root.tree.box && typeof root.tree.box.w === "number" ? root.tree.box.w : null;
+    for (const stray of strays) {
+      const sig = sigOf.get(stray);
+      const sizeable = (textsOf.get(stray) || 0) >= 2 || (rootW !== null && !!stray.box && stray.box.w >= rootW / 2);
+      if (sig === undefined || !sizeable) continue;
+      // the twin is in flow: under a root child that is not absolute (two identical floating badges are no stray copy of each other)
+      const twin = (bySig.get(sig) || []).find((t) => t.top !== stray && !t.top.absolute);
+      if (!twin) continue;
+      const rb = root.tree.box, sb = stray.box;
+      const at = rb && sb && typeof rb.x === "number" && typeof rb.y === "number" && typeof sb.x === "number" && typeof sb.y === "number" ? ` at ${Math.round(sb.x - rb.x)},${Math.round(sb.y - rb.y)}` : "";
+      add("warning", "duplicate-root-subtree", `'${stray.name}' (${stray.id})${at} duplicates '${twin.node.name}' (${twin.node.id}) — a stray copy laid over the frame; build the in-flow one and record this as a design artefact (plan.deviations / a verify waiver)`,
+        stray, { label: root.label, path: `${root.tree.name} > ${stray.name}` }, { twinId: twin.node.id });
+    }
   }
 
   // ---- component state coverage
@@ -730,6 +936,22 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         `. Missing hover/pressed/focus/disabled designs are invisible here: pass the catalog that defines them (a library export: --design-system <export>/libraries/<dir>), or ask the designer`,
       null, null, { controls: unchecked });
   }
+  // F-48: an input instance that reads like a select/picker, unless its component's variants already draw it open.
+  // One finding per component + cue on a screen (three "Select date" fields are one question).
+  const openStates = new Map<string, { node: IrNode; here: Here; cue: string; nodes: string[] }>();
+  for (const p of pickers) {
+    const u = usedComponents.get(p.useKey);
+    const def = u ? stateDefOf(u) : null;
+    if (def && def.values.some((v) => STATE_SYNONYMS.open.test(String(v).trim().toLowerCase()))) continue;
+    const k = `${p.here.label}|${p.useKey}|${p.cue}`;
+    const row = openStates.get(k);
+    if (row) row.nodes.push(p.node.id);
+    else openStates.set(k, { node: p.node, here: p.here, cue: p.cue, nodes: [p.node.id] });
+  }
+  for (const o of openStates.values()) {
+    add("info", "undesigned-open-state", `'${o.node.name}'${o.nodes.length > 1 ? ` (×${o.nodes.length})` : ""} (${o.cue}) reads like a select/picker; no open state (list/calendar) is drawn — ask, or extract the frame that draws it`,
+      o.node, o.here, { nodeIds: o.nodes });
+  }
 
   // ---- screen-level states: what was drawn vs what must be asked
   // "not-found" is a statement about the FRAMES THAT WERE AUDITED, not about the Figma file. Audit
@@ -769,10 +991,32 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   }
 
   // ---- prototype links (DT-14(5)) — one info per destination, so a reader can spot one that doesn't belong
+  // F-55: with the export's index beside the screen, each destination is looked up: exported when a row of the root
+  // index or of any page index names it, or it is drawn inside this tree. A dialog the screen OPENS (overlay/swap)
+  // and nobody exported leaves the builder nothing to build it from — one warning per screen names them all.
+  const nb = opts.neighbours;
+  const exportedIds = nb ? nb.exportedIds ?? new Set(nb.layers.map((l) => l.id)) : null;
+  const shotIds = new Set((nb && nb.unexportedShots) || []);
+  const unexportedTargets = new Map<string, Array<{ n: NavRow; id: string }>>();
   for (const n of navigations.values()) {
+    const id = n.destinationId;
+    const missing = exportedIds !== null && !!id && !exportedIds.has(id) && !nodesById.has(id) && !hiddenIds.has(id);
     add("info", "prototype-navigation",
-      `${n.count} layer(s) (e.g. '${n.node.name}') ${n.navigation === "overlay" ? "open" : n.navigation === "swap" ? "swap to" : "go to"} '${n.destination ?? "an unnamed frame"}'${n.destinationId ? ` (${n.destinationId})` : ""} in the prototype — confirm this is the intended behaviour before wiring it (a link copied along with a layer looks the same as a designed one)`,
-      n.node, { label: n.label }, { ...ifDefined("destination", n.destination), ...ifDefined("destinationId", n.destinationId), navigation: n.navigation, sources: n.count });
+      `${n.count} layer(s) (e.g. '${n.node.name}') ${n.navigation === "overlay" ? "open" : n.navigation === "swap" ? "swap to" : "go to"} '${n.destination ?? "an unnamed frame"}'${n.destinationId ? ` (${n.destinationId})` : ""} in the prototype — confirm this is the intended behaviour before wiring it (a link copied along with a layer looks the same as a designed one)${missing ? " — NOT exported" : ""}`,
+      n.node, { label: n.label }, { ...ifDefined("destination", n.destination), ...ifDefined("destinationId", n.destinationId), navigation: n.navigation, sources: n.count, ...(missing ? { exported: false } : {}) });
+    if (missing && id && (n.navigation === "overlay" || n.navigation === "swap")) {
+      const rows = unexportedTargets.get(n.label) || [];
+      rows.push({ n, id });
+      unexportedTargets.set(n.label, rows);
+    }
+  }
+  for (const [label, rows] of unexportedTargets) {
+    const list = rows.map(({ n, id }) => `'${n.destination ?? "an unnamed frame"}' (${id}) opened by '${n.node.name}'${shotIds.has(id) ? ` — screenshotted only (assets/${id.replace(/:/g, "_")}_ref.png)` : ""}`);
+    const first = rows[0];
+    add("warning", "prototype-target-not-exported",
+      `${rows.length} prototype target(s) this screen opens are in no index of the export: ${list.join("; ")} — pull them (\`dtwin pull --node <id>\`; MCP: \`figma_export_url\`) before building, or the builder has nothing to build the dialog from. ` +
+        `A frame nested in a SECTION or another frame has no index row of its own: search design/export/pages for the id before pulling`,
+      first ? first.n.node : null, { label }, { ids: rows.map((r) => r.id) });
   }
 
   const bindingOf = (k: AuditCategory): { bound: number; total: number; pct: number | null } => { const [b, t] = binding[k]; return { bound: b, total: t, pct: t ? Math.round((b / t) * 100) : null }; };
@@ -841,6 +1085,12 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   if (unchecked.length) questions.push(`The states of ${unchecked.slice(0, 6).map((n) => `'${n}'`).join(", ")}${unchecked.length > 6 ? ", …" : ""} could not be checked (no catalog defines them) — are hover/pressed/focus/disabled designed somewhere?`);
   for (const c of components.filter((c) => c.missing && c.missing.length)) questions.push(`'${c.name}' has no ${c.missing.join("/")} design — use the design-system default, or is there a spec?`);
   if (findings.some((f) => f.code === "fixed-size-text")) questions.push("Several text boxes are fixed-size — at 200% font scale or in a longer language, should they wrap, truncate (how many lines), or grow?");
+  questions.push(...copyQuestions);
+  if (openStates.size) {
+    const list = [...openStates.values()].map((o) => `'${o.node.name}' ${o.node.id} (${o.cue})`);
+    questions.push(`${list.join(", ")} read${list.length === 1 ? "s" : ""} like a select/picker with no open state drawn — what does the open list (or calendar) look like: the platform's native picker, or a designed one (which frame)? → Default: the platform's native control, styled with the field's tokens.`);
+  }
+  if (nearToken.length) questions.push(`Unbound colour${nearToken.length === 1 ? "" : "s"} a hair off a token — ${nearToken.join("; ")}: a typo of the token, or deliberate? → Default: the literal exactly as drawn, flagged.`);
 
   // ---- the cross-FILE pass
   // Everything above reasons inside one screen's own JSON, which is why the live run's audit reported
@@ -979,6 +1229,12 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
 }
 
 // ---------------------------------------------------------------- markdown report
+// DT-58: where a finding sits, as the last three layers of its `path` — enough to find "Option 1" among forty
+// without the whole chain (the JSON keeps the full path).
+function pathTail(p: string): string {
+  const parts = p.split(" > ");
+  return parts.length > 3 ? "… > " + parts.slice(-3).join(" > ") : p;
+}
 function toMarkdown(res: AuditReport): string {
   const L: string[] = [];
   L.push(`# Design audit — ${res.screens.join(", ") || "(no screens)"}`, "");
@@ -1062,7 +1318,7 @@ function toMarkdown(res: AuditReport): string {
     const fs = res.findings.filter((f) => f.severity === sev);
     if (!fs.length) continue;
     L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs.length})`, "");
-    for (const f of fs) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` — node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
+    for (const f of fs) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` — node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
   }
   if (res.annotations.length) {
     L.push("", "## Designer annotations", "");

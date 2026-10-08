@@ -28,8 +28,8 @@ Read these before writing ANY script against an export JSON (field names guessed
   or `absolute:true`); inside an auto-layout parent the position comes from the parent's `layout` (padding, gap,
   order). `layout.inferred:true` is a guess on a frame without auto layout — its children still carry `x`/`y`.
 - **`absolute:true`** = out of the parent's auto-layout flow, placed by `x`/`y`; absent = in flow. `layout` describes
-  how a node lays out ITS OWN children: `layout.mode:"absolute"` means "no auto layout inside" (every TEXT carries it)
-  — it never means the node itself is absolute.
+  how a node lays out ITS OWN children, so only a node that can hold children has it: `layout.mode:"absolute"` =
+  no auto layout inside — it never means the node itself is absolute.
 - **Child order.** `children[]` is Figma's layer list: paint order bottom → top (reversed when the parent's
   `layout.reverseZ` is set). In an auto-layout parent it is also the flow order (first = leading); otherwise — and for
   every `absolute:true` child — the visual order comes only from `x`/`y`.
@@ -37,8 +37,10 @@ Read these before writing ANY script against an export JSON (field names guessed
   flagged on its account (they may carry their own). Skip a node when it OR ANY ANCESTOR is hidden. There is no
   node-level `visible` key.
 - **Scroll.** `clip:true`; `scroll` (`horizontal`/`vertical`/`both`, a node field — not under `layout`);
-  `fixedChildren:N` = the LAST N entries of `children[]` stay pinned while the rest scrolls (Figma keeps them on top);
-  place each by its `y` (top bar → sticky top, bottom bar → sticky bottom). A "Sticky" child is not marked at all.
+  `fixedChildren:N` = the LAST N entries of `children[]` stay pinned while the rest scrolls (Figma moves fixed layers
+  to the top of the layer list); fixed only — "sticky" is not exposed, so a Sticky child is not marked. Each pinned
+  child carries `x`/`y` (in an auto-layout frame Figma lets only an `absolute:true` child be fixed); place it by its
+  `y` (top bar → sticky top, bottom bar → sticky bottom).
 - **Render bounds.** `renderBox` (only when it differs from `box`) = Figma's render bounds: larger than `box` for
   shadow / stroke / blur; on a TEXT usually smaller than `box` (observed).
 - **Three `strokes`.** `strokes` is always an object (`colors[]`, `weight` or `weights{}`, `align`…);
@@ -50,7 +52,10 @@ Read these before writing ANY script against an export JSON (field names guessed
 - **Files.** `asset` and `reference` are paths relative to `design/export/` (`assets/<file>`); `assetFrom` = a hidden
   graphic reusing a visible twin's file; `assetSkipped` = no file at all. `<Screen>.assets.json`
   (single-screen pulls) lists every file.
-- **Noise to ignore.** `gridColumnStart:-1` / `gridRowStart:-1` on a node that is not a grid child (observed).
+- **Older exports.** A file pulled with an older plugin also has `gridColumnStart:-1` / `gridRowStart:-1` on every node,
+  `gridAlignSelf` / `gridJustifySelf` on a node whose parent is not a grid, and `layout.mode:"absolute"` on every
+  TEXT, shape, SLICE, STICKY and other leaf type (a node TYPE that cannot hold children has no `layout` now) — ignore all of it
+  (design-diff does).
 <!-- quick-keys:end -->
 
 ## Contents
@@ -150,19 +155,23 @@ Read these before writing ANY script against an export JSON (field names guessed
 - **`layout.inferred:true`** — flex guessed from a non-auto-layout frame. Trust it, but sanity-check
   against the `.png`.
 - **`layout.mode:"absolute"`** (+`width`/`height`) — no auto layout inside THIS node; its children
-  carry `x`/`y`. Infer a flow layout; do not transcribe coordinates. On a TEXT or vector leaf it is
-  just the node's size; the node's own out-of-flow flag is `absolute:true`.
+  carry `x`/`y`. Infer a flow layout; do not transcribe coordinates. Only a node that can hold children
+  has a `layout` (a TEXT, shape or vector leaf has none); the node's own out-of-flow flag is `absolute:true`.
 - **`children[]`** is Figma's layer order, normally bottom → top (paint order; reversed under
   `layout.reverseZ`); flow order only inside an auto-layout parent.
 - **`layout.display:"grid"`** → `columns`/`rows`/`columnGap`/`rowGap`/`columnSizes`/`rowSizes`
   (per-track `{type: flex|fixed|hug, value}`)/`autoFlow`/`autoTracks`; children
   `gridColumnSpan`/`gridRowSpan`/`gridColumnStart`/`gridRowStart` (0-based) and
-  `gridJustifySelf`/`gridAlignSelf` (`start`/`center`/`end`). Don't flatten a real grid into rows.
+  `gridJustifySelf`/`gridAlignSelf` (`start`/`center`/`end`) — only on an in-flow child of a grid frame. Don't
+  flatten a real grid into rows.
 - **`clip:true`** + **`scroll`** (`horizontal`/`vertical`/`both`; a node field, not under `layout`)
   → overflow handling.
 - **`fixedChildren:N`** — the LAST N entries of `children[]` (the top of Figma's layer list) are pinned
-  while the rest scrolls (sticky header/footer/FAB); place each by its `y` (top bar → sticky top,
-  bottom bar → sticky bottom). A child set to "Sticky" in Figma is not marked in the export.
+  while the rest scrolls (sticky header/footer/FAB); fixed only — "sticky" is not exposed, so a child
+  set to "Sticky" in Figma is not marked in the export. Reported whenever it is above 0, whatever the
+  frame's overflow setting. Each pinned child carries `x`/`y` (and `box.x`/`box.y`) even in
+  an auto-layout frame, where Figma lets only an `absolute:true` child be fixed; place it by its `y`
+  (top bar → sticky top, bottom bar → sticky bottom).
 - **`layoutGrids[]`** — column/row guides (`pattern`, `count`, `size`, `gutter`, `offset`,
   `alignment`): informs margins and breakpoints; not a grid container.
 
@@ -328,7 +337,7 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 | Per-variant trees | entry `variantsFile` / `nodeFile` (opt-in `--variant-visuals`) |
 | Slot rules | `components.local.json` `props[*]` with `type:"SLOT"` → `slotSettings {minChildren, maxChildren, allowPreferredValuesOnly, stretchChildOnInsert, displayEmptyByDefault}` (each only as set; no min/max = unlimited) |
 | Library components | `components.library.json` — props SAMPLED from instances in this file |
-| Token catalog | `design-system/tokens.json` — `collections[] {name, modes, default, theming}`, `variables[] {name, type, collection, tier, values{mode: hex \| number \| {aliasOf}}, scopes, codeSyntax{WEB,ANDROID,iOS}, key}` |
+| Token catalog | `design-system/tokens.json` — `collections[] {name, modes, default, theming}`, `variables[] {name, type, collection, collectionKey, tier, values{mode: hex \| number \| {aliasOf}}, scopes, codeSyntax{WEB,ANDROID,iOS}, key}` — `collectionKey` is the collection's own key (collection NAMES repeat: two collections can both be "Spacing"); absent on an older export |
 | Text/paint/effect/grid styles | `design-system/styles.{text,paint,effect,grid}.json` |
 | Smells | `design-system/hygiene.json` `hygiene[]` — ALL_SCOPES, raw semantic values, broken aliases, variant explosion (>30), unnamed/duplicate components. It does NOT check per-node unbound values — `audit.js` does. |
 | Color profile | `design-system.json` `colorProfile` (`srgb`/`display-p3`/`legacy`) — hex is always 8-bit sRGB-clamped |

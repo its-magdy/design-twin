@@ -75,7 +75,9 @@ its export directly in `design/` — every path below works either way, just dro
   an unquoted `#` starts a shell comment).
 - **`…__<id>.assets.json`** beside the screen — which assets it uses, with content hashes,
   `duplicates` (the same artwork under different names), `monochrome` (safe to recolour) and `heavy` (too big to inline).
-  Each row has `name`/`owner`/`context`/`usedBy`: search `owner`/`name`, not file names.
+  Each row has `name`/`owner`/`context`/`usedBy`: search `owner`/`name`, not file names. **Use only files
+  THIS screen's `.assets.json` lists** (`files[].file`): a file another screen lists is that screen's art, so
+  never substitute it (a row with `reusedFrom` is listed here, so it is fine). A node with no file (`assetSkipped`, no row) is an extract/designer question, not a reuse.
 - **`design/export/design-system/`** — tokens, styles and component catalogs. Written only by a
   `--design-system` (or full) pull, so legitimately **absent** after a single-screen pull; step 1 says
   what to do then. **`design/export/assets/`** — real icon/image files, named after their Figma layer
@@ -281,7 +283,7 @@ Copy this checklist into your notes and keep it updated:
      the user has decided to build past it, record that decision in the plan's
      `auditGate: {auditFile, crossCheckFile, verdict, overridden: [<blocker ids>], reason, decidedBy, decidedAt}` —
      a blocker id is the finding's `id`: its `code`, or `code@nodeId` when it carries a node (a repeat gets
-     `~2`); the old positional `code#i` is still accepted, and so, for a finding with no node, is its bare
+     `~2`); the old positional `code#i` is still accepted (with a warning mapping it to the stable id and naming stale ones "(drop it)"), and so, for a finding with no node, is its bare
      code (which is its id). `crossCheckFile` is the cross-check report beside the audit
      (`<audit>.cross.json`), when there is one. `plan-skeleton.js` pre-fills it from the audit; the Stop hook warns (never blocks) if a current
      blocker id is missing from `overridden` or `reason` is empty.
@@ -304,12 +306,18 @@ Copy this checklist into your notes and keep it updated:
    `catalog` identity (by key, or cross-check's name+signature proposal, or `{by:"ambiguous", candidates:[…]}`
    when several catalog entries share the name and none verifies — a lead to pick from, never a match; component identity comes
    from there and from `design/codeconnect.local.json`, never from an attribute you place in markup);
-   `anchors{}` — every visible node id; `hidden[]` — what is not built. **You fill only the
+   `anchors{}` — every visible node id; `anchorsSuggested[]` — where to start filling them (the screen frame itself, first, as `"screen"` — a frame that is
+   an instance is the whole list; the root's sections,
+   each outermost instance, and each container whose children are mostly rows of one shape — three or more, i.e.
+   a `.map()`; the dividers between its rows go with it; its other children, such as a search bar above the rows, are listed on their own; `covers` says how
+   many nodes it stands for; refreshed on every re-run, not part of `counts`); `hidden[]` — what is not built. **You fill only the
    decisions:** `codeToken`/`verdict`/`decision` per token, `mapModule`/`verdict` per component,
-   `mapModule` on anchors (step 3), `route` (advisory free text — it never reaches a screen), `navigate` and
+   `mapModule` on anchors (step 3: the frame itself plus the `anchorsSuggested` ids first, the rest is covered by its nearest mapped ancestor), `route` (advisory free text — it never reaches a screen), `navigate` and
    `interactions` when the screen needs them (below), `target`, `architecture`, `files[]` (step 3),
-   `deviations[]` as `{nodeId, field, designed, built, reason}`, `allowedLiterals[]` when needed, and
-   `verification` (step 5). Re-running it merges; filled fields survive. `--seed-from <plan>` (repeatable) pre-fills still-empty rows from
+   `deviations[]` as `{nodeId, field, designed, built, reason}` (record a deviation you already know about when you
+   build it, with its reason — the verifier never writes one; a `field: "reference"` row says the reference PNG is
+   only a stand-in there, e.g. an illustration you do not reproduce, and `--compare` shows that on the visual line without
+   waiving a delta), `allowedLiterals[]` when needed, and `verification` (step 5). Re-running it merges; filled fields survive. `--seed-from <plan>` (repeatable) pre-fills still-empty rows from
    a sibling screen's plan when the token (same key and value) or component (same set key) is the same
    thing; seeded rows carry `seededFrom` — review them, they are never overwritten once filled. The `Stop` hook checks the
    built code against this file, so it must exist before step 3. **On a large export, filling in
@@ -377,6 +385,10 @@ Copy this checklist into your notes and keep it updated:
    - **Assets** — each `asset` file and how it's imported for this stack.
    Then **self-review the plan**: every visible node accounted for? any literal where a token exists?
    any hand-built native control? any fixed size that should hug/fill? Fix the plan, then build.
+   **Native control substitution:** when a drawn field becomes a native control (date/time picker, select),
+   the native element draws its own text, so carry the drawn placeholder/value colour onto it, record the
+   substitution in the plan as a `deviations[]` row `{nodeId, field: "control", designed, built, reason}`, and verify it
+   on the element's own text (the profile says how for its stack).
    *Multi-screen:* scaffold navigation/routing and shared sample data first.
 
    **Names come from Figma, not from you.** A token's `value` is what it resolves to in the one mode
@@ -443,12 +455,14 @@ Copy this checklist into your notes and keep it updated:
      strings and its own navigation stack is not done.
    - **Layout** — the profile's stack constructs from `layout`; `fill` → stretch, `hug` → intrinsic,
      fixed only when truly fixed; `sizeLimits` → min/max. `layout.mode:"absolute"` means no auto layout
-     inside that node (every TEXT carries it; the node's own out-of-flow flag is `absolute:true`) — infer
+     inside that node (only on nodes that hold children; the node's own out-of-flow flag is `absolute:true`) — infer
      a flow, never transcribe coordinates. Real grids stay grids. `clip`/`scroll`/`fixedChildren` (the LAST
      N entries of `children[]`) → the profile's scroll & sticky section.
    - **Text** — map to the type scale by style name; convert `lineHeight`/`letterSpacing` **with their
      units** per the profile (percent ≠ px). Every data-driven text gets an overflow rule (`truncate`/
-     `maxLines`/wrap). Never lock text containers to a fixed height. Use start/end alignment.
+     `maxLines`/wrap). Never lock text containers to a fixed height. Use start/end alignment. A line-height taller than
+     its fixed text box (the expectation lists it as "text box height", about Npx): choose deliberately — keep the designed
+     line-height and let the text overflow its box as Figma does, or fit the box — and note which in `deviations`.
    - **Styling** — tokens over literals; paint `opacity` vs node `opacity` are different; strokes honor
      `align` (inside/outside/center) and per-side `weights`; shadows keep `spread` where the stack can.
    - **Assets** — import `asset` files per the profile. **Never hand-write an `<svg>`/`<path>`, draw
@@ -458,6 +472,7 @@ Copy this checklist into your notes and keep it updated:
      `assetFrom` names a visible twin whose file it reuses). Never rotate/flip an asset that has
      `sourceTransform` — it is already in the file. Reuse a project icon only if the glyph clearly matches. Size every
      icon explicitly (square container, both dimensions set).
+     Of the exported files, import only those listed in THIS screen's `.assets.json`; another screen's file is that screen's art, never a substitute.
 
      Three things the screen's `.assets.json` tells you that the files themselves do not:
      - **`heavy`** — faithfully exported and still unusable inline. A flattened noise texture arrives
@@ -516,7 +531,13 @@ Copy this checklist into your notes and keep it updated:
      across every plan's `files[]`: it **blocks** when no file carries `data-dt-node` at all, warns
      below 50% coverage, and records `tagCoverage` in `verification.hook`. A project that genuinely
      cannot tag says so in the plan: `"tagging": {"off": true, "reason": "<why>"}` (no reason, no
-     opt-out). Tags are a measurement aid, never component
+     opt-out). Tags are dev evidence: to keep them out of a deploy bundle, strip `data-dt-node` at build
+     time, only on an explicit opt-in env that the deploy build alone sets — Next.js
+     `compiler: { reactRemoveProperties: process.env.DT_STRIP_TAGS === '1' ? { properties: ['^data-dt-node$'] } : false }`
+     (plain `true` strips only `^data-test`); Babel the same way, adding `babel-plugin-react-remove-properties` with
+     `properties: ['data-dt-node']` (an exact name) only when `DT_STRIP_TAGS === '1'`. Never key it on `NODE_ENV`:
+     `next build` is production, and verify measures preview builds, so verify measures a build that keeps the tags.
+     Never strip them in the source: the Stop hook counts them in source. Tags are a measurement aid, never component
      identity — that is the plan's `components[]` (catalog match, `design/codeconnect.local.json`).
 
 4. **States, scaling, theme, direction.** Before calling a component done:
@@ -558,6 +579,14 @@ Copy this checklist into your notes and keep it updated:
        design/verify/<Screen>.expected.json design/verify/<Screen>.measured.json --out design/verify/<Screen>
      ```
 
+     A probe without `--run` writes an **unbound** measured file (it names no run): `--compare` grades it as your
+     evidence, and an ended run's `<Screen>.status.json` beside it (a `visual-verifier` or verify-skill run at `done`,
+     `failed` or `blocked`) only adds a note — as long as you measured AFTER that run ended (an older measured file is
+     still judged by the run: measure again). A run still in flight makes `--compare` `incomplete` — wait for it
+     (`verify-screen.js --wait <Screen> --run <id>`), or, only if nothing is running it any more (its agent stopped or
+     crashed), end it:
+     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Screen> --phase failed --run <id>`.
+
      Web measurements come from the shipped probe (`verify-probe.js`), never a hand-written one. Pass the plan as
      `--steps` whenever it has `navigate`, with `--ready` on the screen root's tag (a step's click can land on another
      page — a login bounce — and only the root check tells). The probe also drives the overlay/swap `on_click`/`on_press` interactions
@@ -598,14 +627,22 @@ Copy this checklist into your notes and keep it updated:
      no new absolute positioning, fixed width/height or magic offset where the export has auto
      layout (`layout.mode` flex/grid → the stack's flow layout), and no token swapped for a literal.
      Refinement loops drift exactly this way — closer screenshot, less maintainable screen — and the
-     residual difference belongs in `deltas`, not in a `top: 3px`.
+     residual difference belongs in the plan's `deviations[]` (`{nodeId, field, designed, built, reason}`), not in a
+     `top: 3px`.
    - Only if the project genuinely has no dev server/rendering tooling available (checked, not
      assumed) fall back to a structural + visual self-review against the `.png` — and report it as
      "not rendered — reviewed statically", never as a verified match.
-   - **Record the evidence in the plan** under `verification`. After a render: `{mode:"rendered",
-     renderer, artifacts:[<paths on disk>], deltas:[<residual differences, [] if none>],
-     coverage:{rendered:[…], notChecked:[{what, why}]}, a11y:{tool, violations, warnings, report}?}` (copied from `report.behaviour.summary`) — never an `a11y`
-     result beside an a11y entry in `notChecked` (the hook flags a block that contradicts itself).
+   - **Record the evidence in the plan** under `verification`. On web, `--compare … --record-plan` writes the tool-owned
+     keys from the report — `mode` (`"static-only"` + its `reason` when the measured file was static-only), `renderer`,
+     `artifacts`, the open high/medium `deltas`, `a11y` (from `report.behaviour.summary`, when the behaviour checks
+     ran) and a `recorded` block with the report's sha256 — and leaves your hand keys alone; **you still write
+     `coverage`:{rendered:[…], notChecked:[{what, why}]}** (and any notes). It owns `deltas`: a row you wrote there is
+     replaced (with a note) — a residual you chose to keep goes in `deviations[]`, with its reason.
+     Elsewhere (or by hand) the shape is `{mode:"rendered", renderer, artifacts:[<paths on disk>], deltas:[<the
+     report's open high/medium deltas, [] if none>], coverage:{…}, a11y:{tool, violations, warnings, report}?}` (copied from
+     `report.behaviour.summary`) — never an `a11y`
+     result beside an a11y entry in `notChecked` (the hook flags a block that contradicts itself). A recorded block
+     older than its report draws a warning: re-run `--compare --record-plan` after the last change.
      Nothing can render: `{mode:"static-only", reason:<what you checked for and didn't find>}`.
    - **The `Stop` hook** (`verify-build.js`, as your turn ends) checks the plans your session wrote
      (Write/Edit, a redirect, `--out`, `cp`/`mv`, `sed -i`) and the plan whose `files[]` alone lists
@@ -631,7 +668,9 @@ Copy this checklist into your notes and keep it updated:
      capped at 60 s naming what it was still waiting on. A manual run from a terminal never blocks on
      stdin at all.
    - **Status is computed, never stored.** The hook records its result and a hash of every file in
-     `files[]` under `verification.hook`; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status
+     `files[]` — and of every module the plan's anchors/components map (`mapModule`: a project-relative
+     file; one with no extension resolves like an import, `.tsx`/`.ts`/`.jsx`/`.js` then `/index.*`; an
+     `@/`/`~/` alias or a package is not hashed — `--status` and the verify report name it once) — under `verification.hook`; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status
      design/plan/<screen>.json` derives the status: `verified` only when the hook passed, no listed
      file changed since, **and** the screen's `design/verify/<…>.report.json` (schema @2, `--compare`
      run from the project root) says `pass` and measured this design and these files — compared by
@@ -678,8 +717,11 @@ For step 5's render-and-compare, prefer the **`designtwin:visual-verifier`** age
 own work: hand it `design/verify/<Screen>.expected.json`, and it renders, measures every node,
 records which components exist and which designed interactions actually work, and writes
 `design/verify/<Screen>.measured.json`. It returns measurements, not a verdict — you run
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` on what it wrote, copy the resulting report path and its `deltas` into
-the plan's `verification` block, fix the high-severity ones, and re-verify.
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare design/verify/<Screen>.expected.json design/verify/<Screen>.measured.json [--interactions design/verify/<Screen>.evidence.json] --record-plan --out design/verify/<Screen>`
+on what it wrote (`--interactions` when it wrote that file; `--record-plan` records the report in the plan's
+`verification` block), fix the high-severity deltas, and re-verify — every verifier pass (each re-verify round)
+gets a NEW run (`--status <Screen> --phase queued --new-run`, its id passed to the verifier): an ended run takes no
+more writes, and `--wait` on an old id returns at once on that run's old `done`.
 
 It runs for minutes and prints nothing while it does, so it also writes a progress file you can poll
 — written by `verify-screen.js --status` into the run cache (`node_modules/.cache/designtwin-verify/`, outside every

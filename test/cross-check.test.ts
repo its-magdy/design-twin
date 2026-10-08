@@ -10,6 +10,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { crossCheck, toMarkdown, composedRgba } from "../design-to-code/cross-check.ts";
+import { audit } from "../design-to-code/audit.ts";
 import { parseHex, clampOpacityPct, composeAlpha, formatHex, compositeOver } from "../design-to-code/color.ts";
 import { screenCoverage } from "../design-to-code/drift-lint.ts";
 import { check as ok, report } from "./assert.ts";
@@ -159,6 +160,46 @@ console.log("cross-check — DT-07: the foreign-library finding classifies the s
   const fn = get(rn, "foreign-token-library");
   ok("[DT07-2] no shared mode + overlapping values is undecidable; variables in design-system collections are not counted",
     JSON.stringify(fn.nameMap) === JSON.stringify({ agree: 0, differ: 0, undecidable: 1, absent: 0 }) && /of the 1 variables in those collections/.test(fn.message));
+}
+
+// ---------------------------------------------------------------- FU-namemap: collections told apart by key
+console.log("cross-check — FU-namemap: two collections of one name are told apart by their key:");
+{
+  // The screen binds TWO collections called "Spacing": the design system's own (ds-space) and another library's.
+  // Only the second is foreign. Its rows are told apart by `collectionKey`; an export from before that field
+  // can only go by the collection name.
+  const COLLS = [
+    { name: "Spacing", key: "ds-space", modes: ["Mode 1"], default: "Mode 1" },
+    { name: "Spacing", key: "other-space", modes: ["Mode 1"], default: "Mode 1" },
+  ];
+  const rows = (withKeys: boolean) => tokens({
+    collections: COLLS,
+    variables: [
+      { name: "Space 3", collection: "Spacing", ...(withKeys ? { collectionKey: "other-space" } : {}), key: "o-1", type: "FLOAT", values: { "Mode 1": 16 } },
+      { name: "Space 9", collection: "Spacing", ...(withKeys ? { collectionKey: "ds-space" } : {}), key: "d-1", type: "FLOAT", values: { "Mode 1": 36 } },
+    ],
+  });
+  const run = (withKeys: boolean) => get(crossCheck({ screens: [screen("S", [])], variables: rows(withKeys), tokens: DS_TOKENS }), "foreign-token-library");
+  const keyed = run(true);
+  ok("[G21-NM] with collectionKey only the foreign collection's row is counted (n=1, agrees, no ambiguity)",
+    JSON.stringify(keyed.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 0 }) && /of the 1 variables in those collections/.test(keyed.message) && !/predates collection keys/.test(keyed.message));
+  const old = run(false);
+  ok("[G21-NM] without collectionKey both rows go by the name: n=2, and ambiguous counts them",
+    JSON.stringify(old.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 1, ambiguous: 2 }) && /of the 2 variables in those collections/.test(old.message));
+  ok("[G21-NM] the message says 2 of them come from a collection whose name a design-system collection also has, and to re-pull",
+    /\(2 of them come from a collection whose name a design-system collection also has — this export predates collection keys on variables; re-pull to tell them apart\.\)/.test(old.message));
+  // A key the screen's collection list does not know selects nothing: the row falls back to its name (and is ambiguous).
+  const stray = get(crossCheck({ screens: [screen("S", [])], variables: tokens({ collections: COLLS, variables: [{ name: "Space 3", collection: "Spacing", collectionKey: "nobody", key: "o-1", type: "FLOAT", values: { "Mode 1": 16 } }] }), tokens: DS_TOKENS }), "foreign-token-library");
+  ok("[G21-NM] a collectionKey no screen collection carries falls back to the name", JSON.stringify(stray.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 0, ambiguous: 1 }));
+  // Both twins foreign (the real-data shape): every row is counted by key or by name alike, nothing ambiguous.
+  const bothForeign = get(crossCheck({ screens: [screen("S", [])], variables: tokens({
+    collections: [{ name: "Spacing", key: "x-1", modes: ["Mode 1"], default: "Mode 1" }, { name: "Spacing", key: "x-2", modes: ["Mode 1"], default: "Mode 1" }],
+    variables: [
+      { name: "Space 3", collection: "Spacing", collectionKey: "x-1", key: "a", type: "FLOAT", values: { "Mode 1": 16 } },
+      { name: "Space 9", collection: "Spacing", collectionKey: "x-2", key: "b", type: "FLOAT", values: { "Mode 1": 36 } },
+    ] }), tokens: DS_TOKENS }), "foreign-token-library");
+  ok("[G21-NM] two foreign twins: both rows counted, no ambiguity",
+    JSON.stringify(bothForeign.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 1 }));
 }
 
 // ---------------------------------------------------------------- name collides, value differs
@@ -729,6 +770,254 @@ console.log("cross-check — group 14 (DT-27 name rule, F-44 ids, F-47 proposal 
   crossCheck({ screens: [{ doc: A, label: "A" }], components: catalog([{ name: "Other", key: "k", type: "COMPONENT" }]), siblings: () => { called++; return [{ doc: B, label: "B" }]; } });
   ok("[F47-1] the other screens are not read when there is nothing to label", called === 0);
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------- F-126: one screen, two modes
+console.log("cross-check — F-126: colour bindings from collections resolved in different modes:");
+{
+  // Two theme collections sharing Dark/Light (the screen's own resolves Dark, a starter kit's still Light),
+  // and a brand collection on its own vocabulary. Every collection is in resolvedModes, as Figma writes it.
+  const vars = tokens({
+    collections: [
+      { name: "Theme", key: "c-a", modes: ["Dark", "Light"], default: "Dark" },
+      { name: "Kit", key: "c-b", modes: ["Light", "Dark"], default: "Light" },
+      { name: "Brand", key: "c-c", modes: ["Brand 1", "Brand 2"], default: "Brand 1" },
+    ],
+    variables: [
+      { name: "Surface/Page", collection: "Theme", key: "a1", type: "COLOR", values: { Dark: "#121319", Light: "#ffffff" } },
+      { name: "Text/Main", collection: "Theme", key: "a2", type: "COLOR", values: { Dark: "#ffffff", Light: "#121319" } },
+      { name: "Kit/On Surface", collection: "Kit", key: "b1", type: "COLOR", values: { Light: "#1d1b20", Dark: "#e6e0e9" } },
+      { name: "Brand/Accent", collection: "Brand", key: "c1", type: "COLOR", values: { "Brand 1": "#ff8800", "Brand 2": "#0088ff" } },
+    ],
+  });
+  const doc = (modes: Record<string, string>, children: NodeInput[]) => screenExport([
+    { type: "FRAME", id: "1:1", name: "Settings", resolvedModes: modes, tokens: { fills: "Surface/Page" }, children: [text("2:1", "Inter", null, "Text/Main"), ...children] },
+  ], { screen: "Settings" });
+  const ALL = { Theme: "Dark", Kit: "Light", Brand: "Brand 1" };
+  const kitText: NodeInput = { type: "TEXT", id: "3:1", name: "Btn Text", text: "Save", font: { family: "Inter", size: 14 }, fills: [{ type: "solid", color: "#1d1b20", tokens: { color: "Kit/On Surface" } }] };
+  const res = crossCheck({ screens: [{ doc: doc(ALL, [kitText]), label: "Settings" }], variables: vars });
+  const f = res.findings.find((x) => x.code === "mixed-mode-bindings");
+  const kitRow = f?.bindings?.find((b) => b.collection === "Kit");
+  ok("[F126-1] a colour bound from a collection resolved Light on a Dark screen is a warning with a confirm question",
+    f?.severity === "warning" && /'Kit' in 'Light'/.test(f.message) && /in 'Dark'/.test(f.message) && /'Kit\/On Surface' on 'Btn Text'/.test(f.message) && /follow 'Dark'/.test(f.confirm ?? ""));
+  ok("[F126-1] bindings[] names the minority collection's tokens and nodes, and the majority's mode",
+    kitRow?.mode === "Light" && kitRow.tokens.join() === "Kit/On Surface" && kitRow.nodes.join() === "3:1" && f?.bindings?.find((b) => b.collection === "Theme")?.mode === "Dark");
+  ok("[F126-1] nodeId is the first node binding the minority collection", f?.nodeId === "3:1");
+  ok("[F126-2] a collection the screen RESOLVES in Light but binds nothing from is not a mix (every collection is in resolvedModes)",
+    !has(crossCheck({ screens: [{ doc: doc(ALL, []), label: "Settings" }], variables: vars }), "mixed-mode-bindings"));
+  const brandText: NodeInput = { type: "TEXT", id: "4:1", name: "Tag", text: "New", font: { family: "Inter", size: 14 }, tokens: { fills: "Brand/Accent" } };
+  ok("[F126-3] a bound collection on another vocabulary (Brand 1 / Brand 2) is not a mix",
+    !has(crossCheck({ screens: [{ doc: doc(ALL, [brandText]), label: "Settings" }], variables: vars }), "mixed-mode-bindings"));
+  ok("[F126-4] the same binding with the kit pinned to Dark is not a mix",
+    !has(crossCheck({ screens: [{ doc: doc({ ...ALL, Kit: "Dark" }, [kitText]), label: "Settings" }], variables: vars }), "mixed-mode-bindings"));
+  // M-1 (review 1): the majority is chosen per mode vocabulary — Brand 1 / Brand 2 bindings, as many as the theme's or
+  // more, never mask the Dark/Light mix (they used to win the vote, and no Dark/Light collection declares 'Brand 1').
+  for (const n of [2, 3]) {
+    const brands = Array.from({ length: n }, (_, i): NodeInput => ({ ...brandText, id: `4:${i + 1}` }));
+    const m = crossCheck({ screens: [{ doc: doc(ALL, [kitText, ...brands]), label: "Settings" }], variables: vars }).findings.filter((x) => x.code === "mixed-mode-bindings");
+    ok(`[F126-3 / M-1] ${n} Brand binding(s) beside 2 Theme ones: the Theme Dark / Kit Light mix is still ONE warning, Brand out of it`,
+      m.length === 1 && /'Kit' in 'Light'/.test(m[0]?.message ?? "") && !(m[0]?.bindings ?? []).some((x) => x.collection === "Brand"));
+  }
+}
+
+// ---------------------------------------------------------------- L6: same-named collections, told apart by collectionKey
+console.log("cross-check — L6: two collections with one name are matched by collectionKey first:");
+{
+  // The design system's own `Colors` (Light/Dark, default Light) is listed first; a library's `Colors` beside it.
+  const solid = (color: string, token: string) => ({ type: "solid" as const, color, tokens: { color: token } });
+  // mixed-mode-bindings: a ONE-mode library `Colors` variable (values only in 'Light') is not a multi-mode binding,
+  // although the design system's same-named `Colors` declares Light and Dark — by name it was matched there.
+  const mixVars = tokens({
+    collections: [
+      { name: "Theme", key: "k-theme", modes: ["Dark", "Light"], default: "Dark" },
+      { name: "Colors", key: "k-sys", modes: ["Light", "Dark"], default: "Light" },
+      { name: "Colors", key: "k-lib", modes: ["Light"], default: "Light" },
+    ],
+    variables: [
+      { name: "Surface/Page", collection: "Theme", collectionKey: "k-theme", key: "t1", type: "COLOR", values: { Dark: "#121319", Light: "#ffffff" } },
+      { name: "Text/Main", collection: "Theme", collectionKey: "k-theme", key: "t2", type: "COLOR", values: { Dark: "#ffffff", Light: "#121319" } },
+      { name: "Lib/Ink", collection: "Colors", collectionKey: "k-lib", key: "l1", type: "COLOR", values: { Light: "#e6e0e9" } },
+    ],
+  });
+  const inkText: NodeInput = { type: "TEXT", id: "3:1", name: "Btn Text", text: "Save", font: { family: "Inter", size: 14 }, fills: [solid("#e6e0e9", "Lib/Ink")] };
+  const mixDoc = screenExport([
+    { type: "FRAME", id: "1:1", name: "Settings", resolvedModes: { Theme: "Dark", Colors: "Light" }, tokens: { fills: "Surface/Page" }, children: [text("2:1", "Inter", null, "Text/Main"), inkText] },
+  ], { screen: "Settings" });
+  ok("[L6-1] mixed-mode-bindings: a variable whose collectionKey names the ONE-mode `Colors` is not read as the two-mode `Colors` (no mix)",
+    !has(crossCheck({ screens: [{ doc: mixDoc, label: "Settings" }], variables: mixVars }), "mixed-mode-bindings"));
+
+  // token-pair-contrast: no resolvedModes entry, so each variable renders in its collection's default — the
+  // LIBRARY `Colors` (default Dark) for k-lib rows, not the design system's (default Light).
+  const pairVars = (collectionKey: string) => tokens({
+    collections: [
+      { name: "Colors", key: "k-sys", modes: ["Light", "Dark"], default: "Light" },
+      { name: "Colors", key: "k-lib", modes: ["Light", "Dark"], default: "Dark" },
+    ],
+    variables: [
+      { name: "Bg/Page", collection: "Colors", collectionKey, key: "v1", type: "COLOR", values: { Light: "#ffffff", Dark: "#121319" } },
+      { name: "Text/Soft", collection: "Colors", collectionKey, key: "v2", type: "COLOR", values: { Light: "#c0c0c8", Dark: "#ffffff" } },
+    ],
+  });
+  const pairDoc = screenExport([
+    { type: "FRAME", id: "1:1", name: "Profile", tokens: { fills: "Bg/Page" }, fills: [solid("#121319", "Bg/Page")],
+      children: [{ type: "TEXT", id: "2:1", name: "Label", text: "Roles", font: { family: "Inter", size: 14 }, tokens: { fills: "Text/Soft" } }] },
+  ], { screen: "Profile" });
+  const pairsWith = (key: string) => crossCheck({ screens: [{ doc: pairDoc, label: "Profile" }], variables: pairVars(key) }).findings.find((x) => x.code === "token-pair-contrast")?.tokenPairs ?? [];
+  ok("[L6-2] token-pair-contrast: rows keyed to the library `Colors` render in ITS default (Dark: white on near-black passes) — no row",
+    pairsWith("k-lib").length === 0);
+  ok("[L6-2] …and the same rows keyed to the design system's `Colors` render in Light (#c0c0c8 on #ffffff fails) — one row in 'Light'",
+    (() => { const p = pairsWith("k-sys"); return p.length === 1 && p[0]?.fg === "Text/Soft" && p[0].mode === "Light"; })());
+}
+
+// ---------------------------------------------------------------- DT-63: token pairs in the rendered mode
+console.log("cross-check — DT-63: failing token pairs in the RENDERED mode, one table per run:");
+{
+  const vars = tokens({
+    collections: [{ name: "Sem", key: "c1", modes: ["Dark", "Light"], default: "Dark" }, { name: "Prim", key: "c2", modes: ["Mode 1"], default: "Mode 1" }],
+    variables: [
+      { name: "Gray/900", collection: "Prim", key: "p1", type: "COLOR", values: { "Mode 1": "#121319" } },
+      { name: "Bg/Page", collection: "Sem", key: "s1", type: "COLOR", values: { Dark: { aliasOf: "Gray/900" }, Light: "#ffffff" } },
+      { name: "Bg/Input", collection: "Sem", key: "s2", type: "COLOR", values: { Dark: "#1d1d1f", Light: "#f4f4f4" } },
+      { name: "Border", collection: "Sem", key: "s3", type: "COLOR", values: { Dark: "#46464f", Light: "#c0c0c8" } },
+      { name: "Accent", collection: "Sem", key: "s4", type: "COLOR", values: { Dark: "#c6bfff", Light: "#4b3fcf" } },
+      { name: "Text/Main", collection: "Sem", key: "s5", type: "COLOR", values: { Dark: "#ffffff", Light: "#121319" } },
+      { name: "Bg/Card", collection: "Sem", key: "s6", type: "COLOR", values: { Dark: "#ffffff", Light: "#ffffff" } },
+      { name: "Bg/Soft", collection: "Sem", key: "s7", type: "COLOR", values: { Dark: "#e0e0e0", Light: "#e0e0e0" } },
+      { name: "Border/Strong", collection: "Sem", key: "s8", type: "COLOR", values: { Dark: "#8a8a8a", Light: "#8a8a8a" } },
+    ],
+  });
+  const STROKE = { colors: ["#46464f"], weight: 1, align: "inside" as const };
+  const field = (id: string, extra: Partial<NodeInput> = {}): NodeInput => ({
+    type: "INSTANCE", id, name: "Input Field", mainComponent: { name: "State=Default", key: "fk", setKey: "fs", setName: "Input Field" },
+    tokens: { fills: "Bg/Input", strokes: "Border" }, strokes: STROKE,
+    fills: [{ type: "solid", color: "#1d1d1f", tokens: { color: "Bg/Input" } }], ...extra,
+  });
+  // the accent button: stroke token == its own fill token, and that fill stands out on the page (≥ 3:1)
+  const button: NodeInput = { type: "INSTANCE", id: "9:1", name: "Button", tokens: { fills: "Accent", strokes: "Accent" }, strokes: { colors: ["#c6bfff"], weight: 1 }, fills: [{ type: "solid", color: "#c6bfff", tokens: { color: "Accent" } }] };
+  const page = (label: string, id: string, children: NodeInput[]): CrossCheckScreen => ({
+    doc: screenExport([{ type: "FRAME", id, name: label, resolvedModes: { Sem: "Dark", Prim: "Mode 1" }, tokens: { fills: "Bg/Page" }, children }], { screen: label }),
+    label,
+  });
+  // a soft field on a white card: its border passes against the CARD (3.4:1) but not against its own fill
+  // (2.6:1), and the fill does not draw the boundary (1.3:1) — WCAG 1.4.11 asks about the card, so no row
+  const card: NodeInput = { type: "FRAME", id: "8:1", name: "Card", tokens: { fills: "Bg/Card" }, children: [
+    field("8:2", { tokens: { fills: "Bg/Soft", strokes: "Border/Strong" }, fills: [{ type: "solid", color: "#e0e0e0", tokens: { color: "Bg/Soft" } }] }),
+  ] };
+  // a filled switch whose dim border fails on the page, but whose fill stands out 3:1 — the fill is the boundary
+  const chip: NodeInput = { type: "INSTANCE", id: "9:2", name: "Switch", tokens: { fills: "Accent", strokes: "Border" }, strokes: STROKE, fills: [{ type: "solid", color: "#c6bfff", tokens: { color: "Accent" } }] };
+  // D126: a badge's border is decoration, not a control's boundary — no stroke row however dim
+  const badge: NodeInput = { type: "INSTANCE", id: "9:3", name: "Badge", mainComponent: { name: "Type=Neutral", key: "bk", setKey: "bs", setName: "Badge" }, tokens: { strokes: "Border" }, strokes: STROKE };
+  const A = page("Form A", "1:1", [field("1:2"), button, chip, badge, card, text("1:3", "Inter", null, "Text/Main")]);
+  const B = page("Form B", "2:1", [field("2:2"), field("2:3", { props: { State: "Disabled" }, mainComponent: { name: "State=Disabled", key: "fk2", setKey: "fs", setName: "Input Field" } })]);
+  const res = crossCheck({ screens: [A, B], variables: vars });
+  const all = res.findings.filter((x) => x.code === "token-pair-contrast");
+  const rows = all[0]?.tokenPairs ?? [];
+  const row = rows[0];
+  ok("[DT63-T1] two screens with the same stroke/background pair -> ONE info, ONE row covering both screens",
+    all.length === 1 && all[0]?.severity === "info" && rows.length === 1 && row?.screens.join() === "Form A,Form B");
+  ok("[DT63-T1] the row: non-text, the border against the PAGE around the field (not the field's own fill), in the rendered mode, 1.99:1 < 3:1",
+    row?.kind === "non-text" && row.fg === "Border" && row.bg === "Bg/Page" && row.mode === "Dark" && row.ratio === 1.99 && row.required === 3);
+  ok("[DT63-T1] nodes: the two enabled fields only (the Disabled variant is exempt)", row?.nodes.join() === "1:2,2:2");
+  ok("[DT63-T2] a stroke equal to its own fill, on a page that fill contrasts with, is no row (WCAG 1.4.11: the colour outside the control)",
+    !rows.some((r) => r.fg === "Accent"));
+  ok("[DT63-T2] a dim border around a fill that contrasts 3:1 with the page is no node of the row (the fill rescues it)",
+    !(row?.nodes ?? []).includes("9:2"));
+  ok("[DT63-T2/D126] a badge's dim border is no row (stroke rows cover inputs, selects and toggles only)",
+    !(row?.nodes ?? []).includes("9:3") && rows.length === 1);
+  ok("[DT63-T2] a border that passes against the card around it is no row, though it fails against its own fill",
+    !rows.some((r) => r.fg === "Border/Strong"));
+  ok("[DT63-T3] the message is a question once per pair, and the field `pairs` stays derived-mode-contrast's",
+    /^1 token pair\(s\) fail WCAG in the rendered mode\(s\) — ask the designer once per pair: stroke 'Border' on 'Bg\/Page' \(Dark\) 1\.99:1 < 3:1 — 2 screen\(s\)/.test(all[0]?.message ?? "") && all[0]?.pairs === undefined);
+  ok("[DT63-T3] the cross-check markdown prints the table", /## Token pairs below WCAG in the rendered modes[\s\S]*\| non-text \| `Border` \| `Bg\/Page` \| Dark \| 1\.99:1 \| 3:1 \| 2: Form A, Form B \|/.test(toMarkdown(res)));
+  // Text pairs: 4.5:1, 3:1 for large text (≥ 24px).
+  const dim: NodeInput = { type: "TEXT", id: "5:1", name: "Hint", text: "Search", font: { family: "Inter", size: 14 }, tokens: { fills: "Border" } };
+  const big: NodeInput = { type: "TEXT", id: "5:2", name: "Title", text: "Search", font: { family: "Inter", size: 28 }, tokens: { fills: "Accent" } };
+  const t = crossCheck({ screens: [page("Form C", "3:1", [dim, big])], variables: vars }).findings.find((x) => x.code === "token-pair-contrast")?.tokenPairs ?? [];
+  ok("[DT63-T4] text on its backdrop at 4.5:1 is a text row; large text that passes 3:1 is none",
+    t.length === 1 && t[0]?.kind === "text" && t[0].fg === "Border" && t[0].required === 4.5);
+  // The per-screen audit does not merge cross-file info: the run's table is not doubled into its findings.
+  // Real-shaped: what the CLI passes — the screen's own .vars.json slice, the merged variables.json and the
+  // design-system dir's tokens; the cross-file pass's warnings ARE merged, its info never.
+  for (const [how, opts] of [["variables only", { variables: vars }], ["--design-system", { variables: vars, designSystem: { tokens: vars } }]] as const) {
+    const au = audit([{ doc: A.doc ?? null, label: "Form A", vars }], opts);
+    const cf = (au.crossFile && au.crossFile.findings) || [];
+    ok(`[DT63-T5] audit (${how}): the table is in crossFile as info only, never a merged audit finding`,
+      au.findings.every((x) => x.code !== "token-pair-contrast") && cf.filter((x) => x.code === "token-pair-contrast").map((x) => x.severity).join() === "info");
+  }
+}
+
+// ---------------------------------------------------------------- review 1 of groups 18+19, fix pass 1 (D127)
+console.log("cross-check — token pairs, fix pass 1 (unknown backdrops, the colour outside the control, rendered mode, large text, disabled):");
+{
+  const vars = tokens({
+    collections: [{ name: "Sem", key: "c1", modes: ["Dark", "Light"], default: "Dark" }],
+    variables: [
+      { name: "Bg/Page", collection: "Sem", key: "s1", type: "COLOR", values: { Dark: "#121319", Light: "#ffffff" } },
+      { name: "Bg/Card", collection: "Sem", key: "s2", type: "COLOR", values: { Dark: "#1d1d1f", Light: "#ffffff" } },
+      { name: "Bg/Input", collection: "Sem", key: "s3", type: "COLOR", values: { Dark: "#1d1d1f", Light: "#f4f4f4" } },
+      { name: "Bg/Soft", collection: "Sem", key: "s4", type: "COLOR", values: { Dark: "#e0e0e0", Light: "#e0e0e0" } },
+      { name: "Bg/White", collection: "Sem", key: "s5", type: "COLOR", values: { Dark: "#ffffff", Light: "#ffffff" } },
+      { name: "Static/Black", collection: "Sem", key: "s6", type: "COLOR", values: { Dark: "#000000", Light: "#000000" } },
+      { name: "Text/Muted", collection: "Sem", key: "s7", type: "COLOR", values: { Dark: "#ffffff", Light: "#c0c0c8" } },
+      { name: "Text/Faint", collection: "Sem", key: "s8", type: "COLOR", values: { Dark: "#2a2a2a", Light: "#121319" } },
+      { name: "Text/Large", collection: "Sem", key: "s9", type: "COLOR", values: { Dark: "#7a7a85", Light: "#7a7a85" } },
+      { name: "Border", collection: "Sem", key: "s10", type: "COLOR", values: { Dark: "#46464f", Light: "#c0c0c8" } },
+      { name: "Border/Strong", collection: "Sem", key: "s11", type: "COLOR", values: { Dark: "#8a8a8a", Light: "#8a8a8a" } },
+    ],
+  });
+  const solid = (color: string, token?: string) => ({ type: "solid" as const, color, ...(token ? { tokens: { color: token } } : {}) });
+  const label = (id: string, token: string, size = 14): NodeInput => ({ type: "TEXT", id, name: "Label", text: "Roles", font: { family: "Inter", size }, tokens: { fills: token } });
+  const scr = (name: string, children: NodeInput[], mode = "Dark"): CrossCheckScreen => ({
+    doc: screenExport([{ type: "FRAME", id: "1:1", name, resolvedModes: { Sem: mode }, tokens: { fills: "Bg/Page" }, fills: [solid(mode === "Dark" ? "#121319" : "#ffffff", "Bg/Page")], children }], { screen: name }),
+    label: name,
+  });
+  const pairs = (...screens: CrossCheckScreen[]) => crossCheck({ screens, variables: vars }).findings.find((x) => x.code === "token-pair-contrast")?.tokenPairs ?? [];
+  const frame = (id: string, fills: NonNullable<NodeInput["fills"]>, children: NodeInput[], extra: Partial<NodeInput> = {}): NodeInput => ({ type: "FRAME", id, name: "Selected item", fills, children, ...extra });
+
+  // H-1: an untokenised gradient / raw / translucent fill between the text and the nearest token backdrop makes it unknown.
+  const grad = { type: "gradient" as const, kind: "GRADIENT_LINEAR" as const, stops: [{ pos: 0, color: "#c6bfff" }, { pos: 1, color: "#ffffff" }] };
+  ok("[H-1] black text on a gradient highlight inside a dark token page → no row (the audit's contrast-manual covers it)", pairs(scr("Side menu", [frame("2:1", [grad], [label("2:2", "Static/Black")])])).length === 0);
+  ok("[H-1] …nor on a raw, untokenised #f4f4f4 card", pairs(scr("Side menu", [frame("2:1", [solid("#f4f4f4")], [label("2:2", "Static/Black")])])).length === 0);
+  ok("[H-1] …nor on a translucent token-bound fill (the composite is no token's value)", pairs(scr("Side menu", [frame("2:1", [solid("#1d1d1f80", "Bg/Card")], [label("2:2", "Static/Black")])])).length === 0);
+  const card = pairs(scr("Side menu", [frame("2:1", [solid("#1d1d1f", "Bg/Card")], [label("2:2", "Static/Black")])]));
+  ok("[H-1] control: on an opaque token-bound card the pair is judged against the CARD", card.length === 1 && card[0]?.fg === "Static/Black" && card[0].bg === "Bg/Card");
+  ok("[H-1] a fully transparent raw fill paints nothing: the page token stays the backdrop",
+    pairs(scr("Side menu", [frame("2:1", [solid("#f4f4f400")], [label("2:2", "Static/Black")])]))[0]?.bg === "Bg/Page");
+  // …and the derived-mode check walks the same backdrop (walkWithBg): Text/Muted fails on the page only in Light.
+  const derived = (kids: NodeInput[]) => crossCheck({ screens: [scr("Side menu", kids)], variables: vars }).findings.some((x) => x.code === "derived-mode-contrast");
+  ok("[H-1] derived-mode-contrast: a text on the page is judged in the undrawn Light mode", derived([label("2:2", "Text/Muted")]));
+  ok("[H-1] derived-mode-contrast: the same text on a gradient highlight is not (its backdrop is unknown)", !derived([frame("2:1", [grad], [label("2:2", "Text/Muted")])]));
+
+  // M-6: the RENDERED mode is the root's resolvedModes entry, not the collection's default.
+  const light = pairs(scr("Profile", [label("3:1", "Text/Muted"), label("3:2", "Text/Faint")], "Light"));
+  ok("[M-6] a Light screen (default Dark): the pair failing only in Light is a row in mode 'Light' (#c0c0c8 on #ffffff 1.81:1)",
+    light.length === 1 && light[0]?.fg === "Text/Muted" && light[0].mode === "Light" && light[0].ratio === 1.81);
+  ok("[M-6] …and the pair failing only in Dark is absent", !light.some((p) => p.fg === "Text/Faint"));
+
+  // L-1 / C6: large text needs 3:1 — a 28px label at 4.37:1 passes, the same label at 14px does not.
+  ok("[L-1 C6] large text (28px) at 4.37:1 is no row; at 14px it is one (needs 4.5:1)",
+    pairs(scr("Profile", [label("3:3", "Text/Large", 28)])).length === 0 && pairs(scr("Profile", [label("3:3", "Text/Large", 14)]))[0]?.required === 4.5);
+
+  // M-2: the border vs the colour OUTSIDE the control, also when the fill is on the instance and the border on an inner frame.
+  const field = (id: string, instFill: string, fillTok: string, strokeTok: string, strokeHex: string, extra: Partial<NodeInput> = {}): NodeInput => ({
+    type: "INSTANCE", id, name: "Input Field", mainComponent: { name: "State=Default", key: "fk", setKey: "fs", setName: "Input Field" },
+    tokens: { fills: fillTok }, fills: [solid(instFill, fillTok)], ...extra,
+    children: [{ type: "FRAME", id: `I${id};1`, name: "Container", tokens: { strokes: strokeTok }, strokes: { colors: [strokeHex], weight: 1, align: "inside" } }],
+  });
+  const onCard = frame("4:1", [solid("#ffffff", "Bg/White")], [field("4:2", "#e0e0e0", "Bg/Soft", "Border/Strong", "#8a8a8a")], { name: "Card" });
+  ok("[M-2] split layers: a border that passes against the white card around the control (3.4:1) but not against the instance's own fill (2.6:1) is no row",
+    !pairs(scr("Form", [onCard])).some((p) => p.fg === "Border/Strong"));
+  const dark = pairs(scr("Form", [field("4:3", "#1d1d1f", "Bg/Input", "Border", "#46464f")]));
+  ok("[M-2] split layers: a border that fails is a row against the PAGE (the colour outside), never the instance's Bg/Input",
+    dark.length === 1 && dark[0]?.fg === "Border" && dark[0].bg === "Bg/Page" && dark[0].nodes.join() === "I4:3;1");
+  ok("[M-2] split layers: the instance's fill reaching 3:1 against the page draws the boundary → no row",
+    pairs(scr("Form", [field("4:4", "#ffffff", "Bg/White", "Border", "#46464f")])).length === 0);
+
+  // M-5: 'Disabled=True' is a disabled variant here too (one helper with the audit).
+  ok("[M-5] a 'Size=M, Disabled=True' field (props Disabled: \"True\") is exempt",
+    pairs(scr("Form", [field("4:5", "#1d1d1f", "Bg/Input", "Border", "#46464f", { props: { Size: "M", Disabled: "True" }, mainComponent: { name: "Size=M, Disabled=True", key: "fk3", setKey: "fs", setName: "Input Field" } })])).length === 0);
+  // L-2: a fully transparent stroke paints no border.
+  ok("[L-2] a 0-opacity border (#46464f00) is no row", pairs(scr("Form", [field("4:6", "#1d1d1f", "Bg/Input", "Border", "#46464f00")])).length === 0);
 }
 
 report();

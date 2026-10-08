@@ -28,6 +28,11 @@ function parseHex(v) {
   const n = (i) => parseInt(k.slice(i, i + 2), 16);
   return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
 }
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
 function clampOpacityPct(n) {
   return Math.min(100, Math.max(0, n));
 }
@@ -756,7 +761,7 @@ function isVerifyReport(x) {
   return isObj2(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -765,7 +770,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj2(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "waivers", "descopes"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj2)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -801,6 +806,48 @@ function isStringRecord(x) {
   return isObj2(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
+
+// design-to-code/control-kind.ts
+var TOGGLE_WORD = /\b(checkbox|check box|radio|switch|toggle)\b/i;
+function controlKind(name) {
+  const s = String(name || "");
+  const toggle = TOGGLE_WORD.test(s);
+  if (!toggle && /\b(select|dropdown|drop ?down|combo ?box|multi-?select|picker)\b/i.test(s.replace(/\bselect ?all\b/gi, ""))) return "select";
+  if (/\b(input|text ?field|textfield|search|textarea)\b/i.test(s)) return "input";
+  if (toggle) return "toggle";
+  if (/\b(tab|tabs|segmented|nav ?item|navigation item)\b/i.test(s)) return "tab";
+  if (/\blink\b/i.test(s)) return "link";
+  if (/\b(button|btn|cta|icon ?button|chip)\b/i.test(s)) return "button";
+  return null;
+}
+var isBoundaryKind = (a) => [a.name, a.mainComponent && a.mainComponent.setName, a.component].some((l) => {
+  const k = controlKind(l);
+  return k === "input" || k === "select" || k === "toggle";
+});
+function outermostControl(near) {
+  for (let i = 0; i < near.length; i++) {
+    const a = near[i];
+    if (a && a.type === "INSTANCE" && isBoundaryKind(a)) return i;
+  }
+  for (let i = near.length - 1; i >= 0; i--) {
+    const a = near[i];
+    if (a && isBoundaryKind(a)) return i;
+  }
+  return -1;
+}
+var DISABLED_WORD = /^(disabled|inactive|is ?disabled)$/i;
+var ON_VALUE = /^(true|yes|on)$/i;
+function isDisabledLayer(layer) {
+  for (const part of String(layer.mainComponent && layer.mainComponent.name || "").split(",")) {
+    const [k = "", v = ""] = part.split("=").map((x) => x.trim());
+    if (DISABLED_WORD.test(v) || DISABLED_WORD.test(k) && ON_VALUE.test(v)) return true;
+  }
+  for (const [k, v] of Object.entries(layer.props || {})) {
+    if (DISABLED_WORD.test(k.trim()) && (v === true || typeof v === "string" && ON_VALUE.test(v.trim()))) return true;
+    if (!layer.mainComponent && typeof v === "string" && /^disabled$/i.test(v.trim())) return true;
+  }
+  return false;
+}
 
 // design-to-code/design-system-dir.ts
 import fs4 from "node:fs";
@@ -879,7 +926,12 @@ function findExportNeighbours(screenFile) {
     const m = /^(\d+_\d+)(?:_ref(?:-[0-9A-Za-z]+(?:_\d+)?)?|_shot@[\d.]+x)\.png$/.exec(f);
     if (m && m[1] && !known.has(m[1])) shots.add(m[1].replace("_", ":"));
   }
-  return { layers, unexportedShots: [...shots].sort(), textsOf };
+  const exportedIds = new Set(layers.map((l) => l.id));
+  for (const pd of index.pageDirs) {
+    if (!pd.dir || /[\\/]/.test(pd.dir) || pd.dir === "..") continue;
+    for (const l of readJsonOrNull(path2.join(pages, pd.dir, "index.json"), isPageIndex)?.layers ?? []) exportedIds.add(l.id);
+  }
+  return { layers, unexportedShots: [...shots].sort(), textsOf, exportedIds };
 }
 
 // design-to-code/slice-sources.ts
@@ -1105,13 +1157,20 @@ function crossCheck(input) {
   if (foreignPatch) {
     const fp = foreignPatch;
     const foreignNames = new Set(fp.foreign.map((f2) => f2.name));
+    const foreignKeys = new Set(fp.foreign.map((f2) => f2.key).filter((k) => !!k));
+    const screenKeys = new Set(screenColls.map((c) => c.key).filter((k) => !!k));
+    const sharedNames = new Set(screenColls.filter((c) => c.key && dsCollByKey.has(c.key) && foreignNames.has(c.name)).map((c) => c.name));
     const nameMap = { agree: 0, differ: 0, undecidable: 0, absent: 0 };
+    let ambiguous = 0;
     const seen = /* @__PURE__ */ new Set();
     for (const v of screenVars) {
-      if (!v || !v.name || !v.collection || !foreignNames.has(v.collection)) continue;
+      if (!v || !v.name || !v.collection) continue;
+      const byKey = !!v.collectionKey && screenKeys.has(v.collectionKey);
+      if (byKey ? !foreignKeys.has(v.collectionKey ?? "") : !foreignNames.has(v.collection)) continue;
       const id = v.key || `${v.collection}\0${v.name}`;
       if (seen.has(id)) continue;
       seen.add(id);
+      if (!byKey && sharedNames.has(v.collection)) ambiguous++;
       const dv = dsVarByName.get(v.name);
       if (!dv) {
         nameMap.absent++;
@@ -1125,12 +1184,12 @@ function crossCheck(input) {
     const n = seen.size;
     let offline = "";
     if (n) {
-      offline = `Offline check (no Figma needed): of the ${n} variables in those collections, ${nameMap.agree} have a design-system variable of the same name resolving the same in every shared mode, ${nameMap.differ} resolve differently (listed as token-name-collision), ${nameMap.undecidable} cannot be compared (no shared mode), ${nameMap.absent} have no same-name variable. ` + (nameMap.differ === 0 && nameMap.agree > 0 ? `Mapping by NAME is safe for the ${nameMap.agree}: the screen's own .vars.json is the ground truth for names and values. ` : "") + (nameMap.agree === 0 && nameMap.absent === n ? `None of them exists here by name \u2014 this is not the screen's library; pull the one it uses. ` : "");
+      offline = `Offline check (no Figma needed): of the ${n} variables in those collections, ${nameMap.agree} have a design-system variable of the same name resolving the same in every shared mode, ${nameMap.differ} resolve differently (listed as token-name-collision), ${nameMap.undecidable} cannot be compared (no shared mode), ${nameMap.absent} have no same-name variable. ` + (nameMap.differ === 0 && nameMap.agree > 0 ? `Mapping by NAME is safe for the ${nameMap.agree}: the screen's own .vars.json is the ground truth for names and values. ` : "") + (nameMap.agree === 0 && nameMap.absent === n ? `None of them exists here by name \u2014 this is not the screen's library; pull the one it uses. ` : "") + (ambiguous ? `(${ambiguous} of them come from a collection whose name a design-system collection also has \u2014 this export predates collection keys on variables; re-pull to tell them apart.) ` : "");
     }
     const f = findings[fp.at];
     if (f) {
       f.message = fp.head + offline + fp.tail;
-      f.nameMap = nameMap;
+      f.nameMap = ambiguous ? { ...nameMap, ambiguous } : nameMap;
     }
   }
   if (tokens && screenVarByName.size) {
@@ -1462,7 +1521,9 @@ function crossCheck(input) {
       );
     }
   }
+  mixedModeBindings(screens, variables, tokens, push);
   contrastPerMode(screens, variables, tokens, push, resolvedModes);
+  contrastRendered(screens, variables, tokens, push);
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
   const ids = findingIds(findings);
   findings.forEach((f, i) => {
@@ -1570,6 +1631,28 @@ function composedRgba(color, opacity) {
   if (!color || opacity === null || !Number.isFinite(opacity)) return null;
   return { ...color, a: composeAlpha(color.a, opacity) };
 }
+var aliasName = (val) => val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
+function resolveNumberWith(valueOf, name, depth) {
+  if (depth > 8) return null;
+  const val = valueOf(name);
+  if (typeof val === "number") return Number.isFinite(val) ? val : null;
+  const next = aliasName(val);
+  return next ? resolveNumberWith(valueOf, next, depth + 1) : null;
+}
+function resolveColourWith(valueOf, name, depth) {
+  if (depth > 8) return null;
+  const val = valueOf(name);
+  if (typeof val === "string") return parseHex(val);
+  const next = aliasName(val);
+  if (next) return resolveColourWith(valueOf, next, depth + 1);
+  if (val && typeof val === "object" && "composed" in val) {
+    const { color, opacity } = val.composed;
+    const c = typeof color === "string" ? parseHex(color) : resolveColourWith(valueOf, color.aliasOf, depth + 1);
+    const o = typeof opacity === "number" ? opacity : resolveNumberWith(valueOf, opacity.aliasOf, depth + 1);
+    return composedRgba(c, o);
+  }
+  return null;
+}
 function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
   const defs = /* @__PURE__ */ new Map();
   for (const v of tokens && tokens.variables || []) if (v.name) defs.set(v.name, v);
@@ -1584,28 +1667,7 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
     const [onlyKey] = keys;
     return keys.length === 1 && onlyKey !== void 0 ? v.values[onlyKey] : void 0;
   }
-  const aliasName = (val) => val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
-  function resolveNumber(name, mode, depth) {
-    if (depth > 8) return null;
-    const val = valueIn(name, mode);
-    if (typeof val === "number") return Number.isFinite(val) ? val : null;
-    const next = aliasName(val);
-    return next ? resolveNumber(next, mode, depth + 1) : null;
-  }
-  function resolve(name, mode, depth) {
-    if (depth > 8) return null;
-    const val = valueIn(name, mode);
-    if (typeof val === "string") return parseHex(val);
-    const next = aliasName(val);
-    if (next) return resolve(next, mode, depth + 1);
-    if (val && typeof val === "object" && "composed" in val) {
-      const { color, opacity } = val.composed;
-      const c = typeof color === "string" ? parseHex(color) : resolve(color.aliasOf, mode, depth + 1);
-      const o = typeof opacity === "number" ? opacity : resolveNumber(opacity.aliasOf, mode, depth + 1);
-      return composedRgba(c, o);
-    }
-    return null;
-  }
+  const resolve = (name, mode, depth) => resolveColourWith((n) => valueIn(n, mode), name, depth);
   const modes = /* @__PURE__ */ new Set();
   const allColls = (tokens && tokens.collections || []).concat(variables && variables.collections || []);
   for (const c of allColls) {
@@ -1658,11 +1720,223 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
 function walkWithBg(node, bgToken, fn) {
   if (!node || typeof node !== "object") return;
   if (hiddenSelf(node)) return;
-  let bg = bgToken;
-  const own = node.tokens && node.tokens.fills || (node.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
-  if (own && typeof own === "string" && node.type !== "TEXT") bg = own;
+  const bg = backdropTokenAfter(node, bgToken);
   fn(node, bg);
   for (const c of node.children || []) walkWithBg(c, bg, fn);
+}
+function backdropTokenAfter(n, above) {
+  if (n.type === "TEXT") return above;
+  const fills = (n.fills || []).filter(Boolean);
+  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+  if (!fills.length) return nodeTok ?? above;
+  let cur = above;
+  for (const f of fills) {
+    if (f.opacity === 0) continue;
+    if (f.type !== "solid") {
+      cur = null;
+      continue;
+    }
+    const c = parseHex(f.color);
+    if (c && c.a <= 0) continue;
+    const t = f.tokens && f.tokens.color;
+    const tok = typeof t === "string" && t ? t : fills.length === 1 ? nodeTok : null;
+    cur = tok && (!c || c.a >= 1) ? tok : null;
+  }
+  return cur;
+}
+function fillToken(n) {
+  const own = n.tokens && n.tokens.fills || (n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
+  return own && typeof own === "string" ? own : null;
+}
+function textToken(n) {
+  const t = n.tokens || {}, tt = n.textTokens || {};
+  for (const x of [t.fills, t.textRangeFills, fillToken(n), tt.fills]) if (typeof x === "string" && x) return x;
+  return null;
+}
+function colourBindings(n) {
+  const out = [];
+  const add = (x) => {
+    for (const s of Array.isArray(x) ? x : [x]) if (typeof s === "string" && s && !out.includes(s)) out.push(s);
+  };
+  for (const [k, v] of Object.entries(n.tokens || {})) if (/fill|stroke/i.test(k)) add(v);
+  for (const f of n.fills || []) add(f && f.tokens && f.tokens.color);
+  add((n.textTokens || {}).fills);
+  return out;
+}
+function mixedModeBindings(screens, variables, tokens, push) {
+  for (const s of screens) {
+    const label = s.label || screenExportOf(s.doc)?.screen || "screen";
+    const defs = /* @__PURE__ */ new Map();
+    for (const doc of [tokens, variables, s.vars || null]) for (const v of doc && doc.variables || []) if (v.name) defs.set(v.name, v);
+    const colls = [...s.vars && s.vars.collections || [], ...variables && variables.collections || [], ...tokens && tokens.collections || []];
+    const collOf = (v) => {
+      const keyed = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && Array.isArray(c.modes)) : void 0;
+      if (keyed) return keyed;
+      const named = colls.filter((c) => c.name === v.collection && Array.isArray(c.modes));
+      const modes = Object.keys(v.values || {});
+      return named.find((c) => modes.every((m) => c.modes.includes(m))) ?? named[0];
+    };
+    for (const root of screenRoots(s.doc)) {
+      const rm = root.resolvedModes;
+      if (!rm) continue;
+      const use = /* @__PURE__ */ new Map();
+      walk(root, (n) => {
+        for (const name of colourBindings(n)) {
+          const v = defs.get(name);
+          if (!v || v.type !== "COLOR") continue;
+          const c = collOf(v);
+          const mode = c ? rm[c.name] : void 0;
+          if (!c || c.modes.length < 2 || mode === void 0) continue;
+          const u = getOrInit(use, c.name, () => ({ coll: c, mode, count: 0, tokens: [], nodes: [], samples: [] }));
+          u.count++;
+          if (!u.tokens.includes(name) && u.tokens.length < 20) u.tokens.push(name);
+          if (!u.nodes.includes(n.id) && u.nodes.length < 8) u.nodes.push(n.id);
+          if (u.samples.length < 3) u.samples.push(`'${name}' on '${n.name}'`);
+        }
+      });
+      const groups = [];
+      for (const u of use.values()) {
+        const joined = groups.filter((g) => g.some((o) => o.coll.modes.some((m) => u.coll.modes.includes(m))));
+        const merged = [...joined.flat(), u];
+        for (const g of joined) groups.splice(groups.indexOf(g), 1);
+        groups.push(merged);
+      }
+      for (const group of groups) {
+        const perMode = /* @__PURE__ */ new Map();
+        for (const u of group) perMode.set(u.mode, (perMode.get(u.mode) || 0) + u.count);
+        if (perMode.size < 2) continue;
+        const [major] = [...perMode].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] ?? [];
+        if (major === void 0) continue;
+        const majority = group.filter((u) => u.mode === major);
+        const minority = group.filter((u) => u.mode !== major && u.coll.modes.includes(major));
+        const first = minority[0];
+        if (!first) continue;
+        const names = (list) => list.map((u) => `'${u.coll.name}'`).join(", ");
+        const minModes = [...new Set(minority.map((u) => `'${u.mode}'`))].join("/");
+        push(
+          "warning",
+          "mixed-mode-bindings",
+          `'${label}' renders ${names(majority)} in '${major}' (\xD7${perMode.get(major)} bindings) but ` + minority.map((u) => `'${u.coll.name}' in '${u.mode}' (\xD7${u.count}: ${u.samples.join(", ")}${u.count > u.samples.length ? " \u2026" : ""})`).join(", ") + ` \u2014 ${minority.length > 1 ? "tokens from these collections show their" : `a token from '${first.coll.name}' shows its`} ${minModes} value in a '${major}' screen. Pin ${names(minority)} to '${major}' in Figma (the frame's variable mode), or alias these tokens under a role name in code \u2014 a theme built from one mode per collection gives them their '${major}' value, which nobody drew.`,
+          {
+            ...ifDefined("nodeId", first.nodes[0]),
+            // the first node binding a minority-mode token
+            bindings: [...majority, ...minority].map((u) => ({ collection: u.coll.name, mode: u.mode, tokens: u.tokens, nodes: u.nodes })),
+            confirm: `'${label}' binds ${minority.reduce((k, u) => k + u.count, 0)} colour token(s) from ${names(minority)} in ${minModes} while the rest of the screen is '${major}' \u2014 intended, or should they follow '${major}'? Until confirmed, build what was drawn (the ${minModes} values).`
+          }
+        );
+      }
+    }
+  }
+}
+var LARGE_TEXT_PX = 24;
+var LARGE_BOLD_TEXT_PX = 18.66;
+var NON_TEXT_CONTRAST = 3;
+function isLargeText(n) {
+  const f = n.font;
+  const size = f && typeof f.size === "number" ? f.size : 0;
+  const bold = !!f && (typeof f.weightValue === "number" ? f.weightValue >= 700 : /(^|\s)(extra\s*)?(bold|black|heavy)/i.test(f.weight || "") && !/semi|demi/i.test(f.weight || ""));
+  return size >= LARGE_TEXT_PX || size >= LARGE_BOLD_TEXT_PX && bold;
+}
+var isDisabledVariant = (n) => n.type === "INSTANCE" && isDisabledLayer(n);
+function contrastRendered(screens, variables, tokens, push) {
+  const rows = /* @__PURE__ */ new Map();
+  for (const s of screens) {
+    const label = s.label || screenExportOf(s.doc)?.screen || "screen";
+    const defs = /* @__PURE__ */ new Map();
+    for (const doc of [tokens, variables, s.vars || null]) for (const v of doc && doc.variables || []) if (v.name) defs.set(v.name, v);
+    if (!defs.size) continue;
+    const colls = [...s.vars && s.vars.collections || [], ...variables && variables.collections || [], ...tokens && tokens.collections || []];
+    for (const root of screenRoots(s.doc)) {
+      const rm = root.resolvedModes || {};
+      const modeOf = (v) => {
+        const keys = Object.keys(v.values || {});
+        const coll = v.collection;
+        const r = coll !== void 0 ? rm[coll] : void 0;
+        if (r !== void 0 && keys.includes(r)) return r;
+        const hasDefault = (c) => c.default !== void 0 && keys.includes(c.default);
+        const byKey = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && hasDefault(c)) : void 0;
+        const def = (byKey ?? colls.find((c) => c.name === coll && hasDefault(c)))?.default;
+        if (def !== void 0) return def;
+        return keys.length === 1 ? keys[0] : void 0;
+      };
+      const valueOf = (name) => {
+        const v = defs.get(name);
+        const m = v ? modeOf(v) : void 0;
+        return v && m !== void 0 ? v.values[m] : void 0;
+      };
+      const resolve = (name) => resolveColourWith(valueOf, name, 0);
+      const modeLabel = (...names) => {
+        const ms = [];
+        for (const nm of names) {
+          const v = defs.get(nm);
+          const m = v && Object.keys(v.values || {}).length > 1 ? modeOf(v) : void 0;
+          if (m !== void 0 && !ms.includes(m)) ms.push(m);
+        }
+        return ms.join("/") || "single mode";
+      };
+      const check = (kind, fgTok, bgTok, required, nodeId) => {
+        const fg = resolve(fgTok), bg = resolve(bgTok);
+        if (!fg || !bg) return;
+        if (kind === "non-text" && fg.a <= 0) return;
+        const r = contrastRatio(fg.a < 1 ? compositeOver(fg, bg) : fg, bg);
+        if (r >= required) return;
+        const mode = modeLabel(fgTok, bgTok);
+        const row = getOrInit(rows, [kind, fgTok, bgTok, mode].join("\0"), () => ({ kind, fg: fgTok, bg: bgTok, mode, ratio: Number(r.toFixed(2)), required, screens: [], nodes: [] }));
+        if (!row.screens.includes(label)) row.screens.push(label);
+        if (row.nodes.length < 4 && !row.nodes.includes(nodeId)) row.nodes.push(nodeId);
+      };
+      const visit = (n, above, disabled, ancestors, aboves) => {
+        if (hiddenSelf(n)) return;
+        const off = disabled || isDisabledVariant(n);
+        const next = backdropTokenAfter(n, above);
+        if (!off && n.type === "TEXT") {
+          const fg = textToken(n);
+          if (fg && above) check("text", fg, above, isLargeText(n) ? NON_TEXT_CONTRAST : MIN_CONTRAST, n.id);
+        } else if (!off && n.type !== "LINE") {
+          const st = n.tokens && n.tokens.strokes;
+          const w = n.strokes ? Math.max(n.strokes.weight || 0, ...Object.values(n.strokes.weights || {}).map((x) => x || 0)) : 0;
+          const colours = n.strokes && n.strokes.colors || [];
+          const painted = !colours.length || colours.some((c) => {
+            const x = parseHex(c);
+            return !x || x.a > 0;
+          });
+          const outer = typeof st === "string" && st && w > 0 && painted ? outermostControl([n, ...ancestors.slice(-3).reverse()]) : -1;
+          const outside = outer < 0 ? null : outer === 0 ? above : aboves[ancestors.length - outer] ?? null;
+          const bg = outside ? resolve(outside) : null;
+          if (typeof st === "string" && outside && bg) {
+            let inner = null, unknown = false;
+            for (const l of [...ancestors.slice(ancestors.length - outer), n]) {
+              const fills = (l.fills || []).filter(Boolean);
+              const lt = !fills.length && l.tokens && typeof l.tokens.fills === "string" ? resolve(l.tokens.fills) : null;
+              if (lt) inner = compositeOver(lt, inner || bg);
+              for (const f of fills) {
+                if (f.opacity === 0) continue;
+                if (f.type !== "solid") {
+                  unknown = true;
+                  break;
+                }
+                const c = parseHex(f.color);
+                if (c && c.a > 0) inner = compositeOver(c, inner || bg);
+              }
+            }
+            const rescued = !!inner && contrastRatio(inner, bg) >= NON_TEXT_CONTRAST;
+            if (!rescued && !unknown) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
+          }
+        }
+        const chain = [...ancestors, n], chainAbove = [...aboves, above];
+        for (const c of n.children || []) visit(c, next, off, chain, chainAbove);
+      };
+      visit(root, null, false, [], []);
+    }
+  }
+  if (!rows.size) return;
+  const list = [...rows.values()].sort((a, b) => b.screens.length - a.screens.length || a.ratio - b.ratio || a.fg.localeCompare(b.fg));
+  push(
+    "info",
+    "token-pair-contrast",
+    `${list.length} token pair(s) fail WCAG in the rendered mode(s) \u2014 ask the designer once per pair: ` + list.slice(0, 8).map((p) => `${p.kind === "text" ? "" : "stroke "}'${p.fg}' on '${p.bg}' (${p.mode}) ${p.ratio}:1 < ${p.required}:1 \u2014 ${p.screens.length} screen(s)`).join("; ") + (list.length > 8 ? `; \u2026 (${list.length} in all \u2014 see tokenPairs)` : "") + `. Token-level: the token-bound background (a gradient / image / raw or translucent fill in between is not judged), no compositing \u2014 the per-screen audit's low-contrast / non-text-contrast / contrast-manual measure what renders.`,
+    { tokenPairs: list }
+  );
 }
 if (false) process.exitCode = main(process.argv.slice(2));
 
@@ -1725,22 +1999,65 @@ function overlaps(a, b) {
   if (!a || !b || typeof a.x !== "number" || typeof a.y !== "number" || typeof b.x !== "number" || typeof b.y !== "number") return true;
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
+var WHITE = { r: 255, g: 255, b: 255, a: 1 };
+var paintToken = (p) => {
+  const t = p.tokens && p.tokens.color;
+  return Array.isArray(t) ? t[0] : t;
+};
+function backdropOf(ancestors) {
+  let bg = null, complex = false, token;
+  for (const a of ancestors) {
+    const layers = [...Array.isArray(a.fills) ? a.fills : [], ...a.__beneath || []];
+    for (const f of layers) {
+      if (f.type === "solid") {
+        const c = parseHex(f.color);
+        if (!c) continue;
+        bg = bg ? over(c, bg) : c.a >= 1 ? c : over(c, WHITE);
+        if (c.a >= 1) complex = false;
+        token = c.a >= 1 ? paintToken(f) : void 0;
+      } else if (f.type === "gradient" || f.type === "image" || f.type === "video") {
+        complex = true;
+        token = void 0;
+      }
+    }
+  }
+  return { bg, complex, ...ifDefined("token", token) };
+}
+var PICKER_PROMPT = /^(select|choose|pick)\b/i;
+var PICKER_ICON = /chevron|arrow-?down|caret|angle-?down|calendar/i;
+function pickerCue(inst) {
+  let icon = null;
+  const visit = (n) => {
+    for (const c of Array.isArray(n.children) ? n.children : []) {
+      if (hiddenSelf(c)) continue;
+      const t = c.type === "TEXT" ? (c.text || "").replace(/\s+/g, " ").trim() : "";
+      if (t && PICKER_PROMPT.test(t)) return `"${t.length > 40 ? t.slice(0, 39) + "\u2026" : t}"`;
+      if (icon === null && PICKER_ICON.test(c.name || "")) icon = `a '${c.name}' layer`;
+      const deeper = visit(c);
+      if (deeper) return deeper;
+    }
+    return null;
+  };
+  return visit(inst) ?? icon;
+}
 var CONTROL_WORD = /\b(button|btn|checkbox|check box|radio|switch|toggle|input|text ?field|textfield|textarea)\b/i;
 var cite = (node) => {
   const t = textOf(node);
   return `'${node.name}'${t ? ` ("${t}")` : ""}`;
 };
 var textExtra = (node) => ifDefined("text", textOf(node) ?? void 0);
-var CONTROL_STATES = ["hover", "pressed", "focus", "disabled", "error", "selected", "loading"];
+var CONTROL_STATES = ["hover", "pressed", "focus", "disabled", "error", "selected", "loading", "open"];
 var STATE_SYNONYMS = {
   hover: /^(hover|hovered|mouse ?over)$/,
   pressed: /^(pressed|press|active|tapped|down)$/,
   focus: /^(focus|focused|focus[- ]visible|keyboard ?focus)$/,
-  disabled: /^(disabled|inactive|is ?disabled)$/,
+  disabled: DISABLED_WORD,
   // Not "danger"/"destructive": those are button STYLE variants (a red button), not an error state.
   error: /^(error|invalid|has ?error|is ?invalid)$/,
   selected: /^(selected|checked|on|active|current|is ?selected)$/,
-  loading: /^(loading|busy|in ?progress|is ?loading)$/
+  loading: /^(loading|busy|in ?progress|is ?loading)$/,
+  // F-48: a select/picker's list (or calendar) drawn as a variant
+  open: /^(open|opened|expanded|is ?open|show ?list|dropdown ?open)$/
 };
 function requiredStates(kind, platform) {
   const pointer = platform === "web";
@@ -1749,6 +2066,9 @@ function requiredStates(kind, platform) {
       return pointer ? ["hover", "pressed", "focus", "disabled"] : ["pressed", "disabled"];
     case "input":
       return ["focus", "error", "disabled"];
+    // F-48: a select/dropdown/picker also has its open list (or calendar) to design — and, in a form, its error
+    case "select":
+      return pointer ? ["hover", "focus", "disabled", "error", "open"] : ["focus", "disabled", "error", "open"];
     case "toggle":
       return ["selected", "disabled"];
     case "tab":
@@ -1759,15 +2079,8 @@ function requiredStates(kind, platform) {
       return [];
   }
 }
-function controlKind(name) {
-  const s = String(name || "");
-  if (/\b(input|text ?field|textfield|search|select|dropdown|textarea)\b/i.test(s)) return "input";
-  if (/\b(checkbox|check box|radio|switch|toggle)\b/i.test(s)) return "toggle";
-  if (/\b(tab|tabs|segmented|nav ?item|navigation item)\b/i.test(s)) return "tab";
-  if (/\blink\b/i.test(s)) return "link";
-  if (/\b(button|btn|cta|icon ?button|chip)\b/i.test(s)) return "button";
-  return null;
-}
+var variantValuesOf = (mc) => String(mc && mc.name || "").split(",").map((p) => (p.split("=")[1] || "").trim().toLowerCase());
+var isField = (k) => k === "input" || k === "select";
 function labelledRoots(doc, label) {
   const exp = isScreenExport(doc) ? doc : null;
   const manifest = exp ? exp.manifest : isLayerFile(doc) ? doc.manifest : void 0;
@@ -1826,6 +2139,11 @@ function audit(input, opts = {}) {
   const hiddenIds = /* @__PURE__ */ new Set();
   const nodesById = /* @__PURE__ */ new Map();
   const navigations = /* @__PURE__ */ new Map();
+  const charOverridden = /* @__PURE__ */ new Set();
+  const cappedInstances = /* @__PURE__ */ new Set();
+  const instanceTexts = [];
+  const boundaries = /* @__PURE__ */ new Map();
+  const pickers = [];
   for (const root of roots) {
     const m = root.manifest || {};
     if (m.truncated) add("blocker", "export-truncated", `export of '${root.label}' was truncated (${m.truncated} subtree(s) past the depth limit) \u2014 the tree is incomplete; re-export a narrower scope before building`, null, { label: root.label });
@@ -1848,9 +2166,13 @@ function audit(input, opts = {}) {
         stateHits[state].push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
       }
     }
-    const variantValues = String(node.mainComponent && node.mainComponent.name || "").split(",").map((p) => (p.split("=")[1] || "").trim().toLowerCase());
-    if (node.type === "TEXT" && VALIDATION_WORDS.test(node.text || "") || VALIDATION_WORDS.test(node.name || "") || controlKind(node.mainComponent && node.mainComponent.setName || node.component) === "input" && variantValues.some((v) => STATE_SYNONYMS.error.test(v))) {
+    const variantValues = variantValuesOf(node.mainComponent);
+    if (node.type === "TEXT" && VALIDATION_WORDS.test(node.text || "") || VALIDATION_WORDS.test(node.name || "") || isField(controlKind(node.mainComponent && node.mainComponent.setName || node.component)) && variantValues.some((v) => STATE_SYNONYMS.error.test(v))) {
       validationHits.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
+    }
+    if (Array.isArray(node.overrides)) {
+      if (node.overrides.length >= 100) cappedInstances.add(node.id);
+      for (const o of node.overrides) if (Array.isArray(o.fields) && o.fields.includes("characters")) charOverridden.add(o.id);
     }
     if (hiddenBranch) {
       if (node.id) hiddenIds.add(node.id);
@@ -1865,7 +2187,11 @@ function audit(input, opts = {}) {
       const key = mc.setKey || mc.key || name;
       const icon = !!(node.asset || node.geometry || node.assetSkipped) && !CONTROL_WORD.test(String(name || ""));
       if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), ...ifDefined("variantKey", mc.key), remote: !!mc.remote, nodeId: node.id, ...icon ? { icon: true } : {} });
-      if (!icon && controlKind(name) === "input" && !/\b(search|filter)/i.test(String(name || ""))) inputsSeen++;
+      if (!icon && isField(controlKind(name)) && !/\b(search|filter)/i.test(String(name || ""))) inputsSeen++;
+      if (!icon && node.type === "INSTANCE" && key && controlKind(name) === "input" && !/\b(search|filter)/i.test(String(name || "")) && !ancestors.some((a) => a.id !== void 0 && pickers.some((p) => p.node.id === a.id))) {
+        const cue = pickerCue(node);
+        if (cue) pickers.push({ node, here, useKey: key, cue });
+      }
     }
     for (const r of Array.isArray(node.reactions) ? node.reactions : []) {
       for (const a of Array.isArray(r.actions) ? r.actions : []) {
@@ -1930,6 +2256,7 @@ function audit(input, opts = {}) {
         tally("color", bound);
         if (!bound) noteRaw(c, node);
       }
+      if (node.type !== "TEXT" && node.type !== "LINE") boundaryCheck(node, ancestors, here);
     }
     if (node.type === "TEXT") {
       const runs = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ ...ifDefined("font", node.font), ...ifDefined("tokens", node.textTokens), ...ifDefined("textStyle", node.styles && node.styles.text) }];
@@ -1943,6 +2270,10 @@ function audit(input, opts = {}) {
         }
       }
       if (!hiddenBranch) textChecks(node, ancestors, here);
+      const inst = [...ancestors].reverse().find((a) => a.type === "INSTANCE");
+      if (inst && !(node.propRefs && node.propRefs.characters) && (node.text || "").trim() && !ancestors.some((a) => a.id !== void 0 && cappedInstances.has(a.id))) {
+        instanceTexts.push({ node, here, inst });
+      }
     }
     if (node.layout && !isAssetLeaf && !node.assetSkipped) {
       const L = node.layout;
@@ -1994,7 +2325,7 @@ function audit(input, opts = {}) {
     if (Array.isArray(node.children)) {
       const stacks = !node.layout || node.layout.mode === "absolute";
       const earlier = [];
-      const self = { name: node.name, ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: [] };
+      const self = { name: node.name, id: node.id, type: node.type, ...ifDefined("mainComponent", node.mainComponent), ...ifDefined("component", node.component), ...ifDefined("props", node.props), ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: [] };
       const chain = [...ancestors, self];
       for (const child of node.children) {
         self.__beneath = stacks || child.absolute ? earlier.filter((l) => overlaps(l.box, child.box)).flatMap((l) => l.fills) : [];
@@ -2026,20 +2357,7 @@ function audit(input, opts = {}) {
     }
     const fg = parseHex(font.color);
     if (!fg) return;
-    let bg = null, complex = false;
-    for (const a of ancestors) {
-      const layers2 = [...Array.isArray(a.fills) ? a.fills : [], ...a.__beneath || []];
-      for (const f of layers2) {
-        if (f.type === "solid") {
-          const c = parseHex(f.color);
-          if (!c) continue;
-          bg = bg ? over(c, bg) : c.a >= 1 ? c : over(c, { r: 255, g: 255, b: 255, a: 1 });
-          if (c.a >= 1) complex = false;
-        } else if (f.type === "gradient" || f.type === "image" || f.type === "video") {
-          complex = true;
-        }
-      }
-    }
+    const { bg, complex } = backdropOf(ancestors);
     const size = typeof font.size === "number" ? font.size : null;
     const bold = (font.weightValue || 0) >= 700 || /bold|black|heavy/i.test(font.weight || "");
     const large = size != null && (size >= 24 || size >= 18.66 && bold);
@@ -2049,11 +2367,46 @@ function audit(input, opts = {}) {
       return;
     }
     const assumed = !bg;
-    const base = bg || { r: 255, g: 255, b: 255, a: 1 };
+    const base = bg || WHITE;
     const ratio = contrastRatio(over(fg, base), base);
     if (ratio < need) {
       add(assumed ? "info" : "warning", "low-contrast", `${cite(node)} text contrast ${r1(ratio)}:1 is below WCAG AA ${need}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need, ...textExtra(node) });
     }
+  }
+  function boundaryCheck(node, ancestors, here) {
+    const strokes = node.strokes;
+    const hex = strokes && Array.isArray(strokes.colors) ? strokes.colors.find((c) => {
+      const x = parseHex(c);
+      return !!x && x.a > 0;
+    }) : void 0;
+    const sc = parseHex(hex);
+    const weight = strokes ? Math.max(strokes.weight || 0, ...Object.values(strokes.weights || {}).map((w) => w || 0)) : 0;
+    if (!sc || !(weight > 0) || hex === void 0) return;
+    const near = [node, ...ancestors.slice(-3).reverse()];
+    const outer = outermostControl(near);
+    if (outer < 0 || near.some((a) => isDisabledLayer(a))) return;
+    const outside = ancestors.slice(0, ancestors.length - outer), inside = ancestors.slice(ancestors.length - outer);
+    const back = backdropOf(outside);
+    if (back.complex) return;
+    const base = back.bg || WHITE;
+    const ratio = contrastRatio(over(sc, base), base);
+    if (ratio >= 3) return;
+    let inner = null;
+    for (const f of [...inside.flatMap((a) => [...Array.isArray(a.fills) ? a.fills : [], ...a.__beneath || []]), ...Array.isArray(node.fills) ? node.fills : []]) {
+      const c = f.type === "solid" ? parseHex(f.color) : null;
+      if (c) inner = over(c, inner || base);
+    }
+    if (inner && contrastRatio(inner, base) >= 3) return;
+    const stroke = normHex(hex) ?? hex, backdrop = formatHex(base), assumed = !back.bg;
+    const k = `${here.label}|${stroke}|${backdrop}|${assumed}`;
+    const row = boundaries.get(k);
+    if (row) {
+      row.nodes.push(node);
+      return;
+    }
+    const st = node.tokens && node.tokens.strokes;
+    const strokeToken = Array.isArray(st) ? st[0] : st;
+    boundaries.set(k, { nodes: [node], here, stroke, backdrop, ratio, assumed, hasFill: !!inner, ...ifDefined("strokeToken", strokeToken), ...ifDefined("backdropToken", assumed ? void 0 : back.token) });
   }
   const raws = [...rawColors.entries()].map(([hex, e]) => ({ hex, ...e })).filter((x) => x.rgb.a >= 1);
   const labs = raws.map((x) => ({ x, lab: toLab(x.rgb) }));
@@ -2068,6 +2421,111 @@ function audit(input, opts = {}) {
       }
     }
     if (cluster.length > 1) add("info", "near-duplicate-colors", `unbound colors ${cluster.map((c) => `${c.hex}\xD7${c.count}`).join(", ")} are visually indistinguishable (\u0394E<3) \u2014 probably one token`, null, null, { colors: cluster.map((c) => c.hex) });
+  }
+  const tokenColors = /* @__PURE__ */ new Map();
+  for (const doc of [opts.variables, opts.designSystem && opts.designSystem.tokens, ...docs.map((d) => d.vars)]) {
+    for (const v of doc && doc.variables || []) {
+      if (v.type !== "COLOR") continue;
+      for (const val of Object.values(v.values)) {
+        const k = colorKey(val), rgb = parseHex(val);
+        if (k && rgb && typeof val === "string" && !tokenColors.has(k)) tokenColors.set(k, { name: v.name, hex: normHex(val) ?? val, rgb });
+      }
+    }
+  }
+  const tokenRows = [...tokenColors.values()].filter((t) => t.rgb.a >= 1).map((t) => ({ ...t, lab: toLab(t.rgb) }));
+  const nearToken = [];
+  for (const x of raws) {
+    if (tokenColors.has(colorKey(x.hex) ?? "")) continue;
+    const lab = toLab(x.rgb);
+    let best = null, bestD = Infinity;
+    for (const t of tokenRows) {
+      const d = labDist(lab, t.lab);
+      if (d < bestD) {
+        best = t;
+        bestD = d;
+      }
+    }
+    if (!best || !(bestD < 1)) continue;
+    const sample = nodesById.get(x.nodeId) || null;
+    add("info", "near-token-color", `unbound '${x.hex}' \xD7${x.count} (e.g. '${x.nodeName}') is \u0394E ${bestD.toFixed(2)} from token '${best.name}' (${best.hex}) \u2014 a typo of the token, or a deliberate value? Use the literal exactly until the designer answers`, sample, null, { token: best.name, colors: [x.hex, best.hex] });
+    nearToken.push(`'${x.hex}' (e.g. '${x.nodeName}' ${x.nodeId}) vs token '${best.name}' ${best.hex}`);
+  }
+  for (const b of boundaries.values()) {
+    const [first, ...more] = b.nodes;
+    if (!first) continue;
+    add(
+      b.assumed ? "info" : "warning",
+      "non-text-contrast",
+      `'${first.name}'${more.length ? ` and ${more.length} more` : ""}: the control's border ${b.stroke}${b.strokeToken ? ` (${b.strokeToken})` : ""} is ${r1(b.ratio)}:1 against ${b.assumed ? "an assumed white page" : `the colour around it, ${b.backdrop}${b.backdropToken ? ` (${b.backdropToken})` : ""}`} \u2014 below the 3:1 WCAG 1.4.11 asks of a control's boundary, and ${b.hasFill ? "its fill does not set it apart either" : "it has no fill to set it apart"}. Build it to pass (a border or fill that reaches 3:1) and ask the designer \u2014 a contrast failure is never kept as designed`,
+      first,
+      b.here,
+      { nodeIds: b.nodes.map((n) => n.id), stroke: b.stroke, backdrop: b.backdrop, ...ifDefined("strokeToken", b.strokeToken), ...ifDefined("backdropToken", b.backdropToken), ratio: r1(b.ratio), required: 3 }
+    );
+  }
+  const copyGroups = /* @__PURE__ */ new Map();
+  for (const t of instanceTexts) {
+    const mc = t.inst.mainComponent || {};
+    const k = `${t.here.label}|${mc.key ?? mc.setKey ?? t.inst.name}|${t.node.id.split(";").pop()}`;
+    const g = copyGroups.get(k) || { inst: t.inst, overridden: [], plain: [] };
+    (charOverridden.has(t.node.id) ? g.overridden : g.plain).push(t);
+    copyGroups.set(k, g);
+  }
+  const copyQuestions = [];
+  for (const g of copyGroups.values()) {
+    const own2 = [...new Set(g.overridden.map((m) => (m.node.text || "").trim()))];
+    const plain = g.plain.filter((m) => !own2.includes((m.node.text || "").trim()));
+    const first = plain[0];
+    if (!own2.length || !first) continue;
+    const comp = g.inst.mainComponent && g.inst.mainComponent.setName || g.inst.component || g.inst.name;
+    const dflt = textOf(first.node) ?? (first.node.text || "").trim();
+    const eg = own2[0] ?? "";
+    add(
+      "info",
+      "default-copy-in-instance",
+      `'${comp}' > '${first.node.name}': ${plain.length} instance(s) show the component's default copy ("${dflt}") while ${g.overridden.length} show their own copy (e.g. "${eg.length > 40 ? eg.slice(0, 39) + "\u2026" : eg}") \u2014 a placeholder left in, or intended? Build the copy as drawn and ask the designer`,
+      first.node,
+      first.here,
+      { nodeIds: plain.map((m) => m.node.id), copies: { default: (first.node.text || "").trim(), overridden: own2 } }
+    );
+    copyQuestions.push(`'${comp}' > '${first.node.name}' (${first.node.id}) still says "${dflt}" (the component's default) where other instances say "${eg}" \u2014 is "${dflt}" the intended copy, or a placeholder? \u2192 Default: build "${dflt}" as drawn.`);
+  }
+  for (const root of roots) {
+    const strays = (Array.isArray(root.tree.children) ? root.tree.children : []).filter((c) => c && c.absolute && !hiddenSelf(c));
+    if (!strays.length || hiddenSelf(root.tree)) continue;
+    const bySig = /* @__PURE__ */ new Map();
+    const sigOf2 = /* @__PURE__ */ new Map(), textsOf = /* @__PURE__ */ new Map();
+    const visit = (n, top) => {
+      const texts = n.type === "TEXT" && (n.text || "").trim() ? [(n.text || "").trim()] : [];
+      for (const c of Array.isArray(n.children) ? n.children : []) if (c && !hiddenSelf(c)) texts.push(...visit(c, top || c));
+      if (top && texts.length && n.box) {
+        const sig = `${texts.join("\0")}@${Math.round(n.box.w)}x${Math.round(n.box.h)}`;
+        sigOf2.set(n, sig);
+        textsOf.set(n, texts.length);
+        const same = bySig.get(sig);
+        if (same) same.push({ node: n, top });
+        else bySig.set(sig, [{ node: n, top }]);
+      }
+      return texts;
+    };
+    visit(root.tree, null);
+    const rootW = root.tree.box && typeof root.tree.box.w === "number" ? root.tree.box.w : null;
+    for (const stray of strays) {
+      const sig = sigOf2.get(stray);
+      const sizeable = (textsOf.get(stray) || 0) >= 2 || rootW !== null && !!stray.box && stray.box.w >= rootW / 2;
+      if (sig === void 0 || !sizeable) continue;
+      const twin = (bySig.get(sig) || []).find((t) => t.top !== stray && !t.top.absolute);
+      if (!twin) continue;
+      const rb = root.tree.box, sb = stray.box;
+      const at = rb && sb && typeof rb.x === "number" && typeof rb.y === "number" && typeof sb.x === "number" && typeof sb.y === "number" ? ` at ${Math.round(sb.x - rb.x)},${Math.round(sb.y - rb.y)}` : "";
+      add(
+        "warning",
+        "duplicate-root-subtree",
+        `'${stray.name}' (${stray.id})${at} duplicates '${twin.node.name}' (${twin.node.id}) \u2014 a stray copy laid over the frame; build the in-flow one and record this as a design artefact (plan.deviations / a verify waiver)`,
+        stray,
+        { label: root.label, path: `${root.tree.name} > ${stray.name}` },
+        { twinId: twin.node.id }
+      );
+    }
   }
   const screenCollKeys = new Set(docs.flatMap((d) => (d.vars && d.vars.collections || []).map((c) => c.key)).filter((k) => !!k));
   const fullCatalogs = [];
@@ -2154,6 +2612,26 @@ function audit(input, opts = {}) {
       { controls: unchecked }
     );
   }
+  const openStates = /* @__PURE__ */ new Map();
+  for (const p of pickers) {
+    const u = usedComponents.get(p.useKey);
+    const def = u ? stateDefOf(u) : null;
+    if (def && def.values.some((v) => STATE_SYNONYMS.open.test(String(v).trim().toLowerCase()))) continue;
+    const k = `${p.here.label}|${p.useKey}|${p.cue}`;
+    const row = openStates.get(k);
+    if (row) row.nodes.push(p.node.id);
+    else openStates.set(k, { node: p.node, here: p.here, cue: p.cue, nodes: [p.node.id] });
+  }
+  for (const o of openStates.values()) {
+    add(
+      "info",
+      "undesigned-open-state",
+      `'${o.node.name}'${o.nodes.length > 1 ? ` (\xD7${o.nodes.length})` : ""} (${o.cue}) reads like a select/picker; no open state (list/calendar) is drawn \u2014 ask, or extract the frame that draws it`,
+      o.node,
+      o.here,
+      { nodeIds: o.nodes }
+    );
+  }
   const stateOf = (s) => stateHits[s].length ? "designed" : "not-found";
   const allDialogs = roots.length > 0 && roots.every((r) => DIALOG_NAME.test(r.tree.name || ""));
   const screenStates = {
@@ -2176,14 +2654,37 @@ function audit(input, opts = {}) {
       add("info", "heavy-asset", msg, node || null, { label }, { file: h.file, bytes: h.bytes, ...ifDefined("paths", h.paths), ...ifDefined("embeddedRaster", h.embeddedRaster) });
     }
   }
+  const nb = opts.neighbours;
+  const exportedIds = nb ? nb.exportedIds ?? new Set(nb.layers.map((l) => l.id)) : null;
+  const shotIds = new Set(nb && nb.unexportedShots || []);
+  const unexportedTargets = /* @__PURE__ */ new Map();
   for (const n of navigations.values()) {
+    const id = n.destinationId;
+    const missing = exportedIds !== null && !!id && !exportedIds.has(id) && !nodesById.has(id) && !hiddenIds.has(id);
     add(
       "info",
       "prototype-navigation",
-      `${n.count} layer(s) (e.g. '${n.node.name}') ${n.navigation === "overlay" ? "open" : n.navigation === "swap" ? "swap to" : "go to"} '${n.destination ?? "an unnamed frame"}'${n.destinationId ? ` (${n.destinationId})` : ""} in the prototype \u2014 confirm this is the intended behaviour before wiring it (a link copied along with a layer looks the same as a designed one)`,
+      `${n.count} layer(s) (e.g. '${n.node.name}') ${n.navigation === "overlay" ? "open" : n.navigation === "swap" ? "swap to" : "go to"} '${n.destination ?? "an unnamed frame"}'${n.destinationId ? ` (${n.destinationId})` : ""} in the prototype \u2014 confirm this is the intended behaviour before wiring it (a link copied along with a layer looks the same as a designed one)${missing ? " \u2014 NOT exported" : ""}`,
       n.node,
       { label: n.label },
-      { ...ifDefined("destination", n.destination), ...ifDefined("destinationId", n.destinationId), navigation: n.navigation, sources: n.count }
+      { ...ifDefined("destination", n.destination), ...ifDefined("destinationId", n.destinationId), navigation: n.navigation, sources: n.count, ...missing ? { exported: false } : {} }
+    );
+    if (missing && id && (n.navigation === "overlay" || n.navigation === "swap")) {
+      const rows = unexportedTargets.get(n.label) || [];
+      rows.push({ n, id });
+      unexportedTargets.set(n.label, rows);
+    }
+  }
+  for (const [label, rows] of unexportedTargets) {
+    const list = rows.map(({ n, id }) => `'${n.destination ?? "an unnamed frame"}' (${id}) opened by '${n.node.name}'${shotIds.has(id) ? ` \u2014 screenshotted only (assets/${id.replace(/:/g, "_")}_ref.png)` : ""}`);
+    const first = rows[0];
+    add(
+      "warning",
+      "prototype-target-not-exported",
+      `${rows.length} prototype target(s) this screen opens are in no index of the export: ${list.join("; ")} \u2014 pull them (\`dtwin pull --node <id>\`; MCP: \`figma_export_url\`) before building, or the builder has nothing to build the dialog from. A frame nested in a SECTION or another frame has no index row of its own: search design/export/pages for the id before pulling`,
+      first ? first.n.node : null,
+      { label },
+      { ids: rows.map((r) => r.id) }
     );
   }
   const bindingOf = (k) => {
@@ -2240,6 +2741,12 @@ function audit(input, opts = {}) {
   if (unchecked.length) questions.push(`The states of ${unchecked.slice(0, 6).map((n) => `'${n}'`).join(", ")}${unchecked.length > 6 ? ", \u2026" : ""} could not be checked (no catalog defines them) \u2014 are hover/pressed/focus/disabled designed somewhere?`);
   for (const c of components.filter((c2) => c2.missing && c2.missing.length)) questions.push(`'${c.name}' has no ${c.missing.join("/")} design \u2014 use the design-system default, or is there a spec?`);
   if (findings.some((f) => f.code === "fixed-size-text")) questions.push("Several text boxes are fixed-size \u2014 at 200% font scale or in a longer language, should they wrap, truncate (how many lines), or grow?");
+  questions.push(...copyQuestions);
+  if (openStates.size) {
+    const list = [...openStates.values()].map((o) => `'${o.node.name}' ${o.node.id} (${o.cue})`);
+    questions.push(`${list.join(", ")} read${list.length === 1 ? "s" : ""} like a select/picker with no open state drawn \u2014 what does the open list (or calendar) look like: the platform's native picker, or a designed one (which frame)? \u2192 Default: the platform's native control, styled with the field's tokens.`);
+  }
+  if (nearToken.length) questions.push(`Unbound colour${nearToken.length === 1 ? "" : "s"} a hair off a token \u2014 ${nearToken.join("; ")}: a typo of the token, or deliberate? \u2192 Default: the literal exactly as drawn, flagged.`);
   let crossFile;
   const crossOrigin = /* @__PURE__ */ new Map();
   let hiddenFindingsOmitted = 0;
@@ -2357,6 +2864,10 @@ function audit(input, opts = {}) {
     findings
   };
 }
+function pathTail(p) {
+  const parts = p.split(" > ");
+  return parts.length > 3 ? "\u2026 > " + parts.slice(-3).join(" > ") : p;
+}
 function toMarkdown(res) {
   const L = [];
   L.push(`# Design audit \u2014 ${res.screens.join(", ") || "(no screens)"}`, "");
@@ -2437,7 +2948,7 @@ function toMarkdown(res) {
     const fs8 = res.findings.filter((f) => f.severity === sev);
     if (!fs8.length) continue;
     L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs8.length})`, "");
-    for (const f of fs8) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
+    for (const f of fs8) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
   }
   if (res.annotations.length) {
     L.push("", "## Designer annotations", "");

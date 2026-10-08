@@ -219,12 +219,13 @@ export { bootstrap, bootstrapFromProposals, proposalsIn };
 
 // CLI: node design-to-code/map-bootstrap.ts <design-system/components.local.json> [existing-map.json] [--out <file>]
 // The catalog argument is the SPLIT component file, not design-system.json — that is a slim pointer
-// manifest since the split and carries no `components` array (see bridge/design-system-layout.js).
+// manifest since the split and carries no `components` array (see bridge/src/design-system-layout.ts).
 // Without --out the map goes to stdout. With --out it is written to that file; when the file already
 // exists and no existing-map was named, it IS the existing map — so re-running merges into it (the
 // "never destroys human work" semantics above) instead of replacing it with fresh stubs.
 function main(argv: string[]): number {
   const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>] [--catalog <components.json>]...`;
+  if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
   let outFile: string | null = null, proposalsFile: string | null = null, screenFile: string | null = null;
   // --catalog is repeatable: each names one more catalog (beyond the ones found beside the named one)
   // that --screen / --from-proposals may take a component from.

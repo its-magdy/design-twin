@@ -119,7 +119,9 @@ intent to real widgets; a node name is a hint, never the decision.
   Slider→`Slider`, Segmented→`SegmentedButton`, Menu→`DropdownMenu`/`MenuAnchor`, Chip→`FilterChip`/
   `InputChip`, Spinner→`CircularProgressIndicator`, Progress→`LinearProgressIndicator`, field→`TextField`
   with an `InputDecoration` (`labelText`/`hintText`/`errorText`) rather than a separate label `Text`,
-  tabs→`TabBar`/`TabBarView`, sheet→`showModalBottomSheet`, dialog→`AlertDialog`.
+  tabs→`TabBar`/`TabBarView`, sheet→`showModalBottomSheet`, dialog→`AlertDialog`. A picker draws its own text:
+  set the picker's text colour explicitly to the drawn tokens (`DropdownButton`'s `style` and its `hint` `Text`
+  style; `showDatePicker` through a `DatePickerThemeData`).
 
 **Interaction states** — look up the component in `design/export/design-system/components.local.json`'s
 `components` catalog and check its variant `options` for hover/focus/pressed/disabled/error/selected

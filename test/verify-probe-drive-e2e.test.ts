@@ -32,6 +32,18 @@
 // 12b review 8's (fix 9, owner D53): clip-path / background-clip fills, a shadow host's dot, the container's own marker, a hug
 // wrapper's shadow ring, a layered !important, a control mounted on hover, a foreign ticker, transition:all under a strict CSP.
 //
+// Concurrency (test/pool.ts): every independent probe / verify-screen run is queued up front (P, the longest first) and runs
+// poolSize() at a time (DT_E2E_POOL overrides; 2 under CI) — each still its own `node verify-probe.js` + chromium with its
+// own --out; the checks stay in file order, each awaiting its run. An ordered chain (--status --new-run → probe --run → --status
+// done → --compare; a run → its --compare) is one queued task. The serial tail (T) holds the cases with POSITIVE timing
+// assertions — a --max-time budget that must be honoured, a reload / navigation / replaceState N ms after a load or a click, a
+// load answered just past the 10 s cap or the --timeout, the token-switch poll spacing, the scroll-restore cap: they run one at a
+// time once the pool has drained, so concurrent chromiums' CPU cannot flip them; their checks print after the pool's. The
+// gotoSteps and wide runs stay pooled: their --max-time caps (25 s, 30 s) leave wide margins over a run that takes a few seconds
+// under load. A write is charged to the run whose page made it (the POST's Referer query, when it is a launched --url's); any
+// other write (no Referer, an <object> / <embed> subframe's own URL) is charged to every run's check, and a final check wants
+// none across every run.
+//
 // D3: needs the repo's devDependency `playwright` + chromium. Locally an unavailable renderer prints SKIPPED; in CI
 // (CI=true) that is a failure.  Run with:  node test/verify-probe-drive-e2e.test.ts
 import fs from "node:fs";
@@ -39,13 +51,14 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { InteractionEvidence, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
+import { limit, poolSize } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROBE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -90,16 +103,37 @@ const READY = "[data-dt-node=\"70:1\"]";
 // the steps' sha: canonical JSON (sorted keys) — for one-key string steps that is JSON.stringify of the list
 const stepsSha = crypto.createHash("sha256").update(JSON.stringify(STEPS)).digest("hex");
 
+
 // ---- a static server on an ephemeral port (the fixtures under any query string). The edge page's extras: a script
-// answered 2.5 s late (a half-loaded document), POST /mutate (a write an opener's handler made — counted per query), and
-// ?mode=slow-reach answered at once the first time per URL, never again (the driving pages' reach hangs)
-const mutations: string[] = [];
+// answered 2.5 s late (a half-loaded document), POST /mutate (a write an opener's handler made — charged to the run whose
+// page made it: writesOf), and ?mode=slow-reach answered at once the first time per URL, never again (the driving pages' reach hangs)
+/** every write the server received (the /mutate query), and the same charged per run: the key is the full query string of the
+ *  page that made it (its Referer) when that page is a fixture page at a query some run passed to --url, else "?" — charged to
+ *  every run (no Referer, a subframe's own URL such as click-hidden-2's <object> / <embed> page, a page a step navigated to) */
+const writes: string[] = [];
+const writesBy = new Map<string, string[]>();
+/** the query strings of every --url a probe run was given (registered before the run is spawned) */
+const launched = new Set<string>();
+const searchOf = (href: string): string => new URL(href).search;
+const runOfPage = (href: string | undefined): string => {
+  try {
+    const u = new URL(href ?? "");
+    return (u.pathname === "/plot-ledger.html" || u.pathname === "/plot-ledger-edge.html") && launched.has(u.search) ? u.search : "?";
+  } catch { return "?"; }
+};
+/** the writes charged to the runs on these --url values, plus the unattributed ones */
+const writesOf = (...urls: string[]): string[] => [...[...new Set(urls.map(searchOf))].flatMap((s) => writesBy.get(s) ?? []), ...(writesBy.get("?") ?? [])];
 const seen = new Map<string, number>();
 const SLOW_JS = "document.body.insertAdjacentHTML(\"beforeend\", '<div class=\"app\" data-dt-node=\"70:1\"><h1 data-dt-node=\"70:2\">Beds</h1></div>');";
 const server = http.createServer((req, res) => {
   const u = new URL(req.url || "/", "http://x");
   const name = path.basename(u.pathname);
-  if (req.method === "POST" && name === "mutate") { mutations.push(u.search.slice(1)); res.writeHead(204); res.end(); return; }
+  if (req.method === "POST" && name === "mutate") {
+    const what = u.search.slice(1), k = runOfPage(req.headers.referer);
+    writes.push(what);
+    writesBy.set(k, [...(writesBy.get(k) ?? []), what]);
+    res.writeHead(204); res.end(); return;
+  }
   if (name === "plot-ledger-hang.png" || name === "plot-ledger-hangdoc") return; // M-1: an image that never loads (held until finish())
   if (name === "plot-ledger-slow.png") { setTimeout(() => { res.writeHead(404); res.end(); }, Number(u.searchParams.get("d") || 2500)).unref(); return; } // fix 5
   if (name === "plot-ledger-late.png") { setTimeout(() => { res.writeHead(404); res.end(); }, 12_000).unref(); return; } // fix 4 LOW b
@@ -122,18 +156,27 @@ const port = addr !== null && typeof addr === "object" ? (addr satisfies Address
 const url = (mode?: string): string => `http://127.0.0.1:${port}/plot-ledger.html${mode ? `?mode=${mode}` : ""}`;
 const edge = (mode: string): string => `http://127.0.0.1:${port}/plot-ledger-edge.html?mode=${mode}`;
 
-// async spawn: the server lives in THIS process, so a spawnSync would block it from answering
-interface Run { status: number | null; stdout: string; stderr: string }
+// async spawn: the server lives in THIS process, so a spawnSync would block it from answering. ms: spawn → close (never the
+// time a run waited in the pool's queue); a spawn that fails (EAGAIN under load, a synchronous throw) resolves as status null — run never rejects, never hangs the suite
+interface Run { status: number | null; stdout: string; stderr: string; ms: number }
 const run = (script: string, args: string[]): Promise<Run> => new Promise((resolve) => {
-  const p = spawn(process.execPath, [script, ...args], { cwd: proj });
+  const t0 = Date.now();
+  let p: ChildProcessWithoutNullStreams;
+  try { p = spawn(process.execPath, [script, ...args], { cwd: proj }); }
+  catch (e) { resolve({ status: null, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}\n`, ms: Date.now() - t0 }); return; }
   let stdout = "", stderr = "";
   p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
   p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-  p.on("close", (status) => resolve({ status, stdout, stderr }));
+  p.on("error", (e) => resolve({ status: null, stdout, stderr: `${stderr}spawn failed: ${e.message}\n`, ms: Date.now() - t0 }));
+  p.on("close", (status) => resolve({ status, stdout, stderr, ms: Date.now() - t0 }));
 });
 // 12b (D45): these runs check reaching, measuring and driving — `--behaviour off` keeps them fast, except where a run says
 // `--behaviour on` (test/verify-probe-behaviour-e2e.test.ts runs the behaviour checks themselves)
-const probe = (args: string[]): Promise<Run> => run(PROBE, [...args, ...(args.includes("--check") || args.includes("--behaviour") ? [] : ["--behaviour", "off"]), "--project", ROOT]);
+const probe = (args: string[]): Promise<Run> => {
+  const at = args.indexOf("--url"), u = at >= 0 ? args[at + 1] : undefined;
+  if (u !== undefined) launched.add(searchOf(u));
+  return run(PROBE, [...args, ...(args.includes("--check") || args.includes("--behaviour") ? [] : ["--behaviour", "off"]), "--project", ROOT]);
+};
 const vs = (args: string[]): Promise<Run> => run(VS, args);
 const finish = (): void => { server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
 const out = (name: string): string => path.join("design", "verify", name);
@@ -162,14 +205,114 @@ const QUIET = out("Quiet") + ".expected.json";
 const full = readJsonOrNull(path.join(proj, EXPECTED), isVerifyExpectation);
 if (full !== null) { const { interactions: _drop, ...quiet } = full; fs.writeFileSync(path.join(proj, QUIET), JSON.stringify(quiet, null, 2) + "\n"); }
 
+// ---- the runs. P: the independent ones, queued now (the longest first) and run poolSize() at a time, each awaited where its
+// checks are. T: the serial tail (wall-clock windows, see the header) — started one at a time only once P has drained.
+const POOL = poolSize();
+const q = limit(POOL);
+const SLOW_NAV = [0, 120, 160, 200, 400, 1500] as const;
+const ownPxOut = (mode: string): string => out(`OwnPixels-${mode.replace(/[^\w-]/g, "_")}`);
+const ownPxRun = (mode: string): Promise<Run> => probe(["--expected", EXPECTED, "--url", edge(mode), "--out", ownPxOut(mode), "--max-time", "90000"]);
+const T = {
+  budget25000: () => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Budget25000"), "--steps", "steps.json", "--ready", READY, "--max-time", "25000"]),
+  budget30000: () => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Budget30000"), "--steps", "steps.json", "--ready", READY, "--max-time", "30000"]),
+  replace: () => probe(["--expected", QUIET, "--url", url("replace-state"), "--out", out("Replace"), "--max-time", "60000"]),
+  reloadSettle: () => probe(["--expected", QUIET, "--url", edge("reload-settle"), "--out", out("ReloadSettle"), "--ready", READY, "--max-time", "60000"]),
+  reloadSettleNoReady: () => probe(["--expected", QUIET, "--url", edge("reload-settle"), "--out", out("ReloadSettleNoReady"), "--max-time", "60000"]),
+  reloadStep: () => probe(["--expected", QUIET, "--url", edge("reload-step"), "--out", out("ReloadStep"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "60000"]),
+  gotoReload: () => probe(["--expected", QUIET, "--url", edge("reload-after-goto"), "--out", out("GotoReload"), "--steps", "steps-goto-reload.json", "--ready", READY, "--max-time", "60000"]),
+  reloadLate: () => probe(["--expected", QUIET, "--url", edge("reload-late"), "--out", out("ReloadLate"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
+  slowReach: () => probe(["--expected", EXPECTED, "--url", edge("slow-reach"), "--out", out("SlowReach"), "--timeout", "30000", "--max-time", "22000"]),
+  smoothShell: () => probe(["--expected", EXPECTED, "--url", edge("smooth-shell"), "--out", out("SmoothShell"), "--max-time", "60000"]),
+  smoothShellImportant: () => probe(["--expected", EXPECTED, "--url", `${edge("smooth-shell")}&important=1`, "--out", out("SmoothShellImportant"), "--max-time", "60000"]),
+  smoothShellPainted: () => probe(["--expected", EXPECTED, "--url", `${edge("smooth-shell")}&important=1&painted=1`, "--out", out("SmoothShellPainted"), "--max-time", "60000"]),
+  clickReloads: () => probe(["--expected", QUIET, "--url", edge("click-reloads"), "--out", out("ClickReloads"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
+  tokenSwitch: () => probe(["--expected", QUIET, "--url", edge("token-switch"), "--out", out("TokenSwitch"), "--max-time", "60000"]),
+  clickReloadsSync: () => probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=sync`, "--out", out("ClickReloadsSync"), "--steps", "steps-click-only.json", "--max-time", "60000"]),
+  clickReloads100: () => probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=100`, "--out", out("ClickReloads100"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
+  clickReloadsOnce: () => probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=sync&once=1`, "--out", out("ClickReloadsOnce"), "--steps", "steps-click-only.json", "--max-time", "60000"]),
+  hangImg: () => probe(["--expected", QUIET, "--url", edge("hang-img"), "--out", out("HangImg"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "22000"]),
+  lateSlow: () => probe(["--expected", QUIET, "--url", edge("late-slow"), "--out", out("LateSlow"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
+  reloadHang: () => probe(["--expected", QUIET, "--url", edge("reload-hang"), "--out", out("ReloadHang"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
+  lateLoad: () => probe(["--expected", QUIET, "--url", edge("late-load"), "--out", out("LateLoad"), "--steps", "steps-late.json", "--ready", READY, "--max-time", "60000"]),
+  slowStay: () => probe(["--expected", QUIET, "--url", `${edge("slow-stay")}&d=7000`, "--out", out("SlowStay"), "--steps", "steps-slow-stay.json", "--ready", READY, "--timeout", "5000", "--max-time", "60000"]),
+  linkInplaceReload: () => probe(["--expected", QUIET, "--url", `${edge("link-inplace-reload")}&d=300`, "--out", out("LinkInplaceReload"), "--steps", "steps-click-only.json", "--max-time", "60000"]),
+  linkEmptyReload: () => probe(["--expected", QUIET, "--url", `${edge("link-empty-reload")}&d=300`, "--out", out("LinkEmptyReload"), "--steps", "steps-click-only.json", "--max-time", "60000"]),
+  // (--ready on an element that never comes keeps the settle on the page while it navigates)
+  slowChurn: () => probe(["--expected", QUIET, "--url", edge("slow-churn"), "--out", out("SlowChurn"), "--ready", "#never-drawn", "--timeout", "12000", "--max-time", "60000"]),
+  bounceHang: () => probe(["--expected", QUIET, "--url", edge("bounce-hang"), "--out", out("BounceHang"), "--timeout", "12000", "--max-time", "40000"]),
+  redirSlow: () => probe(["--expected", QUIET, "--url", edge("redir-slow"), "--out", out("RedirSlow"), "--steps", "steps-redir-slow.json", "--ready", READY, "--timeout", "30000", "--max-time", "90000"]),
+};
+console.log(`pool ${POOL} (DT_E2E_POOL to override), serial tail ${Object.keys(T).length} runs`);
+const P = {
+  // D4 (12b): the main run again with the behaviour battery on (the longest run: first) — its check compares with main's
+  bedsOn: q(() => probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, "--out", out("BedsOn"), "--behaviour", "on"])),
+  // the main run, bound to a verify run (D41): --status --new-run → probe --run → --status done → --compare, in that order
+  main: q(async () => {
+    const st = await vs(["--status", "Beds", "--phase", "starting", "--new-run", "--dir", "design/verify"]);
+    const runId = /^run (\S+) rev 1$/m.exec(st.stdout)?.[1] ?? "";
+    const r2 = await probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, ...(runId ? ["--run", runId] : [])]);
+    const done = await vs(["--status", "Beds", "--phase", "done", "--run", runId, "--dir", "design/verify"]);
+    const c2 = await vs(["--compare", EXPECTED, out("Beds") + ".measured.json", "--out", out("Beds")]);
+    return { runId, r2, done, c2 };
+  }),
+  noToken: q(() => probe(["--expected", QUIET, "--url", edge("no-token"), "--out", out("NoToken"), "--steps", "steps-no-token.json", "--max-time", "60000"])),
+  churnDomGoto: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("ChurnDomGoto"), "--steps", "steps-goto-churn.json", "--max-time", "60000"])),
+  gotoHang: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("GotoHang"), "--steps", "steps-goto-hang.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"])),
+  hangFirst: q(() => probe(["--expected", QUIET, "--url", edge("hang-first"), "--out", out("HangFirst"), "--steps", "steps-click-only.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"])),
+  ownContent3: q(() => probe(["--expected", EXPECTED, "--url", edge("own-content-3"), "--out", out("OwnContent3"), "--max-time", "90000"])),
+  // D43: the run, then its --compare
+  wide: q(async () => {
+    const r5 = await probe(["--expected", EXPECTED, "--url", url("wide"), "--out", out("Wide"), "--steps", "steps.json", "--ready", READY, "--max-time", "30000"]);
+    const c5 = await vs(["--compare", EXPECTED, out("Wide") + ".measured.json", "--out", out("Wide")]);
+    return { r5, c5 };
+  }),
+  slowImg: q(() => probe(["--expected", QUIET, "--url", `${edge("slow-img")}&d=13000`, "--out", out("SlowImg"), "--timeout", "30000", "--max-time", "60000"])),
+  lateReady: q(() => probe(["--expected", QUIET, "--url", edge("late-ready"), "--out", out("LateReady"), "--ready", READY, "--timeout", "30000", "--max-time", "60000"])),
+  readyNever: q(() => probe(["--expected", QUIET, "--url", `${edge("late-ready")}&d=99999999`, "--out", out("ReadyNever"), "--ready", READY, "--timeout", "12000", "--max-time", "60000"])),
+  hangLate: q(() => probe(["--expected", QUIET, "--url", edge("hang-late"), "--out", out("HangLate"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
+  churnDom: q(() => probe(["--expected", QUIET, "--url", edge("churn-dom"), "--out", out("ChurnDom"), "--max-time", "60000"])),
+  gotoSteps: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("GotoSteps"), "--steps", "steps-goto.json", "--ready", READY, "--max-time", "25000"])),
+  ownContent2: q(() => probe(["--expected", EXPECTED, "--url", edge("own-content-2"), "--out", out("OwnContent2"), "--max-time", "90000"])),
+  px1: q(() => ownPxRun("own-pixels-1")),
+  ownContent: q(() => probe(["--expected", EXPECTED, "--url", edge("own-content"), "--out", out("OwnContent"), "--max-time", "90000"])),
+  px2: q(() => ownPxRun("own-pixels-2")),
+  coveredTall: q(() => probe(["--expected", EXPECTED, "--url", edge("covered-tall"), "--out", out("CoveredTall"), "--max-time", "60000"])),
+  px4: q(() => ownPxRun("own-pixels-4")),
+  px3: q(() => ownPxRun("own-pixels-3")),
+  clickHidden: q(() => probe(["--expected", EXPECTED, "--url", edge("click-hidden"), "--out", out("ClickHidden"), "--max-time", "90000"])),
+  clickHidden2: q(() => probe(["--expected", EXPECTED, "--url", edge("click-hidden-2"), "--out", out("ClickHidden2"), "--max-time", "90000"])),
+  pxTall: q(() => ownPxRun("tall-shell")),
+  ancestor: q(() => probe(["--expected", EXPECTED, "--url", edge("ancestor"), "--out", out("Ancestor"), "--max-time", "90000"])),
+  pxCsp: q(() => ownPxRun("own-pixels-csp&csp=1")),
+  cardCentre: q(() => probe(["--expected", EXPECTED, "--url", edge("card-centre"), "--out", out("CardCentre"), "--max-time", "90000"])),
+  remount: q(() => probe(["--expected", EXPECTED, "--url", edge("remount"), "--out", out("Remount"), "--max-time", "90000"])),
+  wrapperOpener: q(() => probe(["--expected", EXPECTED, "--url", edge("wrapper-submit"), "--out", out("WrapperSubmitOpener"), "--max-time", "90000"])),
+  reload: q(() => probe(["--expected", QUIET, "--url", url("reload-on-first-hover"), "--out", out("Reload"), "--steps", "design/plan/Beds__70_1.json", "--ready", READY, "--max-time", "60000"])),
+  ambiguous: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Ambiguous"), "--steps", "steps-ambiguous.json"])),
+  clickNavSlow: q(() => probe(["--expected", QUIET, "--url", edge("clicknav-slow"), "--out", out("ClickNavSlow"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
+  noSteps: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("NoSteps"), "--ready", READY, "--timeout", "3000"])),
+  waitMany: q(() => probe(["--expected", QUIET, "--url", url(), "--out", out("WaitMany"), "--steps", "steps-waitfor-many.json"])),
+  linkLateAway: q(() => probe(["--expected", QUIET, "--url", edge("link-inplace-late-away"), "--out", out("LinkLateAway"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
+  linkStep: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("LinkStep"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "60000"])),
+  sameLink: q(() => probe(["--expected", QUIET, "--url", `${edge("same-link")}&section=beds`, "--out", out("SameLink"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
+  sameLinkTop: q(() => probe(["--expected", QUIET, "--url", `${edge("same-link")}&section=beds&target=_top`, "--out", out("SameLinkTop"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
+  absEscape: q(() => probe(["--expected", QUIET, "--url", edge("abs-escape"), "--out", out("AbsEscape"), "--max-time", "60000"])),
+  cbCreators: q(() => probe(["--expected", QUIET, "--url", edge("cb-creators"), "--out", out("CbCreators"), "--max-time", "60000"])),
+  wrapperStep: q(() => probe(["--expected", QUIET, "--url", edge("wrapper-submit"), "--out", out("WrapperSubmitStep"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
+  tallWrapper: q(() => probe(["--expected", QUIET, "--url", edge("tall-wrapper"), "--out", out("TallWrapper"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
+  submit: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Submit"), "--steps", "steps-submit.json"])),
+  inlineWrap: q(() => probe(["--expected", QUIET, "--url", edge("inline-wrap"), "--out", out("InlineWrap"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
+  fill: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Fill"), "--steps", "steps-fill.json"])),
+};
+// H-a: a click step navigating to another URL `delay` ms after the click (its ownership no longer rides on the timing)
+const slowNav = SLOW_NAV.map((delay) => ({ delay, run: q(() => probe(["--expected", QUIET, "--url", `${edge("slow-nav")}&delay=${delay}`, "--out", out(`SlowNav${delay}`), "--steps", "steps-reload-step.json", "--max-time", "60000"])) }));
+
 // ---- L-1: the screen behind a click
-const r1 = await probe(["--expected", EXPECTED, "--url", url(), "--out", out("NoSteps"), "--ready", READY, "--timeout", "3000"]);
+const r1 = await P.noSteps;
 check("[L-1] 1 no --steps + --ready on the section's root (only there after a click) → exit 4, nothing written", r1.status === 4 && !written(out("NoSteps")));
 
-// the main run, bound to a verify run (D41): --status --new-run → probe --run → --status done → --compare
-const st = await vs(["--status", "Beds", "--phase", "starting", "--new-run", "--dir", "design/verify"]);
-const runId = /^run (\S+) rev 1$/m.exec(st.stdout)?.[1] ?? "";
-const r2 = await probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, ...(runId ? ["--run", runId] : [])]);
+// the main run, bound to a verify run (D41): --status --new-run → probe --run → --status done → --compare (one queued task: P.main)
+const { runId, r2, done, c2 } = await P.main;
 const m2 = read(out("Beds"));
 if (r2.status !== 0) console.log(r2.stderr);
 check("[L-1] 2 --steps (click the sidebar button, waitFor the root) → exit 0, measured.json written", r2.status === 0 && m2 !== null);
@@ -204,9 +347,7 @@ check("[planner default 1] a panel that is only the destination tag (no dialog c
 check("[D43] 14 measured.page at the design width: scrollWidth = clientWidth = 1024, not scrollable, no offenders, standards mode",
   m2?.page?.scrollWidth === 1024 && m2.page.clientWidth === 1024 && m2.page.viewport.w === 1024 && !m2.page.scrollable && m2.page.offenders.length === 0 && m2.page.overflowX === "visible" && m2.page.compatMode === "CSS1Compat");
 
-const done = await vs(["--status", "Beds", "--phase", "done", "--run", runId, "--dir", "design/verify"]);
 if (done.status !== 0) console.log(done.stderr);
-const c2 = await vs(["--compare", EXPECTED, out("Beds") + ".measured.json", "--out", out("Beds")]);
 const rep2 = readReport(out("Beds"));
 if (rep2 === null) console.log(c2.stderr);
 check("[F-70] 6 --compare: the hover-revealed overlay passes (was not-probed: nothing drove it)", res(rep2, "70:44")?.result === "pass");
@@ -221,7 +362,7 @@ check("[L-1] --compare: inputs.reach (2 steps, matches the plan's navigate)", re
 // D4 (12b): the behaviour battery runs AFTER the drive, in its own pages — the same run with behaviour on records the same
 // interaction evidence (hover-revealed, role=dialog, untagged, dead, reloading, covered, plan-only, panel openers)
 const bOn = out("BedsOn");
-const rOn = await probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, "--out", bOn, "--behaviour", "on"]);
+const rOn = await P.bedsOn;
 const mOn = read(bOn);
 if (rOn.status !== 0) console.log(rOn.stderr);
 check("[D4] 13 --behaviour on: exit 0, measured.behaviour ran, and measured.interactions identical to the --behaviour off run's",
@@ -230,35 +371,18 @@ check("[D4] 13 --behaviour on: exit 0, measured.behaviour ran, and measured.inte
 
 // a step that loads a page (goto) is the probe's own navigation; a small --max-time leaves no driving budget
 const b3 = out("GotoSteps");
-const r3 = await probe(["--expected", EXPECTED, "--url", url(), "--out", b3, "--steps", "steps-goto.json", "--ready", READY, "--max-time", "25000"]);
+const r3 = await P.gotoSteps;
 const m3 = read(b3);
 if (r3.status !== 0) console.log(r3.stderr);
 check("[L-1] 2b a goto step (a document load) → exit 0, reach 3 steps, afterInitialLoad 0 (the step's load is the probe's own)", r3.status === 0 && m3?.reach?.steps.length === 3 && m3.navigation?.afterInitialLoad === 0);
 const cut3 = (m3?.interactions || []).filter((i) => i.cut === "budget");
 check("[D41] budget: --max-time 25 s leaves ≤ 10 s of driving → rows cut: ok:null, cut budget, 'not-run: time budget'; the measured file still written",
   cut3.length > 0 && cut3.every((i) => i.ok === null && i.detail === "not-run: time budget"));
-// M-1 (12b fix 2, D4): the drive keeps 12a's own budget (min(60 s, --max-time left − 15 s)) whatever 12b reserves after it — at a
-// small --max-time the first rows are still driven as on af80061 (--behaviour off: no 12b work at all)
-for (const [mt, ids] of [["25000", ["70:44"]], ["30000", ["70:44", "70:45"]]] as const) {
-  const bm = out(`Budget${mt}`);
-  const rm = await probe(["--expected", EXPECTED, "--url", url(), "--out", bm, "--steps", "steps.json", "--ready", READY, "--max-time", mt]);
-  const mm = read(bm);
-  if (rm.status !== 0) console.log(rm.stderr);
-  check(`[M-1/D4] --max-time ${Number(mt) / 1000} s, --behaviour off: ${ids.join(" and ")} driven ok:true as 12a drives them (the drive's budget never shrinks for 12b)`,
-    rm.status === 0 && ids.every((id) => ix(mm, id)?.ok === true && ix(mm, id)?.cut === undefined));
-}
-
-// facts-12a §1: a same-document URL rewrite after load (replaceState) is no navigation — only a document load is
-const b9 = out("Replace");
-const r9 = await probe(["--expected", QUIET, "--url", url("replace-state"), "--out", b9, "--max-time", "60000"]);
-const m9 = read(b9);
-if (r9.status !== 0) console.log(r9.stderr);
-check("[D19/facts §1] a replaceState 100 ms after load (no --steps) → afterInitialLoad 0 (framenavigated logged, never counted)",
-  r9.status === 0 && m9?.navigation?.afterInitialLoad === 0 && (m9.navigation.events || []).some((e) => e.type === "framenavigated" && /tab=harvest/.test(e.url)));
+// (M-1/D4 Budget25000 / Budget30000 and the facts-12a §1 replaceState run: the serial tail)
 
 // D19: a reload during measurement → one full re-run, which replays the steps (the plan's navigate as --steps)
 const b4 = out("Reload");
-const r4 = await probe(["--expected", QUIET, "--url", url("reload-on-first-hover"), "--out", b4, "--steps", "design/plan/Beds__70_1.json", "--ready", READY, "--max-time", "60000"]);
+const r4 = await P.reload;
 const m4 = read(b4);
 if (r4.status !== 0) console.log(r4.stderr);
 check("[D19/L-1] 3 a reload on the first hover → exit 0, re-runs 1, the steps replayed (the root measured by tag), a note on the kept storage",
@@ -267,89 +391,44 @@ check("[L-1] --steps <plan>: the plan's navigate list, source names the plan fil
 
 // D43: a sideways overflow only in the section the steps reach
 const b5 = out("Wide");
-const r5 = await probe(["--expected", EXPECTED, "--url", url("wide"), "--out", b5, "--steps", "steps.json", "--ready", READY, "--max-time", "30000"]);
+const { r5, c5 } = await P.wide;
 const m5 = read(b5);
 if (r5.status !== 0) console.log(r5.stderr);
 check("[D43] 13 a 1700px strip in the Beds section → page.scrollWidth ≥ 1600, scrollable, the strip named among the offenders",
   r5.status === 0 && (m5?.page?.scrollWidth ?? 0) >= 1600 && m5?.page?.scrollable === true && m5.page.offenders.some((o) => o.dt === "70:57"));
-const c5 = await vs(["--compare", EXPECTED, b5 + ".measured.json", "--out", b5]);
 const rep5 = readReport(b5);
 if (rep5 === null) console.log(c5.stderr);
 const ov = (rep5?.deltas || []).find((d) => d.field === "overflowX");
 check("[D43] 13 --compare: one HIGH overflowX delta on the root frame (expected clientWidth, actual scrollWidth)", ov?.severity === "high" && ov.nodeId === "70:1" && ov.expected === 1024 && typeof ov.actual === "number" && ov.actual >= 1600);
 
 // steps that must fail: ambiguous, a submit, a step outside the vocabulary
-const r6 = await probe(["--expected", EXPECTED, "--url", url(), "--out", out("Ambiguous"), "--steps", "steps-ambiguous.json"]);
+const r6 = await P.ambiguous;
 check("[L-1] 4 a step matching 2 visible elements → exit 4 'matched 2', the step and the navigation log printed, nothing written",
   r6.status === 4 && /step 1 \{click: "\.nav-btn"\} matched 2 visible element/.test(r6.stderr) && /navigation log/.test(r6.stderr) && !written(out("Ambiguous")));
-const r7 = await probe(["--expected", EXPECTED, "--url", url(), "--out", out("Submit"), "--steps", "steps-submit.json"]);
+const r7 = await P.submit;
 check("[L-1] 5 a step clicking a form's typeless button → exit 4 'never submit', nothing written", r7.status === 4 && /never submit/.test(r7.stderr) && !written(out("Submit")));
-const r8 = await probe(["--expected", EXPECTED, "--url", url(), "--out", out("Fill"), "--steps", "steps-fill.json"]);
+const r8 = await P.fill;
 check("[L-1] a {fill} step → exit 2 naming it (the vocabulary is click / waitFor / goto)", r8.status === 2 && /\{fill: …\} is not a step/.test(r8.stderr) && !written(out("Fill")));
 
 // B2: a waitFor is met by one or more visible matches (a click still needs exactly one: check 4 above)
 const b10 = out("WaitMany");
-const r10 = await probe(["--expected", QUIET, "--url", url(), "--out", b10, "--steps", "steps-waitfor-many.json"]);
+const r10 = await P.waitMany;
 if (r10.status !== 0) console.log(r10.stderr);
 check("[B2] a waitFor step matching 7 visible elements → met (exit 0, reach 2 steps)", r10.status === 0 && read(b10)?.reach?.steps.length === 2);
 
 // ---- review 1 repros (plot-ledger-edge.html)
-// H1 / D19: a reload 300 ms after load into a document that stays half-loaded for 2.5 s — the probe must wait for it
-const b11 = out("ReloadSettle");
-const r11 = await probe(["--expected", QUIET, "--url", edge("reload-settle"), "--out", b11, "--ready", READY, "--max-time", "60000"]);
-const m11 = read(b11);
-if (r11.status !== 0) console.log(r11.stderr);
-check("[H1/D19] a reload while settling into a half-loaded document → waited for: the root by tag, its heading measured, afterInitialLoad 1 (the reload's load), re-runs 0",
-  r11.status === 0 && m11?.frame?.via === "tag" && m11.frame.nodeId === "70:1" && (m11.nodes || []).some((n) => n.nodeId === "70:2" && n.matchedBy === "tag")
-  && m11.navigation?.afterInitialLoad === 1 && m11.navigation.reruns === 0);
-const b11b = out("ReloadSettleNoReady");
-const r11b = await probe(["--expected", QUIET, "--url", edge("reload-settle"), "--out", b11b, "--max-time", "60000"]);
-const m11b = read(b11b);
-check("[H1/D19] the same without --ready (nothing to wait for but the quiet window) → still the reloaded document, measured once it loaded",
-  r11b.status === 0 && m11b?.frame?.via === "tag" && m11b.navigation?.afterInitialLoad === 1);
-
-// H1 (steps): a load the step did not start is not the probe's own — it counts, and (the click's state is gone) the
-// pass is re-run once with the steps replayed
-const b12 = out("ReloadStep");
-const r12 = await probe(["--expected", QUIET, "--url", edge("reload-step"), "--out", b12, "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "60000"]);
-const m12 = read(b12);
-if (r12.status !== 0) console.log(r12.stderr);
-check("[H1] a reload 300 ms after a step's in-place click → not absorbed by the step: afterInitialLoad 1, re-runs 1 (steps replayed), the root by tag",
-  r12.status === 0 && m12?.navigation?.afterInitialLoad === 1 && m12.navigation.reruns === 1 && m12.frame?.via === "tag");
-const b12b = out("GotoReload");
-const r12b = await probe(["--expected", QUIET, "--url", edge("reload-after-goto"), "--out", b12b, "--steps", "steps-goto-reload.json", "--ready", READY, "--max-time", "60000"]);
-const m12b = read(b12b);
-if (r12b.status !== 0) console.log(r12b.stderr);
-check("[H1] a goto step whose page then reloads by itself → the goto's load is absorbed, the reload's is not: afterInitialLoad 1, re-runs 0",
-  r12b.status === 0 && m12b?.navigation?.afterInitialLoad === 1 && m12b.navigation.reruns === 0 && m12b.frame?.via === "tag");
-const b12c = out("ReloadLate");
-const r12c = await probe(["--expected", QUIET, "--url", edge("reload-late"), "--out", b12c, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
-const m12c = read(b12c);
-if (r12c.status !== 0) console.log(r12c.stderr);
-check("[H1] a reload 1 s after an in-place click (while waiting for --ready, the section lost) → re-run with the steps replayed: exit 0, re-runs 1, the root by tag",
-  r12c.status === 0 && m12c?.navigation?.reruns === 1 && m12c.navigation.afterInitialLoad === 1 && m12c.frame?.via === "tag");
+// (H1 / D19 ReloadSettle, ReloadSettleNoReady, ReloadStep, GotoReload, ReloadLate: the serial tail)
 const b13 = out("LinkStep");
-const r13 = await probe(["--expected", QUIET, "--url", edge("link-step"), "--out", b13, "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "60000"]);
+const r13 = await P.linkStep;
 const m13 = read(b13);
 if (r13.status !== 0) console.log(r13.stderr);
 check("[H1] a step whose click follows a link → that load is the step's own: afterInitialLoad 0, re-runs 0, the root by tag",
   r13.status === 0 && m13?.navigation?.afterInitialLoad === 0 && m13.navigation.reruns === 0 && m13.frame?.via === "tag" && /section=beds/.test(m13.reach?.url ?? ""));
-
-// M1: every driving page's reach hangs (the server never answers again); --timeout 30 s, --max-time 22 s → about 6 s of
-// driving: the cut closes the row's context mid-reach, so the run ends inside --max-time with the measured file written
-const b14 = out("SlowReach");
-const t14 = Date.now();
-const r14 = await probe(["--expected", EXPECTED, "--url", edge("slow-reach"), "--out", b14, "--timeout", "30000", "--max-time", "22000"]);
-const s14 = Date.now() - t14;
-const m14 = read(b14);
-if (r14.status !== 0) console.log(r14.stderr);
-check(`[M1] a driving reach that never answers is cut by the budget mid-reach → exit 0 in ${Math.round(s14 / 1000)} s (< 22 s), measured written, every row ok:null cut budget`,
-  r14.status === 0 && s14 < 22_000 && m14 !== null && (m14.interactions || []).length === 8 && (m14.interactions || []).every((i) => i.ok === null && i.cut === "budget"));
+// (M1 SlowReach: the serial tail)
 
 // M2 + B3 + L3
 const b15 = out("Ancestor");
-mutations.length = 0;
-const r15 = await probe(["--expected", EXPECTED, "--url", edge("ancestor"), "--out", b15, "--max-time", "90000"]);
+const r15 = await P.ancestor;
 const m15 = read(b15);
 if (r15.status !== 0) console.log(r15.stderr);
 const e47 = ix(m15, "70:47"), e49 = ix(m15, "70:49");
@@ -361,12 +440,12 @@ check("[B3] disabled openers (aria-disabled on it / on an ancestor, [disabled]) 
   ["70:44", "70:45", "70:46"].every((id) => { const e = ix(m15, id); return e?.ok === null && e.detail === "opener is disabled — not driven" && e.activation === undefined; }));
 check("[L3] a typeless <button> in a <form> as the opener → ok:null 'opener would submit a form', not clicked",
   ix(m15, "70:48")?.ok === null && /^opener would submit a form/.test(ix(m15, "70:48")?.detail || "") && ix(m15, "70:48")?.activation === undefined);
-check(`[B3/L3] no opener's handler ran a write (server saw: ${mutations.join(", ") || "nothing"})`, r15.status === 0 && mutations.length === 0);
+const w15 = writesOf(edge("ancestor"));
+check(`[B3/L3] no opener's handler ran a write (server saw: ${w15.join(", ") || "nothing"})`, r15.status === 0 && w15.length === 0);
 
 // 12b review 3 L-2: the drive's click point (the opener's centre) is another control inside the opener → never clicked
 const bCC = out("CardCentre");
-mutations.length = 0;
-const rCC = await probe(["--expected", EXPECTED, "--url", edge("card-centre"), "--out", bCC, "--max-time", "90000"]);
+const rCC = await P.cardCentre;
 const mCC = read(bCC);
 if (rCC.status !== 0) console.log(rCC.stderr);
 check("[L-2] a card opener whose centre is its own Delete button (a 2nd control beside it) → not driven: ok:null 'the opener's click point is another control inside it (<button aria-label=\"Delete bed\">) — tag that control or the opener's own clickable element', no activation",
@@ -376,15 +455,15 @@ const refused = (id: string): boolean => ix(mCC, id)?.ok === null && /^the opene
 check("[D51] a card with its own label whose ONLY control is its centred Delete → not the card's own control: not driven, ok:null naming <button aria-label=\"Delete bed\">, no activation", refused("70:45"));
 check("[D51] a cell whose only other content is an sr-only label → its centred button is the opener: driven, ok:true", ix(mCC, "70:53")?.ok === true && ix(mCC, "70:53")?.activation === "mouse");
 check("[review 4 H-1] a FOCUSABLE card (role=button tabindex=0) and an <a href> card, each with a centred Delete → not driven, ok:null naming the Delete, no activation", refused("70:46") && refused("70:48"));
-check(`[L-2] the drive pressed no Delete (server saw: ${mutations.join(", ") || "nothing"})`, rCC.status === 0 && mutations.length === 0);
+const wCC = writesOf(edge("card-centre"));
+check(`[L-2] the drive pressed no Delete (server saw: ${wCC.join(", ") || "nothing"})`, rCC.status === 0 && wCC.length === 0);
 
 // review 5 H-1: what the centre click would press beyond a plain focusable inside the card — a label's checkbox, a role=button
 // span without tabindex, a shadow-DOM button (also through slotted text), an iframe — never clicked; D47's cell still driven
 const notDrivenFor = (m: VerifyMeasured | null, id: string, ctl: string): boolean => ix(m, id)?.ok === null && ix(m, id)?.activation === undefined
   && (ix(m, id)?.detail || "").startsWith(`the opener's click point is another control inside it (${ctl}) — tag that control or the opener's own clickable element`);
 const bCH = out("ClickHidden");
-mutations.length = 0;
-const rCH = await probe(["--expected", EXPECTED, "--url", edge("click-hidden"), "--out", bCH, "--max-time", "90000"]);
+const rCH = await P.clickHidden;
 const mCH = read(bCH);
 if (rCH.status !== 0) console.log(rCH.stderr);
 check("[review 5 H-1] a <label for> its checkbox at the card's centre (70:44) and a label wrapping its checkbox (70:45) → not driven, ok:null naming the checkbox (the label's control)",
@@ -394,26 +473,27 @@ check("[review 5 H-1] a web component's shadow <button> at the centre (70:47), a
   notDrivenFor(mCH, "70:47", "<button aria-label=\"Delete\">") && notDrivenFor(mCH, "70:50", "<button aria-label=\"Remove\">"));
 check("[review 5 H-1] an iframe at the card's centre (70:48) → not driven, ok:null naming <iframe>", notDrivenFor(mCH, "70:48", "<iframe>"));
 check("[review 5 H-1/D47] a cell whose ONLY focusable is its centred icon button (70:49) → still driven, ok:true, mouse", ix(mCH, "70:49")?.ok === true && ix(mCH, "70:49")?.activation === "mouse");
-check(`[review 5 H-1] the drive toggled no checkbox and pressed no Delete (server saw: ${mutations.join(", ") || "nothing"})`, rCH.status === 0 && mutations.length === 0);
+const wCH = writesOf(edge("click-hidden"));
+check(`[review 5 H-1] the drive toggled no checkbox and pressed no Delete (server saw: ${wCH.join(", ") || "nothing"})`, rCH.status === 0 && wCH.length === 0);
 
 // review 5 H-2 / H-3 (D51): a card's own content the check used to miss (display:contents text, shadow text, a ::before label, a
 // background-image logo) → its centred Delete is never clicked; a cell's text that shows nothing (an opacity-0 tooltip, a
 // clip-path-only sr-only label, an opacity-0 wrapper, an aria-hidden scale(0) tooltip) → its button is the opener's: driven
 const bOC = out("OwnContent");
-mutations.length = 0;
-const rOC = await probe(["--expected", EXPECTED, "--url", edge("own-content"), "--out", bOC, "--max-time", "90000"]);
+const rOC = await P.ownContent;
 const mOC = read(bOC);
 if (rOC.status !== 0) console.log(rOC.stderr);
 check("[review 5 H-2/D51] cards whose own label is text in display:contents wrappers (70:44), a shadow-root title (70:45), a ::before label (70:46) or a background-image logo (70:47) → not driven, ok:null naming the centred Delete",
   ["70:44", "70:45", "70:46", "70:47"].every((id) => notDrivenFor(mOC, id, "<button aria-label=\"Delete bed\">")));
 check("[review 5 H-3/D51] cells whose sole centred button sits beside an opacity-0 tooltip (70:48), a clip-path-only sr-only label (70:49), an opacity-0 wrapper's tooltip (70:50) or an aria-hidden scale(0) tooltip (70:53) → driven, ok:true, mouse (was: refused)",
   ["70:48", "70:49", "70:50", "70:53"].every((id) => ix(mOC, id)?.ok === true && ix(mOC, id)?.activation === "mouse"));
-check(`[review 5 H-2] the drive pressed no Delete (server saw: ${mutations.join(", ") || "nothing"})`, rOC.status === 0 && mutations.length === 0);
+const wOC = writesOf(edge("own-content"));
+check(`[review 5 H-2] the drive pressed no Delete (server saw: ${wOC.join(", ") || "nothing"})`, rOC.status === 0 && wOC.length === 0);
 
 // review 5 M-1: a covered opener's synthetic click starts from the drive's own scroll — its evidence never depends on how many
 // Playwright click retries (each scrolling with another alignment) fitted into the 2 s
 const bCT = out("CoveredTall");
-const rCT = await probe(["--expected", EXPECTED, "--url", edge("covered-tall"), "--out", bCT, "--max-time", "60000"]);
+const rCT = await P.coveredTall;
 const eCT = ix(read(bCT), "70:49");
 if (rCT.status !== 0) console.log(rCT.stderr);
 check(`[review 5 M-1] a covered opener in view on a tall page → synthetic click from the drive's scroll: opened.scrollY 0 (saw ${String(eCT?.opened?.scrollY)}), the dialog detected`,
@@ -424,8 +504,7 @@ check(`[review 5 M-1] a covered opener in view on a tall page → synthetic clic
 // icon, a colour swatch → the centred Delete is never clicked; a hover tint over a whole cell and a filled wrapper around its sole
 // button are the cell's own chrome → driven
 const bO2 = out("OwnContent2");
-mutations.length = 0;
-const rO2 = await probe(["--expected", EXPECTED, "--url", edge("own-content-2"), "--out", bO2, "--max-time", "90000"]);
+const rO2 = await P.ownContent2;
 const mO2 = read(bO2);
 if (rO2.status !== 0) console.log(rO2.stderr);
 check("[review 6 H-1/D51] a card below the fold whose label is opacity 0 in flow until it is scrolled into view (reveal-on-scroll, 70:44) → not driven, ok:null naming the centred Delete (was: pressed)",
@@ -436,14 +515,14 @@ check("[review 6 H-3/D51] an empty ::before logo on a background-image (70:47), 
   ["70:47", "70:48", "70:49"].every((id) => notDrivenFor(mO2, id, "<button aria-label=\"Delete bed\">")));
 check("[review 6 H-3/D47] a cell under a pointer-events:none hover tint over the whole cell (70:50), a cell whose sole button sits in a filled wrapper (70:53) → driven, ok:true, mouse",
   ["70:50", "70:53"].every((id) => ix(mO2, id)?.ok === true && ix(mO2, id)?.activation === "mouse"));
-check(`[review 6 H-1/H-3] the drive pressed no Delete (server saw: ${mutations.join(", ") || "nothing"})`, rO2.status === 0 && mO2 !== null && mutations.length === 0);
+const wO2 = writesOf(edge("own-content-2"));
+check(`[review 6 H-1/H-3] the drive pressed no Delete (server saw: ${wO2.join(", ") || "nothing"})`, rO2.status === 0 && mO2 !== null && wO2.length === 0);
 
 // review 6 L-2 / H-3 / L-1: an sr-only label off the document's start edge shows nothing; an empty ::before status dot on a
 // background colour is content, an empty ::after tint over the whole cell and an out-of-flow opacity-0 ::after tooltip are not;
 // a label 8000 elements deep is found without a stack overflow
 const bO3 = out("OwnContent3");
-mutations.length = 0;
-const rO3 = await probe(["--expected", EXPECTED, "--url", edge("own-content-3"), "--out", bO3, "--max-time", "90000"]);
+const rO3 = await P.ownContent3;
 const mO3 = read(bO3);
 if (rO3.status !== 0) console.log(rO3.stderr);
 check("[review 6 L-2/D47] a cell whose sr-only label is at left:-9999px (off the document's start edge) → driven, ok:true, mouse (was: refused)",
@@ -458,13 +537,14 @@ check("[fix8 D52] a cell painting a tint with its own empty ::after over the who
   notDrivenFor(mO3, "70:46", "<button aria-label=\"Open bed\">") && /D52/.test(ix(mO3, "70:46")?.detail ?? ""));
 check(`[review 6 L-1] a card whose label is 8000 elements deep (70:48) → a clean refusal naming the Delete, no 'driving failed' (saw: ${ix(mO3, "70:48")?.detail ?? "no row"})`,
   notDrivenFor(mO3, "70:48", "<button aria-label=\"Delete bed\">"));
-check(`[review 6 H-3/L-1] the drive pressed no Delete (server saw: ${mutations.join(", ") || "nothing"})`, rO3.status === 0 && mO3 !== null && mutations.length === 0);
+const wO3 = writesOf(edge("own-content-3"));
+check(`[review 6 H-3/L-1] the drive pressed no Delete (server saw: ${wO3.join(", ") || "nothing"})`, rO3.status === 0 && mO3 !== null && wO3.length === 0);
 
 // review 6 H-2: an activating control anywhere on the click point's path wins over a merely focusable element below it; an
-// <object> / <embed> is a nested browsing context → never clicked
+// <object> / <embed> is a nested browsing context → never clicked (a write from inside them carries the subframe's own URL:
+// charged to every run)
 const bR6c = out("ClickHidden2");
-mutations.length = 0;
-const rR6c = await probe(["--expected", EXPECTED, "--url", edge("click-hidden-2"), "--out", bR6c, "--max-time", "90000"]);
+const rR6c = await P.clickHidden2;
 const mR6c = read(bR6c);
 if (rR6c.status !== 0) console.log(rR6c.stderr);
 check("[review 6 H-2] a centred <button> Delete whose glyph is a tabindex=-1 span (70:44) → not driven, ok:null naming the button (was: pressed)",
@@ -474,51 +554,22 @@ check("[review 6 H-2] a span role=button Delete with a tabindex=-1 glyph (70:45)
 check("[review 6 H-2] an <object> (70:47) and an <embed> (70:48) at the card's centre showing a page whose Delete fills them → not driven, ok:null naming <object> / <embed>",
   notDrivenFor(mR6c, "70:47", "<object type=\"text/html\">") && notDrivenFor(mR6c, "70:48", "<embed type=\"text/html\">"));
 check("[review 6 H-2/D47] the plain D47 cell (70:49) → still driven, ok:true, mouse", ix(mR6c, "70:49")?.ok === true && ix(mR6c, "70:49")?.activation === "mouse");
-check(`[review 6 H-2] the drive pressed no Delete inside the openers (server saw: ${mutations.join(", ") || "nothing"})`, rR6c.status === 0 && mR6c !== null && mutations.length === 0);
-
-// review 6 H-4 (D4): a covered opener in a scroll-behavior:smooth app-shell scroller — the drive's scroll is restored at once,
-// so the synthetic click lands on the shell as the drive had it; nothing the page itself scrolls animates either (the probe's
-// init CSS); with the page's own !important ID rule beating the init CSS, the restore is still instant
-const bR6s = out("SmoothShell");
-const rR6s = await probe(["--expected", EXPECTED, "--url", edge("smooth-shell"), "--out", bR6s, "--max-time", "60000"]);
-const mR6s = read(bR6s), eR6s = ix(mR6s, "70:49"), jR6s = ix(mR6s, "70:50");
-if (rR6s.status !== 0) console.log(rR6s.stderr);
-check(`[review 6 H-4] a covered opener in a smooth-scrolling app shell → synthetic click with the shell back at its scroll: the popover anchored at click time is at y 100 (saw ${String(eR6s?.opened?.rect.y)}), the dialog detected`,
-  rR6s.status === 0 && eR6s?.activation === "synthetic" && eR6s.opened?.rect.y === 100 && eR6s.detectedBy === "[role=dialog]");
-check(`[review 6 H-4] the page's own scroll in a smooth shell (scrollTo 300 on click, 70:50) is instant under the probe: its popover is at y 400 (saw ${String(jR6s?.opened?.rect.y)})`,
-  jR6s?.activation === "mouse" && jR6s.opened?.rect.y === 400);
-const bR6i = out("SmoothShellImportant");
-const rR6i = await probe(["--expected", EXPECTED, "--url", `${edge("smooth-shell")}&important=1`, "--out", bR6i, "--max-time", "60000"]);
-const eR6i = ix(read(bR6i), "70:49");
-if (rR6i.status !== 0) console.log(rR6i.stderr);
-check(`[review 6 H-4] the same shell forced smooth by the page's !important ID rule → the drive's restore is still instant: y 100 (saw ${String(eR6i?.opened?.rect.y)})`,
-  rR6i.status === 0 && eR6i?.activation === "synthetic" && eR6i.opened?.rect.y === 100);
-
-// fix 8 (review 6 H-4 follow-up, D4): the same !important-smooth shell, where the page reads the scroll in requestAnimationFrame —
-// its popover is anchored at the shell's scroll in the last frame PAINTED before the click: 100 only when the drive's restore held
-// for frames before its synthetic click (restore, two frames, look again — twice in a row), deterministic under any load (was:
-// the click came right after one restore; under load a smooth scroll Playwright's retry started could still move the shell)
-const bR6p = out("SmoothShellPainted");
-const rR6p = await probe(["--expected", EXPECTED, "--url", `${edge("smooth-shell")}&important=1&painted=1`, "--out", bR6p, "--max-time", "60000"]);
-const eR6p = ix(read(bR6p), "70:49");
-if (rR6p.status !== 0) console.log(rR6p.stderr);
-check(`[fix8 review 6 H-4] the !important-smooth shell, popover anchored at the last painted frame's scroll → the restored scroll held before the synthetic click: y 100 (saw ${String(eR6p?.opened?.rect.y)})`,
-  rR6p.status === 0 && eR6p?.activation === "synthetic" && eR6p.opened?.rect.y === 100);
+const wR6c = writesOf(edge("click-hidden-2"));
+check(`[review 6 H-2] the drive pressed no Delete inside the openers (server saw: ${wR6c.join(", ") || "nothing"})`, rR6c.status === 0 && mR6c !== null && wR6c.length === 0);
+// (review 6 H-4 SmoothShell, SmoothShellImportant, SmoothShellPainted: the serial tail)
 
 // 12b review 7 (fix 8, owner D52): a container's sole centred control is its own only when the container paints nothing of its
 // own beside it — decided by pixels (only that control hidden vs all its content hidden), as a union with the DOM check; the
 // opener is hovered first, so a hover-revealed Delete is at the click point (H-1). Every Delete here writes; none may be pressed
-const ownPx = async (mode: string): Promise<{ m: VerifyMeasured | null; status: number | null; writes: string[] }> => {
-  const b = out(`OwnPixels-${mode.replace(/[^\w-]/g, "_")}`);
-  mutations.length = 0;
-  const r = await probe(["--expected", EXPECTED, "--url", edge(mode), "--out", b, "--max-time", "90000"]);
+const ownPx = async (mode: string, pending: Promise<Run>): Promise<{ m: VerifyMeasured | null; status: number | null; writes: string[] }> => {
+  const r = await pending;
   if (r.status !== 0) console.log(r.stderr);
-  return { m: read(b), status: r.status, writes: [...mutations] };
+  return { m: read(ownPxOut(mode)), status: r.status, writes: writesOf(edge(mode)) };
 };
 const DEL = "<button aria-label=\"Delete bed\">";
 const byPixels = (m: VerifyMeasured | null, id: string): boolean => notDrivenFor(m, id, DEL) && /D52/.test(ix(m, id)?.detail ?? "");
 const drivenOk = (m: VerifyMeasured | null, ids: string[]): boolean => ids.every((id) => ix(m, id)?.ok === true && ix(m, id)?.activation === "mouse");
-const p1 = await ownPx("own-pixels-1");
+const p1 = await ownPx("own-pixels-1", P.px1);
 check("[review 7 H-1] a labelled card whose centred Delete shows only on :hover — by visibility (70:44), display (70:45), opacity + pointer-events (70:46) → not driven, ok:null naming the Delete (was: pressed)",
   ["70:44", "70:45", "70:46"].every((id) => notDrivenFor(p1.m, id, DEL)));
 check("[review 7 H-2a/D52] a status dot drawn by the card's own empty ::before (70:47), by an empty ::before of a wrapper holding the Delete (70:48), a swatch drawn by the card's own ::after (70:49) → not driven by the pixels, naming the Delete (was: pressed)",
@@ -526,7 +577,7 @@ check("[review 7 H-2a/D52] a status dot drawn by the card's own empty ::before (
 check("[D47/D52] a cell under a hover tint over the whole cell (70:53), a cell whose sole button sits in a filled wrapper (70:50) → still driven, ok:true, mouse",
   drivenOk(p1.m, ["70:53", "70:50"]));
 check(`[review 7 H-1/H-2a] the drive pressed no Delete (server saw: ${p1.writes.join(", ") || "nothing"})`, p1.status === 0 && p1.m !== null && p1.writes.length === 0);
-const p2 = await ownPx("own-pixels-2");
+const p2 = await ownPx("own-pixels-2", P.px2);
 check("[review 7 H-2b–d/D52] a dot drawn by a border (70:46), a swatch drawn by a box-shadow (70:47), a band across the centre (70:48), a colour tile holding the Delete (70:49) → not driven by the pixels, naming the Delete (was: pressed)",
   ["70:46", "70:47", "70:48", "70:49"].every((id) => byPixels(p2.m, id)));
 check("[review 7 H-2b/review 8 H-1] a <progress> (70:44), a <meter> (70:45) → not driven, naming the Delete — now by the DOM's media rule, before the pixels (was: pressed)",
@@ -534,7 +585,7 @@ check("[review 7 H-2b/review 8 H-1] a <progress> (70:44), a <meter> (70:45) → 
 check("[D47/D52] a cell with a Tailwind sr-only label (70:53), a cell with a transform:scale(0) aria-hidden tooltip (70:50) → still driven, ok:true, mouse",
   drivenOk(p2.m, ["70:53", "70:50"]));
 check(`[review 7 H-2b–d] the drive pressed no Delete (server saw: ${p2.writes.join(", ") || "nothing"})`, p2.status === 0 && p2.m !== null && p2.writes.length === 0);
-const p3 = await ownPx("own-pixels-3");
+const p3 = await ownPx("own-pixels-3", P.px3);
 check("[review 7 H-2e] a card below the fold whose out-of-flow label fades in once scrolled into view (70:44) → not driven, naming the Delete (was: pressed)",
   notDrivenFor(p3.m, "70:44", DEL));
 check("[review 7 L-2] a label painted past its 1 × 1 overflow:clip box by overflow-clip-margin (70:45) → not driven, naming the Delete (was: pressed)",
@@ -545,7 +596,7 @@ check("[D47/D52] a cell with an icon inside its button (70:47), a clip-path sr-o
   drivenOk(p3.m, ["70:47", "70:48", "70:49", "70:53", "70:50"]));
 check(`[review 7 H-2e/L-2] the drive pressed no Delete (server saw: ${p3.writes.join(", ") || "nothing"})`, p3.status === 0 && p3.m !== null && p3.writes.length === 0);
 // D52 under a strict style CSP: the probe hides by its own constructed sheet (CSSOM), which a CSP never blocks
-const pC = await ownPx("own-pixels-csp&csp=1");
+const pC = await ownPx("own-pixels-csp&csp=1", P.pxCsp);
 check("[fix8 D52/CSP] under style-src 'nonce-…' a card's own ::before status dot beside its sole centred Delete (70:44) → not driven by the pixels, naming the Delete; the plain D47 cell (70:53) → driven",
   byPixels(pC.m, "70:44") && drivenOk(pC.m, ["70:53"]));
 check("[review 8 L-1] under the same CSP a D47 cell whose button has transition:all (70:50) → driven, ok:true, mouse (was: refused 'could not hide its control' — the init CSS <style> was blocked)",
@@ -554,7 +605,7 @@ check(`[fix8 D52/CSP] the drive pressed no Delete (server saw: ${pC.writes.join(
 // 12b review 8 (fix 9, owner D53): the boxes kept as decoration only when their pixels are plain, a shadow host's own content,
 // the container's own ::marker, a layered !important, everything outside the container hidden in both shots (a foreign ticker),
 // a control unmounted when the pointer leaves
-const p4 = await ownPx("own-pixels-4");
+const p4 = await ownPx("own-pixels-4", P.px4);
 const isD53 = (m: VerifyMeasured | null, id: string, re: RegExp): boolean => notDrivenFor(m, id, DEL) && re.test(ix(m, id)?.detail ?? "");
 check("[review 8 H-1/D53] an inset:0 fill clipped to a corner flag by clip-path (70:44), one painted only in a 4-px content box by background-clip (70:45) → never kept as decoration: not driven by the pixels, naming the Delete (was: pressed)",
   byPixels(p4.m, "70:44") && byPixels(p4.m, "70:45"));
@@ -570,7 +621,7 @@ check("[review 8 M-1/M-2] a D47 cell whose button is mounted on hover and unmoun
 check(`[review 8] the drive pressed no Delete (server saw: ${p4.writes.join(", ") || "nothing"})`, p4.status === 0 && p4.m !== null && p4.writes.length === 0);
 // review 7 L-1: in an app shell scrolled so a tall card's label lies above the shell's top, the label is still the card's own
 // (scrolling the shell reaches it): its Delete is never clicked; a D47 cell in the same shell is driven
-const pT = await ownPx("tall-shell");
+const pT = await ownPx("tall-shell", P.pxTall);
 check("[review 7 L-1] a 900-px card in a scrolled app shell, its label above the shell's top, its Delete under the click point (70:44) → not driven, naming the Delete (was: pressed)",
   notDrivenFor(pT.m, "70:44", DEL));
 check("[review 7 L-1/D47] a D47 cell in the same shell (70:53) → driven, ok:true, mouse", drivenOk(pT.m, ["70:53"]));
@@ -578,7 +629,7 @@ check(`[review 7 L-1] the drive pressed no Delete (server saw: ${pT.writes.join(
 
 // L7: an absolute strip escaping a static overflow:hidden wrapper widens the page and is named; a clipped one is not
 const b16 = out("AbsEscape");
-const r16 = await probe(["--expected", QUIET, "--url", edge("abs-escape"), "--out", b16, "--max-time", "60000"]);
+const r16 = await P.absEscape;
 const m16 = read(b16);
 if (r16.status !== 0) console.log(r16.stderr);
 check("[L7] an absolute element inside a static overflow:hidden wrapper → page scrolls sideways and it is named among the offenders; one clipped by a positioned wrapper is not",
@@ -587,9 +638,9 @@ check("[L7] an absolute element inside a static overflow:hidden wrapper → page
 // ---- review 2 repros (plot-ledger-edge.html)
 // H-a: a click step whose page navigates to ANOTHER URL only later (an app that awaits a request first) — that navigation
 // is the step's own however late it starts: no re-run, not after the initial load. 0 and 120 ms are guards (fine before).
-for (const delay of [0, 120, 160, 200, 400, 1500]) {
+for (const { delay, run: pending } of slowNav) {
   const b = out(`SlowNav${delay}`);
-  const r = await probe(["--expected", QUIET, "--url", `${edge("slow-nav")}&delay=${delay}`, "--out", b, "--steps", "steps-reload-step.json", "--max-time", "60000"]);
+  const r = await pending;
   const m = read(b);
   if (r.status !== 0) console.log(r.stderr);
   check(`[H-a${delay <= 120 ? " guard" : ""}] a click step navigating ${delay} ms after the click → the step's own: exit 0, the root by tag, afterInitialLoad 0, re-runs 0, reach url section=beds`,
@@ -597,46 +648,33 @@ for (const delay of [0, 120, 160, 200, 400, 1500]) {
 }
 // M-a: the click's navigation commits at once into a document that stays half-loaded (quiet) for 2.5 s — waited for
 const bM = out("ClickNavSlow");
-const rM = await probe(["--expected", QUIET, "--url", edge("clicknav-slow"), "--out", bM, "--steps", "steps-click-only.json", "--max-time", "60000"]);
+const rM = await P.clickNavSlow;
 const mM = read(bM);
 if (rM.status !== 0) console.log(rM.stderr);
 check("[M-a] a step's navigation into a half-loaded document (no --ready) → its load is waited for: the root by tag, its heading measured, afterInitialLoad 0",
   rM.status === 0 && mM?.frame?.via === "tag" && (mM.nodes || []).some((n) => n.nodeId === "70:2" && n.matchedBy === "tag") && mM.navigation?.afterInitialLoad === 0);
-// H-a: a click that reloads the SAME URL after changing the page in place, every time → exit 4 naming the step, not the watch-tree hint
-const bR = out("ClickReloads");
-const rR = await probe(["--expected", QUIET, "--url", edge("click-reloads"), "--out", bR, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
-check("[H-a] a click that reloads the same URL after its in-place change, on the pass and the re-run → exit 4, nothing written, the step named, 'not a navigation step', no watch-tree hint",
-  rR.status === 4 && !written(bR) && /after step 1 \{click: "\[data-dt-node=\\?"70:30\\?"\]"\} had changed it in place/.test(rR.stderr)
-  && /on the first pass and again on the re-run/.test(rR.stderr) && /not a\s+navigation step/.test(rR.stderr) && !/watch tree/.test(rR.stderr) && /navigation log/.test(rR.stderr));
-// L-a: the document replaced right after settling (simulated by a token that changes at the first plain read after the
-// settle polls) → the pass compares against the token settle saw quiet → one re-run
-const bA = out("TokenSwitch");
-const rA = await probe(["--expected", QUIET, "--url", edge("token-switch"), "--out", bA, "--max-time", "60000"]);
-const mA = read(bA);
-if (rA.status !== 0) console.log(rA.stderr);
-check("[L-a] a document replaced between settling and measuring → caught (the settled token is compared): exit 0, re-runs 1",
-  rA.status === 0 && mA?.navigation?.reruns === 1 && mA.frame?.via === "tag");
+// (H-a ClickReloads and L-a TokenSwitch: the serial tail)
 // L-c: a tagged wrapper whose click point is a typeless <button> in a <form> — as a step, and as an opener
-mutations.length = 0;
 const bC = out("WrapperSubmitStep");
-const rC = await probe(["--expected", QUIET, "--url", edge("wrapper-submit"), "--out", bC, "--steps", "steps-click-only.json", "--max-time", "60000"]);
+const rC = await P.wrapperStep;
 check("[L-c] a step clicking a tagged wrapper whose click point is a form's typeless button → exit 4 'never submit' (at its click point), nothing written",
   rC.status === 4 && /would submit a form \(a <button> without a type inside a <form> \(it submits\) at its click point\) — a step must navigate, never submit/.test(rC.stderr) && !written(bC));
 const bC2 = out("WrapperSubmitOpener");
-const rC2 = await probe(["--expected", EXPECTED, "--url", edge("wrapper-submit"), "--out", bC2, "--max-time", "90000"]);
+const rC2 = await P.wrapperOpener;
 const eC2 = ix(read(bC2), "70:47");
 check("[L-c] an opener that is a tagged wrapper around a form's typeless button → ok:null 'opener would submit a form (… at its click point)', not clicked",
   rC2.status === 0 && eC2?.ok === null && /^opener would submit a form \(.*at its click point\)/.test(eC2.detail || "") && eC2.activation === undefined);
-check(`[L-c] no form was submitted (server saw: ${mutations.join(", ") || "nothing"})`, mutations.length === 0);
+const wC = writesOf(edge("wrapper-submit"));
+check(`[L-c] no form was submitted (server saw: ${wC.join(", ") || "nothing"})`, wC.length === 0);
 // L-b: a destination wrapper the app re-mounts in place around an unrelated dialog is not newly visible → not inside
 const bB = out("Remount");
-const rB = await probe(["--expected", EXPECTED, "--url", edge("remount"), "--out", bB, "--max-time", "90000"]);
+const rB = await P.remount;
 const eB = ix(read(bB), "70:47");
 check("[L-b] an unrelated dialog inside a destination wrapper re-mounted in the same place → destination NOT inside, ok:null",
   rB.status === 0 && eB?.ok === null && eB.detectedBy === "[role=dialog]" && eB.destination?.inside === false);
 // L-d: containing-block creators beyond transform
 const bD = out("CbCreators");
-const rD = await probe(["--expected", QUIET, "--url", edge("cb-creators"), "--out", bD, "--max-time", "60000"]);
+const rD = await P.cbCreators;
 const mD = read(bD);
 if (rD.status !== 0) console.log(rD.stderr);
 check("[L-d] position:fixed under a transformed ancestor widens the page and is named; absolute under a filtered overflow:hidden wrapper or a contain:layout one is not",
@@ -647,39 +685,14 @@ check("[L-d] position:fixed under a transformed ancestor widens the page and is 
 // click's in-place change it loses the steps' state: one re-run, then (every time) the step-specific exit 4
 const stepLost = (r: Run): boolean => r.status === 4 && /after step 1 \{click: "\[data-dt-node=\\?"70:30\\?"\]"\} had changed it in place/.test(r.stderr)
   && /on the first pass and again on the re-run/.test(r.stderr) && !/watch tree/.test(r.stderr);
-const bS = out("ClickReloadsSync");
-const rS = await probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=sync`, "--out", bS, "--steps", "steps-click-only.json", "--max-time", "60000"]);
-if (!stepLost(rS)) console.log(rS.stderr);
-check("[M-2] `draw(); location.reload()` in the click handler, every time (no --ready) → the reload is not the click's: one re-run, then exit 4 naming the step, nothing written (was: exit 0 measuring the default section)",
-  stepLost(rS) && !written(bS));
-const bH = out("ClickReloads100");
-const rH = await probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=100`, "--out", bH, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
-if (!stepLost(rH)) console.log(rH.stderr);
-check("[M-2] a reload 100 ms after the click's in-place change, every time (--ready) → exit 4 naming the step (was: the generic '--ready never visible')",
-  stepLost(rH) && !written(bH) && !/never became visible/.test(rH.stderr));
-const bO = out("ClickReloadsOnce");
-const rO = await probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=sync&once=1`, "--out", bO, "--steps", "steps-click-only.json", "--max-time", "60000"]);
-const mO = read(bO);
-if (rO.status !== 0) console.log(rO.stderr);
-check("[M-2] the same sync reload on the first click only → re-run with the steps replayed: exit 0, re-runs 1, afterInitialLoad 1, the root by tag",
-  rO.status === 0 && mO?.navigation?.reruns === 1 && mO.navigation.afterInitialLoad === 1 && mO.frame?.via === "tag" && mO.frame.nodeId === "70:1");
-// M-1: the click's navigation lands on a document whose image never loads — the load wait is per document: the click's
-// settle waits its 10 s, the waitFor step's and the --ready settle do not wait again (was: 10 s each → past --max-time)
-const bG = out("HangImg");
-const tG = Date.now();
-const rG = await probe(["--expected", QUIET, "--url", edge("hang-img"), "--out", bG, "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "22000"]);
-const sG = Date.now() - tG;
-const mG = read(bG);
-if (rG.status !== 0) console.log(rG.stderr);
-check(`[M-1] a step's navigation into a document that never finishes loading + a waitFor step + --ready → exit 0 in ${Math.round(sG / 1000)} s (< 22 s: one 10 s load wait, not three), the root by tag, the 'had not finished loading' note`,
-  rG.status === 0 && sG < 22_000 && mG?.frame?.via === "tag" && (mG.notes || []).some((n) => /the document had not finished loading after 10s/.test(n)));
+// (M-2 ClickReloadsSync / ClickReloads100 / ClickReloadsOnce and M-1 HangImg: the serial tail)
 // L-2: a tagged wrapper taller than the viewport — Playwright clicks the middle of what shows, where a form's typeless
 // button is (the middle of the whole box is empty) → refused as a step
-mutations.length = 0;
 const bT = out("TallWrapper");
-const rT = await probe(["--expected", QUIET, "--url", edge("tall-wrapper"), "--out", bT, "--steps", "steps-click-only.json", "--max-time", "60000"]);
-check(`[L-2] a step clicking a wrapper taller than the viewport whose on-screen middle is a form's typeless button → exit 4 'never submit' (at its click point), nothing written, nothing submitted (server saw: ${mutations.join(", ") || "nothing"})`,
-  rT.status === 4 && /would submit a form \(a <button> without a type inside a <form> \(it submits\) at its click point\)/.test(rT.stderr) && !written(bT) && mutations.length === 0);
+const rT = await P.tallWrapper;
+const wT = writesOf(edge("tall-wrapper"));
+check(`[L-2] a step clicking a wrapper taller than the viewport whose on-screen middle is a form's typeless button → exit 4 'never submit' (at its click point), nothing written, nothing submitted (server saw: ${wT.join(", ") || "nothing"})`,
+  rT.status === 4 && /would submit a form \(a <button> without a type inside a <form> \(it submits\) at its click point\)/.test(rT.stderr) && !written(bT) && wT.length === 0);
 
 // ---- fix 4 (review 4 of 12a)
 const loadNote = (m: VerifyMeasured | null): boolean => (m?.notes || []).some((n) => /the document had not finished loading after 10s/.test(n));
@@ -687,23 +700,239 @@ const loadNoteAfter = (m: VerifyMeasured | null, sec: number): boolean => (m?.no
 // MED 1: a click on a link to the URL the page already shows (here a URL tab, the tag on a span inside the <a>) is a refresh
 // step — its load is the step's own (was: never the click's → the state "lost", re-run, exit 4 "changed it in place")
 const bSL = out("SameLink");
-const rSL = await probe(["--expected", QUIET, "--url", `${edge("same-link")}&section=beds`, "--out", bSL, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
+const rSL = await P.sameLink;
 const mSL = read(bSL);
 if (rSL.status !== 0) console.log(rSL.stderr);
 check("[fix4 MED 1] a step clicking a link to the URL the page shows (a URL tab) → its load is the step's own: exit 0, afterInitialLoad 0, re-runs 0, the root by tag (was: exit 4 'changed it in place')",
   rSL.status === 0 && mSL?.navigation?.afterInitialLoad === 0 && mSL.navigation.reruns === 0 && mSL.frame?.via === "tag" && mSL.frame.nodeId === "70:1");
 // MED 2: a late click navigation into a document that never finishes loading → its own 10 s, then measured with the note
 const bHL = out("HangLate");
-const tHL = Date.now();
-const rHL = await probe(["--expected", QUIET, "--url", edge("hang-late"), "--out", bHL, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
-const sHL = Date.now() - tHL;
+const rHL = await P.hangLate;
+const sHL = rHL.ms;
 const mHL = read(bHL);
 if (rHL.status !== 0) console.log(rHL.stderr);
 check(`[fix4 MED 2] a click navigating 400 ms later into a document that never finishes loading → exit 0 in ${Math.round(sHL / 1000)} s, the root by tag, the 'had not finished loading' note (was: exit 4 'kept navigating' + the dev-server hint)`,
   rHL.status === 0 && mHL?.frame?.via === "tag" && mHL.frame.nodeId === "70:1" && loadNote(mHL) && mHL.navigation?.afterInitialLoad === 0);
-// MED 2: a document a late navigation brings in gets its own 10 s for its load (per document), not the rest of the settle's
+// (MED 2 LateSlow and the MED 2 guard ReloadHang: the serial tail)
+// MED 2 + fix 5 (decision 1): the probe's own load (--url, a goto step) of a document that never finishes loading is waited for up
+// to --timeout, then (it committed) measured with the note — not "could not load"
+const bHF = out("HangFirst");
+const rHF = await P.hangFirst;
+const mHF = read(bHF);
+if (rHF.status !== 0) console.log(rHF.stderr);
+check("[fix4 MED 2 / fix5 HIGH 1] --url a document that never finishes loading (--timeout 15 s) → its load waited for up to --timeout, then exit 0, the root by tag, the note 'after 15s' (f63e818: 'could not load'; fix 4: after 10 s)",
+  rHF.status === 0 && mHF?.frame?.via === "tag" && mHF.frame.nodeId === "70:1" && loadNoteAfter(mHF, 15));
+const bGH = out("GotoHang");
+const rGH = await P.gotoHang;
+const mGH = read(bGH);
+if (rGH.status !== 0) console.log(rGH.stderr);
+check("[fix4 MED 2 / fix5 HIGH 1] a goto step to a document that never finishes loading → waited for up to --timeout, then exit 0, afterInitialLoad 0, the root by tag, the note 'after 15s'",
+  rGH.status === 0 && mGH?.navigation?.afterInitialLoad === 0 && mGH.frame?.via === "tag" && mGH.frame.nodeId === "70:1" && loadNoteAfter(mGH, 15));
+// (LOW b LateLoad: the serial tail)
+// LOW c: with no per-document token ("" on every document) a timed-out document's note is never shared with the next one
+const bNT = out("NoToken");
+const rNT = await P.noToken;
+const mNT = read(bNT);
+if (rNT.status !== 0) console.log(rNT.stderr);
+check("[fix4 LOW c] no token on any document: after one document's load timed out, the next step's half-loaded document is still waited for (not skipped as that known timed-out one) → exit 0, the root by tag, its heading measured",
+  rNT.status === 0 && mNT?.frame?.via === "tag" && mNT.frame.nodeId === "70:1" && (mNT.nodes || []).some((n) => n.nodeId === "70:2"));
+// LOW d: Playwright clicks the middle of the FIRST content quad (a wrapping inline element's first line), not of its box
+const bIW = out("InlineWrap");
+const rIW = await P.inlineWrap;
+const wIW = writesOf(edge("inline-wrap"));
+check(`[fix4 LOW d] a step clicking an inline span whose first line is a form's typeless button (its box's middle is not) → exit 4 'never submit' at its click point, nothing written, nothing submitted (server saw: ${wIW.join(", ") || "nothing"})`,
+  rIW.status === 4 && /would submit a form \(a <button> without a type inside a <form> \(it submits\) at its click point\)/.test(rIW.stderr) && !written(bIW) && wIW.length === 0);
+
+// ---- fix 5 (review 5 of 12a)
+const notes = (m: VerifyMeasured | null): string[] => m?.notes || [];
+// HIGH 1: the probe's own load never reads as "moved" — a DOM that never goes quiet is measured with the no-navigation note
+const bCD = out("ChurnDom");
+const rCD = await P.churnDom;
+const mCD = read(bCD);
+if (rCD.status !== 0) console.log(rCD.stderr);
+check("[fix5 HIGH 1] a DOM that never goes quiet on the --url page (no navigation) → exit 0, the root by tag, 'the DOM was still changing after 10s (no navigation)' (fix 4: exit 4 'kept navigating')",
+  rCD.status === 0 && mCD?.frame?.via === "tag" && notes(mCD).some((n) => /the DOM was still changing after 10s \(no navigation\)/.test(n)));
+const bCG = out("ChurnDomGoto");
+const rCG = await P.churnDomGoto;
+const mCG = read(bCG);
+if (rCG.status !== 0) console.log(rCG.stderr);
+check("[fix5 HIGH 1] the same after a goto step → exit 0, afterInitialLoad 0, the still-changing note (fix 4: exit 4 'kept navigating')",
+  rCG.status === 0 && mCG?.navigation?.afterInitialLoad === 0 && notes(mCG).some((n) => /the DOM was still changing after 10s \(no navigation\)/.test(n)));
+// HIGH 1: --ready on the --url page keeps the full --timeout (the screen appears at 12 s)
+const bLR = out("LateReady");
+const rLR = await P.lateReady;
+const mLR = read(bLR);
+if (rLR.status !== 0) console.log(rLR.stderr);
+check("[fix5 HIGH 1] --ready that appears 12 s after load with --timeout 30000 → exit 0, the root by tag (fix 4: exit 4 'kept navigating' at 10 s)",
+  rLR.status === 0 && mLR?.frame?.via === "tag" && mLR.frame.nodeId === "70:1");
+const bRN = out("ReadyNever");
+const rRN = await P.readyNever;
+check("[fix5 HIGH 1] a --ready that never appears → exit 4 \"--ready … never became visible\" at --timeout, not 'kept navigating', nothing written",
+  rRN.status === 4 && /--ready '\[data-dt-node="70:1"\]' never became visible/.test(rRN.stderr) && !/kept navigating/.test(rRN.stderr) && !written(bRN));
+// MED 5: a slow-but-finishing page (an image answered at 13 s, --timeout 30000) is measured fully loaded, with no note
+const bSI = out("SlowImg");
+const rSI = await P.slowImg;
+const mSI = read(bSI);
+if (rSI.status !== 0) console.log(rSI.stderr);
+check("[fix5 MED 5] an image finishing 13 s after the --url load (--timeout 30000) → its load waited for: exit 0, no 'had not finished loading' note (fix 4: measured half-loaded at 10 s)",
+  rSI.status === 0 && mSI?.frame?.via === "tag" && !notes(mSI).some((n) => /had not finished loading/.test(n)));
+// (HIGH 2 SlowStay and MED 3 LinkInplaceReload / LinkEmptyReload: the serial tail)
+// MED 4: a same-URL link handled in place whose app navigates AWAY 1.2 s later — still the step's own navigation
+const bLA = out("LinkLateAway");
+const rLA = await P.linkLateAway;
+const mLA = read(bLA);
+if (rLA.status !== 0) console.log(rLA.stderr);
+check("[fix5 MED 4] a same-URL link handled in place, then a navigation to another URL 1.2 s later → the step's own: exit 0, afterInitialLoad 0, re-runs 0, the root by tag (fix 4: exit 4 'reloaded … again')",
+  rLA.status === 0 && mLA?.navigation?.afterInitialLoad === 0 && mLA.navigation.reruns === 0 && mLA.frame?.via === "tag");
+// LOW 6: target=_top is the same tab — a refresh link
+const bTT = out("SameLinkTop");
+const rTT = await P.sameLinkTop;
+const mTT = read(bTT);
+if (rTT.status !== 0) console.log(rTT.stderr);
+check("[fix5 LOW 6] a refresh link with target=_top → its load is the step's own: exit 0, afterInitialLoad 0, re-runs 0 (fix 4: exit 4 'changed it in place')",
+  rTT.status === 0 && mTT?.navigation?.afterInitialLoad === 0 && mTT.navigation.reruns === 0 && mTT.frame?.via === "tag");
+// (LOW 7 SlowChurn and fix 6's BounceHang / RedirSlow: the serial tail)
+
+// ================================================================ the serial tail: one run at a time, once the pool has drained
+await Promise.all([...Object.values(P), ...slowNav.map((s) => s.run)]);
+
+// M-1 (12b fix 2, D4): the drive keeps 12a's own budget (min(60 s, --max-time left − 15 s)) whatever 12b reserves after it — at a
+// small --max-time the first rows are still driven as on af80061 (--behaviour off: no 12b work at all)
+for (const [mt, ids] of [["25000", ["70:44"]], ["30000", ["70:44", "70:45"]]] as const) {
+  const bm = out(`Budget${mt}`);
+  const rm = await T[`budget${mt}`]();
+  const mm = read(bm);
+  if (rm.status !== 0) console.log(rm.stderr);
+  check(`[M-1/D4] --max-time ${Number(mt) / 1000} s, --behaviour off: ${ids.join(" and ")} driven ok:true as 12a drives them (the drive's budget never shrinks for 12b)`,
+    rm.status === 0 && ids.every((id) => ix(mm, id)?.ok === true && ix(mm, id)?.cut === undefined));
+}
+
+// facts-12a §1: a same-document URL rewrite after load (replaceState) is no navigation — only a document load is
+const b9 = out("Replace");
+const r9 = await T.replace();
+const m9 = read(b9);
+if (r9.status !== 0) console.log(r9.stderr);
+check("[D19/facts §1] a replaceState 100 ms after load (no --steps) → afterInitialLoad 0 (framenavigated logged, never counted)",
+  r9.status === 0 && m9?.navigation?.afterInitialLoad === 0 && (m9.navigation.events || []).some((e) => e.type === "framenavigated" && /tab=harvest/.test(e.url)));
+
+// H1 / D19: a reload 300 ms after load into a document that stays half-loaded for 2.5 s — the probe must wait for it
+const b11 = out("ReloadSettle");
+const r11 = await T.reloadSettle();
+const m11 = read(b11);
+if (r11.status !== 0) console.log(r11.stderr);
+check("[H1/D19] a reload while settling into a half-loaded document → waited for: the root by tag, its heading measured, afterInitialLoad 1 (the reload's load), re-runs 0",
+  r11.status === 0 && m11?.frame?.via === "tag" && m11.frame.nodeId === "70:1" && (m11.nodes || []).some((n) => n.nodeId === "70:2" && n.matchedBy === "tag")
+  && m11.navigation?.afterInitialLoad === 1 && m11.navigation.reruns === 0);
+const b11b = out("ReloadSettleNoReady");
+const r11b = await T.reloadSettleNoReady();
+const m11b = read(b11b);
+check("[H1/D19] the same without --ready (nothing to wait for but the quiet window) → still the reloaded document, measured once it loaded",
+  r11b.status === 0 && m11b?.frame?.via === "tag" && m11b.navigation?.afterInitialLoad === 1);
+
+// H1 (steps): a load the step did not start is not the probe's own — it counts, and (the click's state is gone) the
+// pass is re-run once with the steps replayed
+const b12 = out("ReloadStep");
+const r12 = await T.reloadStep();
+const m12 = read(b12);
+if (r12.status !== 0) console.log(r12.stderr);
+check("[H1] a reload 300 ms after a step's in-place click → not absorbed by the step: afterInitialLoad 1, re-runs 1 (steps replayed), the root by tag",
+  r12.status === 0 && m12?.navigation?.afterInitialLoad === 1 && m12.navigation.reruns === 1 && m12.frame?.via === "tag");
+const b12b = out("GotoReload");
+const r12b = await T.gotoReload();
+const m12b = read(b12b);
+if (r12b.status !== 0) console.log(r12b.stderr);
+check("[H1] a goto step whose page then reloads by itself → the goto's load is absorbed, the reload's is not: afterInitialLoad 1, re-runs 0",
+  r12b.status === 0 && m12b?.navigation?.afterInitialLoad === 1 && m12b.navigation.reruns === 0 && m12b.frame?.via === "tag");
+const b12c = out("ReloadLate");
+const r12c = await T.reloadLate();
+const m12c = read(b12c);
+if (r12c.status !== 0) console.log(r12c.stderr);
+check("[H1] a reload 1 s after an in-place click (while waiting for --ready, the section lost) → re-run with the steps replayed: exit 0, re-runs 1, the root by tag",
+  r12c.status === 0 && m12c?.navigation?.reruns === 1 && m12c.navigation.afterInitialLoad === 1 && m12c.frame?.via === "tag");
+
+// M1: every driving page's reach hangs (the server never answers again); --timeout 30 s, --max-time 22 s → about 6 s of
+// driving: the cut closes the row's context mid-reach, so the run ends inside --max-time with the measured file written
+const b14 = out("SlowReach");
+const r14 = await T.slowReach();
+const s14 = r14.ms;
+const m14 = read(b14);
+if (r14.status !== 0) console.log(r14.stderr);
+check(`[M1] a driving reach that never answers is cut by the budget mid-reach → exit 0 in ${Math.round(s14 / 1000)} s (< 22 s), measured written, every row ok:null cut budget`,
+  r14.status === 0 && s14 < 22_000 && m14 !== null && (m14.interactions || []).length === 8 && (m14.interactions || []).every((i) => i.ok === null && i.cut === "budget"));
+
+// review 6 H-4 (D4): a covered opener in a scroll-behavior:smooth app-shell scroller — the drive's scroll is restored at once,
+// so the synthetic click lands on the shell as the drive had it; nothing the page itself scrolls animates either (the probe's
+// init CSS); with the page's own !important ID rule beating the init CSS, the restore is still instant
+const bR6s = out("SmoothShell");
+const rR6s = await T.smoothShell();
+const mR6s = read(bR6s), eR6s = ix(mR6s, "70:49"), jR6s = ix(mR6s, "70:50");
+if (rR6s.status !== 0) console.log(rR6s.stderr);
+check(`[review 6 H-4] a covered opener in a smooth-scrolling app shell → synthetic click with the shell back at its scroll: the popover anchored at click time is at y 100 (saw ${String(eR6s?.opened?.rect.y)}), the dialog detected`,
+  rR6s.status === 0 && eR6s?.activation === "synthetic" && eR6s.opened?.rect.y === 100 && eR6s.detectedBy === "[role=dialog]");
+check(`[review 6 H-4] the page's own scroll in a smooth shell (scrollTo 300 on click, 70:50) is instant under the probe: its popover is at y 400 (saw ${String(jR6s?.opened?.rect.y)})`,
+  jR6s?.activation === "mouse" && jR6s.opened?.rect.y === 400);
+const bR6i = out("SmoothShellImportant");
+const rR6i = await T.smoothShellImportant();
+const eR6i = ix(read(bR6i), "70:49");
+if (rR6i.status !== 0) console.log(rR6i.stderr);
+check(`[review 6 H-4] the same shell forced smooth by the page's !important ID rule → the drive's restore is still instant: y 100 (saw ${String(eR6i?.opened?.rect.y)})`,
+  rR6i.status === 0 && eR6i?.activation === "synthetic" && eR6i.opened?.rect.y === 100);
+// fix 8 (review 6 H-4 follow-up, D4): the same !important-smooth shell, where the page reads the scroll in requestAnimationFrame —
+// its popover is anchored at the shell's scroll in the last frame PAINTED before the click: 100 only when the drive's restore held
+// for frames before its synthetic click (restore, two frames, look again — twice in a row), deterministic under any load (was:
+// the click came right after one restore; under load a smooth scroll Playwright's retry started could still move the shell)
+const bR6p = out("SmoothShellPainted");
+const rR6p = await T.smoothShellPainted();
+const eR6p = ix(read(bR6p), "70:49");
+if (rR6p.status !== 0) console.log(rR6p.stderr);
+check(`[fix8 review 6 H-4] the !important-smooth shell, popover anchored at the last painted frame's scroll → the restored scroll held before the synthetic click: y 100 (saw ${String(eR6p?.opened?.rect.y)})`,
+  rR6p.status === 0 && eR6p?.activation === "synthetic" && eR6p.opened?.rect.y === 100);
+
+// H-a: a click that reloads the SAME URL after changing the page in place, every time → exit 4 naming the step, not the watch-tree hint
+const bR = out("ClickReloads");
+const rR = await T.clickReloads();
+check("[H-a] a click that reloads the same URL after its in-place change, on the pass and the re-run → exit 4, nothing written, the step named, 'not a navigation step', no watch-tree hint",
+  rR.status === 4 && !written(bR) && /after step 1 \{click: "\[data-dt-node=\\?"70:30\\?"\]"\} had changed it in place/.test(rR.stderr)
+  && /on the first pass and again on the re-run/.test(rR.stderr) && /not a\s+navigation step/.test(rR.stderr) && !/watch tree/.test(rR.stderr) && /navigation log/.test(rR.stderr));
+// L-a: the document replaced right after settling (simulated by a token that changes at the first plain read after the
+// settle polls) → the pass compares against the token settle saw quiet → one re-run
+const bA = out("TokenSwitch");
+const rA = await T.tokenSwitch();
+const mA = read(bA);
+if (rA.status !== 0) console.log(rA.stderr);
+check("[L-a] a document replaced between settling and measuring → caught (the settled token is compared): exit 0, re-runs 1",
+  rA.status === 0 && mA?.navigation?.reruns === 1 && mA.frame?.via === "tag");
+
+// M-2 (review 3): a same-URL reload at once / 100 ms after the click's in-place change, every time or once
+const bS = out("ClickReloadsSync");
+const rS = await T.clickReloadsSync();
+if (!stepLost(rS)) console.log(rS.stderr);
+check("[M-2] `draw(); location.reload()` in the click handler, every time (no --ready) → the reload is not the click's: one re-run, then exit 4 naming the step, nothing written (was: exit 0 measuring the default section)",
+  stepLost(rS) && !written(bS));
+const bH = out("ClickReloads100");
+const rH = await T.clickReloads100();
+if (!stepLost(rH)) console.log(rH.stderr);
+check("[M-2] a reload 100 ms after the click's in-place change, every time (--ready) → exit 4 naming the step (was: the generic '--ready never visible')",
+  stepLost(rH) && !written(bH) && !/never became visible/.test(rH.stderr));
+const bO = out("ClickReloadsOnce");
+const rO = await T.clickReloadsOnce();
+const mO = read(bO);
+if (rO.status !== 0) console.log(rO.stderr);
+check("[M-2] the same sync reload on the first click only → re-run with the steps replayed: exit 0, re-runs 1, afterInitialLoad 1, the root by tag",
+  rO.status === 0 && mO?.navigation?.reruns === 1 && mO.navigation.afterInitialLoad === 1 && mO.frame?.via === "tag" && mO.frame.nodeId === "70:1");
+// M-1: the click's navigation lands on a document whose image never loads — the load wait is per document: the click's
+// settle waits its 10 s, the waitFor step's and the --ready settle do not wait again (was: 10 s each → past --max-time)
+const bG = out("HangImg");
+const rG = await T.hangImg();
+const sG = rG.ms;
+const mG = read(bG);
+if (rG.status !== 0) console.log(rG.stderr);
+check(`[M-1] a step's navigation into a document that never finishes loading + a waitFor step + --ready → exit 0 in ${Math.round(sG / 1000)} s (< 22 s: one 10 s load wait, not three), the root by tag, the 'had not finished loading' note`,
+  rG.status === 0 && sG < 22_000 && mG?.frame?.via === "tag" && (mG.notes || []).some((n) => /the document had not finished loading after 10s/.test(n)));
+
+// fix 4 MED 2: a document a late navigation brings in gets its own 10 s for its load (per document), not the rest of the settle's
 const bLS = out("LateSlow");
-const rLS = await probe(["--expected", QUIET, "--url", edge("late-slow"), "--out", bLS, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
+const rLS = await T.lateSlow();
 const mLS = read(bLS);
 if (rLS.status !== 0) console.log(rLS.stderr);
 check("[fix4 MED 2] a click navigating 7 s later into a document that loads 5 s after (--ready its root) → settled on, not 'kept navigating': exit 0, the root by tag, its heading measured, a quiet window of its own (no load / still-changing note)",
@@ -712,81 +941,21 @@ check("[fix4 MED 2] a click navigating 7 s later into a document that loads 5 s 
 // MED 2 guard: no load wait decides a lost state any more — a reload after an in-place click into a document that never
 // finishes loading still loses the steps' state (at its commit): one re-run, then the step-specific exit 4
 const bRH = out("ReloadHang");
-const rRH = await probe(["--expected", QUIET, "--url", edge("reload-hang"), "--out", bRH, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
+const rRH = await T.reloadHang();
 if (!stepLost(rRH)) console.log(rRH.stderr);
 check("[fix4 MED 2] a reload after the click's in-place change into a document that never finishes loading, every time → exit 4 naming the step, nothing written (was: 'kept navigating' + the dev-server hint)",
   stepLost(rRH) && !written(bRH));
-// MED 2 + fix 5 (decision 1): the probe's own load (--url, a goto step) of a document that never finishes loading is waited for up
-// to --timeout, then (it committed) measured with the note — not "could not load"
-const bHF = out("HangFirst");
-const rHF = await probe(["--expected", QUIET, "--url", edge("hang-first"), "--out", bHF, "--steps", "steps-click-only.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"]);
-const mHF = read(bHF);
-if (rHF.status !== 0) console.log(rHF.stderr);
-check("[fix4 MED 2 / fix5 HIGH 1] --url a document that never finishes loading (--timeout 15 s) → its load waited for up to --timeout, then exit 0, the root by tag, the note 'after 15s' (f63e818: 'could not load'; fix 4: after 10 s)",
-  rHF.status === 0 && mHF?.frame?.via === "tag" && mHF.frame.nodeId === "70:1" && loadNoteAfter(mHF, 15));
-const bGH = out("GotoHang");
-const rGH = await probe(["--expected", QUIET, "--url", edge("link-step"), "--out", bGH, "--steps", "steps-goto-hang.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"]);
-const mGH = read(bGH);
-if (rGH.status !== 0) console.log(rGH.stderr);
-check("[fix4 MED 2 / fix5 HIGH 1] a goto step to a document that never finishes loading → waited for up to --timeout, then exit 0, afterInitialLoad 0, the root by tag, the note 'after 15s'",
-  rGH.status === 0 && mGH?.navigation?.afterInitialLoad === 0 && mGH.frame?.via === "tag" && mGH.frame.nodeId === "70:1" && loadNoteAfter(mGH, 15));
 // LOW b: a document whose load timed out in one settle and completed before a later one carries no stale note
 const bLL = out("LateLoad");
-const rLL = await probe(["--expected", QUIET, "--url", edge("late-load"), "--out", bLL, "--steps", "steps-late.json", "--ready", READY, "--max-time", "60000"]);
+const rLL = await T.lateLoad();
 const mLL = read(bLL);
 if (rLL.status !== 0) console.log(rLL.stderr);
 check("[fix4 LOW b] a document whose load timed out in the click's settle and completed before the next ones → exit 0, the root by tag, no 'had not finished loading' note",
   rLL.status === 0 && mLL?.frame?.via === "tag" && mLL !== null && !loadNote(mLL));
-// LOW c: with no per-document token ("" on every document) a timed-out document's note is never shared with the next one
-const bNT = out("NoToken");
-const rNT = await probe(["--expected", QUIET, "--url", edge("no-token"), "--out", bNT, "--steps", "steps-no-token.json", "--max-time", "60000"]);
-const mNT = read(bNT);
-if (rNT.status !== 0) console.log(rNT.stderr);
-check("[fix4 LOW c] no token on any document: after one document's load timed out, the next step's half-loaded document is still waited for (not skipped as that known timed-out one) → exit 0, the root by tag, its heading measured",
-  rNT.status === 0 && mNT?.frame?.via === "tag" && mNT.frame.nodeId === "70:1" && (mNT.nodes || []).some((n) => n.nodeId === "70:2"));
-// LOW d: Playwright clicks the middle of the FIRST content quad (a wrapping inline element's first line), not of its box
-mutations.length = 0;
-const bIW = out("InlineWrap");
-const rIW = await probe(["--expected", QUIET, "--url", edge("inline-wrap"), "--out", bIW, "--steps", "steps-click-only.json", "--max-time", "60000"]);
-check(`[fix4 LOW d] a step clicking an inline span whose first line is a form's typeless button (its box's middle is not) → exit 4 'never submit' at its click point, nothing written, nothing submitted (server saw: ${mutations.join(", ") || "nothing"})`,
-  rIW.status === 4 && /would submit a form \(a <button> without a type inside a <form> \(it submits\) at its click point\)/.test(rIW.stderr) && !written(bIW) && mutations.length === 0);
 
-// ---- fix 5 (review 5 of 12a)
-const notes = (m: VerifyMeasured | null): string[] => m?.notes || [];
-// HIGH 1: the probe's own load never reads as "moved" — a DOM that never goes quiet is measured with the no-navigation note
-const bCD = out("ChurnDom");
-const rCD = await probe(["--expected", QUIET, "--url", edge("churn-dom"), "--out", bCD, "--max-time", "60000"]);
-const mCD = read(bCD);
-if (rCD.status !== 0) console.log(rCD.stderr);
-check("[fix5 HIGH 1] a DOM that never goes quiet on the --url page (no navigation) → exit 0, the root by tag, 'the DOM was still changing after 10s (no navigation)' (fix 4: exit 4 'kept navigating')",
-  rCD.status === 0 && mCD?.frame?.via === "tag" && notes(mCD).some((n) => /the DOM was still changing after 10s \(no navigation\)/.test(n)));
-const bCG = out("ChurnDomGoto");
-const rCG = await probe(["--expected", QUIET, "--url", edge("link-step"), "--out", bCG, "--steps", "steps-goto-churn.json", "--max-time", "60000"]);
-const mCG = read(bCG);
-if (rCG.status !== 0) console.log(rCG.stderr);
-check("[fix5 HIGH 1] the same after a goto step → exit 0, afterInitialLoad 0, the still-changing note (fix 4: exit 4 'kept navigating')",
-  rCG.status === 0 && mCG?.navigation?.afterInitialLoad === 0 && notes(mCG).some((n) => /the DOM was still changing after 10s \(no navigation\)/.test(n)));
-// HIGH 1: --ready on the --url page keeps the full --timeout (the screen appears at 12 s)
-const bLR = out("LateReady");
-const rLR = await probe(["--expected", QUIET, "--url", edge("late-ready"), "--out", bLR, "--ready", READY, "--timeout", "30000", "--max-time", "60000"]);
-const mLR = read(bLR);
-if (rLR.status !== 0) console.log(rLR.stderr);
-check("[fix5 HIGH 1] --ready that appears 12 s after load with --timeout 30000 → exit 0, the root by tag (fix 4: exit 4 'kept navigating' at 10 s)",
-  rLR.status === 0 && mLR?.frame?.via === "tag" && mLR.frame.nodeId === "70:1");
-const bRN = out("ReadyNever");
-const rRN = await probe(["--expected", QUIET, "--url", `${edge("late-ready")}&d=99999999`, "--out", bRN, "--ready", READY, "--timeout", "12000", "--max-time", "60000"]);
-check("[fix5 HIGH 1] a --ready that never appears → exit 4 \"--ready … never became visible\" at --timeout, not 'kept navigating', nothing written",
-  rRN.status === 4 && /--ready '\[data-dt-node="70:1"\]' never became visible/.test(rRN.stderr) && !/kept navigating/.test(rRN.stderr) && !written(bRN));
-// MED 5: a slow-but-finishing page (an image answered at 13 s, --timeout 30000) is measured fully loaded, with no note
-const bSI = out("SlowImg");
-const rSI = await probe(["--expected", QUIET, "--url", `${edge("slow-img")}&d=13000`, "--out", bSI, "--timeout", "30000", "--max-time", "60000"]);
-const mSI = read(bSI);
-if (rSI.status !== 0) console.log(rSI.stderr);
-check("[fix5 MED 5] an image finishing 13 s after the --url load (--timeout 30000) → its load waited for: exit 0, no 'had not finished loading' note (fix 4: measured half-loaded at 10 s)",
-  rSI.status === 0 && mSI?.frame?.via === "tag" && !notes(mSI).some((n) => /had not finished loading/.test(n)));
-// HIGH 2: the measured-anyway --url document's own late load (after a click changed it in place) is no reload
+// fix 5 HIGH 2: the measured-anyway --url document's own late load (after a click changed it in place) is no reload
 const bSS = out("SlowStay");
-const rSS = await probe(["--expected", QUIET, "--url", `${edge("slow-stay")}&d=7000`, "--out", bSS, "--steps", "steps-slow-stay.json", "--ready", READY, "--timeout", "5000", "--max-time", "60000"]);
+const rSS = await T.slowStay();
 const mSS = read(bSS);
 if (rSS.status !== 0) console.log(rSS.stderr);
 check("[fix5 HIGH 2] the --url document taken after --timeout 5 s (its load given up) loads at 7 s, after the click changed it in place (while a waitFor step waits) → its own late load: exit 0, re-runs 0, the root by tag (fix 4: 'the page reloaded … after step 1', exit 4)",
@@ -794,30 +963,15 @@ check("[fix5 HIGH 2] the --url document taken after --timeout 5 s (its load give
 // MED 3: a link to the current URL that the app handles in place, then a reload 300 ms later — a genuine reload (D19 re-run)
 for (const [mode, label] of [["link-inplace-reload", "a link to the URL"], ["link-empty-reload", "an <a href=\"\">"]] as const) {
   const b = out(mode === "link-inplace-reload" ? "LinkInplaceReload" : "LinkEmptyReload");
-  const r = await probe(["--expected", QUIET, "--url", `${edge(mode)}&d=300`, "--out", b, "--steps", "steps-click-only.json", "--max-time", "60000"]);
+  const r = await (mode === "link-inplace-reload" ? T.linkInplaceReload() : T.linkEmptyReload());
   const m = read(b);
   if (r.status !== 0) console.log(r.stderr);
   check(`[fix5 MED 3] ${label} handled in place, the page reloading 300 ms later (once) → not the link's load: afterInitialLoad 1, re-runs 1, the root by tag (fix 4: swallowed, the other section measured)`,
     r.status === 0 && m?.navigation?.afterInitialLoad === 1 && m.navigation.reruns === 1 && m.frame?.via === "tag" && m.frame.nodeId === "70:1");
 }
-// MED 4: a same-URL link handled in place whose app navigates AWAY 1.2 s later — still the step's own navigation
-const bLA = out("LinkLateAway");
-const rLA = await probe(["--expected", QUIET, "--url", edge("link-inplace-late-away"), "--out", bLA, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
-const mLA = read(bLA);
-if (rLA.status !== 0) console.log(rLA.stderr);
-check("[fix5 MED 4] a same-URL link handled in place, then a navigation to another URL 1.2 s later → the step's own: exit 0, afterInitialLoad 0, re-runs 0, the root by tag (fix 4: exit 4 'reloaded … again')",
-  rLA.status === 0 && mLA?.navigation?.afterInitialLoad === 0 && mLA.navigation.reruns === 0 && mLA.frame?.via === "tag");
-// LOW 6: target=_top is the same tab — a refresh link
-const bTT = out("SameLinkTop");
-const rTT = await probe(["--expected", QUIET, "--url", `${edge("same-link")}&section=beds&target=_top`, "--out", bTT, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
-const mTT = read(bTT);
-if (rTT.status !== 0) console.log(rTT.stderr);
-check("[fix5 LOW 6] a refresh link with target=_top → its load is the step's own: exit 0, afterInitialLoad 0, re-runs 0 (fix 4: exit 4 'changed it in place')",
-  rTT.status === 0 && mTT?.navigation?.afterInitialLoad === 0 && mTT.navigation.reruns === 0 && mTT.frame?.via === "tag");
 // LOW 7: "kept navigating for Ns" states the real duration (a first new document at 8 s has its own window; the next one ends it)
 const bKN = out("SlowChurn");
-// (--ready on an element that never comes keeps the settle on the page while it navigates)
-const rKN = await probe(["--expected", QUIET, "--url", edge("slow-churn"), "--out", bKN, "--ready", "#never-drawn", "--timeout", "12000", "--max-time", "60000"]);
+const rKN = await T.slowChurn();
 if (!/kept navigating/.test(rKN.stderr)) console.log(rKN.stderr);
 const kn = /kept navigating for (\d+)s/.exec(rKN.stderr);
 check(`[fix5 LOW 7] a reload at 8 s into a never-loading document that reloads again 6 s later → exit 4 'kept navigating for ${kn?.[1] ?? "?"}s' (the real duration, > 10 s; fix 4 always said 10s)`,
@@ -826,15 +980,14 @@ check(`[fix5 LOW 7] a reload at 8 s into a never-loading document that reloads a
 // ---- fix 6 (review 6 of 12a)
 // MED 1: a page that arrives and goes on (before its load) to a server that never answers → "could not load" at --timeout
 const bBH = out("BounceHang");
-const tBH = Date.now();
-const rBH = await probe(["--expected", QUIET, "--url", edge("bounce-hang"), "--out", bBH, "--timeout", "12000", "--max-time", "40000"]);
-const sBH = Date.now() - tBH;
+const rBH = await T.bounceHang();
+const sBH = rBH.ms;
 if (!/could not load/.test(rBH.stderr)) console.log(rBH.stderr);
 check(`[fix6 MED 1] the --url page goes on, before its load, to a server that never answers → exit 4 'could not load' at --timeout (${Math.round(sBH / 1000)} s < 30 s), nothing written (fix 5: a hang until --max-time)`,
   rBH.status === 4 && /could not load/.test(rBH.stderr) && sBH < 30_000 && !written(bBH));
 // MED 2: a document the page redirected to itself, measured "anyway" at 10 s, whose load comes after an in-place click
 const bRS = out("RedirSlow");
-const rRS = await probe(["--expected", QUIET, "--url", edge("redir-slow"), "--out", bRS, "--steps", "steps-redir-slow.json", "--ready", READY, "--timeout", "30000", "--max-time", "90000"]);
+const rRS = await T.redirSlow();
 const mRS = read(bRS);
 if (rRS.status !== 0) console.log(rRS.stderr);
 check("[fix6 MED 2] a client redirect to a document whose load comes at 11 s (past the 10 s cap), after a click changed it in place → its own late load: exit 0, re-runs 0, the root by tag (fix 5: 'the page reloaded … after step 2', exit 4)",
@@ -842,6 +995,8 @@ check("[fix6 MED 2] a client redirect to a document whose load comes at 11 s (pa
 
 // what --compare wrote reads as a report at all (guards against a half-written run)
 check("the bound compare wrote a v2 report", rep2 !== null && isJsonObject(rep2.inputs));
+// B3 / L3 / L-2 / L-c (per run above); and no run made a write at all — no fixture has a write the drive or a step may make
+check(`[B3/L3/L-2/L-c] across every run the server received no write (saw: ${writes.join(", ") || "none"})`, writes.length === 0);
 
 finish();
 report();

@@ -22,7 +22,7 @@
 // The frame root (F-63) is its own rule: [data-dt-node=<frame id>], else the outermost element of the
 // frame's size that paints (a transparent <body> is not the frame), else the viewport.
 import type { Candidate, CollectOutput, MeasureResult, Rect, SizedCandidate } from "./probe-page.ts";
-import type { MeasuredNode, MeasuredStyles, ProbeFrame, VerifySpec } from "./types.ts";
+import type { MeasuredNode, MeasuredStyles, PaintedBy, ProbeFrame, VerifySpec } from "./types.ts";
 
 export type MatchedBy = "tag" | "tag-shared-path" | "tag-alias" | "text" | "text-ordinal" | "position" | "frame";
 /** Every matchedBy the shipped probe writes, in rule order — the canonical list (D30's caps, the visual-verifier doc). */
@@ -295,6 +295,36 @@ export function claimOnce(results: Array<Match | NoMatch>): Array<Match | NoMatc
   });
 }
 
+/**
+ * F-74 (D111): what to hover for a spec whose drawn state is ANOTHER node's (`drawnStateFrom`: a control inside a row
+ * drawn hovered) — the owner's visible tagged element, else the nearest visible tagged ancestor below the owner (its
+ * :hover reaches the owner's element too). Hovering the control itself would turn on the control's OWN :hover, which the
+ * design never drew. `none`: an own state or an old expectation (no drawnStateFrom) — hover as before; `untagged`: no
+ * tagged element of the owner, or below it, is visible. (verify-probe then hovers it at a free point, freeHoverPoint.)
+ * L1: `next` — the other visible tagged candidates below the owner, in the same order (nearest the measured element
+ * first): verify-probe tries them when `path` has no free point (a same-box wrapper around the control).
+ */
+export type OwnerHover = { kind: "none" } | { kind: "owner"; id: string; path: string; next: Array<{ id: string; path: string }> } | { kind: "untagged"; owner: string };
+export function ownerHover(spec: VerifySpec, m: Pick<Match, "path">, byTag: ReadonlyMap<string, Candidate[]>): OwnerHover {
+  const owner = spec.drawnStateFrom;
+  if (owner === undefined || owner === spec.nodeId) return { kind: "none" };
+  const visible = (id: string): Candidate | undefined => (byTag.get(id) || []).find((c) => tagVisible(c) && !c.flags.zeroSize);
+  // ancestorIds is nearest first and leaves the frame root out: the ones below the owner, or all of them when the owner is
+  // not among them (the frame root)
+  const anc = spec.ancestorIds || [];
+  const at = anc.indexOf(owner);
+  const found: Array<{ id: string; path: string }> = [];
+  for (const id of [owner, ...(at === -1 ? anc : anc.slice(0, at))]) {
+    const c = visible(id);
+    if (!c || found.some((f) => f.path === c.path)) continue;
+    // the measured element IS the hovered one (a label written into the owner's tagged element): its own hover, as before
+    if (c.path === m.path) { if (!found.length) return { kind: "none" }; continue; }
+    found.push({ id, path: c.path });
+  }
+  const [first, ...next] = found;
+  return first ? { kind: "owner", id: first.id, path: first.path, next } : { kind: "untagged", owner };
+}
+
 /** The --position boxes (page coordinates) for specs that state a full frame-relative box. */
 export function positionBoxes(specs: VerifySpec[], pool: Pick<MatchPool, "frames" | "primaryFrameId">): Array<{ nodeId: string; x: number; y: number; w: number; h: number }> {
   const out: Array<{ nodeId: string; x: number; y: number; w: number; h: number }> = [];
@@ -327,6 +357,11 @@ export function shapeNode(spec: VerifySpec, match: Match, raw: MeasureResult, ke
     styles.strokeFrom = from;
     if (from !== "border" && (align === "inside" || align === "outside")) styles.strokeAlign = align;
   }
+  // F-74 (D111) / F-69 (D114): optional keys — only when the page read them
+  const pb = raw.styles.paintedBy;
+  if (isPaintedBy(pb)) styles.paintedBy = pb;
+  const tt = raw.styles.textTransform;
+  if (typeof tt === "string" && tt !== "") styles.textTransform = tt;
   return {
     nodeId: spec.nodeId,
     matchedBy: match.matchedBy,
@@ -340,6 +375,12 @@ export function shapeNode(spec: VerifySpec, match: Match, raw: MeasureResult, ke
     ...(match.matchedBy === "position" ? { note: "matched by position (±2px) — low confidence; tag it with data-dt-node" }
       : match.matchedBy === "tag-alias" ? { note: `matched by another screen's id for this node (${match.selector}) — tag it with data-dt-node="${spec.nodeId}" to make it certain` } : {}),
   };
+}
+
+/** probe-page's styles.paintedBy, as JSON came back from the page. */
+export function isPaintedBy(x: unknown): x is PaintedBy {
+  return typeof x === "object" && x !== null && "backgroundColor" in x && typeof x.backgroundColor === "string" && "via" in x && (x.via === "ancestor" || x.via === "child")
+    && "tag" in x && typeof x.tag === "string" && "depth" in x && typeof x.depth === "number" && (!("dt" in x) || typeof x.dt === "string");
 }
 
 /** The matching-strategy census written to measured.matchedByCensus. */

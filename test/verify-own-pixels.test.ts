@@ -18,7 +18,7 @@ console.log("verify own pixels — D52 / D53 in a real chromium, from source:");
 let browser: Browser;
 try {
   const pw = await import("playwright");
-  browser = await pw.chromium.launch();
+  browser = await pw.chromium.launch({ args: [...VP.LAUNCH_ARGS] });
 } catch (e) {
   const reason = String(e instanceof Error ? e.message : e).split("\n")[0] ?? "";
   if (process.env.CI !== "true") { console.log(`SKIPPED (no playwright: ${reason})`); process.exit(0); }

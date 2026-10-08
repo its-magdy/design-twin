@@ -81,7 +81,7 @@ convention and where the bytes land:
 **One bridge, shared.** Port 8787 has one owner. `dtwin serve` and `figma-mcp` both publish the
 bridge they own on the daemon socket (`daemon.ts`), and every later `dtwin` command or MCP server —
 a second Claude Code session, say — routes through that socket instead of binding the port; an MCP
-server re-resolves the owner per call, so it takes the bridge over when the owning session ends.
+server re-resolves the owner per call, so it takes the bridge over when the owning session ends. An owning MCP server exits with its client unless others have used its socket, then idles out (`FIGMA_DAEMON_IDLE_MIN`).
 Only a one-shot pull does not share: a process that finds the port held by one exits on `EADDRINUSE`
 (`server-core.ts`). `writeToDisk` remains the in-session way to get files.
 

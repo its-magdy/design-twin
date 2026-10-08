@@ -289,7 +289,7 @@ isVerifyReport.expected = "a verify report (the verify-screen script's --compare
 // A plan is written by plan-skeleton.js and then FILLED by a model or a person, so it is the one document
 // here whose shape is genuinely in doubt. parsePlan names the first field that is the wrong kind of value
 // rather than answering a bare yes/no.
-const PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"] as const;
+const PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"] as const;
 const PLAN_OBJECTS = ["anchors", "verification", "counts"] as const;
 const PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"] as const;
 /** Why `x` is not a plan (one line, naming the field), or null when it is one. */
@@ -299,7 +299,7 @@ function planProblem(x: unknown): string | null {
   for (const k of PLAN_OBJECTS) if (x[k] !== undefined && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== undefined && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== undefined && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "waivers", "descopes"] as const) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"] as const) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }

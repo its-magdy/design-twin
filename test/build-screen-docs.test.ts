@@ -240,9 +240,9 @@ console.log("build-screen docs (group 12a, steps / dialog driving / precedence /
   check("[D40 7] --steps: closed click / waitFor / goto vocabulary, exactly one visible match, never submit, idempotent, exit 4 with nothing written, replayed on the re-run and every driven row (verifier, verify skill)",
     [verifier, verifySkill].every((t) => /`--steps`/.test(t) && /`\{"click": "<selector>"\}`, `\{"waitFor": "<selector>"\}`, `\{"goto": "\/same-origin\/path"\}`/.test(t) && /EXACTLY ONE visible\s+element/i.test(t)
       && /never submits a form/.test(t) && /[Ii]dempotent/.test(t) && /exit 4 and nothing is written/.test(t) && /re-run \(D19\)|D19 re-run/.test(t) && /every page the probe drives an interaction on/.test(t)));
-  check("[D40 7] the plan's `route` is advisory; the skill passes the plan to --steps when it has `navigate` (verifier, verify skill, build-screen, references)",
+  check("[D40 7] the plan's `route` is advisory; the skill passes the plan to --steps only when it has `navigate` (verifier, verify skill, build-screen, references)",
     /`route` is advisory/.test(verifier) && /`route` stays advisory/.test(verifySkill) && /`route` \(advisory free text/.test(skill) && /`route` is advisory/.test(verifyRef)
-    && /pass the plan as `--steps`/.test(verifier) && /passes the plan to `--steps` whenever it has one/.test(verifySkill) && /Pass the plan as\s+`--steps` whenever it has `navigate`/.test(skill));
+    && /pass the plan as `--steps`/.test(verifier) && /pass the plan to `--steps` only when it has a `navigate` list/.test(verifySkill) && /Pass the plan as\s+`--steps` whenever it has `navigate`/.test(skill));
   check("[D40 7] the probe call in every doc shows --steps",
     [verifier, verifySkill, skill].every((t) => /verify-probe\.js[^`]*--steps design\/plan\/<screen>\.json/.test(t)) && /`--steps <plan\.json>`/.test(verifyRef));
   check("[F-70] the shipped probe drives overlay/swap on_click/on_press and plan expect:dialog rows: reveals hover-hidden openers, mouse vs synthetic activation, never ok:false, destination tag inside",
@@ -344,7 +344,7 @@ console.log("build-screen docs (group 12b):");
     /\*\*Behaviour and accessibility\b/.test(verifySkill) && /never change the verdict/.test(verifySkill) && /Stop hook/.test(verifySkill)
     && /a measurable accessibility failure is never waived/.test(verifySkill) && /raise a designer question/.test(verifySkill));
   check("[12b] verify skill: copy report.behaviour.summary into plan.verification.a11y (tool, violations = fail, warnings = warn)",
-    /copy `report\.behaviour\.summary` into `plan\.verification\.a11y`/.test(verifySkill) && /tool: "verify-probe\[\+axe-core x\.y\]"/.test(verifySkill)
+    /copies `report\.behaviour\.summary` into `plan\.verification\.a11y`/.test(verifySkill) && /`tool` being `"axe-core <version>"` when axe-core ran, else\s+`"verify-probe behaviour checks"`/.test(verifySkill) // L4: the strings plan-record writes
     && /violations: summary\.fail/.test(verifySkill) && /warnings: summary\.warn/.test(verifySkill));
   check("[12b fix1] verify skill: a11y.report names the report copied from; summary.fail counts a +N more row's elements; keys only on a button-like opener, outside clicks only on a backdrop, the safe close never a link, closed-menu openers not-run",
     /report: "<the report\.json you copied it from>"/.test(verifySkill) && /`summary\.fail` counts the elements behind a "\+N more" row/.test(verifySkill)
@@ -573,6 +573,33 @@ console.log("build-screen docs (group 15, quick keys + export docs):");
   const x01Bad = x01Files.filter((f) => { const t = rd(f); return new RegExp(`fixedChildren[\\s\\S]{0,200}?${firstN}|${firstN}[\\s\\S]{0,200}?fixedChildren`).test(t); });
   check("[X01-1] no first-N / leading-children wording within 200 chars of fixedChildren in ir-fields, the 7 profiles, serialize.ts" + (x01Bad.length ? " (" + x01Bad.join(", ") + ")" : ""), x01Bad.length === 0);
   check("[X01-1] ir-fields and every profile say the LAST N of children[] and place each by y", /fixedChildren:N[^.]{0,40}LAST N entries of `children\[\]`/.test(flat(irRaw)) && x01Files.slice(1, 8).every((f) => /LAST N/.test(rd(f)) && /by its `y`/.test(rd(f))));
+  // group 21 (slice T): `layout` only on nodes that hold children, the "Older exports" sentence, fixedChildren x/y, collectionKey, distinctTexts.
+  check("[G21-1] no doc says every TEXT carries `layout` (ir-fields, quick keys, build-screen SKILL) — only a node that can hold children has it",
+    ![irBody, qk, skill].some((d) => /every TEXT carries it/.test(d)) && /only a node that can hold children has it/.test(qk) && /Only a node that can hold children has a `layout`/.test(irBody) && /only on nodes that hold children/.test(skill));
+  const olderRe = /\*\*Older exports\.\*\*.*?\(design-diff does\)\./;
+  check("[G21-1] the \"Older exports\" sentence (quick keys + ir-fields): gridColumnStart/RowStart:-1 on every node, gridAlignSelf/gridJustifySelf on a node whose parent is not a grid, layout on SLICE/STICKY and other leaf types",
+    [qk, flat(block)].every((d) => {
+      const s = olderRe.exec(d)?.[0] ?? "";
+      return /`gridColumnStart:-1`/.test(s) && /`gridRowStart:-1`/.test(s) && /`gridAlignSelf`/.test(s) && /`gridJustifySelf`/.test(s) && /whose parent is not a grid/.test(s) && /SLICE, STICKY and other leaf type/.test(s);
+    }) && !/Noise to ignore/.test(qk));
+  check("[G21-1] fixedChildren = the LAST N, fixed only (\"sticky\" is not exposed), each pinned child carries x/y (quick keys + ir-fields)",
+    [qk, irBody].every((d) => /`fixedChildren:N`(?:\*\* —| =) the LAST N entries of `children\[\]`/.test(d) && /"sticky" is not exposed/.test(d) && /[Ee]ach pinned child carries `x`\/`y`/.test(d) && /only an `absolute:true` child be fixed/.test(d)));
+  check("[G21-1] ir-fields: the token catalog row has `collectionKey` (the collection's key; names repeat)",
+    /`variables\[\] \{name, type, collection, collectionKey,/.test(irBody) && /`collectionKey` is the collection's own key \(collection NAMES repeat/.test(irBody));
+  const syncSkill = flat(read("claude-plugin/skills/sync-design/SKILL.md"));
+  check("[G21-1] sync-design: a \"differ only by the exporter's format\" warning after a plugin update is not a design change; re-run --expect/--compare once",
+    /differ only by the exporter's format" after a plugin update is not a design change/.test(syncSkill) && /Re-run `verify-screen --expect` \/ `--compare` once/.test(syncSkill));
+  const readme21 = flat(read("bridge/README.md"));
+  const extract21 = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const verbs21 = read("bridge/src/verbs.ts");
+  const mcp21 = read("bridge/src/figma-mcp.ts");
+  const mcpAt = mcp21.indexOf('"figma_list_children",');
+  const mcpDesc = mcpAt < 0 ? "" : mcp21.slice(mcpAt, mcp21.indexOf("inputSchema", mcpAt));
+  check("[G21-2] list children docs (README, extract, verbs help, the MCP description) name `distinctTexts` — up to 3 texts a row shows and its twins do not",
+    [readme21, extract21].every((d) => /`distinctTexts` \(up to 3 texts that row shows and its twins do not\)/.test(d)) &&
+    /`distinctTexts` \(up to 3 texts the row shows and its/.test(verbs21) && /`distinctTexts` \(up to 3 texts that row shows and its twins do not;/.test(mcpDesc));
+  check("[G21-2] …and the listing's read budget: a very large listing skips it with a warning (README, extract, verbs help, MCP description)",
+    /budget of 20000 node reads for the whole listing/.test(readme21) && /node-read budget runs out/.test(extract21) && /skipped, with a warning, past the listing's read budget/.test(verbs21) && /a very large listing skips it with a warning/.test(mcpDesc));
   // X-02: `scroll` is a node field, never `layout.scroll`.
   const x02Bad = pluginDocs.filter((f) => /layout\.scroll/.test(read(f)));
   check("[X02-1] no plugin skill/agent doc says `layout.scroll`" + (x02Bad.length ? " (" + x02Bad.join(", ") + ")" : ""), pluginDocs.length > 20 && x02Bad.length === 0);
@@ -605,7 +632,7 @@ console.log("build-screen docs (group 15, quick keys + export docs):");
   const libFirst = ([["README", readme], ["ARCHITECTURE", arch], ["TESTING", testing], ["extract", ext], ["help", help]] as const)
     .filter(([, d]) => /is the step \*before\* that|intended order is `listLibraries`|dtwin list libraries\s+# 1\.|then scope by library|Before any pull, run `node bridge\/src\/figma-pull\.ts --list-libraries`|\(do this first\)/.test(d)).map(([n]) => n);
   check("[M5-1] README, ARCHITECTURE, TESTING, extract, help: list libraries is never the default first step" + (libFirst.length ? " (" + libFirst.join(", ") + ")" : ""),
-    libFirst.length === 0 && /`figma_list_libraries` \(no arguments\) is a side step/.test(readme) && /`listLibraries` is a side step, never the default first one/.test(arch) && /Not a default first step/.test(testing));
+    libFirst.length === 0 && /`figma_list_libraries` \(optional `client`, like every Figma tool\) is a side step/.test(readme) && /`listLibraries` is a side step, never the default first one/.test(arch) && /Not a default first step/.test(testing));
   const oneAtATime = ([["README", readme], ["extract", ext], ["help", help]] as const).filter(([, d]) => /variable collections one at a time|collections one at a time/.test(d)).map(([n]) => n);
   check("[L5-1] README, extract, help: one Figma call per enabled library collection, never \"one at a time\"" + (oneAtATime.length ? " (" + oneAtATime.join(", ") + ")" : ""),
     oneAtATime.length === 0 && [readme, ext, help].every((d) => /one Figma call per enabled library (variable )?collection/.test(d)));
@@ -618,7 +645,7 @@ console.log("build-screen docs (group 15, quick keys + export docs):");
     /`design\/export\/SCHEMA\.md` holds the scripting quick keys/.test(exportLayout) && /SCHEMA\.md \(scripting quick keys\)/.test(arch) && /under another registration key the prefix differs/.test(help));
   // F2 LOW-2: the extract index paragraph — a page-walk row carries `bytes` and `nodes` (a single-screen row has `nodes` too), no w/h.
   check("[F2 L2] extract index paragraph: a page-walk row carries `bytes` (and `nodes`) but no `w`/`h`; no \"paths to all three sibling files\"",
-    /a page-walk row \(`--page`, `--all-pages`, `pull design`\) carries `bytes` \(and `nodes`\) but no `w`\/`h`; its `reference` sits in the layer file/.test(ext) &&
+    /a page-walk row \(`--page`, `--all-pages`, a bare `dtwin pull`\) carries `bytes` \(and `nodes`\) but no `w`\/`h`; its `reference` sits in the layer file/.test(ext) &&
     !/paths to all\s+three sibling files/.test(ext) && !/carries `nodes`\/`bytes` instead/.test(ext));
   // F-42 / F-05 / DT-05 / DT-07
   check("[F42-1] extract names --variant-visuals and variantVisuals (design-system pulls to build from; the library's pull needs it)", /--variant-visuals/.test(ext) && /`variantVisuals: true`/.test(ext) && /`--as-library` pull/.test(ext));
@@ -645,6 +672,169 @@ console.log("build-screen docs (group 15, quick keys + export docs):");
   check("[DT38-1] extract, build-screen, screen-builder, visual-verifier and audit-design name design/export/SCHEMA.md" + (schemaNamed.length ? " (missing: " + schemaNamed.join(", ") + ")" : ""), schemaNamed.length === 0);
   check("[DT38-1] SCHEMA.md is listed in help's table, extract 'What lands' and README's layout block, and is 'rewritten only when its text changes'",
     /\| every pull that writes to disk \| `SCHEMA\.md`/.test(help) && /Every pull that writes to disk also leaves \*\*`design\/export\/SCHEMA\.md`\*\*/.test(ext) && /SCHEMA\.md\s+scripting quick keys/.test(readme) && [help, ext, readme].every((d) => /[Rr]ewritten only when its text changes/.test(d)) && exists("bridge/src/quick-keys.ts"));
+}
+
+// Group 19: native-control substitution (DT-52), tailwind-merge (DT-62), this screen's assets only (DT-56),
+// body cells set the columns (F-56), dev-only tags (DT-69), the anchors worth filling first (F-34)
+console.log("build-screen docs (group 19):");
+{
+  const date = (d: string): boolean => /`::placeholder` never applies to `<input type="date">`/.test(d) && /`::-webkit-datetime-edit`/.test(d)
+    && /Chromium\/WebKit, non-standard — check in the browser/.test(d) && /Firefox:.{0,120}check it in the browser/.test(d)
+    && /`color-scheme`.{0,80}usually matches/.test(d) && /`select:invalid`/.test(d)
+    // review 18 MED-3: a disabled first option is skipped by the selectedness algorithm, so it must be `selected`
+    // (React: defaultValue="" / value=""), else the first enabled option is chosen and the placeholder never shows
+    && /`<option value="">` on a `required` select \(the spec's placeholder label option\)/.test(d)
+    && /If you make it `disabled hidden`, also mark it `selected`/.test(d) && /`defaultValue=""` or a controlled `value=""`/.test(d)
+    && /the first enabled option is selected, the field is valid, and the placeholder never shows/.test(d);
+  check("[DT52-1] both web profiles: ::placeholder does not apply to a date input; ::-webkit-datetime-edit is labelled Chromium/WebKit non-standard, Firefox hedged, color-scheme `usually`; a select placeholder is `selected` / defaultValue=\"\"", date(tw) && date(cssm));
+  check("[DT52-2] SKILL: a drawn field that becomes a native control carries the drawn colour onto it, is recorded in the plan and verified on the element's own text",
+    /Native control substitution/.test(skill) && /carry the drawn placeholder\/value colour onto it/.test(skill) && /record the\s+substitution in the plan/.test(skill) && /verify it on the element's own text/.test(skill));
+  check("[DT62-1] web-tailwind: tailwind-merge for a caller's className, the sizes registered with extendTailwindMerge, colour+size drops one of the two, size-vs-size not merged unregistered",
+    /`tailwind-merge`/.test(tw) && /extendTailwindMerge\(\{ extend: \{ theme: \{ text: \[/.test(tw) && /colour plus a size drops one of the two/.test(tw) && /not merged/.test(tw));
+  check("[DT56-1] SKILL: use only files THIS screen's .assets.json lists; another screen's file is never a substitute; a node with no file is a question",
+    /Use only files THIS screen's `\.assets\.json` lists/.test(skill) && /never substitute it/.test(skill) && /extract\/designer question, not a reuse/.test(skill));
+  check("[F56-1] both web profiles: column x/widths come from the BODY cells; a header/body x disagreement is a designer question",
+    [tw, cssm].every((d) => /column x\/widths from the BODY cells/.test(d) && /designer question/.test(d)));
+  check("[DT69-1] SKILL: tags are dev evidence, stripped at build time; Next.js needs properties: ['^data-dt-node$'] (plain `true` strips only ^data-test), never in the source",
+    /\{ properties: \['\^data-dt-node\$'\] \}/.test(skill) && /plain `true` strips only\s+`\^data-test`/.test(skill) && /Never strip them in the source/.test(skill));
+  // review 18 LOW-5: an unconditional (or NODE_ENV-keyed) strip removes the tags from the preview build verify measures
+  check("[R18-LOW5] SKILL: the strip is an explicit opt-in env set only by the deploy build, never NODE_ENV; verify measures a build that keeps the tags",
+    /reactRemoveProperties: process\.env\.DT_STRIP_TAGS === '1' \? \{ properties: \['\^data-dt-node\$'\] \} : false/.test(skill)
+    && /only on an explicit opt-in env that the deploy build alone sets/.test(skill) && /Babel the same way/.test(skill)
+    && /Never key it on `NODE_ENV`/.test(skill) && /verify measures a build that keeps the tags/.test(skill)
+    && !/reactRemoveProperties: \{ properties/.test(skill));
+  check("[F34-1] SKILL: anchorsSuggested is named in the plan-skeleton paragraph and step 3 says to fill those ids first, the rest covered by the nearest mapped ancestor",
+    /`anchorsSuggested\[\]`/.test(skill) && /the `anchorsSuggested` ids first, the rest is covered by its nearest mapped ancestor/.test(skill));
+  // review 18 MED-2: the frame has no ancestor to cover it, so the plan suggests it and step 3 names it
+  check("[R18-MED2] SKILL: anchorsSuggested starts with the screen frame (\"screen\"; an instance frame is the whole list) and step 3 fills the frame itself plus the suggested ids",
+    /the screen frame itself, first, as `"screen"` — a frame that is an instance is the whole list/.test(skill)
+    && /step 3: the frame itself plus the `anchorsSuggested` ids first/.test(skill) && /the dividers between its rows go with it/.test(skill));
+  // review 18 LOW-7: a named field for the substitution, a native line in every native profile, reusedFrom allowed
+  const natives = ["swiftui", "android-compose", "flutter", "react-native"].map((n) => flat(read(`claude-plugin/skills/build-screen/profiles/${n}.md`)));
+  check("[R18-LOW7] SKILL + both web profiles: the native-control substitution is a deviations[] row {nodeId, field: \"control\", designed, built, reason}",
+    [skill, tw, cssm].every((d) => /`deviations\[\]` row `\{nodeId, field: "control", designed, built, reason\}`/.test(d)));
+  check("[R18-LOW7] SwiftUI, Compose, Flutter and React Native profiles: set the picker's text colour explicitly",
+    natives.every((d) => /set the picker's text colour explicitly/.test(d)));
+  check("[R18-LOW7] SKILL: a `reusedFrom` row is listed in this screen's .assets.json, so the this-screen-only rule allows it",
+    /never substitute it \(a row with `reusedFrom` is listed here, so it is fine\)/.test(skill));
+  // review 18 LOW-3/LOW-4: the tailwind-merge major per Tailwind major, ask before adding it, every figma- namespace registered
+  check("[R18-LOW3] web-tailwind: tailwind-merge v3 is for Tailwind v4, v2.6 (classGroups font-size) for Tailwind v3; the project's cn first, ask before adding",
+    /tailwind-merge v3 is for Tailwind v4; on Tailwind v3 use v2\.6/.test(tw) && /`classGroups: \{ 'font-size': \[\.\.\.\] \}`/.test(tw)
+    && /Use the project's existing `cn` if it has one; ask before adding `tailwind-merge`\/`clsx`/.test(tw));
+  check("[R18-LOW4] web-tailwind: text, spacing and radius are all registered for the generated figma- namespaces",
+    /theme: \{ text: \['figma-body-1', …\], spacing: \['figma-space-4', …\], radius: \['figma-md', …\] \}/.test(tw) && /`p-figma-space-4` against `p-figma-space-6`/.test(tw));
+  // review 1 of groups 18+19 (L-6, M-3)
+  check("[L-6] SKILL: the this-screen-only asset rule is about the EXPORTED files, so reusing a matching project icon still reads as allowed",
+    /Reuse a project icon only if the glyph clearly matches/.test(skill) && /Of the exported files, import only those listed in THIS screen's `\.assets\.json`/.test(skill) && !/ Import only files listed in THIS screen's/.test(skill));
+  check("[L-6] web-tailwind: the registered sizes drop the --text- prefix (text: ['figma-body-1', …], like tailwind-merge's text: ['huge'])",
+    /theme: \{ text: \['figma-body-1', …\]/.test(tw) && /names without its prefix \(`--text-`/.test(tw) && /`text: \['huge'\]`/.test(tw));
+  check("[M-3] SKILL: a list is a container whose children are MOSTLY one shape; its other children (a search bar) are listed on their own",
+    /children are mostly rows of one shape — three or more/.test(skill) && /a search bar above the rows, are listed on their own/.test(skill));
+}
+
+// Group 17: scratch location (DT-36), hover/press evidence (DT-40), the report's own delta text (DT-51), states placement
+// (F-67), whose hover (F-74), inferred rows (F-121), --record-plan (F-100, F-64), illustrative reference (DT-55),
+// line-height vs the text box (F-119), the replaced expectation's .prev (DT-45), --browser-path (DT-30)
+console.log("build-screen docs (group 17):");
+{
+  const helpSkill = flat(read("claude-plugin/skills/help/SKILL.md"));
+  check("[DT36-1] visual-verifier: scratch scripts go in the run cache's scratch dir (project-local), never under src/ or design/",
+    /`node_modules\/\.cache\/designtwin-verify\/scratch\/` \(project-local/.test(verifier) && /never under `src\/` or `design\/`/.test(verifier));
+  check("[DT40-1] visual-verifier: hover/press feedback is read as background, colour, filter, opacity, box-shadow, transform and outline (readable by getComputedStyle, not part of the effective-paint check) before 'no change'",
+    /read\s+background, colour, `filter`, `opacity`, `box-shadow`, `transform` and `outline`/.test(verifier) && /readable with `getComputedStyle`/.test(verifier)
+    && /effective-paint check \(`paintedBy`\) covers `backgroundColor` only/.test(verifier));
+  check("[F74-1] visual-verifier and verify skill: drawnStateFrom = hover the OWNER, not the control; paintedBy = the painting ancestor's colour for a transparent element",
+    [verifier, verifySkill].every((d) => /`drawnStateFrom`/.test(d) && /hover(s)? (that )?owner|hover the owner/i.test(d) && /`paintedBy`/.test(d)));
+  check("[F67-1] visual-verifier and verify skill: states sit beside styles (nodes[].states), never inside; a state on a spec with no drawnState is listed as inferred, not compared",
+    [verifier, verifySkill].every((d) => /beside(\*\*)? `styles`/.test(d) && /never inside it/.test(d) && /unknown key/.test(d)) && /only for a spec with `drawnState`/.test(verifier) && /Inferred, not designed/.test(verifier));
+  check("[F121-1] visual-verifier and verify skill: inferred[] rows {nodeId?, state, built, why?} in the evidence file; listed under 'Inferred, not designed', never graded, never the verdict",
+    [verifier, verifySkill].every((d) => /`inferred\[\]`/.test(d) && /\{"?nodeId"?\??, "?state"?, "?built"?, "?why"?\??\}/.test(d) && /Inferred, not designed/.test(d)) && /never part of the verdict/.test(verifier) && /never graded and never in the verdict/.test(verifySkill));
+  check("[DT51-1] visual-verifier and verify skill: quote the report's own delta text (it names the axis/dimension), never restate a bound",
+    [verifier, verifySkill].every((d) => /Quote the report's own delta text — it names the axis or dimension — and never restate a bound/.test(d)));
+  check("[F100-1] verify skill, build-screen and references/verify.md: --record-plan writes mode/renderer/artifacts/deltas/a11y/recorded; coverage stays hand-written; no 'Record the result by hand'",
+    /--record-plan/.test(verifySkill) && /--compare … --record-plan/.test(skill) && /--record-plan/.test(verifyRef) && !/Record the result by hand/.test(verifySkill)
+    && /`mode`, `renderer`, `artifacts`, the open high\/medium `deltas`/.test(verifySkill) && /you still write `coverage`/.test(skill) && /\(yours to write\)/.test(verifyRef)
+    && /none, or several and no `--plan`, is exit 2 before anything is compared/.test(verifySkill));
+  check("[F64-1] build-screen and references/verify.md: record the deviations you already know about at build time, with a reason",
+    /record a deviation you already know about when you build it, with its reason/.test(skill) && /Record the differences you already know about as `deviations\[\]` \(with a reason\) when you build them/.test(verifyRef));
+  check("[DT55-1] verify skill and build-screen: a deviations[] row with field \"reference\" marks the reference illustrative; it never waives a delta",
+    /field: "reference"/.test(verifySkill) && /never waives or changes a delta/.test(verifySkill) && /field: "reference"/.test(skill) && /without\s+waiving a delta/.test(skill));
+  check("[F119-1] build-screen: a line-height taller than its fixed text box is a deliberate choice (the expectation's 'text box height' row)",
+    /line-height taller than its fixed text box.{0,160}choose deliberately/.test(skill) && /line-height taller than its fixed text box is a choice to make deliberately/.test(verifyRef));
+  check("[DT45-1] verify skill: a replaced expectation keeps <Screen>.expected.prev.json (one generation) and says generator vs export; byte-identical says nothing about the build",
+    /<Screen>\.expected\.prev\.json/.test(verifySkill) && /one generation/.test(verifySkill) && /expectation generator changed/.test(verifySkill) && /Byte-identical to the expectation on disk" says nothing about the build/.test(verifySkill));
+  check("[DT30-1] help, verify skill and visual-verifier: --browser-path <executable> (macOS inner binary, only guaranteed with the bundled Chromium; recorded as custom, never the path)",
+    [helpSkill, verifySkill, verifier].every((d) => /--browser-path <executable>/.test(d) && /Contents\/MacOS/.test(d) && /only guaranteed with the bundled Chromium/.test(d)) && /`custom`, never the path/.test(verifySkill));
+  // fix pass 1 (D119)
+  const trouble = flat(read("claude-plugin/skills/help/references/troubleshooting.md"));
+  check("[DT30-2] troubleshooting: the probe's exit 3 (no usable browser) → --browser-path <executable> (also on --check; macOS inner binary; only guaranteed with the bundled Chromium; recorded as custom)",
+    /`verify-probe` exits 3/.test(trouble) && /--browser-path <executable>/.test(trouble) && /also on `--check`/.test(trouble) && /Contents\/MacOS/.test(trouble)
+    && /Only guaranteed with the bundled Chromium/.test(trouble) && /records `custom`, never the path/.test(trouble));
+  check("[M1] verify skill: recording never reopens a plan — a hook record from before the hash change is re-stamped in the same write",
+    /recording never reopens a plan \(the hook's hash does not cover `verification`; a hook record from before that change is re-stamped in the same write\)/.test(verifySkill));
+  check("[L12] build-screen: the hook hashes files[] and every mapped module (extensionless resolves like an import; an alias or package is not hashed — --status and the report name it once)",
+    /and of every module the plan's anchors\/components map/.test(skill) && /resolves like an import, `\.tsx`\/`\.ts`\/`\.jsx`\/`\.js` then `\/index\.\*`/.test(skill) && /`--status` and the verify report name it once/.test(skill));
+  check("[L4] verify skill: paintedBy's known miss — a sibling/overlay painting over the element may pass; children painting all of it → no painter",
+    /A sibling or overlay painting over the element is not seen \(it may pass\)/.test(verifySkill) && /its own children paint all over gets no painter/.test(verifySkill));
+  // group 20 (DOC-1)
+  const readme20 = flat(read("bridge/README.md"));
+  const help20 = flat(read("claude-plugin/skills/help/SKILL.md"));
+  const extract20 = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const audit20 = flat(read("claude-plugin/skills/audit-design/SKILL.md"));
+  check("[DOC-1a] README + help: an owning MCP server exits when its client goes away, unless its socket was used, then idles out on FIGMA_DAEMON_IDLE_MIN",
+    [readme20, help20].every((d) => /exits when its client goes away/.test(d) && /FIGMA_DAEMON_IDLE_MIN/.test(d) && /unless another process has used/.test(d)));
+  // s19 L2: narrowed to what write-out keeps — a screen spill ONLY <screen>.json.prev (its sidecars, the index and
+  // variables.json are replaced with no copy), and no MCP tool pulls a library, so there is no "library spill".
+  check("[DOC-1b / s19 L2] extract + README: the implicit page/full/design-system spill keeps a .prev per changed JSON (wrote.prevKept); a screen spill ONLY <screen>.json.prev (wrote.prev) — sidecars replaced with no copy; no library spill",
+    [readme20, extract20].every((d) => /page\/full\/design-system spill/.test(d) && !/library spill/.test(d) && /prevKept/.test(d)
+      && /screen spill( \([^)]*\))? keeps ONLY `<screen>\.json\.prev` \(`wrote\.prev`/.test(d) && /replaced with no copy/.test(d)));
+  // s19 M3: no doc tells you to pull into bare `design` — that is the outDir trap (a second export tree beside
+  // design/export/ that doctor, cross-check, audit and build-screen never read). `dtwin pull` defaults to design/export.
+  {
+    const trapDocs = ["bridge/README.md", "claude-plugin/skills/help/SKILL.md", "claude-plugin/skills/extract/SKILL.md", "ARCHITECTURE.md", "README.md"];
+    // A command line or inline-code span: `dtwin design …`, `dtwin pull design …`, `figma-pull.ts design …` — the trap
+    // is named only in a sentence that says never to (e.g. "never `dtwin pull design …`").
+    const trap = /(?:dtwin|figma-pull\.ts)(?: pull)? \.?\/?design(?:\/)?(?=[\s`"']|$)/;
+    const bad = trapDocs.flatMap((f) => read(f).split("\n").map((l, i) => [f + ":" + (i + 1), l] as const))
+      .filter(([, l]) => trap.test(l) && !/\bnever\b|\btrap\b|parallel/i.test(l)).map(([w]) => w);
+    check("[s19 M3] README, help, extract, ARCHITECTURE: no doc tells you to pull into bare `design` (the default is design/export)" + (bad.length ? " (" + bad.join(", ") + ")" : ""),
+      bad.length === 0 && /defaults to `design\/export`/.test(help20) && /defaults to `design\/export`/.test(extract20) && /Never pull into bare `design`/.test(readme20));
+  }
+  // s19 L1: a held port — the CLI exits with EADDRINUSE; an MCP server stays up and only that call errors (retry).
+  check("[s19 L1] README + help: on a held port an MCP tool call errors and a retry works — the server never exits with EADDRINUSE",
+    [readme20, help20].every((d) => /stays up/.test(d) && /retry/.test(d) && !/an MCP server\s+or second pull started while it runs exits/.test(d) && !/anything else that needs the port exits/.test(d)));
+  check("[s19 L1] README: the MCP tool list names all 15 tools",
+    ["figma_status", "figma_list_clients", "figma_whoami", "figma_get_selection", "figma_list_libraries", "figma_list_pages", "figma_list_children", "figma_export_full",
+      "figma_export_design_system", "figma_export_selection", "figma_export_url", "figma_screenshot", "figma_write", "design_get_component", "design_drift_lint"]
+      .every((t) => readme20.includes("`" + t + "`")) && /Tools \(15\):/.test(readme20));
+  check("[DOC-1c] build-screen + audit-design: the legacy code#i id is accepted with a warning",
+    [skill, audit20].every((d) => /`code#i` is still accepted,? \(?with a warning/.test(d)));
+  check("[DOC-1d] README + extract: outDir is checked before the export", [readme20, extract20].every((d) => /before the export/.test(d)));
+}
+
+{
+  // Live-check fixes (s19 G17/G18): the verify skill's --steps rule, the verifier's own scripts, a run that ended, the audit refusal.
+  console.log("verify / audit-design docs (live-check fixes):");
+  const auditSkill = flat(read("claude-plugin/skills/audit-design/SKILL.md"));
+  check("[F5] verify skill: --steps <plan> only when the plan has a `navigate` list (none is exit 2), never 'whenever it has one'",
+    /only when (the plan|it) has a `navigate` list/.test(verifySkill) && /holds no `navigate` list/.test(verifySkill) && !/whenever it has one/.test(verifySkill));
+  check("[F6] verify skill: allow rules for the verifier's own scratch scripts (Edit on the run cache — never a dead Write(path) rule — Bash node on scratch), written with the Write tool not a heredoc",
+    !/`Write\(node_modules/.test(verifySkill) && /Edit\(node_modules\/\.cache\/designtwin-verify\/\*\*\)/.test(verifySkill)
+    && /Bash\(node node_modules\/\.cache\/designtwin-verify\/scratch\/\*\)/.test(verifySkill) && /Write tool, never a shell heredoc/.test(verifySkill));
+  check("[F6] verifier: scratch scripts are written with the Write tool, not a heredoc; the Edit rule (which covers the Write tool) is named in the denial hand-back, never a Write(path) rule",
+    /Write tool.{0,40}never a shell heredoc/.test(verifier) && (verifier.match(/Edit\(node_modules\/\.cache\/designtwin-verify\/\*\*\)/g) ?? []).length >= 2 && !/`Write\(node_modules/.test(verifier));
+  check("[F4] verify skill: a `blocked` hand-back is reported with its detail and never overwritten with `done`; a retry is a new run (--new-run)",
+    /hands back `blocked`.{0,600}never write `done` over/.test(verifySkill) && /status detail|prints it/.test(verifySkill) && /start a new run with `--new-run`/.test(verifySkill));
+  check("[r3-M2] one NEW run id per verifier pass / re-verify round (an ended id is refused; --wait on it returns at once): build-screen, verify skill, verifier",
+    /every verifier pass \(each re-verify round\) gets a NEW run/.test(skill) && /each verifier pass and each re-verify round gets its own new run id/.test(verifySkill)
+    && /A run id is good for ONE pass/.test(verifier));
+  check("[F4] verifier: an ended run takes no more writes; blocked stays blocked, the orchestrator reports it, a retry is --new-run",
+    /ended .{0,40}takes no more writes/.test(verifier) && /stays `blocked`.{0,200}never overwrites it with `done`/.test(verifier) && /starts a new run with `--new-run`/.test(verifier)
+    && !/after `done`\/`failed`\/`blocked` pass `--run <id>` or `--new-run`/.test(verifier));
+  check("[G18-a] audit-design: the one-report-per-node refusal is explained — use the existing name (as --out) or --force and retire the old pair",
+    /If it refuses.{0,200}already has an audit report/.test(auditSkill) && /pass it as `--out`/.test(auditSkill) && /`--force`.{0,200}retire the old pair/.test(auditSkill));
+  check("[G18-b] audit-design: the cross-check command carries --out (a bare run only prints), with the <Screen>__<id>.cross form the plan's crossCheckFile points at",
+    /cross-check\.js" --design-system design\/export\/design-system \\? ?--out design\/audit\/<name>\.cross/.test(auditSkill) && /--out design\/audit\/<Screen>__<id>\.cross/.test(auditSkill) && /Without `--out` the cross-check report only prints/.test(auditSkill));
 }
 
 report();

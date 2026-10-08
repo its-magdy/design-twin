@@ -129,7 +129,9 @@ export const HELP: Record<string, string> = {
     "                         libraries are enabled). It prints progress while it works.\n" +
     "  dtwin list clients     which Figma files are on the bridge right now, with their connIds\n" +
     "  dtwin list children    one row per direct child: id, name, type, size, childCount; rows that share\n" +
-    "                         name + size also get a `title` (first visible text) and one warning per group\n\n" +
+    "                         name + size also get a `title` (first visible text) and one warning per group;\n" +
+    "                         when titles match too, `distinctTexts` (up to 3 texts the row shows and its\n" +
+    "                         twins do not — skipped, with a warning, past the listing's read budget)\n\n" +
     "  --json                 machine output for the two that print a table (libraries, clients)\n" +
     "  --client <file>        WHICH connected Figma file, when more than one is open\n\n" +
     "  These take no read options (--css/--measurements/…): they emit structural fields only, so\n" +
@@ -142,12 +144,14 @@ export const HELP: Record<string, string> = {
     "  forget   delete the saved token\n\n" +
     "  FIGMA_BRIDGE_TOKEN in the environment overrides the saved file. `dtwin token` says which won.",
   pull:
-    "dtwin pull [outDir] --node <id> | --page <id|name> | --selection | --design-system | --as-library <name>\n\n" +
-    "  Exactly one scope. Everything lands under outDir (default design/export):\n" +
+    "dtwin pull [outDir] [--node <id> | --page <id|name> | --all-pages | --selection | --design-system | --as-library <name>]\n\n" +
+    "  At most one scope; with none it pulls the CURRENT page (its frames, the design system and assets).\n" +
+    "  Everything lands under outDir (default design/export — never bare `design`, a parallel tree nothing reads):\n" +
     "    --node <id>        ONE frame, fully serialized, with its assets. Writes\n" +
     "                       pages/<Page>/<Screen>__<id>.json plus .vars.json and .assets.json beside it,\n" +
     "                       merges its tokens into variables.json, and indexes it in pages/index.json.\n" +
     "    --page <id|name>   every top-level layer on one page (repeatable)\n" +
+    "    --all-pages        every top-level layer on EVERY page (slow on a large file)\n" +
     "    --selection        whatever is selected in Figma right now\n" +
     "    --design-system    tokens, styles and component catalogs — no page walk, no assets\n" +
     "                       On a file that CONSUMES a library it holds that file's own tokens plus only the\n" +

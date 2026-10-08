@@ -124,6 +124,43 @@ void (async () => {
         !broken.isError && /orphaned-entry/.test(broken.text) && /k-sample/.test(broken.text) && !/k-lib'/.test(broken.text));
     }
 
+    // [M4] design_drift_lint with NO arguments on a `dtwin init` project: the map defaults to the project
+    // layout's design/codeconnect.local.json and the export to design/export (like the CLI), not to a root
+    // codeconnect.local.json and a bare design/. Its own server, started in that project.
+    {
+      const proj = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mcp-layout-"));
+      const ex = path.join(proj, "design", "export");
+      fs.mkdirSync(path.join(ex, "design-system"), { recursive: true });
+      fs.writeFileSync(path.join(ex, "design-system.json"), JSON.stringify({ files: { componentsLocal: "design-system/components.local.json" } }));
+      fs.writeFileSync(path.join(ex, "design-system", "components.local.json"), JSON.stringify({ exportedAt: new Date().toISOString(), components: [{ key: "k-row", id: "1:1", name: "Row", type: "COMPONENT" }] }));
+      const mapFile = path.join(proj, "design", "codeconnect.local.json");
+      fs.writeFileSync(mapFile, JSON.stringify({ version: 1, components: { "k-row": { figma: { key: "k-row", name: "Row" }, code: { module: "src/ui/Row.tsx", export: "Row" } } } }));
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== "FIGMA_EXPORT_DIR") env[k] = v;
+      const tl = new StdioClientTransport({
+        command: process.execPath,
+        args: [path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts")],
+        env: { ...env, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: "smoke-test-token", MAX_MCP_OUTPUT_TOKENS: "" },
+        cwd: proj,
+        stderr: "ignore",
+      });
+      const cl = new Client({ name: "mcp-smoke-layout", version: "0.0.0" });
+      try {
+        await cl.connect(tl);
+        const r = await cl.callTool({ name: "design_drift_lint", arguments: {} });
+        const text = firstText(r);
+        ok("[M4] no-argument design_drift_lint on a design/export + design/codeconnect.local.json project → ok", r.isError !== true && /"ok":\s*true/.test(text));
+        fs.rmSync(mapFile);
+        const miss = await cl.callTool({ name: "design_drift_lint", arguments: {} });
+        const missText = firstText(miss);
+        ok("[M4] …and with no map, the error and its scaffold hint name design/codeconnect.local.json",
+          miss.isError === true && /map-bootstrap\.ts <componentsLocal> > design[/\\]codeconnect\.local\.json/.test(missText));
+      } finally {
+        await cl.close().catch(() => {});
+        fs.rmSync(proj, { recursive: true, force: true });
+      }
+    }
+
     // design_get_component follows design-system.json's files.componentsLocal pointer: a wrong-shaped
     // manifest is a tool error that says so (not "Cannot read properties of null" / a path.join
     // TypeError), and a pointer that leaves the server's directory is refused before anything is read.

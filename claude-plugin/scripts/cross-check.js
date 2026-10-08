@@ -678,7 +678,7 @@ function isVerifyReport(x) {
   return isObj2(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -687,7 +687,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj2(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "waivers", "descopes"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj2)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -726,6 +726,48 @@ isStringRecord.expected = "an object of strings";
 
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
+
+// design-to-code/control-kind.ts
+var TOGGLE_WORD = /\b(checkbox|check box|radio|switch|toggle)\b/i;
+function controlKind(name) {
+  const s = String(name || "");
+  const toggle = TOGGLE_WORD.test(s);
+  if (!toggle && /\b(select|dropdown|drop ?down|combo ?box|multi-?select|picker)\b/i.test(s.replace(/\bselect ?all\b/gi, ""))) return "select";
+  if (/\b(input|text ?field|textfield|search|textarea)\b/i.test(s)) return "input";
+  if (toggle) return "toggle";
+  if (/\b(tab|tabs|segmented|nav ?item|navigation item)\b/i.test(s)) return "tab";
+  if (/\blink\b/i.test(s)) return "link";
+  if (/\b(button|btn|cta|icon ?button|chip)\b/i.test(s)) return "button";
+  return null;
+}
+var isBoundaryKind = (a) => [a.name, a.mainComponent && a.mainComponent.setName, a.component].some((l) => {
+  const k = controlKind(l);
+  return k === "input" || k === "select" || k === "toggle";
+});
+function outermostControl(near) {
+  for (let i = 0; i < near.length; i++) {
+    const a = near[i];
+    if (a && a.type === "INSTANCE" && isBoundaryKind(a)) return i;
+  }
+  for (let i = near.length - 1; i >= 0; i--) {
+    const a = near[i];
+    if (a && isBoundaryKind(a)) return i;
+  }
+  return -1;
+}
+var DISABLED_WORD = /^(disabled|inactive|is ?disabled)$/i;
+var ON_VALUE = /^(true|yes|on)$/i;
+function isDisabledLayer(layer) {
+  for (const part of String(layer.mainComponent && layer.mainComponent.name || "").split(",")) {
+    const [k = "", v = ""] = part.split("=").map((x) => x.trim());
+    if (DISABLED_WORD.test(v) || DISABLED_WORD.test(k) && ON_VALUE.test(v)) return true;
+  }
+  for (const [k, v] of Object.entries(layer.props || {})) {
+    if (DISABLED_WORD.test(k.trim()) && (v === true || typeof v === "string" && ON_VALUE.test(v.trim()))) return true;
+    if (!layer.mainComponent && typeof v === "string" && /^disabled$/i.test(v.trim())) return true;
+  }
+  return false;
+}
 
 // design-to-code/color.ts
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
@@ -1015,13 +1057,20 @@ function crossCheck(input) {
   if (foreignPatch) {
     const fp = foreignPatch;
     const foreignNames = new Set(fp.foreign.map((f2) => f2.name));
+    const foreignKeys = new Set(fp.foreign.map((f2) => f2.key).filter((k) => !!k));
+    const screenKeys = new Set(screenColls.map((c) => c.key).filter((k) => !!k));
+    const sharedNames = new Set(screenColls.filter((c) => c.key && dsCollByKey.has(c.key) && foreignNames.has(c.name)).map((c) => c.name));
     const nameMap = { agree: 0, differ: 0, undecidable: 0, absent: 0 };
+    let ambiguous = 0;
     const seen = /* @__PURE__ */ new Set();
     for (const v of screenVars) {
-      if (!v || !v.name || !v.collection || !foreignNames.has(v.collection)) continue;
+      if (!v || !v.name || !v.collection) continue;
+      const byKey = !!v.collectionKey && screenKeys.has(v.collectionKey);
+      if (byKey ? !foreignKeys.has(v.collectionKey ?? "") : !foreignNames.has(v.collection)) continue;
       const id = v.key || `${v.collection}\0${v.name}`;
       if (seen.has(id)) continue;
       seen.add(id);
+      if (!byKey && sharedNames.has(v.collection)) ambiguous++;
       const dv = dsVarByName.get(v.name);
       if (!dv) {
         nameMap.absent++;
@@ -1035,12 +1084,12 @@ function crossCheck(input) {
     const n = seen.size;
     let offline = "";
     if (n) {
-      offline = `Offline check (no Figma needed): of the ${n} variables in those collections, ${nameMap.agree} have a design-system variable of the same name resolving the same in every shared mode, ${nameMap.differ} resolve differently (listed as token-name-collision), ${nameMap.undecidable} cannot be compared (no shared mode), ${nameMap.absent} have no same-name variable. ` + (nameMap.differ === 0 && nameMap.agree > 0 ? `Mapping by NAME is safe for the ${nameMap.agree}: the screen's own .vars.json is the ground truth for names and values. ` : "") + (nameMap.agree === 0 && nameMap.absent === n ? `None of them exists here by name \u2014 this is not the screen's library; pull the one it uses. ` : "");
+      offline = `Offline check (no Figma needed): of the ${n} variables in those collections, ${nameMap.agree} have a design-system variable of the same name resolving the same in every shared mode, ${nameMap.differ} resolve differently (listed as token-name-collision), ${nameMap.undecidable} cannot be compared (no shared mode), ${nameMap.absent} have no same-name variable. ` + (nameMap.differ === 0 && nameMap.agree > 0 ? `Mapping by NAME is safe for the ${nameMap.agree}: the screen's own .vars.json is the ground truth for names and values. ` : "") + (nameMap.agree === 0 && nameMap.absent === n ? `None of them exists here by name \u2014 this is not the screen's library; pull the one it uses. ` : "") + (ambiguous ? `(${ambiguous} of them come from a collection whose name a design-system collection also has \u2014 this export predates collection keys on variables; re-pull to tell them apart.) ` : "");
     }
     const f = findings[fp.at];
     if (f) {
       f.message = fp.head + offline + fp.tail;
-      f.nameMap = nameMap;
+      f.nameMap = ambiguous ? { ...nameMap, ambiguous } : nameMap;
     }
   }
   if (tokens && screenVarByName.size) {
@@ -1372,7 +1421,9 @@ function crossCheck(input) {
       );
     }
   }
+  mixedModeBindings(screens, variables, tokens, push);
   contrastPerMode(screens, variables, tokens, push, resolvedModes);
+  contrastRendered(screens, variables, tokens, push);
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
   const ids = findingIds(findings);
   findings.forEach((f, i) => {
@@ -1480,6 +1531,28 @@ function composedRgba(color, opacity) {
   if (!color || opacity === null || !Number.isFinite(opacity)) return null;
   return { ...color, a: composeAlpha(color.a, opacity) };
 }
+var aliasName = (val) => val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
+function resolveNumberWith(valueOf, name, depth) {
+  if (depth > 8) return null;
+  const val = valueOf(name);
+  if (typeof val === "number") return Number.isFinite(val) ? val : null;
+  const next = aliasName(val);
+  return next ? resolveNumberWith(valueOf, next, depth + 1) : null;
+}
+function resolveColourWith(valueOf, name, depth) {
+  if (depth > 8) return null;
+  const val = valueOf(name);
+  if (typeof val === "string") return parseHex(val);
+  const next = aliasName(val);
+  if (next) return resolveColourWith(valueOf, next, depth + 1);
+  if (val && typeof val === "object" && "composed" in val) {
+    const { color, opacity } = val.composed;
+    const c = typeof color === "string" ? parseHex(color) : resolveColourWith(valueOf, color.aliasOf, depth + 1);
+    const o = typeof opacity === "number" ? opacity : resolveNumberWith(valueOf, opacity.aliasOf, depth + 1);
+    return composedRgba(c, o);
+  }
+  return null;
+}
 function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
   const defs = /* @__PURE__ */ new Map();
   for (const v of tokens && tokens.variables || []) if (v.name) defs.set(v.name, v);
@@ -1494,28 +1567,7 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
     const [onlyKey] = keys;
     return keys.length === 1 && onlyKey !== void 0 ? v.values[onlyKey] : void 0;
   }
-  const aliasName = (val) => val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
-  function resolveNumber(name, mode, depth) {
-    if (depth > 8) return null;
-    const val = valueIn(name, mode);
-    if (typeof val === "number") return Number.isFinite(val) ? val : null;
-    const next = aliasName(val);
-    return next ? resolveNumber(next, mode, depth + 1) : null;
-  }
-  function resolve(name, mode, depth) {
-    if (depth > 8) return null;
-    const val = valueIn(name, mode);
-    if (typeof val === "string") return parseHex(val);
-    const next = aliasName(val);
-    if (next) return resolve(next, mode, depth + 1);
-    if (val && typeof val === "object" && "composed" in val) {
-      const { color, opacity } = val.composed;
-      const c = typeof color === "string" ? parseHex(color) : resolve(color.aliasOf, mode, depth + 1);
-      const o = typeof opacity === "number" ? opacity : resolveNumber(opacity.aliasOf, mode, depth + 1);
-      return composedRgba(c, o);
-    }
-    return null;
-  }
+  const resolve = (name, mode, depth) => resolveColourWith((n) => valueIn(n, mode), name, depth);
   const modes = /* @__PURE__ */ new Set();
   const allColls = (tokens && tokens.collections || []).concat(variables && variables.collections || []);
   for (const c of allColls) {
@@ -1568,11 +1620,223 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
 function walkWithBg(node, bgToken, fn) {
   if (!node || typeof node !== "object") return;
   if (hiddenSelf(node)) return;
-  let bg = bgToken;
-  const own = node.tokens && node.tokens.fills || (node.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
-  if (own && typeof own === "string" && node.type !== "TEXT") bg = own;
+  const bg = backdropTokenAfter(node, bgToken);
   fn(node, bg);
   for (const c of node.children || []) walkWithBg(c, bg, fn);
+}
+function backdropTokenAfter(n, above) {
+  if (n.type === "TEXT") return above;
+  const fills = (n.fills || []).filter(Boolean);
+  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+  if (!fills.length) return nodeTok ?? above;
+  let cur = above;
+  for (const f of fills) {
+    if (f.opacity === 0) continue;
+    if (f.type !== "solid") {
+      cur = null;
+      continue;
+    }
+    const c = parseHex(f.color);
+    if (c && c.a <= 0) continue;
+    const t = f.tokens && f.tokens.color;
+    const tok = typeof t === "string" && t ? t : fills.length === 1 ? nodeTok : null;
+    cur = tok && (!c || c.a >= 1) ? tok : null;
+  }
+  return cur;
+}
+function fillToken(n) {
+  const own = n.tokens && n.tokens.fills || (n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
+  return own && typeof own === "string" ? own : null;
+}
+function textToken(n) {
+  const t = n.tokens || {}, tt = n.textTokens || {};
+  for (const x of [t.fills, t.textRangeFills, fillToken(n), tt.fills]) if (typeof x === "string" && x) return x;
+  return null;
+}
+function colourBindings(n) {
+  const out = [];
+  const add = (x) => {
+    for (const s of Array.isArray(x) ? x : [x]) if (typeof s === "string" && s && !out.includes(s)) out.push(s);
+  };
+  for (const [k, v] of Object.entries(n.tokens || {})) if (/fill|stroke/i.test(k)) add(v);
+  for (const f of n.fills || []) add(f && f.tokens && f.tokens.color);
+  add((n.textTokens || {}).fills);
+  return out;
+}
+function mixedModeBindings(screens, variables, tokens, push) {
+  for (const s of screens) {
+    const label = s.label || screenExportOf(s.doc)?.screen || "screen";
+    const defs = /* @__PURE__ */ new Map();
+    for (const doc of [tokens, variables, s.vars || null]) for (const v of doc && doc.variables || []) if (v.name) defs.set(v.name, v);
+    const colls = [...s.vars && s.vars.collections || [], ...variables && variables.collections || [], ...tokens && tokens.collections || []];
+    const collOf = (v) => {
+      const keyed = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && Array.isArray(c.modes)) : void 0;
+      if (keyed) return keyed;
+      const named = colls.filter((c) => c.name === v.collection && Array.isArray(c.modes));
+      const modes = Object.keys(v.values || {});
+      return named.find((c) => modes.every((m) => c.modes.includes(m))) ?? named[0];
+    };
+    for (const root of screenRoots(s.doc)) {
+      const rm = root.resolvedModes;
+      if (!rm) continue;
+      const use = /* @__PURE__ */ new Map();
+      walk(root, (n) => {
+        for (const name of colourBindings(n)) {
+          const v = defs.get(name);
+          if (!v || v.type !== "COLOR") continue;
+          const c = collOf(v);
+          const mode = c ? rm[c.name] : void 0;
+          if (!c || c.modes.length < 2 || mode === void 0) continue;
+          const u = getOrInit(use, c.name, () => ({ coll: c, mode, count: 0, tokens: [], nodes: [], samples: [] }));
+          u.count++;
+          if (!u.tokens.includes(name) && u.tokens.length < 20) u.tokens.push(name);
+          if (!u.nodes.includes(n.id) && u.nodes.length < 8) u.nodes.push(n.id);
+          if (u.samples.length < 3) u.samples.push(`'${name}' on '${n.name}'`);
+        }
+      });
+      const groups = [];
+      for (const u of use.values()) {
+        const joined = groups.filter((g) => g.some((o) => o.coll.modes.some((m) => u.coll.modes.includes(m))));
+        const merged = [...joined.flat(), u];
+        for (const g of joined) groups.splice(groups.indexOf(g), 1);
+        groups.push(merged);
+      }
+      for (const group of groups) {
+        const perMode = /* @__PURE__ */ new Map();
+        for (const u of group) perMode.set(u.mode, (perMode.get(u.mode) || 0) + u.count);
+        if (perMode.size < 2) continue;
+        const [major] = [...perMode].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] ?? [];
+        if (major === void 0) continue;
+        const majority = group.filter((u) => u.mode === major);
+        const minority = group.filter((u) => u.mode !== major && u.coll.modes.includes(major));
+        const first = minority[0];
+        if (!first) continue;
+        const names = (list) => list.map((u) => `'${u.coll.name}'`).join(", ");
+        const minModes = [...new Set(minority.map((u) => `'${u.mode}'`))].join("/");
+        push(
+          "warning",
+          "mixed-mode-bindings",
+          `'${label}' renders ${names(majority)} in '${major}' (\xD7${perMode.get(major)} bindings) but ` + minority.map((u) => `'${u.coll.name}' in '${u.mode}' (\xD7${u.count}: ${u.samples.join(", ")}${u.count > u.samples.length ? " \u2026" : ""})`).join(", ") + ` \u2014 ${minority.length > 1 ? "tokens from these collections show their" : `a token from '${first.coll.name}' shows its`} ${minModes} value in a '${major}' screen. Pin ${names(minority)} to '${major}' in Figma (the frame's variable mode), or alias these tokens under a role name in code \u2014 a theme built from one mode per collection gives them their '${major}' value, which nobody drew.`,
+          {
+            ...ifDefined("nodeId", first.nodes[0]),
+            // the first node binding a minority-mode token
+            bindings: [...majority, ...minority].map((u) => ({ collection: u.coll.name, mode: u.mode, tokens: u.tokens, nodes: u.nodes })),
+            confirm: `'${label}' binds ${minority.reduce((k, u) => k + u.count, 0)} colour token(s) from ${names(minority)} in ${minModes} while the rest of the screen is '${major}' \u2014 intended, or should they follow '${major}'? Until confirmed, build what was drawn (the ${minModes} values).`
+          }
+        );
+      }
+    }
+  }
+}
+var LARGE_TEXT_PX = 24;
+var LARGE_BOLD_TEXT_PX = 18.66;
+var NON_TEXT_CONTRAST = 3;
+function isLargeText(n) {
+  const f = n.font;
+  const size = f && typeof f.size === "number" ? f.size : 0;
+  const bold = !!f && (typeof f.weightValue === "number" ? f.weightValue >= 700 : /(^|\s)(extra\s*)?(bold|black|heavy)/i.test(f.weight || "") && !/semi|demi/i.test(f.weight || ""));
+  return size >= LARGE_TEXT_PX || size >= LARGE_BOLD_TEXT_PX && bold;
+}
+var isDisabledVariant = (n) => n.type === "INSTANCE" && isDisabledLayer(n);
+function contrastRendered(screens, variables, tokens, push) {
+  const rows = /* @__PURE__ */ new Map();
+  for (const s of screens) {
+    const label = s.label || screenExportOf(s.doc)?.screen || "screen";
+    const defs = /* @__PURE__ */ new Map();
+    for (const doc of [tokens, variables, s.vars || null]) for (const v of doc && doc.variables || []) if (v.name) defs.set(v.name, v);
+    if (!defs.size) continue;
+    const colls = [...s.vars && s.vars.collections || [], ...variables && variables.collections || [], ...tokens && tokens.collections || []];
+    for (const root of screenRoots(s.doc)) {
+      const rm = root.resolvedModes || {};
+      const modeOf = (v) => {
+        const keys = Object.keys(v.values || {});
+        const coll = v.collection;
+        const r = coll !== void 0 ? rm[coll] : void 0;
+        if (r !== void 0 && keys.includes(r)) return r;
+        const hasDefault = (c) => c.default !== void 0 && keys.includes(c.default);
+        const byKey = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && hasDefault(c)) : void 0;
+        const def = (byKey ?? colls.find((c) => c.name === coll && hasDefault(c)))?.default;
+        if (def !== void 0) return def;
+        return keys.length === 1 ? keys[0] : void 0;
+      };
+      const valueOf = (name) => {
+        const v = defs.get(name);
+        const m = v ? modeOf(v) : void 0;
+        return v && m !== void 0 ? v.values[m] : void 0;
+      };
+      const resolve = (name) => resolveColourWith(valueOf, name, 0);
+      const modeLabel = (...names) => {
+        const ms = [];
+        for (const nm of names) {
+          const v = defs.get(nm);
+          const m = v && Object.keys(v.values || {}).length > 1 ? modeOf(v) : void 0;
+          if (m !== void 0 && !ms.includes(m)) ms.push(m);
+        }
+        return ms.join("/") || "single mode";
+      };
+      const check = (kind, fgTok, bgTok, required, nodeId) => {
+        const fg = resolve(fgTok), bg = resolve(bgTok);
+        if (!fg || !bg) return;
+        if (kind === "non-text" && fg.a <= 0) return;
+        const r = contrastRatio(fg.a < 1 ? compositeOver(fg, bg) : fg, bg);
+        if (r >= required) return;
+        const mode = modeLabel(fgTok, bgTok);
+        const row = getOrInit(rows, [kind, fgTok, bgTok, mode].join("\0"), () => ({ kind, fg: fgTok, bg: bgTok, mode, ratio: Number(r.toFixed(2)), required, screens: [], nodes: [] }));
+        if (!row.screens.includes(label)) row.screens.push(label);
+        if (row.nodes.length < 4 && !row.nodes.includes(nodeId)) row.nodes.push(nodeId);
+      };
+      const visit = (n, above, disabled, ancestors, aboves) => {
+        if (hiddenSelf(n)) return;
+        const off = disabled || isDisabledVariant(n);
+        const next = backdropTokenAfter(n, above);
+        if (!off && n.type === "TEXT") {
+          const fg = textToken(n);
+          if (fg && above) check("text", fg, above, isLargeText(n) ? NON_TEXT_CONTRAST : MIN_CONTRAST, n.id);
+        } else if (!off && n.type !== "LINE") {
+          const st = n.tokens && n.tokens.strokes;
+          const w = n.strokes ? Math.max(n.strokes.weight || 0, ...Object.values(n.strokes.weights || {}).map((x) => x || 0)) : 0;
+          const colours = n.strokes && n.strokes.colors || [];
+          const painted = !colours.length || colours.some((c) => {
+            const x = parseHex(c);
+            return !x || x.a > 0;
+          });
+          const outer = typeof st === "string" && st && w > 0 && painted ? outermostControl([n, ...ancestors.slice(-3).reverse()]) : -1;
+          const outside = outer < 0 ? null : outer === 0 ? above : aboves[ancestors.length - outer] ?? null;
+          const bg = outside ? resolve(outside) : null;
+          if (typeof st === "string" && outside && bg) {
+            let inner = null, unknown = false;
+            for (const l of [...ancestors.slice(ancestors.length - outer), n]) {
+              const fills = (l.fills || []).filter(Boolean);
+              const lt = !fills.length && l.tokens && typeof l.tokens.fills === "string" ? resolve(l.tokens.fills) : null;
+              if (lt) inner = compositeOver(lt, inner || bg);
+              for (const f of fills) {
+                if (f.opacity === 0) continue;
+                if (f.type !== "solid") {
+                  unknown = true;
+                  break;
+                }
+                const c = parseHex(f.color);
+                if (c && c.a > 0) inner = compositeOver(c, inner || bg);
+              }
+            }
+            const rescued = !!inner && contrastRatio(inner, bg) >= NON_TEXT_CONTRAST;
+            if (!rescued && !unknown) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
+          }
+        }
+        const chain = [...ancestors, n], chainAbove = [...aboves, above];
+        for (const c of n.children || []) visit(c, next, off, chain, chainAbove);
+      };
+      visit(root, null, false, [], []);
+    }
+  }
+  if (!rows.size) return;
+  const list = [...rows.values()].sort((a, b) => b.screens.length - a.screens.length || a.ratio - b.ratio || a.fg.localeCompare(b.fg));
+  push(
+    "info",
+    "token-pair-contrast",
+    `${list.length} token pair(s) fail WCAG in the rendered mode(s) \u2014 ask the designer once per pair: ` + list.slice(0, 8).map((p) => `${p.kind === "text" ? "" : "stroke "}'${p.fg}' on '${p.bg}' (${p.mode}) ${p.ratio}:1 < ${p.required}:1 \u2014 ${p.screens.length} screen(s)`).join("; ") + (list.length > 8 ? `; \u2026 (${list.length} in all \u2014 see tokenPairs)` : "") + `. Token-level: the token-bound background (a gradient / image / raw or translucent fill in between is not judged), no compositing \u2014 the per-screen audit's low-contrast / non-text-contrast / contrast-manual measure what renders.`,
+    { tokenPairs: list }
+  );
 }
 function toMarkdown(res) {
   const L = [];
@@ -1632,6 +1896,15 @@ function toMarkdown(res) {
     if (!fs7.length) continue;
     L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs7.length})`, "");
     for (const f of fs7) L.push(`- \`${f.code}\` ${f.message}`);
+    L.push("");
+  }
+  const pairs = res.findings.find((f) => f.code === "token-pair-contrast")?.tokenPairs || [];
+  if (pairs.length) {
+    L.push("## Token pairs below WCAG in the rendered modes \u2014 ask once per pair", "");
+    L.push("| kind | foreground | background | mode | ratio | needs | screens | nodes |", "|---|---|---|---|--:|--:|---|---|");
+    for (const p of pairs) {
+      L.push(`| ${p.kind} | \`${p.fg}\` | \`${p.bg}\` | ${p.mode} | ${p.ratio}:1 | ${p.required}:1 | ${p.screens.length}: ${p.screens.slice(0, 4).join(", ")}${p.screens.length > 4 ? ", \u2026" : ""} | ${p.nodes.join(", ")} |`);
+    }
     L.push("");
   }
   if (res.notChecked.length) {

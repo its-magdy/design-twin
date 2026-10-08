@@ -65,7 +65,7 @@ and blockers of each before deciding which need the full step-4-6 review:
 
 ```
 for f in design/export/pages/*/*.json; do
-  case "$f" in *.vars.json|*.assets.json) continue;; esac
+  case "$f" in *.vars.json|*.assets.json|*/index.json) continue;; esac
   node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" "$f" --platform <platform> \
     --design-system design/export/design-system --json | \
     python3 -c "import json,sys; d=json.load(sys.stdin); print(d['summary'], [x['code'] for x in d['findings'] if x['severity']=='blocker'])"
@@ -74,6 +74,24 @@ done
 
 Only screens with blockers, or that the user explicitly wants reviewed in depth, need steps 4-6's
 full turn; a clean summary can be reported from the JSON alone.
+
+The same token pair failing contrast repeats on every screen that draws it (an input border token on the
+page background is one `non-text-contrast` per screen). After the loop, run `cross-check.js` once over all
+the exported screens — the screen files only (a `.vars.json`, `.assets.json` or `index.json` is not a screen and
+stops the run):
+
+```
+find design/export/pages -name '*.json' ! -name '*.vars.json' ! -name '*.assets.json' ! -name index.json -print0 | \
+  xargs -0 node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" --design-system design/export/design-system \
+  --out design/audit/<name>.cross
+```
+
+Without `--out` the cross-check report only prints; `--out <base>` writes `<base>.json` and `<base>.md`. For one screen use
+`--out design/audit/<Screen>__<id>.cross` — the name a plan's `auditGate.crossCheckFile` points at; for this whole-export run
+pick a name that says so (`design/audit/export.cross`). Where `xargs` is not allowed, pass the screen files as arguments.
+
+Its `token-pair-contrast` table lists each failing token pair once, with the screens and nodes that draw it:
+report the pair once, not once per screen.
 
 1. **Scope.** The screen to audit is whatever was passed to this skill (the `ARGUMENTS` line at the
    end of this prompt). This skill runs in its own context and cannot see the conversation that
@@ -135,6 +153,12 @@ full turn; a clean summary can be reported from the JSON alone.
    `team-rules.md`/`Team_Settings.md`). Pass `--out` explicitly only if the user asks for
    a specific filename.
 
+   **If it refuses** ("node … already has an audit report at <file> — refusing to also write …"), a report
+   for this node already exists under another name (a legacy name, or one a person typed). Read the message
+   and take its first option: write to that existing name (pass it as `--out`, minus the extension), so the
+   screen keeps one report pair; or pass `--force` to write the default name anyway, and then retire the old
+   pair (and re-point the plan's `auditGate.auditFile` / `crossCheckFile`), or the node ends up with two reports.
+
    **`--design-system` is what makes this a real audit rather than a self-consistent one.** Without
    it every check reasons inside the screen's own JSON, and the token-binding table means "this node
    binds SOME variable" — not "it binds a variable your design system defines". Those read identically
@@ -143,12 +167,12 @@ full turn; a clean summary can be reported from the JSON alone.
    it. With the flag, the report leads with **"Does this screen come from that design system?"** and
    the cross-file findings (`foreign-token-library`, `catalog-covers-nothing`, `catalog-rekeyed`, `token-name-collision`,
    `text-style-near-miss`, `font-not-in-design-system`, `sentinel-token-value`, `single-mode-export`,
-   `derived-mode-contrast`) are merged into the findings list. Without it the report says, in the
+   `derived-mode-contrast`, `mixed-mode-bindings`) are merged into the findings list. Without it the report says, in the
    report, which checks it could not run — which is the honest outcome, not a clean one.
 
    Every finding in `<Screen>.json` (and the `.cross.json`) carries an `id`: its `code`, or `code@nodeId`
    when it names a node (a repeat of the same one gets `~2`). Quote those ids when you list blockers — a
-   plan's `auditGate.overridden` uses them (the old `code#i` is still accepted), and its `crossCheckFile`
+   plan's `auditGate.overridden` uses them (the old `code#i` is still accepted, with a warning that maps it to the stable id), and its `crossCheckFile`
    points at the cross-check report beside the audit (`<Screen>.cross.json`), when there is one. Component-name matching follows the plan's
    rule (name + prop signature; several same-name entries are *ambiguous*, not matched), and
    `catalog-rekeyed` proposals are labelled `alreadyMapped` / `sharedWith` from the component map and the
@@ -205,6 +229,11 @@ full turn; a clean summary can be reported from the JSON alone.
    - `unexported-frames` lists `design/export/assets/<id>_ref.png` screenshots with no entry in
      `pages/index.json`: frames someone looked at but never exported. Look at them; say "designed but
      not exported — extract `<id>`" rather than "not designed".
+   - `prototype-target-not-exported` names the dialogs/overlays this screen OPENS that no index lists
+     (a `prototype-navigation` row says `NOT exported` for a plain link): the builder has nothing to
+     build them from, so list them as "pull `<id>` first", not as undesigned. A frame nested in a
+     SECTION or in another frame has no index row of its own, so search `design/export/pages` for the
+     id first — it may already be inside an exported file.
 
    On the field run the populated table was right there, named for what it holds rather than for the
    screen beside it, and the audit's single blocking question was answerable without the designer.
@@ -274,7 +303,7 @@ full turn; a clean summary can be reported from the JSON alone.
   a warning.) Everything with a sensible default is NOT a blocker — contrast failures, missing variants,
   undrawn loading/empty/error states and a `devStatus` that isn't final are *warnings* that become
   questions with defaults. Cross-file warnings (`foreign-token-library`, `catalog-covers-nothing`,
-  `catalog-rekeyed`, `text-style-near-miss`, `derived-mode-contrast`) carry a `confirm` question: ask
+  `catalog-rekeyed`, `text-style-near-miss`, `derived-mode-contrast`, `mixed-mode-bindings`) carry a `confirm` question: ask
   it and state the default the build takes until it is answered. *Info* = translation notes and
   tidy-ups. The verdict follows: any blocker → *Blocked*; warnings with defaults → *Ready with
   assumptions*. The counts in your summary must equal the items you list.

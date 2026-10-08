@@ -101,6 +101,12 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   text itself still shows the literal `${…}` form (it was preloaded into an agent), the agent's prompt
   names the folder. The folder is missing → re-run `/plugin install designtwin`. Working from a clone of
   the Design Twin repo instead? The same scripts are `node design-to-code/<name>.ts`.
+- **`verify-probe` exits 3: "chromium did not launch" / no usable browser** → Playwright's Chromium is not
+  installed (or not the revision this Playwright expects). The install line the probe prints downloads a browser —
+  the user's call. A Chromium already on the machine works instead: `verify-probe.js --browser-path <executable>`
+  (also on `--check`) — the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`). A path that is
+  not an executable file is exit 3 with one line saying so. Only guaranteed with the bundled Chromium (another
+  version may not launch or may render differently); `measured.json` records `custom`, never the path.
 - **Audit flags a lot of `small-touch-target` / `fixed-size-text`** → thresholds differ per platform
   (web 24px, iOS 44pt, Android 48dp) — make sure `--platform` matches the stack. Visual size can stay
   small if the hit area is padded; decorative static text can ignore the fixed-size warning.
