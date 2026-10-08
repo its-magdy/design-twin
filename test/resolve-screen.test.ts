@@ -396,4 +396,65 @@ console.log("\nresolve-screen — DT-41: a non-root dir says so; <Layer>__<a>_<b
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+{
+  // A plan file's name or path, a kebab/snake-case slug and a differently-cased name all find the screen; a fold
+  // that makes two screens equal stays ambiguous.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rs-query-"));
+  fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "plan"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [
+    { name: "Crop Plans", id: "1:1", type: "FRAME", page: "P", file: "pages/P/Crop_Plans__1_1.json" },
+    { name: "Seed Swaps", id: "2:1", type: "FRAME", page: "P", file: "pages/P/Seed_Swaps__2_1.json" },
+    { name: "Yield Map", id: "3:1", type: "FRAME", page: "P", file: "pages/P/Yield_Map__3_1.json" },
+    { name: "Yield-Map", id: "3:2", type: "FRAME", page: "P", file: "pages/P/Yield-Map__3_2.json" },
+    { name: "Soil Tests", id: "4:1", type: "FRAME", page: "P", file: "pages/P/Soil_Tests__4_1.json" },
+    { name: "Settings / Profile", id: "5:1", type: "FRAME", page: "P", file: "pages/P/Settings_Profile__5_1.json" },
+    { name: "Profile", id: "5:2", type: "FRAME", page: "P", file: "pages/P/Profile__5_2.json" },
+    { name: "Compost Bins", id: "6:1", type: "FRAME", page: "P", file: "pages/P/Compost_Bins__6_1.json" },
+    { name: "Login", id: "7:1", type: "FRAME", page: "P", file: "pages/P/Login__7_1.json" },
+  ] }));
+  fs.writeFileSync(path.join(dir, "plan", "Unnamed.json"), JSON.stringify({ file: "Unnamed.json", nodeId: "6:1" }));
+  fs.writeFileSync(path.join(dir, "plan", "Orchard.json"), JSON.stringify({ file: "Orchard.json", screenName: "Orchard Rows", nodeId: "4:1", route: "/Orchard/Rows" }));
+  const idOf = (q: string, plan?: boolean): string | null => {
+    const r = resolveScreen(dir, q, plan ? { planDir: path.join(dir, "plan") } : undefined);
+    return r.status === "resolved" ? r.row.id : null;
+  };
+  ok("[query] 'CropPlans.json' finds the layer \"Crop Plans\"", idOf("CropPlans.json") === "1:1");
+  ok("[query] 'CropPlans.JSON' (extension case) finds it too", idOf("CropPlans.JSON") === "1:1");
+  ok("[query] a path 'design/plan/CropPlans.json' finds it", idOf("design/plan/CropPlans.json") === "1:1");
+  ok("[query] a Windows path 'design\\plan\\CropPlans.json' finds it", idOf("design\\plan\\CropPlans.json") === "1:1");
+  ok("[query] a path without an extension 'design/plan/CropPlans' finds it", idOf("design/plan/CropPlans") === "1:1");
+  ok("[query] a screenshot name 'design/verify/Crop_Plans.png' finds it", idOf("design/verify/Crop_Plans.png") === "1:1");
+  ok("[query] a verify artefact name 'Crop_Plans.measured.json' finds it", idOf("design/verify/Crop_Plans.measured.json") === "1:1");
+  ok("[query] 'crop-plans' (kebab) finds the layer \"Crop Plans\"", idOf("crop-plans") === "1:1");
+  ok("[query] 'seed-swaps' finds \"Seed Swaps\"; so does 'seed_swaps.json'", idOf("seed-swaps") === "2:1" && idOf("seed_swaps.json") === "2:1");
+  const cased = resolveScreen(dir, "CROP PLANS");
+  ok("[query] a case-different exact name resolves in the exact stage", cased.status === "resolved" && cased.row.id === "1:1" && cased.stage === "exact layer name");
+  const ys = resolveScreen(dir, "yield_map.json");
+  ok(`[query] a fold that makes two screens equal ('Yield Map' / 'Yield-Map') is ambiguous, not a pick (got ${ys.status})`,
+    ys.status === "ambiguous" && ys.candidates.map((c) => c.id).sort().join() === "3:1,3:2");
+  ok("[query] exact still beats the fold: 'Yield-Map' resolves to 3:2 alone", idOf("Yield-Map") === "3:2");
+  ok("[query] a layer name with a slash still resolves exactly ('Settings / Profile' -> 5:1)", idOf("Settings / Profile") === "5:1");
+  ok("[query] a spaced 'Nope / Profile' does not fall back to its last segment ('Profile')", idOf("Nope / Profile") === null);
+  ok("[query] a slash name without spaces ('Admin/Login') does not fall back to the screen 'Login'",
+    idOf("Admin/Login") === null && idOf("Login") === "7:1" && idOf("design/plan/Login.json") === "7:1");
+  ok("[query] control: a path to a screen that does not exist is not found", resolveScreen(dir, "design/plan/Nothing.json").status === "not-found");
+  ok("[query] a bare '.json' is not found (empty after the tail)", resolveScreen(dir, ".json").status !== "resolved");
+  ok("[query] the plan header's screenName is case-folded in the exact stage ('ORCHARD rows' -> 4:1)", (() => {
+    const r = resolveScreen(dir, "ORCHARD rows", { planDir: path.join(dir, "plan") });
+    return r.status === "resolved" && r.row.id === "4:1" && r.stage === "plan screenName/route";
+  })());
+  ok("[query] the plan header's route is case-folded too ('/ORCHARD/rows' -> 4:1 in the exact stage)", (() => {
+    const r = resolveScreen(dir, "/ORCHARD/rows", { planDir: path.join(dir, "plan") });
+    return r.status === "resolved" && r.row.id === "4:1" && r.stage === "plan screenName/route";
+  })());
+  ok("[query] control: without the plan dir 'ORCHARD rows' matches nothing", resolveScreen(dir, "ORCHARD rows").status === "not-found");
+  ok("[query] a plan file name 'design/plan/OrchardRows.json' finds the plan's screen through the fold", idOf("design/plan/OrchardRows.json", true) === "4:1");
+  ok("[query] an empty query matches no plan header (a plan without a screenName does not fold to it)", (() => {
+    const r = resolveScreen(dir, "  ", { planDir: path.join(dir, "plan") });
+    return r.status !== "resolved";
+  })());
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 report();

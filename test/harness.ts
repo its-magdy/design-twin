@@ -1685,6 +1685,28 @@ const sandbox: Sandbox = context;
   const wNoFills = await sandbox.applyWrites([{ op: "setFill", nodeId: "g:1", color: "#fff" }]);
   ok("write: setFill on a node without fills fails", wNoFills.ok === false && /has no fills/.test(must(wNoFills.error, "wNoFills.error")));
 
+  // A colour that is not hex fails the op (the schema in front of the MCP tool is not the only way in): "red" used to
+  // paint #rreedd, an unparseable channel 0, and a missing setFill color black.
+  const fillBefore = created.length;
+  const rectFillBefore = rectTarget.fills;
+  const wRedFrame = await sandbox.applyWrites([{ op: "createFrame", name: "Red", fill: "red" }]);
+  ok("write: createFrame with a colour name fails and names the expected form",
+    wRedFrame.ok === false && wRedFrame.failedOp === "createFrame" && /not a valid colour/.test(must(wRedFrame.error, "wRedFrame.error")) && /#1A2B3C/.test(must(wRedFrame.error, "wRedFrame.error")));
+  const wBadText = await sandbox.applyWrites([{ op: "createText", text: "x", fill: "#12345" }]);
+  ok("write: createText with a malformed fill fails", wBadText.ok === false && /not a valid colour/.test(must(wBadText.error, "wBadText.error")));
+  ok("write: a bad fill leaves no node behind", created.length === fillBefore && wRedFrame.applied.length === 0 && wBadText.applied.length === 0);
+  const wBadFill = await sandbox.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#gg0000" }]);
+  ok("write: setFill with non-hex digits fails and leaves the fills alone", wBadFill.ok === false && /not a valid colour/.test(must(wBadFill.error, "wBadFill.error")) && rectTarget.fills === rectFillBefore);
+  const wNoColor = await sandbox.applyWrites([{ op: "setFill", nodeId: "r:1" }]);
+  ok("write: setFill without a color fails rather than painting black", wNoColor.ok === false && /not a valid colour/.test(must(wNoColor.error, "wNoColor.error")) && rectTarget.fills === rectFillBefore);
+  const wBare = await sandbox.applyWrites([{ op: "setFill", nodeId: "r:1", color: "ff0000" }]);
+  ok("write: a colour without the # fails", wBare.ok === false);
+  const wAlpha = await sandbox.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#0000ff80" }]);
+  const alphaPaint = rectTarget.fills[0] as { color: { b: number }; opacity?: number } | undefined;
+  ok("write: #rrggbbaa still paints the colour with alpha as opacity", wAlpha.ok === true && Math.round(alphaPaint?.color.b ?? NaN) === 1 && Math.abs((alphaPaint?.opacity ?? NaN) - 128 / 255) < 1e-9);
+  const wShort = await sandbox.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#0f0" }]);
+  ok("write: #rgb still paints", wShort.ok === true && Math.round(rectTarget.fills[0]?.color.g ?? NaN) === 1);
+
   // Dev Mode is read-only for plugins (manifest editorType now includes "dev"): the batch is refused
   // up front with the fix, not left to throw an opaque Plugin-API error partway through.
   sandbox.figma.editorType = "dev";

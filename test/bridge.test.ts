@@ -4345,6 +4345,22 @@ void (async () => {
     for (const d of [proj, elsewhere, links, pdir]) fs.rmSync(d, { recursive: true, force: true });
   }
 
+  // ---------------------------------------------------------------- hex colour (figma_write fill / color)
+  {
+    const { parseHexColor, HEX_COLOR_RE } = await import("../bridge/src/hex-color.ts");
+    const near = (a: number | undefined, b: number): boolean => a !== undefined && Math.abs(a - b) < 1e-9;
+    const rgb = parseHexColor("#ff8000");
+    ok("[hex] #rrggbb parses to 0..1 channels with no alpha", near(rgb?.r, 1) && near(rgb?.g, 128 / 255) && near(rgb?.b, 0) && rgb?.a === undefined);
+    const short = parseHexColor("#f0a");
+    ok("[hex] #rgb doubles each digit", near(short?.r, 1) && near(short?.g, 0) && near(short?.b, 170 / 255) && short?.a === undefined);
+    ok("[hex] #rgba and #rrggbbaa carry the alpha pair", near(parseHexColor("#f008")?.a, 136 / 255) && near(parseHexColor("#FF000080")?.a, 128 / 255));
+    ok("[hex] upper and lower case both parse", near(parseHexColor("#ABCDEF")?.g, 205 / 255) && near(parseHexColor("#abcdef")?.g, 205 / 255));
+    const rejected = ["red", "#red", "rreedd", "ff0000", "bad", "#12", "#12345", "#1234567", "#ggg", "#ff000g", "# ff0000", " #fff", "#fff ", "#fff\n", "", "#", "#ffff00ff0", "rgb(1,2,3)", "transparent"];
+    ok("[hex] names, bare digits, wrong lengths, non-hex digits and stray whitespace are rejected: " + rejected.filter((v) => parseHexColor(v) !== null || HEX_COLOR_RE.test(v)).join("|"),
+      rejected.every((v) => parseHexColor(v) === null && !HEX_COLOR_RE.test(v)));
+    ok("[hex] a non-string is rejected", [undefined, null, 255, {}, ["#fff"]].every((v) => parseHexColor(v) === null));
+  }
+
   // ---------------------------------------------------------------- report
   report();
 })();

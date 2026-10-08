@@ -21,8 +21,10 @@
 //   4b. a carried id      — only when the union is empty: the id a `<Layer>__<a>_<b>` basename (or a
 //                            path to its .json) or a dash/URL form carries (stage "node id").
 //   4c. the folded union  — only when 2–4b found nothing: the same three fields compared with ALL
-//                            whitespace removed and case folded, so a plan file's name (`CropPlans`,
-//                            `SeedSwaps`) finds the screen named "Crop Plans" / "Seed Swaps".
+//                            whitespace, "-" and "_" removed and case folded, after a directory part and a
+//                            file tail (`.json`, `.measured.json`, `.png`) are dropped from the query, so a
+//                            plan file's name or path (`CropPlans.json`, `design/plan/CropPlans.json`),
+//                            `seed-swaps` or `SeedSwaps` finds the screen named "Crop Plans" / "Seed Swaps".
 //                            Two or more rows are still AMBIGUOUS (listed with their node ids); an
 //                            exact match always wins because this stage never runs after one.
 //   5. text search        — query is a case-insensitive substring of row.name, row.title, or any of
@@ -147,8 +149,29 @@ function describe(row: IndexRow, matchedVia?: string[]): ScreenCandidate {
 }
 
 const fold = (s: unknown): string => String(s || "").trim().toLowerCase();
-// The 4c comparison: every whitespace run dropped, case folded ("SeedSwaps" === "Seed Swaps").
-const foldCompact = (s: unknown): string => String(s || "").replace(/\s+/g, "").toLowerCase();
+// The 4c comparison: every whitespace, "-" and "_" run dropped, case folded ("SeedSwaps" === "seed-swaps" ===
+// "Seed Swaps").
+const foldCompact = (s: unknown): string => String(s || "").replace(/[\s_-]+/g, "").toLowerCase();
+
+// A file name the skills pass for a screen: a plan (`CropPlans.json`) or a verify artefact
+// (`Crop_Plans.measured.json`, `.expected.json`, `.vars.json`, `.png`); the extension is not part of the screen name.
+const FILE_TAIL_RE = /(?:\.(?:measured|expected|vars))?\.json$|\.png$/i;
+
+// The 4c keys a query could mean, most specific first: the whole query minus a file tail, then its last path
+// segment minus the tail ("design/plan/CropPlans.json" -> "CropPlans"). The whole query goes first because a
+// layer name may itself contain a slash ("Settings / Profile", "Admin/Login"); the last segment is tried only for
+// something that reads as a repo path (a file tail, or a design/ root or plan/ verify/ export/ directory), so neither
+// "Profile / Settings" nor "Admin/Login" falls back to its last half.
+const PATH_DIR_RE = /^design[\\/]|[\\/](?:plan|verify|export)[\\/]/i;
+function compactKeys(q: string): string[] {
+  const keys: string[] = [];
+  const asPath = FILE_TAIL_RE.test(q) || PATH_DIR_RE.test(q);
+  for (const cand of asPath ? [q, q.split(/[\\/]/).pop() ?? q] : [q]) {
+    const k = foldCompact(cand.trim().replace(FILE_TAIL_RE, ""));
+    if (k && !keys.includes(k)) keys.push(k);
+  }
+  return keys;
+}
 
 // Returns one of:
 //   { status: "resolved", row, stage }                          — node id alone, or exactly one row
@@ -188,7 +211,9 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   // ANY of exact layer name / indexed title / plan screenName-route, and every field it matched on
   // is recorded so the candidate list (if the union has >1 row) says which.
   const plans = planRows(options.planDir);
-  const planHit = plans.filter((p) => p.screenName === q || p.route === q);
+  // screenName and route are trimmed and case-folded like the layer name and title. An empty query matches no
+  // plan (a plan without a screenName would otherwise fold to "" and equal it).
+  const planHit = qFold ? plans.filter((p) => fold(p.screenName) === qFold || fold(p.route) === qFold) : [];
   const planIds = new Set(planHit.map((p) => p.nodeId).filter((id): id is string => !!id));
 
   const union = new Map<string, { row: IndexRow; via: Set<string> }>(); // row.id -> { row, via: Set<string> }
@@ -222,11 +247,11 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
     if (hit) return { status: "resolved", row: hit, stage: "node id" };
   }
 
-  // Stage 4c: the same three fields, whitespace-insensitive. Nothing exact matched (or carried an id), so a
-  // query such as a plan file's name (`CropPlans.json` -> "CropPlans") can still find "Crop Plans". One row
-  // resolves; two or more stop and list (e.g. two frames named "Crop Plans").
-  const qCompact = foldCompact(q);
-  if (qCompact) {
+  // Stage 4c: the same three fields, ignoring whitespace, "-", "_" and case. Nothing exact matched (or carried an
+  // id), so a query such as a plan file's name or path (`design/plan/CropPlans.json` -> "CropPlans", `crop-plans`)
+  // can still find "Crop Plans". One row resolves; two or more stop and list (e.g. two frames named "Crop Plans",
+  // or "Crop Plans" and "Crop-Plans"): a fold that makes rows equal never picks one.
+  for (const qCompact of compactKeys(q)) {
     const planCompactIds = new Set(
       plans.filter((p) => foldCompact(p.screenName) === qCompact || foldCompact(p.route) === qCompact).map((p) => p.nodeId).filter((id): id is string => !!id)
     );

@@ -88,6 +88,28 @@ void (async () => {
     const bad = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "deleteEverything" }] } }).catch((e: unknown) => ({ isError: true, thrown: String(e instanceof Error ? e.message : e) }));
     ok("an op outside the four implemented ones is rejected at the schema boundary", bad.isError === true);
 
+    // fill / color are hex colours: a name or a malformed value is refused at the schema, not painted as a wrong colour.
+    const callWrite = async (op: object): Promise<{ isError: boolean; text: string }> => {
+      try {
+        const r = await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [op] } });
+        return { isError: r.isError === true, text: firstText(r) };
+      } catch (e) { return { isError: true, text: String(e instanceof Error ? e.message : e) }; }
+    };
+    const badFill = await callWrite({ op: "createFrame", fill: "red" });
+    ok("figma_write refuses a colour name as a fill, naming the expected form", badFill.isError && /hex colour like #1A2B3C/.test(badFill.text));
+    const badColor = await callWrite({ op: "setFill", nodeId: "1:2", color: "#12" });
+    ok("figma_write refuses a malformed setFill color", badColor.isError && /hex colour like #1A2B3C/.test(badColor.text));
+    ok("figma_write refuses a bare-digit colour and a createText fill that is not hex",
+      (await callWrite({ op: "setFill", nodeId: "1:2", color: "ff0000" })).isError && (await callWrite({ op: "createText", text: "x", fill: "#gggggg" })).isError);
+    ok("figma_write still accepts #rgb, #rgba, #rrggbb and #rrggbbaa", (await Promise.all(["#f00", "#f008", "#FF0000", "#ff000080"].map((c) => callWrite({ op: "setFill", nodeId: "1:2", color: c })))).every((r) => !r.isError));
+    ok("figma_write accepts fill \"\" (no fill) on createFrame/createText but refuses color \"\" on setFill",
+      !(await callWrite({ op: "createFrame", fill: "" })).isError && !(await callWrite({ op: "createText", text: "x", fill: "" })).isError &&
+      (await callWrite({ op: "setFill", nodeId: "1:2", color: "" })).isError);
+    ok("figma_write's published schema carries the hex pattern for fill and color", (() => {
+      const item = JSON.stringify(write.inputSchema.properties?.ops);
+      return /"fill":\{[^}]*"pattern"/.test(item) && /"color":\{[^}]*"pattern"/.test(item);
+    })());
+
     const status = await client.callTool({ name: "figma_status", arguments: {} });
     ok("figma_status answers with no plugin connected (no hang, parseable JSON)", (() => { try { JSON.parse(firstText(status)) as unknown; return true; } catch { return false; } })());
 

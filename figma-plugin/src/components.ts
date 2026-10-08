@@ -262,7 +262,6 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
           // then report as "component exposes no props" — say so instead of failing silently.
           warn("component '" + n.name + "': property definitions unreadable (" + errMsg(e) + ") — props omitted");
         }
-        // Naming hygiene
         if (/^(Component|Frame)\s*\d+$/.test(n.name)) hygiene.push("unnamed component: '" + n.name + "'");
         if (seenNames.has(n.name)) hygiene.push("duplicate component name: '" + n.name + "'");
         seenNames.add(n.name);
