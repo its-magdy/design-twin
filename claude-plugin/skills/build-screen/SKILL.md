@@ -719,7 +719,9 @@ records which components exist and which designed interactions actually work, an
 `design/verify/<Screen>.measured.json`. It returns measurements, not a verdict — you run
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare design/verify/<Screen>.expected.json design/verify/<Screen>.measured.json [--interactions design/verify/<Screen>.evidence.json] --record-plan --out design/verify/<Screen>`
 on what it wrote (`--interactions` when it wrote that file; `--record-plan` records the report in the plan's
-`verification` block), fix the high-severity deltas, and re-verify.
+`verification` block), fix the high-severity deltas, and re-verify — every verifier pass (each re-verify round)
+gets a NEW run (`--status <Screen> --phase queued --new-run`, its id passed to the verifier): an ended run takes no
+more writes, and `--wait` on an old id returns at once on that run's old `done`.
 
 It runs for minutes and prints nothing while it does, so it also writes a progress file you can poll
 — written by `verify-screen.js --status` into the run cache (`node_modules/.cache/designtwin-verify/`, outside every

@@ -351,7 +351,7 @@ const short = (sha: string | null | undefined): string => (sha ? `${sha.slice(0,
 
 export interface StatusFlags { phase?: string | undefined; run?: string | undefined; "new-run"?: boolean | undefined; detail?: string | undefined; dir?: string | undefined; publish?: string | undefined; by?: string | undefined }
 /**
- * `--status <S> --phase <p> …` → exit 0 wrote / 1 refused / 2 usage / 6 the run cache is not writable (printed as
+ * `--status <S> --phase <p> …` → exit 0 wrote / 1 refused / 2 usage (or a write to a run that already ended) / 6 the run cache is not writable (printed as
  * one sentence naming the cache and the project root — never a stack). Prints `run <id> rev <n>` on stdout and the
  * live status file + the run's stage dir on stderr. Writes only the live status (outside the watched tree); `done`
  * checks first, then publishes (--publish), then writes the live status and its durable copy <dir>/<S>.status.json.
@@ -384,6 +384,12 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
     return 2;
   }
   const sameRun = prevV2 && prevV2.runId === runId ? prevV2 : null;
+  // an ended run stays ended: a later write would replace its phase and detail (a `done` over the verifier's
+  // `blocked` lost the block, and --compare saw a clean run) — the next attempt is a new run
+  if (sameRun && TERMINAL_PHASES.includes(sameRun.phase)) {
+    console.error(`run ${runId} already ended at ${sameRun.phase}${sameRun.detail ? ` (${sameRun.detail})` : ""} — start a new run with --new-run\n` + usage);
+    return 2;
+  }
   const S = path.basename(base), dir = path.dirname(base);
   // the run cache must take a write BEFORE anything is checked or published (a `done` that publishes, then cannot
   // record itself, would leave design/verify changed and the run unfinished)

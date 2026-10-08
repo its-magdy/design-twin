@@ -301,6 +301,12 @@ safe("[H1] an unbound measured file taken after an earlier run's done (another m
   const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
   return r.verdict === "pass" && !(r.integrity || []).length && (r.probe.inputNotes || []).some((n) => /is run run-7 \(done\); this measured file names no run/.test(n));
 });
+safe("[F3] …that report names no run of its own (inputs.runId unset, no '· run' in the md header; the note keeps the run); a bound one still names its run", () => {
+  const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
+  const bound = run(measure({}, { expectationSha256: SHA_E, runId: "run-7" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
+  return r.inputs?.runId === undefined && !/· run run-7/.test(reportToMarkdown(r)) && (r.probe.inputNotes || []).some((n) => /is run run-7 \(done\)/.test(n))
+    && bound.inputs?.runId === "run-7" && /· run run-7/.test(reportToMarkdown(bound));
+});
 safe("[H1] …taken after an ended run at failed or blocked → pass (an ended run is not 'unfinished')", () =>
   (["failed", "blocked"] as const).every((p) => run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) }).verdict === "pass"));
 safe("[H1] …an unbound file NOT newer than the ended run (a stale file left behind, or no measuredAt) is still judged by that run → incomplete", () => {
@@ -325,6 +331,22 @@ safe("[H1] …beside a run at measured (another sha, not yet done) → incomplet
 });
 safe("[H1] …a high mismatch in an unbound measurement taken after an ended run is a plain fail (graded, not hidden as incomplete)", () =>
   run(measure({ "2:1": { fontSize: 30 } }, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) }).verdict === "fail");
+
+// F8: an undesigned row quotes its evidence under the evidence's provenance — never "probe said" for agent evidence
+{
+  const expU = { ...exp, interactions: exp.interactions.map((i) => i.nodeId === "2:4" ? { ...i, destinationExported: false } : i) };
+  const miss = ev("2:4", "none", { ok: false, detail: "no dialog appeared" });
+  const agent = compare(expU, withEvidence([miss]), { expectationSha256: SHA_E, measuredSha256: SHA_M });
+  safe("[F8] undesigned, evidence not run-bound (agent evidence) → the detail says 'agent evidence said: …', never 'probe said'", () =>
+    ia(agent, "2:4")?.result === "undesigned" && /; agent evidence said: no dialog appeared$/.test(ia(agent, "2:4")?.detail ?? "") && !/probe said/.test(ia(agent, "2:4")?.detail ?? ""));
+  const bare = compare(exp, withEvidence([{ nodeId: "2:5", trigger: "on_click", ok: true, detail: "clicked it" }]), {});
+  safe("[F8] …and an agent's ok without evidence → 'reported ok without evidence — …; agent evidence said: …'", () =>
+    ia(bare, "2:5")?.result === "not-probed" && /^reported ok without evidence — .*; agent evidence said: clicked it$/.test(ia(bare, "2:5")?.detail ?? ""));
+  const IDENT = { name: "verify-probe", version: "1.0.0", sha256: "a".repeat(64), playwright: { package: "playwright", version: "1.50.0" }, browser: { name: "chromium", version: "130" } };
+  const bound = compare(expU, { ...withEvidence([miss]), expectationSha256: SHA_E, runId: "run-7", probe: IDENT }, { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
+  safe("[F8] control: the same row from a run-bound probe → 'probe said: …'", () =>
+    ia(bound, "2:4")?.result === "undesigned" && /; probe said: no dialog appeared$/.test(ia(bound, "2:4")?.detail ?? ""));
+}
 
 // M-1: a measured file that names its run, with no status of that run beside it — nothing recorded it as that run's
 safe("[M-1] measured.runId set, compare looked for a status and found none → incomplete 'no status of that run records it'", () => {

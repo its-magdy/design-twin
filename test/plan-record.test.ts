@@ -168,6 +168,32 @@ console.log("review 18 (s19): a hand row in deltas, a static-only run, one forma
   check(`[M1] …re-recording over its own rows adds no note (got ${JSON.stringify(again.notes)})`, !again.written && again.notes.length === 0);
 }
 {
+  // F1: a hand-written NON-array verification.deltas (counts copied from a report) is replaced with a note too
+  const root = project();
+  const p = planOf(root);
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: { high: 4, medium: 9, interactions: "1 pass, 2 fail of 3" } } }, null, 2) + "\n");
+  const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  check(`[F1] a hand-written object in verification.deltas → replaced by the report's array, with a note naming its type (got ${JSON.stringify(r.notes)})`,
+    Array.isArray(planOf(root).verification?.deltas) && r.notes.some((n) => /^verification\.deltas was a hand-written object \(\{"high":4,.*replaced by the report's open deltas/.test(n)));
+}
+{
+  // F2: hand-written headline / verdict keys that disagree with the record stay, named as stale; agreeing ones add no note
+  const root = project();
+  const p = planOf(root);
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: [], headline: "4 high, 9 medium (round 2)", verdict: "pass" } }, null, 2) + "\n");
+  const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const v = planOf(root).verification;
+  const vh: unknown = v && "headline" in v ? v.headline : undefined;
+  check(`[F2] stale hand headline + verdict → one note naming both as stale beside verification.recorded (got ${JSON.stringify(r.notes)})`,
+    r.notes.some((n) => n.startsWith("verification.headline (\"4 high, 9 medium (round 2)\") and verification.verdict (\"pass\") — hand-written") && /stale beside verification\.recorded/.test(n)));
+  check("[F2] …the hand keys are left as they were", vh === "4 high, 9 medium (round 2)" && v?.verdict === "pass");
+  const root2 = project();
+  const p2 = planOf(root2);
+  fs.writeFileSync(path.join(root2, REL), JSON.stringify({ ...p2, verification: { ...p2.verification, deltas: [], headline: rep.headline, verdict: rep.verdict.toUpperCase() } }, null, 2) + "\n");
+  const r2 = recordPlan(REL, rep, REPORT, { cwd: root2, now: NOW });
+  check(`[F2] control: hand headline/verdict that agree with the report → no stale note (got ${JSON.stringify(r2.notes)})`, !r2.notes.some((n) => /stale/.test(n)));
+}
+{
   // M2: a static-only measured file → the report says so, and the plan records static-only + the why, no renderer
   const so: VerifyReportV2 = compare(exp, { mode: "static-only", reason: "no dev server, no Playwright", nodes: [] }, {});
   check(`[M2] compare() of a static-only measured file: report.mode "static-only" + its reason (got ${JSON.stringify({ mode: so.mode, reason: so.reason })}); a rendered one carries no mode`,

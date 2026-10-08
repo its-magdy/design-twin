@@ -147,7 +147,19 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
   // M1 (s19): D115 — this field is the report's; a row it did not write is replaced, never silently
   const hand = Array.isArray(v.deltas) ? v.deltas.filter((d) => !isRecordedDelta(d)) : [];
   if (hand.length) notes.push(`${hand.length} row(s) in verification.deltas were not written by --record-plan and are replaced by the report's open deltas (${hand.map((d) => isJsonObject(d) && typeof d.nodeId === "string" ? `${d.nodeId}${typeof d.field === "string" ? ` ${d.field}` : ""}` : JSON.stringify(d).slice(0, 40)).join(", ")}) — put builder-chosen residuals in deviations[] (with the why), never in verification.deltas`);
+  // F1: a hand-written non-array (counts copied from a report, live) is replaced too — never silently
+  else if (v.deltas !== undefined && !Array.isArray(v.deltas)) notes.push(`verification.deltas was a hand-written ${v.deltas === null ? "null" : typeof v.deltas} (${JSON.stringify(v.deltas).slice(0, 60)}), replaced by the report's open deltas (an array) — the counts are in verification.recorded.counts; put builder-chosen residuals in deviations[] (with the why)`);
   v.deltas = compact;
+  // F2: hand-written headline / verdict keys are left alone, but one that disagrees with this record is stale — say so
+  const handText = (x: unknown): string | null => typeof x === "string" ? x.trim() : isJsonObject(x) && typeof x.verdict === "string" ? x.verdict.trim() : null;
+  const stale: string[] = [];
+  const handHeadline = "headline" in v ? handText(v.headline) : null;
+  if (handHeadline !== null && handHeadline !== recorded.headline.trim()) stale.push(`verification.headline ("${handHeadline.slice(0, 60)}")`);
+  for (const k of ["verdict", "verifyScreenVerdict"] as const) {
+    const t = handText(v[k]);
+    if (t !== null && t.toLowerCase() !== recorded.verdict.toLowerCase()) stale.push(`verification.${k} ("${t.slice(0, 40)}")`);
+  }
+  if (stale.length) notes.push(`${stale.join(" and ")} — hand-written, and not what this report says (verdict "${recorded.verdict}"); stale beside verification.recorded, which is the record — update or remove ${stale.length > 1 ? "them" : "it"} by hand`);
   if (b.ran) {
     const tool = b.axe && "version" in b.axe ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks";
     v.a11y = { tool, violations: b.summary.fail, warnings: b.summary.warn, report: reportAt };

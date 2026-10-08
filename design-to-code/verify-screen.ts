@@ -2336,11 +2336,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const said = hit ? { ...ifDefined("outcome", typeof hit.outcome === "string" ? hit.outcome : undefined), ...ifDefined("navEvents", typeof hit.navEvents === "number" ? hit.navEvents : undefined),
       ...(probeBound ? { evidenceFrom: fromProbe ? "probe" as const : "agent" as const } : {}),
       ...ifDefined("activation", str(hit.activation)), ...ifDefined("detectedBy", str(hit.detectedBy)), ...ifDefined("revealedBy", str(hit.revealedBy)), ...ifDefined("overridden", overridden) } : {};
+    // F8: whose words a detail quotes — the run-bound probe's, else agent evidence (D41: an unbound file's rows too)
+    const saidBy = fromProbe ? "probe said" : "agent evidence said";
     // D20: removed from the graded set before grading; evidence that it works anyway is noted, never graded.
     const scoped = descopeFor(i);
     if (scoped) return Object.assign(row, { result: "descoped" as const, detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`, ...(worked ? { note: "descoped but works — the probe drove it successfully; drop the descope?" } : {}) });
     // D22: its destination was never exported — nothing designed to arrive at. A probe showing it working still passes.
-    if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned" as const, detail: `destination ${i.destinationId} is not in this Figma file's export — nothing designed to check it against${hit && hit.detail ? `; probe said: ${hit.detail}` : ""}` });
+    if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned" as const, detail: `destination ${i.destinationId} is not in this Figma file's export — nothing designed to check it against${hit && hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}` });
     if (!hit) return Object.assign(row, { result: "not-probed" as const, detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
     if (hit.result === "not-probed" || hit.ok === null || hit.ok === undefined) return Object.assign(row, { result: "not-probed" as const, ...ifDefined("detail", hit.detail), ...(probeBound ? said : {}) });
@@ -2352,7 +2354,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     // An agent once credited two hidden popup rows with hovers it performed on unrelated controls (187).
     // F-102: the outcome and the navigation count too — a reload once read as "the dialog opened".
     if (!worked || !hit.selector) {
-      return Object.assign(row, { result: "not-probed" as const, detail: `reported ok without evidence — ${(gaps || []).join("; ")}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
+      return Object.assign(row, { result: "not-probed" as const, detail: `reported ok without evidence — ${(gaps || []).join("; ")}${hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
     return Object.assign(row, { result: "pass" as const, ...ifDefined("detail", hit.detail), selector: hit.selector, selectorCount: count, ...said });
   });
@@ -2555,7 +2557,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const buildNow = isBuildIdentity(buildRaw) ? buildRaw : undefined;
   if (buildRaw !== undefined && !buildNow && !inputNotes.some((n) => n.startsWith("measured.build "))) inputNotes.push("measured.build is not a build identity; ignored (build: unknown)");
   if (opts.status && opts.status.status === "v1") inputNotes.push(`${opts.status.file} is an older hand-written status (no run id, no shas) — not checked; write it with verify-screen --status`);
-  const runId = typeof measured.runId === "string" && measured.runId ? measured.runId : st ? st.runId : undefined;
+  // F3: an unbound measured file (no run, measured after that run ended) is no run's — the ended run is named in its
+  // input note only, never as the report's own run
+  const runId = measuredRun ?? (st && unboundNote === undefined ? st.runId : undefined);
   if (probeRaw !== undefined && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
   const inputs: VerifyReportV2["inputs"] = {
     expectationSchema: expectation.schema || "(none)",
@@ -3339,7 +3343,7 @@ function main(argv: string[]): number | Promise<number> {
     "      workspace root its dependencies are hoisted to, never past .git; the OS temp dir, not shared between sandboxed and unsandboxed\n" +
     "      commands, with no package.json or Yarn PnP) — <dir> resolves against the cwd — outside every dev-server\n" +
     "      watch, so a heartbeat never reloads the page being measured — and prints `run <id> rev <n>` (stdout), the live file and the run's\n" +
-    "      stage dir (stderr). Without --run it continues only a run that has not ended (else exit 2). `done` checks first — refuses (exit 1)\n" +
+    "      stage dir (stderr). A run that has ended (done/failed/blocked) takes no more writes, with or without --run (exit 2: start a --new-run). `done` checks first — refuses (exit 1)\n" +
     "      a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or\n" +
     "      not the one the probe recorded in this run — then publishes, records the sha256 of <Screen>.expected/.measured.json (and\n" +
     "      .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every\n" +

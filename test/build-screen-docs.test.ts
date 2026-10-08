@@ -240,9 +240,9 @@ console.log("build-screen docs (group 12a, steps / dialog driving / precedence /
   check("[D40 7] --steps: closed click / waitFor / goto vocabulary, exactly one visible match, never submit, idempotent, exit 4 with nothing written, replayed on the re-run and every driven row (verifier, verify skill)",
     [verifier, verifySkill].every((t) => /`--steps`/.test(t) && /`\{"click": "<selector>"\}`, `\{"waitFor": "<selector>"\}`, `\{"goto": "\/same-origin\/path"\}`/.test(t) && /EXACTLY ONE visible\s+element/i.test(t)
       && /never submits a form/.test(t) && /[Ii]dempotent/.test(t) && /exit 4 and nothing is written/.test(t) && /re-run \(D19\)|D19 re-run/.test(t) && /every page the probe drives an interaction on/.test(t)));
-  check("[D40 7] the plan's `route` is advisory; the skill passes the plan to --steps when it has `navigate` (verifier, verify skill, build-screen, references)",
+  check("[D40 7] the plan's `route` is advisory; the skill passes the plan to --steps only when it has `navigate` (verifier, verify skill, build-screen, references)",
     /`route` is advisory/.test(verifier) && /`route` stays advisory/.test(verifySkill) && /`route` \(advisory free text/.test(skill) && /`route` is advisory/.test(verifyRef)
-    && /pass the plan as `--steps`/.test(verifier) && /passes the plan to `--steps` whenever it has one/.test(verifySkill) && /Pass the plan as\s+`--steps` whenever it has `navigate`/.test(skill));
+    && /pass the plan as `--steps`/.test(verifier) && /pass the plan to `--steps` only when it has a `navigate` list/.test(verifySkill) && /Pass the plan as\s+`--steps` whenever it has `navigate`/.test(skill));
   check("[D40 7] the probe call in every doc shows --steps",
     [verifier, verifySkill, skill].every((t) => /verify-probe\.js[^`]*--steps design\/plan\/<screen>\.json/.test(t)) && /`--steps <plan\.json>`/.test(verifyRef));
   check("[F-70] the shipped probe drives overlay/swap on_click/on_press and plan expect:dialog rows: reveals hover-hidden openers, mouse vs synthetic activation, never ok:false, destination tag inside",
@@ -810,6 +810,31 @@ console.log("build-screen docs (group 17):");
   check("[DOC-1c] build-screen + audit-design: the legacy code#i id is accepted with a warning",
     [skill, audit20].every((d) => /`code#i` is still accepted,? \(?with a warning/.test(d)));
   check("[DOC-1d] README + extract: outDir is checked before the export", [readme20, extract20].every((d) => /before the export/.test(d)));
+}
+
+{
+  // Live-check fixes (s19 G17/G18): the verify skill's --steps rule, the verifier's own scripts, a run that ended, the audit refusal.
+  console.log("verify / audit-design docs (live-check fixes):");
+  const auditSkill = flat(read("claude-plugin/skills/audit-design/SKILL.md"));
+  check("[F5] verify skill: --steps <plan> only when the plan has a `navigate` list (none is exit 2), never 'whenever it has one'",
+    /only when (the plan|it) has a `navigate` list/.test(verifySkill) && /holds no `navigate` list/.test(verifySkill) && !/whenever it has one/.test(verifySkill));
+  check("[F6] verify skill: allow rules for the verifier's own scratch scripts (Edit on the run cache — never a dead Write(path) rule — Bash node on scratch), written with the Write tool not a heredoc",
+    !/`Write\(node_modules/.test(verifySkill) && /Edit\(node_modules\/\.cache\/designtwin-verify\/\*\*\)/.test(verifySkill)
+    && /Bash\(node node_modules\/\.cache\/designtwin-verify\/scratch\/\*\)/.test(verifySkill) && /Write tool, never a shell heredoc/.test(verifySkill));
+  check("[F6] verifier: scratch scripts are written with the Write tool, not a heredoc; the Edit rule (which covers the Write tool) is named in the denial hand-back, never a Write(path) rule",
+    /Write tool.{0,40}never a shell heredoc/.test(verifier) && (verifier.match(/Edit\(node_modules\/\.cache\/designtwin-verify\/\*\*\)/g) ?? []).length >= 2 && !/`Write\(node_modules/.test(verifier));
+  check("[F4] verify skill: a `blocked` hand-back is reported with its detail and never overwritten with `done`; a retry is a new run (--new-run)",
+    /hands back `blocked`.{0,600}never write `done` over/.test(verifySkill) && /status detail|prints it/.test(verifySkill) && /start a new run with `--new-run`/.test(verifySkill));
+  check("[r3-M2] one NEW run id per verifier pass / re-verify round (an ended id is refused; --wait on it returns at once): build-screen, verify skill, verifier",
+    /every verifier pass \(each re-verify round\) gets a NEW run/.test(skill) && /each verifier pass and each re-verify round gets its own new run id/.test(verifySkill)
+    && /A run id is good for ONE pass/.test(verifier));
+  check("[F4] verifier: an ended run takes no more writes; blocked stays blocked, the orchestrator reports it, a retry is --new-run",
+    /ended .{0,40}takes no more writes/.test(verifier) && /stays `blocked`.{0,200}never overwrites it with `done`/.test(verifier) && /starts a new run with `--new-run`/.test(verifier)
+    && !/after `done`\/`failed`\/`blocked` pass `--run <id>` or `--new-run`/.test(verifier));
+  check("[G18-a] audit-design: the one-report-per-node refusal is explained — use the existing name (as --out) or --force and retire the old pair",
+    /If it refuses.{0,200}already has an audit report/.test(auditSkill) && /pass it as `--out`/.test(auditSkill) && /`--force`.{0,200}retire the old pair/.test(auditSkill));
+  check("[G18-b] audit-design: the cross-check command carries --out (a bare run only prints), with the <Screen>__<id>.cross form the plan's crossCheckFile points at",
+    /cross-check\.js" --design-system design\/export\/design-system \\? ?--out design\/audit\/<name>\.cross/.test(auditSkill) && /--out design\/audit\/<Screen>__<id>\.cross/.test(auditSkill) && /Without `--out` the cross-check report only prints/.test(auditSkill));
 }
 
 report();
