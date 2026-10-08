@@ -78,6 +78,13 @@ function walkWithHidden(root, fn, opts) {
 import fs4 from "node:fs";
 import path3 from "node:path";
 
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
 // design-to-code/color.ts
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 function normHex(v) {
@@ -90,6 +97,63 @@ function normHex(v) {
 function colorKey(v) {
   const h = normHex(v);
   return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?";
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var RGB_LEGACY = new RegExp(`^rgba?\\(\\s*(${CH})\\s*,\\s*(${CH})\\s*,\\s*(${CH})\\s*(?:,\\s*(${CH})\\s*)?\\)$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var comp = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
+var clamp = (n, hi) => Math.min(hi, Math.max(0, n));
+var alphaOf = (x) => x === void 0 ? 1 : clamp(comp(x, 1), 1);
+function parseCssColor(v) {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+  if (t.startsWith("#")) return parseHex(t);
+  const rgb = RGB_LEGACY.exec(t) ?? RGB_MODERN.exec(t);
+  if (rgb) {
+    const ch = (x) => clamp(comp(x, 255), 255);
+    const c = { r: ch(rgb[1]), g: ch(rgb[2]), b: ch(rgb[3]), a: alphaOf(rgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const ok = OK.exec(t);
+  if (ok) {
+    const L = comp(ok[2], 1);
+    let a, b;
+    if (ok[1] === "oklab") {
+      a = comp(ok[3], 0.4);
+      b = comp(ok[4], 0.4);
+    } else {
+      const C = comp(ok[3], 0.4), h = comp(ok[4], 1) * Math.PI / 180;
+      a = C * Math.cos(h);
+      b = C * Math.sin(h);
+    }
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const enc = (c2) => Math.round(255 * clamp(c2 <= 31308e-7 ? 12.92 * c2 : 1.055 * c2 ** (1 / 2.4) - 0.055, 1));
+    const c = {
+      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
+      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
+      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
+      a: alphaOf(ok[5])
+    };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const srgb = SRGB.exec(t);
+  if (srgb) {
+    const ch = (x) => Math.round(clamp(comp(x, 1) * 255, 255));
+    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  return null;
 }
 
 // design-to-code/finding-id.ts
@@ -1085,17 +1149,11 @@ function colorLiterals(source) {
     const h = g.toLowerCase();
     add("#" + (h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff"), m[0]);
   }
-  for (const m of source.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})(?:[\s,/]+([\d.]+%?))?[^)]*\)/g)) {
-    const rgb = [m[1], m[2], m[3]].map((x) => Math.min(255, Number(x)).toString(16).padStart(2, "0")).join("");
-    add("#" + rgb + alphaHex(m[4]), m[0]);
+  for (const m of source.matchAll(/rgba?\([^()]*\)/g)) {
+    const c = parseCssColor(m[0]);
+    if (c) add(colorKey(formatHex(c)), m[0]);
   }
   return found;
-}
-function alphaHex(a) {
-  if (a === void 0 || a === "") return "ff";
-  const n = String(a).endsWith("%") ? Number(String(a).slice(0, -1)) / 100 : Number(a);
-  if (!Number.isFinite(n)) return "ff";
-  return Math.round(Math.min(1, Math.max(0, n)) * 255).toString(16).padStart(2, "0");
 }
 var UTILITY_KIND = [
   [/^rounded(-[a-z]+)?$/, "radius"],
@@ -1721,11 +1779,11 @@ function deviationConflicts(plan) {
     if (!omitted) return;
     const ids = [...typeof d.nodeId === "string" && d.nodeId ? [d.nodeId] : [], ...Array.isArray(d.nodeIds) ? d.nodeIds : []];
     for (const id of ids) {
-      const comp = (plan.components || []).find((c) => c.nodeId === id && verdictOf(c) === "reused");
+      const comp2 = (plan.components || []).find((c) => c.nodeId === id && verdictOf(c) === "reused");
       const a = anchors[id];
       const mod = a && typeof a.mapModule === "string" && a.mapModule.trim() ? a.mapModule : null;
-      if (!comp && !mod) continue;
-      const says = [comp ? `components[] marks '${comp.name}' "reused"${comp.mapModule ? ` from ${comp.mapModule}` : ""}` : null, mod ? `anchors["${id}"] maps it to ${mod}` : null].filter(Boolean).join(" and ");
+      if (!comp2 && !mod) continue;
+      const says = [comp2 ? `components[] marks '${comp2.name}' "reused"${comp2.mapModule ? ` from ${comp2.mapModule}` : ""}` : null, mod ? `anchors["${id}"] maps it to ${mod}` : null].filter(Boolean).join(" and ");
       out.push(`deviation #${i}${d.id ? ` (${d.id})` : ""} says node ${id} was not built, but ${says} \u2014 one of them is wrong: if it was left out, anchor it as {"omitted": "<why>"} and drop the reuse claim; if it was built, correct the deviation`);
     }
   });

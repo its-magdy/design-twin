@@ -47,7 +47,7 @@ import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
-import { colorKey } from "./color.ts";
+import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import { CANONICAL_MATCHED_BY } from "./probe-match.ts";
 import type { MatchedBy } from "./probe-match.ts";
 import type {
@@ -97,18 +97,10 @@ function normColor(v: unknown): string | null {
   const s = String(v).trim().toLowerCase();
   const key = colorKey(s); // color.ts: every hex spelling -> "#rrggbbaa"
   if (key) return key;
-  const inner = /^rgba?\(([^)]+)\)$/.exec(s)?.[1]; // the group is not optional: set whenever the regex matched
-  if (inner !== undefined) {
-    const p = inner.split(/[,\s/]+/).filter(Boolean).map(Number);
-    const [r, g, b, a0] = p;
-    if (r === undefined || g === undefined || b === undefined || p.some((n) => Number.isNaN(n))) return s;
-    const a = a0 ?? 1;
-    if (a === 0) return "transparent"; // rgba(0,0,0,0) is "no background", whatever the channels say
-    const hex = (n: number): string => Math.round(n).toString(16).padStart(2, "0");
-    return "#" + hex(r) + hex(g) + hex(b) + hex(Math.round(a * 255));
-  }
-  if (s === "transparent" || s === "rgba(0, 0, 0, 0)") return "transparent";
-  return s;
+  const c = parseCssColor(s); // color.ts: rgb()/rgba() as the probe reads them back, transparent, oklab()/oklch()
+  if (c === null) return s;
+  if (c.a === 0) return "transparent"; // rgba(0,0,0,0) is "no background", whatever the channels say
+  return colorKey(formatHex(c)) ?? s;
 }
 
 // Figma names weights ("SemiBold"); CSS uses numbers. Compare on the number, because that is what a

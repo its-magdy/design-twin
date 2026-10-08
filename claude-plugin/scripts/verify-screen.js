@@ -1214,6 +1214,13 @@ function screenExportOf(doc) {
   return isScreenExport(doc) ? doc : null;
 }
 
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
 // design-to-code/color.ts
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 function normHex(v) {
@@ -1226,6 +1233,63 @@ function normHex(v) {
 function colorKey(v) {
   const h = normHex(v);
   return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?";
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var RGB_LEGACY = new RegExp(`^rgba?\\(\\s*(${CH})\\s*,\\s*(${CH})\\s*,\\s*(${CH})\\s*(?:,\\s*(${CH})\\s*)?\\)$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var comp = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
+var clamp = (n, hi) => Math.min(hi, Math.max(0, n));
+var alphaOf = (x) => x === void 0 ? 1 : clamp(comp(x, 1), 1);
+function parseCssColor(v) {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+  if (t.startsWith("#")) return parseHex(t);
+  const rgb = RGB_LEGACY.exec(t) ?? RGB_MODERN.exec(t);
+  if (rgb) {
+    const ch = (x) => clamp(comp(x, 255), 255);
+    const c = { r: ch(rgb[1]), g: ch(rgb[2]), b: ch(rgb[3]), a: alphaOf(rgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const ok = OK.exec(t);
+  if (ok) {
+    const L = comp(ok[2], 1);
+    let a, b;
+    if (ok[1] === "oklab") {
+      a = comp(ok[3], 0.4);
+      b = comp(ok[4], 0.4);
+    } else {
+      const C = comp(ok[3], 0.4), h = comp(ok[4], 1) * Math.PI / 180;
+      a = C * Math.cos(h);
+      b = C * Math.sin(h);
+    }
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const enc = (c2) => Math.round(255 * clamp(c2 <= 31308e-7 ? 12.92 * c2 : 1.055 * c2 ** (1 / 2.4) - 0.055, 1));
+    const c = {
+      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
+      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
+      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
+      a: alphaOf(ok[5])
+    };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const srgb = SRGB.exec(t);
+  if (srgb) {
+    const ch = (x) => Math.round(clamp(comp(x, 1) * 255, 255));
+    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  return null;
 }
 
 // design-to-code/probe-match.ts
@@ -1284,18 +1348,10 @@ function normColor(v) {
   const s = String(v).trim().toLowerCase();
   const key = colorKey(s);
   if (key) return key;
-  const inner = /^rgba?\(([^)]+)\)$/.exec(s)?.[1];
-  if (inner !== void 0) {
-    const p = inner.split(/[,\s/]+/).filter(Boolean).map(Number);
-    const [r, g, b, a0] = p;
-    if (r === void 0 || g === void 0 || b === void 0 || p.some((n) => Number.isNaN(n))) return s;
-    const a = a0 ?? 1;
-    if (a === 0) return "transparent";
-    const hex = (n) => Math.round(n).toString(16).padStart(2, "0");
-    return "#" + hex(r) + hex(g) + hex(b) + hex(Math.round(a * 255));
-  }
-  if (s === "transparent" || s === "rgba(0, 0, 0, 0)") return "transparent";
-  return s;
+  const c = parseCssColor(s);
+  if (c === null) return s;
+  if (c.a === 0) return "transparent";
+  return colorKey(formatHex(c)) ?? s;
 }
 var WEIGHTS = {
   thin: 100,

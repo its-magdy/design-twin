@@ -11,7 +11,8 @@ import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { crossCheck, toMarkdown, composedRgba } from "../design-to-code/cross-check.ts";
 import { audit } from "../design-to-code/audit.ts";
-import { parseHex, clampOpacityPct, composeAlpha, formatHex, compositeOver } from "../design-to-code/color.ts";
+import { parseHex, clampOpacityPct, composeAlpha, formatHex, compositeOver, parseCssColor } from "../design-to-code/color.ts";
+import { formatHex as bridgeFormatHex } from "../bridge/src/hex-color.ts";
 import { screenCoverage } from "../design-to-code/drift-lint.ts";
 import { check as ok, report } from "./assert.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -456,6 +457,35 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
   // compositeOver: black at alpha 0.5 over white -> 0 × 0.5 + 255 × 0.5 = 127.5 per channel, opaque.
   const c = compositeOver({ r: 0, g: 0, b: 0, a: 0.5 }, { r: 255, g: 255, b: 255, a: 1 });
   ok("[color] compositeOver: #000000 at alpha 0.5 over #ffffff = (127.5, 127.5, 127.5, 1)", c.r === 127.5 && c.g === 127.5 && c.b === 127.5 && c.a === 1);
+}
+
+// ---------------------------------------------------------------- color.ts parseCssColor: the one CSS colour reader
+{
+  const eq = (v: string, r: number, g: number, b: number, a: number): boolean => {
+    const c = parseCssColor(v);
+    return c !== null && c.r === r && c.g === g && c.b === b && c.a === a;
+  };
+  // Chromium's computed value (CSS Color 4 §16.2): legacy rgb()/rgba(), ", " separators, components not necessarily integers.
+  ok("[css] Chromium computed rgb(29, 29, 31) / rgba(0, 0, 0, 0.4) / rgb(146.06, 107.46, 131.2) (unrounded; formatHex rounds to #926b83)",
+    eq("rgb(29, 29, 31)", 29, 29, 31, 1) && eq("rgba(0, 0, 0, 0.4)", 0, 0, 0, 0.4) && eq("rgb(146.06, 107.46, 131.2)", 146.06, 107.46, 131.2, 1)
+    && formatHex(must(parseCssColor("rgb(146.06, 107.46, 131.2)"), "fractional rgb")) === "#926b83");
+  // Modern syntax (§5.1): spaces, `/ alpha`, percentage channels (100% = 255) and alpha, rgba() as an alias; case and outer space ignored.
+  ok("[css] modern rgb(0 0 0 / 40%), RGBA(100% 0% 50%), rgb(1,2,3,0.5) legacy 4-arg rgb()",
+    eq("rgb(0 0 0 / 40%)", 0, 0, 0, 0.4) && eq("  RGBA(100% 0% 50%) ", 255, 0, 127.5, 1) && eq("rgb(1,2,3,0.5)", 1, 2, 3, 0.5) && eq("rgba(1, 2, 3)", 1, 2, 3, 1));
+  // §4.4: `none` (a missing component) behaves as zero — alpha included; legacy syntax does not allow it.
+  ok("[css] none is 0: rgb(none 10 20 / none) -> (0, 10, 20, 0); oklab(0 0 0 / none) alpha 0; rgb(none, 0, 0) is not a colour",
+    eq("rgb(none 10 20 / none)", 0, 10, 20, 0) && parseCssColor("oklab(0 0 0 / none)")?.a === 0 && parseCssColor("rgb(none, 0, 0)") === null);
+  // §5.1 / §4.2: out-of-range channels and alpha clamp at parsed-value time; they are not invalid.
+  ok("[css] clamps rgb(300, -5, 0, 1.5) -> (255, 0, 0, 1)", eq("rgb(300, -5, 0, 1.5)", 255, 0, 0, 1));
+  // Hex needs its `#` here (CSS hex notation); 3/4/6/8 digits as color.ts reads them.
+  ok("[css] #ABC -> (170, 187, 204, 1), #aabbcc80 alpha 128/255; 'abc', '#abcde', 'red', 'rgb(0, 0 0)' (mixed separators) and a non-string -> null",
+    eq("#ABC", 170, 187, 204, 1) && eq("#aabbcc80", 170, 187, 204, 128 / 255)
+    && parseCssColor("abc") === null && parseCssColor("#abcde") === null && parseCssColor("red") === null && parseCssColor("rgb(0, 0 0)") === null && parseCssColor(42) === null);
+  ok("[css] transparent -> (0, 0, 0, 0); oklch red; color(srgb 1 0 0 / 0.5)",
+    eq("transparent", 0, 0, 0, 0) && eq("oklch(0.628 0.2577 29.23)", 255, 0, 0, 1) && eq("color(srgb 1 0 0 / 0.5)", 255, 0, 0, 0.5));
+  // The formatter is bridge/src/hex-color.ts's, re-exported: the plugin's export and design-to-code agree on 6 vs 8 digits.
+  ok("[css] formatHex is the bridge's (one formatter); alpha 0.999 -> 254.745 rounds to 255 -> 6 digits",
+    formatHex === bridgeFormatHex && formatHex({ r: 17, g: 17, b: 17, a: 0.999 }) === "#111111");
 }
 
 console.log("cross-check — contrast of a TRANSLUCENT text colour (WCAG 2.2 on the rendered colour):");

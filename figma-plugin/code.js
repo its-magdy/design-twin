@@ -11,6 +11,24 @@
     return o;
   }
 
+  // ../bridge/src/hex-color.ts
+  var HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+  var HEX_COLOR_HINT = "a hex colour like #1A2B3C (#rgb, #rgba, #rrggbb or #rrggbbaa)";
+  function parseHexColor(value) {
+    if (typeof value !== "string" || !HEX_COLOR_RE.test(value)) return null;
+    let h = value.slice(1);
+    if (h.length <= 4) h = h.split("").map((c2) => c2 + c2).join("");
+    const chan = (i) => parseInt(h.slice(i, i + 2), 16) / 255;
+    const c = { r: chan(0), g: chan(2), b: chan(4) };
+    if (h.length === 8) c.a = chan(6);
+    return c;
+  }
+  function formatHex(c) {
+    const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+    const a = Math.round(c.a * 255);
+    return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+  }
+
   // ../bridge/src/pages-layout.ts
   function safe(id) {
     return String(id).replace(/[^a-zA-Z0-9]/g, "_");
@@ -192,9 +210,8 @@
     return node[key];
   }
   function rgbaToHex(c) {
-    const to = (x) => Math.round(x * 255).toString(16).padStart(2, "0");
-    const hex = `#${to(c.r)}${to(c.g)}${to(c.b)}`;
-    return c.a !== void 0 && c.a < 1 ? `${hex}${to(c.a)}` : hex;
+    var _a;
+    return formatHex({ r: c.r * 255, g: c.g * 255, b: c.b * 255, a: (_a = c.a) != null ? _a : 1 });
   }
   var solidHex = (p) => rgbaToHex({ r: p.color.r, g: p.color.g, b: p.color.b, ...ifDefined("a", p.opacity) });
   function solidFromFills(fills) {
@@ -3590,19 +3607,6 @@
       manifest: manifest()
     };
     return { designSystem, layersDoc, assets: assets.slice() };
-  }
-
-  // ../bridge/src/hex-color.ts
-  var HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-  var HEX_COLOR_HINT = "a hex colour like #1A2B3C (#rgb, #rgba, #rrggbb or #rrggbbaa)";
-  function parseHexColor(value) {
-    if (typeof value !== "string" || !HEX_COLOR_RE.test(value)) return null;
-    let h = value.slice(1);
-    if (h.length <= 4) h = h.split("").map((c2) => c2 + c2).join("");
-    const chan = (i) => parseInt(h.slice(i, i + 2), 16) / 255;
-    const c = { r: chan(0), g: chan(2), b: chan(4) };
-    if (h.length === 8) c.a = chan(6);
-    return c;
   }
 
   // src/writes.ts

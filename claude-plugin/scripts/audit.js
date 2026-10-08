@@ -9,6 +9,13 @@ import path6 from "node:path";
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
 // design-to-code/color.ts
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 function normHex(v) {
@@ -28,11 +35,13 @@ function parseHex(v) {
   const n = (i) => parseInt(k.slice(i, i + 2), 16);
   return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
 }
-function formatHex(c) {
-  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
-  const a = Math.round(c.a * 255);
-  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
-}
+var NUM = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?";
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var RGB_LEGACY = new RegExp(`^rgba?\\(\\s*(${CH})\\s*,\\s*(${CH})\\s*,\\s*(${CH})\\s*(?:,\\s*(${CH})\\s*)?\\)$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 function clampOpacityPct(n) {
   return Math.min(100, Math.max(0, n));
 }

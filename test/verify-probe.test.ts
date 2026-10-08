@@ -28,6 +28,7 @@ import { must } from "./fixtures.ts";
 import type * as PDT from "../design-to-code/probe-drive.ts";
 import type { VerifyExpectation, VerifyInteraction } from "../design-to-code/types.ts";
 import type * as PBT from "../design-to-code/probe-behaviour.ts";
+import { parseCssColor } from "../design-to-code/color.ts";
 import type { BehaviourCheck as BehaviourCheckRow, InteractionEvidence } from "../design-to-code/types.ts";
 // group 12b: probe-behaviour.ts is loaded dynamically too (a tree without it: every 12b check is a clean ✗)
 const PB: Partial<typeof PBT> = await import("../design-to-code/probe-behaviour.ts").then((m) => ({ ...m }), () => ({}));
@@ -1768,9 +1769,8 @@ block("12b behaviour helpers", () => {
     return !!m && m("#00000066", "rgba(0, 0, 0, 0.4)") && !m("#00000066", "rgba(0, 0, 0, 0)") && m(null, "rgba(0, 0, 0, 0)") && m(null, null) && !m(null, "rgba(0, 0, 0, 0.4)")
       && m("#00000040", "oklab(0 0 0 / 0.25)") && !m("#00000066", "rgba(40, 0, 0, 0.4)") && !m("#00000066", "rgba(0, 0, 0, 0.5)") && !m("not-a-colour", "rgba(0, 0, 0, 0.4)");
   });
-  t("[F-117] parseColor: oklch red → rgb(255, 0, 0); color(srgb …) with alpha; rgb() space syntax with a % alpha", () => {
-    const c = PB.parseColor;
-    if (!c) return false;
+  t("[F-117] parseCssColor: oklch red → rgb(255, 0, 0); color(srgb …) with alpha; rgb() space syntax with a % alpha", () => {
+    const c = parseCssColor;
     const red = c("oklch(0.628 0.2577 29.23)"), s = c("color(srgb 1 0 0 / 0.5)"), r = c("rgb(0 0 0 / 40%)");
     return red !== null && red.r === 255 && red.g === 0 && red.b === 0 && s !== null && s.a === 0.5 && r !== null && r.a === 0.4;
   });
