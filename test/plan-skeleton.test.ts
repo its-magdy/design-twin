@@ -81,6 +81,29 @@ console.log("tokens[] — a composed colour (colour + separate 0–100 opacity) 
   check("an opacity alias that does not resolve stays null", val("E") === null);
 }
 
+console.log("tokens[] — a COLOR value is written in color.ts's one spelling, so equal colours compare equal:");
+{
+  // #abc and #AABBCCFF are the same opaque colour: both "#aabbcc" (shorthand expanded, opaque alpha dropped), so the
+  // design system's "#aabbcc" agrees with a screen's "#abc". A string that is not a hex colour is kept, trimmed and lowercased.
+  const v = tokens({
+    collections: [{ name: "C", modes: ["M"], default: "M" }],
+    variables: [
+      { name: "Short", collection: "C", type: "COLOR", values: { M: "#ABC" } },
+      { name: "Full", collection: "C", type: "COLOR", values: { M: " #AABBCCFF " } },
+      { name: "Half", collection: "C", type: "COLOR", values: { M: "#abc8" } },
+      { name: "Word", collection: "C", type: "COLOR", values: { M: " Not-A-Colour " } },
+    ],
+  });
+  const dsv = tokens({ collections: [{ name: "C", modes: ["M"], default: "M" }], variables: [{ name: "Short", collection: "C", type: "COLOR", values: { M: "#aabbcc" } }] });
+  const names = ["Short", "Full", "Half", "Word"];
+  const doc = { screen: "S", nodes: names.map((n, i) => node({ id: `2:${i}`, type: "RECTANGLE", name: n, tokens: { fills: n } })) };
+  const rows = buildTokens(doc, v, dsv, { C: "M" });
+  const row = (n: string) => rows.find((t) => t.figmaName === n);
+  check("#ABC -> #aabbcc, ' #AABBCCFF ' -> #aabbcc, #abc8 -> #aabbcc88, a word kept lowercased",
+    row("Short")?.value === "#aabbcc" && row("Full")?.value === "#aabbcc" && row("Half")?.value === "#aabbcc88" && row("Word")?.value === "not-a-colour");
+  check("the design system's #aabbcc agrees with the screen's #ABC", row("Short")?.designSystem?.agrees === true);
+}
+
 console.log("the P3 header — so every other skill can find the plan:");
 check("screenName / nodeId / file are written; route is left for the builder",
   plan.nodeId === "7314:87192" && plan.screenName === "positions" && plan.file === "export/pages/__Optimization_management_/positions___7314_87192.json" && plan.route === null && plan.status === "pending");

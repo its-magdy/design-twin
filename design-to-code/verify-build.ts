@@ -48,7 +48,7 @@ import { screenExportOf, screenRoots } from "./export-shape.ts";
 import * as contentHash from "./content-hash.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
-import { colorKey } from "./color.ts";
+import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
 import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerifyReport, parsePlan } from "./doc-guards.ts";
@@ -280,18 +280,13 @@ function colorLiterals(source: string): Map<string, string> {
     const h = g.toLowerCase();
     add("#" + (h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff"), m[0]);
   }
-  for (const m of source.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})(?:[\s,/]+([\d.]+%?))?[^)]*\)/g)) {
-    const rgb = [m[1], m[2], m[3]].map((x) => Math.min(255, Number(x)).toString(16).padStart(2, "0")).join("");
-    add("#" + rgb + alphaHex(m[4]), m[0]);
+  // rgb()/rgba() in either CSS syntax, read by color.ts parseCssColor (the probe's own reader); a call it
+  // cannot read (a var(), a template placeholder) is not a literal.
+  for (const m of source.matchAll(/rgba?\([^()]*\)/g)) {
+    const c = parseCssColor(m[0]);
+    if (c) add(colorKey(formatHex(c)), m[0]);
   }
   return found;
-}
-
-function alphaHex(a: string | undefined): string {
-  if (a === undefined || a === "") return "ff";
-  const n = String(a).endsWith("%") ? Number(String(a).slice(0, -1)) / 100 : Number(a);
-  if (!Number.isFinite(n)) return "ff";
-  return Math.round(Math.min(1, Math.max(0, n)) * 255).toString(16).padStart(2, "0");
 }
 
 // Tailwind arbitrary dimensions: the utility PREFIX says which kind the number is (seen in a live run:

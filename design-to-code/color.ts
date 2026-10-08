@@ -1,19 +1,28 @@
-// color.ts — the ONE hex-colour parser of the design-to-code layer, and the WCAG contrast arithmetic.
+// color.ts — the ONE colour parser of the design-to-code layer (hex, and the CSS colour strings a browser
+// computes), and the WCAG contrast arithmetic.
 //
 // Separate parsers would disagree (one requiring the `#`, one making it optional, one taking 3/4-digit
-// shorthand, one taking shorthand but dropping or keeping alpha, one taking 3- but not 4-digit shorthand),
-// so the same export value could be a colour to one tool and junk to the next. The rule, decided once:
+// shorthand, one taking shorthand but dropping or keeping alpha, one taking 3- but not 4-digit shorthand;
+// three rgb() readers with three grammars), so the same value could be a colour to one tool and junk to the
+// next. The rule, decided once:
 //
 //   ACCEPT  an optional `#`, then 3, 4, 6 or 8 hex digits (#rgb, #rgba, #rrggbb, #rrggbbaa), any case,
-//           surrounding whitespace ignored.
+//           surrounding whitespace ignored. parseCssColor also reads the CSS functions (see there).
 //   EMIT    lowercase, WITH the `#`: "#rrggbb" or "#rrggbbaa" (shorthand expanded).
+//
+// The `#` is optional here because export and token values are compared as written by people as well as by
+// the plugin. The write path (bridge/src/hex-color.ts parseHexColor) requires it: a figma_write colour
+// that is a word ("bad", "fade") must be refused, not painted.
 //
 // Nothing here is imported from another design-to-code module, so every module may import it (a
 // "local copy to avoid an import cycle" is never needed: esbuild inlines the modules into each
-// bundle, and color.ts imports nothing back).
+// bundle, and color.ts imports nothing back). The formatter lives in bridge/src/hex-color.ts because the
+// plugin writes every exported colour with it, and bridge/src never imports design-to-code.
 
-/** 0–255 channels plus alpha 0–1. */
-export interface Rgba { r: number; g: number; b: number; a: number }
+import { formatHex } from "../bridge/src/hex-color.ts";
+import type { Rgba } from "../bridge/src/hex-color.ts";
+export { formatHex };
+export type { Rgba };
 
 const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 
@@ -41,11 +50,74 @@ export function parseHex(v: unknown): Rgba | null {
   return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
 }
 
-/** An Rgba as "#rrggbb" (alpha rounds to 255) or "#rrggbbaa" — channels rounded to 0–255. */
-export function formatHex(c: Rgba): string {
-  const to = (x: number): string => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
-  const a = Math.round(c.a * 255);
-  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+// ---------------------------------------------------------------- CSS colour strings
+// The CSS Color 4 forms (https://www.w3.org/TR/css-color-4/) the callers see: a browser's computed value
+// (§16.2: sRGB colours serialize as legacy comma-separated "rgb(r, g, b)" / "rgba(r, g, b, a)" — components
+// base 10 in [0, 255], not necessarily integers; Tailwind v4 palettes compute to oklab()/oklch(), some to
+// color(srgb …)), and colours authors write in source (both rgb() syntaxes, % alpha).
+const NUM = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?";
+const CH = `${NUM}%?`;
+const CH_OR_NONE = `(?:${CH}|none)`;
+// §5.1: legacy `rgb( <number|percentage>#{3} , <alpha-value>? )` (commas, `none` not allowed) and modern
+// `rgb( [<number> | <percentage> | none]{3} [ / [<alpha-value> | none] ]? )` (spaces); rgba() is the same function.
+const RGB_LEGACY = new RegExp(`^rgba?\\(\\s*(${CH})\\s*,\\s*(${CH})\\s*,\\s*(${CH})\\s*(?:,\\s*(${CH})\\s*)?\\)$`);
+const RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+const OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+const SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+
+/** One component: a percentage is `pct` at 100%; `none` (a missing component) is 0 — CSS Color 4 §4.4: "a
+ *  missing component behaves as a zero value". */
+const comp = (x: string | undefined, pct: number): number =>
+  x === undefined || x === "none" ? 0 : x.endsWith("%") ? (Number(x.slice(0, -1)) / 100) * pct : Number(x);
+const clamp = (n: number, hi: number): number => Math.min(hi, Math.max(0, n));
+/** Alpha: absent is opaque; out-of-range values clamp to [0, 1] (§4.2: "not invalid, but are clamped"). */
+const alphaOf = (x: string | undefined): number => (x === undefined ? 1 : clamp(comp(x, 1), 1));
+
+/**
+ * A CSS colour as sRGB channels 0–255 (not rounded: formatHex rounds) plus alpha 0–1; null when it is not
+ * one this reads. Reads, case-insensitively with surrounding whitespace ignored: `transparent`; a hex
+ * colour WITH its `#` (CSS hex notation; see the rule at the top); rgb()/rgba() in the legacy comma and the
+ * modern space syntax (number or percentage channels, number or percentage alpha); oklab()/oklch(),
+ * converted to sRGB and clipped to its gamut; color(srgb …). Out-of-range rgb() channels clamp to 0–255
+ * (§5.1: "clamped to the ranges defined here at parsed-value time"). Named colours other than
+ * `transparent`, and other colour spaces (lab(), lch(), color(display-p3 …)), are not read.
+ */
+export function parseCssColor(v: unknown): Rgba | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+  if (t.startsWith("#")) return parseHex(t);
+  const rgb = RGB_LEGACY.exec(t) ?? RGB_MODERN.exec(t);
+  if (rgb) {
+    const ch = (x: string | undefined): number => clamp(comp(x, 255), 255);
+    const c = { r: ch(rgb[1]), g: ch(rgb[2]), b: ch(rgb[3]), a: alphaOf(rgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const ok = OK.exec(t);
+  if (ok) {
+    // Oklab -> linear sRGB (Ottosson's published matrices) -> the sRGB transfer curve; percentages: L 100% = 1,
+    // a/b/C 100% = 0.4 (the CSS Color 4 reference ranges).
+    const L = comp(ok[2], 1);
+    let a: number, b: number;
+    if (ok[1] === "oklab") { a = comp(ok[3], 0.4); b = comp(ok[4], 0.4); }
+    else { const C = comp(ok[3], 0.4), h = (comp(ok[4], 1) * Math.PI) / 180; a = C * Math.cos(h); b = C * Math.sin(h); }
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const enc = (c: number): number => Math.round(255 * clamp(c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055, 1));
+    const c = {
+      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
+      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
+      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
+      a: alphaOf(ok[5]),
+    };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const srgb = SRGB.exec(t);
+  if (srgb) {
+    const ch = (x: string | undefined): number => Math.round(clamp(comp(x, 1) * 255, 255));
+    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------- Figma opacity percentages

@@ -41,6 +41,7 @@ import type { BehaviourAxe, BehaviourCheck, BehaviourCheckId, BehaviourLandmark,
 import { DIALOG_CONTRACT, StepError, armDetector, drivable, openerState, ownPixels, pollDetector, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
 import type { DetectorRead } from "./probe-drive.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
+import { parseCssColor } from "./color.ts";
 
 // ---------------------------------------------------------------- the page, as far as these functions use it
 interface BRect { x: number; y: number; width: number; height: number; right: number; bottom: number }
@@ -324,45 +325,11 @@ export function nameStatus(snapshot: string, stop: { tag: string; domName: strin
   if (n.name === null && NAME_REQUIRED.has(n.role)) return { status: "fail", role: n.role, name: null };
   return { status: "pass", role: n.role, name: n.name };
 }
-/** An sRGB colour with alpha 0..1, from #rgb / #rgba / #rrggbb / #rrggbbaa / rgb() / rgba() / "transparent"; null otherwise. */
-export function parseColor(s: string | null | undefined): { r: number; g: number; b: number; a: number } | null {
-  if (typeof s !== "string") return null;
-  const t = s.trim().toLowerCase();
-  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
-  const hex = /^#([0-9a-f]{3,8})$/.exec(t);
-  if (hex) {
-    const h = hex[1] ?? "";
-    const full = h.length === 3 || h.length === 4 ? h.split("").map((c) => c + c).join("") : h;
-    if (full.length !== 6 && full.length !== 8) return null;
-    const at = (i: number): number => parseInt(full.slice(i, i + 2), 16);
-    return { r: at(0), g: at(2), b: at(4), a: full.length === 8 ? at(6) / 255 : 1 };
-  }
-  const alpha = (x: string | undefined): number => x === undefined || x === "none" ? 1 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 : Number(x);
-  const fn = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?|none))?\s*\)$/.exec(t);
-  if (fn) return { r: Number(fn[1]), g: Number(fn[2]), b: Number(fn[3]), a: alpha(fn[4]) };
-  // Tailwind v4 palettes compute to oklab()/oklch() (real app: a scrim read back as `oklab(0 0 0 / 0.25)`), some to color(srgb …)
-  const num = "(-?[\\d.]+(?:e-?\\d+)?%?|none)";
-  const ok = new RegExp(`^(oklab|oklch)\\(\\s*${num}\\s+${num}\\s+${num}(?:\\s*/\\s*([\\d.]+%?|none))?\\s*\\)$`).exec(t);
-  if (ok) {
-    const v = (x: string | undefined, pct: number): number => x === undefined || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
-    const L = v(ok[2], 1);
-    let a: number, b: number;
-    if (ok[1] === "oklab") { a = v(ok[3], 0.4); b = v(ok[4], 0.4); }
-    else { const C = v(ok[3], 0.4), h = (v(ok[4], 1) * Math.PI) / 180; a = C * Math.cos(h); b = C * Math.sin(h); }
-    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
-    const lin = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3, -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3];
-    const [r, g, bb] = lin.map((c) => Math.round(255 * Math.min(1, Math.max(0, c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055))));
-    return { r: r ?? 0, g: g ?? 0, b: bb ?? 0, a: alpha(ok[5]) };
-  }
-  const srgb = /^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+%?|none))?\s*\)$/.exec(t);
-  if (srgb) return { r: Math.round(Number(srgb[1]) * 255), g: Math.round(Number(srgb[2]) * 255), b: Math.round(Number(srgb[3]) * 255), a: alpha(srgb[4]) };
-  return null;
-}
 /** dialog.scrim: the built scrim vs the overlay's designed background (null = no scrim). Channels ±8, alpha ±0.05;
  *  a (near-)transparent colour is "no scrim" on either side. */
 export function scrimMatches(expected: string | null, actual: string | null): boolean {
-  const e = expected === null ? null : parseColor(expected);
-  const a = actual === null ? null : parseColor(actual);
+  const e = expected === null ? null : parseCssColor(expected);
+  const a = actual === null ? null : parseCssColor(actual);
   const none = (c: { a: number } | null): boolean => c === null || c.a <= 0.05;
   if (expected !== null && e === null) return false; // an unreadable design colour never "matches"
   if (none(e)) return none(a);
@@ -2507,7 +2474,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         const built = sr.backdrop ?? sr.cover;
         const want = ov.background;
         // a colour the probe cannot read (a colour space it does not convert) is not-run, never a false warn
-        const unread = sr.backdrop === null && sr.unreadable !== null ? sr.unreadable : built !== null && parseColor(built) === null ? built : want !== null && parseColor(want) === null ? want : null;
+        const unread = sr.backdrop === null && sr.unreadable !== null ? sr.unreadable : built !== null && parseCssColor(built) === null ? built : want !== null && parseCssColor(want) === null ? want : null;
         if (unread !== null) {
           add({ id: "dialog.scrim", status: "not-run", detail: `not-run: the scrim colour ${unread} is in a colour space the probe does not read`, evidence: { built, designed: want } });
         } else {

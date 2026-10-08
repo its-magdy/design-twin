@@ -425,6 +425,15 @@ const sandbox: Sandbox = context;
   const counterOut = await sandbox.serialize(counterFrame, 0, false);
   ok("[counterAxisAlignItems] CENTER -> alignItems: center (unchanged)", counterOut.layout?.alignItems === "center");
 
+  // ---- colours are written by bridge/src/hex-color.ts formatHex: an alpha that rounds to 255 is opaque (6 digits),
+  // 0.999 × 255 = 254.745 -> 255; 0.5 × 255 = 127.5 -> 128 = 0x80. Channels 0.1/0.3/0.9 × 255 = 25.5/76.5/229.5 -> 1a/4d/e6.
+  const hexFrame = { type: "RECTANGLE", name: "HexAlpha", visible: true, id: "hx:1", width: 10, height: 10,
+    fills: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 0.999 }, { type: "SOLID", visible: true, color: { r: 1, g: 0, b: 0 }, opacity: 0.5 }] };
+  const hexOut = await sandbox.serialize(hexFrame, 0, false);
+  const hexFills = hexOut.fills ?? [];
+  ok("[formatHex] a paint at opacity 0.999 exports as 6-digit #1a4de6 (alpha rounds to opaque); at 0.5 as #ff000080",
+    hexFills.length === 2 && flatPaint(must(hexFills[0], "hexFills[0]")).color === "#1a4de6" && flatPaint(must(hexFills[1], "hexFills[1]")).color === "#ff000080");
+
   // ---- itemSpacing under an "auto gap" distribution mode is Figma's unused slack, not a real gap:
   // https://help.figma.com/hc/en-us/articles/31289464393751 (article 31289464393751), "Guide to auto
   // layout" — Between/Evenly/Around "match CSS property values space-between, space-evenly and

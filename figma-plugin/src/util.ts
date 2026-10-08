@@ -1,6 +1,7 @@
 // Pure helpers shared across the extractor. No Figma API calls here.
 import type { JsonObject, JsonValue, XY, CubicBezier, ComponentPropType } from "../../bridge/src/doc-types.ts";
 import { ifDefined } from "../../bridge/src/json-util.ts";
+import { formatHex } from "../../bridge/src/hex-color.ts";
 
 // The filesystem-boundary sanitiser lives in pages-layout.ts, which names the page dirs and layer
 // files this plugin's own download path writes — esbuild inlines that module into the bundle (main.ts
@@ -114,10 +115,10 @@ export function anyProp(node: unknown, key: string): unknown {
   return (node as Record<string, unknown>)[key];
 }
 
+// A Plugin API colour (channels and alpha 0–1) as the export's hex: bridge/src/hex-color.ts formatHex, the
+// formatter design-to-code uses too — "#rrggbb" when the alpha rounds to opaque, else "#rrggbbaa".
 export function rgbaToHex(c: { r: number; g: number; b: number; a?: number }): string {
-  const to = (x: number) => Math.round(x * 255).toString(16).padStart(2, "0");
-  const hex = `#${to(c.r)}${to(c.g)}${to(c.b)}`;
-  return c.a !== undefined && c.a < 1 ? `${hex}${to(c.a)}` : hex;
+  return formatHex({ r: c.r * 255, g: c.g * 255, b: c.b * 255, a: c.a ?? 1 });
 }
 
 // A visible SOLID paint -> hex (folding its opacity into the alpha channel). r/g/b are listed rather than

@@ -39,6 +39,11 @@ console.log("verify-screen — normalising what Figma and CSS each call the same
 ok("[norm] #fff and #ffffffff are the same colour", normColor("#fff") === normColor("#ffffffff"));
 ok("[norm] rgb() is compared as hex", normColor("rgb(29, 29, 31)") === "#1d1d1fff");
 ok("[norm] a fully transparent background is 'no background', whatever its channels", normColor("rgba(0, 0, 0, 0)") === "transparent");
+// normColor reads rgb() with color.ts parseCssColor (the probe's reader): a % alpha is read, not left as a raw string; an
+// out-of-range channel clamps (CSS Color 4 §5.1) instead of writing a 3-digit "12c"; oklab(… / 0) is transparent.
+ok("[norm] rgba(0, 0, 0, 50%) -> #00000080; rgb(300, 0, 0) -> #ff0000ff; rgb(0 0 0 / 0.5) -> #00000080; oklab(0 0 0 / 0) -> transparent; 'red' stays 'red'",
+  normColor("rgba(0, 0, 0, 50%)") === "#00000080" && normColor("rgb(300, 0, 0)") === "#ff0000ff" && normColor("rgb(0 0 0 / 0.5)") === "#00000080"
+  && normColor("oklab(0 0 0 / 0)") === "transparent" && normColor("red") === "red");
 ok("[norm] Figma's 'SemiBold' and CSS's 600 are the same weight", normWeight("SemiBold") === 600 && normWeight(600) === 600);
 ok("[norm] 'Medium' is 500, which is what makes 500-vs-600 a real mismatch", normWeight("Medium") === 500);
 ok("[norm] a CSS font stack compares on its FIRST family", normFamily('"Poppins", ui-sans-serif, system-ui') === "poppins");

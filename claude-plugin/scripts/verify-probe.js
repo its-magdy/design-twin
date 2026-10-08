@@ -73,7 +73,7 @@ function collectCandidates(input) {
     };
   };
   let ctx = null;
-  const alphaOf = (css) => {
+  const alphaOf2 = (css) => {
     const m = /^rgba?\(([^)]*)\)$/.exec(css.trim());
     if (m) {
       const p = (m[1] || "").split(/[\s,/]+/).filter(Boolean);
@@ -107,7 +107,7 @@ function collectCandidates(input) {
           if (Math.abs(r.width - f.w) <= 2 && Math.abs(r.height - f.h) <= 2) {
             const cs = getComputedStyle(el);
             const background = cs.getPropertyValue("background-color"), backgroundImage = cs.getPropertyValue("background-image");
-            sized.push({ ...cand(el, false), background, backgroundImage, paints: alphaOf(background) > 0 || backgroundImage !== "" && backgroundImage !== "none" });
+            sized.push({ ...cand(el, false), background, backgroundImage, paints: alphaOf2(background) > 0 || backgroundImage !== "" && backgroundImage !== "none" });
           }
           next.push(...Array.from(el.children));
         }
@@ -1414,6 +1414,13 @@ function isScreenDoc(x) {
 }
 isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
 
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
 // design-to-code/color.ts
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 function normHex(v) {
@@ -1426,6 +1433,63 @@ function normHex(v) {
 function colorKey(v) {
   const h = normHex(v);
   return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?";
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var RGB_LEGACY = new RegExp(`^rgba?\\(\\s*(${CH})\\s*,\\s*(${CH})\\s*,\\s*(${CH})\\s*(?:,\\s*(${CH})\\s*)?\\)$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var comp = (x, pct2) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct2 : Number(x);
+var clamp = (n, hi) => Math.min(hi, Math.max(0, n));
+var alphaOf = (x) => x === void 0 ? 1 : clamp(comp(x, 1), 1);
+function parseCssColor(v) {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+  if (t.startsWith("#")) return parseHex(t);
+  const rgb = RGB_LEGACY.exec(t) ?? RGB_MODERN.exec(t);
+  if (rgb) {
+    const ch = (x) => clamp(comp(x, 255), 255);
+    const c = { r: ch(rgb[1]), g: ch(rgb[2]), b: ch(rgb[3]), a: alphaOf(rgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const ok = OK.exec(t);
+  if (ok) {
+    const L = comp(ok[2], 1);
+    let a, b;
+    if (ok[1] === "oklab") {
+      a = comp(ok[3], 0.4);
+      b = comp(ok[4], 0.4);
+    } else {
+      const C = comp(ok[3], 0.4), h = comp(ok[4], 1) * Math.PI / 180;
+      a = C * Math.cos(h);
+      b = C * Math.sin(h);
+    }
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const enc = (c2) => Math.round(255 * clamp(c2 <= 31308e-7 ? 12.92 * c2 : 1.055 * c2 ** (1 / 2.4) - 0.055, 1));
+    const c = {
+      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
+      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
+      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
+      a: alphaOf(ok[5])
+    };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const srgb = SRGB.exec(t);
+  if (srgb) {
+    const ch = (x) => Math.round(clamp(comp(x, 1) * 255, 255));
+    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  return null;
 }
 
 // bridge/src/is-main.ts
@@ -1472,18 +1536,10 @@ function normColor(v) {
   const s = String(v).trim().toLowerCase();
   const key = colorKey(s);
   if (key) return key;
-  const inner = /^rgba?\(([^)]+)\)$/.exec(s)?.[1];
-  if (inner !== void 0) {
-    const p = inner.split(/[,\s/]+/).filter(Boolean).map(Number);
-    const [r, g, b, a0] = p;
-    if (r === void 0 || g === void 0 || b === void 0 || p.some((n) => Number.isNaN(n))) return s;
-    const a = a0 ?? 1;
-    if (a === 0) return "transparent";
-    const hex = (n) => Math.round(n).toString(16).padStart(2, "0");
-    return "#" + hex(r) + hex(g) + hex(b) + hex(Math.round(a * 255));
-  }
-  if (s === "transparent" || s === "rgba(0, 0, 0, 0)") return "transparent";
-  return s;
+  const c = parseCssColor(s);
+  if (c === null) return s;
+  if (c.a === 0) return "transparent";
+  return colorKey(formatHex(c)) ?? s;
 }
 var WEIGHTS = {
   thin: 100,
@@ -3157,47 +3213,9 @@ function nameStatus(snapshot, stop) {
   if (n.name === null && NAME_REQUIRED.has(n.role)) return { status: "fail", role: n.role, name: null };
   return { status: "pass", role: n.role, name: n.name };
 }
-function parseColor(s) {
-  if (typeof s !== "string") return null;
-  const t = s.trim().toLowerCase();
-  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
-  const hex = /^#([0-9a-f]{3,8})$/.exec(t);
-  if (hex) {
-    const h = hex[1] ?? "";
-    const full = h.length === 3 || h.length === 4 ? h.split("").map((c) => c + c).join("") : h;
-    if (full.length !== 6 && full.length !== 8) return null;
-    const at = (i) => parseInt(full.slice(i, i + 2), 16);
-    return { r: at(0), g: at(2), b: at(4), a: full.length === 8 ? at(6) / 255 : 1 };
-  }
-  const alpha = (x) => x === void 0 || x === "none" ? 1 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 : Number(x);
-  const fn = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?|none))?\s*\)$/.exec(t);
-  if (fn) return { r: Number(fn[1]), g: Number(fn[2]), b: Number(fn[3]), a: alpha(fn[4]) };
-  const num = "(-?[\\d.]+(?:e-?\\d+)?%?|none)";
-  const ok = new RegExp(`^(oklab|oklch)\\(\\s*${num}\\s+${num}\\s+${num}(?:\\s*/\\s*([\\d.]+%?|none))?\\s*\\)$`).exec(t);
-  if (ok) {
-    const v = (x, pct2) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct2 : Number(x);
-    const L = v(ok[2], 1);
-    let a, b;
-    if (ok[1] === "oklab") {
-      a = v(ok[3], 0.4);
-      b = v(ok[4], 0.4);
-    } else {
-      const C = v(ok[3], 0.4), h = v(ok[4], 1) * Math.PI / 180;
-      a = C * Math.cos(h);
-      b = C * Math.sin(h);
-    }
-    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
-    const lin = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3, -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3];
-    const [r, g, bb] = lin.map((c) => Math.round(255 * Math.min(1, Math.max(0, c <= 31308e-7 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055))));
-    return { r: r ?? 0, g: g ?? 0, b: bb ?? 0, a: alpha(ok[5]) };
-  }
-  const srgb = /^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+%?|none))?\s*\)$/.exec(t);
-  if (srgb) return { r: Math.round(Number(srgb[1]) * 255), g: Math.round(Number(srgb[2]) * 255), b: Math.round(Number(srgb[3]) * 255), a: alpha(srgb[4]) };
-  return null;
-}
 function scrimMatches(expected, actual) {
-  const e = expected === null ? null : parseColor(expected);
-  const a = actual === null ? null : parseColor(actual);
+  const e = expected === null ? null : parseCssColor(expected);
+  const a = actual === null ? null : parseCssColor(actual);
   const none = (c) => c === null || c.a <= 0.05;
   if (expected !== null && e === null) return false;
   if (none(e)) return none(a);
@@ -5241,7 +5259,7 @@ async function runUnits(browser, o, block, t0) {
         const sr = await page.evaluate(scrimRead, null);
         const built = sr.backdrop ?? sr.cover;
         const want = ov.background;
-        const unread = sr.backdrop === null && sr.unreadable !== null ? sr.unreadable : built !== null && parseColor(built) === null ? built : want !== null && parseColor(want) === null ? want : null;
+        const unread = sr.backdrop === null && sr.unreadable !== null ? sr.unreadable : built !== null && parseCssColor(built) === null ? built : want !== null && parseCssColor(want) === null ? want : null;
         if (unread !== null) {
           add({ id: "dialog.scrim", status: "not-run", detail: `not-run: the scrim colour ${unread} is in a colour space the probe does not read`, evidence: { built, designed: want } });
         } else {

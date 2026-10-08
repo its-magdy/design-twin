@@ -86,6 +86,12 @@ check("[alpha] rgba() percent and decimal alpha land on the SAME key as the #rrg
   const c = colorLiterals("rgba(255,255,255,0.1) rgb(1,2,3)");
   return c.has("#ffffff1a") && colorLiterals("rgba(255,255,255,10%)").has("#ffffff1a") && c.has("#010203ff");
 })());
+// rgb() literals go through color.ts parseCssColor, the same reader as the probe: percentage channels and decimal channels
+// are colours too (100% = 255, CSS Color 4 §5.1); a call it cannot read (var(), a template placeholder) is not a literal.
+check("[css] colorLiterals reads rgb(100% 0% 0% / 50%), rgb(10.4, 0, 0) and the modern rgb(0 0 0 / 40%); rgb(var(--x)) and rgba(${c}, 0.5) are skipped", (() => {
+  const c = colorLiterals("rgb(100% 0% 0% / 50%) rgb(10.4, 0, 0) rgb(0 0 0 / 40%) rgb(var(--x)) rgba(${c}, 0.5)");
+  return c.get("#ff000080") === "rgb(100% 0% 0% / 50%)" && c.has("#0a0000ff") && c.has("#00000066") && c.size === 3;
+})());
 check("[alpha] a scrim is no longer exempted by an allowedLiterals entry for the opaque colour", (() => {
   const scrim = { value: "#ffffff1a", kind: "color", codeToken: "bg-scrim", verdict: "exact" };
   // (theme.css is outside files[]: it only declares --color-scrim, so the undeclared-token check is satisfied)

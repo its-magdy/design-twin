@@ -241,14 +241,16 @@ const isLegacyRgba = (v: object): v is LegacyRgba => "r" in v;
 
 function normValue(type: VariableType | undefined, raw: string | number | boolean | LegacyRgba | null | undefined): JsonValue | null {
   if (raw === undefined || raw === null) return null;
+  // One spelling per colour (color.ts: "#rrggbb", or "#rrggbbaa" below opaque), so the JSON compare of a
+  // screen's value with the design system's says "agrees" for #abc and #AABBCCFF alike; a string that is
+  // not a hex colour is kept, trimmed and lowercased.
   if (type === "COLOR" && typeof raw === "string") {
-    const h = raw.trim().toLowerCase();
-    return /^#[0-9a-f]{8}$/.test(h) && h.endsWith("ff") ? h.slice(0, 7) : h;
+    const c = parseHex(raw);
+    return c ? formatHex(c) : raw.trim().toLowerCase();
   }
   if (type === "COLOR" && typeof raw === "object" && isLegacyRgba(raw)) {
-    const to = (x: number): string => Math.round(Math.max(0, Math.min(1, x)) * 255).toString(16).padStart(2, "0");
     const a = raw.a === undefined ? 1 : Number(raw.a);
-    return "#" + to(raw.r) + to(raw.g) + to(raw.b) + (a < 1 ? to(a) : "");
+    return formatHex({ r: raw.r * 255, g: raw.g * 255, b: raw.b * 255, a: Number.isNaN(a) ? 1 : a });
   }
   return raw;
 }
