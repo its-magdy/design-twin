@@ -1,7 +1,7 @@
 // The writer for JSON files a person also edits (plans, the component map): atomic, and in the file's own format.
 // Shared by bridge/ and design-to-code/ (the layer may import bridge/src; bridge cannot import the layer).
 import fs from "node:fs";
-import path from "node:path";
+import { writeFileAtomic } from "./atomic-write.ts";
 
 // The file's own indentation: the first indented line's leading whitespace (2 spaces when the file has none).
 const indentOf = (text: string): string => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
@@ -24,14 +24,6 @@ export function writeJsonLike(file: string, value: unknown, raw?: string | null)
   if (raw === undefined) try { was = fs.readFileSync(file, "utf8"); } catch { was = null; }
   const out = formatJsonLike(value, was);
   if (out === was) return false;
-  fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  try {
-    fs.writeFileSync(tmp, out);
-    fs.renameSync(tmp, file);
-  } catch (e) {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
-    throw e;
-  }
+  writeFileAtomic(file, out);
   return true;
 }

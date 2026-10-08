@@ -61,7 +61,8 @@ import { CLOSE_STEP_CAP_MS, CUT_SETTLE_MS, PS_CAP_MS, WRITE_MARGIN_MS, behaviour
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
-import { RunCacheUnwritable, RunEnded, TERMINAL_PHASES, liveStatusFile, readStatus, sha256Of, stageDirOf, writeFileAtomic, writeStatus } from "./verify-run.ts";
+import { RunCacheUnwritable, RunEnded, TERMINAL_PHASES, liveStatusFile, readStatus, sha256Of, stageDirOf, writeStatus } from "./verify-run.ts";
+import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite } from "./verify-run.ts";
 import type { Expectation } from "./verify-screen.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";

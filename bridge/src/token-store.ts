@@ -23,6 +23,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { writeFileAtomic } from "./atomic-write.ts";
 
 /** Where the token in play came from. "ephemeral" = minted for this run only, never stored. */
 export type TokenSource = "token-file" | "env" | "file" | "ephemeral";
@@ -118,19 +119,14 @@ export function loosePerms(file: string): boolean {
 
 // Write atomically, owner-only.
 //
-// tmp + rename because a token half-written by an interrupted run is worse than no token at all: it
-// would fail every handshake with a 401 until someone thought to look at the file.
-//
-// mode is passed to writeFileSync AND re-applied with chmod because the open(2) mode is masked by
-// the process umask — a umask of 0 would otherwise leave it 0666. Belt and braces on a one-line cost.
+// tmp + rename (atomic-write.ts) because a token half-written by an interrupted run is worse than no token
+// at all: it would fail every handshake with a 401 until someone thought to look at the file. The 0600 mode
+// is set on the tmp file before the rename, so the token is never visible with wider permissions.
 export function write(token: string, file: string = tokenPath()): string {
   const dir = path.dirname(file);
   // 0700: the XDG spec asks for exactly this when creating a config dir that does not exist.
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const tmp = file + ".tmp";
-  fs.writeFileSync(tmp, token + "\n", { mode: 0o600 });
-  try { fs.chmodSync(tmp, 0o600); } catch (e) {}
-  fs.renameSync(tmp, file);
+  writeFileAtomic(file, token + "\n", { mode: 0o600 });
   return file;
 }
 

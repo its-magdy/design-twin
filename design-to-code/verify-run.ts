@@ -21,7 +21,8 @@
 //     measured; `done` publishes the final status into design/verify/<S>.status.json — the durable record,
 //     written once, with every page closed. Readers (--wait, --compare, the next write) prefer the live file and
 //     fall back to the published one (or an older v1 file there);
-//   - writeFileAtomic: a tmp file BESIDE the target, then rename (same directory → same filesystem → atomic);
+//   - writeFileAtomic (bridge/src/atomic-write.ts): a tmp file BESIDE the target, then rename (same directory → same
+//     filesystem → atomic);
 //   - publish: the agent stages its artefacts in the run cache (`stage/<runId>/`), and `--status … --publish
 //     <dir>` copies them in only after every page is closed — copy to a tmp name in the target dir, then
 //     rename, so a stage dir on another filesystem (EXDEV) works too;
@@ -39,6 +40,7 @@ import { anyJson, readJson } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
+import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 
 export const STATUS_SCHEMA = "designtwin/verify-status@2";
 /** Every phase a status v2 can be in, in the order a run normally passes through them. */
@@ -200,23 +202,6 @@ export const liveStatusFile = (base: string): string => path.join(runCacheDir(pa
 /** Where a run stages its evidence and state screenshots until `--publish`: `<run cache>/stage/<runId>/`. */
 export const stageDirOf = (base: string, runId: string): string => path.join(runCacheDir(path.dirname(base)), "stage", runId);
 
-/**
- * Write `data` to `file` so that a reader sees the old file or the new one, never half of either: write a tmp
- * file BESIDE the target (same directory, so the same filesystem — rename is atomic only there), then rename it
- * over the target. On any error the tmp file is removed and the old file is left as it was.
- */
-export function writeFileAtomic(file: string, data: string | Uint8Array): void {
-  fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  try {
-    fs.writeFileSync(tmp, data);
-    fs.renameSync(tmp, file);
-  } catch (e) {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
-    throw e;
-  }
-}
-
 /** A run id: time + randomness, sortable, safe in a file name and a shell word. */
 export function newRunId(): string {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto.randomBytes(3).toString("hex");
@@ -296,7 +281,7 @@ export function publishStatus(base: string, doc: VerifyStatusV2): void {
 // --expect keeps a replaced expectation as <S>.expected.prev.json — `*.prev.json` is tool-written too).
 const TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\.json)$/;
 /**
- * --publish in two steps. `prepareStaged` copies every regular file of `stageDir` (top level only) to `<dest>.tmp-<pid>`
+ * --publish in two steps. `prepareStaged` copies every regular file of `stageDir` (top level only) to `<dest>.tmp-<pid>-<random>`
  * IN `destDir` — so the copy may cross filesystems (EXDEV) and the later rename is still atomic; a copy that fails
  * removes the ones made and refuses. `commit` renames them over `<dest>`, `abort` removes them. statusRun writes the
  * status between the two, so a run that ended meanwhile publishes nothing. Refuses (nothing copied) a stage dir that
@@ -312,7 +297,8 @@ export function prepareStaged(stageDir: string, destDir: string): PreparedPublis
   const owned = files.filter((f) => TOOL_OWNED.test(f));
   if (owned.length) return { error: `--publish refuses ${owned.join(", ")} — expected/report/status files are written by verify-screen itself, never copied in` };
   fs.mkdirSync(destDir, { recursive: true });
-  const tmpOf = (name: string): string => `${path.join(destDir, name)}.tmp-${process.pid}`;
+  const suffix = tmpSuffix(); // one per publish: every copy shares it, so tmpOf(name) is stable between prepare and commit
+  const tmpOf = (name: string): string => path.join(destDir, name) + suffix;
   const abort = (): void => { for (const f of files) try { fs.rmSync(tmpOf(f), { force: true }); } catch { /* best effort */ } };
   for (const f of files) {
     try { fs.copyFileSync(path.join(stageDir, f), tmpOf(f)); } catch (e) {
