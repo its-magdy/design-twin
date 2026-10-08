@@ -5,17 +5,18 @@ import type {
   PageSettings, PrototypeFlow, LayersDoc, LayersDocLayer, LayersDocIndexRow,
 } from "../../bridge/src/doc-types.ts";
 import { safe, errMsg, exportedAt, nonEmpty, isList, round } from "./util";
-// Figma URLs carry `123-456`, the API wants `123:456`. bridge/node-id.js is "the ONE place that knows
-// what a node id looks like and how it hides in a Figma URL" — esbuild inlines that dependency-free CJS
-// module into the plugin bundle exactly as it does pages-layout.js, so the plugin uses the SAME parser
+// Figma URLs carry `123-456`, the API wants `123:456`. bridge/src/node-id.ts is "the ONE place that knows
+// what a node id looks like and how it hides in a Figma URL" — esbuild inlines that dependency-free
+// module into the plugin bundle exactly as it does pages-layout.ts, so the plugin uses the SAME parser
 // as the bridge front-ends instead of a weaker replace(/-/g,":") that accepted less (no URLs, no
-// percent-encoding, no nested-instance paths). toNodeId is its LENIENT entry point: a shape node-id.js
+// percent-encoding, no nested-instance paths). toNodeId is its LENIENT entry point: a shape node-id.ts
 // doesn't recognise passes through and keeps working as before rather than becoming a new hard failure
 // — the caller's own "node not found" error is the better message either way.
 import { toNodeId } from "../../bridge/src/node-id.ts";
 import { ifDefined } from "../../bridge/src/json-util.ts";
-import { NO_NODE_ID, type ListPagesArgs } from "../../bridge/src/commands.ts";
-import { deriveTitle, firstText, type TextWalkNode } from "../../bridge/src/pages-layout.ts";
+// NodeSummary is the bridge's own row type (commands.ts), not a copy: a field added there reaches summarize() here.
+import { NO_NODE_ID, type ListPagesArgs, type NodeSummary } from "../../bridge/src/commands.ts";
+import { deriveTitle, firstText, collectTexts, PLACEHOLDER_TEXT, type TextWalkNode } from "../../bridge/src/pages-layout.ts";
 import { type Asset, assets, stats, resetRun, manifest, runOpts, warn, loadAllPages } from "./state";
 import { checkCancelled, enterPage, progress } from "./progress";
 import type { ReadOptName } from "../../bridge/src/read-opts.ts";
@@ -48,14 +49,7 @@ export interface DesignSystemResult { designSystem: BuiltDesignSystem }
 /** collectScreenshot: one node's reference PNG (its path; the bytes ride in `assets`), plus the node's
  *  size and the scale the PNG was rendered at (DT-06; `w`/`h` absent only for a node with no size). */
 export interface ScreenshotResult { id: string; name: string; type: string; w?: number; h?: number; scale: number; reference: string; manifest: Manifest; assets: Asset[] }
-/** summarize(): the ONLY shape the cheap index reads emit — structure, never an export. */
-export interface NodeSummary {
-  name: string; id: string; type: string; w?: number; h?: number; hidden?: true; hasChildren?: boolean;
-  /** number of direct children, when they are readable */
-  childCount?: number;
-  /** first-visible-text title — only on rows that share name + size with another row (listChildren) */
-  title?: string;
-}
+// summarize() emits commands.ts NodeSummary — the ONLY shape the cheap index reads emit: structure, never an export.
 export interface PageListing { name: string; id: string; current?: true; unreadable?: true; frames?: NodeSummary[] }
 export interface ListPagesResult {
   exportedAt: string; file: string; depth: 1 | 2; pages: PageListing[];
@@ -66,7 +60,7 @@ export interface ListChildrenResult {
   manifest: { children: number; warnings: string[] };
 }
 
-// The read options are NOT restated here: they come from bridge/read-opts.js's ReadOptName, the same
+// The read options are NOT restated here: they come from bridge/src/read-opts.ts's ReadOptName, the same
 // registry the CLI flag table and the MCP tool schema derive from. Only the options this entrypoint
 // owns (scope selection) are spelled out below.
 export interface CollectOpts extends Partial<Record<ReadOptName, boolean>> {
@@ -138,7 +132,7 @@ async function screenResult(title: string, fileBase: string, nodes: IrNode[], or
   if (origin && origin.nodeId) screen.nodeId = origin.nodeId;
   const measurements = collectMeasurements();
   if (measurements) screen.measurements = measurements;
-  // Repeated at the TOP level as well as inside `screen`: write-out.js routes the file into
+  // Repeated at the TOP level as well as inside `screen`: write-out.ts routes the file into
   // pages/<page>/ before it has a reason to open the screen doc, and the MCP path hands the same
   // envelope to a caller that may never write to disk at all.
   const out: ScreenResult = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
@@ -197,45 +191,123 @@ function collisionNote(g: ReadonlyArray<NodeSummary>, what: string, tellBy: stri
 // fallback runs out too does the row carry none (and listChildren says so).
 const TITLE_VISIT_CAP = 5000;
 class TitleCapReached extends Error {}
-function titleOf(node: SceneNode | PageNode): string | undefined {
-  let visits = 0;
-  const visit = (): void => { if (++visits > TITLE_VISIT_CAP) throw new TitleCapReached(); };
-  const wrap = (n: SceneNode | PageNode): TextWalkNode => {
-    let src: ReadonlyArray<SceneNode> | undefined;
-    const kids: TextWalkNode[] = [];
-    const children: Iterable<TextWalkNode> = {
-      [Symbol.iterator]: (): Iterator<TextWalkNode> => {
-        let i = 0;
-        return {
-          next: (): IteratorResult<TextWalkNode> => {
-            if (!src) src = "children" in n ? n.children : [];
-            const c = src[i];
-            if (!c) return { done: true, value: undefined };
-            visit();
-            const w = kids[i] || (kids[i] = wrap(c));
-            i++;
-            return { done: false, value: w };
-          },
-        };
-      },
-    };
-    return {
-      name: n.name,
-      type: n.type,
-      hidden: "visible" in n && n.visible === false,
-      get text() { return n.type === "TEXT" ? n.characters : ""; }, // read only when a walker hits a TEXT
-      children,
-    };
+// A walk's visit budget. HARD (titleOf): past `cap` the walk throws TitleCapReached. SOFT (K-6's
+// distinctTexts): past `cap` every child iterator just ends, so the walker returns what it found so far
+// and `capped` says the result is partial. `listing` (distinctTexts only): the ONE budget a whole
+// listing shares, charged only for a node no walk of this row has read yet (a fresh Plugin API read —
+// titleOf's nodes are memoised and cost it nothing); once spent every later step ends too.
+interface ListingBudget { reads: number; readonly cap: number; spent?: boolean }
+interface VisitBudget { visits: number; readonly cap: number; readonly soft?: boolean; capped?: boolean; readonly listing?: ListingBudget }
+function spend(b: VisitBudget, fresh: boolean): boolean {
+  if (b.listing && b.listing.spent) return false;
+  if (++b.visits > b.cap) {
+    if (!b.soft) throw new TitleCapReached();
+    b.capped = true;
+    return false;
+  }
+  if (fresh && b.listing && ++b.listing.reads > b.listing.cap) {
+    b.listing.spent = true;
+    return false;
+  }
+  return true;
+}
+// The budget a row's walks charge: titleOf sets a hard one, distinctTexts then swaps in a soft one over
+// the SAME adapter tree (so the nodes titleOf already wrapped are not read again).
+interface WalkRef { budget: VisitBudget }
+interface RowWalk { root: TextWalkNode; ref: WalkRef }
+// The lazy live-node adapter every walker over a live node shares (titleOf, distinctTexts).
+function liveWalkNode(n: SceneNode | PageNode, ref: WalkRef): TextWalkNode {
+  let src: ReadonlyArray<SceneNode> | undefined;
+  const kids: TextWalkNode[] = [];
+  const children: Iterable<TextWalkNode> = {
+    [Symbol.iterator]: (): Iterator<TextWalkNode> => {
+      let i = 0;
+      return {
+        next: (): IteratorResult<TextWalkNode> => {
+          if (!src) src = "children" in n ? n.children : [];
+          const c = src[i];
+          if (!c || !spend(ref.budget, !kids[i])) return { done: true, value: undefined };
+          const w = kids[i] || (kids[i] = liveWalkNode(c, ref));
+          i++;
+          return { done: false, value: w };
+        },
+      };
+    },
   };
-  visit();
-  const root = wrap(node);
+  return {
+    name: n.name,
+    type: n.type,
+    hidden: "visible" in n && n.visible === false,
+    get text() { return n.type === "TEXT" ? n.characters : ""; }, // read only when a walker hits a TEXT
+    children,
+  };
+}
+function rowWalk(node: SceneNode | PageNode): RowWalk {
+  const ref: WalkRef = { budget: { visits: 0, cap: TITLE_VISIT_CAP } };
+  return { root: liveWalkNode(node, ref), ref };
+}
+function titleOf(w: RowWalk): string | undefined {
+  w.ref.budget = { visits: 1, cap: TITLE_VISIT_CAP }; // the root counts
   try {
-    return deriveTitle(root);
+    return deriveTitle(w.root);
   } catch (e) {
     if (!(e instanceof TitleCapReached)) throw e;
   }
-  visits = 1; // the root, again
-  return firstText(root) || undefined; // throws TitleCapReached again only past the fallback's own budget
+  w.ref.budget.visits = 1; // the root, again
+  return firstText(w.root) || undefined; // throws TitleCapReached again only past the fallback's own budget
+}
+
+// K-6: rows of one collision group whose titles do not tell them apart (a missing title counts as a
+// match) each get `distinctTexts` — ≤ 3 visible texts that row shows and its twins do not: first the
+// texts NO other row of the group has (U), then those not shared by EVERY row (N∖U), reading order
+// within each, whitespace (line breaks too) collapsed to one space, each cut to 60 chars; omitted when
+// empty. Same pages-layout walk as the index's `texts` (collectTexts, placeholders dropped) over the
+// SAME lazy adapter titleOf walked, under a SOFT cap per row — a frame past it gets a partial list (and
+// a warning), never an error — and ONE budget for the whole listing (DISTINCT_TEXT_LISTING_READS fresh
+// node reads): a row the budget runs out on, and every row after it, gets none (listChildren warns
+// once). A row it never read is left out of its twins' comparison. The unique texts sit deep — behind
+// the chrome every twin repeats — so a first-N preview would not do.
+const DISTINCT_TEXTS = 3;
+const DISTINCT_TEXT_CHARS = 60;
+const DISTINCT_TEXT_SCAN = 200;
+const DISTINCT_TEXT_LISTING_READS = 20000;
+const oneLine = (t: string): string => t.replace(/\s+/g, " ").trim();
+function titlesTellApart(g: ReadonlyArray<NodeSummary>): boolean {
+  const titles = g.map((r) => r.title);
+  return titles.every((t) => !!t) && new Set(titles).size === g.length;
+}
+// Returns the ids of the rows the listing budget left without `distinctTexts`. D149: when ANY row of the group was cut
+// off or never read, NO row of the group gets them — "a text only this row shows" cannot be claimed against twins
+// that were not read in full.
+function addDistinctTexts(g: ReadonlyArray<NodeSummary>, walks: ReadonlyMap<string, RowWalk>, listing: ListingBudget, sink: (m: string) => void): string[] {
+  let skipped = 0;
+  // undefined = never read (the listing budget had run out); `cut` = read in part, then the budget ran out.
+  const textsOf = g.map((row): { texts: Set<string>; cut: boolean } | undefined => {
+    const w = walks.get(row.id);
+    if (!w) return { texts: new Set(), cut: false };
+    if (listing.spent) { skipped++; return undefined; }
+    const budget: VisitBudget = { visits: 1, cap: TITLE_VISIT_CAP, soft: true, listing };
+    w.ref.budget = budget;
+    const texts = collectTexts(w.root, DISTINCT_TEXT_SCAN).map(oneLine).filter((t) => t && !PLACEHOLDER_TEXT.has(t.toLowerCase()));
+    if (listing.spent) { skipped++; return { texts: new Set(texts), cut: true }; }
+    if (budget.capped) sink("`distinctTexts` for '" + row.name + "' (" + row.id + ") read only its first " + TITLE_VISIT_CAP + " nodes");
+    return { texts: new Set(texts), cut: false };
+  });
+  if (skipped) return g.filter((row) => walks.has(row.id)).map((row) => row.id);
+  g.forEach((row, i) => {
+    const mine = textsOf[i];
+    if (!mine || mine.cut) return;
+    const others = textsOf.filter((o, j): o is { texts: Set<string>; cut: boolean } => j !== i && !!o).map((o) => o.texts);
+    const unique: string[] = [];
+    const notCommon: string[] = [];
+    for (const t of mine.texts) {
+      if (others.every((o) => !o.has(t))) unique.push(t);
+      else if (others.some((o) => !o.has(t))) notCommon.push(t);
+    }
+    const picked = unique.concat(notCommon).slice(0, DISTINCT_TEXTS).map((t) => Array.from(t).slice(0, DISTINCT_TEXT_CHARS).join("")); // by code point: never half an emoji
+    if (picked.length) row.distinctTexts = picked;
+  });
+  return [];
 }
 
 // Load ONE page, degrading to a warning. Deliberately not loadAllPagesAsync: the docs are explicit
@@ -609,20 +681,28 @@ export async function listChildren(rawId: string): Promise<ListChildrenResult> {
   }
   // `title` ONLY where it is needed: rows sharing name + size. Bounds the cost (a walk per row) to
   // the ambiguous case instead of every listing.
+  const listing: ListingBudget = { reads: 0, cap: DISTINCT_TEXT_LISTING_READS };
+  const noDistinct: string[] = [];
   for (const g of collisionGroups(children)) {
+    const walks = new Map<string, RowWalk>();
     for (const row of g) {
       const nd = kids.find((k) => k.id === row.id);
       if (!nd) continue;
+      const w = rowWalk(nd);
+      walks.set(row.id, w);
       try {
-        const t = titleOf(nd);
+        const t = titleOf(w);
         if (t) row.title = t;
       } catch (e) {
         if (!(e instanceof TitleCapReached)) throw e;
         sink("no title for '" + row.name + "' (" + row.id + "): more than " + TITLE_VISIT_CAP + " nodes to search");
       }
     }
-    sink(collisionNote(g, "children", "`title`/`childCount`"));
+    // Only where the titles do not already tell the rows apart — the cost stays bounded to ambiguous groups.
+    if (!titlesTellApart(g)) noDistinct.push(...addDistinctTexts(g, walks, listing, sink));
+    sink(collisionNote(g, "children", "`title`/`childCount`/`distinctTexts`"));
   }
+  if (noDistinct.length) sink("`distinctTexts` skipped for " + noDistinct.length + " row(s) (" + noDistinct.slice(0, 6).join(", ") + (noDistinct.length > 6 ? ", …" : "") + "): the listing's budget of " + DISTINCT_TEXT_LISTING_READS + " node reads ran out, and a group with a row not read in full gets none");
   return {
     exportedAt: exportedAt(),
     id: node.id,
@@ -642,7 +722,7 @@ export async function listChildren(rawId: string): Promise<ListChildrenResult> {
 // targets, styles/components it serializes), never the library's catalog. Local variables/styles/
 // components are unaffected; when the dump holds any remote variable that limitation is called out
 // via `designSystem.hygiene` — NOT `manifest().warnings` — because hygiene is the one field that
-// survives to disk: buildDesignSystemLayout (bridge/design-system-layout.js) splits designSystem into
+// survives to disk: buildDesignSystemLayout (bridge/src/design-system-layout.ts) splits designSystem into
 // tokens/styles/components.local/components.library/hygiene.json and a slim root manifest, copying
 // only those five keys + the exportedAt/file/colorProfile stamp. A `manifest` field attached here would
 // be silently dropped by that split, and dropped again by figma_export_design_system's

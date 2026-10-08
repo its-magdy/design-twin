@@ -84,9 +84,11 @@ export { getComponent, findComponent, resolveVariantsFile };
 
 // CLI: node design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>
 function main(argv: string[]): number {
+  const usage = `usage: ${scriptCmd("get-component")} <design-system/components.local.json> <key|id|name>`;
+  if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
   const [catalogFile, handle] = argv;
   if (!catalogFile || !handle) {
-    console.error(`usage: ${scriptCmd("get-component")} <design-system/components.local.json> <key|id|name>`);
+    console.error(usage);
     return 2;
   }
   try {

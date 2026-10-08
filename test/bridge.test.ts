@@ -2764,8 +2764,17 @@ void (async () => {
 
   // ---------------------------------------------------------------- verbs
   console.log("\nverbs — `dtwin <verb>` is a pure argv → argv translation:");
-  const { translate, VerbError, VERBS } = await import("../bridge/src/verbs.ts");
+  const { translate, VerbError, VERBS, HELP } = await import("../bridge/src/verbs.ts");
   const tr = (...a: string[]) => translate(a).join(" ");
+  // s19 L9: zero scopes is a real pull (the current page) — the help page said "Exactly one scope" and left out --all-pages.
+  ok("[verbs] `dtwin pull --help`: at most one scope, none = the current page, --all-pages listed, default design/export",
+    !/Exactly one scope/.test(HELP.pull ?? "") && /with none it pulls the CURRENT page/.test(HELP.pull ?? "") && /--all-pages/.test(HELP.pull ?? "") && /default design\/export/.test(HELP.pull ?? ""));
+  // s19 L9: the design-to-code scripts an agent probes answer --help with their usage and exit 0 (map-bootstrap said
+  // "unknown option --help" and exited 1).
+  for (const script of ["map-bootstrap", "resolve-screen", "get-component"]) {
+    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", script + ".ts"), "--help"], { encoding: "utf8", timeout: 5000 });
+    ok(`[help] ${script} --help prints its usage to stdout and exits 0`, r.status === 0 && /^usage: /.test(r.stdout) && r.stdout.includes(script));
+  }
   ok("[verbs] flags pass through untouched", tr("--list", "--json") === "--list --json" && tr() === "");
   ok("[verbs] `dtwin design` is still a positional outDir, not a verb", tr("design", "--page", "Screens") === "design --page Screens");
   ok("[verbs] pull strips itself and keeps everything after", tr("pull", "design", "--page", "Screens") === "design --page Screens" && tr("pull") === "");
@@ -4180,6 +4189,151 @@ void (async () => {
     ok("[F-08] re-shooting the same thumbnail over a stale one adds one file, not one per shot",
       fs.readdirSync(path.join(shotsDir, "assets")).length === 2);
     for (const d of [ddir, sh, sh2, pw, twin, again, shotsDir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---------------------------------------------------------------- G20 (D132, D133): write-out
+  // RP-*: assertInsideCwd accepts a path that is inside the server's cwd once symlinks are resolved (macOS
+  // /tmp → /private/tmp: getcwd() is resolved, a path built from PWD or os.tmpdir() is not), and still
+  // refuses one whose REAL location is outside. Each test makes its own symlink, so it fails before the fix
+  // on every platform, not just macOS.
+  // PREV-*: the MCP server's implicit spill (keepPrev) keeps a one-level `<file>.prev` for every JSON it
+  // replaces with different content (stamps ignored); the CLI path (keepPrev omitted) keeps nothing.
+  {
+    const W = await import("../bridge/src/write-out.ts");
+    const real = (p: string) => fs.realpathSync.native(p);
+    const proj = real(fs.mkdtempSync(path.join(os.tmpdir(), "g20-proj-")));
+    const elsewhere = real(fs.mkdtempSync(path.join(os.tmpdir(), "g20-out-")));
+    const links = fs.mkdtempSync(path.join(os.tmpdir(), "g20-links-"));
+    const alias = path.join(links, "alias"); // -> the project (cwd)
+    const alias2 = path.join(links, "alias2"); // -> a directory OUTSIDE the project
+    fs.symlinkSync(proj, alias, "dir");
+    fs.symlinkSync(elsewhere, alias2, "dir");
+    const was = process.cwd();
+    const throwsMsg = (f: () => unknown): string | null => { try { f(); return null; } catch (e) { return e instanceof Error ? e.message : String(e); } };
+    try {
+      process.chdir(proj);
+      let got: string | null = null;
+      const err = throwsMsg(() => { got = W.assertInsideCwd(path.join(alias, "design")); });
+      ok("[G20 RP-1] an outDir reaching the cwd through a symlink is accepted (inside after realpath)", err === null);
+      ok("[G20 RP-1] and the returned path is the lexical one (no `..` steering after the link)", got === path.join(alias, "design"));
+      ok("[G20 RP-2] a nested not-yet-existing path under the alias is accepted (realpath of the existing prefix)",
+        throwsMsg(() => W.assertInsideCwd(path.join(alias, "a", "b", "c"))) === null && !fs.existsSync(path.join(proj, "a")));
+      ok("[G20 RP-2] `../x` is still refused", throwsMsg(() => W.assertInsideCwd("../x")) !== null);
+      ok("[G20 RP-2] `/` is still refused", throwsMsg(() => W.assertInsideCwd("/")) !== null);
+      const esc = throwsMsg(() => W.assertInsideCwd(path.join(alias2, "x")));
+      ok("[G20 RP-2] a symlink to a directory OUTSIDE the cwd is refused", esc !== null);
+      ok("[G20 RP-2] and the refusal names the real path it resolved to",
+        esc !== null && esc.includes("real path " + path.join(elsewhere, "x")));
+      ok("[G20 RP-2] a symlink escape with a non-existent tail is refused too",
+        throwsMsg(() => W.assertInsideCwd(path.join(alias2, "p", "q"))) !== null);
+      ok("[G20 RP-2] `<alias>/../alias2/x` is refused (resolved lexically first)",
+        throwsMsg(() => W.assertInsideCwd(path.join(alias, "..", "alias2", "x"))) !== null);
+      ok("[G20 RP-2] the argument name still leads the message",
+        (throwsMsg(() => W.assertInsideCwd("../x", "exportDir")) ?? "").startsWith("exportDir must stay inside"));
+    } finally {
+      process.chdir(was);
+    }
+    // RP-3: a server started in the filesystem root (some MCP hosts launch stdio servers in `/`) accepts no
+    // path below it — every path is lexically "inside" `/`, so the ordinary rule would accept them all.
+    try {
+      const fsRoot = path.parse(process.cwd()).root;
+      process.chdir(fsRoot);
+      const absElsewhere = throwsMsg(() => W.assertInsideCwd(path.join(elsewhere, "x")));
+      ok("[G20 RP-3] cwd = the filesystem root → an absolute outDir anywhere is refused", absElsewhere !== null);
+      ok("[G20 RP-3] …and so is a relative map path (etc/hosts)", throwsMsg(() => W.assertInsideCwd(path.join("etc", "hosts"), "map")) !== null);
+      ok("[G20 RP-3] …through a symlink too (realpath does not reopen it)", throwsMsg(() => W.assertInsideCwd(path.join(alias, "design"))) !== null);
+      ok("[G20 RP-3] …the root itself is still accepted, as it always was", throwsMsg(() => W.assertInsideCwd(fsRoot)) === null);
+      ok("[G20 RP-3] …and the refusal says to start the server in the project",
+        absElsewhere !== null && absElsewhere.includes("started in the filesystem root"));
+    } finally {
+      process.chdir(was);
+    }
+
+    // A full reply built fresh per call (writeExport stamps sourceFile onto layersDoc in place).
+    const fullReply = (stamp: string, label = "Go") => ({
+      designSystem: {
+        file: "Sample File", exportedAt: stamp, colorProfile: "srgb" as const,
+        collections: [collection({ name: "Core", modes: ["Light"] })],
+        variables: [variable({ name: "color/bg", type: "COLOR", values: { Light: "#ffffff" } })],
+        styles: { paint: [{ name: "Brand" }], text: [], effect: [], grid: [] },
+        components: [{ key: "k1", name: "Widget", type: "COMPONENT" as const, id: "2:1", page: "Page A", pageId: "1:0" }],
+        hygiene: [],
+      },
+      layersDoc: {
+        exportedAt: stamp,
+        index: [{ id: "1:2", name: "Panel", type: "FRAME", pageId: "1:0", page: "Page A" }, { id: "1:5", name: "Sheet", type: "FRAME", pageId: "1:0", page: "Page A" }],
+        layers: [
+          { id: "1:2", name: "Panel", page: "Page A", pageId: "1:0", tree: node({ type: "FRAME", id: "1:2", name: "Panel", children: [node({ type: "TEXT", id: "1:3", name: label })] }) },
+          { id: "1:5", name: "Sheet", page: "Page A", pageId: "1:0", tree: node({ type: "FRAME", id: "1:5", name: "Sheet" }) },
+        ],
+      },
+      assets: [],
+    });
+    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]);
+    const readOr = (f: string): string | null => { try { return fs.readFileSync(f, "utf8"); } catch { return null; } };
+    const prevs = (d: string) => walk(d).filter((f) => f.endsWith(".prev")).sort();
+    const pdir = fs.mkdtempSync(path.join(os.tmpdir(), "g20-prev-"));
+    const out = path.join(pdir, "design");
+    type Wrote = { prevKept?: string[] };
+    // prevKept is checked at runtime, not taken on the declared type's word (a non-array fails the test).
+    const { isStringArray } = await import("../bridge/src/json-util.ts");
+    const wroteOf = (r: { wrote: object }): Wrote => {
+      const raw: unknown = "prevKept" in r.wrote ? r.wrote.prevKept : undefined;
+      if (raw === undefined) return {};
+      if (!isStringArray(raw)) { ok(`[G20 PREV] wrote.prevKept is a string[] when present (got ${JSON.stringify(raw)})`, false); return {}; }
+      return { prevKept: raw };
+    };
+    const first = wroteOf(W.writeExport(out, fullReply("2026-10-01T00:00:00.000Z"), undefined, { keepPrev: true }));
+    ok("[G20 PREV-1] a first spill into an empty dir keeps nothing (no field, no .prev)", first.prevKept === undefined && prevs(out).length === 0);
+    const layerFile = walk(path.join(out, "pages")).find((f) => f.endsWith(".json") && !f.endsWith("index.json") && fs.readFileSync(f, "utf8").includes("\"Panel\""));
+    const dsFile = walk(path.join(out, "design-system")).find((f) => f.endsWith(".json") && fs.readFileSync(f, "utf8").includes("color/bg"));
+    ok("[G20 PREV-1] fixture: the layer file and a design-system file exist", !!layerFile && !!dsFile);
+    const editedLayer = '{"hand":"edited layer"}';
+    const editedDs = '{"hand":"edited tokens"}';
+    if (layerFile) fs.writeFileSync(layerFile, editedLayer);
+    if (dsFile) fs.writeFileSync(dsFile, editedDs);
+    const second = wroteOf(W.writeExport(out, fullReply("2026-10-02T00:00:00.000Z"), undefined, { keepPrev: true }));
+    const want = [layerFile + ".prev", dsFile + ".prev"].sort();
+    ok("[G20 PREV-1] exactly the two changed files get a .prev, and wrote.prevKept lists them",
+      JSON.stringify(prevs(out)) === JSON.stringify(want) && JSON.stringify([...(second.prevKept ?? [])].sort()) === JSON.stringify(want));
+    ok("[G20 PREV-1] each .prev holds the text the spill replaced",
+      readOr(layerFile + ".prev") === editedLayer && readOr(dsFile + ".prev") === editedDs);
+    ok("[G20 PREV-1] prevKept paths are absolute", (second.prevKept ?? []).every((p) => path.isAbsolute(p)));
+    const third = wroteOf(W.writeExport(out, fullReply("2026-10-03T00:00:00.000Z"), undefined, { keepPrev: true }));
+    ok("[G20 PREV-2] the same design re-spilled with a fresh exportedAt keeps nothing new",
+      third.prevKept === undefined && JSON.stringify(prevs(out)) === JSON.stringify(want));
+    ok("[G20 PREV-2] and the earlier .prev files are untouched",
+      readOr(layerFile + ".prev") === editedLayer && readOr(dsFile + ".prev") === editedDs);
+    const anyDispatch = wroteOf(W.writeAny(out, fullReply("2026-10-04T00:00:00.000Z", "Stop"), undefined, { keepPrev: true }));
+    ok("[G20 PREV-2] writeAny forwards keepPrev to a full export (a real design change → its layer file kept)",
+      (anyDispatch.prevKept ?? []).includes(layerFile + ".prev") && (readOr(layerFile + ".prev") ?? "").includes("\"Go\""));
+    for (const f of prevs(out)) fs.rmSync(f);
+    if (layerFile) fs.writeFileSync(layerFile, editedLayer);
+    const cli = wroteOf(W.writeExport(out, fullReply("2026-10-05T00:00:00.000Z"), undefined));
+    const cliAny = wroteOf(W.writeAny(out, fullReply("2026-10-06T00:00:00.000Z", "Stop"), undefined, {}));
+    ok("[G20 PREV-2] keepPrev omitted (the CLI path) keeps no .prev and reports no prevKept",
+      prevs(out).length === 0 && cli.prevKept === undefined && cliAny.prevKept === undefined);
+
+    // Libraries: the root index carries a fresh generatedAt and per-row exportedAt on every write.
+    const libReply = (stamp: string, hex: string) => ({ designSystem: {
+      file: "Sample Library", exportedAt: stamp, colorProfile: "srgb" as const,
+      source: { role: "library" as const, libraryName: "Sample", fileKey: "QWERTYUI12345" },
+      collections: [collection({ name: "Core", modes: ["Light"] })],
+      variables: [variable({ name: "color/fg", type: "COLOR", values: { Light: hex } })],
+      styles: { paint: [], text: [], effect: [], grid: [] }, components: [], hygiene: [],
+    } });
+    const lout = path.join(pdir, "lib");
+    W.writeExport(lout, libReply("2026-10-01T00:00:00.000Z", "#000000"), undefined, { keepPrev: true });
+    await new Promise((r) => setTimeout(r, 5)); // a different generatedAt
+    const lib2 = wroteOf(W.writeExport(lout, libReply("2026-10-02T00:00:00.000Z", "#000000"), undefined, { keepPrev: true }));
+    ok("[G20 PREV-2] an unchanged library re-spilled (fresh generatedAt + row exportedAt) keeps no .prev",
+      lib2.prevKept === undefined && prevs(lout).length === 0);
+    const lib3 = wroteOf(W.writeExport(lout, libReply("2026-10-03T00:00:00.000Z", "#111111"), undefined, { keepPrev: true }));
+    ok("[G20 PREV-1] a changed library variable keeps the replaced library file(s), not the unchanged root index",
+      (lib3.prevKept ?? []).length > 0 && prevs(lout).length === (lib3.prevKept ?? []).length &&
+      !prevs(lout).some((f) => f === path.join(lout, "libraries", "index.json.prev")));
+    for (const d of [proj, elsewhere, links, pdir]) fs.rmSync(d, { recursive: true, force: true });
   }
 
   // ---------------------------------------------------------------- report

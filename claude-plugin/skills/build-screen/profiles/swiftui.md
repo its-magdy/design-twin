@@ -105,6 +105,8 @@ Charts (`LineMark`/`BarMark`), not transliterated shapes.
 
 **Native controls, not rebuilt ones** — Segmented→`Picker(...).pickerStyle(.segmented)`, Toggle/Switch→`Toggle`,
 Slider→`Slider`, Stepper→`Stepper`, Menu/Picker→`Picker`, Spinner/Progress→`ProgressView`, `TextField`→`TextField`.
+A `Picker`/`DatePicker` draws its own text: set the picker's text colour explicitly to the drawn token (`.tint(…)`
+for a menu-style value, `.foregroundStyle(…)` on its label) and check it in the simulator.
 
 **Don't double-inset.** `List`/`Form`/`NavigationStack`/toolbars + the safe area already pad to platform
 standard — if a Figma edge inset is ~16pt or the standard row inset, omit the modifier. Prefer `.padding()`.

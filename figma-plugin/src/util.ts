@@ -2,7 +2,7 @@
 import type { JsonObject, JsonValue, XY, CubicBezier, ComponentPropType } from "../../bridge/src/doc-types.ts";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 
-// The filesystem-boundary sanitiser lives in pages-layout.js, which names the page dirs and layer
+// The filesystem-boundary sanitiser lives in pages-layout.ts, which names the page dirs and layer
 // files this plugin's own download path writes — esbuild inlines that module into the bundle (main.ts
 // already imports it), so re-export rather than keeping a byte-identical second copy that could
 // desynchronise asset paths from page/layer paths.
@@ -38,9 +38,9 @@ export const propType = (t: ComponentPropertyType): ComponentPropType => t;
 // CJS module that esbuild inlines into this bundle, so the Node side and the plugin cannot drift.
 export { errMsg } from "../../bridge/src/errmsg.ts";
 
-// "Same SVG, modulo Figma's own export noise" — the ONE definition shared with bridge/write-out.js
-// (clobber-avoidance) and design-to-code/design-diff.js (the change diff), so all three agree on what
-// counts as a redraw. See bridge/svg-normalize.js for why 1 decimal place, not 2.
+// "Same SVG, modulo Figma's own export noise" — the ONE definition shared with bridge/src/write-out.ts
+// (clobber-avoidance) and design-to-code/design-diff.ts (the change diff), so all three agree on what
+// counts as a redraw. See bridge/src/svg-normalize.ts for why 1 decimal place, not 2.
 export { normalizeSvgText } from "../../bridge/src/svg-normalize.ts";
 
 // The extractor's compaction rule: emit nothing rather than an empty object. One place to change it.

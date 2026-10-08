@@ -12,7 +12,7 @@
 import { errMsg } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 // The pages/ layout is defined ONCE, in a dependency-free CJS module the Node CLI requires and
-// esbuild inlines here — see bridge/pages-layout.js.
+// esbuild inlines here — see bridge/src/pages-layout.ts.
 import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
 import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";
 import { cancelBridgeRequest, cancelBridgeRuns, releaseAssets, serializeRun, type Asset } from "./state";
@@ -80,10 +80,10 @@ const runSelection = (): Promise<void> =>
     warnings: r.screen.manifest && r.screen.manifest.warnings,
   }));
 
-// The browser-download twin of bridge/figma-pull.js's writePages: same pages/ layout, built by the
-// same module (pages-layout.js) so the two shapes cannot drift. The ONE difference is the separator —
+// The browser-download twin of bridge/src/write-out.ts's writePages: same pages/ layout, built by the
+// same module (pages-layout.ts) so the two shapes cannot drift. The ONE difference is the separator —
 // a browser download cannot create directories, so the hierarchy is encoded in the filename instead
-// (rationale in pages-layout.js's header, where the layout lives).
+// (rationale in pages-layout.ts's header, where the layout lives).
 const SEP = "__";
 const runFull = (): Promise<void> =>
   runExport<FullResult>("design system + page frames", () => collectFull(), (r) => {

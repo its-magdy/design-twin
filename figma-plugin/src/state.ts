@@ -32,9 +32,9 @@ export interface RunStats {
 
 export const assets: Asset[] = []; // { id, name, format, file, base64/text }
 
-// Per-run read options, mutated by the collect entrypoints and read in serialize. The NAMES and their rationale live in bridge/read-opts.js — the ONE registry
-// shared with the CLI flag table and the MCP tool schema (esbuild inlines that dependency-free CJS
-// module into this bundle, the same way it inlines pages-layout.js). Adding an option there is what
+// Per-run read options, mutated by the collect entrypoints and read in serialize. The NAMES and their rationale live in bridge/src/read-opts.ts — the ONE registry
+// shared with the CLI flag table and the MCP tool schema (esbuild inlines that dependency-free
+// module into this bundle, the same way it inlines pages-layout.ts). Adding an option there is what
 // turns it on here; this file only owns the fact that the values are per-run mutable state.
 export const runOpts: Record<ReadOptName, boolean> = readOptDefaults();
 

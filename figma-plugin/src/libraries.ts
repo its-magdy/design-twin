@@ -370,4 +370,4 @@ export async function listLibraries(): Promise<LibrariesListing> {
 // No test-surface global here: main.ts imports listLibraries/collectLibraryComponents and exposes
 // them on the single `__designExport` namespace alongside every other entry point. A second global
 // registered from this module would be a parallel surface for the harness to keep in sync — and the
-// repo has already paid for parallel lists of the same thing once (see bridge/read-opts.js).
+// repo has already paid for parallel lists of the same thing once (see bridge/src/read-opts.ts).

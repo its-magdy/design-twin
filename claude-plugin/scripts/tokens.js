@@ -248,7 +248,7 @@ function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -257,7 +257,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "waivers", "descopes"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -1756,6 +1756,33 @@ function lookupColor(ds, query) {
   }
   return hits;
 }
+function mixedRootModes(ds) {
+  const collections = ds.collections || [];
+  const colour = /* @__PURE__ */ new Set();
+  for (const v of ds.variables || []) {
+    if (v.type !== "COLOR") continue;
+    const c = collectionOf(v, collections);
+    if (c && (c.modes || []).length > 1) colour.add(c);
+  }
+  const list = [...colour];
+  const assumed = (c) => c.default === void 0 || !c.modes.includes(c.default);
+  const defOf = (c) => assumed(c) ? c.modes[0] ?? "?" : c.default ?? "?";
+  const mixed = /* @__PURE__ */ new Set();
+  for (const a of list) {
+    for (const b of list) {
+      if (a !== b && defOf(a) !== defOf(b) && a.modes.some((m) => b.modes.includes(m))) {
+        mixed.add(a);
+        mixed.add(b);
+      }
+    }
+  }
+  if (!mixed.size) return null;
+  const byDefault = /* @__PURE__ */ new Map();
+  for (const c of list) if (mixed.has(c)) getOrInit(byDefault, defOf(c), () => []).push(c);
+  const groups = [...byDefault].sort((x, y) => y[1].length - x[1].length || cmpStr(x[0], y[0]));
+  const named = (cs) => cs.map((c) => `'${c.name}'${assumed(c) ? " (the export names no default mode \u2014 its first mode assumed)" : ""}`).join(", ");
+  return `:root mixes modes: ` + groups.map(([mode, cs], i) => `${named(cs)} ${i ? "" : cs.length > 1 ? "default " : "defaults "}to '${mode}'`).join("; ") + ` \u2014 :root takes each collection's DEFAULT mode, so a screen drawn in one of these modes shows the other mode's values for the other collections' tokens. Set each collection's mode on the screen's root element (its export's resolvedModes says which), or have the designer give these collections one default`;
+}
 function checkGenerated(ds, input, generated, cmd) {
   let head;
   try {
@@ -1887,6 +1914,8 @@ ${USAGE}`);
   if (!slice && vars.length && vars.every((v) => v.remote === true)) {
     warnings.push(`all ${vars.length} variable(s) in ${input} are remote:true \u2014 this is a design-system pull of a file that CONSUMES a library (only the library variables it references), not the library's catalog; open the library file and run \`dtwin pull --as-library "<name>"\` for the catalog`);
   }
+  const mixedRoot = mixedRootModes(ds);
+  if (mixedRoot) warnings.push(mixedRoot);
   warnings.forEach((w) => console.error("warn  " + w));
   if (webFile !== void 0) console.error("note  " + TAILWIND_SOURCE_NOT_NOTE);
   if (hasTarget) {

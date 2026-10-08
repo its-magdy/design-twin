@@ -95,6 +95,100 @@ check("[X02-2] a node-level `scroll` change is a `layout` change (not `other`)",
 check("a {nodes:[…]} multi-root document is walked too", diffScreens({ nodes: [screen().tree] }, { nodes: [Object.assign(screen().tree, { opacity: 0.5 })] }).changed[0]?.fields[0]?.field === "opacity");
 check("markdown: says so when nothing changed; lists fields when something did", /Nothing changed/.test(markdown(diffScreens(screen(), screen()), "x")) && (() => { const b = screen(); must(b.tree.children[0], "b.tree.children[0]").text = "Hi"; return /`text`: Welcome → Hi/.test(markdown(diffScreens(screen(), b), "x")); })());
 
+console.log("screen diff — the exporter's format (an older plugin's noise, G21):");
+{
+  // The same screen exported by an older plugin (-1 grid anchors on every node, `layout` on text/shape/asset
+  // leaves) and by a newer one (none of them). Plus one asset leaf that carries a layout only in the old export.
+  const withAsset = (): FxScreen => { const s = screen(); s.tree.children.push({ id: "1:6", name: "Icon", type: "VECTOR", asset: "assets/icon.svg", box: { w: 16, h: 16, x: 24, y: 400 } }); return s; };
+  const inGrid = (s: FxScreen): FxScreen => { s.tree.layout = { display: "grid", columns: 2 }; return s; };
+  const oldFormat = (): FxScreen => {
+    const s = withAsset();
+    const walk = (n: FxNode): void => {
+      n.gridColumnStart = -1; n.gridRowStart = -1;
+      if (n.type === "TEXT") n.layout = { mode: "absolute", width: n.box.w, height: n.box.h };
+      if (n.id === "1:6") n.layout = { display: "flex", padding: [4, 4, 4, 4] };
+      for (const k of n.children || []) walk(k);
+    };
+    walk(s.tree);
+    return s;
+  };
+  const d = diffScreens(oldFormat(), withAsset());
+  check("[G21-N] old-format export vs the same screen from a newer plugin: nothing changed, every node counted formatOnly",
+    d.changed.length === 0 && d.summary.changed === 0 && d.summary.formatOnly === 6 && d.summary.positionOnly === 0);
+  check("[G21-N] the warning names the exporter's format and the one-time reopen", d.warnings.length === 1 && /6 node\(s\) differ only by the exporter's format/.test(d.warnings[0] ?? "") && /re-run verify-screen --expect and --compare/.test(d.warnings[0] ?? ""));
+  check("[G21-N] markdown: \"Nothing changed (… exporter's format …)\"", /Nothing changed \(6 node\(s\) differ only by the exporter's format\)\./.test(markdown(d, "x")));
+  check("[G21-N] the other direction (new -> old) is format-only too", diffScreens(withAsset(), oldFormat()).summary.formatOnly === 6);
+  check("[G21-N] two old-format exports of one unchanged screen: not format-only (nothing differs at all)", (() => { const r = diffScreens(oldFormat(), oldFormat()); return r.summary.formatOnly === 0 && r.changed.length === 0 && r.warnings.length === 0; })());
+  check("[G21-N] a real text change under the noise is still exactly one change, and the rest stay format-only", (() => {
+    const b = withAsset(); must(b.tree.children[0], "b.tree.children[0]").text = "Welcome back";
+    const r = diffScreens(oldFormat(), b);
+    return r.changed.length === 1 && r.changed[0]?.id === "1:2" && r.changed[0].fields.length === 1 && r.changed[0].fields[0]?.field === "text" && r.summary.formatOnly === 5;
+  })());
+  check("[G21-N] a grid child's anchor 1 -> 2 is a change (only -1 is noise)", (() => {
+    const a = inGrid(withAsset()), b = inGrid(withAsset());
+    must(a.tree.children[1], "a.tree.children[1]").gridColumnStart = 1;
+    must(b.tree.children[1], "b.tree.children[1]").gridColumnStart = 2;
+    const r = diffScreens(a, b);
+    return r.changed.length === 1 && r.changed[0]?.id === "1:3" && r.changed[0].fields[0]?.field === "gridColumnStart" && r.changed[0].fields[0].before === "1" && r.changed[0].fields[0].after === "2";
+  })());
+  check("[G21-N] a container's real layout change still compares (only absolute-on-a-childless-type and asset-leaf layouts are noise)", (() => {
+    const b = withAsset(); must(b.tree, "b.tree").layout = { display: "flex", gap: 24 };
+    const r = diffScreens(withAsset(), b);
+    return r.changed.length === 1 && r.changed[0]?.id === "1:1" && r.changed[0].fields[0]?.field === "layout.gap";
+  })());
+  check("[G21-N] a TEXT whose layout is not the bare absolute record keeps it as a difference", (() => {
+    const a = withAsset(), b = withAsset();
+    must(a.tree.children[0], "a.tree.children[0]").layout = { mode: "absolute", width: 120, height: 32 };
+    must(b.tree.children[0], "b.tree.children[0]").layout = { display: "flex", gap: 4 };
+    return diffScreens(a, b).changed.length === 1;
+  })());
+  // HIGH-1 (review 1): the normaliser decides as the plugin does — by the PARENT. Grid-child fields belong only to an
+  // in-flow child of a grid; `layout` only to a container type (an allow-list: SLICE, STICKY, … are leaves).
+  const gridKids = (s: FxScreen, extra: (n: FxNode) => void): FxScreen => { for (const k of s.tree.children) extra(k); return s; };
+  check("[G21-N] an older plugin's gridAlignSelf/gridJustifySelf \"start\" (and spans) off a grid are format noise", (() => {
+    const old = gridKids(screen(), (n) => { n.gridAlignSelf = "start"; n.gridJustifySelf = "start"; n.gridColumnSpan = 2; n.gridRowSpan = 2; });
+    const r = diffScreens(old, screen());
+    return r.changed.length === 0 && r.summary.formatOnly === 3 && r.warnings.length === 1;
+  })());
+  check("[G21-N] on an in-flow grid child the self-align and span still compare (absent -> set is a change)", (() => {
+    const r = diffScreens(inGrid(screen()), inGrid(gridKids(screen(), (n) => { n.gridAlignSelf = "end"; n.gridColumnSpan = 2; })));
+    return r.changed.length === 3 && r.changed.every((c) => c.fields.map((f) => f.field).join() === "gridAlignSelf,gridColumnSpan") && r.summary.formatOnly === 0;
+  })());
+  check("[G21-N] an in-flow grid child's -1 anchor is noise; its real anchor stays", (() => {
+    const a = inGrid(gridKids(screen(), (n) => { n.gridColumnStart = -1; n.gridRowStart = 0; })), b = inGrid(gridKids(screen(), (n) => { n.gridRowStart = 0; }));
+    const r = diffScreens(a, b), r2 = diffScreens(b, inGrid(gridKids(screen(), (n) => { n.gridRowStart = 1; })));
+    return r.changed.length === 0 && r.summary.formatOnly === 3 && r2.changed.length === 3 && r2.changed[0]?.fields[0]?.field === "gridRowStart";
+  })());
+  check("[G21-N] an ABSOLUTE child of a grid is not a grid item: its anchors are noise", (() => {
+    const a = inGrid(screen()), b = inGrid(screen());
+    Object.assign(must(a.tree.children[1], "a card"), { absolute: true, gridColumnStart: 0, gridRowStart: 1, gridAlignSelf: "start" });
+    must(b.tree.children[1], "b card").absolute = true;
+    const r = diffScreens(a, b);
+    return r.changed.length === 0 && r.summary.formatOnly === 1;
+  })());
+  check("[G21-N] a ROOT's grid fields are noise (its parent is not exported; an older plugin wrote a --node grid item's anchors)",
+    (() => { const a = screen(); Object.assign(a.tree, { gridColumnStart: 2, gridRowStart: 0, gridColumnSpan: 2 }); const r = diffScreens(a, screen()); return r.changed.length === 0 && r.summary.formatOnly === 1; })());
+  check("[G21-N] `layout` {mode:\"absolute\"} on STICKY / SLICE (no children in Figma) is noise; on a node WITH children it compares", (() => {
+    const leaf = (type: string, w: number, lay: boolean): FxNode => ({ id: "9:" + type, name: type, type, box: { w, h: 40, x: 0, y: 0 }, ...(lay ? { layout: { mode: "absolute", width: w, height: 40 } } : {}) });
+    const host = (lay: boolean, w: number): FxScreen => { const s = screen(); s.tree.children.push(leaf("STICKY", 240, lay), leaf("SLICE", 100, lay),
+      { ...leaf("FUTURE_HOLDER", w, true), widthMode: "hug", children: [leaf("TEXT", 10, false)] }); return s; };
+    const r = diffScreens(host(true, 50), host(false, 50)), r2 = diffScreens(host(false, 50), host(false, 80));
+    return r.changed.length === 0 && r.summary.formatOnly === 2 && r2.changed.length === 1 && r2.changed[0]?.id === "9:FUTURE_HOLDER" && r2.changed[0].fields[0]?.field === "layout.width";
+  })());
+  check("[G21-N] a leaf's layout with more than the bare absolute record still compares", (() => {
+    const a = screen(), b = screen();
+    must(a.tree.children[0], "a title").layout = { mode: "absolute", width: 120, height: 32, inferred: true };
+    return diffScreens(a, b).changed.length === 1;
+  })());
+  check("[G21-N] two OLD exports (noise on both sides) whose only raw difference sits in the noise: not formatOnly, no plugin warning", (() => {
+    const hug = (w: number): FxScreen => { const s = screen(); s.tree.gridColumnStart = -1; s.tree.gridRowStart = -1;
+      Object.assign(must(s.tree.children[0], "title"), { gridColumnStart: -1, gridRowStart: -1, box: { w, h: 32, x: 24, y: 80 }, layout: { mode: "absolute", width: w, height: 32 } }); return s; };
+    const r = diffScreens(hug(80), hug(120));
+    return r.summary.formatOnly === 0 && r.warnings.length === 0 && r.changed.length === 0 && r.summary.positionOnly === 1;
+  })());
+  check("[G21-N] --json carries summary.formatOnly", (() => { const r = diffScreens(oldFormat(), withAsset()); return JSON.stringify(r.summary).includes('"formatOnly":6'); })());
+}
+
 console.log("token diff:");
 type FxTokens = TokensDoc & { variables: Variable[] };
 const tok = (): FxTokens => ({ variables: [variable({ name: "color/primary", type: "COLOR", collection: "Theme", values: { Light: "#111111", Dark: { aliasOf: "blue/200" } } }), variable({ name: "space/md", type: "FLOAT", collection: "Space", values: { M: 16 } })] });

@@ -375,6 +375,36 @@ await block("printed commands quote paths (L-3):", async () => {
     w.status === 0 && (ran.status === 0 || ran.status === 1) && fs.existsSync(path.join(dir, "Plots.report.json")));
 });
 
+// F4: an ended run stays ended — a write after done/failed/blocked would replace its phase and detail
+console.log("verify-screen --status — a run that ended takes no more writes (F4):");
+await block("verify-screen --status after an ended run:", async () => {
+  const { dir, live, cli } = project();
+  fs.writeFileSync(path.join(dir, "Plots.measured.json"), measuredFor(dir));
+  cli("--status", "Plots", "--phase", "measured", "--run", "run-blk");
+  cli("--status", "Plots", "--phase", "blocked", "--run", "run-blk", "--detail", "blocked on permissions: compare remaining");
+  const before = fs.readFileSync(live, "utf8");
+  const stage = mk("dt-run-endstage-");
+  fs.writeFileSync(path.join(stage, "Plots.evidence.json"), JSON.stringify({ interactions: [] }));
+  const d1 = cli("--status", "Plots", "--phase", "done", "--run", "run-blk", "--by", "orchestrator", "--publish", stage);
+  safe("[F4] blocked → done in the same run: exit 2, 'run <id> already ended at blocked (<detail>) — start a new run with --new-run'", () => d1.status === 2
+    && d1.stderr.includes("run run-blk already ended at blocked (blocked on permissions: compare remaining) — start a new run with --new-run"));
+  safe("[F4] …the status is unchanged (still blocked, same rev and detail), nothing published into design/verify", () => fs.readFileSync(live, "utf8") === before
+    && !fs.existsSync(path.join(dir, "Plots.status.json")) && !fs.existsSync(path.join(dir, "Plots.evidence.json")));
+  cli("--status", "Plots", "--phase", "failed", "--run", "run-fld", "--detail", "renderer gone");
+  const d2 = cli("--status", "Plots", "--phase", "done", "--run", "run-fld");
+  safe("[F4] failed → done in the same run: exit 2, names the failed phase and its detail; status stays failed", () => d2.status === 2
+    && d2.stderr.includes("run run-fld already ended at failed (renderer gone)") && readStatusFile(live)?.phase === "failed");
+  fs.writeFileSync(path.join(dir, "Plots.measured.json"), measuredFor(dir, { runId: "run-dn" }));
+  cli("--status", "Plots", "--phase", "done", "--run", "run-dn");
+  const doneDoc = fs.readFileSync(live, "utf8");
+  const d3 = cli("--status", "Plots", "--phase", "measuring", "--run", "run-dn");
+  safe("[F4] done → measuring in the same run: exit 2 'already ended at done — start a new run'; the done status is unchanged", () => d3.status === 2
+    && d3.stderr.includes("run run-dn already ended at done — start a new run with --new-run") && fs.readFileSync(live, "utf8") === doneDoc);
+  cli("--status", "Plots", "--phase", "blocked", "--run", "run-blk2", "--detail", "blocked again");
+  const n = cli("--status", "Plots", "--phase", "starting", "--new-run");
+  safe("[F4] …a new run after a blocked one is written (exit 0, rev 1, phase starting)", () => n.status === 0 && /^run \S+ rev 1$/m.test(n.stdout) && readStatusFile(live)?.phase === "starting");
+});
+
 // ---------------------------------------------------------------- CLI --wait
 console.log("verify-screen --wait:");
 await block("verify-screen --wait:", async () => {
@@ -444,6 +474,20 @@ await block("verify-probe --run exit 3:", async () => {
   const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"], { encoding: "utf8" });
   const st = VR.readStatus(base);
   safe("probe exit 3 with --run → status rev bumped, phase measuring, detail 'probe exit 3 — nothing written'", () => p.status === 3 && st !== null && st !== "v1" && st.runId === "run-x" && st.rev === 2 && st.phase === "measuring" && st.detail === "probe exit 3 — nothing written");
+});
+
+// live F4 (s19): the probe, too, never reopens an ended run (it writes measuring/measured through writeStatus)
+console.log("verify-probe --run on an ended run (F4):");
+await block("verify-probe --run ended:", async () => {
+  const { dir, base, cli } = project();
+  const PROBE_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-probe.ts");
+  cli("--status", "Plots", "--phase", "blocked", "--run", "run-pb", "--detail", "blocked on a login wall");
+  const before = JSON.stringify(VR.readStatus(base));
+  const noPw = mk("dt-run-nopw-");
+  fs.writeFileSync(path.join(noPw, "package.json"), "{}");
+  const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-pb"], { encoding: "utf8" });
+  safe("[F4] probe --run on a blocked run → exit 2 'already ended at blocked (…) — start a new run', the status untouched", () => p.status === 2
+    && p.stderr.includes("run run-pb already ended at blocked (blocked on a login wall) — start a new run with --new-run") && JSON.stringify(VR.readStatus(base)) === before);
 });
 
 // ---------------------------------------------------------------- M-a: the run cache stays inside the project

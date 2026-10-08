@@ -62,16 +62,51 @@ function resolveOutDir(outDir?: string | null): string {
 // applied where the value is untrusted, not inside resolveOutDir, so the CLI keeps its freedom.
 // `what` names the ARGUMENT in the message: this guards exportDir and map too, and telling a model its
 // `outDir` is wrong when it never passed one sends it looking for the wrong thing.
+//
+// D132: inside LEXICALLY, or inside once both sides are resolved through symlinks. On macOS /tmp, /var and
+// /etc are symlinks into /private, and process.cwd() is getcwd() (already resolved) while a path the model
+// builds from PWD or os.tmpdir() is not — so `/tmp/proj/design` was refused for a server started in
+// /tmp/proj. The returned path stays the lexical one (path.resolve has already folded every `..`, so a
+// `..` after a symlink cannot steer the write). A link inside the project that points outside is accepted,
+// as it always was lexically; a path whose real location is outside (`<alias>/x`, alias → elsewhere) is not.
+//
+// A server started in the filesystem root (`/`, or a drive root on Windows — some MCP hosts launch stdio
+// servers there) accepts only the root itself: every path is "inside" `/`, so treating it like any other
+// cwd would let a model-chosen outDir/exportDir/map reach anywhere. So nothing below the root is accepted there.
+const isFsRoot = (p: string): boolean => path.parse(p).root === p;
+function isInside(dir: string, root: string): boolean {
+  if (dir === root) return true;
+  return !isFsRoot(root) && dir.startsWith(root + path.sep);
+}
+// realpath of the longest EXISTING prefix with the not-yet-existing tail re-appended: a fresh outDir does
+// not exist yet, and realpath of a missing path throws.
+function realish(p: string): string {
+  const tail: string[] = [];
+  let head = p;
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(head), ...tail);
+    } catch {
+      const up = path.dirname(head);
+      if (up === head) return p;
+      tail.unshift(path.basename(head));
+      head = up;
+    }
+  }
+}
 function assertInsideCwd(outDir?: string | null, what = "outDir"): string {
   const dir = resolveOutDir(outDir);
   const root = path.resolve(process.cwd());
-  if (dir !== root && !dir.startsWith(root + path.sep)) {
-    throw new Error(
-      `${what} must stay inside the directory this server was started in (${root}) — got '${outDir}' -> ${dir}. ` +
-        "Pass a relative path like 'design' or 'src/design'."
-    );
-  }
-  return dir;
+  if (isInside(dir, root)) return dir;
+  const real = realish(dir);
+  if (isInside(real, realish(root))) return dir;
+  throw new Error(
+    `${what} must stay inside the directory this server was started in (${root}) — got '${outDir}' -> ${dir}` +
+      (real !== dir ? ` (real path ${real})` : "") + ". " +
+      (isFsRoot(root)
+        ? `This server was started in the filesystem root, where no ${what} is accepted — start it in your project directory.`
+        : "Pass a relative path like 'design' or 'src/design'.")
+  );
 }
 
 // quiet: layer files are written by the hundred and get ONE summary line instead of one line each.
@@ -81,11 +116,16 @@ function assertInsideCwd(outDir?: string | null, what = "outDir"): string {
 // big export) leaves the PREVIOUS file intact instead of a truncated JSON that every later reader
 // fails on. Same directory, so the rename never crosses a filesystem. The pid keeps two concurrent
 // writers from sharing a temp file; a failed write removes its own temp file.
-function writeJson(dir: string, name: string, obj: unknown, quiet?: boolean, log?: Log): void {
+//
+// `keep` (D133): when passed, the file this write replaces is first copied to `<file>.prev` if its content
+// differs (keepPrevCopy's rule: one level, stamps ignored) and the .prev path is pushed onto `keep`.
+function writeJson(dir: string, name: string, obj: unknown, quiet?: boolean, log?: Log, keep?: string[]): void {
   const file = path.join(dir, name);
   const tmp = `${file}.tmp-${process.pid}`;
+  const text = JSON.stringify(obj, null, 2);
+  if (keep) { const prev = keepPrevCopy(file, text); if (prev) keep.push(prev); }
   try {
-    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+    fs.writeFileSync(tmp, text);
     fs.renameSync(tmp, file);
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to clean */ }
@@ -129,14 +169,14 @@ function writeSchemaDoc(dir: string, log?: Log): void {
 // page-dir disambiguation, layer filenames, index shape, pageDirs — lives in pages-layout.ts, which
 // the plugin's browser-download twin builds from too (with "__" instead of "/"), so the two writers
 // cannot drift. This function only creates directories and writes bytes.
-function writePages(dir: string, layersDoc: LayersDoc | null | undefined, log?: Log): { meta: PagesRootIndex; layerFiles: number; pageDirs: number; rootIndex: string } {
+function writePages(dir: string, layersDoc: LayersDoc | null | undefined, log?: Log, keep?: string[]): { meta: PagesRootIndex; layerFiles: number; pageDirs: number; rootIndex: string } {
   const pdir = path.join(dir, "pages");
   fs.mkdirSync(pdir, { recursive: true }); // guarantee pages/ exists even for a zero-layer run
   const { meta, layerFiles, indexFiles, rootIndex } = buildPageLayout(layersDoc, "/");
   for (const p of meta.pageDirs) fs.mkdirSync(path.join(pdir, p.dir), { recursive: true }); // once per PAGE, not per layer
-  for (const f of layerFiles) writeJson(dir, f.path, f.data, true);
-  for (const f of indexFiles) writeJson(dir, f.path, f.data, false, log);
-  writeJson(dir, rootIndex, meta, false, log);
+  for (const f of layerFiles) writeJson(dir, f.path, f.data, true, undefined, keep);
+  for (const f of indexFiles) writeJson(dir, f.path, f.data, false, log, keep);
+  writeJson(dir, rootIndex, meta, false, log, keep);
   if (log) log("wrote " + layerFiles.length + " layer file(s) across " + meta.pageDirs.length + " page dir(s) under " + pdir);
   return { meta, layerFiles: layerFiles.length, pageDirs: meta.pageDirs.length, rootIndex };
 }
@@ -144,7 +184,7 @@ function writePages(dir: string, layersDoc: LayersDoc | null | undefined, log?: 
 // The design-system twin of writePages: the SPLIT (which keys land in which file, the local/library
 // component partition, the slim manifest) lives in design-system-layout.ts, which the plugin's
 // browser-download path builds from too, so the two writers cannot drift. This only writes bytes.
-function writeDesignSystem(dir: string, designSystem: DesignSystemDoc | null | undefined, log?: Log): DesignSystemLayout["counts"] {
+function writeDesignSystem(dir: string, designSystem: DesignSystemDoc | null | undefined, log?: Log, keep?: string[]): DesignSystemLayout["counts"] {
   const built = buildDesignSystemLayout(designSystem, "/");
   fs.mkdirSync(path.join(dir, built.dir), { recursive: true });
   // COMPONENT_SET detail files land one level deeper, at manifest.files.componentsDir — only created
@@ -155,7 +195,7 @@ function writeDesignSystem(dir: string, designSystem: DesignSystemDoc | null | u
   if (componentsDir && built.files.some((f) => f.path.startsWith(componentsDir + "/"))) {
     fs.mkdirSync(path.join(dir, componentsDir), { recursive: true });
   }
-  for (const f of built.files) writeJson(dir, f.path, f.data, false, log);
+  for (const f of built.files) writeJson(dir, f.path, f.data, false, log, keep);
   const counts = built.counts;
   return counts;
 }
@@ -168,7 +208,7 @@ function writeDesignSystem(dir: string, designSystem: DesignSystemDoc | null | u
 // ever WRITES, so a file a previous export produced and this one did not stays on disk, stale yet
 // carrying a believable old timestamp. Rather than delete files a read command did not create, we diff
 // this run's pointer map against the previous index and REPORT what is now orphaned. The user decides.
-function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefined, log?: Log): { dir: string; counts: LibraryCounts; publish: Record<string, number> | undefined; orphans: string[] } {
+function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefined, log?: Log, keep?: string[]): { dir: string; counts: LibraryCounts; publish: Record<string, number> | undefined; orphans: string[] } {
   const built = buildLibraryLayout(designSystem, "/");
   const ldir = path.join(dir, built.dir);
 
@@ -176,7 +216,7 @@ function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefi
   try { prevIndexDoc = JSON.parse(fs.readFileSync(path.join(ldir, INDEX), "utf8")) as { files?: unknown }; } catch { /* absent/corrupt = first export */ }
 
   fs.mkdirSync(ldir, { recursive: true });
-  for (const f of built.files) writeJson(dir, f.path, f.data, false, log);
+  for (const f of built.files) writeJson(dir, f.path, f.data, false, log, keep);
 
   const orphans: string[] = [];
   // `files` is the pointer map ({kind: path}); anything else (a string, an array) is a corrupt index —
@@ -197,7 +237,7 @@ function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefi
   const rootIndex = path.join(dir, ROOT, INDEX);
   let prevRoot: unknown = null;
   try { prevRoot = JSON.parse(fs.readFileSync(rootIndex, "utf8")) as unknown; } catch { /* first export */ }
-  writeJson(dir, ROOT + "/" + INDEX, mergeLibrariesIndex(prevRoot, built), false, log);
+  writeJson(dir, ROOT + "/" + INDEX, mergeLibrariesIndex(prevRoot, built), false, log, keep);
 
   return { dir: built.dir, counts: built.counts, publish: built.manifest.publish, orphans };
 }
@@ -581,8 +621,15 @@ function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, 
 // an MCP tool should hand back in place of the export itself: the agent then Reads/Greps the files
 // at whatever granularity it actually needs, instead of paying for the whole tree in context.
 // `r` is a full/page pull (designSystem + layersDoc + assets) or a catalog-only one (designSystem alone).
-function writeExport(outDir: string | null | undefined, r: Stamped<FullExportReply | DesignSystemReply>, log?: Log) {
+// `opts.keepPrev` (D133, the MCP server's implicit spill only): every JSON under pages/, design-system/ or
+// libraries/ this write replaces with DIFFERENT content (exportedAt/generatedAt ignored) is first copied to
+// `<file>.prev` — one level, the next such spill replaces it — and `wrote.prevKept` lists those .prev
+// paths (absolute), present only when non-empty. The CLI and an explicit writeToDisk keep nothing (D80).
+// Assets need nothing: writeAssets never overwrites a file with different bytes.
+function writeExport(outDir: string | null | undefined, r: Stamped<FullExportReply | DesignSystemReply>, log?: Log, opts?: { keepPrev?: boolean | undefined }) {
   const dir = resolveOutDir(outDir);
+  const keep: string[] | undefined = opts && opts.keepPrev ? [] : undefined;
+  const kept = (): { prevKept?: string[] } => (keep && keep.length ? { prevKept: keep } : {});
   fs.mkdirSync(dir, { recursive: true });
   writeSchemaDoc(dir, log);
   // A library catalog is routed by the PRODUCER's own flag (`source.role`), not by a CLI-side guess:
@@ -590,10 +637,10 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
   // design file's catalog with a library's.
   const isLib = !!(r.designSystem.source && r.designSystem.source.role === "library");
   if (isLib) {
-    const lib = writeLibrary(dir, r.designSystem, log);
-    return { outDir: dir, wrote: { library: lib.dir, libraryCounts: lib.counts, publish: lib.publish, orphans: lib.orphans } };
+    const lib = writeLibrary(dir, r.designSystem, log, keep);
+    return { outDir: dir, wrote: { library: lib.dir, libraryCounts: lib.counts, publish: lib.publish, orphans: lib.orphans, ...kept() } };
   }
-  const ds = writeDesignSystem(dir, r.designSystem, log);
+  const ds = writeDesignSystem(dir, r.designSystem, log, keep);
   // DT-08: on a file that CONSUMES a library, the variables flagged `remote` are only the library ones something
   // here references — not that library's catalog. Say so while the pull's log is being read.
   const vars = r.designSystem.variables || [];
@@ -623,7 +670,7 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
     const hn = hiddenNodesLine(full.layersDoc.manifest);
     if (log && hn) log(hn);
   }
-  const pages = full ? writePages(dir, full.layersDoc, log) : null;
+  const pages = full ? writePages(dir, full.layersDoc, log, keep) : null;
   if (full && log) { const d = danglingPointers(dir, full.layersDoc); if (d.length) log(`warn  ${d.length} asset pointer(s) name a file that is not on disk: ${d.slice(0, 3).join(", ")}${d.length > 3 ? ", …" : ""}`); }
   return {
     outDir: dir,
@@ -634,6 +681,7 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
       pageDirs: pages ? pages.pageDirs : 0,
       assets,
       assetsSkipped: full ? full.assets.length - assets : 0,
+      ...kept(),
     },
     index: pages ? pages.meta : undefined,
   };
@@ -830,13 +878,24 @@ function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
 
-// A JSON document re-serialised without its top-level exportedAt, or null when it is not a JSON object.
+// A JSON document re-serialised without its stamps, or null when it is not a JSON object: the top-level
+// exportedAt/generatedAt, and the per-library exportedAt on libraries/index.json's rows. That index carries
+// generatedAt plus one stamp per row (library-layout.ts mergeLibrariesIndex), so without these every re-spill
+// of an unchanged library would keep a pointless .prev.
+function withoutExportedAt(x: unknown): unknown {
+  if (!isRecord(x)) return x;
+  const { exportedAt: _drop, ...rest } = x;
+  void _drop;
+  return rest;
+}
 function unstampedJson(s: string): string | null {
   let o: unknown;
   try { o = JSON.parse(s) as unknown; } catch { return null; }
   if (!isRecord(o)) return null;
-  const { exportedAt: _drop, ...rest } = o;
+  const { exportedAt: _drop, generatedAt: _gen, ...rest } = o;
   void _drop;
+  void _gen;
+  if (Array.isArray(rest.libraries)) rest.libraries = rest.libraries.map(withoutExportedAt);
   return JSON.stringify(rest);
 }
 
@@ -1078,7 +1137,7 @@ function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesD
 function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: { scale?: number | undefined; keepPrev?: boolean | undefined }) {
   if ("screen" in r) return writeScreen(outDir, r, log, opts && opts.keepPrev !== undefined ? { keepPrev: opts.keepPrev } : undefined);
   if ("reference" in r) return writeScreenshot(outDir, r, log, opts);
-  return writeExport(outDir, r, log);
+  return writeExport(outDir, r, log, opts && opts.keepPrev !== undefined ? { keepPrev: opts.keepPrev } : undefined);
 }
 
 // How many characters an INLINE tool result may be before the MCP client truncates it. Claude Code caps
