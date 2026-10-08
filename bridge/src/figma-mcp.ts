@@ -1069,11 +1069,15 @@ export interface DriftLintModule {
     { coverage: unknown; warnings: Array<{ code: string; message: string }>; catalogsRead: string[] };
 }
 async function loadLayer<T>(mod: string, tool: string): Promise<T> {
+  // A file: URL, not a "../" string: tsc's rewriteRelativeImportExtensions wraps a computed relative
+  // specifier in a helper that turns "x.ts" into "x.js" at runtime, and the layer only exists as .ts.
+  const href = new URL("../../design-to-code/" + mod, import.meta.url).href;
   try {
-    // A file: URL, not a "../" string: tsc's rewriteRelativeImportExtensions wraps a computed relative
-    // specifier in a helper that turns "x.ts" into "x.js" at runtime, and the layer only exists as .ts.
-    return (await import(new URL("../../design-to-code/" + mod, import.meta.url).href)) as T;
-  } catch {
+    return (await import(href)) as T;
+  } catch (e) {
+    // Only the layer file itself missing means "not in this install". A missing dependency of it also throws
+    // ERR_MODULE_NOT_FOUND, but with that dependency's url; that error, and any other one, is passed on.
+    if ((e as { code?: unknown; url?: unknown }).code !== "ERR_MODULE_NOT_FOUND" || (e as { url?: unknown }).url !== href) throw e;
     throw new Error(
       `${tool} needs the design-to-code layer, which is not present in this install. It ships with the ` +
         `Design Twin repository, not with the published npm package — run this MCP server from a repo ` +

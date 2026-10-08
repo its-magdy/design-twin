@@ -296,12 +296,14 @@ export function publishStatus(base: string, doc: VerifyStatusV2): void {
 // L13: --expect keeps a replaced expectation as <S>.expected.prev.json — `*.prev.json` is tool-written too).
 const TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\.json)$/;
 /**
- * Copy every regular file of `stageDir` (top level only) into `destDir`: each goes to `<dest>.tmp-<pid>` IN the
- * destination directory, then is renamed over `<dest>` — so the copy crosses filesystems (EXDEV) and the
- * rename is still atomic. Refuses (nothing copied) a stage dir that is the destination itself or holds a file
- * the verify tools own. Returns the copied names, sorted.
+ * --publish in two steps. `prepareStaged` copies every regular file of `stageDir` (top level only) to `<dest>.tmp-<pid>`
+ * IN `destDir` — so the copy may cross filesystems (EXDEV) and the later rename is still atomic; a copy that fails
+ * removes the ones made and refuses. `commit` renames them over `<dest>`, `abort` removes them. statusRun writes the
+ * status between the two, so a run that ended meanwhile publishes nothing. Refuses (nothing copied) a stage dir that
+ * is the destination itself or holds a file the verify tools own. `files`: the names, sorted.
  */
-export function publishStaged(stageDir: string, destDir: string): { published: string[] } | { error: string } {
+export interface PreparedPublish { files: string[]; tmpOf(name: string): string; commit(): void; abort(): void }
+export function prepareStaged(stageDir: string, destDir: string): PreparedPublish | { error: string } {
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(stageDir, { withFileTypes: true }); } catch (e) { return { error: `--publish ${stageDir}: ${errMsg(e).split("\n")[0]}` }; }
   // realpaths: a symlinked or ../ spelling of the verify dir is still the verify dir (L-10)
@@ -310,17 +312,22 @@ export function publishStaged(stageDir: string, destDir: string): { published: s
   const owned = files.filter((f) => TOOL_OWNED.test(f));
   if (owned.length) return { error: `--publish refuses ${owned.join(", ")} — expected/report/status files are written by verify-screen itself, never copied in` };
   fs.mkdirSync(destDir, { recursive: true });
+  const tmpOf = (name: string): string => `${path.join(destDir, name)}.tmp-${process.pid}`;
+  const abort = (): void => { for (const f of files) try { fs.rmSync(tmpOf(f), { force: true }); } catch { /* best effort */ } };
   for (const f of files) {
-    const dest = path.join(destDir, f), tmp = `${dest}.tmp-${process.pid}`;
-    try {
-      fs.copyFileSync(path.join(stageDir, f), tmp);
-      fs.renameSync(tmp, dest);
-    } catch (e) {
-      try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
-      return { error: `--publish: copying ${f} failed (${errMsg(e).split("\n")[0]}) — files before it were published` };
+    try { fs.copyFileSync(path.join(stageDir, f), tmpOf(f)); } catch (e) {
+      abort();
+      return { error: `--publish: copying ${f} failed (${errMsg(e).split("\n")[0]}) — nothing was published` };
     }
   }
-  return { published: files };
+  return { files, tmpOf, abort, commit: () => { for (const f of files) fs.renameSync(tmpOf(f), path.join(destDir, f)); } };
+}
+/** prepareStaged + commit. */
+export function publishStaged(stageDir: string, destDir: string): { published: string[] } | { error: string } {
+  const p = prepareStaged(stageDir, destDir);
+  if ("error" in p) return p;
+  p.commit();
+  return { published: p.files };
 }
 
 // ---------------------------------------------------------------- CLI glue (called from verify-screen.ts main)
@@ -365,13 +372,13 @@ export interface StatusFlags { phase?: string | undefined; run?: string | undefi
  * `--status <S> --phase <p> …` → exit 0 wrote / 1 refused / 2 usage (or a write to a run that already ended) / 6 the run cache is not writable (printed as
  * one sentence naming the cache and the project root — never a stack). Prints `run <id> rev <n>` on stdout and the
  * live status file + the run's stage dir on stderr. Writes only the live status (outside the watched tree); `done`
- * checks first, then publishes (--publish), then writes the live status and its durable copy <dir>/<S>.status.json.
+ * checks first, then writes the live status, then publishes (--publish) and writes its durable copy <dir>/<S>.status.json.
  * `measured` applies done's checks and records the measured file's sha too (the probe's recovery command, M-1).
  */
 export function statusMain(screen: string | undefined, f: StatusFlags, usage: string): number {
   try { return statusRun(screen, f, usage); } catch (e) {
     if (e instanceof RunCacheUnwritable) { console.error(e.message); return EXIT_RUN_CACHE; }
-    if (e instanceof RunEnded) { console.error(e.message + "\n" + usage); return 2; } // it ended while this write was checked
+    if (e instanceof RunEnded) { console.error(e.message); return 2; } // it ended while this write was checked
     throw e;
   }
 }
@@ -427,26 +434,28 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
     shas.expectationSha256 = checked.expectationSha256;
     shas.measuredSha256 = checked.measuredSha256;
   }
-  let published: string[] | undefined;
+  let prep: PreparedPublish | undefined;
   if (f.publish !== undefined) {
-    // re-checked right before publishing: a run ended while the measured file was checked publishes nothing
-    // (writeStatus below refuses it too, but only after the files would be in the verify dir)
-    const now = readStatus(base);
-    if (now && now !== "v1" && now.runId === runId && TERMINAL_PHASES.includes(now.phase)) throw new RunEnded(now.runId, now.phase, now.detail);
-    const r = publishStaged(f.publish, dir);
+    const r = prepareStaged(f.publish, dir);
     if ("error" in r) { console.error(`refused  ${r.error}`); return 1; }
-    published = r.published;
-    console.error(`published ${published.length} file(s) from ${f.publish} into ${dir}${published.length ? `: ${published.join(", ")}` : ""}`);
+    prep = r;
   }
   if (phase === "done") {
-    // the evidence file is this run's only when this run published it (LOW: an older run's evidence is not hashed)
+    // the evidence file is this run's only when this run publishes it (LOW: an older run's evidence is not hashed)
     const evName = S + ".evidence.json";
-    const ours = (published || []).includes(evName) || !!(sameRun && sameRun.published && sameRun.published.includes(evName));
-    const ev = ours ? sha256File(base + ".evidence.json") : null;
+    const ev = prep?.files.includes(evName) ? sha256File(prep.tmpOf(evName))
+      : sameRun?.published?.includes(evName) ? sha256File(base + ".evidence.json") : null;
     if (ev) shas.evidenceSha256 = ev;
     else if (fs.existsSync(base + ".evidence.json")) console.error(`note  ${base}.evidence.json was not published in run ${runId} — not recorded as this run's evidence`);
   }
-  const doc = writeStatus(base, { runId, phase, by, ...(f.detail !== undefined ? { detail: f.detail } : {}), ...shas, ...(published ? { published } : {}) });
+  let doc: VerifyStatusV2;
+  try {
+    doc = writeStatus(base, { runId, phase, by, ...(f.detail !== undefined ? { detail: f.detail } : {}), ...shas, ...(prep ? { published: prep.files } : {}) });
+  } catch (e) { prep?.abort(); throw e; } // refused (the run ended meanwhile, the cache is unwritable): nothing is published
+  if (prep) {
+    prep.commit();
+    console.error(`published ${prep.files.length} file(s) from ${f.publish} into ${dir}${prep.files.length ? `: ${prep.files.join(", ")}` : ""}`);
+  }
   if (phase === "done") publishStatus(base, doc);
   const stage = stageDirOf(base, runId);
   if (!TERMINAL_PHASES.includes(phase)) inRunCache(dir, () => fs.mkdirSync(stage, { recursive: true }));

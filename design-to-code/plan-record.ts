@@ -19,7 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { writeFileAtomic } from "./verify-run.ts";
+import { formatJsonLike, writeJsonLike } from "../bridge/src/json-file.ts";
 import { parsePlan } from "./doc-guards.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { isJsonObject } from "./types.ts";
@@ -28,30 +28,9 @@ import type { JsonObject, JsonValue, PlanVerification, PlanVerificationRecord, V
 export interface RecordPlanResult { written: boolean; notes: string[] }
 
 const slash = (p: string): string => p.split(path.sep).join("/").split("\\").join("/");
-// The file's own indentation: the first indented line's leading whitespace (2 spaces when the file has none).
-const indentOf = (text: string): string => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
-
-// L5 (s19): `value` as the text of the plan file it replaces — that file's BOM, indentation, line endings and final
-// newline. `raw` is the file as read; null (no file yet) → 2 spaces, LF, a final newline.
-function formatPlan(value: unknown, raw: string | null): string {
-  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
-  const bom = raw.charCodeAt(0) === 0xfeff ? "\ufeff" : "";
-  const text = raw.slice(bom.length);
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
-}
-
-// L5 (s19): the one plan writer — --record-plan, --accept and the verify-build hook. Formats `value` like the file
-// (formatPlan over `raw`, else the file as it is on disk now) and writes it atomically (verify-run.ts
-// writeFileAtomic: tmp beside it + rename, the tmp removed on error) — only when the bytes change. True when written.
-function writePlan(file: string, value: unknown, raw?: string | null): boolean {
-  let was: string | null = raw ?? null;
-  if (raw === undefined) try { was = fs.readFileSync(file, "utf8"); } catch { was = null; }
-  const out = formatPlan(value, was);
-  if (out === was) return false;
-  writeFileAtomic(file, out);
-  return true;
-}
+// The one plan writer — --record-plan, --accept, plan-skeleton --out and the verify-build hook: atomic and
+// in the plan file's own format (BOM, indentation, line endings), written only when its bytes change. True when written.
+const formatPlan = formatJsonLike, writePlan = writeJsonLike;
 
 // M1 (s19): a verification.deltas row --record-plan writes — {nodeId, field, severity high|medium, expected, actual}
 // and nothing else. Anything else there was written by hand (a residual, a copied report row).

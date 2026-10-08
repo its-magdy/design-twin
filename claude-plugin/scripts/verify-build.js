@@ -2,7 +2,7 @@
 
 
 // design-to-code/verify-build.ts
-import fs7 from "node:fs";
+import fs6 from "node:fs";
 import path5 from "node:path";
 import crypto3 from "node:crypto";
 
@@ -585,25 +585,30 @@ function auditGateStatus(cwd, screenFile, screenName) {
   return { auditFile: rel, blockers: blockerIds(r.doc), legacyBlockers: legacyBlockerIds(reportFindings(r.doc)) };
 }
 
-// design-to-code/plan-record.ts
-import fs6 from "node:fs";
-
-// design-to-code/verify-run.ts
+// bridge/src/json-file.ts
 import fs4 from "node:fs";
 import path3 from "node:path";
-var STATUS_SCHEMA = "designtwin/verify-status@2";
-var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
-var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+function formatJsonLike(value, raw) {
+  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
+  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const text = raw.slice(bom.length);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
 }
-isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-function writeFileAtomic(file, data) {
+function writeJsonLike(file, value, raw) {
+  let was = raw ?? null;
+  if (raw === void 0) try {
+    was = fs4.readFileSync(file, "utf8");
+  } catch {
+    was = null;
+  }
+  const out = formatJsonLike(value, was);
+  if (out === was) return false;
   fs4.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}`;
   try {
-    fs4.writeFileSync(tmp, data);
+    fs4.writeFileSync(tmp, out);
     fs4.renameSync(tmp, file);
   } catch (e) {
     try {
@@ -612,6 +617,7 @@ function writeFileAtomic(file, data) {
     }
     throw e;
   }
+  return true;
 }
 
 // design-to-code/content-hash.ts
@@ -722,26 +728,7 @@ function legacyPlanHash(plan) {
 }
 
 // design-to-code/plan-record.ts
-var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
-function formatPlan(value, raw) {
-  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
-  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
-  const text = raw.slice(bom.length);
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
-}
-function writePlan(file, value, raw) {
-  let was = raw ?? null;
-  if (raw === void 0) try {
-    was = fs6.readFileSync(file, "utf8");
-  } catch {
-    was = null;
-  }
-  const out = formatPlan(value, was);
-  if (out === was) return false;
-  writeFileAtomic(file, out);
-  return true;
-}
+var writePlan = writeJsonLike;
 
 // design-to-code/plan-skeleton.ts
 var USAGE = [
@@ -822,7 +809,7 @@ function readHookInput() {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st;
   try {
-    st = fs7.fstatSync(0);
+    st = fs6.fstatSync(0);
   } catch {
     return Promise.resolve({ payload: {}, source: "closed" });
   }
@@ -837,7 +824,7 @@ function readHookInput() {
   };
   if (st.isFile() || st.isCharacterDevice()) {
     try {
-      return Promise.resolve({ payload: parse(fs7.readFileSync(0, "utf8")), source: "file" });
+      return Promise.resolve({ payload: parse(fs6.readFileSync(0, "utf8")), source: "file" });
     } catch {
       return Promise.resolve({ payload: {}, source: "unreadable" });
     }
@@ -882,7 +869,7 @@ function isStale(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs7.statSync(file).mtimeMs > cutoff;
+    return now - fs6.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
@@ -896,8 +883,8 @@ function readPlan(file) {
 var isPlanFile = (p) => "plan" in p;
 function findPlans(cwd) {
   const dir = path5.join(cwd, "design", "plan");
-  if (!fs7.existsSync(dir)) return { plans: [], bad: [] };
-  const read = fs7.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path5.join(dir, f)));
+  if (!fs6.existsSync(dir)) return { plans: [], bad: [] };
+  const read = fs6.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path5.join(dir, f)));
   return { plans: read.filter(isPlanFile), bad: read.filter((p) => !isPlanFile(p)) };
 }
 function rootOfPlan(file, fallback) {
@@ -1145,7 +1132,7 @@ function moduleImported(mapModule, byFile, cwd) {
 }
 function exportDirOf(cwd) {
   const e = path5.join(cwd, "design", "export");
-  return fs7.existsSync(path5.join(e, "pages")) ? e : path5.join(cwd, "design");
+  return fs6.existsSync(path5.join(e, "pages")) ? e : path5.join(cwd, "design");
 }
 var idFromStem = (s) => {
   const m = /__(I?\d+)_(\d+)$/.exec(String(s || ""));
@@ -1264,7 +1251,7 @@ function checkVerification(plan, cwd) {
     if (wrongShape.length) return v.deltas === void 0 ? [...wrongShape, "verification.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)"] : wrongShape;
     const artifacts = Array.isArray(v.artifacts) ? v.artifacts : [];
     if (!artifacts.length) return ['verification.mode is "rendered" but `artifacts` is empty \u2014 list the screenshot(s)/report the render produced'];
-    const missing = artifacts.filter((a) => !fs7.existsSync(path5.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs6.existsSync(path5.join(cwd, String(a))));
     if (missing.length) return [`verification artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(v.deltas)) return ["verification.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)"];
     return [];
@@ -1288,7 +1275,7 @@ function recordedReportWarnings(plan, cwd) {
   if (!rec || typeof rec !== "object" || typeof rec.report !== "string" || !rec.report) return [];
   let bytes;
   try {
-    bytes = fs7.readFileSync(path5.resolve(cwd, rec.report));
+    bytes = fs6.readFileSync(path5.resolve(cwd, rec.report));
   } catch {
     return [];
   }
@@ -1459,7 +1446,7 @@ function readFiles(rels, cwd) {
   for (const rel of rels) {
     const abs = path5.join(cwd, rel);
     try {
-      if (fs7.statSync(abs).isFile()) out.push({ rel, text: fs7.readFileSync(abs, "utf8") });
+      if (fs6.statSync(abs).isFile()) out.push({ rel, text: fs6.readFileSync(abs, "utf8") });
     } catch {
     }
   }
@@ -1559,7 +1546,7 @@ var SKIP_DIRS = /* @__PURE__ */ new Set([
 var TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
 var hasTwConfig = (dir) => {
   try {
-    return fs7.readdirSync(dir).some((n) => TW_CONFIG.test(n));
+    return fs6.readdirSync(dir).some((n) => TW_CONFIG.test(n));
   } catch {
     return false;
   }
@@ -1567,7 +1554,7 @@ var hasTwConfig = (dir) => {
 function packageDirOf(cwd, rel) {
   const root = path5.resolve(cwd);
   for (let d = path5.dirname(path5.resolve(cwd, rel)); d.startsWith(root); d = path5.dirname(d)) {
-    if (fs7.existsSync(path5.join(d, "package.json"))) return d;
+    if (fs6.existsSync(path5.join(d, "package.json"))) return d;
     if (d === root) break;
   }
   return root;
@@ -1578,7 +1565,7 @@ function projectScan(cwd, limit = 2e3) {
   const walk = (dir) => {
     let entries;
     try {
-      entries = fs7.readdirSync(dir, { withFileTypes: true });
+      entries = fs6.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -1590,7 +1577,7 @@ function projectScan(cwd, limit = 2e3) {
       } else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
       else if (e.isFile() && /\.css$/i.test(e.name)) {
         try {
-          css.push({ rel: path5.relative(cwd, abs).split(path5.sep).join("/"), text: fs7.readFileSync(abs, "utf8") });
+          css.push({ rel: path5.relative(cwd, abs).split(path5.sep).join("/"), text: fs6.readFileSync(abs, "utf8") });
         } catch {
         }
       }
@@ -1679,10 +1666,10 @@ function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed = plan.files || [];
-  const absent = listed.filter((f) => !fs7.existsSync(path5.join(cwd, f)));
+  const absent = listed.filter((f) => !fs6.existsSync(path5.join(cwd, f)));
   if (!listed.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
-  const byFile = listed.filter((rel) => fs7.existsSync(path5.join(cwd, rel)) && fs7.statSync(path5.join(cwd, rel)).isFile()).map((rel) => ({ rel, text: fs7.readFileSync(path5.join(cwd, rel), "utf8") }));
+  const byFile = listed.filter((rel) => fs6.existsSync(path5.join(cwd, rel)) && fs6.statSync(path5.join(cwd, rel)).isFile()).map((rel) => ({ rel, text: fs6.readFileSync(path5.join(cwd, rel), "utf8") }));
   const code = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
@@ -1852,7 +1839,7 @@ function behaviourRef(x) {
 }
 function locateReports(plan, planFile, cwd, exp) {
   const dir = path5.join(cwd, "design", "verify");
-  if (!fs7.existsSync(dir)) return [];
+  if (!fs6.existsSync(dir)) return [];
   const e = exp === void 0 ? locateExport(plan, planFile, cwd) : exp;
   const stems = new Set([
     plan.file ? path5.basename(String(plan.file)).replace(/\.json$/i, "") : null,
@@ -1863,33 +1850,33 @@ function locateReports(plan, planFile, cwd, exp) {
   const nodeId = plan.nodeId || e && e.nodeId || idFromStem(plan.screen) || (planFile ? idFromStem(path5.basename(planFile, ".json")) : null);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
-  for (const f of fs7.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+  for (const f of fs6.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
     const abs = path5.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
     let by = null;
     const expFile = path5.join(dir, stem + ".expected.json");
-    if (!fs7.existsSync(expFile) && fs7.existsSync(expFile + ".retired")) continue;
+    if (!fs6.existsSync(expFile) && fs6.existsSync(expFile + ".retired")) continue;
     const expFrame = () => {
       const x = readJsonOrNull(expFile, isJsonObject);
       return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null;
     };
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
-    else if (nodeId && fs7.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
+    else if (nodeId && fs6.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try {
-      mtimeMs = fs7.statSync(abs).mtimeMs;
+      mtimeMs = fs6.statSync(abs).mtimeMs;
     } catch {
     }
     const want = r.inputs && r.inputs.expectationSha256;
     let expectationChanged = false;
-    if (want && fs7.existsSync(expFile)) {
+    if (want && fs6.existsSync(expFile)) {
       try {
-        expectationChanged = crypto3.createHash("sha256").update(fs7.readFileSync(expFile)).digest("hex") !== want;
+        expectationChanged = crypto3.createHash("sha256").update(fs6.readFileSync(expFile)).digest("hex") !== want;
       } catch {
       }
     }
@@ -2172,7 +2159,7 @@ function ownPlans(open, input, all, cwd) {
   if (!file || typeof file !== "string") return { plans: open, scope: "unscoped" };
   let writes;
   try {
-    writes = transcriptActions(fs7.readFileSync(file, "utf8"), !agent);
+    writes = transcriptActions(fs6.readFileSync(file, "utf8"), !agent);
   } catch {
     return { plans: open, scope: "unscoped" };
   }
@@ -2234,13 +2221,13 @@ function checkAndRecord(p, cwd, graph) {
   };
   let times = null;
   try {
-    const s = fs7.statSync(p.file);
+    const s = fs6.statSync(p.file);
     times = [s.atime, s.mtime];
   } catch {
   }
   writePlan(p.file, plan);
   if (times) try {
-    fs7.utimesSync(p.file, times[0], times[1]);
+    fs6.utimesSync(p.file, times[0], times[1]);
   } catch {
   }
   const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports });

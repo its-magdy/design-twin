@@ -249,6 +249,12 @@ await block("verify-screen --status --publish (D9 staging):", async () => {
   safe("[L-10] …and a ../ spelling of it → refused", () => "error" in VR.publishStaged(path.join(dir, "..", "verify"), dir));
   fs.unlinkSync(alias);
   fs.rmSync(path.join(stage, "Plots.report.json"));
+  // PR #1 review A3: statusRun writes the status between prepare and commit — a refused write aborts, publishing nothing
+  const prep = VR.prepareStaged(stage, dir);
+  const prepped = "files" in prep && fs.readFileSync(prep.tmpOf("Plots-dialog.png"), "utf8") === "changed" && fs.readFileSync(path.join(dir, "Plots-dialog.png"), "utf8") === "png bytes";
+  if ("files" in prep) prep.abort();
+  safe("[A3] prepareStaged copies beside the destination without replacing it; abort removes the copies, the published file unchanged",
+    () => prepped && fs.readFileSync(path.join(dir, "Plots-dialog.png"), "utf8") === "png bytes" && !fs.readdirSync(dir).some((f) => f.includes(".tmp-")));
   // M3: done validates BEFORE it publishes — and validates the staged measured file when the stage holds one
   fs.writeFileSync(path.join(stage, "Plots.measured.json"), JSON.stringify({ expectationSha256: "0".repeat(64), nodes: [] }));
   fs.writeFileSync(path.join(stage, "Plots-hover.png"), "hover");
