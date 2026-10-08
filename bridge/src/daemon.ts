@@ -347,16 +347,24 @@ export function legacySock(port?: number, place: SockPlace = {}): string | null 
 // Newline-delimited JSON. JSON.stringify escapes literal newlines, so a bare "\n" is an unambiguous
 // frame terminator even for a 24MB export — but the frame can arrive in many chunks, so callers must
 // buffer until they see one. Both sides use this to avoid two subtly different reassembly loops.
+// Chunks are strings: every socket fed here has setEncoding("utf8"), whose decoder holds back a
+// multi-byte character split across reads. Only the NEW chunk is searched for "\n", and the pieces
+// of an unfinished frame are joined once, when its newline arrives: appending to one buffer and
+// searching it from the start on every chunk is quadratic in the frame size (a 100 MB export in
+// 64 KB reads spent tens of seconds just being split).
 export function framer(onFrame: (line: string) => void): (chunk: string) => void {
-  let buf = "";
+  let parts: string[] = [];
   return (chunk) => {
-    buf += chunk;
+    let start = 0;
     let i;
-    while ((i = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, i);
-      buf = buf.slice(i + 1);
+    while ((i = chunk.indexOf("\n", start)) >= 0) {
+      const tail = chunk.slice(start, i);
+      start = i + 1;
+      let line = tail;
+      if (parts.length) { parts.push(tail); line = parts.join(""); parts = []; }
       if (line) onFrame(line);
     }
+    if (start < chunk.length) parts.push(start ? chunk.slice(start) : chunk);
   };
 }
 
