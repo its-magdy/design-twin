@@ -4725,7 +4725,6 @@ function selectForAccept(rep, sel) {
   return { error: `no delta in the report for ${id}${sel.field !== void 0 ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
 }
 function main(argv) {
-  const sha = (file) => sha256Hex(fs10.readFileSync(file));
   const USAGE = `usage:
   ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force] [--plan <plan.json>]
       writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
@@ -4844,8 +4843,8 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
 ` + USAGE);
     return 2;
   }
-  const { out, interactions: interactionsFile, against: againstFile, plan: planFlag } = flags;
-  const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare, doAccept = !!flags.accept;
+  const { interactions: interactionsFile, against: againstFile } = flags;
+  const doExpect = !!flags.expect, doCompare = !!flags.compare, doAccept = !!flags.accept;
   if ([doExpect, doCompare, doAccept].filter(Boolean).length !== 1) {
     console.error("pass exactly one of --expect / --compare / --accept\n" + USAGE);
     return 2;
@@ -4869,134 +4868,143 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     console.error("--record-plan only applies to --compare\n" + USAGE);
     return 2;
   }
-  const write = (base, obj, md2) => {
-    if (!base) {
-      process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
-      return;
-    }
-    writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
-    if (md2) writeFileAtomic(base + ".report.md", md2);
-    console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md2 ? " and " + base + ".report.md" : ""}`);
-  };
-  if (doExpect) {
-    const firstFile = files[0];
-    if (firstFile === void 0) {
-      console.error("--expect needs at least one screen export\n" + USAGE);
+  if (doExpect) return expectMain(files, flags, USAGE);
+  return compareMain(files, flags, USAGE);
+}
+function write(doExpect, base, obj, md) {
+  if (!base) {
+    process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
+    return;
+  }
+  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
+  if (md) writeFileAtomic(base + ".report.md", md);
+  console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
+}
+function expectMain(files, flags, USAGE) {
+  const { out, plan: planFlag } = flags;
+  const force = !!flags.force;
+  const firstFile = files[0];
+  if (firstFile === void 0) {
+    console.error("--expect needs at least one screen export\n" + USAGE);
+    return 2;
+  }
+  const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path9.basename(f, ".json") }));
+  const indexFile = path9.join(EXPORT_DIR, "pages", "index.json");
+  const idx = readJson(indexFile, isPagesRootIndex);
+  if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} \u2014 interaction destinations are checked against the given export(s) only`);
+  const pagesDir = path9.join(EXPORT_DIR, "pages");
+  const pageRows = [];
+  let dirs = [];
+  try {
+    dirs = fs10.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+  }
+  for (const d of dirs) {
+    const pi2 = readJson(path9.join(pagesDir, d, "index.json"), isPageIndex);
+    if ("doc" in pi2) pageRows.push(...pi2.doc.layers);
+  }
+  const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
+  const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
+  const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
+  const exportRoot = EXPORT_DIR;
+  const readSibling = (file) => readJsonOrNull(path9.join(exportRoot, file), isScreenDoc);
+  const outBase0 = out || path9.join(VERIFY_DIR, path9.basename(firstFile, ".json"));
+  let flagged;
+  if (planFlag !== void 0) {
+    const r = readJson(planFlag, isPlan);
+    if (!("doc" in r)) {
+      console.error(`--plan '${planFlag}' ${r.error}`);
       return 2;
     }
-    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path9.basename(f, ".json") }));
-    const indexFile = path9.join(EXPORT_DIR, "pages", "index.json");
-    const idx = readJson(indexFile, isPagesRootIndex);
-    if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} \u2014 interaction destinations are checked against the given export(s) only`);
-    const pagesDir = path9.join(EXPORT_DIR, "pages");
-    const pageRows = [];
-    let dirs = [];
+    flagged = { file: planFlag.split(path9.sep).join("/"), plan: r.doc };
+  }
+  const firstRoot = docs.map((d) => screenRoots(d.doc)[0]).find((r) => r !== void 0);
+  const chosen = choosePlan(flagged, firstRoot && firstRoot.id, path9.basename(outBase0));
+  const planForExpect = chosen.hit;
+  if (chosen.all.length > 1 && chosen.all.some((h2) => h2.plan.interactions !== void 0)) {
+    console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another` : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
+  }
+  const readReference = (pointer) => {
+    const file = resolveInside(exportRoot, pointer);
+    if (file === null) return null;
     try {
-      dirs = fs10.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+      return fs10.readFileSync(file);
     } catch {
+      return null;
     }
-    for (const d of dirs) {
-      const pi2 = readJson(path9.join(pagesDir, d, "index.json"), isPageIndex);
-      if ("doc" in pi2) pageRows.push(...pi2.doc.layers);
-    }
-    const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
-    const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
-    const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
-    const exportRoot = EXPORT_DIR;
-    const readSibling = (file) => readJsonOrNull(path9.join(exportRoot, file), isScreenDoc);
-    const outBase0 = out || path9.join(VERIFY_DIR, path9.basename(firstFile, ".json"));
-    let flagged2;
-    if (planFlag !== void 0) {
-      const r = readJson(planFlag, isPlan);
-      if (!("doc" in r)) {
-        console.error(`--plan '${planFlag}' ${r.error}`);
-        return 2;
-      }
-      flagged2 = { file: planFlag.split(path9.sep).join("/"), plan: r.doc };
-    }
-    const firstRoot = docs.map((d) => screenRoots(d.doc)[0]).find((r) => r !== void 0);
-    const chosen = choosePlan(flagged2, firstRoot && firstRoot.id, path9.basename(outBase0));
-    const planForExpect = chosen.hit;
-    if (chosen.all.length > 1 && chosen.all.some((h2) => h2.plan.interactions !== void 0)) {
-      console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another` : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
-    }
-    const readReference = (pointer) => {
-      const file = resolveInside(exportRoot, pointer);
-      if (file === null) return null;
-      try {
-        return fs10.readFileSync(file);
-      } catch {
-        return null;
-      }
-    };
-    const ds = readJsonOrNull(path9.join(exportRoot, "design-system.json"), isJsonObject);
-    const colorProfile = ds && typeof ds.colorProfile === "string" ? ds.colorProfile : null;
-    const expOpts = { ..."doc" in idx || layers.length ? { index: { layers }, readSibling } : {}, ...planForExpect ? { plan: planForExpect } : {}, readReference, colorProfile };
-    const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
-    const pi = exp.planInteractions;
-    if (pi) {
-      console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}\u2026)`);
-      for (const d of pi.dropped) console.error(`warn  plan interaction ${d.nodeId} dropped: ${d.why}`);
-    }
-    const outBase = outBase0;
-    const target = outBase + ".expected.json";
-    const dup = findExistingExpectedFor(path9.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
-    if (dup && !force) {
-      const oldBase = dup.slice(0, -".expected.json".length);
-      const dir = path9.dirname(dup), stemOld = path9.basename(oldBase);
-      const oldFiles = fs10.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path9.join(dir, f));
-      const canonical3 = path9.join(path9.dirname(target), path9.basename(firstFile, ".json"));
-      const oldStatus = runStatusNote(oldBase);
-      if (oldStatus) console.error(`note  ${oldStatus}`);
-      if (stemOld === path9.basename(canonical3)) {
-        console.error(
-          `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). That is the canonical name: drop --out (the default is ${shellArg(canonical3)}), or pass --force to write a second set anyway.`
-        );
-        return 1;
-      }
+  };
+  const ds = readJsonOrNull(path9.join(exportRoot, "design-system.json"), isJsonObject);
+  const colorProfile = ds && typeof ds.colorProfile === "string" ? ds.colorProfile : null;
+  const expOpts = { ..."doc" in idx || layers.length ? { index: { layers }, readSibling } : {}, ...planForExpect ? { plan: planForExpect } : {}, readReference, colorProfile };
+  const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
+  const pi = exp.planInteractions;
+  if (pi) {
+    console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}\u2026)`);
+    for (const d of pi.dropped) console.error(`warn  plan interaction ${d.nodeId} dropped: ${d.why}`);
+  }
+  const outBase = outBase0;
+  const target = outBase + ".expected.json";
+  const dup = findExistingExpectedFor(path9.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
+  if (dup && !force) {
+    const oldBase = dup.slice(0, -".expected.json".length);
+    const dir = path9.dirname(dup), stemOld = path9.basename(oldBase);
+    const oldFiles = fs10.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path9.join(dir, f));
+    const canonical3 = path9.join(path9.dirname(target), path9.basename(firstFile, ".json"));
+    const oldStatus = runStatusNote(oldBase);
+    if (oldStatus) console.error(`note  ${oldStatus}`);
+    if (stemOld === path9.basename(canonical3)) {
       console.error(
-        `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set).
+        `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). That is the canonical name: drop --out (the default is ${shellArg(canonical3)}), or pass --force to write a second set anyway.`
+      );
+      return 1;
+    }
+    console.error(
+      `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set).
        existing set under '${stemOld}' (${oldFiles.length} file(s)): ${oldFiles.join(", ")}
        the canonical name for this screen is '${path9.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
        To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path9.resolve(target) === path9.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
        Or keep the old name: --out ${shellArg(oldBase)}. (--force writes a second, parallel set \u2014 not recommended.)`
-      );
-      return 1;
-    }
-    const next = JSON.stringify(exp, null, 2) + "\n";
-    const prev = fs10.existsSync(target) ? fs10.readFileSync(target, "utf8") : null;
-    const h = sha256Hex(next);
-    let prevContent = null;
-    try {
-      if (prev !== null) {
-        const prevDoc = JSON.parse(prev);
-        prevContent = isJsonObject(prevDoc) ? prevDoc.exportContentSha256 : null;
-      }
-    } catch {
-    }
-    const onlyExportedAt = prev !== null && prev !== next && !!prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "");
-    const prevFile = outBase + PREV_EXPECTED_SUFFIX;
-    if (prev !== null && prev !== next && !onlyExportedAt) writeFileAtomic(prevFile, prev);
-    write(outBase, exp);
-    const runNote = runStatusNote(outBase);
-    if (runNote) console.error(`note  ${runNote}`);
-    if (prev !== null && prev === next) console.error(`note  ${target} is byte-identical to the expectation on disk (same export inputs, sha256 ${h.slice(0, 12)}\u2026) \u2014 unchanged; this says nothing about the build: re-measure to check the code`);
-    else if (onlyExportedAt) {
-      console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}\u2026 unchanged) \u2014 existing measurements and report still apply`);
-    } else if (prev !== null) {
-      const why = typeof prevContent === "string" && prevContent === exp.exportContentSha256 ? "same export content \u2014 the expectation generator changed (verify-screen upgrade)" : typeof prevContent === "string" ? `the export changed (content sha ${prevContent.slice(0, 12)}\u2026 \u2192 ${exp.exportContentSha256.slice(0, 12)}\u2026)` : `the expectation recorded no export hash (exportContentSha256) \u2014 cannot tell whether the export or the expectation generator changed`;
-      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${sha256Hex(prev).slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026): ${why}; the previous one is kept as ${prevFile}`);
-      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs10.existsSync(f));
-      if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
-    }
-    const hc = exp.counts.hidden;
-    const lineBoxes = exp.notComparable.filter((g) => g.field === TEXT_BOX_HEIGHT).length;
-    console.error(`${exp.counts.nodes} node spec(s), ${exp.counts.instances} instance(s), ${exp.counts.interactions} designed interaction(s) \u2014 visible layers only; skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable${lineBoxes ? `; ${lineBoxes} a line box taller than its fixed text box \u2014 the build chooses its line-height` : ""}) \xB7 expectation sha256 ${h.slice(0, 12)}\u2026`);
-    const ri = exp.referenceImage;
-    if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}\xD7${ri.png.h} at ${ri.scale}x (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` \u2014 ${ri.colorProfile}: colours are compared without colour management` : ""}` : `note  no visual diff for this screen: ${ri.why}`);
-    if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers \u2014 interaction coverage cannot be checked, and the report will say so rather than passing.");
-    return 0;
+    );
+    return 1;
   }
+  const next = JSON.stringify(exp, null, 2) + "\n";
+  const prev = fs10.existsSync(target) ? fs10.readFileSync(target, "utf8") : null;
+  const h = sha256Hex(next);
+  let prevContent = null;
+  try {
+    if (prev !== null) {
+      const prevDoc = JSON.parse(prev);
+      prevContent = isJsonObject(prevDoc) ? prevDoc.exportContentSha256 : null;
+    }
+  } catch {
+  }
+  const onlyExportedAt = prev !== null && prev !== next && !!prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "");
+  const prevFile = outBase + PREV_EXPECTED_SUFFIX;
+  if (prev !== null && prev !== next && !onlyExportedAt) writeFileAtomic(prevFile, prev);
+  write(true, outBase, exp);
+  const runNote = runStatusNote(outBase);
+  if (runNote) console.error(`note  ${runNote}`);
+  if (prev !== null && prev === next) console.error(`note  ${target} is byte-identical to the expectation on disk (same export inputs, sha256 ${h.slice(0, 12)}\u2026) \u2014 unchanged; this says nothing about the build: re-measure to check the code`);
+  else if (onlyExportedAt) {
+    console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}\u2026 unchanged) \u2014 existing measurements and report still apply`);
+  } else if (prev !== null) {
+    const why = typeof prevContent === "string" && prevContent === exp.exportContentSha256 ? "same export content \u2014 the expectation generator changed (verify-screen upgrade)" : typeof prevContent === "string" ? `the export changed (content sha ${prevContent.slice(0, 12)}\u2026 \u2192 ${exp.exportContentSha256.slice(0, 12)}\u2026)` : `the expectation recorded no export hash (exportContentSha256) \u2014 cannot tell whether the export or the expectation generator changed`;
+    console.error(`note  REPLACED an existing ${target} that differed (sha256 ${sha256Hex(prev).slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026): ${why}; the previous one is kept as ${prevFile}`);
+    const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs10.existsSync(f));
+    if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
+  }
+  const hc = exp.counts.hidden;
+  const lineBoxes = exp.notComparable.filter((g) => g.field === TEXT_BOX_HEIGHT).length;
+  console.error(`${exp.counts.nodes} node spec(s), ${exp.counts.instances} instance(s), ${exp.counts.interactions} designed interaction(s) \u2014 visible layers only; skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable${lineBoxes ? `; ${lineBoxes} a line box taller than its fixed text box \u2014 the build chooses its line-height` : ""}) \xB7 expectation sha256 ${h.slice(0, 12)}\u2026`);
+  const ri = exp.referenceImage;
+  if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}\xD7${ri.png.h} at ${ri.scale}x (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` \u2014 ${ri.colorProfile}: colours are compared without colour management` : ""}` : `note  no visual diff for this screen: ${ri.why}`);
+  if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers \u2014 interaction coverage cannot be checked, and the report will say so rather than passing.");
+  return 0;
+}
+function compareMain(files, flags, USAGE) {
+  const sha = (file) => sha256Hex(fs10.readFileSync(file));
+  const { out, interactions: interactionsFile, against: againstFile, plan: planFlag } = flags;
+  const recordPlanFlag = !!flags["record-plan"];
   const [expFile, measuredFile] = files;
   if (!expFile || !measuredFile) {
     console.error("--compare needs <expected.json> <measured.json>\n" + USAGE);
@@ -5118,7 +5126,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
   }
   const rep = compare(expectation, measured, { ...statusOpt, ...readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}, ...readable.dropped.includes("visual") ? { visualMalformed: true } : {}, ...visualDiff ? { visualDiff } : {}, ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}, ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...extraInferred !== void 0 ? { inferred: extraInferred } : {}, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...planHit ? { plan: planHit } : {} });
   const md = reportToMarkdown(rep);
-  write(compareBase, rep, md);
+  write(false, compareBase, rep, md);
   console.error(rep.headline);
   console.error(probeLine(rep));
   console.error(rep.behaviour.headline);
