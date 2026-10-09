@@ -549,11 +549,6 @@ function isCodeConnectMap(x) {
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
 if (false) process.exitCode = main(process.argv.slice(2));
 
-// design-to-code/probe-steps.ts
-function isPlanExpect(x) {
-  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
-}
-
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -738,10 +733,6 @@ function isPlanDescope(x) {
   return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
-function isPlanInteraction(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
-}
-isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }

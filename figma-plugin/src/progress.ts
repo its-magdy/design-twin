@@ -78,16 +78,9 @@ export function abandonedError(): Error {
   return e;
 }
 
-/** Is this thrown value a BRIDGE-initiated cancellation (ABANDONED_MESSAGE)? Such a value is always
- *  also isCancellation(). */
+/** Is this thrown value a BRIDGE-initiated cancellation (ABANDONED_MESSAGE)? */
 export function isAbandonment(e: unknown): boolean {
   return !!e && typeof e === "object" && (e as CancelledMarked)[ABANDONED] === true;
-}
-
-/** Is this thrown value a cancellation rather than a real failure? Exported so a caller can tell
- *  "the designer stopped it" from "the export broke" without string-matching the message. */
-export function isCancellation(e: unknown): boolean {
-  return !!e && typeof e === "object" && (e as CancelledMarked)[CANCELLED] === true;
 }
 
 // ---------------------------------------------------------------- the run being tracked

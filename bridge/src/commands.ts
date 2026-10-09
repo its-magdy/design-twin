@@ -253,8 +253,6 @@ export interface Commands {
 }
 
 export type Cmd = keyof Commands;
-export type CmdArgs<C extends Cmd> = Commands[C]["args"];
-export type CmdReply<C extends Cmd> = Commands[C]["reply"];
 
 /** A command with its arguments, as a discriminated union — `switch (req.cmd)` narrows `req.args`. */
 export type CommandRequest = { [C in Cmd]: { cmd: C; args: Commands[C]["args"] } }[Cmd];
