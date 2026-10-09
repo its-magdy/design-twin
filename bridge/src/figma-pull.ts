@@ -266,76 +266,6 @@ class UsageError extends Error {}
 // (the flag names), dropping the false/0/null/"" a condition produced.
 const isFlag = (x: string | number | false | null | undefined): x is string => Boolean(x);
 
-function parseArgs(args: string[]) {
-const selection = args.includes("--selection");
-const allPages = args.includes("--all-pages");
-// --design-system: tokens/styles/components/hygiene, no page/frame walk and therefore no
-// assets either (assets are exported per-node during that walk). The cheap sibling of a full pull
-// for "just give me the design system" — see collect.ts's collectDesignSystemOnly for the one
-// tradeoff (library-variable completeness depends on nodes actually being walked).
-const designSystemOnly = args.includes("--design-system");
-// Daemon lifecycle. These are COMMANDS, not modifiers: each one owns the whole invocation, so they
-// are refused in combination with each other and with any pull below. --serve holds the bridge open
-// until stopped; every ordinary command then routes through it automatically (see daemon.ts).
-const DAEMON_CMDS = ["--serve", "--stop", "--daemon-status"];
-const daemonCmd = DAEMON_CMDS.find((f) => args.includes(f)) || null;
-// Token lifecycle. COMMANDS, like the daemon ones above: each owns the whole invocation, needs no
-// bridge and no plugin (they only touch the local token file), and so is refused in combination with
-// anything else. --token-file is the exception — it is a MODIFIER, read below.
-const TOKEN_CMDS = ["--token-status", "--show-token", "--rotate-token", "--forget-token"];
-const tokenCmd = TOKEN_CMDS.find((f) => args.includes(f)) || null;
-// --no-assets REMOVES work (every other flag adds it): skips the per-node exportAsync render pass,
-// which dominates the export on a real design-system file. Structure, layout and tokens are
-// unaffected — a skipped node stays the same LEAF the full export produces, marked
-// `assetSkipped: true` instead of carrying an `asset` path; only assets/ goes missing.
-// Flag -> option name comes from bridge/src/read-opts.ts, the ONE registry shared with the plugin's
-// runOpts and the MCP tool schema. Building the table from it (rather than restating the six names
-// here) is what lets the guard below name the offending flags without a second hand-written list —
-// a twin that would silently stop matching the moment a read option is added.
-const READ_OPT_FLAGS = Object.fromEntries(READ_OPTS.map((o) => [o.flag, o.name]));
-const readOpts: Partial<Record<ReadOptName, boolean>> = {};
-const readOptFlagsGiven: string[] = [];
-for (const [flag, opt] of Object.entries(READ_OPT_FLAGS)) {
-  readOpts[opt] = args.includes(flag);
-  if (readOpts[opt]) readOptFlagsGiven.push(flag); // same predicate by construction, one walk
-}
-
-// Export timeout. The extraction — not the interactive connect — is the slow half: it walks every
-// node on every page, and a real design-system file blows past server-core's 120s default (found the
-// hard way on a ~1000-node file with --all-pages). Scale with the work and let the user override.
-// --list is the CHEAP map (pages + top-level frames, no recursion, no assets) you consult before
-// paying for a deep export. --list-pages is depth 1: page names only, which needs no page load at all.
-// One name for the structural-index command, decided once: every message and guard below asks for
-// the flag the user actually typed, instead of re-deriving it from two booleans at each site.
-// Exact `includes` matches, so "--list-libraries" is NOT swallowed by the "--list" branch — the same
-// prefix trap takeValues() guards against below, one line earlier.
-const listCmd = args.includes("--list-pages") ? "--list-pages" : args.includes("--list") ? "--list" : null;
-const listOnly = listCmd !== null;
-const listDepth: 1 | 2 = listCmd === "--list-pages" ? 1 : 2;
-// --list-libraries: the LIBRARY-scoped member of the same cheap-index family. Same cost model as
-// --list (no recursion, no node properties, no assets — it reads the file's library usage), same
-// budget tier (TIMEOUTS.list), same "prints and exits before any export runs" shape, and therefore
-// the same guards below. It is a discovery step: find out which libraries a file draws on, THEN pull
-// only what you need — the library analogue of --list -> --page.
-const listLibraries = args.includes("--list-libraries");
-
-// --whoami: the identity/liveness probe. Cheapest command there is (no page load, no node walk, no
-// assets) and it PRINTS rather than writing outDir, so it joins the index-command family below and
-// inherits its guards. It exists to answer, with evidence rather than inference, the three questions
-// the docs do not: whether two Figma files can run the plugin at once, whether `figma.fileKey` is
-// available to a locally-imported plugin, and whether a connection survives being left idle.
-const whoami = args.includes("--whoami");
-
-// --list-clients: which Figma FILES are connected right now. The bridge accepts one connection per
-// open file, so this is the "which of my open files can I talk to?" index — the discovery step before
-// --client, exactly as --list is before --page.
-const listClients = args.includes("--list-clients");
-
-// Value-taking flags (space form: `--flag value`) consume the NEXT token — that token must never be
-// mistaken for the positional [outDir] below. `consumedIdx` tracks every such value's index so
-// outDir detection can skip them, not just skip tokens that literally start with "--".
-const consumedIdx = new Set<number>();
-
 // ONE parser for every `--flag value` / `--flag=value` pair, repeatable by construction. One
 // shared rule keeps the positional [outDir] correct without each value flag remembering consumedIdx
 // (hand-rolled copies drifted into subtly different shapes, and `--timeout` once mishandled its own
@@ -343,7 +273,7 @@ const consumedIdx = new Set<number>();
 // Matching the flag EXACTLY (plus its `=` form) is part of the rule: startsWith("--timeout") would
 // also swallow a future `--timeout-ms`, reading another flag's value as this one's.
 // Returns [] when the flag is absent; throws UsageError when it's present with no value.
-function takeValues(args: string[], flag: string, missingMsg: string): string[] {
+function takeValues(args: string[], flag: string, missingMsg: string, consumedIdx: Set<number>): string[] {
   const eq = flag + "=";
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -364,283 +294,353 @@ function takeValues(args: string[], flag: string, missingMsg: string): string[] 
   return out;
 }
 
-// --children <id>: the node-scoped twin of --list. Same cost model (no recursion, no assets), just
-// scoped to one node's direct children instead of a page's top level — for peeking inside a frame
-// `--list` surfaced before paying for a full recursive `--page` pull of it.
-// Accepts `--children=<id>` as well as `--children <id>` — --page and --timeout both take the `=`
-// form, and a value-flag that silently rejects it is a papercut with no reason to exist.
-let childrenId: string | null = takeValues(args, "--children", "--children needs a node id (see --list)")[0] || null;
-// Accept everything the MCP twin accepts: bare id, dash form, percent-encoded, nested-instance
-// path, or a whole figma.com URL. toNodeId is node-id.ts's lenient entry point — an id shape it
-// doesn't recognise passes through and works rather than becoming a hard failure.
-if (childrenId) childrenId = toNodeId(childrenId);
-
-// --node <id>: a REAL export (properties + assets) of exactly ONE node — the CLI twin of the MCP
-// `figma_export_url` tool ("paste a link and ask about it"). Unlike --children (peek, no recursion)
-// and --screenshot (PNG only, no asset walk) this walks the node's subtree with the full serialize()
-// pass and exports the assets found inside it, same as a --page pull would for that subtree. It is a
-// SCOPE flag (selects WHAT is exported), not an index command, so it joins the `scopes` guard below.
-let nodeId: string | null = takeValues(args, "--node", "--node needs a node id or figma.com URL (see --list / --children)")[0] || null;
-if (nodeId) nodeId = toNodeId(nodeId);
-
-// --screenshot <id>: an on-demand PNG of ONE node — the visual-validation counterpart to --list/
-// --children (see collectScreenshot's comment in collect.ts for why this is a single-node pull rather
-// than a bulk pre-render pass). Unlike --list/--children it WRITES a file, so it is its own small
-// export, not a member of the indexCmds family below.
-let screenshotId: string | null = takeValues(args, "--screenshot", "--screenshot needs a node id (see --list / --children)")[0] || null;
-if (screenshotId) screenshotId = toNodeId(screenshotId);
-// --scale <n>: override collectReference's default (auto, capped at 2048px on the longest side). Only
-// meaningful paired with --screenshot — refused standalone below, the same silent-loss class as a read
-// option combined with --list.
-const BAD_SCALE = "--scale expects a positive number";
-const scaleArg = takeValues(args, "--scale", BAD_SCALE)[0];
-const scale = scaleArg !== undefined ? Number(scaleArg) : undefined;
-if (scale !== undefined && !(scale > 0)) throw new UsageError(`${BAD_SCALE}, got '${scaleArg}'`);
-if (scale !== undefined && !screenshotId) {
-  throw new UsageError("--scale only applies to --screenshot — pass both, or drop --scale.");
-}
-
-// --page <id|name>, REPEATABLE (docker -e / curl -H convention): export a bounded, caller-chosen set
-// of pages. Accepts `--page=x` and `--page x`. Ambiguous/unknown selectors fail loudly plugin-side
-// with the available pages listed — never a silent pick, since nothing here is interactive.
-const pageSel = takeValues(args, "--page", "--page needs an id or name (see --list)");
-// --as-library <name>: the LIBRARY-FILE pull. A scope, not a read option — it selects WHAT is
-// exported, and like --design-system it walks no page, so the read-option guard below refuses those
-// flags for it too. The name is required rather than defaulted from figma.root.name, because it is
-// what the output directory is named after and a silent default is a directory the user did not
-// choose. Run it with the LIBRARY file open in Figma, not the design file that consumes it.
-const asLibrary = takeValues(args, "--as-library", "a library name, e.g. --as-library \"Acme UI\"")[0] || null;
-
-// --client: WHICH connected Figma file this command talks to. Unlike every other flag here it is not
-// a scope or a read option — it is the ADDRESS, and it composes with all of them. Omit it and the
-// bridge uses the only connected file; with several connected it refuses and lists them rather than
-// guessing, so an export can never silently come from the wrong file. Accepts a connId (from
-// --list-clients), a fileKey, or part of the file's name. The connId (c1, c2, …) is a reconnect-order
-// LABEL for the current bridge lifetime, not a stable id across restarts — prefer the
-// file name or fileKey in a script; connId is fine for a human picking between two files open right now.
-const client = takeValues(args, "--client", "--client needs a connection id, fileKey, or part of a file name (see --list-clients)")[0] || null;
-
-// --token-file <path>: read the bridge token from somewhere other than the stored default. A
-// MODIFIER (it changes which token every other command uses), not a command.
-//
-// There is deliberately NO `--token <value>` twin. Process arguments are world-readable — `ps aux`,
-// /proc/<pid>/cmdline — so a value flag would hand the secret to every other user on the machine for
-// as long as the command runs. A path is not a secret; the file it points at is.
-const tokenFile = takeValues(args, "--token-file", "--token-file needs a path to a file containing the token")[0] || null;
-
-
-// A missing VALUE is distinct from a missing FLAG, and takeValues makes that structural: `--timeout`
-// with nothing after it (or another flag after it) throws here rather than leaving `undefined` for the
-// validator's own `!== undefined` guard to EXEMPT — which is how the flag once got silently ignored
-// and you got the default, the one outcome an explicit timeout exists to prevent, invisible until the
-// export died at a limit you thought you had raised.
-// One message for both failures (absent value, unusable value) so they cannot drift apart.
-const BAD_TIMEOUT = "--timeout expects a positive number of seconds";
-const timeoutArg = takeValues(args, "--timeout", BAD_TIMEOUT)[0];
-const timeoutSec = Number(timeoutArg);
-if (timeoutArg !== undefined && !(timeoutSec > 0)) throw new UsageError(`${BAD_TIMEOUT}, got '${timeoutArg}'`);
-// One override, applied to every budget below — spelling the `--timeout` conversion per budget is how
-// the list ops came to be missed by the flag in the first place.
-const overrideMs = timeoutSec > 0 ? timeoutSec * 1000 : undefined;
-const exportTimeoutMs = overrideMs ?? exportTimeout({ selection, allPages });
-// The list ops get their own budget, and --timeout raises it too — they are cheap RELATIVE to an
-// export, not fast (see TIMEOUTS.list). Without this the command you are told to run FIRST would be
-// the first to fail on the big files where looking before you pull is the whole point, with no flag to
-// rescue it, since --timeout only ever reached the export branch.
-const listTimeoutMs = overrideMs ?? TIMEOUTS.list;
-// How long to wait for the Figma plugin to CONNECT, before any command is sent. --timeout bounds this
-// too — the help has always said it applies to the discovery commands, and a wait it cannot shorten
-// made `dtwin list --timeout 5` sit for ten minutes. Without the flag: ten minutes at a terminal (a
-// person is walking over to Figma), but 90 s when nobody is watching stderr — an agent's shell gives
-// up at two minutes, and a command that outlives it reads as a hang with no message at all.
-const connectWaitMs = overrideMs ?? (process.stderr.isTTY ? 600000 : 90000);
-
-// Unknown flags are REFUSED, not absorbed. Every flag above is matched by exact `includes`, so a typo
-// (`--lsit`, `--al-pages`) would match nothing and fall through to the default — a full pull that
-// then waits on the plugin: the wrong command, run silently. Same silent-loss class as the guards
-// below, one step earlier. Runs after every takeValues() call so a flag's VALUE is never judged.
-const BOOL_FLAGS = [
-  "--selection", "--all-pages", "--design-system", ...DAEMON_CMDS, ...TOKEN_CMDS,
-  "--list", "--list-pages", "--list-libraries", "--whoami", "--list-clients", "--help", "--json",
-  ...Object.keys(READ_OPT_FLAGS),
-];
-const VALUE_FLAGS = ["--children", "--node", "--screenshot", "--scale", "--page", "--as-library", "--client", "--token-file", "--timeout"];
-const KNOWN_FLAGS = [...BOOL_FLAGS, ...VALUE_FLAGS];
-const OUT_FLAG_ALIASES = ["--out", "-o", "--output", "--out-dir", "--outdir", "--dir"];
-const unknown = args.filter((a, i) => a.startsWith("-") && a !== "-h" && !consumedIdx.has(i)
-  && !BOOL_FLAGS.includes(a) && !VALUE_FLAGS.some((f) => a === f || a.startsWith(f + "=")));
-if (unknown.length) {
-  // `--out`/`-o`/`--output` are what people reach for to name where the file lands, and they are
-  // too far (> 2 edits) from every real flag for the did-you-mean below to help. outDir is positional.
-  const outLike = unknown.find((u) => OUT_FLAG_ALIASES.includes(u.split("=")[0] ?? u));
-  if (outLike) {
-    throw new UsageError(`unknown flag: ${outLike}. outDir is positional: \`dtwin screenshot <id> <outDir>\` (the PNG lands in <outDir>/assets/<id>_ref.png) or \`dtwin pull <outDir> --node <id>\`; there is no ${outLike.split("=")[0]} flag.`);
+function parseArgs(args: string[]) {
+  const selection = args.includes("--selection");
+  const allPages = args.includes("--all-pages");
+  // --design-system: tokens/styles/components/hygiene, no page/frame walk and therefore no
+  // assets either (assets are exported per-node during that walk). The cheap sibling of a full pull
+  // for "just give me the design system" — see collect.ts's collectDesignSystemOnly for the one
+  // tradeoff (library-variable completeness depends on nodes actually being walked).
+  const designSystemOnly = args.includes("--design-system");
+  // Daemon lifecycle. These are COMMANDS, not modifiers: each one owns the whole invocation, so they
+  // are refused in combination with each other and with any pull below. --serve holds the bridge open
+  // until stopped; every ordinary command then routes through it automatically (see daemon.ts).
+  const DAEMON_CMDS = ["--serve", "--stop", "--daemon-status"];
+  const daemonCmd = DAEMON_CMDS.find((f) => args.includes(f)) || null;
+  // Token lifecycle. COMMANDS, like the daemon ones above: each owns the whole invocation, needs no
+  // bridge and no plugin (they only touch the local token file), and so is refused in combination with
+  // anything else. --token-file is the exception — it is a MODIFIER, read below.
+  const TOKEN_CMDS = ["--token-status", "--show-token", "--rotate-token", "--forget-token"];
+  const tokenCmd = TOKEN_CMDS.find((f) => args.includes(f)) || null;
+  // --no-assets REMOVES work (every other flag adds it): skips the per-node exportAsync render pass,
+  // which dominates the export on a real design-system file. Structure, layout and tokens are
+  // unaffected — a skipped node stays the same LEAF the full export produces, marked
+  // `assetSkipped: true` instead of carrying an `asset` path; only assets/ goes missing.
+  // Flag -> option name comes from bridge/src/read-opts.ts, the ONE registry shared with the plugin's
+  // runOpts and the MCP tool schema. Building the table from it (rather than restating the six names
+  // here) is what lets the guard below name the offending flags without a second hand-written list —
+  // a twin that would silently stop matching the moment a read option is added.
+  const READ_OPT_FLAGS = Object.fromEntries(READ_OPTS.map((o) => [o.flag, o.name]));
+  const readOpts: Partial<Record<ReadOptName, boolean>> = {};
+  const readOptFlagsGiven: string[] = [];
+  for (const [flag, opt] of Object.entries(READ_OPT_FLAGS)) {
+    readOpts[opt] = args.includes(flag);
+    if (readOpts[opt]) readOptFlagsGiven.push(flag); // same predicate by construction, one walk
   }
-  // "Did you mean": the nearest known flag by edit distance, offered only when it is a plausible typo.
-  const hints = unknown.map((u) => {
-    const eqAt = u.indexOf("=");
-    const name = eqAt === -1 ? u : u.slice(0, eqAt); // u.split("=")[0]
-    // The FIRST nearest flag in KNOWN_FLAGS order — what the stable `sort(...)[0]` picked. reduce()
-    // without a seed needs a non-empty array; KNOWN_FLAGS is a non-empty literal list.
-    const best = KNOWN_FLAGS.map((f) => [distance(name, f), f] as const).reduce((x, y) => (y[0] < x[0] ? y : x));
-    return best[0] <= 2 ? `${u} (did you mean ${best[1]}?)` : u;
-  });
-  throw new UsageError(`unknown flag${unknown.length > 1 ? "s" : ""}: ${hints.join(", ")}. Run dtwin --help for the full list.`);
-}
 
-// The positional [outDir] — the first token that's neither a `--flag` nor a value a flag above already
-// claimed. Doing this AFTER parsing every value-taking flag is what keeps e.g. `--children 131:1879`
-// (no outDir given) from being misread as `outDir = "131:1879"`.
-// Default: design/export — dtwin writes only there, so `rm -rf design/export && re-pull` cannot take
-// the component map, the plan or the audit with it. A project created under the older flat layout
-// keeps working: its export is still found (bridge/src/project-layout.ts findExportDir).
-const userOutDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i));
-const outDir = userOutDir ||
-  (LAYOUT.findExportDir(process.cwd()).layout === "legacy-flat" ? LAYOUT.DESIGN_DIR : LAYOUT.EXPORT_DIR);
+  // Export timeout. The extraction — not the interactive connect — is the slow half: it walks every
+  // node on every page, and a real design-system file blows past server-core's 120s default (found the
+  // hard way on a ~1000-node file with --all-pages). Scale with the work and let the user override.
+  // --list is the CHEAP map (pages + top-level frames, no recursion, no assets) you consult before
+  // paying for a deep export. --list-pages is depth 1: page names only, which needs no page load at all.
+  // One name for the structural-index command, decided once: every message and guard below asks for
+  // the flag the user actually typed, instead of re-deriving it from two booleans at each site.
+  // Exact `includes` matches, so "--list-libraries" is NOT swallowed by the "--list" branch — the same
+  // prefix trap takeValues() guards against below, one line earlier.
+  const listCmd = args.includes("--list-pages") ? "--list-pages" : args.includes("--list") ? "--list" : null;
+  const listOnly = listCmd !== null;
+  const listDepth: 1 | 2 = listCmd === "--list-pages" ? 1 : 2;
+  // --list-libraries: the LIBRARY-scoped member of the same cheap-index family. Same cost model as
+  // --list (no recursion, no node properties, no assets — it reads the file's library usage), same
+  // budget tier (TIMEOUTS.list), same "prints and exits before any export runs" shape, and therefore
+  // the same guards below. It is a discovery step: find out which libraries a file draws on, THEN pull
+  // only what you need — the library analogue of --list -> --page.
+  const listLibraries = args.includes("--list-libraries");
 
-// `dtwin pull design --node <id>` is the outDir trap — `design` is a valid, deliberate
-// positional outDir (never special-cased; see the note above), but when the project ALREADY has a
-// design/export/ tree, writing into `design` too creates a SECOND, parallel export tree that every
-// other command (doctor, cross-check, audit, build-screen) keeps ignoring. Warn, don't refuse — a
-// project genuinely named "design" for something else is legitimate, and refusing would be the parser
-// getting magic about one string.
-if (userOutDir) {
-  const requested = path.resolve(process.cwd(), userOutDir);
-  const alreadyHasExport = fs.existsSync(path.join(requested, "export"));
-  if (alreadyHasExport) {
-    console.error(
-      `[dtwin] warn: ${userOutDir} already contains ${path.join(userOutDir, "export")} — writing here too creates a` +
-      ` PARALLEL export tree that doctor/cross-check/audit/build-screen do not read. You almost certainly want` +
-      ` \`dtwin pull ${userOutDir === "design" ? "" : userOutDir + "/export "}...\` (drop the outDir to use the default` +
-      ` design/export, or pass the export dir itself) instead of writing into ${userOutDir}.`
-    );
+  // --whoami: the identity/liveness probe. Cheapest command there is (no page load, no node walk, no
+  // assets) and it PRINTS rather than writing outDir, so it joins the index-command family below and
+  // inherits its guards. It exists to answer, with evidence rather than inference, the three questions
+  // the docs do not: whether two Figma files can run the plugin at once, whether `figma.fileKey` is
+  // available to a locally-imported plugin, and whether a connection survives being left idle.
+  const whoami = args.includes("--whoami");
+
+  // --list-clients: which Figma FILES are connected right now. The bridge accepts one connection per
+  // open file, so this is the "which of my open files can I talk to?" index — the discovery step before
+  // --client, exactly as --list is before --page.
+  const listClients = args.includes("--list-clients");
+
+  // Value-taking flags (space form: `--flag value`) consume the NEXT token — that token must never be
+  // mistaken for the positional [outDir] below. `consumedIdx` tracks every such value's index so
+  // outDir detection can skip them, not just skip tokens that literally start with "--".
+  const consumedIdx = new Set<number>();
+
+  // --children <id>: the node-scoped twin of --list. Same cost model (no recursion, no assets), just
+  // scoped to one node's direct children instead of a page's top level — for peeking inside a frame
+  // `--list` surfaced before paying for a full recursive `--page` pull of it.
+  // Accepts `--children=<id>` as well as `--children <id>` — --page and --timeout both take the `=`
+  // form, and a value-flag that silently rejects it is a papercut with no reason to exist.
+  let childrenId: string | null = takeValues(args, "--children", "--children needs a node id (see --list)", consumedIdx)[0] || null;
+  // Accept everything the MCP twin accepts: bare id, dash form, percent-encoded, nested-instance
+  // path, or a whole figma.com URL. toNodeId is node-id.ts's lenient entry point — an id shape it
+  // doesn't recognise passes through and works rather than becoming a hard failure.
+  if (childrenId) childrenId = toNodeId(childrenId);
+
+  // --node <id>: a REAL export (properties + assets) of exactly ONE node — the CLI twin of the MCP
+  // `figma_export_url` tool ("paste a link and ask about it"). Unlike --children (peek, no recursion)
+  // and --screenshot (PNG only, no asset walk) this walks the node's subtree with the full serialize()
+  // pass and exports the assets found inside it, same as a --page pull would for that subtree. It is a
+  // SCOPE flag (selects WHAT is exported), not an index command, so it joins the `scopes` guard below.
+  let nodeId: string | null = takeValues(args, "--node", "--node needs a node id or figma.com URL (see --list / --children)", consumedIdx)[0] || null;
+  if (nodeId) nodeId = toNodeId(nodeId);
+
+  // --screenshot <id>: an on-demand PNG of ONE node — the visual-validation counterpart to --list/
+  // --children (see collectScreenshot's comment in collect.ts for why this is a single-node pull rather
+  // than a bulk pre-render pass). Unlike --list/--children it WRITES a file, so it is its own small
+  // export, not a member of the indexCmds family below.
+  let screenshotId: string | null = takeValues(args, "--screenshot", "--screenshot needs a node id (see --list / --children)", consumedIdx)[0] || null;
+  if (screenshotId) screenshotId = toNodeId(screenshotId);
+  // --scale <n>: override collectReference's default (auto, capped at 2048px on the longest side). Only
+  // meaningful paired with --screenshot — refused standalone below, the same silent-loss class as a read
+  // option combined with --list.
+  const BAD_SCALE = "--scale expects a positive number";
+  const scaleArg = takeValues(args, "--scale", BAD_SCALE, consumedIdx)[0];
+  const scale = scaleArg !== undefined ? Number(scaleArg) : undefined;
+  if (scale !== undefined && !(scale > 0)) throw new UsageError(`${BAD_SCALE}, got '${scaleArg}'`);
+  if (scale !== undefined && !screenshotId) {
+    throw new UsageError("--scale only applies to --screenshot — pass both, or drop --scale.");
   }
-}
 
-// Scope flags are MUTUALLY EXCLUSIVE, and the loser must not be discarded in silence: collectFull is
-// `if (allPages) … else if (page)`, so `--all-pages --page Foo` would export all 25 pages while the user
-// watched for one; `--selection --page Foo` never forwards the page at all. Both produce a plausible
-// export of the WRONG scope — the failure you don't notice. Parsing is a pure function, so
-// refusing costs two lines and a test.
-const scopes = [selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library", nodeId && "--node"].filter(isFlag);
-if (scopes.length > 1) {
-  throw new UsageError(`${scopes.join(" and ")} select different scopes — pass only one.`);
-}
-// --screenshot exports exactly one node's reference PNG — it is not a scope modifier, so combining it
-// with one is the same silent-loss class the scope guard above exists for.
-if (screenshotId && scopes.length) {
-  throw new UsageError(`--screenshot renders ONE node's reference image — it cannot be combined with ${scopes.join(" / ")}. Run it on its own.`);
-}
-// The cheap-index FAMILY, decided once. Every guard below asks this list rather than re-deriving
-// "is this an index command?" from a growing pile of booleans — which is exactly how a flag gets
-// added and then silently omitted from one of the three guards (the --timeout class of bug: the
-// flag is accepted, and then quietly does nothing).
-const indexCmds = [listCmd, childrenId && "--children", listLibraries && "--list-libraries", whoami && "--whoami", listClients && "--list-clients"].filter(isFlag);
-const indexCmd = indexCmds[0] || null;
-// --screenshot writes a file, so it does not join the indexCmds family above (which never do) — but
-// combining it with one is still the same silent-loss class: only one command's output would appear.
-if (screenshotId && indexCmds.length) {
-  throw new UsageError(`--screenshot cannot be combined with ${indexCmds.join(" / ")} — run them as separate commands.`);
-}
-// Read options need a serialize()/node walk that --screenshot deliberately skips (see its usage
-// comment above), so any of them here would be silently ignored exactly as they would on a list command.
-if (screenshotId && readOptFlagsGiven.length) {
-  const many = readOptFlagsGiven.length > 1;
-  const [are, they] = many ? ["are read options", "they"] : ["is a read option", "it"];
-  throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for a full export — --screenshot only renders a PNG, so ${they} would be silently ignored.`);
-}
+  // --page <id|name>, REPEATABLE (docker -e / curl -H convention): export a bounded, caller-chosen set
+  // of pages. Accepts `--page=x` and `--page x`. Ambiguous/unknown selectors fail loudly plugin-side
+  // with the available pages listed — never a silent pick, since nothing here is interactive.
+  const pageSel = takeValues(args, "--page", "--page needs an id or name (see --list)", consumedIdx);
+  // --as-library <name>: the LIBRARY-FILE pull. A scope, not a read option — it selects WHAT is
+  // exported, and like --design-system it walks no page, so the read-option guard below refuses those
+  // flags for it too. The name is required rather than defaulted from figma.root.name, because it is
+  // what the output directory is named after and a silent default is a directory the user did not
+  // choose. Run it with the LIBRARY file open in Figma, not the design file that consumes it.
+  const asLibrary = takeValues(args, "--as-library", "a library name, e.g. --as-library \"Acme UI\"", consumedIdx)[0] || null;
 
-// --json: machine output for the two index commands that print a TABLE for humans (--list-clients,
-// --list-libraries). The primary caller of this CLI is an agent, and scraping an aligned table is
-// how a column rename becomes a silent misread. --list / --list-pages / --children / --whoami already
-// print JSON, so the flag is accepted there as a no-op (one habit for every index command) and
-// refused everywhere else — an export writes files and prints no result to make JSON of.
-const json = args.includes("--json");
-if (json && !indexCmds.length) {
-  throw new UsageError("--json applies to the commands that PRINT (--list-clients, --list-libraries; --list / --list-pages / --children / --whoami are JSON already). An export writes files instead — read its _manifest.json.");
-}
+  // --client: WHICH connected Figma file this command talks to. Unlike every other flag here it is not
+  // a scope or a read option — it is the ADDRESS, and it composes with all of them. Omit it and the
+  // bridge uses the only connected file; with several connected it refuses and lists them rather than
+  // guessing, so an export can never silently come from the wrong file. Accepts a connId (from
+  // --list-clients), a fileKey, or part of the file's name. The connId (c1, c2, …) is a reconnect-order
+  // LABEL for the current bridge lifetime, not a stable id across restarts — prefer the
+  // file name or fileKey in a script; connId is fine for a human picking between two files open right now.
+  const client = takeValues(args, "--client", "--client needs a connection id, fileKey, or part of a file name (see --list-clients)", consumedIdx)[0] || null;
 
-// Same class of silent loss: the list/peek commands print and exit(0) before any export runs, so an
-// export flag combined with one of them is a no-op the user has no way to see.
-if (indexCmd && scopes.length) {
-  throw new UsageError(`${indexCmd} only prints a structural index — it cannot be combined with ${scopes.join(" / ")}. Run the list first, then pull with the ids it prints.`);
-}
-// Two index commands at once is the same silent loss one step over: only one of them would run and
-// print, and the other would vanish without a word.
-if (indexCmds.length > 1) {
-  throw new UsageError(`${indexCmds.join(" and ")} are different queries — pass only one.`);
-}
-// Read options are the SAME silent loss, one step further in. The list ops emit only structural
-// fields (id/name/type/size) — they never serialize a node, never call getCSSAsync, never read
-// measurements, never export an asset — so every flag in READ_OPT_FLAGS is a no-op here, discarded
-// without a word. Refused as a group, --no-assets included: it is just as inert (nothing renders on
-// this path), and exempting it would put the caller back to guessing WHICH flags survive a list,
-// which is the ambiguity the guard exists to remove. `--timeout` is deliberately NOT in this set —
-// it genuinely applies (listTimeoutMs).
-// --list-libraries is in the same boat and joins the guard through indexCmd: it reports library
-// identity/usage, never a serialized node, so a read option there would be discarded just as silently.
-if (indexCmd && readOptFlagsGiven.length) {
-  const cmd = indexCmd;
-  // What the command DOES emit, so the refusal explains itself instead of asserting a shape that is
-  // wrong for one member of the family.
-  const emits = cmd === "--list-libraries" ? "only prints the libraries this file uses"
-    : cmd === "--whoami" ? "only prints connection/plugin identity"
-    : cmd === "--list-clients" ? "only prints which Figma files are connected"
-    : "only prints a structural index (id/name/type/size)";
-  // Decide plurality ONCE. Six inline ternaries in one template literal meant any wording edit was an
-  // edit to a 400-character single expression with six branch points.
-  const many = readOptFlagsGiven.length > 1;
-  const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
-  throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for an EXPORT — ${cmd} ${emits}, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to the --page pull afterwards.`);
-}
-// --design-system never walks a page or node, so every read option (css/measurements/
-// plugin-data/motion/shared-data/no-assets) is just as inert here as it is on a list command — same
-// silent-loss class, same refusal. --variant-visuals is the ONE exception: it enriches the
-// component catalog itself (findAllWithCriteria for COMPONENT_SET/COMPONENT), which --design-system
-// and --as-library both build, so it is genuinely live here — excluded from the guard below and
-// forwarded explicitly a few lines down.
-const dsGuardFlags = readOptFlagsGiven.filter((f) => f !== "--variant-visuals");
-if ((designSystemOnly || asLibrary) && dsGuardFlags.length) {
-  const many = dsGuardFlags.length > 1;
-  const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
-  throw new UsageError(`${dsGuardFlags.join(" / ")} ${are} for a node/page walk — ${asLibrary ? "--as-library" : "--design-system"} skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`);
-}
+  // --token-file <path>: read the bridge token from somewhere other than the stored default. A
+  // MODIFIER (it changes which token every other command uses), not a command.
+  //
+  // There is deliberately NO `--token <value>` twin. Process arguments are world-readable — `ps aux`,
+  // /proc/<pid>/cmdline — so a value flag would hand the secret to every other user on the machine for
+  // as long as the command runs. A path is not a secret; the file it points at is.
+  const tokenFile = takeValues(args, "--token-file", "--token-file needs a path to a file containing the token", consumedIdx)[0] || null;
 
-// A daemon command owns the invocation. Combining it with a pull or a list is the same silent-loss
-// class the scope guards above exist for: --serve --all-pages would start a daemon and never run the
-// export the user typed, with nothing said about it.
-if (daemonCmd) {
-  const others = [...scopes, screenshotId && "--screenshot", ...indexCmds, ...readOptFlagsGiven].filter(isFlag);
-  if (others.length) {
-    throw new UsageError(`${daemonCmd} manages the background bridge — it cannot be combined with ${others.join(" / ")}. Start the daemon, then run your pull as a separate command (it will route through it automatically).`);
+
+  // A missing VALUE is distinct from a missing FLAG, and takeValues makes that structural: `--timeout`
+  // with nothing after it (or another flag after it) throws here rather than leaving `undefined` for the
+  // validator's own `!== undefined` guard to EXEMPT — which is how the flag once got silently ignored
+  // and you got the default, the one outcome an explicit timeout exists to prevent, invisible until the
+  // export died at a limit you thought you had raised.
+  // One message for both failures (absent value, unusable value) so they cannot drift apart.
+  const BAD_TIMEOUT = "--timeout expects a positive number of seconds";
+  const timeoutArg = takeValues(args, "--timeout", BAD_TIMEOUT, consumedIdx)[0];
+  const timeoutSec = Number(timeoutArg);
+  if (timeoutArg !== undefined && !(timeoutSec > 0)) throw new UsageError(`${BAD_TIMEOUT}, got '${timeoutArg}'`);
+  // One override, applied to every budget below — spelling the `--timeout` conversion per budget is how
+  // the list ops came to be missed by the flag in the first place.
+  const overrideMs = timeoutSec > 0 ? timeoutSec * 1000 : undefined;
+  const exportTimeoutMs = overrideMs ?? exportTimeout({ selection, allPages });
+  // The list ops get their own budget, and --timeout raises it too — they are cheap RELATIVE to an
+  // export, not fast (see TIMEOUTS.list). Without this the command you are told to run FIRST would be
+  // the first to fail on the big files where looking before you pull is the whole point, with no flag to
+  // rescue it, since --timeout only ever reached the export branch.
+  const listTimeoutMs = overrideMs ?? TIMEOUTS.list;
+  // How long to wait for the Figma plugin to CONNECT, before any command is sent. --timeout bounds this
+  // too — the help has always said it applies to the discovery commands, and a wait it cannot shorten
+  // made `dtwin list --timeout 5` sit for ten minutes. Without the flag: ten minutes at a terminal (a
+  // person is walking over to Figma), but 90 s when nobody is watching stderr — an agent's shell gives
+  // up at two minutes, and a command that outlives it reads as a hang with no message at all.
+  const connectWaitMs = overrideMs ?? (process.stderr.isTTY ? 600000 : 90000);
+
+  // Unknown flags are REFUSED, not absorbed. Every flag above is matched by exact `includes`, so a typo
+  // (`--lsit`, `--al-pages`) would match nothing and fall through to the default — a full pull that
+  // then waits on the plugin: the wrong command, run silently. Same silent-loss class as the guards
+  // below, one step earlier. Runs after every takeValues() call so a flag's VALUE is never judged.
+  const BOOL_FLAGS = [
+    "--selection", "--all-pages", "--design-system", ...DAEMON_CMDS, ...TOKEN_CMDS,
+    "--list", "--list-pages", "--list-libraries", "--whoami", "--list-clients", "--help", "--json",
+    ...Object.keys(READ_OPT_FLAGS),
+  ];
+  const VALUE_FLAGS = ["--children", "--node", "--screenshot", "--scale", "--page", "--as-library", "--client", "--token-file", "--timeout"];
+  const KNOWN_FLAGS = [...BOOL_FLAGS, ...VALUE_FLAGS];
+  const OUT_FLAG_ALIASES = ["--out", "-o", "--output", "--out-dir", "--outdir", "--dir"];
+  const unknown = args.filter((a, i) => a.startsWith("-") && a !== "-h" && !consumedIdx.has(i)
+    && !BOOL_FLAGS.includes(a) && !VALUE_FLAGS.some((f) => a === f || a.startsWith(f + "=")));
+  if (unknown.length) {
+    // `--out`/`-o`/`--output` are what people reach for to name where the file lands, and they are
+    // too far (> 2 edits) from every real flag for the did-you-mean below to help. outDir is positional.
+    const outLike = unknown.find((u) => OUT_FLAG_ALIASES.includes(u.split("=")[0] ?? u));
+    if (outLike) {
+      throw new UsageError(`unknown flag: ${outLike}. outDir is positional: \`dtwin screenshot <id> <outDir>\` (the PNG lands in <outDir>/assets/<id>_ref.png) or \`dtwin pull <outDir> --node <id>\`; there is no ${outLike.split("=")[0]} flag.`);
+    }
+    // "Did you mean": the nearest known flag by edit distance, offered only when it is a plausible typo.
+    const hints = unknown.map((u) => {
+      const eqAt = u.indexOf("=");
+      const name = eqAt === -1 ? u : u.slice(0, eqAt); // u.split("=")[0]
+      // The FIRST nearest flag in KNOWN_FLAGS order — what the stable `sort(...)[0]` picked. reduce()
+      // without a seed needs a non-empty array; KNOWN_FLAGS is a non-empty literal list.
+      const best = KNOWN_FLAGS.map((f) => [distance(name, f), f] as const).reduce((x, y) => (y[0] < x[0] ? y : x));
+      return best[0] <= 2 ? `${u} (did you mean ${best[1]}?)` : u;
+    });
+    throw new UsageError(`unknown flag${unknown.length > 1 ? "s" : ""}: ${hints.join(", ")}. Run dtwin --help for the full list.`);
   }
-  if (DAEMON_CMDS.filter((f) => args.includes(f)).length > 1) {
-    throw new UsageError("--serve / --stop / --daemon-status are different commands — pass only one.");
-  }
-}
 
-// A token command owns the invocation for the same reason a daemon one does: it manages the local
-// credential and never opens a bridge, so pairing it with a pull would start an export the user did
-// not ask for — or, worse, silently do only the token half of what they typed.
-if (tokenCmd) {
-  const others = [...scopes, screenshotId && "--screenshot", daemonCmd, ...indexCmds, ...readOptFlagsGiven].filter(isFlag);
-  if (others.length) {
-    throw new UsageError(`${tokenCmd} manages the stored bridge token — it cannot be combined with ${others.join(" / ")}. Run it on its own, then run your command.`);
-  }
-  const tokenCmds = TOKEN_CMDS.filter((f) => args.includes(f));
-  if (tokenCmds.length > 1) {
-    throw new UsageError(`${tokenCmds.join(" and ")} are different commands — pass only one.`);
-  }
-  // --token-file names a token to READ; these three act on the STORED one. Passing both reads as
-  // "rotate/report the token in this file", which is not what happens — the stored token is the one
-  // acted on and the --token-file one is silently ignored. --show-token is the ONE token command
-  // where --token-file genuinely applies (print the token in that file), so it is not listed here.
-  if (tokenFile && tokenCmd !== "--show-token") {
-    throw new UsageError(`${tokenCmd} acts on the stored token, so --token-file would be silently ignored. Drop it (or, for --rotate-token/--forget-token, edit that file directly).`);
-  }
-}
+  // The positional [outDir] — the first token that's neither a `--flag` nor a value a flag above already
+  // claimed. Doing this AFTER parsing every value-taking flag is what keeps e.g. `--children 131:1879`
+  // (no outDir given) from being misread as `outDir = "131:1879"`.
+  // Default: design/export — dtwin writes only there, so `rm -rf design/export && re-pull` cannot take
+  // the component map, the plan or the audit with it. A project created under the older flat layout
+  // keeps working: its export is still found (bridge/src/project-layout.ts findExportDir).
+  const userOutDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i));
+  const outDir = userOutDir ||
+    (LAYOUT.findExportDir(process.cwd()).layout === "legacy-flat" ? LAYOUT.DESIGN_DIR : LAYOUT.EXPORT_DIR);
 
-return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json };
+  // `dtwin pull design --node <id>` is the outDir trap — `design` is a valid, deliberate
+  // positional outDir (never special-cased; see the note above), but when the project ALREADY has a
+  // design/export/ tree, writing into `design` too creates a SECOND, parallel export tree that every
+  // other command (doctor, cross-check, audit, build-screen) keeps ignoring. Warn, don't refuse — a
+  // project genuinely named "design" for something else is legitimate, and refusing would be the parser
+  // getting magic about one string.
+  if (userOutDir) {
+    const requested = path.resolve(process.cwd(), userOutDir);
+    const alreadyHasExport = fs.existsSync(path.join(requested, "export"));
+    if (alreadyHasExport) {
+      console.error(
+        `[dtwin] warn: ${userOutDir} already contains ${path.join(userOutDir, "export")} — writing here too creates a` +
+        ` PARALLEL export tree that doctor/cross-check/audit/build-screen do not read. You almost certainly want` +
+        ` \`dtwin pull ${userOutDir === "design" ? "" : userOutDir + "/export "}...\` (drop the outDir to use the default` +
+        ` design/export, or pass the export dir itself) instead of writing into ${userOutDir}.`
+      );
+    }
+  }
+
+  // Scope flags are MUTUALLY EXCLUSIVE, and the loser must not be discarded in silence: collectFull is
+  // `if (allPages) … else if (page)`, so `--all-pages --page Foo` would export all 25 pages while the user
+  // watched for one; `--selection --page Foo` never forwards the page at all. Both produce a plausible
+  // export of the WRONG scope — the failure you don't notice. Parsing is a pure function, so
+  // refusing costs two lines and a test.
+  const scopes = [selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library", nodeId && "--node"].filter(isFlag);
+  if (scopes.length > 1) {
+    throw new UsageError(`${scopes.join(" and ")} select different scopes — pass only one.`);
+  }
+  // --screenshot exports exactly one node's reference PNG — it is not a scope modifier, so combining it
+  // with one is the same silent-loss class the scope guard above exists for.
+  if (screenshotId && scopes.length) {
+    throw new UsageError(`--screenshot renders ONE node's reference image — it cannot be combined with ${scopes.join(" / ")}. Run it on its own.`);
+  }
+  // The cheap-index FAMILY, decided once. Every guard below asks this list rather than re-deriving
+  // "is this an index command?" from a growing pile of booleans — which is exactly how a flag gets
+  // added and then silently omitted from one of the three guards (the --timeout class of bug: the
+  // flag is accepted, and then quietly does nothing).
+  const indexCmds = [listCmd, childrenId && "--children", listLibraries && "--list-libraries", whoami && "--whoami", listClients && "--list-clients"].filter(isFlag);
+  const indexCmd = indexCmds[0] || null;
+  // --screenshot writes a file, so it does not join the indexCmds family above (which never do) — but
+  // combining it with one is still the same silent-loss class: only one command's output would appear.
+  if (screenshotId && indexCmds.length) {
+    throw new UsageError(`--screenshot cannot be combined with ${indexCmds.join(" / ")} — run them as separate commands.`);
+  }
+  // Read options need a serialize()/node walk that --screenshot deliberately skips (see its usage
+  // comment above), so any of them here would be silently ignored exactly as they would on a list command.
+  if (screenshotId && readOptFlagsGiven.length) {
+    const many = readOptFlagsGiven.length > 1;
+    const [are, they] = many ? ["are read options", "they"] : ["is a read option", "it"];
+    throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for a full export — --screenshot only renders a PNG, so ${they} would be silently ignored.`);
+  }
+
+  // --json: machine output for the two index commands that print a TABLE for humans (--list-clients,
+  // --list-libraries). The primary caller of this CLI is an agent, and scraping an aligned table is
+  // how a column rename becomes a silent misread. --list / --list-pages / --children / --whoami already
+  // print JSON, so the flag is accepted there as a no-op (one habit for every index command) and
+  // refused everywhere else — an export writes files and prints no result to make JSON of.
+  const json = args.includes("--json");
+  if (json && !indexCmds.length) {
+    throw new UsageError("--json applies to the commands that PRINT (--list-clients, --list-libraries; --list / --list-pages / --children / --whoami are JSON already). An export writes files instead — read its _manifest.json.");
+  }
+
+  // Same class of silent loss: the list/peek commands print and exit(0) before any export runs, so an
+  // export flag combined with one of them is a no-op the user has no way to see.
+  if (indexCmd && scopes.length) {
+    throw new UsageError(`${indexCmd} only prints a structural index — it cannot be combined with ${scopes.join(" / ")}. Run the list first, then pull with the ids it prints.`);
+  }
+  // Two index commands at once is the same silent loss one step over: only one of them would run and
+  // print, and the other would vanish without a word.
+  if (indexCmds.length > 1) {
+    throw new UsageError(`${indexCmds.join(" and ")} are different queries — pass only one.`);
+  }
+  // Read options are the SAME silent loss, one step further in. The list ops emit only structural
+  // fields (id/name/type/size) — they never serialize a node, never call getCSSAsync, never read
+  // measurements, never export an asset — so every flag in READ_OPT_FLAGS is a no-op here, discarded
+  // without a word. Refused as a group, --no-assets included: it is just as inert (nothing renders on
+  // this path), and exempting it would put the caller back to guessing WHICH flags survive a list,
+  // which is the ambiguity the guard exists to remove. `--timeout` is deliberately NOT in this set —
+  // it genuinely applies (listTimeoutMs).
+  // --list-libraries is in the same boat and joins the guard through indexCmd: it reports library
+  // identity/usage, never a serialized node, so a read option there would be discarded just as silently.
+  if (indexCmd && readOptFlagsGiven.length) {
+    const cmd = indexCmd;
+    // What the command DOES emit, so the refusal explains itself instead of asserting a shape that is
+    // wrong for one member of the family.
+    const emits = cmd === "--list-libraries" ? "only prints the libraries this file uses"
+      : cmd === "--whoami" ? "only prints connection/plugin identity"
+      : cmd === "--list-clients" ? "only prints which Figma files are connected"
+      : "only prints a structural index (id/name/type/size)";
+    // Decide plurality ONCE. Six inline ternaries in one template literal meant any wording edit was an
+    // edit to a 400-character single expression with six branch points.
+    const many = readOptFlagsGiven.length > 1;
+    const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
+    throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for an EXPORT — ${cmd} ${emits}, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to the --page pull afterwards.`);
+  }
+  // --design-system never walks a page or node, so every read option (css/measurements/
+  // plugin-data/motion/shared-data/no-assets) is just as inert here as it is on a list command — same
+  // silent-loss class, same refusal. --variant-visuals is the ONE exception: it enriches the
+  // component catalog itself (findAllWithCriteria for COMPONENT_SET/COMPONENT), which --design-system
+  // and --as-library both build, so it is genuinely live here — excluded from the guard below and
+  // forwarded explicitly a few lines down.
+  const dsGuardFlags = readOptFlagsGiven.filter((f) => f !== "--variant-visuals");
+  if ((designSystemOnly || asLibrary) && dsGuardFlags.length) {
+    const many = dsGuardFlags.length > 1;
+    const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
+    throw new UsageError(`${dsGuardFlags.join(" / ")} ${are} for a node/page walk — ${asLibrary ? "--as-library" : "--design-system"} skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`);
+  }
+
+  // A daemon command owns the invocation. Combining it with a pull or a list is the same silent-loss
+  // class the scope guards above exist for: --serve --all-pages would start a daemon and never run the
+  // export the user typed, with nothing said about it.
+  if (daemonCmd) {
+    const others = [...scopes, screenshotId && "--screenshot", ...indexCmds, ...readOptFlagsGiven].filter(isFlag);
+    if (others.length) {
+      throw new UsageError(`${daemonCmd} manages the background bridge — it cannot be combined with ${others.join(" / ")}. Start the daemon, then run your pull as a separate command (it will route through it automatically).`);
+    }
+    if (DAEMON_CMDS.filter((f) => args.includes(f)).length > 1) {
+      throw new UsageError("--serve / --stop / --daemon-status are different commands — pass only one.");
+    }
+  }
+
+  // A token command owns the invocation for the same reason a daemon one does: it manages the local
+  // credential and never opens a bridge, so pairing it with a pull would start an export the user did
+  // not ask for — or, worse, silently do only the token half of what they typed.
+  if (tokenCmd) {
+    const others = [...scopes, screenshotId && "--screenshot", daemonCmd, ...indexCmds, ...readOptFlagsGiven].filter(isFlag);
+    if (others.length) {
+      throw new UsageError(`${tokenCmd} manages the stored bridge token — it cannot be combined with ${others.join(" / ")}. Run it on its own, then run your command.`);
+    }
+    const tokenCmds = TOKEN_CMDS.filter((f) => args.includes(f));
+    if (tokenCmds.length > 1) {
+      throw new UsageError(`${tokenCmds.join(" and ")} are different commands — pass only one.`);
+    }
+    // --token-file names a token to READ; these three act on the STORED one. Passing both reads as
+    // "rotate/report the token in this file", which is not what happens — the stored token is the one
+    // acted on and the --token-file one is silently ignored. --show-token is the ONE token command
+    // where --token-file genuinely applies (print the token in that file), so it is not listed here.
+    if (tokenFile && tokenCmd !== "--show-token") {
+      throw new UsageError(`${tokenCmd} acts on the stored token, so --token-file would be silently ignored. Drop it (or, for --rotate-token/--forget-token, edit that file directly).`);
+    }
+  }
+
+  return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json };
 }
 
 // --list-libraries prints for a HUMAN (and for an agent skimming a terminal), not raw JSON: the
