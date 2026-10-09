@@ -8,13 +8,18 @@
 // Port rule: NOTHING here binds 8787–8789. The server runs under test/fixtures/no-shared-port.mjs, which
 // rewrites its TCP listen to an ephemeral port and prints it (`[no-shared-port] 8789 -> <port>`);
 // FIGMA_BRIDGE_PORT=8789 then only names the daemon socket, which lives under a short per-run TMPDIR
-// (/tmp/dtl-…: a unix socket path is capped at 104 bytes on macOS, and /var/folders/… is too long).
-// HOME is isolated and the token fixed, so nothing is minted into a real config dir.
+// (/tmp/dtl-…: a unix socket path is capped at 104 bytes on macOS, and /var/folders/… is too long; Windows
+// has no /tmp, and no daemon socket either, so there it is under os.tmpdir()).
+// HOME (USERPROFILE, APPDATA on Windows) is isolated and the token fixed, so nothing is minted into a real
+// config dir. Windows has no daemon (daemon.ts daemonSupported): the checks that need its socket print why
+// they are skipped, and every other one runs.
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import WebSocket from "ws";
 import type { RawData } from "ws";
 import { ok, report } from "./assert.ts";
@@ -23,10 +28,11 @@ import type { DaemonBridge } from "../bridge/src/daemon.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const MCP = path.join(ROOT, "bridge", "src", "figma-mcp.ts");
-const PRELOAD = path.join(import.meta.dirname, "fixtures", "no-shared-port.mjs");
+// As a file: URL — `--import` takes a module specifier, and a bare `D:\…` path reads as the URL scheme `d:` on Windows.
+const PRELOAD = pathToFileURL(path.join(import.meta.dirname, "fixtures", "no-shared-port.mjs")).href;
 const TOKEN = "lifecycle-test-token";
 // Short, and resolved: /tmp is /private/tmp on macOS, and the server's getcwd() is the resolved form.
-const BASE = fs.realpathSync.native(fs.mkdtempSync("/tmp/dtl-"));
+const BASE = fs.realpathSync.native(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "dtl-")));
 // The test process's own TMPDIR, for the in-process daemons (sockPath reads os.tmpdir() on every call).
 const OWN_TMP = path.join(BASE, "t");
 fs.mkdirSync(OWN_TMP);
@@ -100,8 +106,13 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
   for (const d of [home, tmp, cwd]) fs.mkdirSync(d, { recursive: true });
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
-  for (const k of ["FIGMA_DAEMON_IDLE_MIN", "FIGMA_EXPORT_DIR", "FIGMA_BRIDGE_TOKEN_FILE", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "APPDATA"]) delete env[k];
-  Object.assign(env, { HOME: home, TMPDIR: tmp, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: TOKEN, MAX_MCP_OUTPUT_TOKENS: "" }, opts.env ?? {});
+  for (const k of ["FIGMA_DAEMON_IDLE_MIN", "FIGMA_EXPORT_DIR", "FIGMA_BRIDGE_TOKEN_FILE", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"]) delete env[k];
+  // The home and temp directory under each name a platform reads them by: HOME / TMPDIR (POSIX), and
+  // USERPROFILE (os.homedir), TEMP / TMP (os.tmpdir), APPDATA (token-store's config dir) on Windows.
+  Object.assign(env, {
+    HOME: home, USERPROFILE: home, APPDATA: path.join(home, "AppData", "Roaming"), TMPDIR: tmp, TEMP: tmp, TMP: tmp,
+    FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: TOKEN, MAX_MCP_OUTPUT_TOKENS: "",
+  }, opts.env ?? {});
   const p = spawn(process.execPath, ["--import", PRELOAD, MCP], { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
   let err = "";
   let exit: Exit | null = null;
@@ -159,9 +170,11 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
   servers.push(s);
   return s;
 }
-/** Up = the stdio transport is connected and (owner) the daemon socket is being served. */
+/** Up = the stdio transport is connected and (owner) the bridge is bound and the daemon socket is being
+ *  served — or, where no daemon can run, the server has said it does not share the bridge. */
+const SERVED = daemon.daemonSupported() ? /daemon listening on/ : /not sharing the bridge with other sessions/;
 async function up(s: Server, owner = true): Promise<boolean> {
-  const done = await until(() => /MCP server up/.test(s.err()) && (!owner || (/daemon listening on/.test(s.err()) && s.wsPort() !== null)), 20000);
+  const done = await until(() => /MCP server up/.test(s.err()) && (!owner || (SERVED.test(s.err()) && s.wsPort() !== null)), 20000);
   if (!done) console.log("   (server did not come up; stderr:)\n" + s.err().split("\n").map((l) => "   | " + l).join("\n"));
   return done;
 }
@@ -254,12 +267,18 @@ function fakeBridge(): { b: DaemonBridge; closes(): number; pending(): number; r
 async function section(name: string, fn: () => Promise<void>): Promise<void> {
   try { await fn(); } catch (e) { ok(`[${name}] ran without throwing — ${e instanceof Error ? e.message : String(e)}`, false); }
 }
+/** A block that needs the daemon socket (served, used by another process, or idled out): where no daemon
+ *  can run (daemon.ts daemonSupported) it says so and is skipped. */
+async function daemonSection(name: string, fn: () => Promise<void>): Promise<void> {
+  if (!daemon.daemonSupported()) { console.log(`  (skipped: ${name} — the daemon is not supported on Windows, so no socket is served for another process to use)`); return; }
+  return section(name, fn);
+}
 
 void (async () => {
   try {
     // ============================================================ in-process: the serve() handle
     console.log("daemon.serve() handle — activity() and idleOut():");
-    await section("idle shutdown on a quiet socket", async () => {
+    await daemonSection("idle shutdown on a quiet socket", async () => {
       const f = fakeBridge();
       const h = await daemon.serve(f.b, { port: 19793, idleMin: 0, signals: false, crashHandlers: false });
       const before = h.activity().frames;
@@ -278,7 +297,7 @@ void (async () => {
       h.shutdown();
       ok("shutdown() is idempotent (bridge closed once)", f.closes() === 1);
     });
-    await section("idle shutdown held off by an in-flight request", async () => {
+    await daemonSection("idle shutdown held off by an in-flight request", async () => {
       const f = fakeBridge();
       const h = await daemon.serve(f.b, { port: 19794, idleMin: 0, signals: false, crashHandlers: false });
       const c = await openRaw(h.sock, { cmd: "listPages", args: {}, timeoutMs: 20000 });
@@ -292,7 +311,7 @@ void (async () => {
       ok(`…and it shuts down within 2 s of the request finishing (${Date.now() - tRel} ms)`, shut && !fs.existsSync(h.sock));
       c.destroy();
     });
-    await section("idleOut after the window has passed", async () => {
+    await daemonSection("idleOut after the window has passed", async () => {
       const f = fakeBridge();
       const h = await daemon.serve(f.b, { port: 19795, idleMin: 0, signals: false, crashHandlers: false });
       await sleep(700);
@@ -309,7 +328,7 @@ void (async () => {
       ok("[IDLE] one idle formatting helper, daemon.humanMs: 2 h → \"120 min\", 1.2 s → \"1s\"",
         typeof daemon.humanMs === "function" && daemon.humanMs(7200000) === "120 min" && daemon.humanMs(1200) === "1s");
     });
-    await section("STOPPED", async () => {
+    await daemonSection("STOPPED", async () => {
       // [STOPPED] a frame that lands after shutdown() on a connection opened before it is refused, never
       // forwarded to the (closed) bridge.
       const f = fakeBridge();
@@ -345,10 +364,12 @@ void (async () => {
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
         ok(`owner, shared socket never used → stdin EOF → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0);
-        ok("…the socket file is gone, and the log says why", !fs.existsSync(s.sock) && /no other dtwin command or session used the shared bridge/.test(s.err()));
+        if (daemon.daemonSupported()) ok("…the socket file is gone, and the log says why", !fs.existsSync(s.sock) && /no other dtwin command or session used the shared bridge/.test(s.err()));
+        // No daemon (Windows): nothing was shared, so the log says only that the client went away.
+        else ok("…and the log says why (the client went away; the bridge was never shared)", /the MCP client went away \(stdin closed\) — exiting/.test(s.err()));
       } else ok("server came up", false);
     });
-    await section("stdin EOF, socket used by another process", async () => {
+    await daemonSection("stdin EOF, socket used by another process", async () => {
       // owner, another process used the socket, FIGMA_DAEMON_IDLE_MIN=1 → keeps serving.
       const s = startServer({ env: { FIGMA_DAEMON_IDLE_MIN: "1" } });
       if (await up(s)) {
@@ -367,7 +388,7 @@ void (async () => {
         ok(`…then __shutdown (dtwin stop) → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0 && !fs.existsSync(s.sock));
       } else ok("server came up", false);
     });
-    await section("stdin EOF, short idle window idles out", async () => {
+    await daemonSection("stdin EOF, short idle window idles out", async () => {
       // as above, a 1.2 s window → idles out on its own.
       const s = startServer({ env: { FIGMA_DAEMON_IDLE_MIN: "0.02" } });
       if (await up(s)) {
@@ -399,7 +420,7 @@ void (async () => {
         pl.close();
       } else ok("server came up", false);
     });
-    await section("SIGTERM while serving another process", async () => {
+    await daemonSection("SIGTERM while serving another process", async () => {
       // SIGTERM while owning and serving others — another process's export in flight on the
       // shared socket → exit 0, socket file gone, and the plugin is told to stop THAT export (only the
       // daemon's shutdown sends this one: the request is not this server's own call).
@@ -423,7 +444,10 @@ void (async () => {
         pl.close();
       } else ok("server came up", false);
     });
-    await section("SIGINT then SIGTERM stop sequence", async () => {
+    // Windows: child.kill("SIGINT" | "SIGTERM") ends the process outright (Node: "the process will always be
+    // killed forcefully and abruptly"), so no handler of its own runs to be checked.
+    if (process.platform === "win32") console.log("  (skipped: SIGINT then SIGTERM stop sequence — on Windows a signal sent with child.kill terminates the process outright, so its handler cannot run)");
+    else await section("SIGINT then SIGTERM stop sequence", async () => {
       // Claude Code's stop sequence: SIGINT, SIGTERM 100 ms later — with a read in flight.
       const s = startServer();
       if (await up(s) && await initialize(s)) {
@@ -451,7 +475,7 @@ void (async () => {
         pl.close();
       } else ok("server came up", false);
     });
-    await section("stdin EOF, routed through a daemon", async () => {
+    await daemonSection("stdin EOF, routed through a daemon", async () => {
       // routed through a daemon (not holding the bridge) → exits at once. Passes at HEAD too:
       // a regression guard for the via path.
       const f = fakeBridge();
@@ -468,7 +492,7 @@ void (async () => {
       } else ok("server came up", false);
       fake.shutdown();
     });
-    await section("stdout gone, then stdin EOF", async () => {
+    await daemonSection("stdout gone, then stdin EOF", async () => {
       // the parent is gone for real: its stdout read end destroyed, then stdin ended, with an
       // export in flight. The aborted call's result goes to a dead pipe (EPIPE) — the orphan serving
       // others must survive it.
@@ -504,7 +528,7 @@ void (async () => {
         pl.close();
       } else ok("server came up", false);
     });
-    await section("stdin EOF after a quiet socket", async () => {
+    await daemonSection("stdin EOF after a quiet socket", async () => {
       // used, but quiet for longer than the window when the client goes → exits at once and says
       // so; it never logs "still serving" first.
       const s = startServer({ env: { FIGMA_DAEMON_IDLE_MIN: "0.01" } }); // 600 ms
@@ -520,7 +544,7 @@ void (async () => {
           /used this shared bridge \(1 request\(s\)\), but none in the last 1s \(FIGMA_DAEMON_IDLE_MIN\) — closing it and exiting/.test(s.err()) && !/still serving/.test(s.err()));
       } else ok("server came up", false);
     });
-    await section("idle window off or unparsable", async () => {
+    await daemonSection("idle window off or unparsable", async () => {
       // the idle window is off: FIGMA_DAEMON_IDLE_MIN=0 is named as such; an unparsable value is
       // quoted as what it is, not reported as "=0".
       const runs = await Promise.all(["0", "soon"].map(async (v) => {

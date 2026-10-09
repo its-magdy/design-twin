@@ -34,6 +34,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
+// A printed command quotes the script's path in double quotes, or in single quotes when it holds a character a
+// shell expands inside them: a backslash (cli-args.ts shellQuote), which every Windows path does.
+const PATH_QUOTE = process.platform === "win32" ? "'" : '"';
+
 // `a` may be an optional channel (alpha): absent is "not near" — what `Math.abs(undefined - b) < 0.001` (NaN) said.
 const near = (a: number | undefined, b: number) => a !== undefined && Math.abs(a - b) < 0.001;
 
@@ -994,8 +998,8 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   // the usage line is text the model copies into Bash, where ${CLAUDE_PLUGIN_ROOT} is empty — so it
   // names the script by the real path it is running from (here, the source; installed, the bundle).
   check("[usage] the usage line names the script by its real path (node \"<its own folder>/<name>\"), not ${CLAUDE_PLUGIN_ROOT}",
-    run("drift-lint.ts", []).stderr.includes(`usage: node "${path.join(D2C, "drift-lint.ts")}"`)
-    && run("tokens.ts", ["--help"]).stdout.includes(`usage: node "${path.join(D2C, "tokens.ts")}"`));
+    run("drift-lint.ts", []).stderr.includes(`usage: node ${PATH_QUOTE}${path.join(D2C, "drift-lint.ts")}${PATH_QUOTE}`)
+    && run("tokens.ts", ["--help"]).stdout.includes(`usage: node ${PATH_QUOTE}${path.join(D2C, "tokens.ts")}${PATH_QUOTE}`));
 })();
 
 // ---------- tokens: the export's colour profile (the plugin writes Figma's DISPLAY_P3 lowercased: "display_p3") ----------
@@ -1626,13 +1630,13 @@ console.log("map — SLOT props:");
   // script named in a hint both exist.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dt-paths-"));
   const help = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), "--help"], { cwd: tmp, encoding: "utf8" });
-  const usagePath = /usage: node "([^"]+)"/.exec(help.stdout)?.[1];
+  const usagePath = new RegExp(`usage: node ${PATH_QUOTE}([^${PATH_QUOTE}]+)${PATH_QUOTE}`).exec(help.stdout)?.[1];
   check("the shipped tokens.js --help prints its own real path (node \"…/scripts/tokens.js\"), from any cwd",
     help.status === 0 && usagePath === path.join(SCRIPTS, "tokens.js") && fs.existsSync(usagePath));
   fs.writeFileSync(path.join(tmp, "map.json"), "{}");
   fs.writeFileSync(path.join(tmp, "cat.json"), JSON.stringify({ components: [] }));
   const lint = spawnSync(process.execPath, [path.join(SCRIPTS, "drift-lint.js"), "map.json", "cat.json"], { cwd: tmp, encoding: "utf8" });
-  const hintPath = /node "([^"]+map-validate\.js)"/.exec(lint.stderr)?.[1];
+  const hintPath = new RegExp(`node ${PATH_QUOTE}([^${PATH_QUOTE}]+map-validate\\.js)${PATH_QUOTE}`).exec(lint.stderr)?.[1];
   check("a hint the shipped drift-lint.js prints names the sibling script by its real path (…/scripts/map-validate.js)",
     hintPath === path.join(SCRIPTS, "map-validate.js") && fs.existsSync(hintPath));
   fs.rmSync(tmp, { recursive: true, force: true });

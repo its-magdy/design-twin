@@ -112,7 +112,10 @@ try {
 
   // ---- a signal to the runner reaches the running suite (its own process group), and the summary still prints
   console.log("\nrun-suites — SIGTERM / SIGHUP:");
-  for (const sig of ["SIGTERM", "SIGHUP"] as const) {
+  // Not on Windows: there child.kill(sig) is an unconditional terminate (Node: "Sending SIGINT, SIGTERM, and SIGKILL will
+  // cause the unconditional termination of the target process"), so the runner's handler never runs; SIGHUP is only
+  // generated when the console window closes.
+  for (const sig of process.platform === "win32" ? [] : (["SIGTERM", "SIGHUP"] as const)) {
     const pidFile = path.join(tmp, "hang.pid");
     fs.rmSync(pidFile, { force: true });
     const e: Record<string, string | undefined> = { ...process.env, DT_RUN_SUITES_LIST: list(["hangpid", "after"]), DT_KILL_GRACE_MS: "500" };
@@ -131,6 +134,7 @@ try {
     check(`${sig} to the runner kills the running suite (no orphan), skips the rest, prints the summary, exits 130`,
       suitePid > 0 && gone && code === 130 && /SUMMARY/.test(out) && /hangpid\s+FAIL\s.*interrupted/.test(out) && /after\s+not run/.test(out));
   }
+  if (process.platform === "win32") console.log("  (skipped on win32: child.kill(SIGTERM|SIGHUP) terminates the runner outright there, its handler cannot run; SIGHUP only comes from a closed console)");
 
   // ---- the verdict is the suite's exit, not its pipes closing (a lingering grandchild holds them)
   console.log("\nrun-suites — exit vs close, piped stdout, 0/0:");
@@ -274,15 +278,19 @@ console.log("CMD " + JSON.stringify({
   check("[fast] `npm run test:fast` is the runner with --fast (package.json scripts[\"test:fast\"] === \"node test/run-suites.ts --fast\")", pkg.scripts?.["test:fast"] === "node test/run-suites.ts --fast");
 
   // CI splits the run over a matrix (.github/workflows/test.yml): each `include:` entry is a leg (from its `- leg:` line); a leg
-  // without `node:` is on the primary Node. There, one leg is `--fast` and the others name suites — between them every suite runs
-  // exactly once (the named ones are exactly what --fast leaves out, none twice). A leg on another Node version runs `--fast` alone.
+  // without `node:` or `os:` is on the primary Node and OS. There, one leg is `--fast` and the others name suites — between them every
+  // suite runs exactly once (the named ones are exactly what --fast leaves out, none twice). A leg on another Node version or OS
+  // runs `--fast` alone, and only a leg on another OS may be `allow-failure` (non-blocking): a primary leg's failure always fails
+  // `test result`.
   const wf = read(path.join(testDir, "..", ".github", "workflows", "test.yml"));
   const inc = /^( *)include:\n((?:(?:\1 +.*|[ \t]*)\n)*)/m.exec(wf)?.[2] ?? "";
   const legs = inc.split(/^\s*- (?=leg:)/m).slice(1).map((l) => ({
     node: /^\s*node: (.+)$/m.exec(l)?.[1]?.trim(),
+    os: /^\s*os: (.+)$/m.exec(l)?.[1]?.trim(),
+    allowFailure: /^\s*allow-failure: true\s*$/m.test(l),
     suites: (/^\s*suites: (.+)$/m.exec(l)?.[1] ?? "").trim().split(/\s+/).filter(Boolean),
   }));
-  const primary = legs.filter((l) => l.node === undefined);
+  const primary = legs.filter((l) => l.node === undefined && l.os === undefined);
   const primaryFast = primary.filter((l) => l.suites.includes("--fast"));
   const legNamed = primary.filter((l) => !l.suites.includes("--fast")).flatMap((l) => l.suites);
   check("[ci] the workflow's Test step runs the runner with the leg's suites (`node test/run-suites.ts ${{ matrix.suites }}`)", /^\s+run: node test\/run-suites\.ts \$\{\{ matrix\.suites \}\}$/m.test(wf));
@@ -293,6 +301,11 @@ console.log("CMD " + JSON.stringify({
     legNamed.length === SLOW.length && new Set(legNamed).size === legNamed.length && [...legNamed].sort().join(",") === [...SLOW].sort().join(","));
   check("[ci] every leg on another Node version (`node:`) is `--fast` alone (an extra Node version runs the quick suites only)",
     legs.filter((l) => l.node !== undefined).every((l) => l.suites.join(" ") === "--fast"));
+  check("[ci] every leg on another OS (`os:`) is `--fast` alone, and the job runs each leg on its `os:` (else the pinned Ubuntu image)",
+    legs.some((l) => l.os !== undefined) && legs.filter((l) => l.os !== undefined).every((l) => l.suites.join(" ") === "--fast")
+    && /^ {4}runs-on: \$\{\{ matrix\.os \|\| 'ubuntu-24\.04' \}\}$/m.test(wf));
+  check("[ci] only a leg on another OS is `allow-failure`, and the job's continue-on-error is that flag (a primary or other-Node leg always blocks)",
+    legs.every((l) => !l.allowFailure || l.os !== undefined) && /^ {4}continue-on-error: \$\{\{ matrix\.allow-failure \|\| false \}\}$/m.test(wf));
 
   const mirror = path.join(tmp, "mirror");
   fs.mkdirSync(mirror);

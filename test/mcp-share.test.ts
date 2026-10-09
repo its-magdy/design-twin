@@ -41,8 +41,77 @@ function start(procEnv: NodeJS.ProcessEnv = env): McpProc {
   return p;
 }
 
+const init = { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } };
+
+// Windows: no daemon (daemon.ts daemonSupported), so nothing is shared. The first server holds the bridge
+// and says once why it does not share it; a second one stays up, and its tool calls are errors saying
+// the bridge is held by another session and sharing is not supported there — until the first one ends,
+// when the second takes the port itself (it re-resolves per call). A held port and concurrent first
+// calls behave as everywhere else.
+async function windows(): Promise<void> {
+  console.log("  (skipped: the daemon is not supported on Windows — no session shares its bridge, so the sharing, mute-socket and squatted-directory checks have nothing to run on; the one-holder behaviour is checked instead)");
+  const notSharing = "not sharing the bridge with other sessions: " + daemon.DAEMON_UNSUPPORTED;
+  const heldText = /port 8789 is already in use — another MCP session or dtwin command holds the bridge, and sharing it between sessions is not supported on Windows \(yet\)\. Close the other one first/;
+  const a = start();
+  check("first server opens the bridge itself", await until(() => /Bridge listening on ws:\/\/localhost:8789/.test(a.err)));
+  check("…and says once, on stderr, that it does not share it, with the reason — no socket listen is tried",
+    a.err.split(notSharing).length === 2 && !/daemon listening|EACCES/.test(a.err));
+  const b = start();
+  check("second server stays up and reports at startup that another session holds the bridge, unshared on Windows",
+    await until(() => /no bridge yet: \[bridge\] /.test(b.err) && heldText.test(b.err)) && b.code === undefined);
+  b.send(init);
+  await until(() => b.reply(1));
+  b.send({ method: "notifications/initialized" });
+  b.send({ id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } });
+  check("…and its tool call is a tool error saying so (close the other one), not a dead server",
+    await until(() => b.reply(2)) && /"isError":true/.test(b.reply(2) ?? "") && heldText.test(b.reply(2) ?? "") && b.code === undefined);
+  a.proc.kill();
+  await until(() => a.code !== undefined || a.proc.killed);
+  await wait(500);
+  b.send({ id: 3, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } });
+  check("when the first session ends, the second takes the bridge over (and says it does not share it)",
+    await until(() => b.reply(3)) && !/"isError":true/.test(b.reply(3) ?? "") && b.err.split(notSharing).length === 2);
+  b.proc.kill();
+  await until(() => b.code !== undefined);
+  await wait(300);
+
+  // Concurrent first calls: one bridge, both answer. No probe delay holds the window open here (no daemon
+  // socket to probe), so this is the plain case.
+  const c = start();
+  c.proc.stdin.write([init, { method: "notifications/initialized" },
+    { id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } },
+    { id: 3, method: "tools/call", params: { name: "figma_status", arguments: {} } }]
+    .map((o) => JSON.stringify({ jsonrpc: "2.0", ...o }) + "\n").join(""));
+  const both = await until(() => c.reply(2) && c.reply(3));
+  check("two concurrent tool calls both answer, neither as an error", both && !/"isError":true/.test((c.reply(2) ?? "") + (c.reply(3) ?? "")));
+  check("…from ONE bridge (createBridge ran once) and the process is still up",
+    (c.err.match(/auth: using FIGMA_BRIDGE_TOKEN/g) || []).length === 1 && c.code === undefined);
+  c.proc.kill();
+  await until(() => c.code !== undefined);
+  await wait(300);
+
+  // A port held by something that is not a dtwin bridge: a tool error naming the port, the server stays up.
+  const squatter = net.createServer();
+  await new Promise<void>((r) => squatter.listen(8789, "127.0.0.1", () => r()));
+  const d = start();
+  d.send(init);
+  await until(() => d.reply(1));
+  d.send({ method: "notifications/initialized" });
+  d.send({ id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } });
+  check("a held port is a TOOL error naming the port, not a dead MCP server",
+    await until(() => d.reply(2)) && /"isError":true/.test(d.reply(2) ?? "") && /already in use/.test(d.reply(2) ?? "") && d.code === undefined);
+  d.proc.kill();
+  await until(() => d.code !== undefined);
+  squatter.close();
+}
+
 // The suite reports its own failures (report() sets the exit code); nothing awaits the IIFE.
 void (async () => {
+  if (!daemon.daemonSupported()) {
+    await windows();
+    report();
+    return;
+  }
   const a = start();
   check("first server opens the bridge itself", await until(() => /Bridge listening on ws:\/\/localhost:8789/.test(a.err)));
   await until(() => /daemon listening/.test(a.err));
@@ -73,7 +142,6 @@ void (async () => {
   const mute = net.createServer(() => { /* accept, never reply */ });
   await new Promise<void>((r) => mute.listen(sock, () => r()));
   const c = start();
-  const init = { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } };
   c.proc.stdin.write([init, { method: "notifications/initialized" },
     { id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } },
     { id: 3, method: "tools/call", params: { name: "figma_status", arguments: {} } }]

@@ -749,7 +749,8 @@ var AUDIT_DIR = path5.join(DESIGN_DIR, "audit");
 var VERIFY_DIR = path5.join(DESIGN_DIR, "verify");
 var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
 var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+var slashed = (p) => p.split(path5.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
 function listPlans(dir) {
   if (!fs6.existsSync(dir)) return [];
   return fs6.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
@@ -2090,6 +2091,7 @@ function pngHeader(b) {
   return { w: dv.getUint32(16), h: dv.getUint32(20), bitDepth: b[24] ?? 0, colorType: b[25] ?? 0, interlace: b[28] ?? 0, iccp };
 }
 var round4 = (n) => Math.round(n * 1e4) / 1e4;
+var scaleText = (n) => `${round4(n)}x`;
 function resolveInside(base, rel, within = base) {
   const root = path7.resolve(within), file = path7.resolve(base, ...rel.split("/"));
   return file.startsWith(root + path7.sep) ? file : null;
@@ -2116,16 +2118,17 @@ function referenceImageFor(o) {
   const rb = root.renderBox && num(root.renderBox.w) && root.renderBox.w > 0 ? root.renderBox : void 0;
   const exportOffset = !rb ? { x: 0, y: 0 } : num(rb.x) && num(rb.y) && num(box.x) && num(box.y) ? { x: rb.x - box.x, y: rb.y - box.y } : null;
   const rowOffset = row && row.referenceOffset && num(row.referenceOffset.x) && num(row.referenceOffset.y) ? { x: row.referenceOffset.x, y: row.referenceOffset.y } : null;
-  const scale = row && num(row.referenceScale) ? row.referenceScale : round4(png.w / (rb ? rb.w : box.w));
+  const stated = row && num(row.referenceScale) ? row.referenceScale : round4(png.w / (rb ? rb.w : box.w));
   const offset = rowOffset ?? exportOffset;
   if (!offset) return unusable(p, "the export root has render bounds but no position (box.x/y) \u2014 where the reference sits over the frame is unknown");
   const s0 = figmaReferenceScale(box.w, box.h), onDisk = png.w / (rb ? rb.w : box.w);
-  if (![scale, onDisk].every((v) => Math.abs(v - s0) <= REFERENCE_SCALE_SLACK * s0))
+  if (![stated, onDisk].every((v) => Math.abs(v - s0) <= REFERENCE_SCALE_SLACK * s0))
     return unusable(p, `the reference is a ${png.w} px image, not the export reference (a discovery thumbnail) \u2014 re-pull the screen`);
   const refW = rb ? rb.w : box.w, refH = rb && num(rb.h) && rb.h > 0 ? rb.h : box.h;
-  const ew = Math.round(refW * scale), eh = Math.round(refH * scale), tolH = 2 + Math.floor(refH * (1 / refW + 5e-5));
+  const ew = Math.round(refW * stated), eh = Math.round(refH * stated), tolH = 2 + Math.floor(refH * (1 / refW + 5e-5));
   if (Math.abs(png.w - ew) > 2 || Math.abs(png.h - eh) > tolH)
-    return unusable(p, `the reference ${p} is ${png.w}\xD7${png.h} px, but the frame's render bounds at ${scale}x are ${ew}\xD7${eh} \u2014 a stale or foreign PNG under the pointer; re-pull the screen, then re-run --expect`);
+    return unusable(p, `the reference ${p} is ${png.w}\xD7${png.h} px, but the frame's render bounds at ${stated}x are ${ew}\xD7${eh} \u2014 a stale or foreign PNG under the pointer; re-pull the screen, then re-run --expect`);
+  const scale = Math.abs(stated - s0) <= 1 / refW + 5e-5 ? s0 : stated;
   const x = Math.min(Math.max(0, Math.round(-offset.x * scale)), png.w), y = Math.min(Math.max(0, Math.round(-offset.y * scale)), png.h);
   const crop = { x, y, w: Math.max(0, Math.min(Math.round(box.w * scale), png.w - x)), h: Math.max(0, Math.min(Math.round(box.h * scale), png.h - y)) };
   const profiles = [o.colorProfile === "display_p3" ? "display_p3" : null, png.iccp !== null ? `iCCP:${png.iccp}` : null].filter((v) => v !== null);
@@ -3810,7 +3813,7 @@ function visualMarkdown(v) {
     return L;
   }
   L.push(`${pctText(v.shiftTolerantPct ?? 0)}% of the compared pixels differ after the shift tolerance (${pctText(v.differingPct ?? 0)}% before it; anti-aliased edge pixels excluded) \xB7 ${v.regionsTotal ?? v.regions.length} hot region(s).`, "");
-  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale ?? "?"}x (geometry from the ${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
+  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale !== void 0 ? scaleText(v.scale) : "?x"} (geometry from the ${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
   if (v.grid === "1x") L.push("Grid: **resampled to 1x** \u2014 the capture and the reference crop differ by more than 2 px, so both were resampled to the design size (up or down); resampling can hide a difference.", "");
   else if (v.grid) L.push("Grid: the reference's own pixel grid (the build rendered at the reference's scale).", "");
   if (v.reference && v.reference.colorProfile) L.push(`Colour profile: ${mdText(v.reference.colorProfile)} \u2014 colours are compared without colour management, so colour differences are unreliable.`, "");
@@ -4447,7 +4450,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     const lineBoxes = exp.notComparable.filter((g) => g.field === TEXT_BOX_HEIGHT).length;
     console.error(`${exp.counts.nodes} node spec(s), ${exp.counts.instances} instance(s), ${exp.counts.interactions} designed interaction(s) \u2014 visible layers only; skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable${lineBoxes ? `; ${lineBoxes} a line box taller than its fixed text box \u2014 the build chooses its line-height` : ""}) \xB7 expectation sha256 ${h.slice(0, 12)}\u2026`);
     const ri = exp.referenceImage;
-    if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}\xD7${ri.png.h} at ${ri.scale}x (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` \u2014 ${ri.colorProfile}: colours are compared without colour management` : ""}` : `note  no visual diff for this screen: ${ri.why}`);
+    if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}\xD7${ri.png.h} at ${scaleText(ri.scale)} (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` \u2014 ${ri.colorProfile}: colours are compared without colour management` : ""}` : `note  no visual diff for this screen: ${ri.why}`);
     if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers \u2014 interaction coverage cannot be checked, and the report will say so rather than passing.");
     return 0;
   }
@@ -4721,6 +4724,7 @@ export {
   referenceImageFor,
   reportToMarkdown,
   resolveInside,
+  scaleText,
   selectForAccept,
   tokenFor,
   visualHeadline,

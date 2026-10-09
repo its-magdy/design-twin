@@ -17,12 +17,15 @@ concurrency:
 jobs:
   # One leg per runner, so the slow browser suites neither queue behind each other nor share a CPU (their Budget checks
   # are load-sensitive). `fast` is every suite but the probe e2e ones (run-suites --fast) plus the repo checks; the other
-  # primary-Node legs name exactly those suites between them, and a leg with `node:` runs `--fast` alone on that Node —
-  # test/run-suites.test.ts holds this matrix to FAST_SKIP, so a suite cannot drop out of CI.
+  # primary-Node legs name exactly those suites between them, and a leg with `node:` (or `os:`) runs `--fast` alone on that
+  # Node (or OS) — test/run-suites.test.ts holds this matrix to FAST_SKIP, so a suite cannot drop out of CI.
   test:
     name: test (${{ matrix.leg }})
     # pinned, not ubuntu-latest: the Budget checks' margins were measured on this image
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os || 'ubuntu-24.04' }}
+    # A leg with `allow-failure` shows red when it fails but does not fail `test result` (a failed continue-on-error
+    # job is a success to `needs`)
+    continue-on-error: ${{ matrix.allow-failure || false }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -36,6 +39,12 @@ jobs:
           - leg: fast-node26
             node: 26
             suites: --fast
+          # the same quick suites on Windows; non-blocking until it has stayed green (the dtwin daemon is not
+          # supported there, and its checks skip with that reason)
+          - leg: fast-windows
+            os: windows-latest
+            suites: --fast
+            allow-failure: true
           - leg: drive-e2e
             suites: verify-probe-drive-e2e
           - leg: drive-tail-e2e

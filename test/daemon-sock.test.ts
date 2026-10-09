@@ -7,12 +7,78 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import * as daemon from "../bridge/src/daemon.ts";
+import type { DaemonBridge } from "../bridge/src/daemon.ts";
 import { checkDaemon } from "../bridge/src/doctor.ts";
 import { check, report } from "./assert.ts";
 
 const SRC = path.join(import.meta.dirname, "..", "bridge", "src");
 
 const uid = process.getuid?.();
+
+// Where a daemon can run at all (daemonSupported, DAEMON_UNSUPPORTED). The platform is a parameter, so
+// these run on every OS: an injected "win32" refuses serve/stop with the reason before anything is made,
+// and reads every lookup as "no daemon" without looking — even with a live daemon at that location.
+{
+  const why = daemon.DAEMON_UNSUPPORTED;
+  check("daemonSupported: false on win32, true on darwin and linux",
+    !daemon.daemonSupported("win32") && daemon.daemonSupported("darwin") && daemon.daemonSupported("linux"));
+  check("…and it defaults to this process's platform", daemon.daemonSupported() === (process.platform !== "win32"));
+  check("the reason says what is unsupported (dtwin serve, sharing the bridge), where, and what to do instead",
+    /`dtwin serve`/.test(why) && /sharing one bridge between sessions/.test(why) && /not supported on Windows/.test(why)
+    && /one MCP session or dtwin command holds the bridge at a time/.test(why) && /close the other one/.test(why));
+
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-u-"));
+  const rejectsWithWhy = async (p: Promise<unknown>): Promise<boolean> => { try { await p; return false; } catch (e) { return e instanceof Error && e.message === why; } };
+  // stop / assertNoDaemon on a fresh tmpdir: POSIX would create <tmpdir>/designtwin-<uid> first.
+  const fresh = fs.mkdtempSync(path.join(base, "f-"));
+  const win = (tmpdir: string): daemon.SockPlace => ({ env: {}, tmpdir, platform: "win32" });
+  check("win32: stop() rejects with the reason", await rejectsWithWhy(daemon.stop(8790, win(fresh))));
+  check("win32: assertNoDaemon() (what `dtwin serve` asks first) rejects with the reason", await rejectsWithWhy(daemon.assertNoDaemon(8790, win(fresh))));
+  check("…and neither created anything", fs.readdirSync(fresh).length === 0);
+  let closes = 0;
+  const bridge: DaemonBridge = { port: 8790, isConnected: () => false, waitForConnection: async () => {}, request: async () => ({}), close: () => { closes++; } };
+  check("win32: serve() rejects with the reason", await rejectsWithWhy(daemon.serve(bridge, { port: 8790, signals: false, crashHandlers: false, platform: "win32" })));
+  check("…without listening (no daemon answers for that port) and without touching the bridge",
+    (await daemon.connect(8790)) === null && closes === 0);
+  check("win32: sockProblem() and legacySock() are null", daemon.sockProblem(8790, win(fresh)) === null && daemon.legacySock(8790, win(fresh)) === null);
+  check("win32: doctor's daemon check is a note quoting the reason, not a failure and not a \"not checked\"",
+    (() => { const c = checkDaemon(null, 8790, null, why); return c.status === "warn" && c.detail === why && !/not checked/i.test(c.detail); })());
+
+  // A live daemon of ours at that location (POSIX only: a path socket): found with the real platform, not
+  // looked at under "win32". The location is a private XDG_RUNTIME_DIR (mkdtemp makes it 0700), which
+  // keeps the socket path inside sun_path.
+  if (uid !== undefined) {
+    const live = fs.mkdtempSync(path.join(base, "l"));
+    const place: daemon.SockPlace = { env: { XDG_RUNTIME_DIR: live }, tmpdir: live };
+    const sock = daemon.sockPath(8790, place);
+    const fake = net.createServer((c) => {
+      c.setEncoding("utf8");
+      c.on("data", daemon.framer(() => { c.write(JSON.stringify({ ok: true, result: { daemon: true, pid: 1, port: 8790 } }) + "\n"); }));
+    });
+    await new Promise<void>((r) => fake.listen(sock, () => r()));
+    check("fixture: a live daemon at the location is found on this platform", (await daemon.connect(8790, place)) !== null);
+    const errs: string[] = [];
+    const realError = console.error;
+    console.error = (...a: unknown[]) => { errs.push(a.map(String).join(" ")); };
+    let conn: unknown = "unset", st: unknown = "unset";
+    try {
+      conn = await daemon.connect(8790, { ...place, platform: "win32" });
+      st = await daemon.status(8790, { ...place, platform: "win32" });
+    } finally { console.error = realError; }
+    check("win32: connect() and status() are null with that daemon live — no probe, and nothing on stderr", conn === null && st === null && errs.length === 0);
+    await new Promise<void>((r) => fake.close(() => r()));
+  }
+
+  // End to end on Windows: `dtwin doctor` reports the daemon line as unsupported, with the reason.
+  if (process.platform === "win32") {
+    const doc = spawnSync(process.execPath, [path.join(SRC, "figma-pull.ts"), "doctor", "--json", "--wait", "0"],
+      { env: { ...process.env, FIGMA_BRIDGE_TOKEN: "s".repeat(40), FIGMA_BRIDGE_PORT: "8789" }, encoding: "utf8", cwd: fresh });
+    let daemonCheck: { status?: string; detail?: string } | undefined;
+    try { daemonCheck = (JSON.parse(doc.stdout) as { checks: { id: string; status: string; detail: string }[] }).checks.find((x) => x.id === "daemon"); } catch { /* checked below */ }
+    check("doctor --json on Windows: the daemon check is a note quoting the reason", daemonCheck?.status === "warn" && daemonCheck.detail === why);
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
 if (uid === undefined) {
   console.log("  (no POSIX uids on this platform: the socket stays in os.tmpdir())");
   check("without uids the socket directory is the tmpdir, unchanged", daemon.sockDir({ tmpdir: os.tmpdir() }) === os.tmpdir());

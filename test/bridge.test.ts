@@ -2106,260 +2106,283 @@ void (async () => {
 
   ok("[daemon] with none running, connect() is null — callers fall back to their own bridge",
     (await daemon.connect(D_PORT)) === null);
-  ok("[daemon] and --stop reports there was nothing to stop", (await daemon.stop(D_PORT)) === false);
 
-  // A socket FILE left by a crashed daemon is not a running daemon. If this read as "alive", every
-  // later CLI run would fail until the user hand-deleted a file they don't know about.
-  fs.writeFileSync(daemon.sockPath(D_PORT), "");
-  ok("[daemon] a stale socket file reads as NO daemon, not as a hang",
-    (await daemon.connect(D_PORT)) === null);
-
-  // crashHandlers:false — the process-wide unhandledRejection handler only LOGS, which inside this
-  // suite would turn a crashed test into a silent pass. It is tested in a subprocess below.
-  await daemon.serve(fakeBridge, { port: D_PORT, crashHandlers: false });
-  ok("[daemon] --serve starts over a stale socket file", !!(await daemon.connect(D_PORT)));
-  const dstat = await daemon.status(D_PORT);
-  ok("[daemon] status reports the pid, port and whether the PLUGIN is connected",
-    dstat?.pid === process.pid && dstat.port === D_PORT && dstat.pluginConnected === true);
-
-  // Starting a second daemon must REFUSE, not silently steal the socket out from under the first.
-  let dblErr: Error | undefined;
-  try { await daemon.serve(fakeBridge, { port: D_PORT, crashHandlers: false }); } catch (e) { dblErr = asErr(e); }
-  ok("[daemon] a second --serve is refused rather than stealing the live socket",
-    !!dblErr && /already running/.test(dblErr.message));
-  ok("[daemon] and the refusal names the way out", !!dblErr && /--stop/.test(dblErr.message));
-
-  const dcli = await daemon.connect(D_PORT);
-  if (!dcli) throw new Error("daemon.connect() returned null right after serve()");
-  ok("[daemon] a request round-trips", (await dcli.request({ cmd: "listPages", timeoutMs: 5000 }, 5000)).file === "echo:listPages");
-  let dReqErr: Error | undefined;
-  try { await dcli.request({ cmd: "write", args: { ops: [] }, timeoutMs: 5000 }, 5000); } catch (e) { dReqErr = asErr(e); }
-  ok("[daemon] a plugin-side failure propagates to the client as an error, not a silent empty result",
-    !!dReqErr && /plugin exploded/.test(dReqErr.message));
-
-  // Requests are SERIALIZED. The plugin is single-threaded and its heavy commands mutate shared
-  // per-run state, so concurrent exports interleave badly — the daemon must behave like a sequence of
-  // one-shot runs, which is what every existing caller was written against.
-  const order: string[] = [];
-  const three: Cmd[] = ["ping", "whoami", "getSelection"];
-  await Promise.all(three.map((c) => dcli.request({ cmd: c, timeoutMs: 5000 }, 5000).then(() => order.push(c))));
-  ok("[daemon] concurrent client requests run ONE at a time, in arrival order", order.join(",") === three.join(","));
-
-  // The frame is CHECKED before anything reads it (daemon.ts isDaemonRequest): a `{}` used to be
-  // forwarded to the bridge as `cmd: undefined`, and `timeoutMs: "x"` reached setTimeout as NaN.
-  // Driven over the raw socket, since the typed client cannot even express these frames.
-  const rawFrame = (frame: string) => new Promise<string>((resolve, reject) => {
-    const c = net.createConnection(daemon.sockPath(D_PORT));
-    c.setEncoding("utf8");
-    let buf = "";
-    c.on("data", (d: string) => { buf += d; if (buf.includes("\n")) { c.end(); resolve(buf.trim()); } });
-    c.on("error", reject);
-    c.on("connect", () => c.write(frame + "\n"));
-  });
-  const badFrames: Array<[string, RegExp]> = [
-    ["{}", /bad request frame: `cmd` is missing/],
-    ["[]", /bad request frame: not an object/],
-    ['{"cmd":"boom"}', /bad request frame: unknown cmd 'boom'/],
-    ['{"cmd":"listPages","timeoutMs":"x"}', /bad request frame: `timeoutMs` is not a positive number/],
-    ['{"cmd":"listPages","args":[]}', /bad request frame: `args` is not an object/],
-    ['{"cmd":"listPages","client":7}', /bad request frame: `client` is not a string/],
-    ['{"cmd":"listPages","progress":"yes"}', /bad request frame: `progress` is not a boolean/],
-    ["not json", /bad request frame: /],
-  ];
-  for (const [frame, want] of badFrames) {
-    const r = await rawFrame(frame);
-    ok(`[daemon] a malformed frame ${frame} is refused as a bad request frame`, /"ok":false/.test(r) && want.test(r));
-  }
-  ok("[daemon] a refused frame never reached the bridge", !calls.includes("boom") && !calls.some((c) => c === "undefined"));
-  ok("[daemon] the daemon's own commands need no other field", /"daemon":true/.test(await rawFrame('{"cmd":"__ping"}')));
-  ok("[daemon] a request id is echoed back on the reply", /"id":"q7"/.test(await rawFrame('{"id":"q7","cmd":"ping"}')));
-
-  // Routing has to survive the daemon hop. A CLI process behind a daemon has no bridge of its own, so
-  // if `client` were dropped in the unix-socket frame the command would silently run against whichever
-  // file the bridge picked — the exact wrong-file export the refusal in resolveClient exists to prevent.
-  calls.length = 0;
-  const routed = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000 }, 5000);
-  ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NIMA Library"));
-  ok("[daemon] and the command itself still arrives", calls.includes("whoami"));
-  ok("[daemon] a bridge that cannot name the client it used leaves `client` null — never a guess", routed.client === null);
-  ok("[daemon] a named client with no connect window asks for no wait", !calls.some((c) => c.startsWith("wait:")));
-  // With a connect window (the CLI behind a daemon passes its own), a NAMED client gets the bounded
-  // waitForClient before the request — min(window, 15 s) — so the second file's window has time to
-  // redial; a bare connId never waits (it does not depend on identification).
-  calls.length = 0;
-  await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
-  ok("[daemon] a named client WITH a connect window is waited for, capped at 15 s", calls[0] === "wait:NIMA Library:15000" && calls.includes("client:NIMA Library"));
-  calls.length = 0;
-  await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 4000 }, 5000);
-  ok("[daemon] …and a shorter window is used as-is", calls[0] === "wait:NIMA Library:4000");
-  calls.length = 0;
-  await dcli.requestWithClient({ cmd: "whoami", client: "c2", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
-  ok("[daemon] a bare connId target never waits", !calls.some((c) => c.startsWith("wait:")) && calls.includes("client:c2"));
-  // A connect window that runs out with NOTHING connected is not the daemon's error to report: the
-  // request still runs, so the bridge's own resolveClient text ("Figma plugin not connected. Open the
-  // file in Figma and run the plugin.") is what every path prints — not waitForConnection's "timed out
-  // waiting for the plugin to connect" (the MCP's named `client` sends a window).
-  calls.length = 0;
-  const wasConnected = fakeBridge.isConnected, wasWait = fakeBridge.waitForConnection;
-  fakeBridge.isConnected = () => false;
-  fakeBridge.waitForConnection = async () => { calls.push("waitConn"); throw new Error("timed out waiting for the plugin to connect"); };
-  const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
-  fakeBridge.isConnected = wasConnected;
-  fakeBridge.waitForConnection = wasWait;
-  ok("[daemon] a connect window that runs out falls through to the request (the bridge's own not-connected text), not the daemon's timeout text",
-    calls[0] === "waitConn" && calls[1] === "wait:NIMA Library:50" && calls.includes("whoami") && afterWindow === "answered");
-  // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
-  const cstat = await daemon.status(D_PORT);
-  ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
-    Array.isArray(cstat?.clients) && cstat.clients.length === 2 && cstat.clients[0]?.connId === "c1");
-
-  // Newline-delimited framing has to survive a payload that arrives in many chunks — a real export is
-  // megabytes, and reassembling it wrongly would corrupt every large pull.
-  const big = await dcli.request({ cmd: "exportFull", args: { allPages: true }, timeoutMs: 30000 }, 30000);
-  ok("[daemon] a multi-megabyte reply is reassembled intact across chunks", big.designSystem.hygiene?.[0]?.length === 4e6);
-  // The daemon client re-checks the relayed reply's shape (an older daemon build may not have): a
-  // bridge answering `listChildren` with a listPages-shaped reply is a named error, not a typed lie.
-  let shapeErr: Error | undefined;
-  try { await dcli.request({ cmd: "listChildren", args: { nodeId: "1:1" }, timeoutMs: 5000 }, 5000); } catch (e) { shapeErr = asErr(e); }
-  ok("[daemon] a relayed reply of the wrong shape is refused by the client, naming the command",
-    !!shapeErr && /relayed an unexpected shape for listChildren: `id` is missing/.test(shapeErr.message));
-
-  // Idle shutdown config is reported in MS, not rounded minutes: a sub-minute window rounded to "0"
-  // reads as "disabled", which is the opposite of true. (The reap itself is time-based and covered by
-  // a manual run rather than a 40s sleep in the suite; what's asserted here is the wiring.)
-  ok("[daemon] status reports the idle window in ms, and how long it has been idle",
-    typeof dstat?.idleForMs === "number" && (dstat.idleMs == null || dstat.idleMs > 0));
-  ok("[daemon] a client probe counts as activity — idleForMs stays small while in use",
-    (dstat?.idleForMs ?? NaN) < 60000);
-
-  // A bridge with no requestWithClient cannot take a progress listener (the shape an older bridge has):
-  // a client that asks for progress still gets its reply, and simply no ticks.
-  let noTicks = 0;
-  const optedNoSource = await dcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, () => { noTicks++; });
-  ok("[daemon-progress] a listener against a bridge with no progress source still gets the reply, and no ticks",
-    optedNoSource.file === "echo:ping" && noTicks === 0);
-
-  ok("[daemon] --stop stops it", (await daemon.stop(D_PORT)) === true);
-  ok("[daemon] and removes the socket file, so the next --serve is not blocked",
-    !fs.existsSync(daemon.sockPath(D_PORT)));
-  ok("[daemon] stopping closes the underlying bridge", calls.includes("close"));
-
-  // ---------------------------------------------------------------- daemon: progress frames
-  // An MCP export routed through a daemon owes its caller notifications/progress (MCP spec 2025-06-18,
-  // basic/utilities/progress) just as one that holds the bridge does, so the daemon relays the
-  // bridge's ticks as `{ id, progress }` frames ahead of the reply — to a client that opted in only.
-  // A second daemon, over a fake bridge WITH requestWithClient that emits ticks through its listener.
+  // The port-in-use refusal (server-core portInUseMessage), per platform, on every OS: POSIX keeps its text;
+  // where no daemon can run it says another session or command holds the bridge, that sharing is not
+  // supported there, and to close the other one.
   {
-    const P_PORT = 19788; // a socket name only: the fake bridge binds no TCP port
-    const TICKS: ProgressTick[] = [
-      { phase: "pages", page: { index: 1, of: 2, name: "P1" }, nodes: 10, assets: null },
-      { phase: "assets", page: null, nodes: null, assets: 3 },
-    ];
-    const TICK0 = must(TICKS[0], "TICKS[0]"), TICK1 = must(TICKS[1], "TICKS[1]");
-    const row: ClientRow = { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true, pluginVersion: null, pluginStale: null };
-    const listeners: string[] = []; // whether each forwarded request carried a listener
-    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-    const tickBridge: DaemonBridge = {
-      port: P_PORT,
-      isConnected: () => true,
-      waitForConnection: async () => {},
-      close: () => {},
-      request: async () => { throw new Error("a bridge with requestWithClient is never asked through request()"); },
-      requestWithClient: async (cmd, _args, _timeoutMs, _target, _stallMs, onProgress) => {
-        listeners.push(onProgress ? "yes" : "none");
-        // ping: both ticks, then the reply in the same turn (the tightest ordering case).
-        if (cmd === "ping") { for (const t of TICKS) onProgress?.(t); return { reply: { pong: true, page: "P", file: "ticked" }, client: row }; }
-        // whoami: 4 ticks 150 ms apart, reply at ~600 ms — longer than the client's 400 ms guard, so it
-        // only succeeds if each tick re-arms that guard (the silence-budget decision in daemon.ts).
-        if (cmd === "whoami") { for (let i = 0; i < 4; i++) { await sleep(150); onProgress?.(TICK0); } return { reply: { instanceId: "fig-a", file: "slow" }, client: row }; }
-        // listPages: one tick, then 1.5 s of silence — past the client's 400 ms guard.
-        await sleep(10); onProgress?.(TICK1); await sleep(1500);
-        return { reply: { exportedAt: "2026-09-24T00:00:00.000Z", file: "late", depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }, client: row };
-      },
-    };
-    await daemon.serve(tickBridge, { port: P_PORT, crashHandlers: false });
-    const pcli = await daemon.connect(P_PORT);
-    if (!pcli) throw new Error("daemon.connect() returned null right after serve() (progress daemon)");
+    const posix = core.portInUseMessage(8787, "darwin"), win = core.portInUseMessage(8787, "win32");
+    ok("[port-in-use] POSIX: another bridge or MCP server is running, stop it or use one of the other two ports",
+      posix.startsWith("[bridge] port 8787 is already in use — another dtwin bridge or MCP server is running. Stop it first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports (8788, 8789) — the plugin walks all three."));
+    ok("[port-in-use] Windows: another MCP session or dtwin command holds the bridge, sharing is not supported there — close the other one",
+      /^\[bridge\] port 8787 is already in use — another MCP session or dtwin command holds the bridge, and sharing it between sessions is not supported on Windows \(yet\)\. Close the other one first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports \(8788, 8789\) — the plugin walks all three\.$/.test(win));
+  }
 
-    // Typed client, opted in: both ticks, exact values, in order, and before the promise settles.
-    const events: string[] = [];
-    const got: ProgressTick[] = [];
-    const withTicks = await pcli.requestWithClient({ cmd: "ping", timeoutMs: 5000 }, 5000, (t) => { got.push(t); events.push("tick"); });
-    events.push("reply");
-    ok("[daemon-progress] an opted-in client receives both ticks, exact values, in order",
-      JSON.stringify(got) === JSON.stringify(TICKS));
-    ok("[daemon-progress] …all before the reply, and the reply (and its client) is unchanged",
-      events.join(",") === "tick,tick,reply" && withTicks.reply.file === "ticked" && withTicks.client?.connId === "c1" && listeners.at(-1) === "yes");
+  // Everything below needs a daemon to serve. Where none can run (daemon.ts daemonSupported) --serve and
+  // --stop refuse with the reason instead, which is what is checked there; the predicate itself, with an
+  // injected platform, is in daemon-sock.test.ts.
+  if (!daemon.daemonSupported()) {
+    console.log("  (skipped: the daemon is not supported on Windows — serve() and stop() refuse, so there is no socket to drive the lifecycle, queue, framing, routing and progress frames through)");
+    const refusal = async (p: Promise<unknown>): Promise<string> => { try { await p; return "resolved"; } catch (e) { return asErr(e).message; } };
+    ok("[daemon] on Windows --stop refuses with the reason, rather than reporting nothing to stop", (await refusal(daemon.stop(D_PORT))) === daemon.DAEMON_UNSUPPORTED);
+    ok("[daemon] on Windows --serve refuses with the reason, and the bridge is left alone",
+      (await refusal(daemon.serve(fakeBridge, { port: D_PORT, crashHandlers: false }))) === daemon.DAEMON_UNSUPPORTED && !calls.includes("close"));
+  } else {
+    ok("[daemon] and --stop reports there was nothing to stop", (await daemon.stop(D_PORT)) === false);
 
-    // Over the raw socket: what an OLD client (one that never sends `progress`) sees vs an opted-in one.
-    const rawLines = (frame: string) => new Promise<string[]>((resolve, reject) => {
-      const c = net.createConnection(daemon.sockPath(P_PORT));
+    // A socket FILE left by a crashed daemon is not a running daemon. If this read as "alive", every
+    // later CLI run would fail until the user hand-deleted a file they don't know about.
+    fs.writeFileSync(daemon.sockPath(D_PORT), "");
+    ok("[daemon] a stale socket file reads as NO daemon, not as a hang",
+      (await daemon.connect(D_PORT)) === null);
+
+    // crashHandlers:false — the process-wide unhandledRejection handler only LOGS, which inside this
+    // suite would turn a crashed test into a silent pass. It is tested in a subprocess below.
+    await daemon.serve(fakeBridge, { port: D_PORT, crashHandlers: false });
+    ok("[daemon] --serve starts over a stale socket file", !!(await daemon.connect(D_PORT)));
+    const dstat = await daemon.status(D_PORT);
+    ok("[daemon] status reports the pid, port and whether the PLUGIN is connected",
+      dstat?.pid === process.pid && dstat.port === D_PORT && dstat.pluginConnected === true);
+
+    // Starting a second daemon must REFUSE, not silently steal the socket out from under the first.
+    let dblErr: Error | undefined;
+    try { await daemon.serve(fakeBridge, { port: D_PORT, crashHandlers: false }); } catch (e) { dblErr = asErr(e); }
+    ok("[daemon] a second --serve is refused rather than stealing the live socket",
+      !!dblErr && /already running/.test(dblErr.message));
+    ok("[daemon] and the refusal names the way out", !!dblErr && /--stop/.test(dblErr.message));
+
+    const dcli = await daemon.connect(D_PORT);
+    if (!dcli) throw new Error("daemon.connect() returned null right after serve()");
+    ok("[daemon] a request round-trips", (await dcli.request({ cmd: "listPages", timeoutMs: 5000 }, 5000)).file === "echo:listPages");
+    let dReqErr: Error | undefined;
+    try { await dcli.request({ cmd: "write", args: { ops: [] }, timeoutMs: 5000 }, 5000); } catch (e) { dReqErr = asErr(e); }
+    ok("[daemon] a plugin-side failure propagates to the client as an error, not a silent empty result",
+      !!dReqErr && /plugin exploded/.test(dReqErr.message));
+
+    // Requests are SERIALIZED. The plugin is single-threaded and its heavy commands mutate shared
+    // per-run state, so concurrent exports interleave badly — the daemon must behave like a sequence of
+    // one-shot runs, which is what every existing caller was written against.
+    const order: string[] = [];
+    const three: Cmd[] = ["ping", "whoami", "getSelection"];
+    await Promise.all(three.map((c) => dcli.request({ cmd: c, timeoutMs: 5000 }, 5000).then(() => order.push(c))));
+    ok("[daemon] concurrent client requests run ONE at a time, in arrival order", order.join(",") === three.join(","));
+
+    // The frame is CHECKED before anything reads it (daemon.ts isDaemonRequest): a `{}` used to be
+    // forwarded to the bridge as `cmd: undefined`, and `timeoutMs: "x"` reached setTimeout as NaN.
+    // Driven over the raw socket, since the typed client cannot even express these frames.
+    const rawFrame = (frame: string) => new Promise<string>((resolve, reject) => {
+      const c = net.createConnection(daemon.sockPath(D_PORT));
       c.setEncoding("utf8");
-      const lines: string[] = [];
-      c.on("data", daemon.framer((l) => { lines.push(l); if (l.includes('"ok":')) { c.end(); resolve(lines); } }));
+      let buf = "";
+      c.on("data", (d: string) => { buf += d; if (buf.includes("\n")) { c.end(); resolve(buf.trim()); } });
       c.on("error", reject);
       c.on("connect", () => c.write(frame + "\n"));
     });
-    const plain = await rawLines('{"id":"n1","cmd":"ping"}');
-    const opted = await rawLines('{"id":"y1","cmd":"ping","progress":true}');
-    ok("[daemon-progress] a client that did not opt in gets ONLY the reply frame, unchanged — while an opted-in one gets the ticks first",
-      plain.length === 1 && plain[0] === JSON.stringify({ ok: true, id: "n1", result: { pong: true, page: "P", file: "ticked" }, client: row })
-      && listeners.at(-2) === "none"
-      && opted.length === 3 && opted[0] === JSON.stringify({ id: "y1", progress: TICKS[0] }) && opted[1] === JSON.stringify({ id: "y1", progress: TICKS[1] }));
-    const noOpt = await pcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000);
-    ok("[daemon-progress] the typed client without a listener does not opt in, and its reply is unchanged",
-      noOpt.file === "ticked" && listeners.at(-1) === "none");
+    const badFrames: Array<[string, RegExp]> = [
+      ["{}", /bad request frame: `cmd` is missing/],
+      ["[]", /bad request frame: not an object/],
+      ['{"cmd":"boom"}', /bad request frame: unknown cmd 'boom'/],
+      ['{"cmd":"listPages","timeoutMs":"x"}', /bad request frame: `timeoutMs` is not a positive number/],
+      ['{"cmd":"listPages","args":[]}', /bad request frame: `args` is not an object/],
+      ['{"cmd":"listPages","client":7}', /bad request frame: `client` is not a string/],
+      ['{"cmd":"listPages","progress":"yes"}', /bad request frame: `progress` is not a boolean/],
+      ["not json", /bad request frame: /],
+    ];
+    for (const [frame, want] of badFrames) {
+      const r = await rawFrame(frame);
+      ok(`[daemon] a malformed frame ${frame} is refused as a bad request frame`, /"ok":false/.test(r) && want.test(r));
+    }
+    ok("[daemon] a refused frame never reached the bridge", !calls.includes("boom") && !calls.some((c) => c === "undefined"));
+    ok("[daemon] the daemon's own commands need no other field", /"daemon":true/.test(await rawFrame('{"cmd":"__ping"}')));
+    ok("[daemon] a request id is echoed back on the reply", /"id":"q7"/.test(await rawFrame('{"id":"q7","cmd":"ping"}')));
 
-    // Timeout: each tick re-arms the client's outer guard (a silence budget, like the CLI's stall check).
-    let slowTicks = 0;
-    const slow = await pcli.request({ cmd: "whoami", timeoutMs: 5000 }, 400, () => { slowTicks++; }).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
-    ok("[daemon-progress] ticks keep a request alive past the client's guard (each one re-arms it)", slow === "slow" && slowTicks === 4);
-    const t0 = Date.now();
-    const silent = await pcli.request({ cmd: "listPages", timeoutMs: 5000 }, 400, () => {}).then(() => "resolved", (e: unknown) => asErr(e).message);
-    ok("[daemon-progress] …but silence after a tick still times out, on the guard, not on the late reply",
-      /daemon did not respond within 0s/.test(silent) && Date.now() - t0 < 1200);
-    await sleep(1400); // let the daemon's queue drain the late listPages before stopping it
-    ok("[daemon-progress] the progress daemon stops", (await daemon.stop(P_PORT)) === true);
+    // Routing has to survive the daemon hop. A CLI process behind a daemon has no bridge of its own, so
+    // if `client` were dropped in the unix-socket frame the command would silently run against whichever
+    // file the bridge picked — the exact wrong-file export the refusal in resolveClient exists to prevent.
+    calls.length = 0;
+    const routed = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000 }, 5000);
+    ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NIMA Library"));
+    ok("[daemon] and the command itself still arrives", calls.includes("whoami"));
+    ok("[daemon] a bridge that cannot name the client it used leaves `client` null — never a guess", routed.client === null);
+    ok("[daemon] a named client with no connect window asks for no wait", !calls.some((c) => c.startsWith("wait:")));
+    // With a connect window (the CLI behind a daemon passes its own), a NAMED client gets the bounded
+    // waitForClient before the request — min(window, 15 s) — so the second file's window has time to
+    // redial; a bare connId never waits (it does not depend on identification).
+    calls.length = 0;
+    await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
+    ok("[daemon] a named client WITH a connect window is waited for, capped at 15 s", calls[0] === "wait:NIMA Library:15000" && calls.includes("client:NIMA Library"));
+    calls.length = 0;
+    await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 4000 }, 5000);
+    ok("[daemon] …and a shorter window is used as-is", calls[0] === "wait:NIMA Library:4000");
+    calls.length = 0;
+    await dcli.requestWithClient({ cmd: "whoami", client: "c2", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
+    ok("[daemon] a bare connId target never waits", !calls.some((c) => c.startsWith("wait:")) && calls.includes("client:c2"));
+    // A connect window that runs out with NOTHING connected is not the daemon's error to report: the
+    // request still runs, so the bridge's own resolveClient text ("Figma plugin not connected. Open the
+    // file in Figma and run the plugin.") is what every path prints — not waitForConnection's "timed out
+    // waiting for the plugin to connect" (the MCP's named `client` sends a window).
+    calls.length = 0;
+    const wasConnected = fakeBridge.isConnected, wasWait = fakeBridge.waitForConnection;
+    fakeBridge.isConnected = () => false;
+    fakeBridge.waitForConnection = async () => { calls.push("waitConn"); throw new Error("timed out waiting for the plugin to connect"); };
+    const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
+    fakeBridge.isConnected = wasConnected;
+    fakeBridge.waitForConnection = wasWait;
+    ok("[daemon] a connect window that runs out falls through to the request (the bridge's own not-connected text), not the daemon's timeout text",
+      calls[0] === "waitConn" && calls[1] === "wait:NIMA Library:50" && calls.includes("whoami") && afterWindow === "answered");
+    // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
+    const cstat = await daemon.status(D_PORT);
+    ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
+      Array.isArray(cstat?.clients) && cstat.clients.length === 2 && cstat.clients[0]?.connId === "c1");
 
-    // A daemon that sends malformed progress frames (or sends them unasked) must not break the reply:
-    // bad ticks are dropped, a good one is still delivered, and the reply is the answer.
-    const F_PORT = 19790;
-    const fsock = daemon.sockPath(F_PORT);
-    try { fs.unlinkSync(fsock); } catch { /* none */ }
-    const seenFrames: unknown[] = [];
-    const fake = net.createServer((conn) => {
-      conn.setEncoding("utf8");
-      conn.on("error", () => {});
-      conn.on("data", daemon.framer((line) => {
-        const m = JSON.parse(line) as unknown;
-        const rec = typeof m === "object" && m !== null && !Array.isArray(m) ? m : {};
-        const cmd = "cmd" in rec ? rec.cmd : undefined;
-        const id = "id" in rec && typeof rec.id === "string" ? rec.id : undefined;
-        if (cmd === "__ping") { conn.write(JSON.stringify({ ok: true, id, result: { daemon: true } }) + "\n"); return; }
-        seenFrames.push(m);
-        conn.write([
-          '{"id":"z","progress":"nope"}',
-          '{"progress":{"phase":5,"page":null,"nodes":null,"assets":null}}',
-          '{"progress":{"phase":"pages","page":{"index":"1","of":2,"name":null},"nodes":null,"assets":null}}',
-          '{"progress":null}',
-          JSON.stringify({ progress: TICKS[1] }),
-          JSON.stringify({ ok: true, id, result: { pong: true, page: "P", file: "fake" } }),
-        ].join("\n") + "\n");
-      }));
-    });
-    await new Promise<void>((r) => fake.listen(fsock, r));
-    const fcli = await daemon.connect(F_PORT);
-    if (!fcli) throw new Error("daemon.connect() returned null against the hand-rolled daemon");
-    const fgot: ProgressTick[] = [];
-    const fr = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, (t) => fgot.push(t)).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
-    ok("[daemon-progress] malformed progress frames are dropped — the reply still arrives, and only the well-formed tick is delivered",
-      fr === "fake" && JSON.stringify(fgot) === JSON.stringify([TICKS[1]]));
-    const fr2 = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
-    const optIn = seenFrames.map((f) => typeof f === "object" && f !== null && "progress" in f ? f.progress : "absent");
-    ok("[daemon-progress] the client opts in on the wire only with a listener, and copes with frames it never asked for",
-      fr2 === "fake" && optIn.join(",") === "true,absent");
-    await new Promise<void>((r) => fake.close(() => r()));
-    try { fs.unlinkSync(fsock); } catch { /* closed server removed it */ }
+    // Newline-delimited framing has to survive a payload that arrives in many chunks — a real export is
+    // megabytes, and reassembling it wrongly would corrupt every large pull.
+    const big = await dcli.request({ cmd: "exportFull", args: { allPages: true }, timeoutMs: 30000 }, 30000);
+    ok("[daemon] a multi-megabyte reply is reassembled intact across chunks", big.designSystem.hygiene?.[0]?.length === 4e6);
+    // The daemon client re-checks the relayed reply's shape (an older daemon build may not have): a
+    // bridge answering `listChildren` with a listPages-shaped reply is a named error, not a typed lie.
+    let shapeErr: Error | undefined;
+    try { await dcli.request({ cmd: "listChildren", args: { nodeId: "1:1" }, timeoutMs: 5000 }, 5000); } catch (e) { shapeErr = asErr(e); }
+    ok("[daemon] a relayed reply of the wrong shape is refused by the client, naming the command",
+      !!shapeErr && /relayed an unexpected shape for listChildren: `id` is missing/.test(shapeErr.message));
+
+    // Idle shutdown config is reported in MS, not rounded minutes: a sub-minute window rounded to "0"
+    // reads as "disabled", which is the opposite of true. (The reap itself is time-based and covered by
+    // a manual run rather than a 40s sleep in the suite; what's asserted here is the wiring.)
+    ok("[daemon] status reports the idle window in ms, and how long it has been idle",
+      typeof dstat?.idleForMs === "number" && (dstat.idleMs == null || dstat.idleMs > 0));
+    ok("[daemon] a client probe counts as activity — idleForMs stays small while in use",
+      (dstat?.idleForMs ?? NaN) < 60000);
+
+    // A bridge with no requestWithClient cannot take a progress listener (the shape an older bridge has):
+    // a client that asks for progress still gets its reply, and simply no ticks.
+    let noTicks = 0;
+    const optedNoSource = await dcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, () => { noTicks++; });
+    ok("[daemon-progress] a listener against a bridge with no progress source still gets the reply, and no ticks",
+      optedNoSource.file === "echo:ping" && noTicks === 0);
+
+    ok("[daemon] --stop stops it", (await daemon.stop(D_PORT)) === true);
+    ok("[daemon] and removes the socket file, so the next --serve is not blocked",
+      !fs.existsSync(daemon.sockPath(D_PORT)));
+    ok("[daemon] stopping closes the underlying bridge", calls.includes("close"));
+
+    // ---------------------------------------------------------------- daemon: progress frames
+    // An MCP export routed through a daemon owes its caller notifications/progress (MCP spec 2025-06-18,
+    // basic/utilities/progress) just as one that holds the bridge does, so the daemon relays the
+    // bridge's ticks as `{ id, progress }` frames ahead of the reply — to a client that opted in only.
+    // A second daemon, over a fake bridge WITH requestWithClient that emits ticks through its listener.
+    {
+      const P_PORT = 19788; // a socket name only: the fake bridge binds no TCP port
+      const TICKS: ProgressTick[] = [
+        { phase: "pages", page: { index: 1, of: 2, name: "P1" }, nodes: 10, assets: null },
+        { phase: "assets", page: null, nodes: null, assets: 3 },
+      ];
+      const TICK0 = must(TICKS[0], "TICKS[0]"), TICK1 = must(TICKS[1], "TICKS[1]");
+      const row: ClientRow = { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true, pluginVersion: null, pluginStale: null };
+      const listeners: string[] = []; // whether each forwarded request carried a listener
+      const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+      const tickBridge: DaemonBridge = {
+        port: P_PORT,
+        isConnected: () => true,
+        waitForConnection: async () => {},
+        close: () => {},
+        request: async () => { throw new Error("a bridge with requestWithClient is never asked through request()"); },
+        requestWithClient: async (cmd, _args, _timeoutMs, _target, _stallMs, onProgress) => {
+          listeners.push(onProgress ? "yes" : "none");
+          // ping: both ticks, then the reply in the same turn (the tightest ordering case).
+          if (cmd === "ping") { for (const t of TICKS) onProgress?.(t); return { reply: { pong: true, page: "P", file: "ticked" }, client: row }; }
+          // whoami: 4 ticks 150 ms apart, reply at ~600 ms — longer than the client's 400 ms guard, so it
+          // only succeeds if each tick re-arms that guard (the silence-budget decision in daemon.ts).
+          if (cmd === "whoami") { for (let i = 0; i < 4; i++) { await sleep(150); onProgress?.(TICK0); } return { reply: { instanceId: "fig-a", file: "slow" }, client: row }; }
+          // listPages: one tick, then 1.5 s of silence — past the client's 400 ms guard.
+          await sleep(10); onProgress?.(TICK1); await sleep(1500);
+          return { reply: { exportedAt: "2026-09-24T00:00:00.000Z", file: "late", depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }, client: row };
+        },
+      };
+      await daemon.serve(tickBridge, { port: P_PORT, crashHandlers: false });
+      const pcli = await daemon.connect(P_PORT);
+      if (!pcli) throw new Error("daemon.connect() returned null right after serve() (progress daemon)");
+
+      // Typed client, opted in: both ticks, exact values, in order, and before the promise settles.
+      const events: string[] = [];
+      const got: ProgressTick[] = [];
+      const withTicks = await pcli.requestWithClient({ cmd: "ping", timeoutMs: 5000 }, 5000, (t) => { got.push(t); events.push("tick"); });
+      events.push("reply");
+      ok("[daemon-progress] an opted-in client receives both ticks, exact values, in order",
+        JSON.stringify(got) === JSON.stringify(TICKS));
+      ok("[daemon-progress] …all before the reply, and the reply (and its client) is unchanged",
+        events.join(",") === "tick,tick,reply" && withTicks.reply.file === "ticked" && withTicks.client?.connId === "c1" && listeners.at(-1) === "yes");
+
+      // Over the raw socket: what an OLD client (one that never sends `progress`) sees vs an opted-in one.
+      const rawLines = (frame: string) => new Promise<string[]>((resolve, reject) => {
+        const c = net.createConnection(daemon.sockPath(P_PORT));
+        c.setEncoding("utf8");
+        const lines: string[] = [];
+        c.on("data", daemon.framer((l) => { lines.push(l); if (l.includes('"ok":')) { c.end(); resolve(lines); } }));
+        c.on("error", reject);
+        c.on("connect", () => c.write(frame + "\n"));
+      });
+      const plain = await rawLines('{"id":"n1","cmd":"ping"}');
+      const opted = await rawLines('{"id":"y1","cmd":"ping","progress":true}');
+      ok("[daemon-progress] a client that did not opt in gets ONLY the reply frame, unchanged — while an opted-in one gets the ticks first",
+        plain.length === 1 && plain[0] === JSON.stringify({ ok: true, id: "n1", result: { pong: true, page: "P", file: "ticked" }, client: row })
+        && listeners.at(-2) === "none"
+        && opted.length === 3 && opted[0] === JSON.stringify({ id: "y1", progress: TICKS[0] }) && opted[1] === JSON.stringify({ id: "y1", progress: TICKS[1] }));
+      const noOpt = await pcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000);
+      ok("[daemon-progress] the typed client without a listener does not opt in, and its reply is unchanged",
+        noOpt.file === "ticked" && listeners.at(-1) === "none");
+
+      // Timeout: each tick re-arms the client's outer guard (a silence budget, like the CLI's stall check).
+      let slowTicks = 0;
+      const slow = await pcli.request({ cmd: "whoami", timeoutMs: 5000 }, 400, () => { slowTicks++; }).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
+      ok("[daemon-progress] ticks keep a request alive past the client's guard (each one re-arms it)", slow === "slow" && slowTicks === 4);
+      const t0 = Date.now();
+      const silent = await pcli.request({ cmd: "listPages", timeoutMs: 5000 }, 400, () => {}).then(() => "resolved", (e: unknown) => asErr(e).message);
+      ok("[daemon-progress] …but silence after a tick still times out, on the guard, not on the late reply",
+        /daemon did not respond within 0s/.test(silent) && Date.now() - t0 < 1200);
+      await sleep(1400); // let the daemon's queue drain the late listPages before stopping it
+      ok("[daemon-progress] the progress daemon stops", (await daemon.stop(P_PORT)) === true);
+
+      // A daemon that sends malformed progress frames (or sends them unasked) must not break the reply:
+      // bad ticks are dropped, a good one is still delivered, and the reply is the answer.
+      const F_PORT = 19790;
+      const fsock = daemon.sockPath(F_PORT);
+      try { fs.unlinkSync(fsock); } catch { /* none */ }
+      const seenFrames: unknown[] = [];
+      const fake = net.createServer((conn) => {
+        conn.setEncoding("utf8");
+        conn.on("error", () => {});
+        conn.on("data", daemon.framer((line) => {
+          const m = JSON.parse(line) as unknown;
+          const rec = typeof m === "object" && m !== null && !Array.isArray(m) ? m : {};
+          const cmd = "cmd" in rec ? rec.cmd : undefined;
+          const id = "id" in rec && typeof rec.id === "string" ? rec.id : undefined;
+          if (cmd === "__ping") { conn.write(JSON.stringify({ ok: true, id, result: { daemon: true } }) + "\n"); return; }
+          seenFrames.push(m);
+          conn.write([
+            '{"id":"z","progress":"nope"}',
+            '{"progress":{"phase":5,"page":null,"nodes":null,"assets":null}}',
+            '{"progress":{"phase":"pages","page":{"index":"1","of":2,"name":null},"nodes":null,"assets":null}}',
+            '{"progress":null}',
+            JSON.stringify({ progress: TICKS[1] }),
+            JSON.stringify({ ok: true, id, result: { pong: true, page: "P", file: "fake" } }),
+          ].join("\n") + "\n");
+        }));
+      });
+      await new Promise<void>((r) => fake.listen(fsock, r));
+      const fcli = await daemon.connect(F_PORT);
+      if (!fcli) throw new Error("daemon.connect() returned null against the hand-rolled daemon");
+      const fgot: ProgressTick[] = [];
+      const fr = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, (t) => fgot.push(t)).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
+      ok("[daemon-progress] malformed progress frames are dropped — the reply still arrives, and only the well-formed tick is delivered",
+        fr === "fake" && JSON.stringify(fgot) === JSON.stringify([TICKS[1]]));
+      const fr2 = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
+      const optIn = seenFrames.map((f) => typeof f === "object" && f !== null && "progress" in f ? f.progress : "absent");
+      ok("[daemon-progress] the client opts in on the wire only with a listener, and copes with frames it never asked for",
+        fr2 === "fake" && optIn.join(",") === "true,absent");
+      await new Promise<void>((r) => fake.close(() => r()));
+      try { fs.unlinkSync(fsock); } catch { /* closed server removed it */ }
+    }
   }
 
   // ---------------------------------------------------------------- is-main.ts: the import.meta.main fallback
@@ -3536,7 +3559,8 @@ void (async () => {
     // (e) the daemon. A real server-core bridge + a fake plugin behind a real daemon socket.
     // Pre-change daemon.ts ignored its client's disconnect entirely: the in-flight request ran to its
     // timeout with no cancel, and a queued one was forwarded once the one ahead of it finished.
-    {
+    if (!daemon.daemonSupported()) console.log("  (skipped: the daemon is not supported on Windows — no daemon socket for a client to leave mid-request)");
+    else {
       const { bridge: b, client: ws1 } = await connectedBridge();
       const seen: Array<Seen | "socket-closed"> = [];
       record(ws1, seen);
@@ -3597,7 +3621,8 @@ void (async () => {
     // `signal.aborted` check also stops B, so a daemon that forwarded an abandoned queued request still passed
     // (a daemon.ts `abandoned()` that returns false survived). This fake bridge ignores `signal` entirely:
     // only the daemon can keep B from reaching it. A is held, B's client ends while B is queued, C is the FIFO fence.
-    {
+    if (!daemon.daemonSupported()) console.log("  (skipped: the daemon is not supported on Windows — no daemon queue to drop an abandoned request from)");
+    else {
       const seenCmds: string[] = [];
       let releaseA: (() => void) | undefined;
       const row = clientRow({ connId: "c1" });
@@ -3782,7 +3807,8 @@ void (async () => {
     // the daemon client's optional trailing `signal` (the MCP cancel via a daemon): an
     // abort closes the request's socket, so the daemon abandons it on the wire. Without it, the client
     // would let the call run to its reply and the bridge's signal would never abort.
-    {
+    if (!daemon.daemonSupported()) console.log("  (skipped: the daemon is not supported on Windows — no daemon socket for the client's signal to close)");
+    else {
       const S_PORT = 19792; // a socket name only: the fake bridge binds no TCP port
       const row: ClientRow = { connId: "c1", file: "Sample App", fileKey: null, page: "Home", instanceId: "fig-s", connectedAt: 1, uptimeMs: 1, identified: true, pluginVersion: null, pluginStale: null };
       const bridgeSaw: string[] = [];

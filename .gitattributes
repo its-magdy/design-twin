@@ -1,0 +1,6 @@
+# LF everywhere, on every OS: the committed bundles (figma-plugin/code.js, claude-plugin/scripts/*.js) are checked byte for
+# byte against a fresh build, and fixtures are hashed — a CRLF checkout (git's default on Windows) would fail both.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

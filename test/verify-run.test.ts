@@ -11,10 +11,14 @@ import * as VR from "../design-to-code/verify-run.ts";
 import { shellArg } from "../design-to-code/cli-args.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { check, report } from "./assert.ts";
+import { POSIX_SH } from "./posix-sh.ts";
 
 const safe = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch (e) { console.log(`    (threw: ${e instanceof Error ? e.message : String(e)})`); } return check(name, r); };
 const VS_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
 const sha = (f: string): string => crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex");
+// The run cache keys by the on-disk spelling (fs.realpathSync.native); the JS resolver keeps what it was given — on Windows
+// the 8.3 short temp dir (RUNNER~1) stays short there and is the long name natively — so expectations use the native one.
+const realNative = (p: string): string => fs.realpathSync.native(p);
 const tmps: string[] = [];
 const mk = (p: string): string => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); tmps.push(d); return d; };
 const inTmpDir = (live: string): boolean => live.startsWith(path.join(os.tmpdir(), "designtwin-verify") + path.sep);
@@ -59,7 +63,7 @@ function proj(prefix = "dt-run-cli-"): string {
 }
 await block("the run cache:", async () => {
   const cwd = proj();
-  const real = fs.realpathSync(cwd);
+  const real = realNative(cwd);
   const base = path.join(cwd, "design", "verify", "Plots");
   safe("a project with node_modules → <project>/node_modules/.cache/designtwin-verify/<S>.status.json", () => VR.liveStatusFile(base) === path.join(real, "node_modules", ".cache", "designtwin-verify", "Plots.status.json"));
   safe("…the stage dir of a run is <run cache>/stage/<runId>/", () => VR.stageDirOf(base, "run-a") === path.join(real, "node_modules", ".cache", "designtwin-verify", "stage", "run-a"));
@@ -75,14 +79,14 @@ await block("the run cache:", async () => {
   fs.mkdirSync(path.join(bare, "design", "verify"), { recursive: true });
   const bareLive = VR.liveStatusFile(path.join(bare, "design", "verify", "Plots"));
   safe("no node_modules → <os tmpdir>/designtwin-verify/<short sha of the verify dir's realpath>/", () => bareLive.startsWith(path.join(os.tmpdir(), "designtwin-verify") + path.sep)
-    && path.basename(path.dirname(bareLive)) === crypto.createHash("sha256").update(fs.realpathSync(path.join(bare, "design", "verify"))).digest("hex").slice(0, 16));
+    && path.basename(path.dirname(bareLive)) === crypto.createHash("sha256").update(realNative(path.join(bare, "design", "verify"))).digest("hex").slice(0, 16));
   tmps.push(path.dirname(bareLive));
 });
 
 // a monorepo with hoisted dependencies — node_modules only at the workspace root, none beside the app's package.json
 await block("the run cache in a monorepo:", async () => {
   const ws = mk("dt-run-ws-");
-  const real = fs.realpathSync(ws);
+  const real = realNative(ws);
   fs.writeFileSync(path.join(ws, "package.json"), "{\"name\":\"plots-ws\",\"private\":true,\"workspaces\":[\"apps/*\"]}\n");
   fs.mkdirSync(path.join(ws, "node_modules"));
   const app = path.join(ws, "apps", "plots");
@@ -133,6 +137,8 @@ function project(): { cwd: string; dir: string; base: string; live: string; cli:
   const base = path.join(dir, "Plots");
   return { cwd, dir, base, live: VR.liveStatusFile(base), cli };
 }
+// A printed repo-relative path is path.join'd (backslashes on Windows) and quoted by shellArg: build the expectation the same way.
+const relPrinted = (file: string): string => shellArg(path.join("design", "verify", file));
 const measuredFor = (dir: string, extra: Record<string, unknown> = {}): string => JSON.stringify({ expectationSha256: sha(path.join(dir, "Plots.expected.json")), nodes: [], ...extra });
 await block("verify-screen --status:", async () => {
   const { cwd, dir, live, cli } = project();
@@ -140,7 +146,7 @@ await block("verify-screen --status:", async () => {
   const s1 = cli("--status", "Plots", "--phase", "starting", "--new-run", "--detail", "renderer check");
   const m = /^run (\S+) rev 1$/m.exec(s1.stdout);
   const runId = m ? m[1] ?? "" : "";
-  safe("--new-run prints `run <id> rev 1` and writes the LIVE status (run cache); stderr names that file", () => s1.status === 0 && runId !== "" && readStatusFile(live)?.detail === "renderer check" && s1.stderr.includes(`status ${fs.realpathSync(path.dirname(live))}`));
+  safe("--new-run prints `run <id> rev 1` and writes the LIVE status (run cache); stderr names that file", () => s1.status === 0 && runId !== "" && readStatusFile(live)?.detail === "renderer check" && s1.stderr.includes(`status ${shellArg(path.join(realNative(path.dirname(live)), path.basename(live)))}`));
   const s2 = cli("--status", "Plots", "--phase", "driving");
   cli("--status", "Plots", "--phase", "driving", "--detail", "heartbeat");
   safe("no --run continues the run in progress (rev 2, same id)", () => s2.status === 0 && s2.stdout.trim() === `run ${runId} rev 2`);
@@ -201,7 +207,7 @@ await block("verify-screen --status --publish (staging):", async () => {
   const s = cli("--status", "Plots", "--phase", "driving", "--new-run");
   const runId = /^run (\S+) rev 1$/m.exec(s.stdout)?.[1] ?? "";
   const stage = VR.stageDirOf(base, runId);
-  safe("--status prints and creates the run's stage dir in the run cache", () => s.stderr.includes(`stage  ${stage}`) && fs.statSync(stage).isDirectory());
+  safe("--status prints and creates the run's stage dir in the run cache", () => s.stderr.includes(`stage  ${shellArg(stage)}`) && fs.statSync(stage).isDirectory());
   fs.writeFileSync(path.join(stage, "Plots.evidence.json"), JSON.stringify({ interactions: [{ nodeId: "2:4", trigger: "on_click", ok: true }] }));
   fs.writeFileSync(path.join(stage, "Plots-dialog.png"), "png bytes");
   fs.mkdirSync(path.join(stage, "nested"));
@@ -337,6 +343,8 @@ await block(".git file / --wait with no cache:", async () => {
 // printed commands run as printed from a project whose path holds a space
 console.log("printed commands quote their paths:");
 await block("printed commands quote paths:", async () => {
+  if (POSIX_SH === null) { console.log("  (skipped: no sh on PATH — the printed commands are POSIX-shell quoted, run through Git Bash on Windows)"); return; }
+  const sh = POSIX_SH;
   const cwd = mk("dt run space-");
   fs.writeFileSync(path.join(cwd, "package.json"), "{\"name\":\"plots-app\",\"private\":true}\n");
   fs.mkdirSync(path.join(cwd, "node_modules"));
@@ -346,12 +354,12 @@ await block("printed commands quote paths:", async () => {
   const cli = (...a: string[]) => spawnSync(process.execPath, [VS_TS, ...a], { cwd: os.tmpdir(), encoding: "utf8" });
   const s = cli("--status", "Plots", "--phase", "driving", "--run", "run-q", "--dir", dir);
   const stageLine = /^stage {2}(.+)$/m.exec(s.stderr)?.[1] ?? "";
-  const echoed = spawnSync("/bin/sh", ["-c", `printf %s ${stageLine}`], { encoding: "utf8" }).stdout;
+  const echoed = spawnSync(sh, ["-c", `printf %s ${stageLine}`], { encoding: "utf8" }).stdout;
   safe("--status prints the stage dir as one shell word (the path holds a space)", () => s.status === 0 && echoed === VR.stageDirOf(path.join(dir, "Plots"), "run-q"));
   fs.writeFileSync(path.join(dir, "Plots.measured.json"), measuredFor(dir, { runId: "run-q" }));
   cli("--status", "Plots", "--phase", "done", "--run", "run-q", "--dir", dir);
   const w = cli("--wait", "Plots", "--run", "run-q", "--dir", dir, "--timeout", "5", "--interval", "0.1");
-  const ran = spawnSync("/bin/sh", ["-c", w.stdout.trim()], { cwd: os.tmpdir(), encoding: "utf8" });
+  const ran = spawnSync(sh, ["-c", w.stdout.trim()], { cwd: os.tmpdir(), encoding: "utf8" });
   safe("--wait's printed --compare runs as printed from another directory (exit 0/1, the report written beside the measured file)", () =>
     w.status === 0 && (ran.status === 0 || ran.status === 1) && fs.existsSync(path.join(dir, "Plots.report.json")));
 });
@@ -409,7 +417,7 @@ await block("verify-screen --wait:", async () => {
   const w1 = cli("--wait", "Plots", "--run", "run-b", "--timeout", "1", "--interval", "0.1");
   safe("a stale `done` from run A does not end a wait for run B → exit 5 after --timeout", () => w1.status === 5 && /timed out after 1s waiting for run run-b/.test(w1.stderr) && Date.now() - t0 >= 900);
   const w2 = cli("--wait", "Plots", "--run", "run-a", "--timeout", "5", "--interval", "0.1");
-  safe("run A done and the measured file is the one it names → exit 0, prints the --compare command", () => w2.status === 0 && /--compare design\/verify\/Plots\.expected\.json design\/verify\/Plots\.measured\.json --out design\/verify\/Plots/.test(w2.stdout));
+  safe("run A done and the measured file is the one it names → exit 0, prints the --compare command", () => w2.status === 0 && w2.stdout.includes(`--compare ${relPrinted("Plots.expected.json")} ${relPrinted("Plots.measured.json")} --out ${relPrinted("Plots")}`));
   safe("…without --interactions: that evidence file was not published in run A", () => !/--interactions/.test(w2.stdout));
   safe("--wait names the live file it waits on", () => w2.stderr.includes(live));
   fs.writeFileSync(path.join(dir, "Plots.measured.json"), JSON.stringify({ expectationSha256: "remeasured", nodes: [] }));
@@ -448,7 +456,7 @@ await block("verify-screen --wait:", async () => {
   cli("--status", "Plots", "--phase", "done", "--run", "run-e", "--publish", stage);
   const code = await waiting;
   safe("…a wait that is polling when the run reaches done → exit 0", () => code === 0);
-  safe("…and prints --interactions for the evidence published in this run", () => /--interactions design\/verify\/Plots\.evidence\.json/.test(out));
+  safe("…and prints --interactions for the evidence published in this run", () => out.includes(`--interactions ${relPrinted("Plots.evidence.json")}`));
   // the live file alone moves a wait: design/verify/Plots.status.json is only the published copy
   fs.rmSync(path.join(dir, "Plots.status.json"), { force: true });
   VR.writeStatus(base, { runId: "run-f", phase: "failed", by: "agent", detail: "gave up" });
@@ -490,7 +498,7 @@ const inTmp = (live: string): boolean => live.startsWith(path.join(os.tmpdir(), 
 await block("the run cache stays inside the project (M-a):", async () => {
   // an unrelated ancestor has a node_modules (a stray ~/node_modules); the project has none installed yet
   const anc = mk("dt-run-anc-");
-  const real = fs.realpathSync(anc);
+  const real = realNative(anc);
   fs.mkdirSync(path.join(anc, "node_modules"));
   const app = path.join(anc, "plots-app");
   fs.mkdirSync(path.join(app, "design", "verify"), { recursive: true });
@@ -523,7 +531,7 @@ await block("the run cache stays inside the project (M-a):", async () => {
   const pnApp = path.join(pn, "apps", "plots");
   fs.mkdirSync(path.join(pnApp, "design", "verify"), { recursive: true });
   fs.writeFileSync(path.join(pnApp, "package.json"), "{\"name\":\"plots\",\"private\":true}\n");
-  safe("a pnpm workspace (pnpm-workspace.yaml + root node_modules) → the root's cache", () => VR.liveStatusFile(path.join(pnApp, "design", "verify", "Plots")).startsWith(path.join(fs.realpathSync(pn), CACHE, "dirs") + path.sep));
+  safe("a pnpm workspace (pnpm-workspace.yaml + root node_modules) → the root's cache", () => VR.liveStatusFile(path.join(pnApp, "design", "verify", "Plots")).startsWith(path.join(realNative(pn), CACHE, "dirs") + path.sep));
   // a design/verify in a repo with no package.json of its own: the package.json search stops at .git too
   const noPkg = path.join(anc, "plots-native");
   fs.mkdirSync(path.join(noPkg, "design", "verify"), { recursive: true });
@@ -545,6 +553,7 @@ await block("the run cache stays inside the project (M-a):", async () => {
 
 console.log("an unwritable run cache — exit 6, one sentence, no stack (M-a):");
 await block("an unwritable run cache (M-a):", async () => {
+  if (process.platform === "win32") { console.log("  (skipped: mode bits do not make a directory read-only on Windows — chmod 0o555 / 0o000 refuses nothing)"); return; }
   const { cwd, dir, base, live, cli } = project();
   const cache = path.dirname(live);
   fs.mkdirSync(cache, { recursive: true });
@@ -554,7 +563,7 @@ await block("an unwritable run cache (M-a):", async () => {
   fs.chmodSync(cache, 0o755);
   const msg = /run cache \S+designtwin-verify is not writable \(sandbox write scope\?\) — run from \S+ or allow writes there/;
   safe("--status into a read-only run cache → exit 6, 'run cache <dir> is not writable (sandbox write scope?) — run from <root> or allow writes there'", () =>
-    s.status === 6 && msg.test(s.stderr) && s.stderr.includes(fs.realpathSync(cwd)));
+    s.status === 6 && msg.test(s.stderr) && s.stderr.includes(realNative(cwd)));
   safe("…no stack trace, nothing on stdout", () => !/\n\s+at /.test(s.stderr) && s.stdout === "");
   safe("…a refused `done --publish` published nothing into design/verify", () => d.status === 6 && !fs.existsSync(path.join(dir, "Plots.status.json")));
   // --wait on a run cache it cannot read → exit 6 at once, not a --timeout of silence
@@ -582,7 +591,7 @@ await block("case-insensitive spellings (M-b):", async () => {
   if (!insensitive) { console.log("  (skipped: this filesystem is case-sensitive — Design/Verify is another directory there)"); return; }
   const lower = VR.liveStatusFile(path.join(cwd, "design", "verify", "Plots"));
   const upper = VR.liveStatusFile(path.join(cwd, "Design", "Verify", "Plots"));
-  safe("`Design/Verify` and `design/verify` → the same live file (the default layout's, not a dirs/<key>/ one)", () => upper === lower && lower === path.join(fs.realpathSync(cwd), CACHE, "Plots.status.json"));
+  safe("`Design/Verify` and `design/verify` → the same live file (the default layout's, not a dirs/<key>/ one)", () => upper === lower && lower === path.join(realNative(cwd), CACHE, "Plots.status.json"));
   const tmpCase = mk("dt-run-case-bare-");
   fs.mkdirSync(path.join(tmpCase, "design", "verify"), { recursive: true });
   const a = VR.liveStatusFile(path.join(tmpCase, "design", "verify", "Plots")), b = VR.liveStatusFile(path.join(tmpCase, "DESIGN", "verify", "Plots"));
@@ -592,9 +601,11 @@ await block("case-insensitive spellings (M-b):", async () => {
 
 for (const d of tmps) fs.rmSync(d, { recursive: true, force: true });
 // a printed argument is ONE shell word whatever it holds — the shell gives back exactly the string
-{
+if (POSIX_SH === null) console.log("  (skipped: no sh on PATH to round-trip the quoting through)");
+else {
+  const sh = POSIX_SH;
   const words = ["design/verify/Plots.json", "/tmp/My Plots/design/verify", "it's here", "a!b c", "$HOME `x` \\ \"q\""];
-  const back = words.map((w) => spawnSync("/bin/sh", ["-c", `printf %s ${shellArg(w)}`], { encoding: "utf8" }).stdout);
+  const back = words.map((w) => spawnSync(sh, ["-c", `printf %s ${shellArg(w)}`], { encoding: "utf8" }).stdout);
   check("shellArg: a plain path stays bare; spaces, quotes, !, $, backticks and backslashes round-trip through sh as one word",
     shellArg(words[0] ?? "") === words[0] && back.every((b, i) => b === words[i]));
 }

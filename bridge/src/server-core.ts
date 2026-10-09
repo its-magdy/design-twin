@@ -18,7 +18,7 @@ import { ifDefined, isRecord } from "./json-util.ts";
 import { TIMEOUTS, exportTimeout, HEARTBEAT_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS } from "./ports.ts";
-import { legacySock } from "./daemon.ts";
+import { daemonSupported, legacySock } from "./daemon.ts";
 // The command/reply contract shared with the plugin: `request()` is typed per command from it, and
 // every reply is checked against it once, at the point it enters this process (see the message handler).
 import { replyShapeError } from "./commands.ts";
@@ -346,6 +346,21 @@ function refuseUpgrade(socket: Duplex, code: number, message?: string): void {
   );
 }
 
+/** The bind refusal when `port` is already held (EADDRINUSE). Where no daemon can run (daemon.ts
+ *  daemonSupported) the holder cannot share the bridge, so the text says so and to close the other
+ *  session or command. Elsewhere, a daemon from an earlier dtwin build listens on a socket this build
+ *  does not look at, so neither routing through it nor `dtwin --stop`'s first look finds it — the
+ *  text names it instead. */
+function portInUseMessage(port: number, platform: NodeJS.Platform = process.platform): string {
+  const others = `set FIGMA_BRIDGE_PORT to one of the other allowed ports (${ALLOWED_PORTS.filter((p) => p !== port).join(", ")}) — the plugin walks all three.`;
+  if (!daemonSupported(platform)) {
+    return `[bridge] port ${port} is already in use — another MCP session or dtwin command holds the bridge, and sharing it between sessions is not supported on Windows (yet). Close the other one first, or ${others}`;
+  }
+  const sock = legacySock(port);
+  const legacy = sock ? ` A dtwin daemon from an earlier version may be holding it (socket ${sock}) — \`dtwin --stop\` stops it.` : "";
+  return `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. Stop it first, or ${others}${legacy}`;
+}
+
 /** createBridge options. `onListenError` is for a caller that must SURVIVE a failed bind (the MCP
  * server: a held port is a tool error there, not a reason to kill the stdio session). Without it, a
  * held port prints the fix and exits 1 — the CLI behaviour, unchanged. `heartbeatMs` overrides the
@@ -624,19 +639,9 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   let bound = false;
   const listening = new Promise<void>((resolve) => server.once("listening", () => { bound = true; resolve(); }));
 
-  // A daemon from an earlier dtwin build listens on a socket this build does not look at, so neither
-  // routing through it nor `dtwin --stop`'s first look finds it — the port error names it instead.
-  const legacyDaemonHint = (p: number): string => {
-    const sock = legacySock(p);
-    return sock ? ` A dtwin daemon from an earlier version may be holding it (socket ${sock}) — \`dtwin --stop\` stops it.` : "";
-  };
   server.on("error", (e) => {
     if (errCode(e) === "EADDRINUSE") {
-      const msg =
-        `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. ` +
-        `Stop it first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports ` +
-        `(${ALLOWED_PORTS.filter((p) => p !== port).join(", ")}) — the plugin walks all three.` +
-        legacyDaemonHint(port);
+      const msg = portInUseMessage(port);
       if (opts.onListenError) return opts.onListenError(new Error(msg));
       console.error(msg);
       process.exit(1);
@@ -1004,4 +1009,4 @@ export type { BridgeOptions };
 // verifyClientWith/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-export { createBridge, connectionFor, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore, BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote };
+export { createBridge, connectionFor, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore, BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote, portInUseMessage };

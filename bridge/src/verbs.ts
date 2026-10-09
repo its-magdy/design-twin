@@ -93,7 +93,8 @@ export const HELP: Record<string, string> = {
     "  port, so while it (or the MCP server) is up a second bridge refuses to start.\n\n" +
     "  It shuts itself down after FIGMA_DAEMON_IDLE_MIN minutes without a command (default 120;\n" +
     "  0 disables), so an abandoned daemon cannot hold the port forever.\n" +
-    "  Port: 8787 by default; FIGMA_BRIDGE_PORT=8788|8789 picks another (the plugin tries all three).",
+    "  Port: 8787 by default; FIGMA_BRIDGE_PORT=8788|8789 picks another (the plugin tries all three).\n" +
+    "  Not on Windows yet: there it refuses, and one MCP session or dtwin command holds the bridge at a time.",
   stop:
     "dtwin stop\n\n" +
     "  Stop the daemon `dtwin serve` started, and free its port. Says so when none is running.",

@@ -1078,6 +1078,8 @@ export function pngHeader(b: Uint8Array): { w: number; h: number; colorType: num
   return { w: dv.getUint32(16), h: dv.getUint32(20), bitDepth: b[24] ?? 0, colorType: b[25] ?? 0, interlace: b[28] ?? 0, iccp };
 }
 const round4 = (n: number): number => Math.round(n * 10000) / 10000;
+/** A reference scale as printed (4 decimals): the value itself stays exact — 2048/1440 is captured as 1.4222222…. */
+export const scaleText = (n: number): string => `${round4(n)}x`;
 /** `base` joined with a "/"-separated relative path, resolved, when it lies strictly inside `within` (default `base`) — else
  *  null (a pointer or a referenceImage.path with `..` segments never reads a file outside design/export). Lexical only:
  *  no file is touched. Shared by --expect and the probe (probe-visual.ts). */
@@ -1119,22 +1121,28 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   const rb = root.renderBox && num(root.renderBox.w) && root.renderBox.w > 0 ? root.renderBox : undefined;
   const exportOffset = !rb ? { x: 0, y: 0 } : num(rb.x) && num(rb.y) && num(box.x) && num(box.y) ? { x: rb.x - box.x, y: rb.y - box.y } : null;
   const rowOffset = row && row.referenceOffset && num(row.referenceOffset.x) && num(row.referenceOffset.y) ? { x: row.referenceOffset.x, y: row.referenceOffset.y } : null;
-  const scale = row && num(row.referenceScale) ? row.referenceScale : round4(png.w / (rb ? rb.w : box.w));
+  const stated = row && num(row.referenceScale) ? row.referenceScale : round4(png.w / (rb ? rb.w : box.w));
   const offset = rowOffset ?? exportOffset;
   if (!offset) return unusable(p, "the export root has render bounds but no position (box.x/y) — where the reference sits over the frame is unknown");
   // a discovery thumbnail (360 px for a 1440 frame) is no export reference — Figma renders roots at s0
   // (the PNG on disk is checked too, not only the index's number: a thumbnail written over the pointer after the pull)
   const s0 = figmaReferenceScale(box.w, box.h), onDisk = png.w / (rb ? rb.w : box.w);
-  if (![scale, onDisk].every((v) => Math.abs(v - s0) <= REFERENCE_SCALE_SLACK * s0))
+  if (![stated, onDisk].every((v) => Math.abs(v - s0) <= REFERENCE_SCALE_SLACK * s0))
     return unusable(p, `the reference is a ${png.w} px image, not the export reference (a discovery thumbnail) — re-pull the screen`);
   // the PNG must be the render bounds at that scale on BOTH axes (±2 px; on the height also the scale's own rounding — it
   // comes from png.w, up to 1 px off the true width, + round4 — so a tall narrow frame's round(h · scale) can be h/w px off:
   // 0 extra for 1440×720, 12 for 400×5000). A PNG of another height is a stale or
   // foreign image under the pointer — and an absurd one (150 000 px tall) would be decoded in full by the probe.
   const refW = rb ? rb.w : box.w, refH = rb && num(rb.h) && rb.h > 0 ? rb.h : box.h;
-  const ew = Math.round(refW * scale), eh = Math.round(refH * scale), tolH = 2 + Math.floor(refH * (1 / refW + 0.00005));
+  const ew = Math.round(refW * stated), eh = Math.round(refH * stated), tolH = 2 + Math.floor(refH * (1 / refW + 0.00005));
   if (Math.abs(png.w - ew) > 2 || Math.abs(png.h - eh) > tolH)
-    return unusable(p, `the reference ${p} is ${png.w}×${png.h} px, but the frame's render bounds at ${scale}x are ${ew}×${eh} — a stale or foreign PNG under the pointer; re-pull the screen, then re-run --expect`);
+    return unusable(p, `the reference ${p} is ${png.w}×${png.h} px, but the frame's render bounds at ${stated}x are ${ew}×${eh} — a stale or foreign PNG under the pointer; re-pull the screen, then re-run --expect`);
+  // The scale the PNG was MADE at, which the probe captures at: Figma renders a root at s0 exactly (collectReference passes no
+  // scale), and a stated scale is s0 up to its own rounding — png.w is whole pixels (≤ 1 px off refW · s0) and the index keeps
+  // 4 decimals. Captured at the rounded value instead, the build drifts off the reference by up to ~0.3 device px across a
+  // 1440 frame, which whole-pixel glyph placement (Windows) turns into hot text regions. A stated scale further from s0
+  // (inside the slack above) is used as stated.
+  const scale = Math.abs(stated - s0) <= 1 / refW + 0.00005 ? s0 : stated;
   // the frame box inside the PNG, device px, clamped to the image
   const x = Math.min(Math.max(0, Math.round(-offset.x * scale)), png.w), y = Math.min(Math.max(0, Math.round(-offset.y * scale)), png.h);
   const crop = { x, y, w: Math.max(0, Math.min(Math.round(box.w * scale), png.w - x)), h: Math.max(0, Math.min(Math.round(box.h * scale), png.h - y)) };
@@ -2851,7 +2859,7 @@ function visualMarkdown(v: ReportVisual): string[] {
     return L;
   }
   L.push(`${pctText(v.shiftTolerantPct ?? 0)}% of the compared pixels differ after the shift tolerance (${pctText(v.differingPct ?? 0)}% before it; anti-aliased edge pixels excluded) · ${v.regionsTotal ?? v.regions.length} hot region(s).`, "");
-  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale ?? "?"}x (geometry from the ${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
+  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale !== undefined ? scaleText(v.scale) : "?x"} (geometry from the ${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
   if (v.grid === "1x") L.push("Grid: **resampled to 1x** — the capture and the reference crop differ by more than 2 px, so both were resampled to the design size (up or down); resampling can hide a difference.", "");
   else if (v.grid) L.push("Grid: the reference's own pixel grid (the build rendered at the reference's scale).", "");
   if (v.reference && v.reference.colorProfile) L.push(`Colour profile: ${mdText(v.reference.colorProfile)} — colours are compared without colour management, so colour differences are unreliable.`, "");
@@ -3518,7 +3526,7 @@ function main(argv: string[]): number | Promise<number> {
       `skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ` +
       `${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable${lineBoxes ? `; ${lineBoxes} a line box taller than its fixed text box — the build chooses its line-height` : ""}) · expectation sha256 ${h.slice(0, 12)}…`);
     const ri = exp.referenceImage;
-    if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}×${ri.png.h} at ${ri.scale}x (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` — ${ri.colorProfile}: colours are compared without colour management` : ""}`
+    if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}×${ri.png.h} at ${scaleText(ri.scale)} (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` — ${ri.colorProfile}: colours are compared without colour management` : ""}`
       : `note  no visual diff for this screen: ${ri.why}`);
     if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers — interaction coverage cannot be checked, and the report will say so rather than passing.");
     return 0;
