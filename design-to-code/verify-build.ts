@@ -1648,6 +1648,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); return 0; }
   const OPTIONS = { status: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
   const { values: flags, positionals: planArgs } = cliParse("verify-build", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) { console.log(USAGE); return 0; } // (-hh: the whole-word check above only sees -h)
   const statusMode = !!flags.status, json = !!flags.json;
 
   if (statusMode) {

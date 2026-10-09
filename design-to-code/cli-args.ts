@@ -51,29 +51,71 @@ function joinNegativeValues(argv: string[], options: ParseArgsOptionsConfig): st
 }
 
 /**
+ * The single-dash words in `args` that are not a run of this tool's short flags: Node splits `-Button` into
+ * -B -u -t -t -o -n (and reads `-h-thing` as -h, then `--`, then positionals), so a value that merely starts
+ * with "-" would be reported as five unknown flags, or slip through as a help flag. A word right after a
+ * value-taking flag is that flag's value (parseArgs rules on it), and everything after `--` is left alone.
+ */
+function badShortWords(args: string[], options: ParseArgsOptionsConfig): string[] {
+  const shorts = new Map<string, string>();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad: string[] = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) { takesNext = false; continue; }
+    if (a.startsWith("--")) { takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string"; continue; }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === undefined) { ok = false; break; }
+      if (type === "string") { takesNext = i === a.length - 2; break; } // the rest of the word is its value
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
+
+/**
  * Run `parse` (a strict parseArgs call over the normalised `args` with `options`); on a parse error print
  * the tool's message + usage to stderr and exit with `exitCode`.
  */
 export function cliParse<R>(tool: string, argv: string[], options: ParseArgsOptionsConfig, usage: string, exitCode: number, parse: (args: string[]) => R): R {
   const args = joinNegativeValues(argv, options);
+  // Every unknown flag, named as typed: long ones from a loose re-read (it knows which words are values), plus
+  // the single-dash words above, once each (never the letters Node expands them into), in the order typed.
+  const unknownFlags = (): string => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => (t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []));
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}\n${usage}`;
+  };
+  let failure: string;
   try {
-    return parse(args);
+    // Node rules first, so its own error (a flag missing its value, a boolean given one) is the one reported;
+    // the single-dash check runs only on argv Node accepted (it reads `-h-thing` as -h, `--`, positionals).
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
   } catch (e) {
     const code = errCode(e);
     if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      // Name them all: re-read loosely and list every option token parseArgs does not know.
-      const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-      const unknown = [...new Set(tokens.flatMap((t) => (t.kind === "option" && !(t.name in options) ? [t.rawName] : [])))];
-      console.error(`${tool}: unknown flag ${unknown.join(", ")}\n${usage}`);
+      failure = unknownFlags();
     } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      // the name as typed: the message quotes "-o, --out <value>" or "--out"; take the form that is in argv
       const msg = e instanceof Error ? e.message : "";
-      const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
-      console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}\n${usage}`);
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}\n${usage}`;
     } else {
-      console.error(`${tool}: ${errMsg(e)}\n${usage}`);
+      failure = `${tool}: ${errMsg(e)}\n${usage}`;
     }
-    process.exit(exitCode);
   }
+  console.error(failure);
+  process.exit(exitCode);
 }
 
 /**
@@ -86,3 +128,7 @@ export function cliArity(tool: string, positionals: string[], min: number, max: 
   if (positionals.length > max) { console.error(`${tool}: unexpected argument ${positionals.slice(max).join(", ")}\n${usage}`); return false; }
   return true;
 }
+
+/** `argv` with a leading `--` dropped: for a CLI whose only flag is --help, every other word is an argument, so a
+ *  name that starts with "-" is passed as-is (`tool -- -Divider`) or just typed (`tool -Divider`). */
+export const bareArgs = (argv: string[]): string[] => argv[0] === "--" ? argv.slice(1) : argv;

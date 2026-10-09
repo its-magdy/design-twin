@@ -234,6 +234,7 @@ function main(argv: string[]): number {
     out: { type: "string" }, "from-proposals": { type: "string" }, screen: { type: "string" }, catalog: { type: "string", multiple: true }, help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals } = cliParse("map-bootstrap", argv, OPTIONS, usage, 1, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) { console.log(usage); return 0; } // (-hh: the whole-word check above only sees -h)
   if (!cliArity("map-bootstrap", positionals, 1, 2, usage)) return 1;
   // an empty word is no file name: `--out ""` would otherwise read as "no --out" and print the map to stdout
   const emptyFlag = (["out", "from-proposals", "screen"] as const).find((n) => flags[n] === "") ?? (flags.catalog?.includes("") ? "catalog" : undefined);

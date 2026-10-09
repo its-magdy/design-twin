@@ -45,14 +45,13 @@
 // name matching fuzzy" means in code: fuzziness may narrow the list, it may never pick from it.
 import fs from "node:fs";
 import path from "node:path";
-import { parseArgs } from "node:util";
 import type { IndexRow, ResolveScreenResult, ScreenCandidate } from "./types.ts";
 import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { toNodeId } from "../bridge/src/node-id.ts";
 import { getOrInit } from "./map-util.ts";
-import { cliArity, cliParse, scriptCmd } from "./cli-args.ts";
+import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { EXPORT_DIR, EXPORT_SUBDIR, listPlans } from "../bridge/src/project-layout.ts";
 
@@ -303,8 +302,8 @@ export { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
 function main(argv: string[]): number {
   const usage = `usage: ${scriptCmd("resolve-screen")} <design/export dir> <name-or-id> [design/plan dir]`;
   if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
-  const OPTIONS = { help: { type: "boolean", short: "h" } } as const;
-  const { positionals } = cliParse("resolve-screen", argv, OPTIONS, usage, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  // --help is the only flag, so every other word is an argument — a screen named "--- Draft ---" is looked up, not parsed
+  const positionals = bareArgs(argv);
   if (!cliArity("resolve-screen", positionals, 2, 3, usage)) return 2;
   const [exportDir, query, planDir] = positionals;
   if (!exportDir || !query) {
