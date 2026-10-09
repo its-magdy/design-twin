@@ -355,22 +355,12 @@ const lineBoxWhy = (lh: number, h: number): string =>
 export interface InheritedState { state: DrawnState; why: string; from: string; fromId: string }
 /** expectNode()'s context: the node's path, its frame (for positions), and any inherited drawn state. */
 export interface ExpectContext { path?: string; frame?: Partial<VerifyFrame> | null; inheritedState?: InheritedState; frameId?: string }
-/** expectNode()'s row: a VerifySpec plus the design values it could not compare, on a NON-enumerable
- *  `__notComparable` (so it never reaches the JSON). Always defined on a returned row. */
-export interface ExpectedSpec extends VerifySpec { __notComparable?: NotComparable[] }
-
 /**
  * The spec row for one VISIBLE node, plus any design values the method cannot compare
  * (`notComparable`, each with a reason). `ctx` = { path, frame, inheritedState }.
  */
-function expectNode(n: IrNode, ctxOrPath?: string | ExpectContext | null): ExpectedSpec {
-  return expectNodeRow(n, ctxOrPath).spec;
-}
-
-/** expectNode() plus the same `notComparable` array it hangs on the row, typed, for buildExpectation. */
-function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { spec: ExpectedSpec; notComparable: NotComparable[] } {
-  const ctx: ExpectContext = ctxOrPath == null ? {} : typeof ctxOrPath === "string" ? { path: ctxOrPath } : ctxOrPath;
-  const spec: ExpectedSpec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
+function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; notComparable: NotComparable[] } {
+  const spec: VerifySpec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
   const notComparable: NotComparable[] = [];
   const skip = (field: string, value: JsonValue, why: string): number => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
 
@@ -552,8 +542,6 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
   // a token bug, not a number bug, and that distinction is what tells a reader where to look.
   if (n.tokens && Object.keys(n.tokens).length) spec.tokens = n.tokens;
   if (ctx.frameId) spec.frameId = ctx.frameId;
-  // Backward-compatible return: callers that only want the row get it; buildExpectation reads both.
-  Object.defineProperty(spec, "__notComparable", { value: notComparable, enumerable: false });
   return { spec, notComparable };
 }
 
@@ -755,7 +743,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
           // drove a hidden layer" instead of crediting it.
           if (!c.parentHidden) hidden.roots.push({ nodeId: n.id, name: n.name, path: c.path });
           if (n.id) hidden.ids.push(n.id);
-          if (checkable(expectNode(n, { path: c.path }))) hidden.specsSkipped++;
+          if (checkable(expectNode(n, { path: c.path }).spec)) hidden.specsSkipped++;
           if (n.type === "INSTANCE" && n.mainComponent) hidden.instancesSkipped++;
           const reactions: LegacyReaction[] = Array.isArray(n.reactions) ? n.reactions : [];
           for (const r of reactions) hidden.interactionsSkipped += (Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : []).filter((a) => a && (a.type || a.navigation)).length;
@@ -769,7 +757,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
         if (n.id && seen.has(n.id)) return;
         if (n.id) seen.add(n.id);
         if (n.id) visibleById.set(n.id, { name: n.name, file: sourceFile ?? "" });
-        const { spec, notComparable: gaps } = expectNodeRow(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
+        const { spec, notComparable: gaps } = expectNode(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
         spec.ancestorIds = ancestorIds;
         if (n.absolute) spec.absolute = true;
         const par = c.parent;
@@ -3283,7 +3271,7 @@ function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; fi
   return { error: `no delta in the report for ${id}${sel.field !== undefined ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
 }
 
-export { buildExpectation, compare, reportToMarkdown, selectForAccept, probeLine, expectNode, STYLE_KEYS, MEASURED_KEYS_DOC, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, findExistingExpectedFor, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
+export { buildExpectation, compare, reportToMarkdown, selectForAccept, probeLine, STYLE_KEYS, MEASURED_KEYS_DOC, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, findExistingExpectedFor, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
 
 
 // ---------------------------------------------------------------- CLI

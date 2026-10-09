@@ -23,7 +23,7 @@ import { buildDesignSystem } from "./components";
 import { listLibraries, collectLibraryComponents } from "./libraries";
 import { handleBridge } from "./bridge";
 import { applyWrites } from "./writes";
-import { isUIToMain, type ExportFile, type ExportLayerFile } from "./messages";
+import { isUIToMain, type ExportFile, type ExportLayerFile, type MainToUI } from "./messages";
 
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
 // under one namespaced global so the VM test harness (test/harness.ts) can drive them. Harmless in
@@ -39,6 +39,9 @@ figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
 console.log("[export] main.ts loaded (main thread)"); // visible with Plugins > Development > Use Developer VM
 
 // ---------- messaging ----------
+// Every main -> UI message goes through here so it is checked against the MainToUI contract (messages.ts).
+const post = (m: MainToUI): void => figma.ui.postMessage(m);
+
 // Run a collector under serializeRun, then post its files — or an error message if it throws.
 // `layerFiles` is a SEPARATE bucket from `files`, downloaded in one batch the same way `assets` is
 // (see ui.html's "Download layers" button) rather than one download button per layer — a real
@@ -57,7 +60,7 @@ async function runExport<T extends { assets: Asset[] }>(
   try {
     r = await serializeRun(collect, { source: "ui", label });
   } catch (e) {
-    figma.ui.postMessage({ type: "error", message: errMsg(e) });
+    post({ type: "error", message: errMsg(e) });
     return;
   }
   const { files, layerFiles, summary, warnings } = toFiles(r);
@@ -66,7 +69,7 @@ async function runExport<T extends { assets: Asset[] }>(
   // non-empty and name where to read it — otherwise "Ready: …" reads as a clean export and nobody looks.
   // Post the collector's OWN asset list (it returned a copy; the module-level one was dropped when the
   // run settled — state.ts bracket).
-  figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary, warnings: warnings ? warnings.length : 0 });
+  post({ type: "files", files, ...ifDefined("layerFiles", layerFiles), assets: r.assets, summary, warnings: warnings ? warnings.length : 0 });
 }
 
 const runSelection = (): Promise<void> =>
@@ -111,7 +114,7 @@ const runFull = (): Promise<void> =>
 function notifySelection(): void {
   const sel = figma.currentPage.selection;
   const first = sel[0]; // undefined exactly when the selection is empty
-  figma.ui.postMessage({ type: "selection", count: sel.length, name: first ? first.name : null });
+  post({ type: "selection", count: sel.length, name: first ? first.name : null });
 }
 
 figma.ui.onmessage = async (raw: unknown) => {
@@ -120,7 +123,7 @@ figma.ui.onmessage = async (raw: unknown) => {
     case "get-token": {
       // The bridge token is persisted per-user via clientStorage (never leaves the file).
       const token: unknown = await figma.clientStorage.getAsync("bridgeToken");
-      figma.ui.postMessage({ type: "token", token: typeof token === "string" ? token : "" });
+      post({ type: "token", token: typeof token === "string" ? token : "" });
       break;
     }
     case "set-token": {
@@ -138,7 +141,7 @@ figma.ui.onmessage = async (raw: unknown) => {
       } catch (e) {
         identity = { error: errMsg(e) };
       }
-      figma.ui.postMessage({ type: "identity", identity });
+      post({ type: "identity", identity });
       break;
     }
     case "run-selection": {
@@ -165,7 +168,7 @@ figma.ui.onmessage = async (raw: unknown) => {
       // Acknowledged either way: a click that hit nothing (the run finished a moment earlier) must read
       // as a no-op in the UI rather than leave a Cancel button spinning forever.
       const hit = requestCancel();
-      figma.ui.postMessage({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
+      post({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
       break;
     }
     case "bridge": {
@@ -183,7 +186,7 @@ figma.ui.onmessage = async (raw: unknown) => {
       }
       // No releaseAssets() here: a queued run drops its assets when it settles (state.ts bracket), and
       // this reply may be an unqueued command answering DURING an export that is still filling them.
-      figma.ui.postMessage({ type: "bridge-result", id: raw.id, ok: !error, result, error });
+      post({ type: "bridge-result", ...ifDefined("id", raw.id), ok: !error, result, ...ifDefined("error", error) });
       break;
     }
     default: {

@@ -1302,10 +1302,6 @@ export type ResolveScreenResult =
 export function isJsonObject(x: unknown): x is JsonObject {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
-/** A parsed JSON array. */
-export function isJsonArray(x: unknown): x is JsonValue[] {
-  return Array.isArray(x);
-}
 /**
  * Read any object as a string-keyed bag of unknowns — for the generic key loops (design-diff, tests) that
  * compare WHATEVER a document or node carries, named field or not. The interfaces here deliberately have

@@ -100,15 +100,6 @@ function ifDefined(key, v) {
   return o;
 }
 
-// bridge/src/hash.ts
-import crypto from "node:crypto";
-var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
-
-// design-to-code/probe-steps.ts
-function isPlanExpect(x) {
-  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
-}
-
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -299,10 +290,6 @@ function isPlanDescope(x) {
   return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
-function isPlanInteraction(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
-}
-isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -805,6 +792,10 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
   return { toNative: toNative2, platformOf: platformOf2, PLATFORMS: PLATFORMS2 };
 }
 
+// bridge/src/hash.ts
+import crypto from "node:crypto";
+var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
+
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -887,7 +878,7 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
     if (id == null) continue;
     getOrInit(groups, id, () => []).push(v);
   }
-  const ids = /* @__PURE__ */ new Map(), canonical2 = /* @__PURE__ */ new Map(), notes = [];
+  const ids = /* @__PURE__ */ new Map(), canonical = /* @__PURE__ */ new Map(), notes = [];
   const taken = new Set(groups.keys());
   for (const [id, list] of groups) {
     const byIdent = /* @__PURE__ */ new Map();
@@ -902,7 +893,7 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
     const onlyCluster = clusters.length === 1 ? clusters[0] : void 0;
     if (onlyCluster) {
       for (const v of list) ids.set(v, id);
-      canonical2.set(onlyCluster[0], id);
+      canonical.set(onlyCluster[0], id);
       if (members.length > 1) notes.push({ output, id, differ: false, members: members.map((v) => ({ v, id })) });
       continue;
     }
@@ -913,7 +904,7 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
     for (const v of members) {
       if (v === keeper) {
         assigned.set(identityOf(v), id);
-        canonical2.set(v, id);
+        canonical.set(v, id);
         memberIds.push({ v, id });
         continue;
       }
@@ -922,7 +913,7 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
       for (let n = 2; taken.has(nid); n++) nid = suffix(id, s + "-" + n);
       taken.add(nid);
       assigned.set(identityOf(v), nid);
-      canonical2.set(v, nid);
+      canonical.set(v, nid);
       memberIds.push({ v, id: nid });
     }
     for (const v of list) {
@@ -935,7 +926,7 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
   for (const v of vars) {
     getOrInit(byName, v.name, () => []).push(v);
   }
-  return { id: (v) => ids.get(v), canonical: canonical2, notes, byName };
+  return { id: (v) => ids.get(v), canonical, notes, byName };
 }
 function aliasTargetId(plan, name, referrer, warn) {
   const cands = [];
