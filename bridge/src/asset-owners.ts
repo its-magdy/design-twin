@@ -24,6 +24,7 @@
 //    (`Button / Type=Danger` drawing its icon red), and Figma's `overrides` list only what is overridden
 //    directly on an instance, never what it inherits — so no override would block that twin.
 import type { InstanceOverride, IrNode } from "./doc-types.ts";
+import { OVERRIDE_CAP } from "./instance-overrides.ts";
 
 /** The nearest INSTANCE ancestor-or-self that names its main component. */
 export interface AssetOwner {
@@ -62,12 +63,11 @@ const PAINT_FIELD_RE = /^(?:fills|strokes|strokeWeight|sto?ke\w*Weight|opacity|e
 // On a SUBLAYER of the graphic (inside the exported file), any field but these changes the drawing: a
 // `visible` override drops a layer, a size/corner/transform one reshapes it.
 const INERT_SUBLAYER_FIELD_RE = /^(?:name|locked|pluginData|reactions|description|exportSettings|expanded|autoRename|hyperlink|characters|styledTextSegments|textStyleId|fontName)$/;
-// components.ts instanceOverrides caps the list at this length (and warns): past it, what was cut is unknown.
-const OVERRIDE_CAP = 100;
 
 const lastSegment = (id: string): string => { const i = id.lastIndexOf(";"); return i >= 0 ? id.slice(i + 1) : id; };
 const isOwnerInstance = (n: IrNode): boolean => n.type === "INSTANCE" && !!n.mainComponent;
 const overridesOf = (n: IrNode): readonly InstanceOverride[] => (Array.isArray(n.overrides) ? n.overrides : []);
+// The plugin cuts the list at OVERRIDE_CAP (and warns): at that length, what was cut is unknown.
 const truncated = (n: IrNode): boolean => overridesOf(n).length >= OVERRIDE_CAP;
 const paintEntry = (o: InstanceOverride): boolean => !!o && Array.isArray(o.fields) && o.fields.some((f) => typeof f === "string" && PAINT_FIELD_RE.test(f));
 

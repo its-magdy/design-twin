@@ -1811,13 +1811,10 @@
     }
     return t;
   }
-  function isVariableAlias2(v) {
-    return !!v && typeof v === "object" && "type" in v && v.type === "VARIABLE_ALIAS";
-  }
   async function simplifyVariableData(vd) {
     if (!vd || typeof vd !== "object") return vd;
     const v = "value" in vd ? vd.value : vd;
-    if (isVariableAlias2(v)) {
+    if (isVariableAlias(v)) {
       return { token: await varName(v.id) || v.id };
     }
     return v;
@@ -1900,6 +1897,9 @@
     }
     return out.length ? out : void 0;
   }
+
+  // ../bridge/src/instance-overrides.ts
+  var OVERRIDE_CAP = 100;
 
   // src/libraries.ts
   var UNKNOWN_LIBRARY = "unknown-library";
@@ -2183,7 +2183,6 @@
     }
     return nonEmpty(out);
   }
-  var OVERRIDE_CAP = 100;
   function instanceOverrides(node) {
     if (node.type !== "INSTANCE") return void 0;
     const overrides = node.overrides;

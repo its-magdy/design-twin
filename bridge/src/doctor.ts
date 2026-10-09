@@ -38,10 +38,10 @@ import { ifDefined } from "./json-util.ts";
 import * as LAYOUT from "./project-layout.ts";
 import { isOurMcpEntry, readMcpJson } from "./init.ts";
 import { daemonRowStalenessNote } from "./staleness.ts";
-// The manifest's allowedDomains ports — ports.ts, the same list server-core.ts binds from. Its own
-// dependency-free module, so reading it never loads server-core (which exits the process on a bad
-// FIGMA_BRIDGE_PORT — the very case this list exists to diagnose).
-import { ALLOWED_PORTS } from "./ports.ts";
+// The manifest's allowedDomains ports and the FIGMA_BRIDGE_PORT parse — ports.ts, the same list and
+// parse server-core.ts binds from. Its own dependency-free module, so reading it never loads
+// server-core (which exits the process on a bad FIGMA_BRIDGE_PORT — the very case this exists to diagnose).
+import { ALLOWED_PORTS, parsePortEnv } from "./ports.ts";
 import { dtwinPortWarning } from "./verbs.ts";
 import type { ClientRow, Bridge } from "./server-core.ts";
 
@@ -201,10 +201,9 @@ function checkDaemon(st: DaemonStatusView | null | undefined, port: number, refu
 
 // `raw` is FIGMA_BRIDGE_PORT. Returns { port } or { problem: <check> }.
 function resolvePort(raw: string | undefined): { port: number; problem?: undefined } | { problem: Check; port?: undefined } {
-  if (!raw) return { port: ALLOWED_PORTS[0] };
-  const n = Number(raw);
-  if (ALLOWED_PORTS.includes(n)) return { port: n };
-  return { problem: fail("port", "Port", `FIGMA_BRIDGE_PORT=${raw} is not one of ${ALLOWED_PORTS.join(", ")} — the Figma plugin may only open sockets to ports named in its manifest, so nothing could ever connect`, `unset FIGMA_BRIDGE_PORT, or set it to one of ${ALLOWED_PORTS.join(", ")}`) };
+  const parsed = parsePortEnv(raw);
+  if (parsed.port !== undefined) return { port: parsed.port };
+  return { problem: fail("port", "Port", `FIGMA_BRIDGE_PORT=${parsed.invalid} is not one of ${ALLOWED_PORTS.join(", ")} — the Figma plugin may only open sockets to ports named in its manifest, so nothing could ever connect`, `unset FIGMA_BRIDGE_PORT, or set it to one of ${ALLOWED_PORTS.join(", ")}`) };
 }
 
 // `probe` is probePort()'s result; `st` the daemon status for the same port; `envPort` the value of
@@ -508,7 +507,8 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
     add(pluginCheck);
   } else {
     // A refused socket location is reported, not read as "no daemon" (status() alone would only warn
-    // on stderr and return null).
+    // on stderr and return null). Always pass the port: a daemon call without one reads the env itself
+    // and exits on a bad value, where doctor has to report it.
     const refused = daemon.sockProblem(port);
     const st = refused ? null : await daemon.status(port).catch(() => null);
     add(checkDaemon(st, port, refused));

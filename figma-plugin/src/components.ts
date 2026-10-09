@@ -6,6 +6,7 @@ import type {
   EffectStyle as IrEffectStyle, GridStyle as IrGridStyle,
 } from "../../bridge/src/doc-types.ts";
 import { ifDefined } from "../../bridge/src/json-util.ts";
+import { OVERRIDE_CAP } from "../../bridge/src/instance-overrides.ts";
 import { propName, propType, errMsg, nonEmpty, putNonEmpty, round, exportedAt, isList } from "./util";
 import { warn, loadAllPages, runOpts } from "./state";
 import { checkCancelled, enterPage } from "./progress";
@@ -58,8 +59,8 @@ export function componentPropRefs(node: SceneNode): IrNode["propRefs"] {
   return nonEmpty(out);
 }
 
-// Instance overrides — the fields directly changed on an instance vs its main component.
-const OVERRIDE_CAP = 100;
+// Instance overrides — the fields directly changed on an instance vs its main component, cut to
+// OVERRIDE_CAP (the consumers read a list that long as possibly incomplete).
 export function instanceOverrides(node: SceneNode): InstanceOverride[] | undefined {
   if (node.type !== "INSTANCE") return undefined;
   const overrides = node.overrides;

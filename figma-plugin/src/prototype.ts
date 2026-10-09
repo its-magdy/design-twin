@@ -6,6 +6,7 @@ import type { Action as IrAction, Reaction as IrReaction, Transition as IrTransi
 import { easingCurve, xy, isList } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import { varName, nodeNameLookup, getCollection } from "./state";
+import { isVariableAlias } from "./variables";
 
 // A prototype Transition -> compact descriptor (type/direction/duration + the exact easing curve).
 function simplifyTransition(tr: Transition): IrTransition {
@@ -24,10 +25,6 @@ function simplifyTransition(tr: Transition): IrTransition {
     Object.assign(t, easingCurve(ez));
   }
   return t;
-}
-
-function isVariableAlias(v: unknown): v is VariableAlias {
-  return !!v && typeof v === "object" && "type" in v && (v as VariableAlias).type === "VARIABLE_ALIAS";
 }
 
 // A VariableData payload (SET_VARIABLE value / CONDITIONAL condition) -> a readable value. `vd` is

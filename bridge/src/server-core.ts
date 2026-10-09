@@ -17,7 +17,7 @@ import { errCode, errMsg } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { TIMEOUTS, exportTimeout, HEARTBEAT_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
-import { ALLOWED_PORTS } from "./ports.ts";
+import { ALLOWED_PORTS, bridgePortOrExit } from "./ports.ts";
 import { legacySock } from "./daemon.ts";
 // The command/reply contract shared with the plugin: `request()` is typed per command from it, and
 // every reply is checked against it once, at the point it enters this process (see the message handler).
@@ -34,18 +34,8 @@ import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "./s
 // listener; see createBridge). Its unit tests drive it through exactly that shape.
 type VerifyClientCallback = Parameters<VerifyClientCallbackAsync>[1];
 
-// FIGMA_BRIDGE_PORT is a choice of three (ports.ts), not a free number.
-const PORT = (() => {
-  const raw = process.env.FIGMA_BRIDGE_PORT;
-  if (!raw) return ALLOWED_PORTS[0];
-  const n = Number(raw);
-  if (ALLOWED_PORTS.includes(n)) return n;
-  console.error(
-    `[bridge] FIGMA_BRIDGE_PORT=${raw} is not one of ${ALLOWED_PORTS.join(", ")}. The Figma plugin ` +
-      "may only open sockets to ports named in its manifest, so a bridge here would never be reachable."
-  );
-  process.exit(1);
-})();
+// FIGMA_BRIDGE_PORT is a choice of three (ports.ts), not a free number; any other value exits here, at load.
+const PORT = bridgePortOrExit(process.env.FIGMA_BRIDGE_PORT);
 
 // Shared secret the plugin must present as ?token=... on connect. This is the REAL access control:
 // loopback binding and the Origin check below are both defeatable — a sandboxed attacker iframe on
