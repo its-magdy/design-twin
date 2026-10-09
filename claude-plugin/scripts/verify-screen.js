@@ -628,6 +628,52 @@ function planInteractionsSha256(plan) {
   return sha256Hex(canonical(rows));
 }
 
+// design-to-code/png.ts
+import { crc32, deflateSync, inflateSync } from "node:zlib";
+var PngError = class extends Error {
+};
+var SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+function chunks(b) {
+  const buf = Buffer.from(b.buffer, b.byteOffset, b.byteLength);
+  if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) throw new PngError("not a PNG (bad signature)");
+  const out = [];
+  let o = 8;
+  while (o + 12 <= buf.length) {
+    const len = buf.readUInt32BE(o);
+    if (o + 12 + len > buf.length) throw new PngError("truncated PNG chunk");
+    const type = buf.toString("latin1", o + 4, o + 8), data = buf.subarray(o + 8, o + 8 + len);
+    if (crc32(buf.subarray(o + 4, o + 8 + len)) >>> 0 !== buf.readUInt32BE(o + 8 + len)) throw new PngError(`bad CRC in the ${type} chunk`);
+    out.push({ type, data });
+    o += 12 + len;
+    if (type === "IEND") break;
+  }
+  if (!out.length || out[0]?.type !== "IHDR") throw new PngError("not a PNG (no IHDR)");
+  return out;
+}
+function pngInfo(b) {
+  let cs;
+  try {
+    cs = chunks(b);
+  } catch {
+    return null;
+  }
+  const ihdr = cs[0];
+  if (!ihdr || ihdr.data.length < 13) return null;
+  const d = ihdr.data;
+  const info = { w: d.readUInt32BE(0), h: d.readUInt32BE(4), bitDepth: d[8] ?? 0, colorType: d[9] ?? 0, interlace: d[12] ?? 0, srgb: false, gama: null, iccp: null };
+  for (const c of cs) {
+    if (c.type === "sRGB") info.srgb = true;
+    else if (c.type === "gAMA" && c.data.length >= 4) info.gama = c.data.readUInt32BE(0);
+    else if (c.type === "iCCP") {
+      const z = c.data.indexOf(0);
+      info.iccp = c.data.toString("latin1", 0, z < 0 ? Math.min(79, c.data.length) : z);
+    }
+  }
+  return info;
+}
+var MAX_DECODE_SIDE = 4096;
+var MAX_DECODE_PIXELS = MAX_DECODE_SIDE * MAX_DECODE_SIDE;
+
 // design-to-code/probe-steps.ts
 var STEP_KINDS = ["click", "waitFor", "goto"];
 var isStepKind = (k) => STEP_KINDS.includes(k);
@@ -2058,26 +2104,6 @@ function buildExpectation(docs, opts) {
     ...ifDefined("referenceImage", referenceImage)
   };
 }
-function pngHeader(b) {
-  const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
-  if (b.length < 33 || SIG.some((v, i) => b[i] !== v)) return null;
-  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  const name = (at) => String.fromCharCode(b[at] ?? 0, b[at + 1] ?? 0, b[at + 2] ?? 0, b[at + 3] ?? 0);
-  if (dv.getUint32(8) !== 13 || name(12) !== "IHDR") return null;
-  let iccp = null;
-  for (let at = 33; at + 8 <= b.length; ) {
-    const len = dv.getUint32(at), type = name(at + 4);
-    if (type === "IDAT" || type === "IEND") break;
-    if (type === "iCCP") {
-      const start = at + 8, end = Math.min(start + len, start + 80, b.length);
-      let nameEnd = start;
-      while (nameEnd < end && b[nameEnd] !== 0) nameEnd++;
-      iccp = String.fromCharCode(...b.subarray(start, nameEnd)) || "unnamed";
-    }
-    at += 12 + len;
-  }
-  return { w: dv.getUint32(16), h: dv.getUint32(20), bitDepth: b[24] ?? 0, colorType: b[25] ?? 0, interlace: b[28] ?? 0, iccp };
-}
 var round4 = (n) => Math.round(n * 1e4) / 1e4;
 function resolveInside(base, rel, within = base) {
   const root = path7.resolve(within), file = path7.resolve(base, ...rel.split("/"));
@@ -2096,7 +2122,7 @@ function referenceImageFor(o) {
   if (!box || !(num(box.w) && box.w > 0) || !(num(box.h) && box.h > 0)) return unusable(p, "the frame has no size in the export (box.w/h) \u2014 the reference cannot be placed");
   const bytes = o.readReference(reference);
   if (!bytes) return unusable(p, `the reference PNG ${p} is missing on disk \u2014 re-pull the screen`);
-  const png = pngHeader(bytes);
+  const png = pngInfo(bytes);
   if (!png) return unusable(p, `the reference ${p} is not a PNG`);
   if (png.bitDepth !== 8 || png.colorType !== 2 && png.colorType !== 6 || png.interlace !== 0)
     return unusable(p, `the reference ${p} is a PNG of colour type ${png.colorType} / depth ${png.bitDepth}${png.interlace ? " / interlaced" : ""} \u2014 the visual diff reads 8-bit RGB/RGBA, non-interlaced`);
@@ -2117,7 +2143,7 @@ function referenceImageFor(o) {
     return unusable(p, `the reference ${p} is ${png.w}\xD7${png.h} px, but the frame's render bounds at ${scale}x are ${ew}\xD7${eh} \u2014 a stale or foreign PNG under the pointer; re-pull the screen, then re-run --expect`);
   const x = Math.min(Math.max(0, Math.round(-offset.x * scale)), png.w), y = Math.min(Math.max(0, Math.round(-offset.y * scale)), png.h);
   const crop = { x, y, w: Math.max(0, Math.min(Math.round(box.w * scale), png.w - x)), h: Math.max(0, Math.min(Math.round(box.h * scale), png.h - y)) };
-  const profiles = [o.colorProfile === "display_p3" ? "display_p3" : null, png.iccp !== null ? `iCCP:${png.iccp}` : null].filter((v) => v !== null);
+  const profiles = [o.colorProfile === "display_p3" ? "display_p3" : null, png.iccp !== null ? `iCCP:${png.iccp || "unnamed"}` : null].filter((v) => v !== null);
   return {
     usable: true,
     path: p,
@@ -4703,7 +4729,6 @@ export {
   normFamily,
   normWeight,
   pctText,
-  pngHeader,
   probeLine,
   radiusCorners,
   referenceImageFor,

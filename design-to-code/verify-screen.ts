@@ -38,6 +38,7 @@ import { recordPlan, writePlan } from "./plan-record.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
 import { isBuildIdentity, isInteractionEvidenceList, isMeasuredBehaviour, isMeasuredComponentList, isMeasuredVisual, isVisualRegion, isPageIndex, isPageOverflow, isPagesRootIndex, isPlan, isPlanDescope, isPlanWaiver, isProbeIdentity, isProbeReach, isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "./doc-guards.ts";
 import { isPassingVerdict, planInteractionsSha256, waiversHash } from "./plan-waivers.ts";
+import { pngInfo } from "./png.ts";
 import { actionForExpect, isPlanExpect, parseSteps, stepsSha256 } from "./probe-steps.ts";
 import { MEASURED_PHASES, STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
@@ -1040,29 +1041,6 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
 // scale and crop the frame box out of it. Index first (the row write-out.ts wrote for THIS png), else recomputed from
 // the export root exactly as the bridge does. A png whose scale is not the one Figma renders a reference at is a
 // discovery thumbnail — never diffed at its own scale.
-/** PNG facts the visual diff needs (IHDR + the colour chunks before IDAT) — null when the bytes are not a PNG. A tiny
- *  local reader: design-to-code's png.ts is the probe's decoder (verify-screen stays independent of it). */
-export function pngHeader(b: Uint8Array): { w: number; h: number; colorType: number; bitDepth: number; interlace: number; iccp: string | null } | null {
-  const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  if (b.length < 33 || SIG.some((v, i) => b[i] !== v)) return null;
-  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  const name = (at: number): string => String.fromCharCode(b[at] ?? 0, b[at + 1] ?? 0, b[at + 2] ?? 0, b[at + 3] ?? 0);
-  if (dv.getUint32(8) !== 13 || name(12) !== "IHDR") return null;
-  let iccp: string | null = null;
-  // chunks: length(4) type(4) data(length) crc(4); iCCP's data starts with its NUL-terminated profile name
-  for (let at = 33; at + 8 <= b.length;) {
-    const len = dv.getUint32(at), type = name(at + 4);
-    if (type === "IDAT" || type === "IEND") break;
-    if (type === "iCCP") {
-      const start = at + 8, end = Math.min(start + len, start + 80, b.length);
-      let nameEnd = start;
-      while (nameEnd < end && b[nameEnd] !== 0) nameEnd++;
-      iccp = String.fromCharCode(...b.subarray(start, nameEnd)) || "unnamed";
-    }
-    at += 12 + len;
-  }
-  return { w: dv.getUint32(16), h: dv.getUint32(20), bitDepth: b[24] ?? 0, colorType: b[25] ?? 0, interlace: b[28] ?? 0, iccp };
-}
 const round4 = (n: number): number => Math.round(n * 10000) / 10000;
 /** `base` joined with a "/"-separated relative path, resolved, when it lies strictly inside `within` (default `base`) — else
  *  null (a pointer or a referenceImage.path with `..` segments never reads a file outside design/export). Lexical only:
@@ -1091,7 +1069,7 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   if (!box || !(num(box.w) && box.w > 0) || !(num(box.h) && box.h > 0)) return unusable(p, "the frame has no size in the export (box.w/h) — the reference cannot be placed");
   const bytes = o.readReference(reference);
   if (!bytes) return unusable(p, `the reference PNG ${p} is missing on disk — re-pull the screen`);
-  const png = pngHeader(bytes);
+  const png = pngInfo(bytes);
   if (!png) return unusable(p, `the reference ${p} is not a PNG`);
   if (png.bitDepth !== 8 || (png.colorType !== 2 && png.colorType !== 6) || png.interlace !== 0)
     return unusable(p, `the reference ${p} is a PNG of colour type ${png.colorType} / depth ${png.bitDepth}${png.interlace ? " / interlaced" : ""} — the visual diff reads 8-bit RGB/RGBA, non-interlaced`);
@@ -1124,7 +1102,7 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   // the frame box inside the PNG, device px, clamped to the image
   const x = Math.min(Math.max(0, Math.round(-offset.x * scale)), png.w), y = Math.min(Math.max(0, Math.round(-offset.y * scale)), png.h);
   const crop = { x, y, w: Math.max(0, Math.min(Math.round(box.w * scale), png.w - x)), h: Math.max(0, Math.min(Math.round(box.h * scale), png.h - y)) };
-  const profiles = [o.colorProfile === "display_p3" ? "display_p3" : null, png.iccp !== null ? `iCCP:${png.iccp}` : null].filter((v): v is string => v !== null);
+  const profiles = [o.colorProfile === "display_p3" ? "display_p3" : null, png.iccp !== null ? `iCCP:${png.iccp || "unnamed"}` : null].filter((v): v is string => v !== null);
   return {
     usable: true, path: p, sha256: sha256Hex(bytes), png: { w: png.w, h: png.h },
     scale, offset, from: row ? "index" : "export", crop, ...(profiles.length ? { colorProfile: profiles.join(" + ") } : {}),
