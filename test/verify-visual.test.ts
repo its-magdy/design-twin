@@ -175,6 +175,8 @@ console.log("[11] --expect: a thumbnail or an unreadable file is refused with wh
     !!missing && missing.usable === false && missing.path === "design/export/" + REF && /missing on disk — re-pull the screen/.test(missing.why));
   const notPng = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: Buffer.from("<svg/>") }) }));
   safe("[11] not a PNG → usable:false 'is not a PNG'", () => !!notPng && notPng.usable === false && /is not a PNG/.test(notPng.why));
+  const cut = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: REF_PNG.subarray(0, 150) }) }));
+  safe("[11] a PNG cut off mid-stream → usable:false 'is not a PNG' (the reader checks every chunk it reads)", () => !!cut && cut.usable === false && /is not a PNG/.test(cut.why));
   const odd = [png(REF_W, REF_H, { colorType: 3 }), png(REF_W, REF_H, { bitDepth: 16 }), png(REF_W, REF_H, { interlace: 1 }), png(REF_W, REF_H, { colorType: 0 })]
     .map((b) => refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: b }) })));
   safe("[11] palette / 16-bit / interlaced / grey PNGs → usable:false naming the colour type and depth", () =>
@@ -218,6 +220,8 @@ console.log("[12] --expect: a Display P3 document or an iCCP reference is record
   safe("[12] design-system colorProfile display_p3 → colorProfile 'display_p3'", () => !!p3 && p3.usable === true && p3.colorProfile === "display_p3");
   const icc = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: png(REF_W, REF_H, { iccp: "Display P3" }) }), colorProfile: "srgb" }));
   safe("[12] an iCCP chunk → colorProfile 'iCCP:Display P3'", () => !!icc && icc.usable === true && icc.colorProfile === "iCCP:Display P3");
+  const nameless = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: png(REF_W, REF_H, { iccp: "" }) }), colorProfile: "srgb" }));
+  safe("[12] an iCCP chunk with no profile name → 'iCCP:unnamed'", () => !!nameless && nameless.usable === true && nameless.colorProfile === "iCCP:unnamed");
   const both = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: png(REF_W, REF_H, { iccp: "Display P3" }) }), colorProfile: "display_p3" }));
   safe("[12] both → both named", () => !!both && both.usable === true && both.colorProfile === "display_p3 + iCCP:Display P3");
   const srgb = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: REF_PNG }), colorProfile: "srgb" }));

@@ -1198,6 +1198,169 @@ function canonical(v) {
   return JSON.stringify(v ?? null);
 }
 
+// design-to-code/png.ts
+import { crc32, deflateSync, inflateSync } from "node:zlib";
+var PngError = class extends Error {
+};
+var SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+function chunks(b) {
+  const buf = Buffer.from(b.buffer, b.byteOffset, b.byteLength);
+  if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) throw new PngError("not a PNG (bad signature)");
+  const out = [];
+  let o = 8;
+  while (o + 12 <= buf.length) {
+    const len = buf.readUInt32BE(o);
+    if (o + 12 + len > buf.length) throw new PngError("truncated PNG chunk");
+    const type = buf.toString("latin1", o + 4, o + 8), data = buf.subarray(o + 8, o + 8 + len);
+    if (crc32(buf.subarray(o + 4, o + 8 + len)) >>> 0 !== buf.readUInt32BE(o + 8 + len)) throw new PngError(`bad CRC in the ${type} chunk`);
+    out.push({ type, data });
+    o += 12 + len;
+    if (type === "IEND") break;
+  }
+  if (!out.length || out[0]?.type !== "IHDR") throw new PngError("not a PNG (no IHDR)");
+  return out;
+}
+var MAX_DECODE_SIDE = 4096;
+var MAX_DECODE_PIXELS = MAX_DECODE_SIDE * MAX_DECODE_SIDE;
+function decodePng(b) {
+  const cs = chunks(b);
+  const d = cs[0]?.data;
+  if (!d || d.length < 13) throw new PngError("bad IHDR");
+  const w = d.readUInt32BE(0), h = d.readUInt32BE(4), depth = d[8] ?? 0, ct = d[9] ?? 0, interlace = d[12] ?? 0;
+  if (depth !== 8 || ct !== 2 && ct !== 6 || interlace !== 0) throw new PngError(`unsupported PNG (colour type ${ct} / depth ${depth}${interlace ? " / interlaced" : ""}) \u2014 only 8-bit RGB / RGBA, not interlaced`);
+  if (!w || !h) throw new PngError("empty PNG");
+  if (w * h > MAX_DECODE_PIXELS) throw new PngError(`the PNG is ${w}\xD7${h} px \u2014 over the ${MAX_DECODE_SIDE}\xD7${MAX_DECODE_SIDE} pixels this decoder reads`);
+  const ch = ct === 6 ? 4 : 3, stride = w * ch;
+  let raw;
+  try {
+    raw = inflateSync(Buffer.concat(cs.filter((c) => c.type === "IDAT").map((c) => c.data)), { maxOutputLength: (stride + 1) * h });
+  } catch (e) {
+    throw new PngError(`bad image data (${errMsg(e)})`);
+  }
+  if (raw.length < (stride + 1) * h) throw new PngError("truncated image data");
+  const px = new Uint8Array(stride * h);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)] ?? 0, s = y * (stride + 1) + 1, dst = y * stride, prev = dst - stride;
+    if (f > 4) throw new PngError(`bad filter type ${f} on row ${y}`);
+    for (let i = 0; i < stride; i++) {
+      const x = raw[s + i] ?? 0, a = i >= ch ? px[dst + i - ch] ?? 0 : 0, up = y ? px[prev + i] ?? 0 : 0, c = y && i >= ch ? px[prev + i - ch] ?? 0 : 0;
+      let v;
+      if (f === 0) v = x;
+      else if (f === 1) v = x + a;
+      else if (f === 2) v = x + up;
+      else if (f === 3) v = x + (a + up >> 1);
+      else {
+        const p = a + up - c, pa = Math.abs(p - a), pb = Math.abs(p - up), pc = Math.abs(p - c);
+        v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? up : c);
+      }
+      px[dst + i] = v & 255;
+    }
+  }
+  if (ch === 4) return { w, h, data: px };
+  const data = new Uint8Array(w * h * 4);
+  for (let i = 0, j = 0; i < px.length; i += 3, j += 4) {
+    data[j] = px[i] ?? 0;
+    data[j + 1] = px[i + 1] ?? 0;
+    data[j + 2] = px[i + 2] ?? 0;
+    data[j + 3] = 255;
+  }
+  return { w, h, data };
+}
+function chunk(type, data) {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, "latin1");
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])) >>> 0, 0);
+  return Buffer.concat([head, data, crc]);
+}
+function encodePng(img) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(img.w, 0);
+  ihdr.writeUInt32BE(img.h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  const stride = img.w * 3 + 1, raw = Buffer.alloc(stride * img.h);
+  for (let y = 0; y < img.h; y++) {
+    let o = y * stride + 1, i = y * img.w * 4;
+    for (let x = 0; x < img.w; x++, i += 4) {
+      raw[o++] = img.data[i] ?? 0;
+      raw[o++] = img.data[i + 1] ?? 0;
+      raw[o++] = img.data[i + 2] ?? 0;
+    }
+  }
+  return Buffer.concat([SIGNATURE, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw, { level: 1 })), chunk("IEND", Buffer.alloc(0))]);
+}
+function crop(img, r) {
+  const x0 = Math.max(0, Math.min(img.w, Math.round(r.x))), y0 = Math.max(0, Math.min(img.h, Math.round(r.y)));
+  const w = Math.max(0, Math.min(img.w - x0, Math.round(r.w))), h = Math.max(0, Math.min(img.h - y0, Math.round(r.h)));
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) data.set(img.data.subarray(((y0 + y) * img.w + x0) * 4, ((y0 + y) * img.w + x0 + w) * 4), y * w * 4);
+  return { w, h, data };
+}
+function resampleBox(img, w, h) {
+  if (w <= 0 || h <= 0) return { w: Math.max(0, w), h: Math.max(0, h), data: new Uint8Array(0) };
+  if (w === img.w && h === img.h) return { w, h, data: img.data.slice() };
+  const spans = (n, m) => {
+    const sc = n / m, out = [];
+    for (let o = 0; o < m; o++) {
+      const a = o * sc, b = (o + 1) * sc, list = [];
+      for (let s = Math.floor(a); s < Math.min(n, Math.ceil(b)); s++) {
+        const wgt = Math.min(b, s + 1) - Math.max(a, s);
+        if (wgt > 1e-9) list.push([s, wgt]);
+      }
+      out.push(list);
+    }
+    return out;
+  };
+  const xs = spans(img.w, w), ys = spans(img.h, h);
+  const tmp = new Float64Array(w * img.h * 4);
+  for (let y = 0; y < img.h; y++) {
+    for (let x = 0; x < w; x++) {
+      let r = 0, g = 0, bl = 0, a = 0, tw = 0;
+      for (const [s, wgt] of xs[x] ?? []) {
+        const i = (y * img.w + s) * 4, al = img.data[i + 3] ?? 0;
+        r += (img.data[i] ?? 0) * al * wgt;
+        g += (img.data[i + 1] ?? 0) * al * wgt;
+        bl += (img.data[i + 2] ?? 0) * al * wgt;
+        a += al * wgt;
+        tw += wgt;
+      }
+      const o = (y * w + x) * 4;
+      tmp[o] = r / tw;
+      tmp[o + 1] = g / tw;
+      tmp[o + 2] = bl / tw;
+      tmp[o + 3] = a / tw;
+    }
+  }
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let r = 0, g = 0, bl = 0, a = 0, tw = 0;
+      for (const [s, wgt] of ys[y] ?? []) {
+        const i = (s * w + x) * 4;
+        r += (tmp[i] ?? 0) * wgt;
+        g += (tmp[i + 1] ?? 0) * wgt;
+        bl += (tmp[i + 2] ?? 0) * wgt;
+        a += (tmp[i + 3] ?? 0) * wgt;
+        tw += wgt;
+      }
+      const o = (y * w + x) * 4;
+      a /= tw;
+      data[o + 3] = Math.round(a);
+      if (a > 0) {
+        data[o] = Math.round(r / tw / a);
+        data[o + 1] = Math.round(g / tw / a);
+        data[o + 2] = Math.round(bl / tw / a);
+      }
+    }
+  }
+  return { w, h, data };
+}
+
 // design-to-code/probe-steps.ts
 var STEP_KINDS = ["click", "waitFor", "goto"];
 var isStepKind = (k) => STEP_KINDS.includes(k);
@@ -1704,171 +1867,6 @@ if (false) {
 
 // design-to-code/probe-drive.ts
 import { setTimeout as sleep } from "node:timers/promises";
-
-// design-to-code/png.ts
-import { crc32, deflateSync, inflateSync } from "node:zlib";
-var PngError = class extends Error {
-};
-var SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-function chunks(b) {
-  const buf = Buffer.from(b.buffer, b.byteOffset, b.byteLength);
-  if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) throw new PngError("not a PNG (bad signature)");
-  const out = [];
-  let o = 8;
-  while (o + 12 <= buf.length) {
-    const len = buf.readUInt32BE(o);
-    if (o + 12 + len > buf.length) throw new PngError("truncated PNG chunk");
-    const type = buf.toString("latin1", o + 4, o + 8), data = buf.subarray(o + 8, o + 8 + len);
-    if (crc32(buf.subarray(o + 4, o + 8 + len)) >>> 0 !== buf.readUInt32BE(o + 8 + len)) throw new PngError(`bad CRC in the ${type} chunk`);
-    out.push({ type, data });
-    o += 12 + len;
-    if (type === "IEND") break;
-  }
-  if (!out.length || out[0]?.type !== "IHDR") throw new PngError("not a PNG (no IHDR)");
-  return out;
-}
-var MAX_DECODE_SIDE = 4096;
-var MAX_DECODE_PIXELS = MAX_DECODE_SIDE * MAX_DECODE_SIDE;
-function decodePng(b) {
-  const cs = chunks(b);
-  const d = cs[0]?.data;
-  if (!d || d.length < 13) throw new PngError("bad IHDR");
-  const w = d.readUInt32BE(0), h = d.readUInt32BE(4), depth = d[8] ?? 0, ct = d[9] ?? 0, interlace = d[12] ?? 0;
-  if (depth !== 8 || ct !== 2 && ct !== 6 || interlace !== 0) throw new PngError(`unsupported PNG (colour type ${ct} / depth ${depth}${interlace ? " / interlaced" : ""}) \u2014 only 8-bit RGB / RGBA, not interlaced`);
-  if (!w || !h) throw new PngError("empty PNG");
-  if (w * h > MAX_DECODE_PIXELS) throw new PngError(`the PNG is ${w}\xD7${h} px \u2014 over the ${MAX_DECODE_SIDE}\xD7${MAX_DECODE_SIDE} pixels this decoder reads`);
-  const ch = ct === 6 ? 4 : 3, stride = w * ch;
-  let raw;
-  try {
-    raw = inflateSync(Buffer.concat(cs.filter((c) => c.type === "IDAT").map((c) => c.data)), { maxOutputLength: (stride + 1) * h });
-  } catch (e) {
-    throw new PngError(`bad image data (${errMsg(e)})`);
-  }
-  if (raw.length < (stride + 1) * h) throw new PngError("truncated image data");
-  const px = new Uint8Array(stride * h);
-  for (let y = 0; y < h; y++) {
-    const f = raw[y * (stride + 1)] ?? 0, s = y * (stride + 1) + 1, dst = y * stride, prev = dst - stride;
-    if (f > 4) throw new PngError(`bad filter type ${f} on row ${y}`);
-    for (let i = 0; i < stride; i++) {
-      const x = raw[s + i] ?? 0, a = i >= ch ? px[dst + i - ch] ?? 0 : 0, up = y ? px[prev + i] ?? 0 : 0, c = y && i >= ch ? px[prev + i - ch] ?? 0 : 0;
-      let v;
-      if (f === 0) v = x;
-      else if (f === 1) v = x + a;
-      else if (f === 2) v = x + up;
-      else if (f === 3) v = x + (a + up >> 1);
-      else {
-        const p = a + up - c, pa = Math.abs(p - a), pb = Math.abs(p - up), pc = Math.abs(p - c);
-        v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? up : c);
-      }
-      px[dst + i] = v & 255;
-    }
-  }
-  if (ch === 4) return { w, h, data: px };
-  const data = new Uint8Array(w * h * 4);
-  for (let i = 0, j = 0; i < px.length; i += 3, j += 4) {
-    data[j] = px[i] ?? 0;
-    data[j + 1] = px[i + 1] ?? 0;
-    data[j + 2] = px[i + 2] ?? 0;
-    data[j + 3] = 255;
-  }
-  return { w, h, data };
-}
-function chunk(type, data) {
-  const head = Buffer.alloc(8);
-  head.writeUInt32BE(data.length, 0);
-  head.write(type, 4, "latin1");
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])) >>> 0, 0);
-  return Buffer.concat([head, data, crc]);
-}
-function encodePng(img) {
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(img.w, 0);
-  ihdr.writeUInt32BE(img.h, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 2;
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
-  const stride = img.w * 3 + 1, raw = Buffer.alloc(stride * img.h);
-  for (let y = 0; y < img.h; y++) {
-    let o = y * stride + 1, i = y * img.w * 4;
-    for (let x = 0; x < img.w; x++, i += 4) {
-      raw[o++] = img.data[i] ?? 0;
-      raw[o++] = img.data[i + 1] ?? 0;
-      raw[o++] = img.data[i + 2] ?? 0;
-    }
-  }
-  return Buffer.concat([SIGNATURE, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw, { level: 1 })), chunk("IEND", Buffer.alloc(0))]);
-}
-function crop(img, r) {
-  const x0 = Math.max(0, Math.min(img.w, Math.round(r.x))), y0 = Math.max(0, Math.min(img.h, Math.round(r.y)));
-  const w = Math.max(0, Math.min(img.w - x0, Math.round(r.w))), h = Math.max(0, Math.min(img.h - y0, Math.round(r.h)));
-  const data = new Uint8Array(w * h * 4);
-  for (let y = 0; y < h; y++) data.set(img.data.subarray(((y0 + y) * img.w + x0) * 4, ((y0 + y) * img.w + x0 + w) * 4), y * w * 4);
-  return { w, h, data };
-}
-function resampleBox(img, w, h) {
-  if (w <= 0 || h <= 0) return { w: Math.max(0, w), h: Math.max(0, h), data: new Uint8Array(0) };
-  if (w === img.w && h === img.h) return { w, h, data: img.data.slice() };
-  const spans = (n, m) => {
-    const sc = n / m, out = [];
-    for (let o = 0; o < m; o++) {
-      const a = o * sc, b = (o + 1) * sc, list = [];
-      for (let s = Math.floor(a); s < Math.min(n, Math.ceil(b)); s++) {
-        const wgt = Math.min(b, s + 1) - Math.max(a, s);
-        if (wgt > 1e-9) list.push([s, wgt]);
-      }
-      out.push(list);
-    }
-    return out;
-  };
-  const xs = spans(img.w, w), ys = spans(img.h, h);
-  const tmp = new Float64Array(w * img.h * 4);
-  for (let y = 0; y < img.h; y++) {
-    for (let x = 0; x < w; x++) {
-      let r = 0, g = 0, bl = 0, a = 0, tw = 0;
-      for (const [s, wgt] of xs[x] ?? []) {
-        const i = (y * img.w + s) * 4, al = img.data[i + 3] ?? 0;
-        r += (img.data[i] ?? 0) * al * wgt;
-        g += (img.data[i + 1] ?? 0) * al * wgt;
-        bl += (img.data[i + 2] ?? 0) * al * wgt;
-        a += al * wgt;
-        tw += wgt;
-      }
-      const o = (y * w + x) * 4;
-      tmp[o] = r / tw;
-      tmp[o + 1] = g / tw;
-      tmp[o + 2] = bl / tw;
-      tmp[o + 3] = a / tw;
-    }
-  }
-  const data = new Uint8Array(w * h * 4);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let r = 0, g = 0, bl = 0, a = 0, tw = 0;
-      for (const [s, wgt] of ys[y] ?? []) {
-        const i = (s * w + x) * 4;
-        r += (tmp[i] ?? 0) * wgt;
-        g += (tmp[i + 1] ?? 0) * wgt;
-        bl += (tmp[i + 2] ?? 0) * wgt;
-        a += (tmp[i + 3] ?? 0) * wgt;
-        tw += wgt;
-      }
-      const o = (y * w + x) * 4;
-      a /= tw;
-      data[o + 3] = Math.round(a);
-      if (a > 0) {
-        data[o] = Math.round(r / tw / a);
-        data[o + 1] = Math.round(g / tw / a);
-        data[o + 2] = Math.round(bl / tw / a);
-      }
-    }
-  }
-  return { w, h, data };
-}
-
-// design-to-code/probe-drive.ts
 function readPageOverflow(_arg) {
   const de = document.documentElement, body = document.body;
   const hs = getComputedStyle(de);
