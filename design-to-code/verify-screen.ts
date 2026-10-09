@@ -909,7 +909,14 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   // equals the spec's own is left out (the probe's tag-shared-path finds it already). Rebuilt from the CURRENT
   // siblings at every --expect (sublayer id stability is undocumented). Known misses: a renamed layer, a
   // repeated name inside the instance (e.g. same-named menu items), a shell instantiated twice on one screen.
+  // Each sibling export is read from disk once per --expect: this pass and the overlay pass below share the memo.
   const readSibling = opts && opts.readSibling;
+  const siblingCache = new Map<string, ScreenDoc | null>();
+  const sibling = (file: string): ScreenDoc | null => {
+    if (!readSibling) return null;
+    if (!siblingCache.has(file)) siblingCache.set(file, readSibling(file) ?? null);
+    return siblingCache.get(file) ?? null;
+  };
   if (index && readSibling) {
     const ownRootIds = new Set(roots.map((r) => r.id));
     const specSuffixes = new Set(nodes.map((n) => idSuffix(n.nodeId)).filter((x): x is string => x !== null));
@@ -924,7 +931,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
       for (const row of cands) {
         if (ownRootIds.has(row.id) || !row.file || read.has(row.file)) continue;
         read.add(row.file);
-        const sib = readSibling(row.file);
+        const sib = sibling(row.file);
         if (!sib) continue;
         // the sibling's own stamp must not name another file (a row may be unnamed while its export is stamped). An
         // UNSTAMPED sibling is allowed for a stamped screen (a partly re-pulled export): the risk is small — an alias
@@ -959,12 +966,6 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   // differs from Figma's default: centred, no scrim, no close-on-click-outside) — read off the destination ROOT among the
   // inputs of the same file, else off the sibling export its index row names (the candidate rows). A destination
   // that is no exported root (never exported, or nested in another frame) gets no overlay.
-  const siblingCache = new Map<string, ScreenDoc | null>();
-  const sibling = (file: string): ScreenDoc | null => {
-    if (!readSibling) return null;
-    if (!siblingCache.has(file)) siblingCache.set(file, readSibling(file) ?? null);
-    return siblingCache.get(file) ?? null;
-  };
   const destinationRoot = (destId: string, file: string): IrNode | undefined => {
     const own = [...(rootNodesByFile.get(file) ?? []), ...(file !== "" ? rootNodesByFile.get("") ?? [] : [])].find((r) => r.id === destId);
     if (own) return own;
