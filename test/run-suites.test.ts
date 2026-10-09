@@ -12,7 +12,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { check, report } from "./assert.ts";
-import { limit, poolSize } from "./pool.ts";
+import { limit, poolSize, runNode } from "./pool.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const RUNNER = path.join(import.meta.dirname, "run-suites.ts");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "run-suites-"));
@@ -63,7 +64,6 @@ const runner = (args: string[], env: Record<string, string>, removeCI = true): R
 const lines = (s: string): string[] => s.split("\n");
 const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const pidIn = (f: string): number => Number(read(f)) || 0;
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const until = async (cond: () => boolean, capMs: number): Promise<boolean> => { const end = Date.now() + capMs; while (!cond() && Date.now() < end) await sleep(25); return cond(); };
 const summaryOf = (s: string): string => s.slice(s.lastIndexOf("SUMMARY"));
 
@@ -298,7 +298,7 @@ console.log("CMD " + JSON.stringify({
   const guardNoRun = runner(["zz-nothing"], guardEnv);
   check("the guard also stops a real run (not only --list): exit 1 before any suite starts", guardNoRun.status === 1 && !/^=== /m.test(guardNoRun.out));
 
-  // ---- test/pool.ts: limit() and poolSize() (each async check is raced against 2 s so a regression fails instead of hanging)
+  // ---- test/pool.ts: limit(), poolSize() and runNode() (each async check is raced against 2 s so a regression fails instead of hanging)
   console.log("\nrun-suites — test/pool.ts:");
   const within = async <T, F>(p: Promise<T>, fallback: F): Promise<T | F> => { let t: NodeJS.Timeout | undefined; try { return await Promise.race([p, new Promise<F>((r) => { t = setTimeout(() => r(fallback), 2000); })]); } finally { clearTimeout(t); } };
   const TIMED_OUT = Symbol("timed out");
@@ -315,7 +315,7 @@ console.log("CMD " + JSON.stringify({
     const N = 3;
     const q = limit(N);
     let live = 0, peak = 0;
-    const work = (): Promise<number> => q(async () => { live++; peak = Math.max(peak, live); await new Promise((r) => setTimeout(r, 15)); live--; return 1; });
+    const work = (): Promise<number> => q(async () => { live++; peak = Math.max(peak, live); await sleep(15); live--; return 1; });
     const all = await within(Promise.all(Array.from({ length: 10 }, work)), TIMED_OUT);
     check(`[pool] limit(${N}): ten tasks all finish and never more than ${N} run at once (peak ${peak})`, all !== TIMED_OUT && all.length === 10 && peak >= 2 && peak <= N);
     const order: number[] = [];
@@ -337,6 +337,21 @@ console.log("CMD " + JSON.stringify({
     check("[pool] poolSize: an empty DT_E2E_POOL is unset (no warning)", (() => { const w = warned.length; return ps({ DT_E2E_POOL: "" }) === 4 && warned.length === w; })());
     check("[pool] poolSize: CI counts as set for any value but \"\", \"0\" and \"false\" (CI=1 and CI=yes give 2)", ps({ CI: "true" }) === 2 && ps({ CI: "1" }) === 2 && ps({ CI: "yes" }) === 2 && ps({ CI: "" }) === 4 && ps({ CI: "0" }) === 4 && ps({ CI: "false" }) === 4);
     check("[pool] poolSize: without CI it is half the cores clamped to 2-4", ps({}, 2) === 2 && ps({}, 6) === 3 && ps({}, 64) === 4 && ps({}, 1) === 2);
+  }
+  // runNode: the shared async spawn of the e2e suites (a tiny `node -e`, no port)
+  {
+    const r = await within(runNode(tmp, "-e", ["console.log('out'); console.error('err'); process.exit(3)"]), TIMED_OUT);
+    check("[pool] runNode: resolves the exit status and both captured streams, not killed, with a spawn → close time", r !== TIMED_OUT && r.status === 3 && r.stdout === "out\n" && r.stderr === "err\n" && !r.killed && r.ms >= 0);
+    const cwd = await within(runNode(tmp, "-e", ["process.stdout.write(process.cwd())"]), TIMED_OUT);
+    check("[pool] runNode: runs in the given cwd", cwd !== TIMED_OUT && fs.realpathSync(cwd.stdout) === fs.realpathSync(tmp));
+    const missing = await within(runNode(path.join(tmp, "no-such-dir"), "-e", ["0"]), TIMED_OUT);
+    check("[pool] runNode: a spawn that fails asynchronously (missing cwd) resolves status null with `spawn failed:` in stderr — never rejects or hangs", missing !== TIMED_OUT && missing.status === null && /spawn failed: /.test(missing.stderr) && !missing.killed);
+    const sync = await within(runNode(tmp, "-e", ["bad\0arg"]), TIMED_OUT);
+    check("[pool] runNode: a spawn that throws synchronously (NUL in an argument) resolves status null with `spawn failed:` in stderr", sync !== TIMED_OUT && sync.status === null && /^spawn failed: /.test(sync.stderr) && sync.stdout === "");
+    const hung = await within(runNode(tmp, "-e", ["setTimeout(() => {}, 30000)"], 200), TIMED_OUT);
+    check("[pool] runNode: killAfterMs SIGKILLs a run that has not exited and reports killed (status null)", hung !== TIMED_OUT && hung.killed && hung.status === null && hung.ms < 10_000);
+    const quick = await within(runNode(tmp, "-e", ["0"], 20_000), TIMED_OUT);
+    check("[pool] runNode: a run that exits before killAfterMs is not killed", quick !== TIMED_OUT && !quick.killed && quick.status === 0);
   }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

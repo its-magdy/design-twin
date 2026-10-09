@@ -23,6 +23,7 @@ import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mc
 import type * as GetComponentMod from "../design-to-code/get-component.ts";
 import type * as DriftLintMod from "../design-to-code/drift-lint.ts";
 import { isUnknownArray } from "../bridge/src/json-util.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 
 // Compile-time only. figma-mcp.ts declares its OWN view of the two design-to-code modules it loads
 // lazily (it cannot reference them: rootDir is bridge/src). Nothing else ties those local interfaces to
@@ -343,7 +344,7 @@ void (async () => {
       bare.isError === true && /no connected Figma file matches 'c9'/.test(firstText(bare)) && /Late File/.test(firstText(bare)) && Date.now() - t1 < 2000);
     late.close();
     plugin.close();
-    await new Promise((r) => setTimeout(r, 200)); // both sockets gone: the bridge has NO client now
+    await sleep(200); // both sockets gone: the bridge has NO client now
 
     // LIVE 2026-09-25: with NOTHING connected — every window mid-redial right after a bridge
     // restart — `figma_status {client:"<name>"}` answered `connected:false` in 10 ms: its zero-clients
@@ -366,7 +367,7 @@ void (async () => {
       !routed0.isError && s0.connected === true && s0.pong === true && s0.file === "Late File 2" &&
       Array.isArray(s0.clients) && s0.clients.some((c) => c.file === "Late File 2") && Date.now() - t2 < 5000);
     late2.close();
-    await new Promise((r) => setTimeout(r, 200));
+    await sleep(200);
     const t3 = Date.now();
     const bare0 = await client.callTool({ name: "figma_status", arguments: { client: "c9" } });
     ok("figma_status with a bare connId and nothing connected is refused at once like every other tool (no wait, not connected:false)",
@@ -412,7 +413,7 @@ void (async () => {
       };
       const p1 = await fake("Sample App", "fig-sample");
       const p2 = await fake("Acme Kit", "fig-acme");
-      await new Promise((r) => setTimeout(r, 200));
+      await sleep(200);
       const roster = parse(await client.callTool({ name: "figma_list_clients", arguments: {} }));
       const rosterRows = Array.isArray(roster.clients) ? roster.clients.map(rec) : [];
       const c2 = rosterRows.find((c) => c.file === "Acme Kit")?.connId;
@@ -517,11 +518,11 @@ void (async () => {
       const ac = new AbortController();
       const n0 = frames.length;
       const cancelled = client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }, undefined, { signal: ac.signal }).catch(() => "aborted");
-      await new Promise((r) => setTimeout(r, 300));
+      await sleep(300);
       const sentId = frames.slice(n0).find((f) => f.m.cmd === "exportNode")?.m.id;
       ac.abort();
       await cancelled;
-      await new Promise((r) => setTimeout(r, 300));
+      await sleep(300);
       ok("an aborted figma_export_url → the plugin receives {type:\"cancel\"} for that request",
         typeof sentId === "string" && frames.slice(n0).some((f) => f.m.type === "cancel" && f.m.id === sentId));
 
@@ -542,12 +543,12 @@ void (async () => {
           const n3 = frames.length;
           const viaCall = client3.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }, undefined, { signal: ac3.signal }).catch(() => "aborted");
           const until = Date.now() + 3000;
-          while (Date.now() < until && !frames.slice(n3).some((f) => f.m.cmd === "exportNode")) await new Promise((r) => setTimeout(r, 50));
+          while (Date.now() < until && !frames.slice(n3).some((f) => f.m.cmd === "exportNode")) await sleep(50);
           const sentId3 = frames.slice(n3).find((f) => f.m.cmd === "exportNode")?.m.id;
           ac3.abort();
           await viaCall;
           const until2 = Date.now() + 1500;
-          while (Date.now() < until2 && !frames.slice(n3).some((f) => f.m.type === "cancel" && f.m.id === sentId3)) await new Promise((r) => setTimeout(r, 50));
+          while (Date.now() < until2 && !frames.slice(n3).some((f) => f.m.type === "cancel" && f.m.id === sentId3)) await sleep(50);
           ok("an aborted call on a DAEMON-ROUTED session → the plugin receives {type:\"cancel\"} for that request",
             typeof sentId3 === "string" && frames.slice(n3).some((f) => f.m.type === "cancel" && f.m.id === sentId3));
         } finally {
@@ -560,12 +561,12 @@ void (async () => {
       // SIGTERM, so a cancel frame inside that window can only come from the stdin watch.
       const n1 = frames.length;
       void client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }).catch(() => {});
-      await new Promise((r) => setTimeout(r, 300));
+      await sleep(300);
       const sentId2 = frames.slice(n1).find((f) => f.m.cmd === "exportNode")?.m.id;
       const tClose = Date.now();
       const closing = client.close().catch(() => {});
       const deadline = Date.now() + 1500;
-      while (Date.now() < deadline && !frames.slice(n1).some((f) => f.m.type === "cancel" && f.m.id === sentId2)) await new Promise((r) => setTimeout(r, 50));
+      while (Date.now() < deadline && !frames.slice(n1).some((f) => f.m.type === "cancel" && f.m.id === sentId2)) await sleep(50);
       ok("stdin closing (the client exited) → the plugin receives {type:\"cancel\"} for the in-flight request (within " + (Date.now() - tClose) + " ms)",
         typeof sentId2 === "string" && frames.slice(n1).some((f) => f.m.type === "cancel" && f.m.id === sentId2));
       await closing;

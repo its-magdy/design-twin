@@ -10,11 +10,11 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import * as daemon from "../bridge/src/daemon.ts";
 import { check, report } from "./assert.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const MCP = path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
 const env = { ...process.env, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: "s".repeat(40) };
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const until = async (fn: () => unknown, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await wait(100)) if (fn()) return true; return false; };
+const until = async (fn: () => unknown, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(100)) if (fn()) return true; return false; };
 
 /** One MCP server subprocess, with its stdio accumulated and a raw JSON-RPC writer/reader on top. */
 interface McpProc {
@@ -55,12 +55,12 @@ void (async () => {
   check("a tool call through the shared bridge answers", await until(() => b.reply(2)) && /Nothing connected/.test(b.reply(2) ?? ""));
   a.proc.kill();
   await until(() => a.code !== undefined || a.proc.killed);
-  await wait(500);
+  await sleep(500);
   b.send({ id: 3, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } });
   check("when the first session ends, the second takes the bridge over", await until(() => b.reply(3)) && !/"isError":true/.test(b.reply(3) ?? "") && /Bridge|daemon listening/.test(b.err.split("Sharing")[1] || ""));
   b.proc.kill();
   await until(() => b.code !== undefined);
-  await wait(300);
+  await sleep(300);
 
   // Concurrent first calls. holder() used to resolve per call: main()'s startup resolution and two
   // tool calls sent in the same stdin write each saw no daemon and each called createBridge(), and the
@@ -86,7 +86,7 @@ void (async () => {
   await until(() => c.code !== undefined);
   mute.close();
   try { fs.unlinkSync(sock); } catch { /* the MCP server's own daemon may have replaced/removed it */ }
-  await wait(300);
+  await sleep(300);
 
   // A socket directory that is not private to this user (here: 0777, under the server's own TMPDIR)
   // is no daemon: the server holds the bridge itself, its tools work, and the refusal reaches stderr
@@ -113,7 +113,7 @@ void (async () => {
       r.out.split("\n").filter((l) => l.trim()).every((l) => { try { JSON.parse(l) as unknown; return true; } catch { return false; } }));
     r.proc.kill();
     await until(() => r.code !== undefined);
-    await wait(300);
+    await sleep(300);
   }
 
   // A port held by something that is NOT a dtwin daemon (no socket to share through): the MCP server

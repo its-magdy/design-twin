@@ -20,6 +20,7 @@ import type { RawData } from "ws";
 import { ok, report } from "./assert.ts";
 import * as daemon from "../bridge/src/daemon.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const MCP = path.join(ROOT, "bridge", "src", "figma-mcp.ts");
@@ -35,7 +36,6 @@ process.env.TMPDIR = OWN_TMP;
 // each process's socket follows its own TMPDIR and the servers below stay apart.
 delete process.env.XDG_RUNTIME_DIR;
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, ms: number, step = 25): Promise<boolean> {
   const end = Date.now() + ms;
   while (Date.now() < end) { if (cond()) return true; await sleep(step); }
