@@ -5,29 +5,52 @@ on:
     branches: [main]
   pull_request:
 
+# Every job asks for what it needs (zizmor's excessive-permissions); the workflow grants nothing.
+permissions: {}
+
+# A newer push to a pull request cancels its older run. On main a run is never cancelled once started; a queued one is
+# replaced by a newer push's (one running + one pending per group).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  # Three legs on three runners, so the slow browser suites neither queue behind each other nor share a CPU (their
-  # Budget checks are load-sensitive). `fast` is every suite but the three probe e2e ones (run-suites --fast) plus the
-  # repo checks; the other two legs name exactly those three suites between them — test/run-suites.test.ts holds this
-  # matrix to FAST_SKIP, so a suite cannot drop out of CI.
+  # One leg per runner, so the slow browser suites neither queue behind each other nor share a CPU (their Budget checks
+  # are load-sensitive). `fast` is every suite but the probe e2e ones (run-suites --fast) plus the repo checks; the other
+  # primary-Node legs name exactly those suites between them, and a leg with `node:` runs `--fast` alone on that Node —
+  # test/run-suites.test.ts holds this matrix to FAST_SKIP, so a suite cannot drop out of CI.
   test:
     name: test (${{ matrix.leg }})
-    runs-on: ubuntu-latest
+    # pinned, not ubuntu-latest: the Budget checks' margins were measured on this image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
           - leg: fast
             suites: --fast
+          # the same quick suites on the next Node LTS (package.json engines is >=24.2)
+          - leg: fast-node26
+            node: 26
+            suites: --fast
           - leg: drive-e2e
             suites: verify-probe-drive-e2e
-          - leg: probe-behaviour-e2e
-            suites: verify-probe-e2e verify-probe-behaviour-e2e
+          - leg: drive-tail-e2e
+            suites: verify-probe-drive-tail-e2e verify-probe-e2e
+          - leg: behaviour-e2e
+            suites: verify-probe-behaviour-e2e
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      # Full commit SHAs, not tags (a tag can be moved); Dependabot keeps them and the version comments current.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 24
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # explicit: node-version-file would resolve engines' >=24.2 to the newest Node, not 24
+          node-version: ${{ matrix.node || 24 }}
           cache: npm
 
       - name: Install
@@ -64,3 +87,16 @@ jobs:
       # lint:any and lint:types run as the first two suites of the `fast` leg.
       - name: Test
         run: node test/run-suites.ts ${{ matrix.suites }}
+
+  # The one check a ruleset requires: a leg's check name changes when a leg is added or renamed, this one does not. It runs
+  # even when a leg failed or was cancelled (a job skipped because its `needs` failed would not block a merge).
+  result:
+    name: test result
+    needs: test
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every leg passed
+        if: needs.test.result != 'success'
+        run: exit 1

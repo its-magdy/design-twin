@@ -225,9 +225,9 @@ console.log("CMD " + JSON.stringify({
   const pkg = JSON.parse(read(path.join(testDir, "..", "package.json")) || "{}") as { scripts?: Record<string, string> };
   check("`npm test` is the runner (package.json scripts.test === \"node test/run-suites.ts\"); the lints stay scripts", pkg.scripts?.test === "node test/run-suites.ts" && typeof pkg.scripts.typecheck === "string" && typeof pkg.scripts["lint:any"] === "string" && typeof pkg.scripts["lint:types"] === "string");
 
-  // ---- --fast: skips exactly the three probe e2e suites, `not run` in the summary, exit unaffected, never looks like a full pass
+  // ---- --fast: skips exactly the four probe e2e suites, `not run` in the summary, exit unaffected, never looks like a full pass
   console.log("\nrun-suites — --fast:");
-  const SLOW = ["verify-probe-e2e", "verify-probe-drive-e2e", "verify-probe-behaviour-e2e"];
+  const SLOW = ["verify-probe-e2e", "verify-probe-drive-e2e", "verify-probe-drive-tail-e2e", "verify-probe-behaviour-e2e"];
   // fakes named like the real slow suites (the skip applies by name); they would log `start <name>` if they ever ran
   const named = (entries: { name: string; src: string }[], tag: string): string => {
     const f = path.join(tmp, `list-fast-${tag}.json`);
@@ -239,12 +239,12 @@ console.log("CMD " + JSON.stringify({
   fs.rmSync(LOG, { force: true });
   const fastRun = runner(["--fast"], { DT_RUN_SUITES_LIST: fastList });
   const fastSum = summaryOf(fastRun.out);
-  check("[fast] --fast skips the three slow suites (never started), runs the others, and exits 0 although they are `not run`",
-    fastRun.status === 0 && /^start quick$/m.test(read(LOG)) && /^start quick2$/m.test(read(LOG)) && SLOW.every((n) => !new RegExp(`start ${n}`).test(read(LOG))) && /2 passed, 0 FAILED, 0 skipped, 3 not run/.test(fastSum));
+  check("[fast] --fast skips the four slow suites (never started), runs the others, and exits 0 although they are `not run`",
+    fastRun.status === 0 && /^start quick$/m.test(read(LOG)) && /^start quick2$/m.test(read(LOG)) && SLOW.every((n) => !new RegExp(`start ${n}`).test(read(LOG))) && /2 passed, 0 FAILED, 0 skipped, 4 not run/.test(fastSum));
   check("[fast] the SUMMARY lists each skipped suite as `not run` with the reason `--fast`", SLOW.every((n) => lines(fastSum).some((l) => l.startsWith(n + " ") && /\bnot run\b/.test(l) && /--fast\s*$/.test(l))));
-  check("[fast] the run ends with the loud line (3 of the probe e2e suites, names them, not the full suite, run `npm test`, CI's other matrix legs run them)",
-    /^--fast: skipped 3 of the probe e2e suites \(verify-probe-e2e, verify-probe-drive-e2e, verify-probe-behaviour-e2e\) .*NOT the full suite.*`npm test`.*CI's other matrix legs run them$/m.test(fastRun.out) && !/CI runs everything/.test(fastRun.out) && (lines(fastRun.out.trimEnd()).pop() ?? "").startsWith("--fast:"));
-  check("[fast] without --fast the same list runs all five suites", (() => { const r = runner([], { DT_RUN_SUITES_LIST: fastList }); return r.status === 0 && /5 suites: 5 passed/.test(r.out) && !/--fast/.test(r.out); })());
+  check("[fast] the run ends with the loud line (4 of the probe e2e suites, names them, not the full suite, run `npm test`, CI's other matrix legs run them)",
+    /^--fast: skipped 4 of the probe e2e suites \(verify-probe-e2e, verify-probe-drive-e2e, verify-probe-drive-tail-e2e, verify-probe-behaviour-e2e\) .*NOT the full suite.*`npm test`.*CI's other matrix legs run them$/m.test(fastRun.out) && !/CI runs everything/.test(fastRun.out) && (lines(fastRun.out.trimEnd()).pop() ?? "").startsWith("--fast:"));
+  check("[fast] without --fast the same list runs all six suites", (() => { const r = runner([], { DT_RUN_SUITES_LIST: fastList }); return r.status === 0 && /6 suites: 6 passed/.test(r.out) && !/--fast/.test(r.out); })());
   check("[fast] under CI=true --fast is allowed and still prints the warning", (() => { const r = runner(["--fast"], { DT_RUN_SUITES_LIST: fastList, CI: "true" }); return r.status === 0 && /^--fast: skipped/m.test(r.out); })());
   const fastFail = runner(["--fast"], { DT_RUN_SUITES_LIST: named([{ name: "bad", src: traced("bad", `console.log("\\n0/1 checks passed"); process.exit(1);`) }, ...SLOW.map((n) => ({ name: n, src: okSrc(n) }))], "fail") });
   check("[fast] a failing suite still exits 1 under --fast", fastFail.status === 1 && /^FAILED: bad$/m.test(fastFail.out));
@@ -262,26 +262,37 @@ console.log("CMD " + JSON.stringify({
   check("[fast] without --fast a custom list is not subject to that guard", runner([], { DT_RUN_SUITES_LIST: list(["pass"]) }).status === 0);
   check("[fast] an unknown option is still a usage error, and the usage line names --fast", (() => { const r = runner(["--bogus"], { DT_RUN_SUITES_LIST: list(["pass"]) }); return r.status === 2 && /--fast/.test(r.err); })());
   const realFast = runner(["--fast", "--list"], {});
-  check("[fast] the real `--fast --list` omits exactly verify-probe-e2e, verify-probe-drive-e2e, verify-probe-behaviour-e2e (nothing else) and keeps the rest",
+  check("[fast] the real `--fast --list` omits exactly verify-probe-e2e, verify-probe-drive-e2e, verify-probe-drive-tail-e2e, verify-probe-behaviour-e2e (nothing else) and keeps the rest",
     realFast.status === 0 && (() => {
       const all = new Set(lines(real.out).filter(Boolean).map((l) => l.split(/\s+/)[0]));
       const got = new Set(lines(realFast.out).filter(Boolean).map((l) => l.split(/\s+/)[0]));
       const missing = [...all].filter((n) => !got.has(n));
-      return missing.sort().join(",") === [...SLOW].sort().join(",") && [...got].every((n) => all.has(n)) && got.size === all.size - 3;
+      return missing.sort().join(",") === [...SLOW].sort().join(",") && [...got].every((n) => all.has(n)) && got.size === all.size - SLOW.length;
     })());
 
 
   check("[fast] `npm run test:fast` is the runner with --fast (package.json scripts[\"test:fast\"] === \"node test/run-suites.ts --fast\")", pkg.scripts?.["test:fast"] === "node test/run-suites.ts --fast");
 
-  // CI splits the run over a matrix (.github/workflows/test.yml): one leg `--fast`, the others name suites. Between them
-  // every suite runs exactly once — the named ones are exactly what --fast leaves out, none twice.
+  // CI splits the run over a matrix (.github/workflows/test.yml): each `include:` entry is a leg (from its `- leg:` line); a leg
+  // without `node:` is on the primary Node. There, one leg is `--fast` and the others name suites — between them every suite runs
+  // exactly once (the named ones are exactly what --fast leaves out, none twice). A leg on another Node version runs `--fast` alone.
   const wf = read(path.join(testDir, "..", ".github", "workflows", "test.yml"));
-  const legs = [...wf.matchAll(/^\s+suites: (.+)$/gm)].map((m) => (m[1] ?? "").trim().split(/\s+/));
-  const legNamed = legs.filter((l) => !l.includes("--fast")).flat();
+  const inc = /^( *)include:\n((?:(?:\1 +.*|[ \t]*)\n)*)/m.exec(wf)?.[2] ?? "";
+  const legs = inc.split(/^\s*- (?=leg:)/m).slice(1).map((l) => ({
+    node: /^\s*node: (.+)$/m.exec(l)?.[1]?.trim(),
+    suites: (/^\s*suites: (.+)$/m.exec(l)?.[1] ?? "").trim().split(/\s+/).filter(Boolean),
+  }));
+  const primary = legs.filter((l) => l.node === undefined);
+  const primaryFast = primary.filter((l) => l.suites.includes("--fast"));
+  const legNamed = primary.filter((l) => !l.suites.includes("--fast")).flatMap((l) => l.suites);
   check("[ci] the workflow's Test step runs the runner with the leg's suites (`node test/run-suites.ts ${{ matrix.suites }}`)", /^\s+run: node test\/run-suites\.ts \$\{\{ matrix\.suites \}\}$/m.test(wf));
-  check("[ci] exactly one matrix leg is `--fast` and it names no suites", legs.filter((l) => l.includes("--fast")).length === 1 && legs.some((l) => l.length === 1 && l[0] === "--fast"));
-  check("[ci] the other legs name exactly the suites --fast leaves out, each once (no suite dropped from CI, none run twice)",
+  check("[ci] every `suites:` line in the workflow is one matrix leg's (each `- leg:` under `include:` has its own)",
+    legs.length > 0 && legs.every((l) => l.suites.length > 0) && legs.length === [...wf.matchAll(/^\s+suites: /gm)].length);
+  check("[ci] on the primary Node exactly one matrix leg is `--fast` and it names no suites", primaryFast.length === 1 && primaryFast[0]?.suites.join(" ") === "--fast");
+  check("[ci] the other primary-Node legs name exactly the suites --fast leaves out, each once (no suite dropped from CI, none run twice)",
     legNamed.length === SLOW.length && new Set(legNamed).size === legNamed.length && [...legNamed].sort().join(",") === [...SLOW].sort().join(","));
+  check("[ci] every leg on another Node version (`node:`) is `--fast` alone (an extra Node version runs the quick suites only)",
+    legs.filter((l) => l.node !== undefined).every((l) => l.suites.join(" ") === "--fast"));
 
   const mirror = path.join(tmp, "mirror");
   fs.mkdirSync(mirror);

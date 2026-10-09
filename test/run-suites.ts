@@ -2,7 +2,7 @@
 //   node test/run-suites.ts                run both lints, then every suite, in order
 //   node test/run-suites.ts bridge verify-probe-e2e    only the named suites (exact name, else substring), in order
 //   node test/run-suites.ts --list         print the order and exit (the coverage guard still runs)
-//   node test/run-suites.ts --fast         everything except the three slow probe e2e suites (`npm run test:fast`, ~3 min vs ~20)
+//   node test/run-suites.ts --fast         everything except the four slow probe e2e suites (`npm run test:fast`, ~3 min vs ~20)
 //   node test/run-suites.ts --fast --list  what --fast would run
 //
 // --fast: the name filters (if any) pick the suites first, then FAST_SKIP is dropped from that pick. The dropped suites
@@ -19,7 +19,7 @@
 // children are alive), its output is forwarded live, and the end prints one row per suite.
 //
 // A suite FAILS when it exits non-zero or by signal, prints `p/t checks passed` with p < t, runs past the cap
-// (DT_SUITE_TIMEOUT_MS, default 30 min — the slowest suite, the drive e2e, takes ~12), exits 0 WITHOUT a checks
+// (DT_SUITE_TIMEOUT_MS, default 30 min — the slowest suites, the two drive e2e halves, take ~3–4 each), exits 0 WITHOUT a checks
 // line (it ended before its summary) or with `0/0` (it asserted nothing). It is never re-run: the only retry is for a spawn that never ran
 // (EAGAIN/ENOMEM), once, after DT_SPAWN_RETRY_MS (default 5 s). A suite that prints `SKIPPED (no playwright…)`
 // and exits 0 is `skipped`: a warning locally, a FAILURE under CI (any CI value but "", "0" or "false"; the browser suites already exit
@@ -71,7 +71,7 @@ const NODE_SUITES: readonly string[] = [
   "audit.test.ts", "build-screen-docs.test.ts", "verify-build.test.ts", "plan-record.test.ts", "verify-screen.test.ts", "verify-accuracy.test.ts", "verify-values.test.ts",
   "verify-waivers.test.ts", "verify-node-rules.test.ts", "verify-run.test.ts", "verify-behaviour.test.ts",
   "verify-integrity.test.ts", "verify-probe.test.ts", "verify-probe-e2e.test.ts", "verify-drive.test.ts",
-  "verify-probe-drive-e2e.test.ts", "verify-own-pixels.test.ts", "verify-probe-behaviour-e2e.test.ts",
+  "verify-probe-drive-e2e.test.ts", "verify-probe-drive-tail-e2e.test.ts", "verify-own-pixels.test.ts", "verify-probe-behaviour-e2e.test.ts",
   "visual-diff.test.ts", "verify-visual.test.ts", "verify-probe-visual-e2e.test.ts", "cross-check.test.ts",
   "design-diff.test.ts", "identity.test.ts", "plan-skeleton.test.ts", "resolve-screen.test.ts", "ui.test.ts",
   "daemon-sock.test.ts", "mcp-share.test.ts", "mcp-smoke.test.ts", "mcp-lifecycle.test.ts", "json-size.test.ts",
@@ -79,7 +79,7 @@ const NODE_SUITES: readonly string[] = [
   "run-suites.test.ts",
 ];
 // The slow browser suites `--fast` leaves out (~17 of the ~19 min); everything else is quick.
-const FAST_SKIP: readonly string[] = ["verify-probe-e2e", "verify-probe-drive-e2e", "verify-probe-behaviour-e2e"];
+const FAST_SKIP: readonly string[] = ["verify-probe-e2e", "verify-probe-drive-e2e", "verify-probe-drive-tail-e2e", "verify-probe-behaviour-e2e"];
 const USAGE = "usage: node test/run-suites.ts [--list] [--fast] [suite-name…]";
 const baseName = (f: string): string => f.replace(/\.test\.ts$/, "").replace(/\.ts$/, "");
 const SUITES: readonly Suite[] = [
