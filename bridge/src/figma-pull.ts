@@ -294,7 +294,7 @@ function takeValues(args: string[], flag: string, missingMsg: string, consumedId
   return out;
 }
 
-function parseArgs(args: string[]) {
+function readArgs(args: string[]) {
   const selection = args.includes("--selection");
   const allPages = args.includes("--all-pages");
   // --design-system: tokens/styles/components/hygiene, no page/frame walk and therefore no
@@ -498,25 +498,37 @@ function parseArgs(args: string[]) {
   const outDir = userOutDir ||
     (LAYOUT.findExportDir(process.cwd()).layout === "legacy-flat" ? LAYOUT.DESIGN_DIR : LAYOUT.EXPORT_DIR);
 
-  // `dtwin pull design --node <id>` is the outDir trap — `design` is a valid, deliberate
-  // positional outDir (never special-cased; see the note above), but when the project ALREADY has a
-  // design/export/ tree, writing into `design` too creates a SECOND, parallel export tree that every
-  // other command (doctor, cross-check, audit, build-screen) keeps ignoring. Warn, don't refuse — a
-  // project genuinely named "design" for something else is legitimate, and refusing would be the parser
-  // getting magic about one string.
-  if (userOutDir) {
-    const requested = path.resolve(process.cwd(), userOutDir);
-    const alreadyHasExport = fs.existsSync(path.join(requested, "export"));
-    if (alreadyHasExport) {
-      console.error(
-        `[dtwin] warn: ${userOutDir} already contains ${path.join(userOutDir, "export")} — writing here too creates a` +
-        ` PARALLEL export tree that doctor/cross-check/audit/build-screen do not read. You almost certainly want` +
-        ` \`dtwin pull ${userOutDir === "design" ? "" : userOutDir + "/export "}...\` (drop the outDir to use the default` +
-        ` design/export, or pass the export dir itself) instead of writing into ${userOutDir}.`
-      );
-    }
-  }
+  // For the guards in argConflict(): --json, and every daemon/token command typed (two of either kind
+  // are refused).
+  const json = args.includes("--json");
+  const daemonCmdsGiven = DAEMON_CMDS.filter((f) => args.includes(f));
+  const tokenCmdsGiven = TOKEN_CMDS.filter((f) => args.includes(f));
 
+  return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json, listCmd, userOutDir, readOptFlagsGiven, daemonCmdsGiven, tokenCmdsGiven };
+}
+
+export type ParsedArgs = ReturnType<typeof readArgs>;
+
+// `dtwin pull design --node <id>` is the outDir trap — `design` is a valid, deliberate
+// positional outDir (never special-cased; see the note above), but when the project ALREADY has a
+// design/export/ tree, writing into `design` too creates a SECOND, parallel export tree that every
+// other command (doctor, cross-check, audit, build-screen) keeps ignoring. Warn, don't refuse — a
+// project genuinely named "design" for something else is legitimate, and refusing would be the parser
+// getting magic about one string.
+// Returns the warning text (the caller prints it as `[dtwin] warn: …`), or null.
+function outDirWarning(userOutDir: string | undefined, exists: (p: string) => boolean): string | null {
+  if (!userOutDir) return null;
+  const requested = path.resolve(process.cwd(), userOutDir);
+  if (!exists(path.join(requested, "export"))) return null;
+  return `${userOutDir} already contains ${path.join(userOutDir, "export")} — writing here too creates a` +
+    ` PARALLEL export tree that doctor/cross-check/audit/build-screen do not read. You almost certainly want` +
+    ` \`dtwin pull ${userOutDir === "design" ? "" : userOutDir + "/export "}...\` (drop the outDir to use the default` +
+    ` design/export, or pass the export dir itself) instead of writing into ${userOutDir}.`;
+}
+
+// The combination guards: the first refusal's message, or null when the flags make one command.
+function argConflict(p: ParsedArgs): string | null {
+  const { selection, allPages, designSystemOnly, asLibrary, nodeId, childrenId, screenshotId, listCmd, listLibraries, whoami, listClients, pageSel, daemonCmd, tokenCmd, tokenFile, json, readOptFlagsGiven, daemonCmdsGiven, tokenCmdsGiven } = p;
   // Scope flags are MUTUALLY EXCLUSIVE, and the loser must not be discarded in silence: collectFull is
   // `if (allPages) … else if (page)`, so `--all-pages --page Foo` would export all 25 pages while the user
   // watched for one; `--selection --page Foo` never forwards the page at all. Both produce a plausible
@@ -524,12 +536,12 @@ function parseArgs(args: string[]) {
   // refusing costs two lines and a test.
   const scopes = [selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library", nodeId && "--node"].filter(isFlag);
   if (scopes.length > 1) {
-    throw new UsageError(`${scopes.join(" and ")} select different scopes — pass only one.`);
+    return `${scopes.join(" and ")} select different scopes — pass only one.`;
   }
   // --screenshot exports exactly one node's reference PNG — it is not a scope modifier, so combining it
   // with one is the same silent-loss class the scope guard above exists for.
   if (screenshotId && scopes.length) {
-    throw new UsageError(`--screenshot renders ONE node's reference image — it cannot be combined with ${scopes.join(" / ")}. Run it on its own.`);
+    return `--screenshot renders ONE node's reference image — it cannot be combined with ${scopes.join(" / ")}. Run it on its own.`;
   }
   // The cheap-index FAMILY, decided once. Every guard below asks this list rather than re-deriving
   // "is this an index command?" from a growing pile of booleans — which is exactly how a flag gets
@@ -540,14 +552,14 @@ function parseArgs(args: string[]) {
   // --screenshot writes a file, so it does not join the indexCmds family above (which never do) — but
   // combining it with one is still the same silent-loss class: only one command's output would appear.
   if (screenshotId && indexCmds.length) {
-    throw new UsageError(`--screenshot cannot be combined with ${indexCmds.join(" / ")} — run them as separate commands.`);
+    return `--screenshot cannot be combined with ${indexCmds.join(" / ")} — run them as separate commands.`;
   }
   // Read options need a serialize()/node walk that --screenshot deliberately skips (see its usage
   // comment above), so any of them here would be silently ignored exactly as they would on a list command.
   if (screenshotId && readOptFlagsGiven.length) {
     const many = readOptFlagsGiven.length > 1;
     const [are, they] = many ? ["are read options", "they"] : ["is a read option", "it"];
-    throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for a full export — --screenshot only renders a PNG, so ${they} would be silently ignored.`);
+    return `${readOptFlagsGiven.join(" / ")} ${are} for a full export — --screenshot only renders a PNG, so ${they} would be silently ignored.`;
   }
 
   // --json: machine output for the two index commands that print a TABLE for humans (--list-clients,
@@ -555,20 +567,19 @@ function parseArgs(args: string[]) {
   // how a column rename becomes a silent misread. --list / --list-pages / --children / --whoami already
   // print JSON, so the flag is accepted there as a no-op (one habit for every index command) and
   // refused everywhere else — an export writes files and prints no result to make JSON of.
-  const json = args.includes("--json");
   if (json && !indexCmds.length) {
-    throw new UsageError("--json applies to the commands that PRINT (--list-clients, --list-libraries; --list / --list-pages / --children / --whoami are JSON already). An export writes files instead — read its _manifest.json.");
+    return "--json applies to the commands that PRINT (--list-clients, --list-libraries; --list / --list-pages / --children / --whoami are JSON already). An export writes files instead — read its _manifest.json.";
   }
 
   // Same class of silent loss: the list/peek commands print and exit(0) before any export runs, so an
   // export flag combined with one of them is a no-op the user has no way to see.
   if (indexCmd && scopes.length) {
-    throw new UsageError(`${indexCmd} only prints a structural index — it cannot be combined with ${scopes.join(" / ")}. Run the list first, then pull with the ids it prints.`);
+    return `${indexCmd} only prints a structural index — it cannot be combined with ${scopes.join(" / ")}. Run the list first, then pull with the ids it prints.`;
   }
   // Two index commands at once is the same silent loss one step over: only one of them would run and
   // print, and the other would vanish without a word.
   if (indexCmds.length > 1) {
-    throw new UsageError(`${indexCmds.join(" and ")} are different queries — pass only one.`);
+    return `${indexCmds.join(" and ")} are different queries — pass only one.`;
   }
   // Read options are the SAME silent loss, one step further in. The list ops emit only structural
   // fields (id/name/type/size) — they never serialize a node, never call getCSSAsync, never read
@@ -591,7 +602,7 @@ function parseArgs(args: string[]) {
     // edit to a 400-character single expression with six branch points.
     const many = readOptFlagsGiven.length > 1;
     const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
-    throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for an EXPORT — ${cmd} ${emits}, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to the --page pull afterwards.`);
+    return `${readOptFlagsGiven.join(" / ")} ${are} for an EXPORT — ${cmd} ${emits}, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to the --page pull afterwards.`;
   }
   // --design-system never walks a page or node, so every read option (css/measurements/
   // plugin-data/motion/shared-data/no-assets) is just as inert here as it is on a list command — same
@@ -603,7 +614,7 @@ function parseArgs(args: string[]) {
   if ((designSystemOnly || asLibrary) && dsGuardFlags.length) {
     const many = dsGuardFlags.length > 1;
     const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
-    throw new UsageError(`${dsGuardFlags.join(" / ")} ${are} for a node/page walk — ${asLibrary ? "--as-library" : "--design-system"} skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`);
+    return `${dsGuardFlags.join(" / ")} ${are} for a node/page walk — ${asLibrary ? "--as-library" : "--design-system"} skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`;
   }
 
   // A daemon command owns the invocation. Combining it with a pull or a list is the same silent-loss
@@ -612,10 +623,10 @@ function parseArgs(args: string[]) {
   if (daemonCmd) {
     const others = [...scopes, screenshotId && "--screenshot", ...indexCmds, ...readOptFlagsGiven].filter(isFlag);
     if (others.length) {
-      throw new UsageError(`${daemonCmd} manages the background bridge — it cannot be combined with ${others.join(" / ")}. Start the daemon, then run your pull as a separate command (it will route through it automatically).`);
+      return `${daemonCmd} manages the background bridge — it cannot be combined with ${others.join(" / ")}. Start the daemon, then run your pull as a separate command (it will route through it automatically).`;
     }
-    if (DAEMON_CMDS.filter((f) => args.includes(f)).length > 1) {
-      throw new UsageError("--serve / --stop / --daemon-status are different commands — pass only one.");
+    if (daemonCmdsGiven.length > 1) {
+      return "--serve / --stop / --daemon-status are different commands — pass only one.";
     }
   }
 
@@ -625,22 +636,37 @@ function parseArgs(args: string[]) {
   if (tokenCmd) {
     const others = [...scopes, screenshotId && "--screenshot", daemonCmd, ...indexCmds, ...readOptFlagsGiven].filter(isFlag);
     if (others.length) {
-      throw new UsageError(`${tokenCmd} manages the stored bridge token — it cannot be combined with ${others.join(" / ")}. Run it on its own, then run your command.`);
+      return `${tokenCmd} manages the stored bridge token — it cannot be combined with ${others.join(" / ")}. Run it on its own, then run your command.`;
     }
-    const tokenCmds = TOKEN_CMDS.filter((f) => args.includes(f));
-    if (tokenCmds.length > 1) {
-      throw new UsageError(`${tokenCmds.join(" and ")} are different commands — pass only one.`);
+    if (tokenCmdsGiven.length > 1) {
+      return `${tokenCmdsGiven.join(" and ")} are different commands — pass only one.`;
     }
     // --token-file names a token to READ; these three act on the STORED one. Passing both reads as
     // "rotate/report the token in this file", which is not what happens — the stored token is the one
     // acted on and the --token-file one is silently ignored. --show-token is the ONE token command
     // where --token-file genuinely applies (print the token in that file), so it is not listed here.
     if (tokenFile && tokenCmd !== "--show-token") {
-      throw new UsageError(`${tokenCmd} acts on the stored token, so --token-file would be silently ignored. Drop it (or, for --rotate-token/--forget-token, edit that file directly).`);
+      return `${tokenCmd} acts on the stored token, so --token-file would be silently ignored. Drop it (or, for --rotate-token/--forget-token, edit that file directly).`;
     }
   }
+  return null;
+}
 
-  return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json };
+// Everything the CLI says about a parsed command line before running it: warnings to print (each as
+// `[dtwin] warn: …`, in order) and the refusal, if any (printed as `[dtwin] error: …`, exit 1, after the
+// warnings). Nothing is printed here; `exists` is the filesystem probe for the outDir trap.
+function validateArgs(p: ParsedArgs, exists: (p: string) => boolean = fs.existsSync): { warnings: string[]; error: string | null } {
+  const trap = outDirWarning(p.userOutDir, exists);
+  return { warnings: trap ? [trap] : [], error: argConflict(p) };
+}
+
+// readArgs + the combination guards, throwing the refusal as a UsageError: the one-call form the test
+// suites drive. Warnings are not computed here — cli() prints them from validateArgs.
+function parseArgs(args: string[]): ParsedArgs {
+  const parsed = readArgs(args);
+  const error = argConflict(parsed);
+  if (error) throw new UsageError(error);
+  return parsed;
 }
 
 // --list-libraries prints for a HUMAN (and for an agent skimming a terminal), not raw JSON: the
@@ -777,8 +803,6 @@ function formatDone(t: { totalMs: number; connectMs: number; exportMs: number; w
   }
   return lines;
 }
-
-export type ParsedArgs = ReturnType<typeof parseArgs>;
 
 async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> {
   const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json } = parsed;
@@ -1279,15 +1303,22 @@ async function cli(argv: string[]): Promise<void> {
 
   const core = await import("./server-core.ts");
 
-  // Parse once, turning a UsageError back into the message + exit 1 it replaced. (When this file is
-  // IMPORTED — the test suite pulling in parseArgs/writePages — cli() never runs, so nothing is parsed:
-  // the runner's own argv is not ours to interpret or exit over.)
+  // Parse once, turning a UsageError back into the message + exit 1 it replaced, then print the
+  // validation's warnings and, after them, its refusal (exit 1). (When this file is IMPORTED — the test
+  // suite pulling in parseArgs/writePages — cli() never runs, so nothing is parsed: the runner's own
+  // argv is not ours to interpret or exit over.)
   let parsed: ParsedArgs;
   try {
-    parsed = parseArgs(argv);
+    parsed = readArgs(argv);
   } catch (e) {
     if (!(e instanceof UsageError)) throw e;
     console.error("[dtwin] error: " + errMsg(e));
+    process.exit(1);
+  }
+  const check = validateArgs(parsed);
+  for (const w of check.warnings) console.error("[dtwin] warn: " + w);
+  if (check.error !== null) {
+    console.error("[dtwin] error: " + check.error);
     process.exit(1);
   }
 
@@ -1308,4 +1339,4 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) await cli(process.argv.
 // formatLibraries is exported for the same reason parseArgs is: the case that MUST NOT look like a
 // failure (zero libraries — free plan, or none enabled in the UI) is unreachable from a test that
 // needs a live plugin, so the renderer is driven directly.
-export { parseArgs, writePages, writeJson, formatLibraries, formatClients, formatDone, UsageError };
+export { parseArgs, readArgs, validateArgs, writePages, writeJson, formatLibraries, formatClients, formatDone, UsageError };

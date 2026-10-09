@@ -67,7 +67,7 @@ const SUITE_ENV: NodeJS.ProcessEnv = process.env.NODE_COMPILE_CACHE === undefine
 const NODE_SUITES: readonly string[] = [
   // the real-name guard, right after the lints (fast, repo-wide)
   "real-names.test.ts",
-  "harness.ts", "bridge.test.ts", "daemon-framing.test.ts", "cli-help.test.ts", "cli-pull.test.ts", "asset-compare.test.ts", "asset-index.test.ts", "asset-key-cache.test.ts", "quick-keys.test.ts", "design-to-code.test.ts", "tokens-cli.test.ts", "g14-step0.test.ts", "cli-exit.test.ts", "atomic-write.test.ts",
+  "harness.ts", "bridge.test.ts", "daemon-framing.test.ts", "cli-help.test.ts", "figma-pull-args.test.ts", "cli-pull.test.ts", "asset-compare.test.ts", "asset-index.test.ts", "asset-key-cache.test.ts", "quick-keys.test.ts", "design-to-code.test.ts", "tokens-cli.test.ts", "g14-step0.test.ts", "cli-exit.test.ts", "atomic-write.test.ts",
   "audit.test.ts", "build-screen-docs.test.ts", "verify-build.test.ts", "plan-record.test.ts", "verify-screen.test.ts", "verify-accuracy.test.ts", "verify-values.test.ts",
   "verify-waivers.test.ts", "verify-node-rules.test.ts", "verify-run.test.ts", "verify-behaviour.test.ts",
   "verify-integrity.test.ts", "verify-probe.test.ts", "verify-probe-e2e.test.ts", "verify-drive.test.ts",
