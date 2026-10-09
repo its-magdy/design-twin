@@ -52,7 +52,7 @@ import { CANONICAL_MATCHED_BY, PAINT_TYPES, idSuffix, normText } from "./probe-m
 import type { MatchedBy } from "./probe-match.ts";
 import type {
   Action, ArtifactCheck, BehaviourCheck, BehaviourStatus, BehaviourSummary, Box, CodeInputs, DeltaSeverity, DrawnState, IndexRow, InteractionEvidence, IrNode, JsonValue, LayoutSpec, MeasuredComponent, MeasuredNode, MeasuredStyles,
-  InferredRow, NotComparable, PageOverflowCoverage, Paint, PaintedBy, Plan, PlanAnchor, PlanDescope, PlanWaiver, ProbeFrame, Reaction, ReactionTrigger, ReportBehaviour, ReportVisual, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
+  InferredRow, NotComparable, PageOverflowCoverage, Paint, PaintedBy, Plan, PlanAnchor, PlanDescope, PlanWaiver, ProbeFrame, Reaction, ReportBehaviour, ReportVisual, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
   VerifyInteractionResult, VerifyMeasured, VerifyFrame, VerifyReferenceImage, VerifyReferenceUnusable, VerifyAgainst, VerifyReport, VerifyReportV2, VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -563,9 +563,12 @@ const COORDINATES =
   "and no height (vertical ink and line boxes depend on font metrics). " +
   "Auto-layout children carry no position (the export does not state one); their parent's is compared.";
 
-// the older reaction shape (`action` singular, `trigger.type`, `on`) is still read beside the producer's
-// reactions[].actions[] + plain-string trigger.
-type LegacyReaction = Omit<Reaction, "trigger"> & { trigger?: ReactionTrigger | { type?: string }; action?: Action; on?: string };
+// The export's reaction shape is reactions[].actions[] with `trigger` a plain lowercase string
+// (figma-plugin/src/prototype.ts). A reaction with no trigger is read as a click.
+/** The actions of one reaction that name something to do (an action type or a navigation). */
+const actionsOf = (r: Reaction): Action[] => (Array.isArray(r.actions) ? r.actions : []).filter((a) => a && (a.type || a.navigation));
+/** The reaction's trigger, lowercased; `on_click` when it names none. */
+const triggerOf = (r: Reaction): string => String(r.trigger || "on_click").toLowerCase();
 
 /** An expectation as READ BACK from disk (or built here): every field may be absent. */
 export type Expectation = Partial<VerifyExpectation>;
@@ -745,8 +748,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
           if (n.id) hidden.ids.push(n.id);
           if (checkable(expectNode(n, { path: c.path }).spec)) hidden.specsSkipped++;
           if (n.type === "INSTANCE" && n.mainComponent) hidden.instancesSkipped++;
-          const reactions: LegacyReaction[] = Array.isArray(n.reactions) ? n.reactions : [];
-          for (const r of reactions) hidden.interactionsSkipped += (Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : []).filter((a) => a && (a.type || a.navigation)).length;
+          for (const r of Array.isArray(n.reactions) ? n.reactions : []) hidden.interactionsSkipped += actionsOf(r).length;
           return;
         }
         const inherited = c.parent ? stateOf.get(c.parent) : undefined;
@@ -789,18 +791,14 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
         // The interaction graph is already in the export, keyed by node id — the richest input in the
         // whole IR and the one nothing verified. The real shape is
         // `reactions[].actions[]` (plural on both), with `trigger` a plain string — see
-        // figma-plugin/src/prototype.ts. A singular `action` is accepted too so an older export still
-        // yields interactions rather than silently producing none.
-        const reactions: LegacyReaction[] = Array.isArray(n.reactions) ? n.reactions : [];
-        for (const r of reactions) {
-          const actions = Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : [];
-          const trigger = (r.trigger && (typeof r.trigger === "object" ? r.trigger.type || r.trigger : r.trigger)) || r.on || "on_click";
-          for (const a of actions) {
-            if (!a || !(a.type || a.navigation)) continue;
+        // figma-plugin/src/prototype.ts.
+        for (const r of Array.isArray(n.reactions) ? n.reactions : []) {
+          const trigger = triggerOf(r);
+          for (const a of actionsOf(r)) {
             const row: VerifyInteraction = {
               nodeId: n.id,
               name: n.name,
-              trigger: String(trigger).toLowerCase(),
+              trigger,
               ...ifDefined("action", a.navigation || a.type),
               ...ifDefined("destinationId", a.destinationId),
               ...ifDefined("destination", a.destination),
