@@ -10,6 +10,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import * as VS from "../design-to-code/verify-screen.ts";
 import * as VSH from "../design-to-code/verify-shared.ts";
+import * as VSC from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import type { BuiltExpectation, ExpectInput } from "../design-to-code/verify-expect.ts";
 import type { FontSpec, MeasuredNode, MeasuredStyles, ProbeIdentity, ScreenExport, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
@@ -50,7 +51,7 @@ const fakeDe = (root: unknown, extra?: Record<string, unknown>): Record<string, 
 const block = (name: string, fn: () => void): void => { try { fn(); } catch (e) { check(`${name} — setup threw: ${e instanceof Error ? e.message : String(e)}`, false); } };
 
 // ---- compare/contract
-const { compare } = VS;
+const { compare } = VSC;
 const { FIELDS } = VSH;
 // Read through the namespace so this file still RUNS against a tree without them (the "fails before" check).
 const vsNs: Record<string, unknown> = { ...VS, ...VSH };

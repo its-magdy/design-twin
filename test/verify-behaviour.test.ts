@@ -6,10 +6,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { compare, reportToMarkdown, probeLine } from "../design-to-code/verify-screen.ts";
+import { reportToMarkdown, probeLine } from "../design-to-code/verify-screen.ts";
+import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
-import * as verifyScreen from "../design-to-code/verify-screen.ts";
+import * as verifyCompare from "../design-to-code/verify-compare.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
 import * as guards from "../design-to-code/doc-guards.ts";
 import { isVerifyMeasured, isVerifyReport, readableMeasured } from "../design-to-code/doc-guards.ts";
@@ -22,9 +23,9 @@ import { check, report } from "./assert.ts";
 const safe = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch (e) { console.log(`    (threw: ${e instanceof Error ? e.message : String(e)})`); } return check(name, r); };
 // (looked up by name so this file runs — and fails cleanly — against a verify-screen that predates them)
 // (namespace lookups: a namespace read of a missing export is undefined, where a named import would refuse to link)
-const ns: Record<string, unknown> = { ...verifyScreen, ...guards };
+const ns: Record<string, unknown> = { ...verifyCompare, ...guards };
 const has = (name: string): boolean => typeof ns[name] === "function";
-const headlineFn = has("behaviourHeadline") ? verifyScreen.behaviourHeadline : null;
+const headlineFn = has("behaviourHeadline") ? verifyCompare.behaviourHeadline : null;
 const guard = (x: unknown): boolean => has("isMeasuredBehaviour") && guards.isMeasuredBehaviour(x);
 
 // ---------------------------------------------------------------- the "Seed Shelf" screen (invented)

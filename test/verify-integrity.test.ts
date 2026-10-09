@@ -9,10 +9,12 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import * as VS from "../design-to-code/verify-screen.ts";
-import { compare, reportToMarkdown } from "../design-to-code/verify-screen.ts";
+import * as VSC from "../design-to-code/verify-compare.ts";
+import { reportToMarkdown } from "../design-to-code/verify-screen.ts";
+import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
-import type { CompareOptions } from "../design-to-code/verify-screen.ts";
+import type { CompareOptions } from "../design-to-code/verify-compare.ts";
 import { isVerifyReport, readableMeasured } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { liveStatusFile } from "../design-to-code/verify-run.ts";
@@ -104,8 +106,8 @@ safe("close + url-changed with navEvents 0 (an in-page URL change) → pass; wit
 safe("an overlay opened as a route records what appeared: selector-appeared → pass; a tab kept in the query (change_to) + selector-appeared → pass", () =>
   ia(run(withEvidence([ev("2:4", "selector-appeared")])), "2:4")?.result === "pass" && ia(run(withEvidence([ev("3:2", "selector-appeared")])), "3:2")?.result === "pass");
 safe("OUTCOMES_FOR_ACTION / INTERACTION_OUTCOMES are exported with the interface's values", () =>
-  JSON.stringify(VS.OUTCOMES_FOR_ACTION.navigate) === JSON.stringify(["url-changed", "selector-appeared"]) && JSON.stringify(VS.OUTCOMES_FOR_ACTION.overlay) === JSON.stringify(["dialog-opened", "selector-appeared"])
-  && VS.OUTCOMES_FOR_ACTION.other.length === 4 && !VS.OUTCOMES_FOR_ACTION.other.includes("none") && VS.INTERACTION_OUTCOMES.length === 5);
+  JSON.stringify(VSC.OUTCOMES_FOR_ACTION.navigate) === JSON.stringify(["url-changed", "selector-appeared"]) && JSON.stringify(VSC.OUTCOMES_FOR_ACTION.overlay) === JSON.stringify(["dialog-opened", "selector-appeared"])
+  && VSC.OUTCOMES_FOR_ACTION.other.length === 4 && !VSC.OUTCOMES_FOR_ACTION.other.includes("none") && VSC.INTERACTION_OUTCOMES.length === 5);
 
 // ---------------------------------------------------------------- unfiled probe results
 console.log("a probe result filed under no designed interaction is named, with a hint:");

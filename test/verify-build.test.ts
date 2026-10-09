@@ -16,7 +16,7 @@ import { waiversHash } from "../design-to-code/plan-waivers.ts";
 import { build, ENTRIES } from "../claude-plugin/build-scripts.ts";
 import type { CheckPlanResult, ReportRef } from "../design-to-code/verify-build.ts";
 import * as verifyBuild from "../design-to-code/verify-build.ts";
-import { compare } from "../design-to-code/verify-screen.ts";
+import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import type { BehaviourCheck, CodeConnectMap, MeasuredBehaviour, MeasuredNode, MeasuredStyles, Plan, PlanComputedStatus, PlanHookRecord, PlanTokenRow, PlanVerification } from "../design-to-code/types.ts";

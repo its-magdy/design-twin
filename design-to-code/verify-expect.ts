@@ -20,7 +20,9 @@ import type {
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import { EXPORT_DIR } from "../bridge/src/project-layout.ts";
-import { EXPECTATION_SCHEMA, MEASURED_KEYS_DOC, PAD_SIDES, TEXT_BOX_HEIGHT, TOLERANCE, lineHeightPx, normColor, normWeight, num, r2, resolveInside } from "./verify-shared.ts";
+import {
+  EXPECTATION_SCHEMA, MEASURED_KEYS_DOC, PAD_SIDES, TEXT_BOX_HEIGHT, TOLERANCE, lineHeightPx, normColor, normWeight, num, r2, resolveInside,
+} from "./verify-shared.ts";
 import type { PadSide } from "./verify-shared.ts";
 
 // ---------------------------------------------------------------- the expectation
