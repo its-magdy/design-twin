@@ -23,6 +23,7 @@ import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mc
 import type * as GetComponentMod from "../design-to-code/get-component.ts";
 import type * as DriftLintMod from "../design-to-code/drift-lint.ts";
 import { isUnknownArray } from "../bridge/src/json-util.ts";
+import { daemonSupported } from "../bridge/src/daemon.ts";
 
 // Compile-time only. figma-mcp.ts declares its OWN view of the two design-to-code modules it loads
 // lazily (it cannot reference them: rootDir is bridge/src). Nothing else ties those local interfaces to
@@ -289,26 +290,34 @@ void (async () => {
     const client2 = new Client({ name: "mcp-smoke-2", version: "0.0.0" });
     try {
       await client2.connect(transport2);
-      const seen2: Progress[] = [];
-      const via = await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen2.push(p) });
-      const s0b = must(seen2[0], "first daemon-routed progress notification");
-      const s1b = must(seen2[1], "second daemon-routed progress notification");
-      ok("a DAEMON-ROUTED export (a second session sharing this one's bridge) forwards the plugin's progress as notifications/progress too",
-        !via.isError && (JSON.parse(firstText(via)) as ScreenReply).screen.nodes[0]?.children?.length === 3
-        && seen2.length === 2 && s0b.progress < s1b.progress && s1b.message === "pages, page 2 of 2 (P2), 20 nodes");
-      burst = true;
-      const wire2: string[] = [];
-      const prev2 = transport2.onmessage;
-      transport2.onmessage = (m: JSONRPCMessage) => {
-        if ("method" in m && m.method === "notifications/progress") wire2.push("progress");
-        else if ("id" in m && "result" in m) wire2.push("result");
-        prev2?.(m);
-      };
-      for (let i = 0; i < 3; i++) await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: () => {} });
-      if (prev2) transport2.onmessage = prev2; else delete transport2.onmessage;
-      ok("…and with ticks and the reply sent in ONE turn, every daemon-relayed notifications/progress is on the wire before its result (3 runs)",
-        wire2.join(",") === Array(3).fill("progress,progress,result").join(","));
-      burst = false;
+      if (!daemonSupported()) {
+        // Windows: no daemon, so nothing is shared — the second session's export is a tool error saying why.
+        console.log("  (skipped: the daemon is not supported on Windows — a second session cannot route an export through this one's bridge, so there are no daemon-relayed progress frames)");
+        const held = await client2.callTool({ name: "figma_export_selection", arguments: {} });
+        ok("on Windows a second session's export is a tool error: another session holds the bridge, and sharing it is not supported there",
+          held.isError === true && /another MCP session or dtwin command holds the bridge, and sharing it between sessions is not supported on Windows/.test(firstText(held)));
+      } else {
+        const seen2: Progress[] = [];
+        const via = await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen2.push(p) });
+        const s0b = must(seen2[0], "first daemon-routed progress notification");
+        const s1b = must(seen2[1], "second daemon-routed progress notification");
+        ok("a DAEMON-ROUTED export (a second session sharing this one's bridge) forwards the plugin's progress as notifications/progress too",
+          !via.isError && (JSON.parse(firstText(via)) as ScreenReply).screen.nodes[0]?.children?.length === 3
+          && seen2.length === 2 && s0b.progress < s1b.progress && s1b.message === "pages, page 2 of 2 (P2), 20 nodes");
+        burst = true;
+        const wire2: string[] = [];
+        const prev2 = transport2.onmessage;
+        transport2.onmessage = (m: JSONRPCMessage) => {
+          if ("method" in m && m.method === "notifications/progress") wire2.push("progress");
+          else if ("id" in m && "result" in m) wire2.push("result");
+          prev2?.(m);
+        };
+        for (let i = 0; i < 3; i++) await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: () => {} });
+        if (prev2) transport2.onmessage = prev2; else delete transport2.onmessage;
+        ok("…and with ticks and the reply sent in ONE turn, every daemon-relayed notifications/progress is on the wire before its result (3 runs)",
+          wire2.join(",") === Array(3).fill("progress,progress,result").join(","));
+        burst = false;
+      }
     } finally {
       await client2.close().catch(() => {});
     }
@@ -527,7 +536,8 @@ void (async () => {
 
       // Via a daemon: a second MCP server shares this one's bridge through the daemon socket;
       // its cancelled call closes that socket, the daemon abandons the request, and the plugin is told.
-      {
+      if (!daemonSupported()) console.log("  (skipped: the daemon is not supported on Windows — no second session routes a call through this one's bridge to cancel)");
+      else {
         const transport3 = new StdioClientTransport({
           command: process.execPath,
           args: [path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts")],

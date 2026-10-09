@@ -304,7 +304,8 @@ check("[shape] a plan the hook cannot use is WARNED about by name on every stop,
   const root = project({ "a.tsx": "" }, { status: "pending", files: ["a.tsx"], verification: STATIC });
   fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), JSON.stringify({ status: "pending", tokens: "none" }));
   const r = runHook(root);
-  return /warning: design\/plan\/broken\.json is not a valid plan: `tokens` must be an array — it was NOT checked/.test(r.stderr);
+  // the plan is named as the OS spells the path (path.relative), so the expectation is built the same way
+  return r.stderr.includes(`warning: ${path.join("design", "plan", "broken.json")} is not a valid plan: \`tokens\` must be an array — it was NOT checked`);
 })());
 check("[shape] a plan path argument that is not a plan -> 'cannot read plan(s): <file> (<why>)', exit 1", (() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-bad-"));
@@ -1220,10 +1221,10 @@ console.log("field-test fixes:");
   check("a project with a tailwind.config.* is not checked (Tailwind v3 colours live there)",
     !has(problems({ "src/A.tsx": "<p />", "tailwind.config.js": "module.exports = {}" }, { files: ["src/A.tsx"], tokens: [{ figmaName: "Brand/Main", value: "#123456", kind: "color", codeToken: "bg-brand", verdict: "exact" }], verification: STATIC }), /declared nowhere/));
   {
-    const hookWith = (lines: string[], files?: string[]) => {
+    const hookWith = (lines: string[] | ((root: string) => string[]), files?: string[]) => {
       const root = project({ "a.tsx": "#5B5FC7", "src/Other.tsx": "" }, { ...BLOCKING, files: files || BLOCKING.files });
       const t = path.join(root, "t.jsonl");
-      fs.writeFileSync(t, lines.join("\n"));
+      fs.writeFileSync(t, (typeof lines === "function" ? lines(root) : lines).join("\n"));
       return { r: runHook(root, { cwd: root, transcript_path: t }), root };
     };
     check("a Bash heredoc whose notes mention the plan does not make it this session's", (() => {
@@ -1235,7 +1236,9 @@ console.log("field-test fixes:");
       return r.status === 2 && hookOf(root).result === "blocked";
     })());
     check("a Windows-style path to the plan is matched", (() => {
-      const { r } = hookWith([toolUse("Write", { file_path: "C:\\work\\app\\design\\plan\\login.json", content: "{}" })]);
+      // On Windows the hook matches the project's own drive-letter path (a different root's is another checkout's plan);
+      // elsewhere a drive-letter path is matched by its tail.
+      const { r } = hookWith((root) => [toolUse("Write", { file_path: process.platform === "win32" ? path.join(root, "design", "plan", "login.json") : "C:\\work\\app\\design\\plan\\login.json", content: "{}" })]);
       return r.status === 2;
     })());
     check("a builder that only ran plan-skeleton --out on the plan owns it", (() => {

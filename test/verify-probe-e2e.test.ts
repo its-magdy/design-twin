@@ -20,6 +20,7 @@ import { isJsonObject } from "../design-to-code/types.ts";
 import { freeHoverPoint } from "../design-to-code/probe-page.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
+import { POSIX_SH } from "./posix-sh.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const BUNDLE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -346,15 +347,19 @@ const recovery = /with: (node .*--phase measured --run run-e2e-11 --dir .*)$/m.e
 check("every status write refused → exit 0, the warning says no live status exists and --compare will report the run as unrecorded",
   r11.status === 0 && !fs.existsSync(sLive) && /no live status of the run exists, so --compare will report the run as unrecorded/.test(r11.stderr) && recovery !== "");
 if (r11.status !== 0) console.log(r11.stderr);
-const next11 = /^next {2}(.+)$/m.exec(r11.stderr)?.[1] ?? "";
-const c11 = spawnSync("/bin/sh", ["-c", next11], { cwd: os.tmpdir(), encoding: "utf8" });
-check("the printed `next` --compare runs as printed from another directory (paths with a space) → incomplete: 'no status of that run records it'",
-  c11.status === 1 && /no status of that run records it/.test(fs.existsSync(path.join(sStage, "Staff.report.json")) ? fs.readFileSync(path.join(sStage, "Staff.report.json"), "utf8") : ""));
-const rec11 = spawnSync("/bin/sh", ["-c", recovery], { cwd: os.tmpdir(), encoding: "utf8" });
-const st11 = readStatus(sLive);
-check("the printed recovery runs as printed → status measured, measuredSha256 = the staged measured file",
-  rec11.status === 0 && st11?.phase === "measured" && st11.runId === "run-e2e-11" && st11.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(path.join(sStage, "Staff.measured.json"))).digest("hex"));
-if (rec11.status !== 0) console.log(rec11.stderr);
+if (POSIX_SH === null) console.log("(skipped: no sh on PATH — the printed commands are POSIX-shell quoted, run through Git Bash on Windows)");
+else {
+  const sh = POSIX_SH;
+  const next11 = /^next {2}(.+)$/m.exec(r11.stderr)?.[1] ?? "";
+  const c11 = spawnSync(sh, ["-c", next11], { cwd: os.tmpdir(), encoding: "utf8" });
+  check("the printed `next` --compare runs as printed from another directory (paths with a space) → incomplete: 'no status of that run records it'",
+    c11.status === 1 && /no status of that run records it/.test(fs.existsSync(path.join(sStage, "Staff.report.json")) ? fs.readFileSync(path.join(sStage, "Staff.report.json"), "utf8") : ""));
+  const rec11 = spawnSync(sh, ["-c", recovery], { cwd: os.tmpdir(), encoding: "utf8" });
+  const st11 = readStatus(sLive);
+  check("the printed recovery runs as printed → status measured, measuredSha256 = the staged measured file",
+    rec11.status === 0 && st11?.phase === "measured" && st11.runId === "run-e2e-11" && st11.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(path.join(sStage, "Staff.measured.json"))).digest("hex"));
+  if (rec11.status !== 0) console.log(rec11.stderr);
+}
 
 const bd = m1?.build;
 check("measured.build: the url, mode static, same-origin assets hashed (document + asset.js), git state of the project", bd !== undefined && bd.url === url() && bd.mode === "static" && bd.assets === 2
