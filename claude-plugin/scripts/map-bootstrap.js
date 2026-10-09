@@ -3,6 +3,7 @@
 
 // design-to-code/map-bootstrap.ts
 import fs6 from "node:fs";
+import { parseArgs as parseArgs2 } from "node:util";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -17,6 +18,7 @@ import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
 // design-to-code/read-json.ts
 var anyJson = (_x) => true;
@@ -313,9 +315,62 @@ function screenRoots(doc) {
 // design-to-code/cli-args.ts
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  try {
+    return parse(args);
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+      const unknown = [...new Set(tokens.flatMap((t) => t.kind === "option" && !(t.name in options) ? [t.rawName] : []))];
+      console.error(`${tool}: unknown flag ${unknown.join(", ")}
+${usage}`);
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
+      console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`);
+    } else {
+      console.error(`${tool}: ${errMsg(e)}
+${usage}`);
+    }
+    process.exit(exitCode);
+  }
+}
+function cliArity(tool, positionals, min, max, usage) {
+  if (positionals.length < min) {
+    console.error(usage);
+    return false;
+  }
+  if (positionals.length > max) {
+    console.error(`${tool}: unexpected argument ${positionals.slice(max).join(", ")}
+${usage}`);
+    return false;
+  }
+  return true;
+}
 
 // design-to-code/component-match.ts
 function visibleInstances(doc, label) {
@@ -814,54 +869,24 @@ function main(argv) {
     console.log(usage);
     return 0;
   }
-  let outFile = null, proposalsFile = null, screenFile = null;
-  const extraCatalogFiles = [];
-  for (let ci = argv.indexOf("--catalog"); ci !== -1; ci = argv.indexOf("--catalog")) {
-    const next = argv[ci + 1];
-    if (!next || next.startsWith("--")) {
-      console.error("--catalog needs a component catalog .json (components.json / components.library.json)\n" + usage);
-      return 1;
-    }
-    extraCatalogFiles.push(next);
-    argv.splice(ci, 2);
-  }
-  const pi = argv.indexOf("--from-proposals");
-  if (pi !== -1) {
-    const next = argv[pi + 1];
-    if (!next || next.startsWith("--")) {
-      console.error("--from-proposals needs the JSON report the cross-check (or audit) script wrote with --out/--json\n" + usage);
-      return 1;
-    }
-    proposalsFile = next;
-    argv.splice(pi, 2);
-  }
-  const si = argv.indexOf("--screen");
-  if (si !== -1) {
-    const next = argv[si + 1];
-    if (!next || next.startsWith("--")) {
-      console.error("--screen needs a screen export .json\n" + usage);
-      return 1;
-    }
-    screenFile = next;
-    argv.splice(si, 2);
-  }
-  const o = argv.indexOf("--out");
-  if (o !== -1) {
-    const next = argv[o + 1];
-    if (!next || next.startsWith("--")) {
-      console.error("--out needs a file path\n" + usage);
-      return 1;
-    }
-    outFile = next;
-    argv.splice(o, 2);
-  }
-  const unknown = argv.find((a) => a.startsWith("--"));
-  if (unknown) {
-    console.error(`unknown option ${unknown}
+  const OPTIONS = {
+    out: { type: "string" },
+    "from-proposals": { type: "string" },
+    screen: { type: "string" },
+    catalog: { type: "string", multiple: true },
+    help: { type: "boolean", short: "h" }
+  };
+  const { values: flags, positionals } = cliParse("map-bootstrap", argv, OPTIONS, usage, 1, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
+  if (!cliArity("map-bootstrap", positionals, 1, 2, usage)) return 1;
+  const emptyFlag = ["out", "from-proposals", "screen"].find((n) => flags[n] === "") ?? (flags.catalog?.includes("") ? "catalog" : void 0);
+  if (emptyFlag) {
+    console.error(`map-bootstrap: --${emptyFlag} needs a value
 ${usage}`);
     return 1;
   }
-  const [catalogFile, existingArg] = argv;
+  const outFile = flags.out ?? null, proposalsFile = flags["from-proposals"] ?? null, screenFile = flags.screen ?? null;
+  const extraCatalogFiles = flags.catalog ?? [];
+  const [catalogFile, existingArg] = positionals;
   if (!catalogFile) {
     console.error(usage);
     return 1;

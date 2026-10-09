@@ -42,6 +42,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { parseArgs } from "node:util";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { visibility } from "./plan-skeleton.ts";
 import { screenExportOf, screenRoots } from "./export-shape.ts";
@@ -49,7 +50,7 @@ import * as contentHash from "./content-hash.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
-import { scriptCmd } from "./cli-args.ts";
+import { cliParse, scriptCmd } from "./cli-args.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
 import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerifyReport, parsePlan } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
@@ -1644,13 +1645,10 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
 }
 
 async function main(argv: string[]): Promise<number> {
-  const args = argv.slice();
-  if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); return 0; }
-  const statusMode = args.includes("--status");
-  const json = args.includes("--json");
-  const planArgs = args.filter((a) => !a.startsWith("-"));
-  const stray = args.filter((a) => a.startsWith("-") && !["--status", "--json"].includes(a));
-  if (stray.length) { console.error(`verify-build: unknown flag ${stray.join(", ")}\n${USAGE}`); return 2; }
+  if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); return 0; }
+  const OPTIONS = { status: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
+  const { values: flags, positionals: planArgs } = cliParse("verify-build", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  const statusMode = !!flags.status, json = !!flags.json;
 
   if (statusMode) {
     setPhase("computing plan status");

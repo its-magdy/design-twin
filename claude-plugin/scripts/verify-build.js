@@ -4,6 +4,7 @@
 // design-to-code/verify-build.ts
 import fs8 from "node:fs";
 import path6 from "node:path";
+import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/hash.ts
 import crypto from "node:crypto";
@@ -183,14 +184,56 @@ function legacyBlockerIds(findings) {
 // design-to-code/cli-args.ts
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
 // design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  try {
+    return parse(args);
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+      const unknown = [...new Set(tokens.flatMap((t) => t.kind === "option" && !(t.name in options) ? [t.rawName] : []))];
+      console.error(`${tool}: unknown flag ${unknown.join(", ")}
+${usage}`);
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
+      console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`);
+    } else {
+      console.error(`${tool}: ${errMsg(e)}
+${usage}`);
+    }
+    process.exit(exitCode);
+  }
+}
 
 // design-to-code/read-json.ts
 import fs from "node:fs";
@@ -2392,20 +2435,13 @@ function checkAndRecord(p, cwd, graph) {
   return { blocking, warnings, cleared, status: st };
 }
 async function main(argv) {
-  const args = argv.slice();
-  if (args.includes("--help") || args.includes("-h")) {
+  if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE2);
     return 0;
   }
-  const statusMode = args.includes("--status");
-  const json = args.includes("--json");
-  const planArgs = args.filter((a) => !a.startsWith("-"));
-  const stray = args.filter((a) => a.startsWith("-") && !["--status", "--json"].includes(a));
-  if (stray.length) {
-    console.error(`verify-build: unknown flag ${stray.join(", ")}
-${USAGE2}`);
-    return 2;
-  }
+  const OPTIONS = { status: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" } };
+  const { values: flags, positionals: planArgs } = cliParse("verify-build", argv, OPTIONS, USAGE2, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
+  const statusMode = !!flags.status, json = !!flags.json;
   if (statusMode) {
     setPhase("computing plan status");
     const found = planArgs.length ? planArgs.map((f) => readPlan(path6.resolve(f))) : null;
