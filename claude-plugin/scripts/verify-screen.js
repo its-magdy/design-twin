@@ -2123,7 +2123,7 @@ function referenceImageFor(o) {
   const bytes = o.readReference(reference);
   if (!bytes) return unusable(p, `the reference PNG ${p} is missing on disk \u2014 re-pull the screen`);
   const png = pngInfo(bytes);
-  if (!png) return unusable(p, `the reference ${p} is not a PNG`);
+  if (!png) return unusable(p, `the reference ${p} is not a PNG or is damaged \u2014 re-pull the screen`);
   if (png.bitDepth !== 8 || png.colorType !== 2 && png.colorType !== 6 || png.interlace !== 0)
     return unusable(p, `the reference ${p} is a PNG of colour type ${png.colorType} / depth ${png.bitDepth}${png.interlace ? " / interlaced" : ""} \u2014 the visual diff reads 8-bit RGB/RGBA, non-interlaced`);
   if (!png.w || !png.h) return unusable(p, `the reference ${p} is an empty PNG`);

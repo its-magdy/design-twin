@@ -1071,15 +1071,15 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   const bytes = o.readReference(reference);
   if (!bytes) return unusable(p, `the reference PNG ${p} is missing on disk — re-pull the screen`);
   const png = pngInfo(bytes);
-  if (!png) return unusable(p, `the reference ${p} is not a PNG`);
+  if (!png) return unusable(p, `the reference ${p} is not a PNG or is damaged — re-pull the screen`);
   if (png.bitDepth !== 8 || (png.colorType !== 2 && png.colorType !== 6) || png.interlace !== 0)
     return unusable(p, `the reference ${p} is a PNG of colour type ${png.colorType} / depth ${png.bitDepth}${png.interlace ? " / interlaced" : ""} — the visual diff reads 8-bit RGB/RGBA, non-interlaced`);
   if (!png.w || !png.h) return unusable(p, `the reference ${p} is an empty PNG`);
   // index first: the row write-out.ts wrote for THIS png (same id, same file when both are stamped, same pointer)
   const row = o.rows.find((r) => r.id === root.id && (!r.sourceFile || !o.sourceFile || r.sourceFile === o.sourceFile) && r.reference === reference
     && num(r.referenceScale) && r.referenceScale > 0);
-  // The export fallback is bridge/src/write-out.ts writeScreen's formula, duplicated here — design-to-code never
-  // imports bridge runtime code; keep the two in step: refBox = renderBox || box; scale = round4(png.w / refBox.w);
+  // The export fallback is bridge/src/write-out.ts writeScreen's formula, duplicated here — it is inline in
+  // writeScreen, not an exported function; keep the two in step: refBox = renderBox || box; scale = round4(png.w / refBox.w);
   // offset = renderBox ? renderBox − box : {0, 0}.
   const rb = root.renderBox && num(root.renderBox.w) && root.renderBox.w > 0 ? root.renderBox : undefined;
   const exportOffset = !rb ? { x: 0, y: 0 } : num(rb.x) && num(rb.y) && num(box.x) && num(box.y) ? { x: rb.x - box.x, y: rb.y - box.y } : null;
