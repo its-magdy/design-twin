@@ -312,6 +312,48 @@ function spacingStep(tokens: TokensDoc | null | undefined): number | null {
 }
 
 // ---------------------------------------------------------------- the audit
+// audit() runs its passes in report order over one AuditCtx: the walk fills the ctx's collections, and
+// every pass after it reads them and adds its findings (sorted and given ids at the end).
+/** One audit input, unwrapped. */
+type AuditDoc = ReturnType<typeof unwrap>;
+// The one way a pass records a finding (makeAdd's `add`, with its overloads).
+interface AddFinding {
+  (severity: "blocker", code: BlockerCode & AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number;
+  (severity: "warning" | "info", code: AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number;
+}
+interface RawColor { count: number; nodeId: string; nodeName: string; rgb: Rgba }
+interface Boundary { nodes: IrNode[]; here: Here; stroke: string; backdrop: string; ratio: number; assumed: boolean; strokeToken?: string; backdropToken?: string; hasFill: boolean }
+interface Picker { node: IrNode; here: Here; useKey: string; cue: string }
+interface InstanceText { node: IrNode; here: Here; inst: Ancestor }
+interface OpenState { node: IrNode; here: Here; cue: string; nodes: string[] }
+/** What every pass reads: the inputs and options, the findings, and what the walk collects. */
+interface AuditCtx {
+  opts: AuditOptions;
+  platform: AuditPlatform;
+  grid: number;
+  docs: AuditDoc[];
+  roots: Root[];
+  catalog: CatalogComponent[];
+  findings: AuditFinding[];
+  add: AddFinding;
+  binding: Record<AuditCategory, [number, number]>;
+  tally: (cat: AuditCategory, bound: boolean) => void;
+  rawColors: Map<string, RawColor>;
+  usedComponents: Map<string, UsedComponent>;
+  stateHits: Record<ScreenStateKey, StateHit[]>;
+  validationHits: StateHit[];
+  inputsSeen: number;
+  annotations: AuditAnnotation[];
+  hiddenIds: Set<string>;
+  nodesById: Map<string, IrNode>;
+  navigations: Map<string, NavRow>;
+  charOverridden: Set<string>;
+  cappedInstances: Set<string>;
+  instanceTexts: InstanceText[];
+  boundaries: Map<string, Boundary>;
+  pickers: Picker[];
+}
+
 function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | undefined, opts: AuditOptions = {}): AuditReport {
   // Live run #10: with no --platform the audit quietly picked "web" and the assumption surfaced only
   // as one designer question buried in a list of thirteen. Every touch-target size, shadow-spread
@@ -336,6 +378,77 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   const catalog: CatalogComponent[] = (opts.catalog && Array.isArray(opts.catalog.components)) ? opts.catalog.components : [];
 
   const findings: AuditFinding[] = [];
+  const binding: Record<AuditCategory, [number, number]> = { color: [0, 0], typography: [0, 0], spacing: [0, 0], radius: [0, 0], effects: [0, 0] };
+  const tally = (cat: AuditCategory, bound: boolean): void => { binding[cat][1]++; if (bound) binding[cat][0]++; };
+  const ac: AuditCtx = {
+    opts, platform, grid, docs, roots, catalog, findings, add: makeAdd(findings), binding, tally,
+    rawColors: new Map<string, RawColor>(), // hex -> { count, sample node, channels }
+    usedComponents: new Map<string, UsedComponent>(), // setKey|key|name -> { name, kind }
+    stateHits: { loading: [], empty: [], error: [] },
+    validationHits: [],
+    inputsSeen: 0, // visible input controls — whether a validation state applies at all
+    annotations: [],
+    hiddenIds: new Set<string>(), // every node skipped by the hidden predicate — cross-file findings are filtered by it too
+    nodesById: new Map<string, IrNode>(), // visible nodes, so a finding raised off-tree (a heavy asset) can cite one
+    // Prototype links out of this screen, one row per destination: the export has them, and a
+    // link copied along with a layer ("every row opens the Details screen") is invisible until clicked.
+    navigations: new Map<string, NavRow>(),
+    // Sublayer ids (I<inst>;<layer>) whose `characters` some instance overrides, the instances whose list hit
+    // the plugin's cap (incomplete), and every visible instance text that is not driven by a TEXT property.
+    charOverridden: new Set<string>(),
+    cappedInstances: new Set<string>(),
+    instanceTexts: [],
+    // Failing control boundaries, one entry per screen + stroke + backdrop.
+    boundaries: new Map<string, Boundary>(),
+    // Input instances that read like a select/picker ("Select …", a chevron/calendar layer).
+    pickers: [],
+  };
+
+  walkRoots(ac);
+  const raws = nearDuplicateColors(ac);
+  const nearToken = nearTokenColors(ac, raws);
+  nonTextContrast(ac);
+  const copyQuestions = defaultCopyInInstances(ac);
+  duplicateRootSubtrees(ac);
+  const lookup = stateLookup(ac);
+  const { components, unchecked } = componentStates(ac, lookup);
+  const openStates = undesignedOpenStates(ac, lookup);
+  const { allDialogs, screenStates, screenStatesScope } = screenStatesOf(ac);
+  heavyAssets(ac);
+  prototypeLinks(ac);
+  const tokenBinding = tokenBindingOf(ac);
+  const questions = openQuestions(ac, { allDialogs, screenStates, unchecked, components, copyQuestions, openStates, nearToken });
+  const { crossFile, crossOrigin, hiddenFindingsOmitted } = crossFilePass(ac);
+  libraryNotes(ac, crossFile, lookup.screenCollKeys);
+  const overridesUnmatched = applyOverrides(ac, crossFile, crossOrigin);
+  finishFindings(ac, questions);
+  const count = (s: Severity): number => findings.filter((f) => f.severity === s).length;
+  return {
+    platform,
+    platformAssumed,
+    crossFile,
+    grid,
+    gridAssumed,
+    gridMismatch,
+    screenStatesScope,
+    screens: roots.map((r) => r.label),
+    // The root node id(s) audited — additive, read only by the CLI's duplicate-artefact
+    // check: it lets a re-run find an EARLIER report for the same screen under a
+    // different name without re-parsing every screen export in the directory.
+    nodeIds: roots.map((r) => r.tree && r.tree.id).filter((id): id is string => !!id),
+    summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
+    hiddenLayers: { nodesSkipped: ac.hiddenIds.size, crossFileFindingsOmitted: hiddenFindingsOmitted },
+    ...(overridesUnmatched.length ? { overridesUnmatched } : {}),
+    tokenBinding,
+    components,
+    screenStates,
+    annotations: ac.annotations,
+    questions,
+    findings,
+  };
+}
+
+function makeAdd(findings: AuditFinding[]): AddFinding {
   // typed on its own: spread inline in the Object.assign below, oxlint-tsgolint reads the result as `any`
   const placeOf = (ctx: Here): Pick<AuditFinding, "screen" | "path"> => ({ screen: ctx.label, ...ifDefined("path", ctx.path) });
   // "blocker" only with a BlockerCode — the overloads make any other blocker a compile error.
@@ -349,30 +462,11 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       extra || {}
     ));
   }
+  return add;
+}
 
-  const binding: Record<AuditCategory, [number, number]> = { color: [0, 0], typography: [0, 0], spacing: [0, 0], radius: [0, 0], effects: [0, 0] };
-  const tally = (cat: AuditCategory, bound: boolean): void => { binding[cat][1]++; if (bound) binding[cat][0]++; };
-  const rawColors = new Map<string, { count: number; nodeId: string; nodeName: string; rgb: Rgba }>(); // hex -> { count, sample node, channels }
-  const usedComponents = new Map<string, UsedComponent>(); // setKey|key|name -> { name, kind }
-  const stateHits: Record<ScreenStateKey, StateHit[]> = { loading: [], empty: [], error: [] };
-  const validationHits: StateHit[] = [];
-  let inputsSeen = 0; // visible input controls — whether a validation state applies at all
-  const annotations: AuditAnnotation[] = [];
-  const hiddenIds = new Set<string>(); // every node skipped by the hidden predicate — cross-file findings are filtered by it too
-  const nodesById = new Map<string, IrNode>(); // visible nodes, so a finding raised off-tree (a heavy asset) can cite one
-  // Prototype links out of this screen, one row per destination: the export has them, and a
-  // link copied along with a layer ("every row opens the Details screen") is invisible until clicked.
-  const navigations = new Map<string, NavRow>();
-  // Sublayer ids (I<inst>;<layer>) whose `characters` some instance overrides, the instances whose list hit
-  // the plugin's cap (incomplete), and every visible instance text that is not driven by a TEXT property.
-  const charOverridden = new Set<string>();
-  const cappedInstances = new Set<string>();
-  const instanceTexts: Array<{ node: IrNode; here: Here; inst: Ancestor }> = [];
-  // Failing control boundaries, one entry per screen + stroke + backdrop.
-  const boundaries = new Map<string, { nodes: IrNode[]; here: Here; stroke: string; backdrop: string; ratio: number; assumed: boolean; strokeToken?: string; backdropToken?: string; hasFill: boolean }>();
-  // Input instances that read like a select/picker ("Select …", a chevron/calendar layer).
-  const pickers: Array<{ node: IrNode; here: Here; useKey: string; cue: string }> = [];
-
+function walkRoots(ac: AuditCtx): void {
+  const { roots, add } = ac;
   for (const root of roots) {
     const m: Partial<Manifest> = root.manifest || {};
     if (m.truncated) add("blocker", "export-truncated", `export of '${root.label}' was truncated (${m.truncated} subtree(s) past the depth limit) — the tree is incomplete; re-export a narrower scope before building`, null, { label: root.label });
@@ -380,347 +474,354 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     if (root.tree.devStatus && root.tree.devStatus !== "ready_for_dev" && root.tree.devStatus !== "completed") {
       add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${String(root.tree.devStatus)}' — confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
     }
-    walk(root.tree, [], { label: root.label, ...ifDefined("rootBox", root.tree.box) });
+    walk(ac, root.tree, [], { label: root.label, ...ifDefined("rootBox", root.tree.box) });
+  }
+}
+
+function walk(ac: AuditCtx, node: IrNode | null | undefined, ancestors: Ancestor[], ctx: WalkCtx): void {
+  const { platform, grid, add, tally, annotations, stateHits, validationHits, cappedInstances, charOverridden, hiddenIds, nodesById, usedComponents, pickers, navigations, instanceTexts } = ac;
+  if (!node || typeof node !== "object") return;
+  const path = [...ancestors.map((a) => a.name), node.name].join(" > ");
+  const here: Here = { label: ctx.label, path };
+  // hidden.ts's one predicate: the node or any ancestor carries `hidden: true`.
+  const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
+
+  // Designer intent the agent must read, collected verbatim.
+  if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
+  if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
+
+  // Drawn states (a layer called "Loading" or a hidden "Error toast") — evidence the state was designed.
+  // Text is read only near the top for loading/error (a "Failed" status chip deep in a table row is data,
+  // not an error screen); an empty-state sentence is specific enough to count at any depth (a real
+  // one sat 7 levels down, inside the illustration's card).
+  for (const state of STATE_KEYS) {
+    const re = STATE_WORDS[state];
+    if (re.test(node.name || "") || (node.type === "TEXT" && (state === "empty" || ancestors.length <= 6) && re.test(node.text || ""))) {
+      stateHits[state].push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
+    }
+  }
+  // Validation evidence: error copy, or an input instance drawn in its error variant ("Status=Error").
+  const variantValues = variantValuesOf(node.mainComponent);
+  if ((node.type === "TEXT" && VALIDATION_WORDS.test(node.text || "")) || VALIDATION_WORDS.test(node.name || "")
+    || (isField(controlKind((node.mainComponent && node.mainComponent.setName) || node.component)) && variantValues.some((v) => STATE_SYNONYMS.error.test(v)))) {
+    validationHits.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
   }
 
-  function walk(node: IrNode | null | undefined, ancestors: Ancestor[], ctx: WalkCtx): void {
-    if (!node || typeof node !== "object") return;
-    const path = [...ancestors.map((a) => a.name), node.name].join(" > ");
-    const here: Here = { label: ctx.label, path };
-    // hidden.ts's one predicate: the node or any ancestor carries `hidden: true`.
-    const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
+  // An instance's `overrides` name the sublayers it changed (the plugin keeps the first OVERRIDE_CAP = 100 — a
+  // full list may be cut short, so its instance's texts are not judged). Read before the hidden branch returns.
+  if (Array.isArray(node.overrides)) {
+    if (node.overrides.length >= 100) cappedInstances.add(node.id);
+    for (const o of node.overrides) if (Array.isArray(o.fields) && o.fields.includes("characters")) charOverridden.add(o.id);
+  }
 
-    // Designer intent the agent must read, collected verbatim.
-    if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
-    if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
+  // A layer the designer switched off renders nothing, so nothing about it is a finding: the audit
+  // would hand a builder "use paddingTop=2 EXACTLY" for a hidden selected-state icon (44 of one
+  // screen's 119 findings cited hidden nodes). It is still WALKED, only for the two
+  // collections above: a hidden "Error toast" is evidence the error state was designed, and an
+  // annotation is designer intent wherever it sits. Token-binding tallies, component usage and every
+  // emitter below see visible layers only.
+  if (hiddenBranch) {
+    if (node.id) hiddenIds.add(node.id);
+    const self: Ancestor = { name: node.name, hidden: true, fills: [], __tappable: false, __beneath: [] };
+    for (const child of Array.isArray(node.children) ? node.children : []) walk(ac, child, [...ancestors, self], ctx);
+    return;
+  }
 
-    // Drawn states (a layer called "Loading" or a hidden "Error toast") — evidence the state was designed.
-    // Text is read only near the top for loading/error (a "Failed" status chip deep in a table row is data,
-    // not an error screen); an empty-state sentence is specific enough to count at any depth (a real
-    // one sat 7 levels down, inside the illustration's card).
-    for (const state of STATE_KEYS) {
-      const re = STATE_WORDS[state];
-      if (re.test(node.name || "") || (node.type === "TEXT" && (state === "empty" || ancestors.length <= 6) && re.test(node.text || ""))) {
-        stateHits[state].push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
+  if (node.id) nodesById.set(node.id, node);
+  // Component usage → state coverage later.
+  if (node.mainComponent || node.component) {
+    const mc: Partial<MainComponentRef> = node.mainComponent || {};
+    const name = mc.setName || node.component;
+    const key = mc.setKey || mc.key || name;
+    // An icon exported as an asset ("search-normal") is not a control; an "Icon Button" asset still is.
+    const icon = !!(node.asset || node.geometry || node.assetSkipped) && !CONTROL_WORD.test(String(name || ""));
+    if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), ...ifDefined("variantKey", mc.key), remote: !!mc.remote, nodeId: node.id, ...(icon ? { icon: true as const } : {}) });
+    // A search box or a filter on a list page has no validation state to ask about.
+    if (!icon && isField(controlKind(name)) && !/\b(search|filter)/i.test(String(name || ""))) ac.inputsSeen++;
+    // Real selects are generic input instances — the only tell is a "Select …" prompt or a chevron/calendar.
+    if (!icon && node.type === "INSTANCE" && key && controlKind(name) === "input" && !/\b(search|filter)/i.test(String(name || ""))
+      && !ancestors.some((a) => a.id !== undefined && pickers.some((p) => p.node.id === a.id))) {
+      const cue = pickerCue(node);
+      if (cue) pickers.push({ node, here, useKey: key, cue });
+    }
+  }
+  for (const r of Array.isArray(node.reactions) ? node.reactions : []) {
+    for (const a of Array.isArray(r.actions) ? r.actions : []) {
+      // A move to another screen/overlay. `change_to` is a variant swap (hover/pressed), `scroll_to` stays put.
+      if (a.type !== "node" || !(a.destination || a.destinationId) || a.navigation === "change_to" || a.navigation === "scroll_to") continue;
+      const nav = a.navigation || "navigate";
+      const id = nav + "|" + (a.destinationId || a.destination); // two frames can share a name
+      const row = navigations.get(id);
+      if (row) row.count++;
+      else navigations.set(id, { destination: a.destination, destinationId: a.destinationId, navigation: nav, count: 1, node, label: ctx.label });
+    }
+  }
+  if (node.detachedFrom) add("warning", "detached-instance", `'${node.name}' is a detached component instance — map it back to the component unless the detach was deliberate`, node, here);
+  if (node.missingFont) add("blocker", "missing-font", `'${node.name}' uses a font Figma couldn't load — the recorded family/weight may not match the render; confirm the font files and license`, node, here);
+  if (node.layout && node.layout.mode === "absolute" && Array.isArray(node.children) && node.children.length > 1 && node.type !== "GROUP" && ancestors.length > 0) {
+    add("info", "no-auto-layout", `'${node.name}' has no auto layout (${node.children.length} children placed by coordinates) — infer a flow layout and ask how it should resize`, node, here);
+  }
+
+  // The export can state a box.h that its own layout.padding +
+  // children's box.h cannot produce (the real case: header padding [16,32,16,32] with a 24-high
+  // text child declares box.h=44, but 16+24+16=56 — content genuinely overflows a FIXED box).
+  // The check must not fire on ordinary auto-layout: a FIXED-height row (heightMode absent/"fixed")
+  // whose children are simply SHORTER than the box (e.g. a 40-high sidebar row, padding [0,4,0,12],
+  // a 24-high icon centred in it) is normal — content fitting inside a fixed box is not a
+  // contradiction. The export's own sizing-mode field (figma-plugin/src/serialize.ts:
+  // layoutSizingVertical -> node.heightMode, default "fixed", also "hug"/"fill") tells the two
+  // cases apart: a FIXED/FILL box only contradicts itself when content OVERFLOWS it; a HUG box's
+  // declared size is supposed to equal the content exactly, so any mismatch (over OR under) is a
+  // contradiction (the table row 20173:142081 is heightMode:"hug", declares 48, computes 56).
+  // Only children that take part in the flow add height. A hidden child renders
+  // nothing and takes no space (Figma skips it in auto layout), and an `absolute: true` child
+  // (layoutPositioning ABSOLUTE) is placed over the flow, not in it — counting either makes a hug row
+  // with a hidden 24px child "compute 56, not 48" and a dialog with an absolute close icon "318, not 270".
+  const flow = Array.isArray(node.children) ? node.children.filter((c) => c && !hiddenSelf(c) && !c.absolute) : [];
+  if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && flow.length) {
+    const [padTop, , padBottom] = node.layout.padding;
+    const kids = flow.filter((c): c is IrNode & { box: Box } => !!(c.box && typeof c.box.h === "number"));
+    // (length 4 above, so both pads are set; a missing one would have made expectedH NaN and reported nothing)
+    if (kids.length === flow.length && padTop !== undefined && padBottom !== undefined) {
+      const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
+      const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
+      let expectedH: number | null = null;
+      if (direction === "row") expectedH = padTop + padBottom + Math.max(...kids.map((c) => c.box.h));
+      else if (direction === "column") expectedH = padTop + padBottom + kids.reduce((s, c) => s + c.box.h, 0) + gap * (kids.length - 1);
+      const heightMode = node.heightMode || "fixed"; // absent = FIXED (the emitter's own default)
+      const delta = expectedH === null ? 0 : expectedH - node.box.h;
+      const overflow = expectedH !== null && delta > 1; // content genuinely does not fit a fixed/fill box
+      const hugMismatch = expectedH !== null && heightMode === "hug" && Math.abs(delta) > 1; // hug must equal content, either direction
+      // `expectedH !== null` is implied by both overflow and hugMismatch; spelling it out narrows the type
+      if (expectedH !== null && (overflow || hugMismatch)) {
+        const how = direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom);
+        const why = heightMode === "hug"
+          ? `heightMode:"hug" means this box's height IS the content height, but its own padding + children compute ${expectedH}, not the declared ${node.box.h}`
+          : `content (padding + children) computes ${expectedH}, which OVERFLOWS the declared box.h=${node.box.h} by ${delta}px`;
+        add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h} (heightMode:${JSON.stringify(heightMode)}) — ${why}: ${padTop}+${how}+${padBottom} = ${expectedH}. The export contradicts itself — decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH, heightMode });
       }
     }
-    // Validation evidence: error copy, or an input instance drawn in its error variant ("Status=Error").
-    const variantValues = variantValuesOf(node.mainComponent);
-    if ((node.type === "TEXT" && VALIDATION_WORDS.test(node.text || "")) || VALIDATION_WORDS.test(node.name || "")
-      || (isField(controlKind((node.mainComponent && node.mainComponent.setName) || node.component)) && variantValues.some((v) => STATE_SYNONYMS.error.test(v)))) {
-      validationHits.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
-    }
+  }
 
-    // An instance's `overrides` name the sublayers it changed (the plugin keeps the first OVERRIDE_CAP = 100 — a
-    // full list may be cut short, so its instance's texts are not judged). Read before the hidden branch returns.
-    if (Array.isArray(node.overrides)) {
-      if (node.overrides.length >= 100) cappedInstances.add(node.id);
-      for (const o of node.overrides) if (Array.isArray(o.fields) && o.fields.includes("characters")) charOverridden.add(o.id);
-    }
+  // ---- system chrome drawn into a mobile frame (top-level-ish only)
+  if (ancestors.length <= 2 && node.box && ctx.rootBox && platform !== "web") {
+    const label = `${node.name || ""} ${node.component || ""} ${(node.mainComponent && node.mainComponent.setName) || ""}`;
+    if (CHROME_TOP.test(label) && node.box.h <= 64) add("warning", "fake-status-bar", `'${node.name}' looks like a drawn status bar — don't build it; apply the system safe-area/status-bar inset instead`, node, here);
+    else if (CHROME_BOTTOM.test(label) && node.box.h <= 40) add("warning", "fake-home-indicator", `'${node.name}' looks like a drawn home indicator/gesture bar — use the bottom safe-area inset instead`, node, here);
+  }
 
-    // A layer the designer switched off renders nothing, so nothing about it is a finding: the audit
-    // would hand a builder "use paddingTop=2 EXACTLY" for a hidden selected-state icon (44 of one
-    // screen's 119 findings cited hidden nodes). It is still WALKED, only for the two
-    // collections above: a hidden "Error toast" is evidence the error state was designed, and an
-    // annotation is designer intent wherever it sits. Token-binding tallies, component usage and every
-    // emitter below see visible layers only.
-    if (hiddenBranch) {
-      if (node.id) hiddenIds.add(node.id);
-      const self: Ancestor = { name: node.name, hidden: true, fills: [], __tappable: false, __beneath: [] };
-      for (const child of Array.isArray(node.children) ? node.children : []) walk(child, [...ancestors, self], ctx);
-      return;
-    }
-
-    if (node.id) nodesById.set(node.id, node);
-    // Component usage → state coverage later.
-    if (node.mainComponent || node.component) {
-      const mc: Partial<MainComponentRef> = node.mainComponent || {};
-      const name = mc.setName || node.component;
-      const key = mc.setKey || mc.key || name;
-      // An icon exported as an asset ("search-normal") is not a control; an "Icon Button" asset still is.
-      const icon = !!(node.asset || node.geometry || node.assetSkipped) && !CONTROL_WORD.test(String(name || ""));
-      if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), ...ifDefined("variantKey", mc.key), remote: !!mc.remote, nodeId: node.id, ...(icon ? { icon: true as const } : {}) });
-      // A search box or a filter on a list page has no validation state to ask about.
-      if (!icon && isField(controlKind(name)) && !/\b(search|filter)/i.test(String(name || ""))) inputsSeen++;
-      // Real selects are generic input instances — the only tell is a "Select …" prompt or a chevron/calendar.
-      if (!icon && node.type === "INSTANCE" && key && controlKind(name) === "input" && !/\b(search|filter)/i.test(String(name || ""))
-        && !ancestors.some((a) => a.id !== undefined && pickers.some((p) => p.node.id === a.id))) {
-        const cue = pickerCue(node);
-        if (cue) pickers.push({ node, here, useKey: key, cue });
-      }
-    }
-    for (const r of Array.isArray(node.reactions) ? node.reactions : []) {
-      for (const a of Array.isArray(r.actions) ? r.actions : []) {
-        // A move to another screen/overlay. `change_to` is a variant swap (hover/pressed), `scroll_to` stays put.
-        if (a.type !== "node" || !(a.destination || a.destinationId) || a.navigation === "change_to" || a.navigation === "scroll_to") continue;
-        const nav = a.navigation || "navigate";
-        const id = nav + "|" + (a.destinationId || a.destination); // two frames can share a name
-        const row = navigations.get(id);
-        if (row) row.count++;
-        else navigations.set(id, { destination: a.destination, destinationId: a.destinationId, navigation: nav, count: 1, node, label: ctx.label });
-      }
-    }
-    if (node.detachedFrom) add("warning", "detached-instance", `'${node.name}' is a detached component instance — map it back to the component unless the detach was deliberate`, node, here);
-    if (node.missingFont) add("blocker", "missing-font", `'${node.name}' uses a font Figma couldn't load — the recorded family/weight may not match the render; confirm the font files and license`, node, here);
-    if (node.layout && node.layout.mode === "absolute" && Array.isArray(node.children) && node.children.length > 1 && node.type !== "GROUP" && ancestors.length > 0) {
-      add("info", "no-auto-layout", `'${node.name}' has no auto layout (${node.children.length} children placed by coordinates) — infer a flow layout and ask how it should resize`, node, here);
-    }
-
-    // The export can state a box.h that its own layout.padding +
-    // children's box.h cannot produce (the real case: header padding [16,32,16,32] with a 24-high
-    // text child declares box.h=44, but 16+24+16=56 — content genuinely overflows a FIXED box).
-    // The check must not fire on ordinary auto-layout: a FIXED-height row (heightMode absent/"fixed")
-    // whose children are simply SHORTER than the box (e.g. a 40-high sidebar row, padding [0,4,0,12],
-    // a 24-high icon centred in it) is normal — content fitting inside a fixed box is not a
-    // contradiction. The export's own sizing-mode field (figma-plugin/src/serialize.ts:
-    // layoutSizingVertical -> node.heightMode, default "fixed", also "hug"/"fill") tells the two
-    // cases apart: a FIXED/FILL box only contradicts itself when content OVERFLOWS it; a HUG box's
-    // declared size is supposed to equal the content exactly, so any mismatch (over OR under) is a
-    // contradiction (the table row 20173:142081 is heightMode:"hug", declares 48, computes 56).
-    // Only children that take part in the flow add height. A hidden child renders
-    // nothing and takes no space (Figma skips it in auto layout), and an `absolute: true` child
-    // (layoutPositioning ABSOLUTE) is placed over the flow, not in it — counting either makes a hug row
-    // with a hidden 24px child "compute 56, not 48" and a dialog with an absolute close icon "318, not 270".
-    const flow = Array.isArray(node.children) ? node.children.filter((c) => c && !hiddenSelf(c) && !c.absolute) : [];
-    if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && flow.length) {
-      const [padTop, , padBottom] = node.layout.padding;
-      const kids = flow.filter((c): c is IrNode & { box: Box } => !!(c.box && typeof c.box.h === "number"));
-      // (length 4 above, so both pads are set; a missing one would have made expectedH NaN and reported nothing)
-      if (kids.length === flow.length && padTop !== undefined && padBottom !== undefined) {
-        const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
-        const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
-        let expectedH: number | null = null;
-        if (direction === "row") expectedH = padTop + padBottom + Math.max(...kids.map((c) => c.box.h));
-        else if (direction === "column") expectedH = padTop + padBottom + kids.reduce((s, c) => s + c.box.h, 0) + gap * (kids.length - 1);
-        const heightMode = node.heightMode || "fixed"; // absent = FIXED (the emitter's own default)
-        const delta = expectedH === null ? 0 : expectedH - node.box.h;
-        const overflow = expectedH !== null && delta > 1; // content genuinely does not fit a fixed/fill box
-        const hugMismatch = expectedH !== null && heightMode === "hug" && Math.abs(delta) > 1; // hug must equal content, either direction
-        // `expectedH !== null` is implied by both overflow and hugMismatch; spelling it out narrows the type
-        if (expectedH !== null && (overflow || hugMismatch)) {
-          const how = direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom);
-          const why = heightMode === "hug"
-            ? `heightMode:"hug" means this box's height IS the content height, but its own padding + children compute ${expectedH}, not the declared ${node.box.h}`
-            : `content (padding + children) computes ${expectedH}, which OVERFLOWS the declared box.h=${node.box.h} by ${delta}px`;
-          add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h} (heightMode:${JSON.stringify(heightMode)}) — ${why}: ${padTop}+${how}+${padBottom} = ${expectedH}. The export contradicts itself — decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH, heightMode });
-        }
-      }
-    }
-
-    // ---- system chrome drawn into a mobile frame (top-level-ish only)
-    if (ancestors.length <= 2 && node.box && ctx.rootBox && platform !== "web") {
-      const label = `${node.name || ""} ${node.component || ""} ${(node.mainComponent && node.mainComponent.setName) || ""}`;
-      if (CHROME_TOP.test(label) && node.box.h <= 64) add("warning", "fake-status-bar", `'${node.name}' looks like a drawn status bar — don't build it; apply the system safe-area/status-bar inset instead`, node, here);
-      else if (CHROME_BOTTOM.test(label) && node.box.h <= 40) add("warning", "fake-home-indicator", `'${node.name}' looks like a drawn home indicator/gesture bar — use the bottom safe-area inset instead`, node, here);
-    }
-
-    // ---- colors: fills, strokes, text
-    const isAssetLeaf = !!(node.asset || node.geometry);
-    // A TEXT node's `fills` ARE its glyph color — already counted via font.color below.
-    if (!isAssetLeaf && node.type !== "TEXT" && Array.isArray(node.fills)) {
-      for (const f of node.fills) {
-        if (f.type === "solid") {
-          const bound = !!(f.tokens || hasTok(node, "fills") || (node.styles && node.styles.fill));
-          tally("color", bound);
-          if (!bound) noteRaw(f.color, node);
-        }
-        if (f.type === "gradient" && /DIAMOND/.test(f.kind || "") && platform !== "flutter") add("info", "diamond-gradient", `'${node.name}' uses a diamond gradient — no native equivalent; use the exported asset or approximate`, node, here);
-        if (f.type === "image" && (f.scaleMode === "crop" || f.scaleMode === "tile")) add("info", "image-scale-mode", `'${node.name}' image fill uses scaleMode '${f.scaleMode}' — not a plain cover/contain; read the crop transform / tile scale`, node, here);
-      }
-    }
-    if (!isAssetLeaf && node.strokes && (node.strokes.align === "outside" || node.strokes.align === "center") && (node.strokes.weight || node.strokes.weights)) {
-      const how: Record<AuditPlatform, string> = { web: "a CSS border is inside the box — use outline/box-shadow (no layout) or grow the box", ios: "SwiftUI .strokeBorder is inside, .stroke is centered — pad an overlay for outside", android: "Modifier.border draws inside — compensate with padding or drawBehind", "react-native": "borderWidth is inside — wrap or add padding", flutter: "use BorderSide.strokeAlign outside/center" };
-      add("info", "stroke-align", `'${node.name}' has a ${node.strokes.align} stroke — ${how[platform]}; the rendered size differs from box`, node, here);
-    }
-    if (!isAssetLeaf && node.strokes && Array.isArray(node.strokes.colors)) {
-      for (const c of node.strokes.colors) {
-        const bound = !!(hasTok(node, "strokes") || (node.styles && node.styles.stroke) || (node.strokes.paints || []).some((p) => p.tokens));
+  // ---- colors: fills, strokes, text
+  const isAssetLeaf = !!(node.asset || node.geometry);
+  // A TEXT node's `fills` ARE its glyph color — already counted via font.color below.
+  if (!isAssetLeaf && node.type !== "TEXT" && Array.isArray(node.fills)) {
+    for (const f of node.fills) {
+      if (f.type === "solid") {
+        const bound = !!(f.tokens || hasTok(node, "fills") || (node.styles && node.styles.fill));
         tally("color", bound);
-        if (!bound) noteRaw(c, node);
+        if (!bound) noteRaw(ac, f.color, node);
       }
-      // a LINE is a divider, not a control's boundary (cross-check's token-pair table skips it too)
-      if (node.type !== "TEXT" && node.type !== "LINE") boundaryCheck(node, ancestors, here);
+      if (f.type === "gradient" && /DIAMOND/.test(f.kind || "") && platform !== "flutter") add("info", "diamond-gradient", `'${node.name}' uses a diamond gradient — no native equivalent; use the exported asset or approximate`, node, here);
+      if (f.type === "image" && (f.scaleMode === "crop" || f.scaleMode === "tile")) add("info", "image-scale-mode", `'${node.name}' image fill uses scaleMode '${f.scaleMode}' — not a plain cover/contain; read the crop transform / tile scale`, node, here);
     }
-    if (node.type === "TEXT") {
-      const runs: RunLike[] = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ ...ifDefined("font", node.font), ...ifDefined("tokens", node.textTokens), ...ifDefined("textStyle", node.styles && node.styles.text) }];
-      for (const r of runs) {
-        const typoBound = !!(r.textStyle || (node.styles && node.styles.text) || (r.tokens && (r.tokens.fontSize || r.tokens.fontFamily || r.tokens.lineHeight)) || (node.textTokens && (node.textTokens.fontSize || node.textTokens.fontFamily)));
-        tally("typography", typoBound);
-        if (r.font && r.font.color) {
-          const cBound = !!((r.tokens && r.tokens.fills) || r.fillStyle || (node.textTokens && node.textTokens.fills) || hasTok(node, "fills") || (node.styles && node.styles.fill));
-          tally("color", cBound);
-          if (!cBound) noteRaw(r.font.color, node);
-        }
-      }
-      if (!hiddenBranch) textChecks(node, ancestors, here);
-      // A text a TEXT property drives (`propRefs.characters`) is never reported as a `characters` override,
-      // so only the others can be judged; an instance whose override list was capped says nothing either way.
-      const inst = [...ancestors].reverse().find((a) => a.type === "INSTANCE");
-      if (inst && !(node.propRefs && node.propRefs.characters) && (node.text || "").trim() && !ancestors.some((a) => a.id !== undefined && cappedInstances.has(a.id))) {
-        instanceTexts.push({ node, here, inst });
-      }
+  }
+  if (!isAssetLeaf && node.strokes && (node.strokes.align === "outside" || node.strokes.align === "center") && (node.strokes.weight || node.strokes.weights)) {
+    const how: Record<AuditPlatform, string> = { web: "a CSS border is inside the box — use outline/box-shadow (no layout) or grow the box", ios: "SwiftUI .strokeBorder is inside, .stroke is centered — pad an overlay for outside", android: "Modifier.border draws inside — compensate with padding or drawBehind", "react-native": "borderWidth is inside — wrap or add padding", flutter: "use BorderSide.strokeAlign outside/center" };
+    add("info", "stroke-align", `'${node.name}' has a ${node.strokes.align} stroke — ${how[platform]}; the rendered size differs from box`, node, here);
+  }
+  if (!isAssetLeaf && node.strokes && Array.isArray(node.strokes.colors)) {
+    for (const c of node.strokes.colors) {
+      const bound = !!(hasTok(node, "strokes") || (node.styles && node.styles.stroke) || (node.strokes.paints || []).some((p) => p.tokens));
+      tally("color", bound);
+      if (!bound) noteRaw(ac, c, node);
     }
-
-    // ---- spacing / radius
-    // An asset leaf is one exported image; the padding/gap an older export inferred for it is the inset baked into
-    // the file, not spacing to build — never tallied, never off-grid (assetSkipped true|"hidden" are leaves too).
-    if (node.layout && !isAssetLeaf && !node.assetSkipped) {
-      const L = node.layout;
-      const spacing: Array<[string, number, boolean]> = [];
-      if (typeof L.gap === "number") spacing.push(["gap", L.gap, hasTok(node, "itemSpacing")]);
-      if (typeof L.rowGap === "number") spacing.push(["rowGap", L.rowGap, hasTok(node, "counterAxisSpacing")]);
-      if (typeof L.columnGap === "number") spacing.push(["columnGap", L.columnGap, hasTok(node, "gridColumnGap")]);
-      if (Array.isArray(L.padding)) {
-        const pad = L.padding;
-        ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].forEach((k, j) => { if (pad[j]) spacing.push([k, pad[j], hasTok(node, k)]); });
-      }
-      const offGrid: string[] = [];
-      for (const [k, v, bound] of spacing) {
-        tally("spacing", bound);
-        if (v < 0) add("info", "negative-spacing", `'${node.name}' ${k} is ${v} (overlap) — Compose Arrangement.spacedBy rejects negatives; use offset/overlay`, node, here);
-        else if (!bound && (v % grid !== 0 || !Number.isInteger(v))) offGrid.push(`${k}=${v}`);
-      }
-      // The wording is never "snap to the nearest token": that would contradict build-screen's rule 5,
-      // which forbids resolving a value to an approximately-matching token (silent hardcoding by
-      // proxy). The audit reports the DESIGN problem; fixing it is a change to the Figma file or a
-      // new token, never a rounding the build performs on its own.
-      if (offGrid.length) add("info", "off-grid-spacing", `'${node.name}' has unbound spacing off the ${grid}px grid (${offGrid.join(", ")}) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid`, node, here);
-    }
-    if (node.radius != null) {
-      const vals = typeof node.radius === "number" ? [node.radius] : Object.values(node.radius);
-      const bound = hasTok(node, "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius");
-      vals.forEach(() => tally("radius", bound));
-      if (node.cornerSmoothing && (platform === "android" || platform === "web" || platform === "react-native")) {
-        add("info", "corner-smoothing", `'${node.name}' uses corner smoothing ${node.cornerSmoothing} (squircle) — ${platform} has no native continuous corners; plain radius or a custom shape`, node, here);
+    // a LINE is a divider, not a control's boundary (cross-check's token-pair table skips it too)
+    if (node.type !== "TEXT" && node.type !== "LINE") boundaryCheck(ac, node, ancestors, here);
+  }
+  if (node.type === "TEXT") {
+    const runs: RunLike[] = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ ...ifDefined("font", node.font), ...ifDefined("tokens", node.textTokens), ...ifDefined("textStyle", node.styles && node.styles.text) }];
+    for (const r of runs) {
+      const typoBound = !!(r.textStyle || (node.styles && node.styles.text) || (r.tokens && (r.tokens.fontSize || r.tokens.fontFamily || r.tokens.lineHeight)) || (node.textTokens && (node.textTokens.fontSize || node.textTokens.fontFamily)));
+      tally("typography", typoBound);
+      if (r.font && r.font.color) {
+        const cBound = !!((r.tokens && r.tokens.fills) || r.fillStyle || (node.textTokens && node.textTokens.fills) || hasTok(node, "fills") || (node.styles && node.styles.fill));
+        tally("color", cBound);
+        if (!cBound) noteRaw(ac, r.font.color, node);
       }
     }
-
-    // ---- effects
-    if (Array.isArray(node.effects)) {
-      for (const e of node.effects) {
-        tally("effects", !!(e.tokens || (node.styles && node.styles.effect)));
-        if ((e.type === "drop_shadow" || e.type === "inner_shadow") && e.spread && (platform === "ios" || platform === "android")) {
-          add("info", "shadow-spread", `'${node.name}' shadow has spread ${e.spread} — ${platform === "ios" ? "SwiftUI .shadow/CALayer have no spread (use shadowPath or a padded shape)" : "Modifier.shadow can't express it (use Compose 1.9+ Modifier.dropShadow)"}`, node, here);
-        }
-        if (e.type === "background_blur" && (platform === "android" || platform === "react-native")) add("info", "background-blur", `'${node.name}' uses a background blur — ${platform === "android" ? "no backdrop blur below API 31 / needs window blur or a library" : "needs expo-blur or a native blur view"}`, node, here);
-        if ("blurType" in e && e.blurType === "progressive") add("info", "progressive-blur", `'${node.name}' uses a progressive blur — no direct equivalent on any platform; mask a blur with a gradient or use the asset`, node, here);
-        if (["noise", "glass", "texture", "shader"].includes(e.type)) add("info", "exotic-effect", `'${node.name}' uses a '${e.type}' effect — no code equivalent; rasterize via the exported asset if it's load-bearing`, node, here);
-      }
-    }
-    if (node.blendMode && (platform === "android" || platform === "react-native")) add("info", "blend-mode", `'${node.name}' uses blend mode '${node.blendMode}' — limited support on ${platform}; flag or bake into an asset`, node, here);
-
-    // ---- touch targets
-    const tappable = !hiddenBranch && isTappable(node);
-    if (tappable && node.box && !ancestors.some((a) => a.__tappable)) {
-      const min = TOUCH_MIN[platform];
-      if (node.box.w < min || node.box.h < min) {
-        add("warning", "small-touch-target", `'${node.name}' is ${node.box.w}×${node.box.h} — below the ${min}×${min} ${platform} minimum; expand the hit area (padding/hitSlop/contentShape) even if the visual stays small`, node, here, { size: { w: node.box.w, h: node.box.h }, min });
-      }
-    }
-
-    if (Array.isArray(node.children)) {
-      // In a parent that doesn't flow its children (no auto layout), earlier siblings paint BENEATH
-      // later ones — a caption laid over a photo gets its backdrop from a sibling, not an ancestor.
-      const stacks = !node.layout || node.layout.mode === "absolute";
-      const earlier: Layer[] = [];
-      // Only what descendants read off an ancestor. The walk is synchronous and nothing keeps
-      // `ancestors`, so `self` is reused — `__beneath` is set per child before that child is walked.
-      const self: Ancestor = { name: node.name, id: node.id, type: node.type, ...ifDefined("mainComponent", node.mainComponent), ...ifDefined("component", node.component), ...ifDefined("props", node.props), ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: [] };
-      const chain = [...ancestors, self];
-      for (const child of node.children) {
-        self.__beneath = stacks || child.absolute ? earlier.filter((l) => overlaps(l.box, child.box)).flatMap((l) => l.fills) : [];
-        walk(child, chain, ctx);
-        // A TEXT sibling's `fills` are its GLYPH colour and an icon's are its ink — neither paints a
-        // backdrop. Counting them would make the 2nd and 3rd of three stacked white header labels "white on white, 1:1". A
-        // SHAPE the plugin also exports as an asset (an ELLIPSE avatar disc, a photo RECTANGLE) still does.
-        if (!hiddenSelf(child) && child.type !== "TEXT" && !isIconInk(child) && Array.isArray(child.fills) && child.fills.length) {
-          earlier.push({ fills: child.fills, ...ifDefined("box", child.box) });
-        }
-      }
+    if (!hiddenBranch) textChecks(ac, node, ancestors, here);
+    // A text a TEXT property drives (`propRefs.characters`) is never reported as a `characters` override,
+    // so only the others can be judged; an instance whose override list was capped says nothing either way.
+    const inst = [...ancestors].reverse().find((a) => a.type === "INSTANCE");
+    if (inst && !(node.propRefs && node.propRefs.characters) && (node.text || "").trim() && !ancestors.some((a) => a.id !== undefined && cappedInstances.has(a.id))) {
+      instanceTexts.push({ node, here, inst });
     }
   }
 
-  function isTappable(node: IrNode): boolean {
-    if (Array.isArray(node.reactions) && node.reactions.some((r) => TAP_TRIGGER.test(r.trigger || ""))) return true;
-    const compName = (node.mainComponent && node.mainComponent.setName) || node.component || "";
-    if (node.type === "INSTANCE" && controlKind(compName)) return true;
-    return (node.type === "INSTANCE" || node.type === "FRAME" || node.type === "COMPONENT") && INTERACTIVE_NAME.test(node.name || "") && !/\b(group|container|list|bar|section|row)s?\b/i.test(node.name || "");
-  }
-
-  function noteRaw(hex: unknown, node: IrNode): void {
-    const h = String(hex || "").toLowerCase();
-    const rgb = parseHex(h);
-    if (!rgb) return;
-    const e = rawColors.get(h) || { count: 0, nodeId: node.id, nodeName: node.name, rgb };
-    e.count++;
-    rawColors.set(h, e);
-  }
-
-  function textChecks(node: IrNode, ancestors: Ancestor[], here: Here): void {
-    const font: FontSpec = node.font || {};
-    // Fixed text box: no autoResize means Figma's "fixed size" — it will clip once text grows
-    // (localization +30–40%, Dynamic Type / font scale up to 200–310%).
-    if (!node.autoResize && !node.truncate && !node.maxLines) {
-      add("warning", "fixed-size-text", `${cite(node)} is a fixed-size text box with no truncation rule — it will clip under font scaling or longer translations; decide wrap / truncate / grow`, node, here, textExtra(node));
+  // ---- spacing / radius
+  // An asset leaf is one exported image; the padding/gap an older export inferred for it is the inset baked into
+  // the file, not spacing to build — never tallied, never off-grid (assetSkipped true|"hidden" are leaves too).
+  if (node.layout && !isAssetLeaf && !node.assetSkipped) {
+    const L = node.layout;
+    const spacing: Array<[string, number, boolean]> = [];
+    if (typeof L.gap === "number") spacing.push(["gap", L.gap, hasTok(node, "itemSpacing")]);
+    if (typeof L.rowGap === "number") spacing.push(["rowGap", L.rowGap, hasTok(node, "counterAxisSpacing")]);
+    if (typeof L.columnGap === "number") spacing.push(["columnGap", L.columnGap, hasTok(node, "gridColumnGap")]);
+    if (Array.isArray(L.padding)) {
+      const pad = L.padding;
+      ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].forEach((k, j) => { if (pad[j]) spacing.push([k, pad[j], hasTok(node, k)]); });
     }
-    // Contrast against the composited ancestor background.
-    const fg = parseHex(font.color);
-    if (!fg) return;
-    const { bg, complex } = backdropOf(ancestors);
-    const size = typeof font.size === "number" ? font.size : null;
-    const bold = (font.weightValue || 0) >= 700 || /bold|black|heavy/i.test(font.weight || "");
-    const large = size != null && (size >= 24 || (size >= 18.66 && bold));
-    const need = large ? 3 : 4.5;
-    if (complex) { add("info", "contrast-manual", `${cite(node)} sits on a gradient/image — check text contrast manually (needs ${need}:1)`, node, here, textExtra(node)); return; }
-    const assumed = !bg;
-    const base = bg || WHITE;
-    const ratio = contrastRatio(over(fg, base), base);
-    if (ratio < need) {
-      add(assumed ? "info" : "warning", "low-contrast", `${cite(node)} text contrast ${r1(ratio)}:1 is below WCAG AA ${need}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need, ...textExtra(node) });
+    const offGrid: string[] = [];
+    for (const [k, v, bound] of spacing) {
+      tally("spacing", bound);
+      if (v < 0) add("info", "negative-spacing", `'${node.name}' ${k} is ${v} (overlap) — Compose Arrangement.spacedBy rejects negatives; use offset/overlay`, node, here);
+      else if (!bound && (v % grid !== 0 || !Number.isInteger(v))) offGrid.push(`${k}=${v}`);
+    }
+    // The wording is never "snap to the nearest token": that would contradict build-screen's rule 5,
+    // which forbids resolving a value to an approximately-matching token (silent hardcoding by
+    // proxy). The audit reports the DESIGN problem; fixing it is a change to the Figma file or a
+    // new token, never a rounding the build performs on its own.
+    if (offGrid.length) add("info", "off-grid-spacing", `'${node.name}' has unbound spacing off the ${grid}px grid (${offGrid.join(", ")}) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid`, node, here);
+  }
+  if (node.radius != null) {
+    const vals = typeof node.radius === "number" ? [node.radius] : Object.values(node.radius);
+    const bound = hasTok(node, "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius");
+    vals.forEach(() => tally("radius", bound));
+    if (node.cornerSmoothing && (platform === "android" || platform === "web" || platform === "react-native")) {
+      add("info", "corner-smoothing", `'${node.name}' uses corner smoothing ${node.cornerSmoothing} (squircle) — ${platform} has no native continuous corners; plain radius or a custom shape`, node, here);
     }
   }
 
-  // WCAG 1.4.11 asks 3:1 between a control's visual boundary and the colour ADJACENT to it — the colour
-  // around the control, not its own inside (W3C Understanding 1.4.11: a white-inside input with a dark border on
-  // a white page is judged border vs page). So: a stroked layer that is (or sits within 3 levels of) an input,
-  // select or toggle, its stroke over the backdrop vs the backdrop. The backdrop is what lies ABOVE the control's
-  // outermost layer in that window — kits put the fill on the instance and the border on an inner frame, and the
-  // control's own fill is never the adjacent colour. The fills from that layer down to the stroked one reaching 3:1
-  // against the backdrop already mark the boundary (no finding); visible text inside does not. A disabled variant
-  // is exempt (inactive components are). A gradient/image backdrop is not judged (contrast-manual covers text only);
-  // a fully transparent stroke paints nothing (no border to measure).
-  function boundaryCheck(node: IrNode, ancestors: Ancestor[], here: Here): void {
-    const strokes = node.strokes;
-    const hex = strokes && Array.isArray(strokes.colors) ? strokes.colors.find((c) => { const x = parseHex(c); return !!x && x.a > 0; }) : undefined;
-    const sc = parseHex(hex);
-    const weight = strokes ? Math.max(strokes.weight || 0, ...Object.values(strokes.weights || {}).map((w) => w || 0)) : 0;
-    if (!sc || !(weight > 0) || hex === undefined) return;
-    const near: Array<IrNode | Ancestor> = [node, ...ancestors.slice(-3).reverse()];
-    const outer = outermostControl(near);
-    if (outer < 0 || near.some((a) => isDisabledLayer(a))) return;
-    // near[outer] is ancestors[ancestors.length - outer] (outer 0 = the stroked layer itself)
-    const outside = ancestors.slice(0, ancestors.length - outer), inside = ancestors.slice(ancestors.length - outer);
-    const back = backdropOf(outside);
-    if (back.complex) return;
-    const base = back.bg || WHITE;
-    const ratio = contrastRatio(over(sc, base), base);
-    if (ratio >= 3) return;
-    let inner: Rgba | null = null;
-    for (const f of [...inside.flatMap((a) => [...(Array.isArray(a.fills) ? a.fills : []), ...(a.__beneath || [])]), ...(Array.isArray(node.fills) ? node.fills : [])]) {
-      const c = f.type === "solid" ? parseHex(f.color) : null;
-      if (c) inner = over(c, inner || base);
+  // ---- effects
+  if (Array.isArray(node.effects)) {
+    for (const e of node.effects) {
+      tally("effects", !!(e.tokens || (node.styles && node.styles.effect)));
+      if ((e.type === "drop_shadow" || e.type === "inner_shadow") && e.spread && (platform === "ios" || platform === "android")) {
+        add("info", "shadow-spread", `'${node.name}' shadow has spread ${e.spread} — ${platform === "ios" ? "SwiftUI .shadow/CALayer have no spread (use shadowPath or a padded shape)" : "Modifier.shadow can't express it (use Compose 1.9+ Modifier.dropShadow)"}`, node, here);
+      }
+      if (e.type === "background_blur" && (platform === "android" || platform === "react-native")) add("info", "background-blur", `'${node.name}' uses a background blur — ${platform === "android" ? "no backdrop blur below API 31 / needs window blur or a library" : "needs expo-blur or a native blur view"}`, node, here);
+      if ("blurType" in e && e.blurType === "progressive") add("info", "progressive-blur", `'${node.name}' uses a progressive blur — no direct equivalent on any platform; mask a blur with a gradient or use the asset`, node, here);
+      if (["noise", "glass", "texture", "shader"].includes(e.type)) add("info", "exotic-effect", `'${node.name}' uses a '${e.type}' effect — no code equivalent; rasterize via the exported asset if it's load-bearing`, node, here);
     }
-    if (inner && contrastRatio(inner, base) >= 3) return;
-    const stroke = normHex(hex) ?? hex, backdrop = formatHex(base), assumed = !back.bg;
-    const k = `${here.label}|${stroke}|${backdrop}|${assumed}`;
-    const row = boundaries.get(k);
-    if (row) { row.nodes.push(node); return; }
-    const st = node.tokens && node.tokens.strokes;
-    const strokeToken = Array.isArray(st) ? st[0] : st;
-    boundaries.set(k, { nodes: [node], here, stroke, backdrop, ratio, assumed, hasFill: !!inner, ...ifDefined("strokeToken", strokeToken), ...ifDefined("backdropToken", assumed ? undefined : back.token) });
+  }
+  if (node.blendMode && (platform === "android" || platform === "react-native")) add("info", "blend-mode", `'${node.name}' uses blend mode '${node.blendMode}' — limited support on ${platform}; flag or bake into an asset`, node, here);
+
+  // ---- touch targets
+  const tappable = !hiddenBranch && isTappable(node);
+  if (tappable && node.box && !ancestors.some((a) => a.__tappable)) {
+    const min = TOUCH_MIN[platform];
+    if (node.box.w < min || node.box.h < min) {
+      add("warning", "small-touch-target", `'${node.name}' is ${node.box.w}×${node.box.h} — below the ${min}×${min} ${platform} minimum; expand the hit area (padding/hitSlop/contentShape) even if the visual stays small`, node, here, { size: { w: node.box.w, h: node.box.h }, min });
+    }
   }
 
-  // ---- near-duplicate raw colors (likely one token typed twice)
+  if (Array.isArray(node.children)) {
+    // In a parent that doesn't flow its children (no auto layout), earlier siblings paint BENEATH
+    // later ones — a caption laid over a photo gets its backdrop from a sibling, not an ancestor.
+    const stacks = !node.layout || node.layout.mode === "absolute";
+    const earlier: Layer[] = [];
+    // Only what descendants read off an ancestor. The walk is synchronous and nothing keeps
+    // `ancestors`, so `self` is reused — `__beneath` is set per child before that child is walked.
+    const self: Ancestor = { name: node.name, id: node.id, type: node.type, ...ifDefined("mainComponent", node.mainComponent), ...ifDefined("component", node.component), ...ifDefined("props", node.props), ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: [] };
+    const chain = [...ancestors, self];
+    for (const child of node.children) {
+      self.__beneath = stacks || child.absolute ? earlier.filter((l) => overlaps(l.box, child.box)).flatMap((l) => l.fills) : [];
+      walk(ac, child, chain, ctx);
+      // A TEXT sibling's `fills` are its GLYPH colour and an icon's are its ink — neither paints a
+      // backdrop. Counting them would make the 2nd and 3rd of three stacked white header labels "white on white, 1:1". A
+      // SHAPE the plugin also exports as an asset (an ELLIPSE avatar disc, a photo RECTANGLE) still does.
+      if (!hiddenSelf(child) && child.type !== "TEXT" && !isIconInk(child) && Array.isArray(child.fills) && child.fills.length) {
+        earlier.push({ fills: child.fills, ...ifDefined("box", child.box) });
+      }
+    }
+  }
+}
+
+function isTappable(node: IrNode): boolean {
+  if (Array.isArray(node.reactions) && node.reactions.some((r) => TAP_TRIGGER.test(r.trigger || ""))) return true;
+  const compName = (node.mainComponent && node.mainComponent.setName) || node.component || "";
+  if (node.type === "INSTANCE" && controlKind(compName)) return true;
+  return (node.type === "INSTANCE" || node.type === "FRAME" || node.type === "COMPONENT") && INTERACTIVE_NAME.test(node.name || "") && !/\b(group|container|list|bar|section|row)s?\b/i.test(node.name || "");
+}
+
+function noteRaw(ac: AuditCtx, hex: unknown, node: IrNode): void {
+  const { rawColors } = ac;
+  const h = String(hex || "").toLowerCase();
+  const rgb = parseHex(h);
+  if (!rgb) return;
+  const e = rawColors.get(h) || { count: 0, nodeId: node.id, nodeName: node.name, rgb };
+  e.count++;
+  rawColors.set(h, e);
+}
+
+function textChecks(ac: AuditCtx, node: IrNode, ancestors: Ancestor[], here: Here): void {
+  const { add } = ac;
+  const font: FontSpec = node.font || {};
+  // Fixed text box: no autoResize means Figma's "fixed size" — it will clip once text grows
+  // (localization +30–40%, Dynamic Type / font scale up to 200–310%).
+  if (!node.autoResize && !node.truncate && !node.maxLines) {
+    add("warning", "fixed-size-text", `${cite(node)} is a fixed-size text box with no truncation rule — it will clip under font scaling or longer translations; decide wrap / truncate / grow`, node, here, textExtra(node));
+  }
+  // Contrast against the composited ancestor background.
+  const fg = parseHex(font.color);
+  if (!fg) return;
+  const { bg, complex } = backdropOf(ancestors);
+  const size = typeof font.size === "number" ? font.size : null;
+  const bold = (font.weightValue || 0) >= 700 || /bold|black|heavy/i.test(font.weight || "");
+  const large = size != null && (size >= 24 || (size >= 18.66 && bold));
+  const need = large ? 3 : 4.5;
+  if (complex) { add("info", "contrast-manual", `${cite(node)} sits on a gradient/image — check text contrast manually (needs ${need}:1)`, node, here, textExtra(node)); return; }
+  const assumed = !bg;
+  const base = bg || WHITE;
+  const ratio = contrastRatio(over(fg, base), base);
+  if (ratio < need) {
+    add(assumed ? "info" : "warning", "low-contrast", `${cite(node)} text contrast ${r1(ratio)}:1 is below WCAG AA ${need}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need, ...textExtra(node) });
+  }
+}
+
+// WCAG 1.4.11 asks 3:1 between a control's visual boundary and the colour ADJACENT to it — the colour
+// around the control, not its own inside (W3C Understanding 1.4.11: a white-inside input with a dark border on
+// a white page is judged border vs page). So: a stroked layer that is (or sits within 3 levels of) an input,
+// select or toggle, its stroke over the backdrop vs the backdrop. The backdrop is what lies ABOVE the control's
+// outermost layer in that window — kits put the fill on the instance and the border on an inner frame, and the
+// control's own fill is never the adjacent colour. The fills from that layer down to the stroked one reaching 3:1
+// against the backdrop already mark the boundary (no finding); visible text inside does not. A disabled variant
+// is exempt (inactive components are). A gradient/image backdrop is not judged (contrast-manual covers text only);
+// a fully transparent stroke paints nothing (no border to measure).
+function boundaryCheck(ac: AuditCtx, node: IrNode, ancestors: Ancestor[], here: Here): void {
+  const { boundaries } = ac;
+  const strokes = node.strokes;
+  const hex = strokes && Array.isArray(strokes.colors) ? strokes.colors.find((c) => { const x = parseHex(c); return !!x && x.a > 0; }) : undefined;
+  const sc = parseHex(hex);
+  const weight = strokes ? Math.max(strokes.weight || 0, ...Object.values(strokes.weights || {}).map((w) => w || 0)) : 0;
+  if (!sc || !(weight > 0) || hex === undefined) return;
+  const near: Array<IrNode | Ancestor> = [node, ...ancestors.slice(-3).reverse()];
+  const outer = outermostControl(near);
+  if (outer < 0 || near.some((a) => isDisabledLayer(a))) return;
+  // near[outer] is ancestors[ancestors.length - outer] (outer 0 = the stroked layer itself)
+  const outside = ancestors.slice(0, ancestors.length - outer), inside = ancestors.slice(ancestors.length - outer);
+  const back = backdropOf(outside);
+  if (back.complex) return;
+  const base = back.bg || WHITE;
+  const ratio = contrastRatio(over(sc, base), base);
+  if (ratio >= 3) return;
+  let inner: Rgba | null = null;
+  for (const f of [...inside.flatMap((a) => [...(Array.isArray(a.fills) ? a.fills : []), ...(a.__beneath || [])]), ...(Array.isArray(node.fills) ? node.fills : [])]) {
+    const c = f.type === "solid" ? parseHex(f.color) : null;
+    if (c) inner = over(c, inner || base);
+  }
+  if (inner && contrastRatio(inner, base) >= 3) return;
+  const stroke = normHex(hex) ?? hex, backdrop = formatHex(base), assumed = !back.bg;
+  const k = `${here.label}|${stroke}|${backdrop}|${assumed}`;
+  const row = boundaries.get(k);
+  if (row) { row.nodes.push(node); return; }
+  const st = node.tokens && node.tokens.strokes;
+  const strokeToken = Array.isArray(st) ? st[0] : st;
+  boundaries.set(k, { nodes: [node], here, stroke, backdrop, ratio, assumed, hasFill: !!inner, ...ifDefined("strokeToken", strokeToken), ...ifDefined("backdropToken", assumed ? undefined : back.token) });
+}
+
+// ---- near-duplicate raw colors (likely one token typed twice)
+function nearDuplicateColors(ac: AuditCtx): Array<RawColor & { hex: string }> {
+  const { rawColors, add } = ac;
   const raws = [...rawColors.entries()].map(([hex, e]) => ({ hex, ...e })).filter((x) => x.rgb.a >= 1);
   const labs = raws.map((x) => ({ x, lab: toLab(x.rgb) })); // once per color, not once per pair
   const seen = new Set<string>();
@@ -732,11 +833,15 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     }
     if (cluster.length > 1) add("info", "near-duplicate-colors", `unbound colors ${cluster.map((c) => `${c.hex}×${c.count}`).join(", ")} are visually indistinguishable (ΔE<3) — probably one token`, null, null, { colors: cluster.map((c) => c.hex) });
   }
+  return raws;
+}
 
-  // ---- an unbound colour a hair off a token's value — a typo of the token, or a deliberate value. Token values:
-  // every COLOR variable's raw hex in every mode, from the variables union, the design system's tokens and each
-  // screen's own slice (an alias adds no value: its target is a row of its own). ΔE < 1 is below what an eye
-  // tells apart; an EXACT match is a different question (unbound, but the token's value) and is not raised here.
+// ---- an unbound colour a hair off a token's value — a typo of the token, or a deliberate value. Token values:
+// every COLOR variable's raw hex in every mode, from the variables union, the design system's tokens and each
+// screen's own slice (an alias adds no value: its target is a row of its own). ΔE < 1 is below what an eye
+// tells apart; an EXACT match is a different question (unbound, but the token's value) and is not raised here.
+function nearTokenColors(ac: AuditCtx, raws: Array<RawColor & { hex: string }>): string[] {
+  const { opts, docs, nodesById, add } = ac;
   const tokenColors = new Map<string, { name: string; hex: string; rgb: Rgba }>(); // colorKey -> first token with that value
   for (const doc of [opts.variables, opts.designSystem && opts.designSystem.tokens, ...docs.map((d) => d.vars)]) {
     for (const v of (doc && doc.variables) || []) {
@@ -759,8 +864,12 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     add("info", "near-token-color", `unbound '${x.hex}' ×${x.count} (e.g. '${x.nodeName}') is ΔE ${bestD.toFixed(2)} from token '${best.name}' (${best.hex}) — a typo of the token, or a deliberate value? Use the literal exactly until the designer answers`, sample, null, { token: best.name, colors: [x.hex, best.hex] });
     nearToken.push(`'${x.hex}' (e.g. '${x.nodeName}' ${x.nodeId}) vs token '${best.name}' ${best.hex}`);
   }
+  return nearToken;
+}
 
-  // ---- one finding per stroke/backdrop pair per screen (the same input border repeats on every field)
+// ---- one finding per stroke/backdrop pair per screen (the same input border repeats on every field)
+function nonTextContrast(ac: AuditCtx): void {
+  const { boundaries, add } = ac;
   for (const b of boundaries.values()) {
     const [first, ...more] = b.nodes;
     if (!first) continue;
@@ -769,10 +878,13 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         `below the 3:1 WCAG 1.4.11 asks of a control's boundary, and ${b.hasFill ? "its fill does not set it apart either" : "it has no fill to set it apart"}. Build it to pass (a border or fill that reaches 3:1) and ask the designer — a contrast failure is never kept as designed`,
       first, b.here, { nodeIds: b.nodes.map((n) => n.id), stroke: b.stroke, backdrop: b.backdrop, ...ifDefined("strokeToken", b.strokeToken), ...ifDefined("backdropToken", b.backdropToken), ratio: r1(b.ratio), required: 3 });
   }
+}
 
-  // ---- one component's text layer, its own copy on some instances and the component's default on others. Same
-  // component (variant key) + the same layer (the id's last segment); the default members must also differ from
-  // every overridden copy (a default that equals one is a real value). Same-screen groups only.
+// ---- one component's text layer, its own copy on some instances and the component's default on others. Same
+// component (variant key) + the same layer (the id's last segment); the default members must also differ from
+// every overridden copy (a default that equals one is a real value). Same-screen groups only.
+function defaultCopyInInstances(ac: AuditCtx): string[] {
+  const { instanceTexts, charOverridden, add } = ac;
   const copyGroups = new Map<string, { inst: Ancestor; overridden: Array<{ node: IrNode; here: Here }>; plain: Array<{ node: IrNode; here: Here }> }>();
   for (const t of instanceTexts) {
     const mc: Partial<MainComponentRef> = t.inst.mainComponent || {};
@@ -795,11 +907,15 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       first.node, first.here, { nodeIds: plain.map((m) => m.node.id), copies: { default: (first.node.text || "").trim(), overridden: own } });
     copyQuestions.push(`'${comp}' > '${first.node.name}' (${first.node.id}) still says "${dflt}" (the component's default) where other instances say "${eg}" — is "${dflt}" the intended copy, or a placeholder? → Default: build "${dflt}" as drawn.`);
   }
+  return copyQuestions;
+}
 
-  // ---- a stray copy laid over the frame — a visible `absolute` direct child of a root whose visible texts and
-  // rounded size equal an IN-FLOW visible node of the same tree that is not inside it (the field case: a footer pasted
-  // over a page that already ends in the same footer). Root-level copies only, and only a sizeable one — two texts
-  // or more, or at least half the root's width: a pinned "Save" button beside the form's own is a deliberate copy.
+// ---- a stray copy laid over the frame — a visible `absolute` direct child of a root whose visible texts and
+// rounded size equal an IN-FLOW visible node of the same tree that is not inside it (the field case: a footer pasted
+// over a page that already ends in the same footer). Root-level copies only, and only a sizeable one — two texts
+// or more, or at least half the root's width: a pinned "Save" button beside the form's own is a deliberate copy.
+function duplicateRootSubtrees(ac: AuditCtx): void {
+  const { roots, add } = ac;
   for (const root of roots) {
     const strays = (Array.isArray(root.tree.children) ? root.tree.children : []).filter((c) => c && c.absolute && !hiddenSelf(c));
     if (!strays.length || hiddenSelf(root.tree)) continue;
@@ -833,44 +949,48 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         stray, { label: root.label, path: `${root.tree.name} > ${stray.name}` }, { twinId: twin.node.id });
     }
   }
+}
 
-  // ---- component state coverage
-  // The check reads every catalog the run has, not only `--catalog`: with `--design-system` alone it would have
-  // nothing to look states up in, mark every control "not in the catalog" in a table note, and raise no finding —
-  // a file whose whole library lacked a pressed state would audit clean. The sources, most authoritative first: --catalog, the design system's own catalog (components.local.json, or a
-  // library dir's components.json), each --as-library export beside it (its FULL definitions), and last
-  // components.library.json — sampled from instances, so it knows only the states some screen uses.
-  // Name matching is the weak half: a library can hold several rows under one name (a bare COMPONENT
-  // beside two COMPONENT_SETs), and an auto-discovered library may be unrelated to this screen. So a KEY
-  // match in a full catalog wins; a discovered library is name-matched only when it shares a variable
-  // collection with the screen — or, when either side's keys are unknown, only if the sampled catalog has
-  // no key match for the set; and among same-name rows, the ones with variants are read together.
-  interface StateCatalog { label: string; components: CatalogComponent[]; byName: boolean; unproven?: boolean }
+// ---- component state coverage
+// The check reads every catalog the run has, not only `--catalog`: with `--design-system` alone it would have
+// nothing to look states up in, mark every control "not in the catalog" in a table note, and raise no finding —
+// a file whose whole library lacked a pressed state would audit clean. The sources, most authoritative first: --catalog, the design system's own catalog (components.local.json, or a
+// library dir's components.json), each --as-library export beside it (its FULL definitions), and last
+// components.library.json — sampled from instances, so it knows only the states some screen uses.
+// Name matching is the weak half: a library can hold several rows under one name (a bare COMPONENT
+// beside two COMPONENT_SETs), and an auto-discovered library may be unrelated to this screen. So a KEY
+// match in a full catalog wins; a discovered library is name-matched only when it shares a variable
+// collection with the screen — or, when either side's keys are unknown, only if the sampled catalog has
+// no key match for the set; and among same-name rows, the ones with variants are read together.
+interface StateCatalog { label: string; components: CatalogComponent[]; byName: boolean; unproven?: boolean }
+interface StateDef { def: CatalogComponent; values: Array<string | boolean>; label: string; matchedBy: "key" | "name"; sampled: boolean }
+const valuesOf = (c: CatalogComponent): Array<string | boolean> => {
+  const values: Array<string | boolean> = [];
+  for (const p of Object.values(c.props || {})) {
+    // A sampled row lists the values SEEN (`observed`), a definition the option list (`options`).
+    if (p.type === "VARIANT") values.push(...(Array.isArray(p.options) ? p.options : Array.isArray(p.observed) ? p.observed : []));
+    if (p.type === "BOOLEAN") values.push(String(p.key || "").split("#")[0] ?? ""); // ?? "": split() always returns at least one piece, so it never applies
+  }
+  // A sampled variant row also names its own combination ("Type=Primary, Status=Hover").
+  if (c.variant) for (const part of c.variant.split(",")) { const v = part.split("=")[1]; if (v) values.push(v.trim()); }
+  return values;
+};
+const isSampled = (c: CatalogComponent): boolean => !!(c.remote || c.derivedFrom === "instances");
+const sameDir = (a: string, b: string | undefined): boolean => b !== undefined && path.resolve(a) === path.resolve(b);
+interface StateLookup { screenCollKeys: Set<string>; fullCatalogs: StateCatalog[]; sampledCatalog: CatalogComponent[]; stateDefOf: (u: UsedComponent) => StateDef | null }
+function stateLookup(ac: AuditCtx): StateLookup {
+  const { opts, docs, catalog } = ac;
   const screenCollKeys = new Set(docs.flatMap((d) => ((d.vars && d.vars.collections) || []).map((c) => c.key)).filter((k): k is string => !!k));
   const fullCatalogs: StateCatalog[] = [];
   if (catalog.length) fullCatalogs.push({ label: "--catalog", components: catalog, byName: true });
   const dsCatalog = opts.designSystem && opts.designSystem.components;
   if (dsCatalog && dsCatalog !== opts.catalog && Array.isArray(dsCatalog.components)) fullCatalogs.push({ label: opts.designSystemDir || "the design system", components: dsCatalog.components, byName: true });
-  const sameDir = (a: string, b: string | undefined): boolean => b !== undefined && path.resolve(a) === path.resolve(b);
   for (const lib of opts.libraries || []) {
     if (!lib.components || sameDir(lib.rel, opts.designSystemDir)) continue;
     const unknown = !screenCollKeys.size || !lib.collectionKeys.length;
     fullCatalogs.push({ label: lib.rel, components: lib.components.components, byName: unknown || lib.collectionKeys.some((k) => screenCollKeys.has(k)), unproven: unknown });
   }
   const sampledCatalog: CatalogComponent[] = (opts.designSystem && opts.designSystem.componentsLibrary && opts.designSystem.componentsLibrary.components) || [];
-  interface StateDef { def: CatalogComponent; values: Array<string | boolean>; label: string; matchedBy: "key" | "name"; sampled: boolean }
-  const valuesOf = (c: CatalogComponent): Array<string | boolean> => {
-    const values: Array<string | boolean> = [];
-    for (const p of Object.values(c.props || {})) {
-      // A sampled row lists the values SEEN (`observed`), a definition the option list (`options`).
-      if (p.type === "VARIANT") values.push(...(Array.isArray(p.options) ? p.options : Array.isArray(p.observed) ? p.observed : []));
-      if (p.type === "BOOLEAN") values.push(String(p.key || "").split("#")[0] ?? ""); // ?? "": split() always returns at least one piece, so it never applies
-    }
-    // A sampled variant row also names its own combination ("Type=Primary, Status=Hover").
-    if (c.variant) for (const part of c.variant.split(",")) { const v = part.split("=")[1]; if (v) values.push(v.trim()); }
-    return values;
-  };
-  const isSampled = (c: CatalogComponent): boolean => !!(c.remote || c.derivedFrom === "instances");
   const hasVariants = (c: CatalogComponent): boolean => !!c.variant || Object.values(c.props || {}).some((p) => p.type === "VARIANT");
   // Several rows under one name: read the ones with variants together; say how many were merged.
   const merged = (rows: CatalogComponent[], label: string, matchedBy: "key" | "name", sampled: boolean): StateDef | null => {
@@ -902,6 +1022,12 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     }
     return sampledDef || (u.name === undefined ? null : merged(sampledCatalog.filter((c) => c.name === u.name), "components.library.json", "name", true));
   }
+  return { screenCollKeys, fullCatalogs, sampledCatalog, stateDefOf };
+}
+
+function componentStates(ac: AuditCtx, lookup: StateLookup): { components: AuditComponentRow[]; unchecked: string[] } {
+  const { platform, catalog, usedComponents, add } = ac;
+  const { fullCatalogs, sampledCatalog, stateDefOf } = lookup;
   const components: AuditComponentRow[] = [];
   const unchecked: string[] = [];
   const candidates: Array<{ use: UsedComponent; found: StateDef | null }> = usedComponents.size
@@ -936,9 +1062,15 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         `. Missing hover/pressed/focus/disabled designs are invisible here: pass the catalog that defines them (a library export: --design-system <export>/libraries/<dir>), or ask the designer`,
       null, null, { controls: unchecked });
   }
-  // An input instance that reads like a select/picker, unless its component's variants already draw it open.
-  // One finding per component + cue on a screen (three "Select date" fields are one question).
-  const openStates = new Map<string, { node: IrNode; here: Here; cue: string; nodes: string[] }>();
+  return { components, unchecked };
+}
+
+// An input instance that reads like a select/picker, unless its component's variants already draw it open.
+// One finding per component + cue on a screen (three "Select date" fields are one question).
+function undesignedOpenStates(ac: AuditCtx, lookup: StateLookup): Map<string, OpenState> {
+  const { pickers, usedComponents, add } = ac;
+  const { stateDefOf } = lookup;
+  const openStates = new Map<string, OpenState>();
   for (const p of pickers) {
     const u = usedComponents.get(p.useKey);
     const def = u ? stateDefOf(u) : null;
@@ -952,12 +1084,16 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     add("info", "undesigned-open-state", `'${o.node.name}'${o.nodes.length > 1 ? ` (×${o.nodes.length})` : ""} (${o.cue}) reads like a select/picker; no open state (list/calendar) is drawn — ask, or extract the frame that draws it`,
       o.node, o.here, { nodeIds: o.nodes });
   }
+  return openStates;
+}
 
-  // ---- screen-level states: what was drawn vs what must be asked
-  // "not-found" is a statement about the FRAMES THAT WERE AUDITED, not about the Figma file. Audit
-  // one frame and every state but the drawn one is "not-found" by construction — which read as "the
-  // designer forgot these" and needed a human to reinterpret (live run #9). The count of roots is
-  // the missing context, so it ships with the verdict instead of being inferred from it.
+// ---- screen-level states: what was drawn vs what must be asked
+// "not-found" is a statement about the FRAMES THAT WERE AUDITED, not about the Figma file. Audit
+// one frame and every state but the drawn one is "not-found" by construction — which read as "the
+// designer forgot these" and needed a human to reinterpret (live run #9). The count of roots is
+// the missing context, so it ships with the verdict instead of being inferred from it.
+function screenStatesOf(ac: AuditCtx): { allDialogs: boolean; screenStates: AuditScreenStates; screenStatesScope: AuditReport["screenStatesScope"] } {
+  const { roots, stateHits, validationHits, inputsSeen } = ac;
   const stateOf = (s: ScreenStateKey): ScreenStateValue => stateHits[s].length ? "designed" : "not-found";
   // A dialog has no data list, so its "empty" question is noise; a screen with inputs has a
   // validation state nobody asked about. Dialog = every audited root is named like one.
@@ -969,9 +1105,13 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     ...(inputsSeen ? { validation: validationHits.length ? "designed" as const : "not-found" as const } : {}),
   };
   const screenStatesScope = { rootsAudited: roots.length, singleFrame: roots.length === 1 };
+  return { allDialogs, screenStates, screenStatesScope };
+}
 
-  // ---- heavy assets (<Screen>.assets.json `heavy`) — the pull warns once on stderr; the audit is what
-  // the build reads (a 2.4 MB, 1523-path illustration must reach the report).
+// ---- heavy assets (<Screen>.assets.json `heavy`) — the pull warns once on stderr; the audit is what
+// the build reads (a 2.4 MB, 1523-path illustration must reach the report).
+function heavyAssets(ac: AuditCtx): void {
+  const { docs, hiddenIds, nodesById, add } = ac;
   for (const d of docs) {
     const a = d.assets;
     if (!a || !Array.isArray(a.heavy)) continue;
@@ -989,11 +1129,14 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       add("info", "heavy-asset", msg, node || null, { label }, { file: h.file, bytes: h.bytes, ...ifDefined("paths", h.paths), ...ifDefined("embeddedRaster", h.embeddedRaster) });
     }
   }
+}
 
-  // ---- prototype links — one info per destination, so a reader can spot one that doesn't belong
-  // With the export's index beside the screen, each destination is looked up: exported when a row of the root
-  // index or of any page index names it, or it is drawn inside this tree. A dialog the screen OPENS (overlay/swap)
-  // and nobody exported leaves the builder nothing to build it from — one warning per screen names them all.
+// ---- prototype links — one info per destination, so a reader can spot one that doesn't belong
+// With the export's index beside the screen, each destination is looked up: exported when a row of the root
+// index or of any page index names it, or it is drawn inside this tree. A dialog the screen OPENS (overlay/swap)
+// and nobody exported leaves the builder nothing to build it from — one warning per screen names them all.
+function prototypeLinks(ac: AuditCtx): void {
+  const { opts, navigations, nodesById, hiddenIds, add } = ac;
   const nb = opts.neighbours;
   const exportedIds = nb ? nb.exportedIds ?? new Set(nb.layers.map((l) => l.id)) : null;
   const shotIds = new Set((nb && nb.unexportedShots) || []);
@@ -1018,15 +1161,26 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         `A frame nested in a SECTION or another frame has no index row of its own: search design/export/pages for the id before pulling`,
       first ? first.n.node : null, { label }, { ids: rows.map((r) => r.id) });
   }
+}
 
+function tokenBindingOf(ac: AuditCtx): AuditReport["tokenBinding"] {
+  const { binding, add } = ac;
   const bindingOf = (k: AuditCategory): { bound: number; total: number; pct: number | null } => { const [b, t] = binding[k]; return { bound: b, total: t, pct: t ? Math.round((b / t) * 100) : null }; };
   const tokenBinding: AuditReport["tokenBinding"] = { color: bindingOf("color"), typography: bindingOf("typography"), spacing: bindingOf("spacing"), radius: bindingOf("radius"), effects: bindingOf("effects") };
   for (const k of AUDIT_CATEGORIES) {
     const v = tokenBinding[k];
     if (v.total >= 5 && v.pct !== null && v.pct < 50) add("warning", "low-token-binding", `only ${v.pct}% of ${k} values are bound to tokens/styles (${v.bound}/${v.total}) — expect to carry raw values through EXACTLY and report each as unbound; do not snap them to the nearest token`, null, null, { category: k });
   }
+  return tokenBinding;
+}
 
-  // ---- questions the export cannot answer (always asked; the skill trims ones already answered)
+interface QuestionInputs {
+  allDialogs: boolean; screenStates: AuditScreenStates; unchecked: string[]; components: AuditComponentRow[];
+  copyQuestions: string[]; openStates: Map<string, OpenState>; nearToken: string[];
+}
+// ---- questions the export cannot answer (always asked; the skill trims ones already answered)
+function openQuestions(ac: AuditCtx, { allDialogs, screenStates, unchecked, components, copyQuestions, openStates, nearToken }: QuestionInputs): string[] {
+  const { opts, roots, findings, add } = ac;
   const questions: string[] = [];
   const STATE_QUESTION: Record<ScreenStateKey, string> = {
     loading: allDialogs ? "what shows while the dialog's action runs (disabled buttons, spinner, can it be dismissed)?" : "what shows while data loads (skeleton vs spinner, delay before showing)?",
@@ -1090,13 +1244,17 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     questions.push(`${list.join(", ")} read${list.length === 1 ? "s" : ""} like a select/picker with no open state drawn — what does the open list (or calendar) look like: the platform's native picker, or a designed one (which frame)? → Default: the platform's native control, styled with the field's tokens.`);
   }
   if (nearToken.length) questions.push(`Unbound colour${nearToken.length === 1 ? "" : "s"} a hair off a token — ${nearToken.join("; ")}: a typo of the token, or deliberate? → Default: the literal exactly as drawn, flagged.`);
+  return questions;
+}
 
-  // ---- the cross-FILE pass
-  // Everything above reasons inside one screen's own JSON, which is how an audit once reported
-  // "96% of colors bound" on a screen whose tokens came from an entirely different library than the
-  // design system beside it. "Bound" means "resolves to some variable in its own file",
-  // never "matches what you exported" — and a reader can reasonably read it as the latter. The join lives
-  // in cross-check.ts; its findings are merged in here so one report answers both questions.
+// ---- the cross-FILE pass
+// Everything above reasons inside one screen's own JSON, which is how an audit once reported
+// "96% of colors bound" on a screen whose tokens came from an entirely different library than the
+// design system beside it. "Bound" means "resolves to some variable in its own file",
+// never "matches what you exported" — and a reader can reasonably read it as the latter. The join lives
+// in cross-check.ts; its findings are merged in here so one report answers both questions.
+function crossFilePass(ac: AuditCtx): { crossFile: AuditCrossFile; crossOrigin: Map<AuditFinding, AuditCrossFile["findings"][number]>; hiddenFindingsOmitted: number } {
+  const { opts, docs, hiddenIds, findings } = ac;
   let crossFile: AuditCrossFile;
   const crossOrigin = new Map<AuditFinding, AuditCrossFile["findings"][number]>(); // merged copy -> crossFile's own finding
   let hiddenFindingsOmitted = 0;
@@ -1142,11 +1300,15 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       inputs: {},
     };
   }
+  return { crossFile, crossOrigin, hiddenFindingsOmitted };
+}
 
-  // A --as-library export beside the design system is where the screen's library tokens and full
-  // component definitions usually are, and nothing pointed at it. Its components already feed the state
-  // check above; checking tokens against it changes what the cross-file pass compares, so that stays the
-  // caller's choice — named here with the command, and with how much of this screen it covers by key.
+// A --as-library export beside the design system is where the screen's library tokens and full
+// component definitions usually are, and nothing pointed at it. Its components already feed the state
+// check above; checking tokens against it changes what the cross-file pass compares, so that stays the
+// caller's choice — named here with the command, and with how much of this screen it covers by key.
+function libraryNotes(ac: AuditCtx, crossFile: AuditCrossFile, screenCollKeys: Set<string>): void {
+  const { opts } = ac;
   for (const lib of opts.libraries || []) {
     if (sameDir(lib.rel, opts.designSystemDir)) continue;
     const shared = lib.collectionKeys.filter((k) => screenCollKeys.has(k)).length;
@@ -1156,14 +1318,17 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         `. Its components.json ${lib.components ? "WAS" : "could not be"} read for the component-state check. To check tokens, text styles and components against it, re-run with --design-system ${lib.rel}.`
     );
   }
+}
 
-  // A severity the user changed after review is recorded in <out>.overrides.json and
-  // applied HERE, so the .json (what plan-skeleton and the Stop hook gate on) and the .md say the same
-  // thing (a hand edit of the .md alone would leave the dismissed blocker gating the build).
-  // Rules: an entry must NAME its finding when the finding has a node/token/component
-  // (a bare `{code}` would also silence tomorrow's new finding of that code); only a BLOCKER_CODES code can
-  // be raised to a blocker (the closed list); a blocker is downgraded only on a recorded
-  // decidedBy. A rule-breaking entry is not applied and is reported with why.
+// A severity the user changed after review is recorded in <out>.overrides.json and
+// applied HERE, so the .json (what plan-skeleton and the Stop hook gate on) and the .md say the same
+// thing (a hand edit of the .md alone would leave the dismissed blocker gating the build).
+// Rules: an entry must NAME its finding when the finding has a node/token/component
+// (a bare `{code}` would also silence tomorrow's new finding of that code); only a BLOCKER_CODES code can
+// be raised to a blocker (the closed list); a blocker is downgraded only on a recorded
+// decidedBy. A rule-breaking entry is not applied and is reported with why.
+function applyOverrides(ac: AuditCtx, crossFile: AuditCrossFile, crossOrigin: Map<AuditFinding, AuditCrossFile["findings"][number]>): Array<AuditOverride & { why: string }> {
+  const { opts, findings } = ac;
   const overridesUnmatched: Array<AuditOverride & { why: string }> = [];
   for (const o of opts.overrides || []) {
     const hits = findings.filter((f) => f.code === o.code && OVERRIDE_KEYS.every((k) => o[k] === undefined || f[k] === o[k]));
@@ -1188,6 +1353,11 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     const cf = crossFile.findings;
     crossFile.summary = { blockers: cf.filter((f) => f.severity === "blocker").length, warnings: cf.filter((f) => f.severity === "warning").length, info: cf.filter((f) => f.severity === "info").length };
   }
+  return overridesUnmatched;
+}
+
+function finishFindings(ac: AuditCtx, questions: string[]): void {
+  const { findings } = ac;
   // A cross-file warning with a default is a question to CONFIRM — unless the user already decided it.
   for (const f of findings) if (f.crossFile && f.confirm && !f.overridden) questions.push(`Confirm (${f.code}): ${f.confirm}`);
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
@@ -1201,30 +1371,6 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     findings[i] = { severity, code, id: f.crossFile && id ? id : ownIds[own] ?? code, ...rest };
     if (!f.crossFile) own++;
   });
-  const count = (s: Severity): number => findings.filter((f) => f.severity === s).length;
-  return {
-    platform,
-    platformAssumed,
-    crossFile,
-    grid,
-    gridAssumed,
-    gridMismatch,
-    screenStatesScope,
-    screens: roots.map((r) => r.label),
-    // The root node id(s) audited — additive, read only by the CLI's duplicate-artefact
-    // check: it lets a re-run find an EARLIER report for the same screen under a
-    // different name without re-parsing every screen export in the directory.
-    nodeIds: roots.map((r) => r.tree && r.tree.id).filter((id): id is string => !!id),
-    summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
-    hiddenLayers: { nodesSkipped: hiddenIds.size, crossFileFindingsOmitted: hiddenFindingsOmitted },
-    ...(overridesUnmatched.length ? { overridesUnmatched } : {}),
-    tokenBinding,
-    components,
-    screenStates,
-    annotations,
-    questions,
-    findings,
-  };
 }
 
 // ---------------------------------------------------------------- markdown report
