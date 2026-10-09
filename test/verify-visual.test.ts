@@ -98,15 +98,20 @@ console.log("[9] --expect: referenceImage from the index row (the scale belongs 
 {
   const e = expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: REF_PNG }) });
   const r = refOf(e);
-  safe("[9] referenceImage {usable, from:index, scale 1.4222, offset {-12,-12}, path design/export/<pointer>, png dims, sha256 of the PNG bytes}", () =>
-    !!r && r.usable === true && r.from === "index" && r.scale === 1.4222 && r.offset.x === -12 && r.offset.y === -12 && r.path === "design/export/" + REF
+  safe("[9] referenceImage {usable, from:index, scale s0 = 2048/1440 (the index's 1.4222 is it, rounded), offset {-12,-12}, path design/export/<pointer>, png dims, sha256 of the PNG bytes}", () =>
+    !!r && r.usable === true && r.from === "index" && r.scale === S0 && r.offset.x === -12 && r.offset.y === -12 && r.path === "design/export/" + REF
     && r.png.w === REF_W && r.png.h === REF_H && r.sha256 === sha(REF_PNG) && r.colorProfile === undefined);
   // crop: x = round(12·1.4222) = 17, y = 17, w = round(1440·1.4222) = 2048, h = round(720·1.4222) = 1024
   safe("[9] crop = the frame box inside the PNG in device px: {17, 17, 2048, 1024}", () =>
     !!r && r.usable === true && r.crop.x === 17 && r.crop.y === 17 && r.crop.w === 2048 && r.crop.h === 1024);
   const other = refOf(expect({ index: { layers: [indexRow({ reference: "assets/90_1_ref.png", referenceScale: 1.9, referenceOffset: { x: 0, y: 0 } })] }, readReference: reader({ [REF]: REF_PNG }) }));
   safe("[9] a row naming ANOTHER png (an earlier pull's) is not this reference's geometry → the export fallback, never its scale", () =>
-    !!other && other.usable === true && other.from === "export" && other.scale === 1.4221);
+    !!other && other.usable === true && other.from === "export" && other.scale === S0);
+  // the 4-decimal number is s0 up to its rounding, so it means s0; a PNG really rendered at another scale (inside the
+  // thumbnail slack) keeps the scale its row states
+  const at143 = refOf(expect({ index: { layers: [indexRow({ referenceScale: 1.43 })] }, readReference: reader({ [REF]: png(Math.round(1464 * 1.43), Math.round(744 * 1.43)) }) }));
+  safe("[9] a row stating 1.43 for a PNG rendered at 1.43 (off s0 by more than its rounding) is used as stated, not taken for s0", () =>
+    !!at143 && at143.usable === true && at143.from === "index" && at143.scale === 1.43);
   const otherFile = refOf(expect({ index: { layers: [indexRow({ sourceFile: "Another File", referenceScale: 1.9 })] }, readReference: reader({ [REF]: REF_PNG }) }));
   safe("[9] a row of another Figma file (sourceFile stamped on both, different) is not used", () => !!otherFile && otherFile.usable === true && otherFile.from === "export");
   safe("[9] the guard accepts it (isVerifyReferenceImage) and the expectation still reads back", () =>
@@ -120,8 +125,8 @@ console.log("[10] --expect: an export with no referenceScale — recomputed exac
 {
   const e = expect({ index: { layers: [noScaleRow()] }, readReference: reader({ [REF]: REF_PNG }) });
   const r = refOf(e);
-  safe("[10] from:export, scale round4(png.w / renderBox.w) = 1.4221, offset renderBox − box = {-12,-12}", () =>
-    !!r && r.usable === true && r.from === "export" && r.scale === Math.round((REF_W / 1464) * 10000) / 10000 && r.scale === 1.4221 && r.offset.x === -12 && r.offset.y === -12);
+  safe("[10] from:export, scale s0 (round4(png.w / renderBox.w) = 1.4221 is it, rounded), offset renderBox − box = {-12,-12}", () =>
+    !!r && r.usable === true && r.from === "export" && Math.round((REF_W / 1464) * 10000) / 10000 === 1.4221 && r.scale === S0 && r.offset.x === -12 && r.offset.y === -12);
   safe("[10] crop from the recomputed geometry {17, 17, 2048, 1024}", () => !!r && r.usable === true && r.crop.x === 17 && r.crop.y === 17 && r.crop.w === 2048 && r.crop.h === 1024);
   const noIndex = refOf(expect({ readReference: reader({ [REF]: REF_PNG }) }));
   safe("[10] no index at all → the same from:export geometry", () => !!noIndex && JSON.stringify(noIndex) === JSON.stringify(r));
@@ -134,8 +139,8 @@ console.log("[10] --expect: an export with no referenceScale — recomputed exac
     && pop.crop.x === 42 && pop.crop.y === 2 && pop.crop.w === 960 && pop.crop.h === 1176);
   const flat: NodeInput = without(FIRINGS, "renderBox");
   const flatRef = refOf(expect({ readReference: reader({ [REF]: png(2048, 1024) }) }, flat));
-  safe("[10] no renderBox → scale png.w / box.w, offset {0,0}, crop the whole PNG", () =>
-    !!flatRef && flatRef.usable === true && flatRef.scale === 1.4222 && flatRef.offset.x === 0 && flatRef.offset.y === 0 && flatRef.crop.x === 0 && flatRef.crop.w === 2048 && flatRef.crop.h === 1024);
+  safe("[10] no renderBox → scale png.w / box.w (s0), offset {0,0}, crop the whole PNG", () =>
+    !!flatRef && flatRef.usable === true && flatRef.scale === S0 && flatRef.offset.x === 0 && flatRef.offset.y === 0 && flatRef.crop.x === 0 && flatRef.crop.w === 2048 && flatRef.crop.h === 1024);
 }
 // the formula equals write-out's: a harness pull of the same screen writes the index row, and the fallback agrees with it
 {
@@ -153,9 +158,9 @@ console.log("[10] --expect: an export with no referenceScale — recomputed exac
   const pointer = row && row.reference ? row.reference : "";
   const fallback = refOf(expect({ readReference: (p) => (p === pointer ? fs.readFileSync(path.join(dir, ...p.split("/"))) : null) }, { ...FIRINGS, reference: pointer }));
   const fromIndex = refOf(expect({ index: { layers: row ? [row] : [] }, readReference: (p) => (p === pointer ? fs.readFileSync(path.join(dir, ...p.split("/"))) : null) }, { ...FIRINGS, reference: pointer }));
-  safe("[10] a harness pull (bridge write-out) writes referenceScale/referenceOffset; the export fallback computes the same numbers", () =>
-    !!row && typeof row.referenceScale === "number" && !!fallback && fallback.usable === true && fallback.from === "export"
-    && fallback.scale === row.referenceScale && fallback.offset.x === row.referenceOffset?.x && fallback.offset.y === row.referenceOffset?.y);
+  safe("[10] a harness pull (bridge write-out) writes referenceScale (round4(png.w / renderBox.w)) and referenceOffset; the export fallback resolves the same: s0 and that offset", () =>
+    !!row && row.referenceScale === Math.round((REF_W / 1464) * 10000) / 10000 && !!fallback && fallback.usable === true && fallback.from === "export"
+    && fallback.scale === S0 && fallback.offset.x === row.referenceOffset?.x && fallback.offset.y === row.referenceOffset?.y);
   safe("[10] …and --expect over that pull's index takes the row (from:index) with the same geometry", () =>
     !!fromIndex && !!fallback && fromIndex.usable === true && fallback.usable === true && fromIndex.from === "index" && fromIndex.scale === fallback.scale && JSON.stringify(fromIndex.crop) === JSON.stringify(fallback.crop));
   fs.rmSync(dir, { recursive: true, force: true });
