@@ -1,29 +1,14 @@
 // Per-run mutable state + id->name memo caches. esbuild bundles every module into one scope,
 // so these module-level singletons are genuinely shared across the extractor.
 
+import type { Asset, Manifest } from "../../bridge/src/doc-types.ts";
 import { errMsg } from "./util";
-import { beginRun, endRun, RunInfo } from "./progress";
+import { abandonedError, beginRun, endRun, isAbandonment, postQueued, requestAbandon, type RunInfo } from "./progress";
 import { resetAssetNames } from "./assets";
-import { readOptDefaults, ReadOptName } from "../../bridge/read-opts.js";
+import { readOptDefaults, type ReadOptName } from "../../bridge/src/read-opts.ts";
 
-export interface Asset {
-  id: string;
-  name: string;
-  format: string;
-  /** Basename this asset must be written as. The PRODUCER names the file (assets.ts) and the node
-   *  tree's `asset` path is built from the same string, so a consumer never re-derives the convention
-   *  — a mismatch here would silently point every `asset:` path at a file that isn't on disk. */
-  file: string;
-  base64?: string;
-  text?: string;
-  kind?: string;
-  /** Content hash of the bytes (assets.ts contentHash). Written into the per-screen asset index so a
-   *  consumer can see which files are byte-identical without diffing them. */
-  hash?: string;
-  /** Every node id that resolved to THIS file. Present only when more than one did — i.e. when the
-   *  same artwork was reached through several instance paths and deduped to one file. */
-  from?: string[];
-}
+/** One exported asset — doc-types' Asset, re-exported under the name every module here imports it by. */
+export type { Asset };
 
 export interface RunStats {
   nodes: number;
@@ -37,14 +22,19 @@ export interface RunStats {
   assetsSkippedInvisible: number;
   /** Real export failures that were RECOVERED as inline path geometry (see assets.ts geometryOf). */
   assetsGeometry: number;
+  /** Graphics that are hidden (the node or an ancestor `visible:false`) — never sent to exportAsync,
+   *  which returns no SVG for them; the node stays a leaf with `assetSkipped: "hidden"`. */
+  assetsHidden: number;
+  /** Nodes kept as hidden: `visible:false` themselves or anywhere under a hidden ancestor. */
+  hiddenNodes: number;
   truncated: number;
 }
 
 export const assets: Asset[] = []; // { id, name, format, file, base64/text }
 
-// Per-run read options, mutated by the collect entrypoints and read in serialize. The NAMES and their rationale live in bridge/read-opts.js — the ONE registry
-// shared with the CLI flag table and the MCP tool schema (esbuild inlines that dependency-free CJS
-// module into this bundle, the same way it inlines pages-layout.js). Adding an option there is what
+// Per-run read options, mutated by the collect entrypoints and read in serialize. The NAMES and their rationale live in bridge/src/read-opts.ts — the ONE registry
+// shared with the CLI flag table and the MCP tool schema (esbuild inlines that dependency-free
+// module into this bundle, the same way it inlines pages-layout.ts). Adding an option there is what
 // turns it on here; this file only owns the fact that the values are per-run mutable state.
 export const runOpts: Record<ReadOptName, boolean> = readOptDefaults();
 
@@ -58,15 +48,16 @@ export const imageSizeCache = new Map<string, Promise<{ w: number; h: number } |
 export let warnings: string[] = [];
 // ONE spelling of the zeroed counters — resetRun() uses the same factory, so adding a counter to
 // RunStats is one edit the compiler checks, not two literals that can silently drift apart.
-const newStats = (): RunStats => ({ nodes: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0, truncated: 0 });
+const newStats = (): RunStats => ({ nodes: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0,
+  assetsHidden: 0, hiddenNodes: 0, truncated: 0 });
 export let stats: RunStats = newStats();
 
 export function warn(msg: string): void {
   warnings.push(msg);
 }
 
-// PER-NODE warnings that recur — one per failed asset export, one per missing font — used to be pushed
-// individually. A real export produced 896 entries, ~800 of them the same two sentences with a
+// PER-NODE warnings that recur — one per failed asset export, one per missing font — are not pushed
+// individually: a real export that did so produced 896 entries, ~800 of them the same two sentences with a
 // different node name, which is not a diagnostics list an agent can read: the handful of one-off
 // warnings that actually needed attention were buried in it. Kinded warnings are COUNTED instead, and
 // manifest() emits ONE line per kind carrying the count plus a few examples. The manifest's shape is
@@ -108,7 +99,7 @@ const SKIP_ASSETS_NOTE = (n: number): string =>
 // The documented manifest shape (ARCHITECTURE.md / TESTING.md) is {nodes, skipped, truncated,
 // assetsFailed, warnings}. `skipped` is DERIVED, not counted: depth truncation is the only thing that
 // drops a node, so a second counter incremented at the same single site could only ever drift.
-export function manifest() {
+export function manifest(): Manifest {
   // Derived HERE rather than at each collect entrypoint: the warning belongs to every doc that carries
   // a manifest, and putting it at one call site (as it first was) meant a --no-assets SELECTION dropped
   // its assets silently — the exact never-silent break the counter exists to prevent.
@@ -123,7 +114,7 @@ export function manifest() {
   // an annotation" from "annotations were not exported" — and on a real export `codeSyntax`,
   // `annotations`, `devStatusNote` and `measurements` were all absent, which silently killed two of
   // build-screen's six hint tiers with nothing to say so. `reads` names exactly what was asked for,
-  // so an absent field is now an answerable question rather than an ambiguous one.
+  // so an absent field is an answerable question rather than an ambiguous one.
   const reads = Object.keys(runOpts).filter((k) => (runOpts as Record<string, boolean>)[k]);
   return { ...stats, skipped: stats.truncated, reads, warnings: note ? all.concat(note) : all };
 }
@@ -132,24 +123,25 @@ export function manifest() {
 // the same handful of variable/style ids across hundreds of nodes, so this collapses O(nodes)
 // Plugin-API round-trips to O(distinct ids). reset() drops the cache between export runs so a
 // re-export picks up renamed tokens.
-type NamedFetch = (id: string) => Promise<{ name: string } | null>;
-export interface MemoName {
+type Named = { name: string };
+type NamedFetch<T extends Named> = (id: string) => Promise<T | null>;
+export interface MemoName<T extends Named = Named> {
   (id: string): Promise<string | undefined>;
   reset(): void;
   /** Every id looked up during this run — i.e. every id the document actually REFERENCES. */
   ids(): string[];
   /** The FETCHED object behind an id (null if it didn't resolve), from the same cache as the name.
    *  Lets a later pass reuse what the walk already retrieved instead of re-fetching by id. */
-  obj(id: string): Promise<any>;
+  obj(id: string): Promise<T | null>;
 }
-function memoName(fetch: NamedFetch): MemoName {
+function memoName<T extends Named>(fetch: NamedFetch<T>): MemoName<T> {
   // Cache the PROMISE, not the resolved value. The extractor fans these lookups out concurrently
   // (Promise.all over text runs, paints, styles), and a value-cache is only written after `await`
   // resolves — so every duplicate reference issued while the first fetch was in flight missed the
-  // cache and made its own round trip. One paragraph sharing a text style used to cost one call
+  // cache and made its own round trip. One paragraph sharing a text style would cost one call
   // per run; a design system where 40 styles reference color/primary cost 40.
-  const cache = new Map<string, Promise<{ name: string } | null>>();
-  const get = (id: string): Promise<{ name: string } | null> => {
+  const cache = new Map<string, Promise<T | null>>();
+  const get = (id: string): Promise<T | null> => {
     let p = cache.get(id);
     if (!p) {
       // fetch can throw synchronously as well as reject — normalise both to null.
@@ -161,7 +153,7 @@ function memoName(fetch: NamedFetch): MemoName {
   const fn = (async (id: string) => {
     const o = await get(id);
     return o ? o.name : undefined;
-  }) as MemoName;
+  }) as MemoName<T>;
   fn.reset = () => cache.clear();
   fn.obj = get;
   // The cache keys double as the run's reference set: varName.ids() is exactly the variables the
@@ -180,11 +172,11 @@ export const nodeNameLookup = memoName((id) => figma.getNodeByIdAsync(id)); // p
 // collection object per run (not just its name — we also need its .modes list). memoName is exactly
 // that cache (promise-held, throw-and-reject normalised to null, reset per run); `.obj` hands back the
 // fetched collection rather than its name, so this needs no second copy of the machinery.
-const collectionLookup = memoName((id) =>
+const collectionLookup = memoName<VariableCollection>((id) =>
   figma.variables && figma.variables.getVariableCollectionByIdAsync
     ? figma.variables.getVariableCollectionByIdAsync(id)
     : Promise.resolve(null));
-export const getCollection = collectionLookup.obj as (id: string) => Promise<VariableCollection | null>;
+export const getCollection = collectionLookup.obj;
 
 // Serialize every state-mutating run. All the singletons above (assets/stats/warnings/memo caches)
 // are shared across the one bundled scope, so two overlapping runs — a double-click, or a bridge
@@ -197,12 +189,64 @@ export const getCollection = collectionLookup.obj as (id: string) => Promise<Var
 // the one place that knows a run is actually EXECUTING rather than merely queued — bracketing at the
 // dispatch sites instead would have a bridge pull queued behind a manual export announce itself as
 // in-progress for however long it waits, and would let two overlapping brackets clobber each other.
+//
+// It is also the one place that knows which runs are QUEUED (accepted, not yet started), which is what
+// lets the bridge cancel one before it ever executes (cancelBridgeRequest / cancelBridgeRuns below).
+// Each serializeRun call gets its own ticket object, tracked by identity — never by `run`, which a
+// caller is free to reuse — so two queued runs can never be confused with each other.
+interface QueuedRun { run: RunInfo; abandoned: boolean }
+const queuedRuns = new Set<QueuedRun>();
 let runChain: Promise<unknown> = Promise.resolve();
+// Runs accepted and not yet finished (queued or executing). Above 0 when a new run arrives = it will
+// wait, which a BRIDGE caller is told at once (postQueued): its stall check reads any frame as life,
+// and a run queued behind a long export is busy, not stalled. Counted down when the run itself settles
+// (not on a later tick of the chain), so a run that arrives just after the last one ended is not
+// reported as queued.
+let inChain = 0;
 export function serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
-  const go = () => bracket(fn, run);
+  const ticket: QueuedRun = { run, abandoned: false };
+  queuedRuns.add(ticket);
+  if (inChain > 0) postQueued(run);
+  inChain++;
+  const go = (): Promise<T> => {
+    queuedRuns.delete(ticket);
+    // Abandoned while it waited: fail at once, WITHOUT calling fn and without bracketing — it never
+    // executed, so the window must never see a run-begin/run-end for it. The chain proceeds as it
+    // does after any failed run.
+    if (ticket.abandoned) { inChain--; return Promise.reject(abandonedError()); }
+    return bracket(fn, run).finally(() => { inChain--; });
+  };
   const next = runChain.then(go, go);
   runChain = next.then(() => {}, () => {});
   return next;
+}
+
+/** The bridge gave up on request `id`: abandon the QUEUED run it asked for (it will fail without
+ *  executing when its turn comes), or — if it is the one executing — arm the cancel flag so it aborts
+ *  at its next safe point. Returns the run it hit, or null for an id nobody knows (a no-op). */
+export function cancelBridgeRequest(id: string): RunInfo | null {
+  for (const t of queuedRuns) {
+    if (t.run.source === "bridge" && t.run.requestId === id) {
+      t.abandoned = true;
+      return t.run;
+    }
+  }
+  return requestAbandon((r) => r.source === "bridge" && r.requestId === id);
+}
+
+/** The socket that asked for work is gone: abandon EVERY bridge-sourced run — the executing one (if
+ *  it is a bridge run) and all currently queued ones. UI-sourced runs are untouched, and a run queued
+ *  after this call runs normally. Returns how many runs were hit. */
+export function cancelBridgeRuns(): number {
+  let hit = 0;
+  for (const t of queuedRuns) {
+    if (t.run.source === "bridge" && !t.abandoned) {
+      t.abandoned = true;
+      hit++;
+    }
+  }
+  if (requestAbandon((r) => r.source === "bridge")) hit++;
+  return hit;
 }
 
 // `run` is required, not optional: every caller genuinely knows who asked (the UI button, or the
@@ -210,21 +254,27 @@ export function serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> 
 // — which is the exact gap progress exists to close.
 async function bracket<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
   beginRun(run);
+  let abandoned = false;
   try {
     return await fn();
   } catch (e) {
-    // A run that THREW — cancelled or crashed — still allocated asset payloads (tens of MB of base64
-    // PNG/SVG), and nobody downstream takes them off our hands: only a SUCCESSFUL collector returns
-    // assets.slice() for the caller to post. Dropping them here is what keeps "state is fully reset
-    // after a cancel" true, rather than leaving the whole aborted export resident until the next run.
-    releaseAssets();
+    abandoned = isAbandonment(e);
     throw e;
   } finally {
+    // Drop the run's asset payloads (tens of MB of base64 PNG/SVG) the moment it settles: a successful
+    // collector has already returned its own assets.slice(), and a run that THREW — cancelled or
+    // crashed — hands them to nobody. Here, inside the run, and not after the caller posts its reply:
+    // an UNQUEUED bridge command (ping, whoami, listPages, …) answers DURING a queued export, so a
+    // release on every reply emptied the array that export was still filling — and the next queued
+    // run may already have started by the time a caller's continuation runs.
+    releaseAssets();
     // In `finally`, so the cancellation flag is cleared even on the path that threw BECAUSE of it.
     // (The other per-run toggle a cancel could strand — figma.skipInvisibleInstanceChildren, set by
     // the component-catalog and library walks — is already restored by their own `finally` blocks,
     // which a thrown cancellation runs exactly like any other error.)
-    endRun();
+    // `abandoned` tells the window this run died because its bridge caller went away — the only way it
+    // can learn that, since a bridge run's error goes to the socket, not to the window.
+    endRun(abandoned);
   }
 }
 
@@ -236,9 +286,9 @@ export function releaseAssets(): void {
 }
 
 // The blanket document load, with its one guard. Two callers need it (the all-pages export walk and
-// the component catalog, which spans every page by definition) and both used to carry a byte-similar
-// feature-check + try/catch, differing only in the consequence they name. That made the dynamic-page
-// loading POLICY two edits rather than one — which matters because collect.ts argues for replacing
+// the component catalog, which spans every page by definition); sharing one
+// feature-check + try/catch, which differs only in the consequence named, keeps the dynamic-page
+// loading POLICY one edit rather than two — which matters because collect.ts argues for replacing
 // this blanket load with per-page loadAsync, a change that would otherwise land on one caller only.
 export async function loadAllPages(consequence: string): Promise<void> {
   if (!figma.loadAllPagesAsync) return;

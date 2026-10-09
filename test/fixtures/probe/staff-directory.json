@@ -1,0 +1,606 @@
+{
+  "exportedAt": "2026-09-30T00:00:00Z",
+  "screen": "Staff Directory",
+  "page": "Directory",
+  "pageId": "50:0",
+  "nodeId": "50:1",
+  "nodes": [
+    {
+      "type": "FRAME",
+      "name": "Staff Directory",
+      "id": "50:1",
+      "box": {
+        "w": 800,
+        "h": 600,
+        "x": 0,
+        "y": 0
+      },
+      "clip": true,
+      "fills": [
+        {
+          "type": "solid",
+          "color": "#1d1d1f",
+          "tokens": {
+            "color": "Backgrounds/Page"
+          }
+        }
+      ],
+      "tokens": {
+        "fills": "Backgrounds/Page"
+      },
+      "children": [
+        {
+          "type": "FRAME",
+          "name": "Side Nav",
+          "id": "50:2",
+          "layout": {
+            "display": "flex",
+            "flexDirection": "column",
+            "gap": 8,
+            "padding": [
+              16,
+              16,
+              16,
+              16
+            ]
+          },
+          "box": {
+            "w": 200,
+            "h": 600,
+            "x": 0,
+            "y": 0
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#121319"
+            }
+          ],
+          "children": [
+            {
+              "type": "TEXT",
+              "name": "Nav Label",
+              "id": "50:3",
+              "box": {
+                "w": 120,
+                "h": 16
+              },
+              "renderBox": {
+                "x": 24,
+                "y": 20,
+                "w": 80,
+                "h": 12
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#d4d4d4"
+                }
+              ],
+              "text": "Shift Planner",
+              "font": {
+                "size": 12,
+                "family": "Arial",
+                "weight": "Regular",
+                "lineHeight": {
+                  "value": 16,
+                  "unit": "px"
+                },
+                "color": "#d4d4d4"
+              }
+            },
+            {
+              "type": "TEXT",
+              "name": "Nav Label",
+              "id": "50:8",
+              "box": {
+                "w": 120,
+                "h": 16
+              },
+              "renderBox": {
+                "x": 24,
+                "y": 44,
+                "w": 80,
+                "h": 12
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#d4d4d4"
+                }
+              ],
+              "text": "Rota Settings",
+              "font": {
+                "size": 12,
+                "family": "Arial",
+                "weight": "Regular",
+                "lineHeight": {
+                  "value": 16,
+                  "unit": "px"
+                },
+                "color": "#d4d4d4"
+              }
+            }
+          ]
+        },
+        {
+          "type": "TEXT",
+          "name": "Button Label",
+          "id": "50:4",
+          "box": {
+            "w": 59,
+            "h": 20,
+            "x": 240,
+            "y": 60
+          },
+          "renderBox": {
+            "x": 262,
+            "y": 66,
+            "w": 70,
+            "h": 10
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#ffffff"
+            }
+          ],
+          "text": "Add Rule",
+          "font": {
+            "size": 14,
+            "family": "Arial",
+            "weight": "Regular",
+            "lineHeight": {
+              "value": 20,
+              "unit": "px"
+            },
+            "color": "#ffffff"
+          }
+        },
+        {
+          "type": "VECTOR",
+          "name": "Star Icon",
+          "id": "50:5",
+          "box": {
+            "w": 16,
+            "h": 16
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#ff8800"
+            }
+          ],
+          "asset": "assets/Star_Icon.svg"
+        },
+        {
+          "type": "VECTOR",
+          "name": "Logo",
+          "id": "50:6",
+          "box": {
+            "w": 16,
+            "h": 16
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#00aa55"
+            }
+          ],
+          "asset": "assets/Logo.svg"
+        },
+        {
+          "type": "FRAME",
+          "name": "Staff Row",
+          "id": "50:7",
+          "box": {
+            "w": 560,
+            "h": 40,
+            "x": 220,
+            "y": 160
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#46464f",
+              "tokens": {
+                "color": "Backgrounds/Row Hover"
+              }
+            }
+          ],
+          "tokens": {
+            "fills": "Backgrounds/Row Hover"
+          },
+          "children": [
+            {
+              "type": "TEXT",
+              "name": "Staff Name",
+              "id": "50:10",
+              "box": {
+                "w": 100,
+                "h": 20
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#ffffff"
+                }
+              ],
+              "text": "Jordan Avery",
+              "font": {
+                "size": 14,
+                "family": "Arial",
+                "weight": "Regular",
+                "lineHeight": {
+                  "value": 20,
+                  "unit": "px"
+                },
+                "color": "#ffffff"
+              }
+            },
+            {
+              "type": "FRAME",
+              "name": "Edit Button",
+              "id": "50:11",
+              "box": {
+                "w": 40,
+                "h": 24
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#0a84ff"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "FRAME",
+          "name": "Search Field",
+          "id": "50:12",
+          "box": {
+            "w": 200,
+            "h": 28
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#2c2c34",
+              "tokens": {
+                "color": "Inputs/Focus Fill"
+              }
+            }
+          ],
+          "tokens": {
+            "fills": "Inputs/Focus Fill"
+          }
+        },
+        {
+          "type": "FRAME",
+          "name": "Summary Card",
+          "id": "50:13",
+          "box": {
+            "w": 100,
+            "h": 40
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#333333",
+              "tokens": {
+                "color": "Cards/Focused"
+              }
+            }
+          ],
+          "tokens": {
+            "fills": "Cards/Focused"
+          }
+        },
+        {
+          "type": "FRAME",
+          "name": "Shift Row A",
+          "id": "50:14",
+          "box": {
+            "w": 560,
+            "h": 24
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#202020"
+            }
+          ],
+          "children": [
+            {
+              "type": "TEXT",
+              "name": "Shift Date",
+              "id": "50:15",
+              "box": {
+                "w": 60,
+                "h": 20
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#ffffff"
+                }
+              ],
+              "text": "12 Mar",
+              "font": {
+                "size": 14,
+                "family": "Arial",
+                "weight": "Regular",
+                "lineHeight": {
+                  "value": 20,
+                  "unit": "px"
+                },
+                "color": "#ffffff"
+              }
+            }
+          ]
+        },
+        {
+          "type": "FRAME",
+          "name": "Shift Row B",
+          "id": "50:16",
+          "box": {
+            "w": 560,
+            "h": 24
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#202020"
+            }
+          ],
+          "children": [
+            {
+              "type": "TEXT",
+              "name": "Shift Date",
+              "id": "50:17",
+              "box": {
+                "w": 60,
+                "h": 20
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#ffffff"
+                }
+              ],
+              "text": "12 Mar",
+              "font": {
+                "size": 14,
+                "family": "Arial",
+                "weight": "Regular",
+                "lineHeight": {
+                  "value": 20,
+                  "unit": "px"
+                },
+                "color": "#ffffff"
+              }
+            }
+          ]
+        },
+        {
+          "type": "TEXT",
+          "name": "Search Placeholder",
+          "id": "50:18",
+          "box": {
+            "w": 80,
+            "h": 20
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#8a8a8a",
+              "tokens": {
+                "color": "Text/Placeholder"
+              }
+            }
+          ],
+          "text": "Find staff",
+          "font": {
+            "size": 13,
+            "family": "Arial",
+            "weight": "Regular",
+            "lineHeight": {
+              "value": 20,
+              "unit": "px"
+            },
+            "color": "#8a8a8a"
+          }
+        },
+        {
+          "type": "TEXT",
+          "name": "Section Title",
+          "id": "50:20",
+          "box": {
+            "w": 120,
+            "h": 20
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#ffffff"
+            }
+          ],
+          "text": "Open shifts",
+          "font": {
+            "size": 14,
+            "family": "Arial",
+            "weight": "Regular",
+            "lineHeight": {
+              "value": 20,
+              "unit": "px"
+            },
+            "color": "#ffffff"
+          }
+        },
+        {
+          "type": "TEXT",
+          "name": "Section Caption",
+          "id": "50:21",
+          "box": {
+            "w": 120,
+            "h": 20
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#ffffff"
+            }
+          ],
+          "text": "open shifts",
+          "font": {
+            "size": 14,
+            "family": "Arial",
+            "weight": "Regular",
+            "lineHeight": {
+              "value": 20,
+              "unit": "px"
+            },
+            "color": "#ffffff"
+          }
+        },
+        {
+          "type": "FRAME",
+          "name": "Note Field",
+          "id": "50:22",
+          "box": {
+            "w": 200,
+            "h": 28
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#121319"
+            }
+          ],
+          "children": [
+            {
+              "type": "TEXT",
+              "name": "Note Placeholder",
+              "id": "50:23",
+              "box": {
+                "w": 80,
+                "h": 20
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#8a8a8a",
+                  "tokens": {
+                    "color": "Text/Placeholder"
+                  }
+                }
+              ],
+              "text": "Add a note",
+              "font": {
+                "size": 13,
+                "family": "Arial",
+                "weight": "Regular",
+                "lineHeight": {
+                  "value": 20,
+                  "unit": "px"
+                },
+                "color": "#8a8a8a"
+              }
+            }
+          ]
+        },
+        {
+          "type": "FRAME",
+          "name": "Filter Button",
+          "id": "50:24",
+          "box": {
+            "w": 80,
+            "h": 28
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#0a84ff"
+            }
+          ],
+          "children": [
+            {
+              "type": "TEXT",
+              "name": "Filter Label",
+              "id": "50:25",
+              "box": {
+                "w": 40,
+                "h": 20
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#ffffff"
+                }
+              ],
+              "text": "Filter",
+              "font": {
+                "size": 13,
+                "family": "Arial",
+                "weight": "Regular",
+                "lineHeight": {
+                  "value": 20,
+                  "unit": "px"
+                },
+                "color": "#ffffff"
+              }
+            }
+          ]
+        },
+        {
+          "type": "FRAME",
+          "name": "Save Glyph",
+          "id": "50:26",
+          "box": {
+            "w": 12,
+            "h": 12
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#ffcc00",
+              "tokens": {
+                "color": "Buttons/Focus Glyph"
+              }
+            }
+          ],
+          "tokens": {
+            "fills": "Buttons/Focus Glyph"
+          }
+        },
+        {
+          "type": "TEXT",
+          "name": "Filter Reference",
+          "id": "50:27",
+          "box": {
+            "w": 40,
+            "h": 20
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#ffffff"
+            }
+          ],
+          "text": "Filter",
+          "font": {
+            "size": 13,
+            "family": "Arial",
+            "weight": "Regular",
+            "lineHeight": {
+              "value": 20,
+              "unit": "px"
+            },
+            "color": "#ffffff"
+          }
+        }
+      ]
+    }
+  ]
+}

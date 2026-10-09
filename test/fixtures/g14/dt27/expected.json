@@ -1,0 +1,13 @@
+{
+  "about": "DT-27: one name verdict per component (component-match nameVerdict). cross-check's coverage entry and plan-skeleton's components[].catalog must both say this for Screen__5_6.json against design-system/components.local.json. No instance key is in the catalog, so every row is decided by name.",
+  "verdicts": {
+    "icon/check-circle": "matched",
+    "Header": "unmatched",
+    "Badge": "ambiguous"
+  },
+  "why": {
+    "icon/check-circle": "two catalog entries with identical props: duplicate definitions, a harmless tie (cross-check before: ambiguous)",
+    "Header": "the one candidate declares Title, the instance carries Count: the signature disagrees (cross-check before: a name match)",
+    "Badge": "two entries both accept Tone=Info but have different VARIANT axes: a different-signatures tie (plan-skeleton before: matched)"
+  }
+}

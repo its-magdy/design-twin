@@ -1,458 +1,176 @@
 // GENERATED from src/*.ts by build.js — do not edit by hand. Run `npm run build`.
 "use strict";
 (() => {
-  var __create = Object.create;
-  var __defProp = Object.defineProperty;
-  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-  var __getOwnPropNames = Object.getOwnPropertyNames;
-  var __getProtoOf = Object.getPrototypeOf;
-  var __hasOwnProp = Object.prototype.hasOwnProperty;
-  var __commonJS = (cb, mod) => function __require() {
-    try {
-      return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-    } catch (e) {
-      throw mod = 0, e;
-    }
-  };
-  var __copyProps = (to, from, except, desc) => {
-    if (from && typeof from === "object" || typeof from === "function") {
-      for (let key of __getOwnPropNames(from))
-        if (!__hasOwnProp.call(to, key) && key !== except)
-          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-    }
-    return to;
-  };
-  var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-    // If the importer is in node compatibility mode or this is not an ESM
-    // file that has been converted to a CommonJS file using a Babel-
-    // compatible transform (i.e. "__esModule" has not been set), then set
-    // "default" to the CommonJS "module.exports" for node compatibility.
-    isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-    mod
-  ));
+  // ../bridge/src/json-util.ts
+  function isRecord(x) {
+    return typeof x === "object" && x !== null && !Array.isArray(x);
+  }
+  function isUnknownArray(x) {
+    return Array.isArray(x);
+  }
+  function ifDefined(key, v) {
+    const o = {};
+    if (v !== void 0) o[key] = v;
+    return o;
+  }
 
-  // ../bridge/pages-layout.js
-  var require_pages_layout = __commonJS({
-    "../bridge/pages-layout.js"(exports, module) {
-      "use strict";
-      function safe2(id) {
-        return String(id).replace(/[^a-zA-Z0-9]/g, "_");
-      }
-      function firstByName(node, name) {
-        if (!node || typeof node !== "object") return null;
-        if (node.name === name) return node;
-        for (const c of node.children || []) {
-          const found = firstByName(c, name);
-          if (found) return found;
-        }
-        return null;
-      }
-      var PLACEHOLDER_TEXT = /* @__PURE__ */ new Set(["text", "label"]);
-      function firstText(node) {
-        if (!node || typeof node !== "object") return null;
-        if (node.type === "TEXT" && typeof node.text === "string") {
-          const t = node.text.trim();
-          if (t && !PLACEHOLDER_TEXT.has(t.toLowerCase())) return node.text;
-        }
-        for (const c of node.children || []) {
-          const found = firstText(c);
-          if (found) return found;
-        }
-        return null;
-      }
-      function firstNamedText(node, name) {
-        if (!node || typeof node !== "object") return null;
-        if (node.type === "TEXT" && node.name === name && typeof node.text === "string" && node.text.trim()) {
-          return node.text;
-        }
-        for (const c of node.children || []) {
-          const found = firstNamedText(c, name);
-          if (found) return found;
-        }
-        return null;
-      }
-      function deriveTitle(root) {
-        const slot = firstByName(root, "Page Title");
-        if (slot) {
-          const named = firstNamedText(slot, "Title");
-          if (named) return named;
-          const anyText = firstText(slot);
-          if (anyText) return anyText;
-        }
-        const fallback = firstText(root);
-        return fallback || void 0;
-      }
-      function collectTexts(root, limit) {
-        const n = limit || 8;
-        const seen = /* @__PURE__ */ new Set();
-        const out = [];
-        (function walk(node) {
-          if (!node || typeof node !== "object" || out.length >= n) return;
-          if (node.type === "TEXT" && typeof node.text === "string") {
-            const t = node.text.trim();
-            if (t && !seen.has(t)) {
-              seen.add(t);
-              out.push(t);
-            }
-          }
-          for (const c of node.children || []) {
-            if (out.length >= n) break;
-            walk(c);
-          }
-        })(root);
-        return out;
-      }
-      function buildPageLayout2(layersDoc, sep) {
-        const { layers, index, ...meta } = layersDoc || {};
-        const join = (...parts) => ["pages"].concat(parts).join(sep);
-        const byPage = /* @__PURE__ */ new Map();
-        const pages = [];
-        const layerFiles = [];
-        const usedDirs = /* @__PURE__ */ new Set();
-        const uniqueDir = (name) => {
-          const base = safe2(name) || "page";
-          if (!usedDirs.has(base)) {
-            usedDirs.add(base);
-            return base;
-          }
-          let i = 2;
-          while (usedDirs.has(base + "_" + i)) i++;
-          usedDirs.add(base + "_" + i);
-          return base + "_" + i;
-        };
-        (layers || []).forEach((l, i) => {
-          const pageName = l.page || "(no page)";
-          const key = l.pageId || "name:" + pageName;
-          let bucket = byPage.get(key);
-          if (!bucket) {
-            bucket = { page: pageName, pageId: l.pageId, dir: uniqueDir(pageName), entries: [] };
-            byPage.set(key, bucket);
-            bucket.index = join(bucket.dir, "index.json");
-            pages.push(bucket);
-          }
-          const base = safe2(l.name || "layer") + "__" + safe2(l.id) + ".json";
-          const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
-          layerFiles.push({
-            path: join(bucket.dir, base),
-            data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, ...src, tree: l.tree, reference: l.reference, devResources: l.devResources }
-          });
-          const title = l.tree ? deriveTitle(l.tree) : void 0;
-          const texts = l.tree ? collectTexts(l.tree) : void 0;
-          bucket.entries.push({ ...(index || [])[i], title, texts, ...src, file: join(bucket.dir, base) });
-        });
-        meta.pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
-        meta.layers = pages.flatMap((b) => b.entries);
-        const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
-        return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
-      }
-      var NO_PAGE_DIR = "_unfiled";
-      function screenPaths(screenDoc, sep) {
-        const join = (...parts) => ["pages"].concat(parts).join(sep);
-        const page2 = screenDoc.page || screenDoc.screen && screenDoc.screen.page;
-        const pageId = screenDoc.pageId || screenDoc.screen && screenDoc.screen.pageId;
-        const dir = page2 ? safe2(page2) : NO_PAGE_DIR;
-        const nodeId = screenDoc.nodeId || screenDoc.screen && screenDoc.screen.nodeId;
-        const base = safe2(screenDoc.screenName || "screen") + (nodeId ? "__" + safe2(nodeId) : "");
-        return {
-          page: page2 || null,
-          pageId: pageId || null,
-          nodeId: nodeId || null,
-          dir,
-          base,
-          screen: join(dir, base + ".json"),
-          variables: join(dir, base + ".vars.json"),
-          assets: join(dir, base + ".assets.json"),
-          index: join(dir, "index.json"),
-          rootIndex: join("index.json")
-        };
-      }
-      function mergeScreenIndex(prev, entry) {
-        const base = prev && typeof prev === "object" ? prev : {};
-        const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
-        layers.push(entry);
-        return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
-      }
-      function mergeRootIndex(prev, paths, layerCount, entry) {
-        const base = prev && typeof prev === "object" ? prev : {};
-        const pageDirs = Array.isArray(base.pageDirs) ? base.pageDirs.filter((p) => p && p.dir !== paths.dir) : [];
-        pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
-        const result = Object.assign({}, base, { pageDirs });
-        if (entry) {
-          const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
-          layers.push(entry);
-          result.layers = layers;
-        }
-        return result;
-      }
-      module.exports = { buildPageLayout: buildPageLayout2, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, firstByName, firstText, safe: safe2, NO_PAGE_DIR };
-    }
-  });
+  // ../bridge/src/hex-color.ts
+  var HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+  var HEX_COLOR_HINT = "a hex colour like #1A2B3C (#rgb, #rgba, #rrggbb or #rrggbbaa)";
+  function parseHexColor(value) {
+    if (typeof value !== "string" || !HEX_COLOR_RE.test(value)) return null;
+    let h = value.slice(1);
+    if (h.length <= 4) h = h.split("").map((c2) => c2 + c2).join("");
+    const chan = (i) => parseInt(h.slice(i, i + 2), 16) / 255;
+    const c = { r: chan(0), g: chan(2), b: chan(4) };
+    if (h.length === 8) c.a = chan(6);
+    return c;
+  }
+  function formatHex(c) {
+    const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+    const a = Math.round(c.a * 255);
+    return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+  }
 
-  // ../bridge/errmsg.js
-  var require_errmsg = __commonJS({
-    "../bridge/errmsg.js"(exports, module) {
-      "use strict";
-      var errMsg2 = (e) => typeof e === "string" ? e : String(e && e.message || e);
-      module.exports = { errMsg: errMsg2 };
+  // ../bridge/src/pages-layout.ts
+  function safe(id) {
+    return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+  }
+  var shown = (c) => !!c && typeof c === "object" && !c.hidden;
+  function firstByName(node, name) {
+    if (!node || typeof node !== "object") return null;
+    if (node.name === name) return node;
+    for (const c of node.children || []) {
+      const found = shown(c) ? firstByName(c, name) : null;
+      if (found) return found;
     }
-  });
+    return null;
+  }
+  var PLACEHOLDER_TEXT = /* @__PURE__ */ new Set(["text", "label"]);
+  function firstText(node) {
+    if (!node || typeof node !== "object") return null;
+    if (node.type === "TEXT" && typeof node.text === "string") {
+      const t = node.text.trim();
+      if (t && !PLACEHOLDER_TEXT.has(t.toLowerCase())) return node.text;
+    }
+    for (const c of node.children || []) {
+      const found = shown(c) ? firstText(c) : null;
+      if (found) return found;
+    }
+    return null;
+  }
+  function firstNamedText(node, name) {
+    if (!node || typeof node !== "object") return null;
+    if (node.type === "TEXT" && node.name === name && typeof node.text === "string" && node.text.trim()) {
+      return node.text;
+    }
+    for (const c of node.children || []) {
+      const found = shown(c) ? firstNamedText(c, name) : null;
+      if (found) return found;
+    }
+    return null;
+  }
+  function deriveTitle(root) {
+    const slot = firstByName(root, "Page Title");
+    if (slot) {
+      const named = firstNamedText(slot, "Title");
+      if (named) return named;
+      const anyText = firstText(slot);
+      if (anyText) return anyText;
+    }
+    const fallback = firstText(root);
+    return fallback || void 0;
+  }
+  function collectTexts(root, limit) {
+    const n = limit || 8;
+    const seen = /* @__PURE__ */ new Set();
+    const out = [];
+    (function walk(node, isRoot) {
+      if (!node || typeof node !== "object" || node.hidden && !isRoot || out.length >= n) return;
+      if (node.type === "TEXT" && typeof node.text === "string") {
+        const t = node.text.trim();
+        if (t && !seen.has(t)) {
+          seen.add(t);
+          out.push(t);
+        }
+      }
+      for (const c of node.children || []) {
+        if (out.length >= n) break;
+        walk(c, false);
+      }
+    })(root, true);
+    return out;
+  }
+  function buildPageLayout(layersDoc, sep) {
+    const doc = layersDoc || {};
+    const { layers, index, ...rest } = doc;
+    const join = (...parts) => ["pages"].concat(parts).join(sep);
+    const byPage = /* @__PURE__ */ new Map();
+    const pages = [];
+    const layerFiles = [];
+    const usedDirs = /* @__PURE__ */ new Set();
+    const uniqueDir = (name) => {
+      const base = safe(name) || "page";
+      if (!usedDirs.has(base)) {
+        usedDirs.add(base);
+        return base;
+      }
+      let i = 2;
+      while (usedDirs.has(base + "_" + i)) i++;
+      usedDirs.add(base + "_" + i);
+      return base + "_" + i;
+    };
+    (layers || []).forEach((l, i) => {
+      const pageName = l.page || "(no page)";
+      const key = l.pageId || "name:" + pageName;
+      let bucket = byPage.get(key);
+      if (!bucket) {
+        const dir = uniqueDir(pageName);
+        bucket = { page: pageName, ...ifDefined("pageId", l.pageId), dir, index: join(dir, "index.json"), entries: [] };
+        byPage.set(key, bucket);
+        pages.push(bucket);
+      }
+      const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
+      const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
+      layerFiles.push({
+        path: join(bucket.dir, base),
+        data: { name: l.name, id: l.id, ...ifDefined("page", l.page), ...ifDefined("pageId", l.pageId), ...src, tree: l.tree, ...ifDefined("reference", l.reference), ...ifDefined("devResources", l.devResources) }
+      });
+      const title = l.tree ? deriveTitle(l.tree) : void 0;
+      const texts = l.tree ? collectTexts(l.tree) : void 0;
+      bucket.entries.push(Object.assign({}, (index || [])[i], { title, texts, ...src, file: join(bucket.dir, base) }));
+    });
+    const pageDirs = pages.map((b) => ({ page: b.page, ...ifDefined("pageId", b.pageId), dir: b.dir, index: b.index, layers: b.entries.length }));
+    const meta = Object.assign(rest, { pageDirs, layers: pages.flatMap((b) => b.entries) });
+    const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, ...ifDefined("pageId", b.pageId), layers: b.entries } }));
+    return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
+  }
 
-  // ../bridge/svg-normalize.js
-  var require_svg_normalize = __commonJS({
-    "../bridge/svg-normalize.js"(exports, module) {
-      "use strict";
-      var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
-      function normalizeSvgText2(svg) {
-        return svg.replace(NUM_RE, (m) => {
-          const n = Number(m);
-          if (!Number.isFinite(n)) return m;
-          const fixed = n.toFixed(1);
-          return fixed === "-0.0" ? "0.0" : fixed;
-        });
-      }
-      function isSvgName(fileName) {
-        return /\.svg$/i.test(String(fileName || ""));
-      }
-      module.exports = { normalizeSvgText: normalizeSvgText2, isSvgName };
-    }
-  });
+  // ../bridge/src/errmsg.ts
+  var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 
-  // ../bridge/design-system-layout.js
-  var require_design_system_layout = __commonJS({
-    "../bridge/design-system-layout.js"(exports, module) {
-      "use strict";
-      var { safe: safe2 } = require_pages_layout();
-      var DIR = "design-system";
-      var COMPONENTS_DIR = "components";
-      var TOKENS = "tokens.json";
-      var STYLES_PAINT = "styles.paint.json";
-      var STYLES_TEXT = "styles.text.json";
-      var STYLES_EFFECT = "styles.effect.json";
-      var STYLES_GRID = "styles.grid.json";
-      var COMPONENTS_LOCAL = "components.local.json";
-      var COMPONENTS_LIBRARY = "components.library.json";
-      var HYGIENE = "hygiene.json";
-      var MANIFEST = "design-system.json";
-      function isLibraryEntry(c) {
-        return !!(c && c.remote === true);
-      }
-      function buildDesignSystemLayout2(ds, sep) {
-        const d = ds || {};
-        const join = (name) => DIR + (sep || "/") + name;
-        const stamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
-        const components = Array.isArray(d.components) ? d.components : [];
-        const rawLocal = components.filter((c) => !isLibraryEntry(c));
-        const library = components.filter(isLibraryEntry);
-        const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
-        const usedNames = /* @__PURE__ */ new Set();
-        const uniqueDetailName = (name, id) => {
-          const base = safe2(name || "component") + "__" + safe2(id);
-          if (!usedNames.has(base)) {
-            usedNames.add(base);
-            return base;
-          }
-          let i = 2;
-          while (usedNames.has(base + "_" + i)) i++;
-          usedNames.add(base + "_" + i);
-          return base + "_" + i;
-        };
-        const componentFiles = [];
-        const local = rawLocal.map((c) => {
-          if (c.type === "COMPONENT" && c.node) {
-            const { node, ...rest } = c;
-            const detailName2 = uniqueDetailName(c.name, c.id);
-            const detailPath2 = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName2 + ".json";
-            componentFiles.push({
-              path: detailPath2,
-              data: { ...stamp, id: c.id, key: c.key, name: c.name, node }
-            });
-            return { ...rest, nodeFile: detailPath2 };
-          }
-          if (c.type !== "COMPONENT_SET" || !Array.isArray(c.variants) || !c.variants.some((v) => v && v.node)) {
-            return c;
-          }
-          const slimVariants = c.variants.map((v) => {
-            const { node, ...rest } = v || {};
-            return rest;
-          });
-          const detailName = uniqueDetailName(c.name, c.id);
-          const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
-          componentFiles.push({
-            path: detailPath,
-            data: { ...stamp, setId: c.id, setKey: c.key, name: c.name, variants: c.variants }
-          });
-          return { ...c, variants: slimVariants, variantsFile: detailPath };
-        });
-        const styles = d.styles || {};
-        const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
-        const stylesText = Array.isArray(styles.text) ? styles.text : [];
-        const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
-        const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
-        const files = [
-          { path: join(TOKENS), data: { ...stamp, collections: d.collections, variables: d.variables } },
-          { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
-          { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
-          { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
-          { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
-          { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
-          { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
-          { path: join(HYGIENE), data: { ...stamp, hygiene } },
-          ...componentFiles
-        ];
-        const counts = {
-          collections: (d.collections || []).length,
-          variables: (d.variables || []).length,
-          stylesPaint: stylesPaint.length,
-          stylesText: stylesText.length,
-          stylesEffect: stylesEffect.length,
-          stylesGrid: stylesGrid.length,
-          components: local.length,
-          libraryComponents: library.length,
-          hygiene: hygiene.length
-        };
-        const manifest2 = {
-          ...stamp,
-          files: {
-            tokens: join(TOKENS),
-            stylesPaint: join(STYLES_PAINT),
-            stylesText: join(STYLES_TEXT),
-            stylesEffect: join(STYLES_EFFECT),
-            stylesGrid: join(STYLES_GRID),
-            componentsLocal: join(COMPONENTS_LOCAL),
-            componentsLibrary: join(COMPONENTS_LIBRARY),
-            hygiene: join(HYGIENE)
-          },
-          counts
-        };
-        const detailPrefix = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/");
-        if (files.some((f) => String(f.path).startsWith(detailPrefix))) {
-          manifest2.files.componentsDir = DIR + (sep || "/") + COMPONENTS_DIR;
-        }
-        files.push({ path: MANIFEST, data: manifest2 });
-        return { files, manifest: manifest2, counts, dir: DIR };
-      }
-      module.exports = {
-        buildDesignSystemLayout: buildDesignSystemLayout2,
-        isLibraryEntry,
-        DESIGN_SYSTEM_DIR: DIR,
-        DESIGN_SYSTEM_FILES: {
-          TOKENS,
-          STYLES_PAINT,
-          STYLES_TEXT,
-          STYLES_EFFECT,
-          STYLES_GRID,
-          COMPONENTS_LOCAL,
-          COMPONENTS_LIBRARY,
-          COMPONENTS_DIR,
-          HYGIENE,
-          MANIFEST
-        }
-      };
-    }
-  });
-
-  // ../bridge/read-opts.js
-  var require_read_opts = __commonJS({
-    "../bridge/read-opts.js"(exports, module) {
-      "use strict";
-      var READ_OPTS = [
-        {
-          name: "css",
-          flag: "--css",
-          describe: "Include Figma's OWN computed CSS per node (getCSSAsync) \u2014 the design-to-code oracle. One async call per node, so larger/slower; use for a screen you're implementing."
-        },
-        {
-          // NOT "Dev Mode only": per developers.figma.com only addMeasurement/editMeasurement/
-          // deleteMeasurement carry that restriction — PageNode.getMeasurements() has no such note. And no
-          // longer "current page": collect.ts reads measurements from the page(s) actually exported.
-          name: "measurements",
-          flag: "--measurements",
-          describe: "Include measurement redlines (spacing specs the designer placed) for the exported page(s). Reading them does not require Dev Mode."
-        },
-        {
-          name: "pluginData",
-          flag: "--plugin-data",
-          describe: "Include own-scope plugin data (getPluginData) stamped on nodes \u2014 round-trip metadata. Usually empty unless the write plane wrote it."
-        },
-        {
-          name: "motion",
-          flag: "--motion",
-          describe: "Include motion/animation reads (timelines, manual keyframe tracks, animations, applied animation styles). Free via the Plugin API; useful for Slides/prototype animation. Can be verbose."
-        },
-        {
-          name: "sharedData",
-          flag: "--shared-data",
-          describe: "Include cross-plugin shared data (getSharedPluginData) \u2014 notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node."
-        },
-        {
-          name: "variantVisuals",
-          flag: "--variant-visuals",
-          describe: "Walk each COMPONENT_SET's variant children and record their real layout/fills/radius/tokens/css \u2014 the master-component source of truth, not the component-set wrapper's own selection-chrome visuals. One node walk per variant; noticeably slower on large systems."
-        },
-        {
-          // The odd one out: the others ADD work, this one REMOVES it. Asset export is one exportAsync (a
-          // real render round-trip — SVG per vector, 2x PNG per image) PER NODE, run sequentially, and
-          // unlike getCSSAsync it was never gated despite being the same O(nodes) shape and far more
-          // expensive. On a real design-system page it dominates the export and can outgrow the bridge's
-          // frame limit. Opt-IN to skipping, so the default stays exactly as it was.
-          name: "skipAssets",
-          flag: "--no-assets",
-          describe: "Skip the per-node SVG/PNG render pass \u2014 the dominant cost on a big file. Structure, layout and tokens are unaffected; skipped nodes stay leaves marked `assetSkipped: true`. Asset BYTES are stripped from MCP results anyway, so this is usually pure savings here."
-        }
-      ];
-      function readOptDefaults2() {
-        const o = {};
-        for (const d of READ_OPTS) o[d.name] = false;
-        return o;
-      }
-      module.exports = { READ_OPTS, readOptDefaults: readOptDefaults2 };
-    }
-  });
-
-  // ../bridge/node-id.js
-  var require_node_id = __commonJS({
-    "../bridge/node-id.js"(exports, module) {
-      "use strict";
-      var ID = "[A-Za-z0-9%:;_-]+";
-      var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
-      function decode(s) {
-        try {
-          return decodeURIComponent(s);
-        } catch (e) {
-          return s;
-        }
-      }
-      function normalizeNodeId(raw) {
-        if (!raw) return void 0;
-        const s = decode(String(raw).trim()).replace(/-/g, ":");
-        return /^I?\d+:\d+(?:[;:]\d+:\d+)*$/.test(s) || /^\d+$/.test(s) ? s : void 0;
-      }
-      function parseNodeId(input) {
-        if (!input) return void 0;
-        const s = String(input).trim();
-        try {
-          const nid = new URL(s).searchParams.get("node-id");
-          if (nid) return normalizeNodeId(nid);
-        } catch (e) {
-        }
-        const m = s.match(NODE_ID_RE);
-        if (m) return normalizeNodeId(m[1]);
-        return normalizeNodeId(s);
-      }
-      function toNodeId2(raw) {
-        return parseNodeId(raw) || (raw == null ? "" : String(raw));
-      }
-      module.exports = { ID, parseNodeId, toNodeId: toNodeId2 };
-    }
-  });
+  // ../bridge/src/svg-normalize.ts
+  var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
+  function normalizeSvgText(svg) {
+    return svg.replace(NUM_RE, (m) => {
+      const n = Number(m);
+      if (!Number.isFinite(n)) return m;
+      const fixed = n.toFixed(1);
+      return fixed === "-0.0" ? "0.0" : fixed;
+    });
+  }
 
   // src/util.ts
-  var import_pages_layout = __toESM(require_pages_layout());
-  var import_errmsg = __toESM(require_errmsg());
-  var import_svg_normalize = __toESM(require_svg_normalize());
   var exportedAt = () => (/* @__PURE__ */ new Date()).toISOString();
-  var round = (n) => typeof n === "number" ? Math.round(n * 100) / 100 : n;
-  var propName = (k) => k.split("#")[0];
+  function round(n) {
+    return typeof n === "number" ? Math.round(n * 100) / 100 : n;
+  }
+  var lower = (s) => s.toLowerCase();
+  var propName = (k) => {
+    const hash = k.indexOf("#");
+    return hash === -1 ? k : k.slice(0, hash);
+  };
+  var propType = (t) => t;
   var nonEmpty = (o) => Object.keys(o).length ? o : void 0;
   function putNonEmpty(o, key, v) {
     const kept = v && nonEmpty(v);
@@ -468,6 +186,25 @@
     if (ez.easingFunctionSpring) o.spring = ez.easingFunctionSpring;
     return o;
   }
+  function asJson(v) {
+    if (v === null || typeof v === "string" || typeof v === "boolean" || typeof v === "number") return v;
+    if (Array.isArray(v)) return v.map((x) => {
+      const j = asJson(x);
+      return j === void 0 ? null : j;
+    });
+    if (typeof v === "object") {
+      const out = {};
+      for (const [k, x] of Object.entries(v)) {
+        const j = asJson(x);
+        if (j !== void 0) out[k] = j;
+      }
+      return out;
+    }
+    return void 0;
+  }
+  function isList(v) {
+    return Array.isArray(v);
+  }
   function numProp(node, key) {
     const v = node[key];
     return typeof v === "number" ? v : void 0;
@@ -476,11 +213,10 @@
     return node[key];
   }
   function rgbaToHex(c) {
-    const to = (x) => Math.round(x * 255).toString(16).padStart(2, "0");
-    const hex = `#${to(c.r)}${to(c.g)}${to(c.b)}`;
-    return c.a !== void 0 && c.a < 1 ? `${hex}${to(c.a)}` : hex;
+    var _a;
+    return formatHex({ r: c.r * 255, g: c.g * 255, b: c.b * 255, a: (_a = c.a) != null ? _a : 1 });
   }
-  var solidHex = (p) => rgbaToHex({ ...p.color, a: p.opacity });
+  var solidHex = (p) => rgbaToHex({ r: p.color.r, g: p.color.g, b: p.color.b, ...ifDefined("a", p.opacity) });
   function solidFromFills(fills) {
     if (!fills || fills === figma.mixed || !Array.isArray(fills)) return void 0;
     const s = fills.find((f) => f.visible !== false && f.type === "SOLID");
@@ -493,8 +229,8 @@
     let out = "";
     let chunk = "";
     for (let i = 0; i < n; i += 3) {
-      const t = bytes[i] << 16 | (bytes[i + 1] || 0) << 8 | (bytes[i + 2] || 0);
-      chunk += B64[t >> 18 & 63] + B64[t >> 12 & 63] + (i + 1 < n ? B64[t >> 6 & 63] : "=") + (i + 2 < n ? B64[t & 63] : "=");
+      const t = (bytes[i] || 0) << 16 | (bytes[i + 1] || 0) << 8 | (bytes[i + 2] || 0);
+      chunk += B64.charAt(t >> 18 & 63) + B64.charAt(t >> 12 & 63) + (i + 1 < n ? B64.charAt(t >> 6 & 63) : "=") + (i + 2 < n ? B64.charAt(t & 63) : "=");
       if (chunk.length >= B64_CHUNK) {
         out += chunk;
         chunk = "";
@@ -503,20 +239,139 @@
     return out + chunk;
   }
 
-  // src/main.ts
-  var import_pages_layout2 = __toESM(require_pages_layout());
-  var import_design_system_layout = __toESM(require_design_system_layout());
+  // ../bridge/src/design-system-layout.ts
+  var DIR = "design-system";
+  var COMPONENTS_DIR = "components";
+  var TOKENS = "tokens.json";
+  var STYLES_PAINT = "styles.paint.json";
+  var STYLES_TEXT = "styles.text.json";
+  var STYLES_EFFECT = "styles.effect.json";
+  var STYLES_GRID = "styles.grid.json";
+  var COMPONENTS_LOCAL = "components.local.json";
+  var COMPONENTS_LIBRARY = "components.library.json";
+  var HYGIENE = "hygiene.json";
+  var MANIFEST = "design-system.json";
+  function isLibraryEntry(c) {
+    return !!(c && c.remote === true);
+  }
+  function buildDesignSystemLayout(ds, sep) {
+    const d = ds || {};
+    const join = (name) => DIR + (sep || "/") + name;
+    const stamp = { ...ifDefined("exportedAt", d.exportedAt), ...ifDefined("file", d.file), ...ifDefined("colorProfile", d.colorProfile) };
+    const components = Array.isArray(d.components) ? d.components : [];
+    const rawLocal = components.filter((c) => !isLibraryEntry(c));
+    const library = components.filter(isLibraryEntry);
+    const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
+    const usedNames = /* @__PURE__ */ new Set();
+    const uniqueDetailName = (name, id) => {
+      const base = safe(name || "component") + "__" + safe(id);
+      if (!usedNames.has(base)) {
+        usedNames.add(base);
+        return base;
+      }
+      let i = 2;
+      while (usedNames.has(base + "_" + i)) i++;
+      usedNames.add(base + "_" + i);
+      return base + "_" + i;
+    };
+    const componentFiles = [];
+    const local = rawLocal.map((c) => {
+      if (c.type === "COMPONENT" && c.node) {
+        const { node, ...rest } = c;
+        const detailName2 = uniqueDetailName(c.name, c.id);
+        const detailPath2 = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName2 + ".json";
+        componentFiles.push({
+          path: detailPath2,
+          data: { ...stamp, ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name, node }
+        });
+        return { ...rest, nodeFile: detailPath2 };
+      }
+      if (c.type !== "COMPONENT_SET" || !Array.isArray(c.variants) || !c.variants.some((v) => v && v.node)) {
+        return c;
+      }
+      const slimVariants = c.variants.map((v) => {
+        const rest = Object.assign({}, v);
+        delete rest.node;
+        return rest;
+      });
+      const detailName = uniqueDetailName(c.name, c.id);
+      const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
+      componentFiles.push({
+        path: detailPath,
+        data: { ...stamp, ...ifDefined("setId", c.id), ...ifDefined("setKey", c.key), name: c.name, variants: c.variants }
+      });
+      return { ...c, variants: slimVariants, variantsFile: detailPath };
+    });
+    const styles = d.styles || {};
+    const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
+    const stylesText = Array.isArray(styles.text) ? styles.text : [];
+    const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
+    const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
+    const files = [
+      { path: join(TOKENS), data: { ...stamp, ...ifDefined("collections", d.collections), ...ifDefined("variables", d.variables) } },
+      { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
+      { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
+      { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
+      { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
+      { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
+      { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
+      { path: join(HYGIENE), data: { ...stamp, hygiene } },
+      ...componentFiles
+    ];
+    const counts = {
+      collections: (d.collections || []).length,
+      variables: (d.variables || []).length,
+      stylesPaint: stylesPaint.length,
+      stylesText: stylesText.length,
+      stylesEffect: stylesEffect.length,
+      stylesGrid: stylesGrid.length,
+      components: local.length,
+      libraryComponents: library.length,
+      hygiene: hygiene.length
+    };
+    const manifest2 = {
+      ...stamp,
+      files: {
+        tokens: join(TOKENS),
+        stylesPaint: join(STYLES_PAINT),
+        stylesText: join(STYLES_TEXT),
+        stylesEffect: join(STYLES_EFFECT),
+        stylesGrid: join(STYLES_GRID),
+        componentsLocal: join(COMPONENTS_LOCAL),
+        componentsLibrary: join(COMPONENTS_LIBRARY),
+        hygiene: join(HYGIENE)
+      },
+      counts
+    };
+    const detailPrefix = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/");
+    if (files.some((f) => String(f.path).startsWith(detailPrefix))) {
+      manifest2.files.componentsDir = DIR + (sep || "/") + COMPONENTS_DIR;
+    }
+    files.push({ path: MANIFEST, data: manifest2 });
+    return { files, manifest: manifest2, counts, dir: DIR };
+  }
 
   // src/progress.ts
   var CANCELLED_MESSAGE = "export cancelled by the designer in Figma";
+  var ABANDONED_MESSAGE = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
   var CANCELLED = "__designTwinCancelled";
+  var ABANDONED = "__designTwinAbandoned";
   function cancelledError() {
     const e = new Error(CANCELLED_MESSAGE);
     e[CANCELLED] = true;
     return e;
   }
+  function abandonedError() {
+    const e = new Error(ABANDONED_MESSAGE);
+    e[CANCELLED] = true;
+    e[ABANDONED] = true;
+    return e;
+  }
+  function isAbandonment(e) {
+    return !!e && typeof e === "object" && e[ABANDONED] === true;
+  }
   var running = null;
-  var cancelRequested = false;
+  var cancelRequested = null;
   var lastPost = 0;
   var page;
   var MIN_INTERVAL_MS = 250;
@@ -528,41 +383,51 @@
   }
   function beginRun(info) {
     running = info;
-    cancelRequested = false;
+    cancelRequested = null;
     page = void 0;
     lastPost = 0;
-    post({ type: "run-begin", source: info.source, label: info.label });
+    post({ type: "run-begin", source: info.source, label: info.label, ...ifDefined("requestId", info.requestId) });
   }
-  function endRun() {
+  function endRun(abandoned) {
     running = null;
-    cancelRequested = false;
+    cancelRequested = null;
     page = void 0;
-    post({ type: "run-end" });
+    post(abandoned ? { type: "run-end", abandoned: true } : { type: "run-end" });
+  }
+  function postQueued(run) {
+    if (run.source !== "bridge") return;
+    post({ type: "progress", phase: "queued", source: "bridge", label: run.label, ...ifDefined("requestId", run.requestId) });
   }
   function requestCancel() {
     if (!running) return null;
-    cancelRequested = true;
+    cancelRequested = "designer";
+    return running;
+  }
+  function requestAbandon(matches) {
+    if (!running || !matches(running)) return null;
+    if (cancelRequested === null) cancelRequested = "abandoned";
     return running;
   }
   function checkCancelled() {
-    if (cancelRequested) throw cancelledError();
+    if (cancelRequested === "designer") throw cancelledError();
+    if (cancelRequested === "abandoned") throw abandonedError();
   }
   function progress(phase, extra, force) {
     if (!running) return;
     const now = Date.now();
     if (!force && now - lastPost < MIN_INTERVAL_MS) return;
     lastPost = now;
-    post({ type: "progress", phase, source: running.source, label: running.label, page, ...extra });
+    post({ type: "progress", phase, source: running.source, label: running.label, ...ifDefined("page", page), ...extra });
   }
   function enterPage(phase, index, of, name, pageId, extra) {
-    page = { index, of, name, pageId };
+    page = { index, of, name, ...ifDefined("pageId", pageId) };
     progress(phase, extra, true);
   }
 
   // src/assets.ts
   var ASSET_DIR = "assets/";
   function contentHash(a) {
-    const src = a.text != null ? (0, import_svg_normalize.normalizeSvgText)(a.text) : a.base64 != null ? a.base64 : "";
+    const src = a.text != null ? normalizeSvgText(a.text) : a.base64 != null ? a.base64 : "";
     let h = 2166136261;
     for (let i = 0; i < src.length; i++) {
       h ^= src.charCodeAt(i);
@@ -580,14 +445,14 @@
     return String(x).replace(/[^a-zA-Z0-9-]+/g, "_").replace(/_+/g, "_");
   }
   function baseNameFor(a) {
-    if (a.kind === "reference") return (0, import_pages_layout.safe)(a.id.replace(/:ref$/, "")) + "_ref";
-    if (a.kind === "source") return (0, import_pages_layout.safe)(a.id);
+    if (a.kind === "reference") return safe(a.id.replace(/:ref$/, "")) + "_ref";
+    if (a.kind === "source") return safe(a.id);
     const last = String(a.name || "").split("/").pop() || "";
     const cleaned = assetSafe(last.trim()).replace(/^[-_]+|[-_]+$/g, "");
-    return cleaned || (0, import_pages_layout.safe)(a.id);
+    return cleaned || safe(a.id);
   }
   function register(a) {
-    const fmt = (0, import_pages_layout.safe)(a.format);
+    const fmt = safe(a.format);
     const dedupable = a.kind !== "reference";
     const hash = contentHash(a);
     if (dedupable) {
@@ -602,7 +467,8 @@
     const key = file.toLowerCase();
     const taken = byName.get(key);
     if (taken !== void 0 && taken !== hash) {
-      file = base + "-" + hash.split("-")[0].slice(0, 6) + "." + fmt;
+      const [head = ""] = hash.split("-");
+      file = base + "-" + head.slice(0, 6) + "." + fmt;
     }
     byName.set(file.toLowerCase(), hash);
     const asset = { ...a, file, hash };
@@ -618,34 +484,29 @@
     return "bin";
   }
   function collectSourceImage(hash) {
-    const f = figma;
-    if (!hash || typeof f.getImageByHash !== "function") return Promise.resolve(void 0);
+    if (!hash) return Promise.resolve(void 0);
     let p = imageSizeCache.get(hash);
     if (!p) {
-      p = readSourceImage(f, hash);
+      p = readSourceImage(hash);
       imageSizeCache.set(hash, p);
     }
     return p;
   }
-  async function readSourceImage(f, hash) {
+  async function readSourceImage(hash) {
     let size;
     try {
-      const img = f.getImageByHash(hash);
+      const img = figma.getImageByHash(hash);
       if (img) {
-        if (typeof img.getSizeAsync === "function") {
-          const s = await img.getSizeAsync();
-          if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
-        }
-        if (typeof img.getBytesAsync === "function") {
-          try {
-            const bytes = await img.getBytesAsync();
-            if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
-          } catch (e) {
-          }
+        const s = await img.getSizeAsync();
+        if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
+        try {
+          const bytes = await img.getBytesAsync();
+          if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
+        } catch (e) {
         }
       }
     } catch (e) {
-      warn("source image unavailable for hash " + hash + " (" + (0, import_errmsg.errMsg)(e) + ")");
+      warn("source image unavailable for hash " + hash + " (" + errMsg(e) + ")");
     }
     return size;
   }
@@ -654,46 +515,49 @@
   function paints(v) {
     return Array.isArray(v) ? v : null;
   }
-  function hasVisiblePaint(n, fills) {
+  function hasVisiblePaint(node, fills) {
     if (fills && fills.some((p) => p.visible !== false)) return true;
-    const s = paints(n.strokes);
+    const s = paints("strokes" in node ? node.strokes : void 0);
     return !!s && s.some((p) => p.visible !== false);
   }
-  function hasArea(n) {
-    if (typeof n.width !== "number" || typeof n.height !== "number") return true;
-    return n.width > 0 && n.height > 0;
+  function hasArea(node) {
+    if (!("width" in node) || typeof node.width !== "number" || typeof node.height !== "number") return true;
+    return node.width > 0 && node.height > 0;
   }
-  function geometryOf(n) {
-    const ds = (g) => Array.isArray(g) ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
-    const fills = ds(n.fillGeometry);
-    const strokes = ds(n.strokeGeometry);
+  function paintsNothing(node, isVector, fills) {
+    return !hasArea(node) || isVector && !hasVisiblePaint(node, fills);
+  }
+  function geometryOf(node) {
+    const ds = (g) => g ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
+    const fills = ds("fillGeometry" in node ? node.fillGeometry : void 0);
+    const strokes = ds("strokeGeometry" in node ? node.strokeGeometry : void 0);
     if (!fills.length && !strokes.length) return void 0;
     const out = {};
     if (fills.length) out.fills = fills;
     if (strokes.length) out.strokes = strokes;
-    if (typeof n.width === "number") {
-      out.w = round(n.width);
-      out.h = round(n.height);
+    if ("width" in node && typeof node.width === "number") {
+      out.w = round(node.width);
+      out.h = round(node.height);
     }
     return out;
   }
-  async function collectAsset(node) {
+  async function collectAsset(node, hidden) {
     const isVector = VECTOR_TYPES.has(node.type);
-    const n = node;
-    const fills = "fills" in node && Array.isArray(n.fills) ? n.fills : null;
-    const kids = "children" in node && Array.isArray(n.children) ? n.children : null;
+    const rawFills = "fills" in node ? node.fills : void 0;
+    const fills = Array.isArray(rawFills) ? rawFills : null;
+    const kids = "children" in node && Array.isArray(node.children) ? node.children : null;
     const hasImage = !!fills && fills.some((f) => f.type === "IMAGE" && f.visible !== false) && !(kids && kids.length > 0);
     let iconLike = false;
-    if (ICON_CONTAINER_TYPES.has(node.type) && node.name && /icon|logo|illustration|avatar/i.test(node.name) && "width" in node && Math.max(n.width, n.height) <= 96) {
+    if (ICON_CONTAINER_TYPES.has(node.type) && node.name && /icon|logo|illustration|avatar/i.test(node.name) && "width" in node && "findOne" in node && Math.max(node.width, node.height) <= 96) {
       try {
-        iconLike = !n.findOne((x) => x.type === "TEXT");
+        iconLike = !node.findOne((x) => x.type === "TEXT");
       } catch (e) {
         iconLike = false;
       }
     }
-    if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && n.isAsset === true) {
+    if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && node.isAsset === true && "findOne" in node) {
       try {
-        iconLike = !n.findOne((x) => x.type === "TEXT");
+        iconLike = !node.findOne((x) => x.type === "TEXT");
       } catch (e) {
         iconLike = false;
       }
@@ -702,26 +566,34 @@
       stats.assetsSkipped++;
       return { skipped: true };
     }
+    if (hidden && (isVector || iconLike || hasImage)) {
+      if ((isVector || iconLike) && paintsNothing(node, isVector, fills)) {
+        stats.assetsSkippedInvisible++;
+        return void 0;
+      }
+      stats.assetsHidden++;
+      return { skipped: "hidden" };
+    }
     if (isVector || iconLike || hasImage) {
       checkCancelled();
       progress("assets", { nodes: stats.nodes, assets: assets.length });
     }
     if (isVector || iconLike) {
-      if (!hasArea(n) || isVector && !hasVisiblePaint(n, fills)) {
+      if (paintsNothing(node, isVector, fills)) {
         stats.assetsSkippedInvisible++;
         return void 0;
       }
       let svg = null;
       let reason = "empty/invalid SVG";
       try {
-        svg = await node.exportAsync({ format: "SVG_STRING" });
+        if ("exportAsync" in node) svg = await node.exportAsync({ format: "SVG_STRING" });
       } catch (e) {
-        reason = (0, import_errmsg.errMsg)(e);
+        reason = errMsg(e);
       }
       if (svg && svg.indexOf("<svg") !== -1) {
         return { path: register({ id: node.id, name: node.name, format: "svg", text: svg }) };
       }
-      const geo = geometryOf(n);
+      const geo = isVector ? geometryOf(node) : void 0;
       if (geo) {
         stats.assetsGeometry++;
         return { geometry: geo };
@@ -731,7 +603,7 @@
       return void 0;
     }
     try {
-      if (hasImage) {
+      if (hasImage && "exportAsync" in node) {
         const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
         if (!bytes || !bytes.length) {
           stats.assetsFailed++;
@@ -742,31 +614,35 @@
       }
     } catch (e) {
       stats.assetsFailed++;
-      warnKind("image asset export failed", node.name + " (" + node.id + "): " + (0, import_errmsg.errMsg)(e));
+      warnKind("image asset export failed", node.name + " (" + node.id + "): " + errMsg(e));
     }
     return void 0;
   }
+  function referenceScale(node, opts) {
+    if (opts && typeof opts.scale === "number" && opts.scale > 0) return opts.scale;
+    const w = "width" in node ? node.width || 0 : 0;
+    const h = "height" in node ? node.height || 0 : 0;
+    return Math.min(2, 2048 / (Math.max(w, h) || 1));
+  }
   async function collectReference(node, opts) {
-    const n = node;
     if (!node || !("exportAsync" in node) || !("width" in node)) return void 0;
     try {
-      const value = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : Math.min(2, 2048 / (Math.max(n.width || 0, n.height || 0) || 1));
-      const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
+      const value = referenceScale(node, opts);
+      const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
       if (!bytes || !bytes.length) {
         warn("reference screenshot empty: " + node.name);
         return void 0;
       }
       return register({ id: node.id + ":ref", name: node.name + " (reference)", format: "png", base64: toBase64(bytes), kind: "reference" });
     } catch (e) {
-      warn("reference screenshot failed: " + node.name + " (" + (0, import_errmsg.errMsg)(e) + ")");
+      warn("reference screenshot failed: " + node.name + " (" + errMsg(e) + ")");
       return void 0;
     }
   }
   async function devResources(node) {
-    const n = node;
-    if (!node || typeof n.getDevResourcesAsync !== "function") return void 0;
+    if (!node) return void 0;
     try {
-      const rs = await n.getDevResourcesAsync({ includeChildren: true });
+      const rs = await node.getDevResourcesAsync({ includeChildren: true });
       if (!Array.isArray(rs) || !rs.length) return void 0;
       return rs.map((r) => {
         const o = { name: r.name, url: r.url };
@@ -775,18 +651,78 @@
         return o;
       });
     } catch (e) {
-      warn("dev resources unavailable for '" + node.name + "' (" + (0, import_errmsg.errMsg)(e) + ")");
+      warn("dev resources unavailable for '" + node.name + "' (" + errMsg(e) + ")");
       return void 0;
     }
   }
 
+  // ../bridge/src/read-opts.ts
+  var READ_OPTS = [
+    {
+      name: "css",
+      flag: "--css",
+      describe: "Include Figma's OWN computed CSS per node (getCSSAsync) \u2014 the design-to-code oracle. One async call per node, so larger/slower; use for a screen you're implementing."
+    },
+    {
+      // NOT "Dev Mode only": per developers.figma.com only addMeasurement/editMeasurement/
+      // deleteMeasurement carry that restriction — PageNode.getMeasurements() has no such note. And no
+      // longer "current page": collect.ts reads measurements from the page(s) actually exported.
+      name: "measurements",
+      flag: "--measurements",
+      describe: "Include measurement redlines (spacing specs the designer placed) for the exported page(s). Reading them does not require Dev Mode."
+    },
+    {
+      name: "pluginData",
+      flag: "--plugin-data",
+      describe: "Include own-scope plugin data (getPluginData) stamped on nodes \u2014 round-trip metadata. Usually empty unless the write plane wrote it."
+    },
+    {
+      name: "motion",
+      flag: "--motion",
+      describe: "Include motion/animation reads (timelines, manual keyframe tracks, animations, applied animation styles). Free via the Plugin API; useful for Slides/prototype animation. Can be verbose."
+    },
+    {
+      name: "sharedData",
+      flag: "--shared-data",
+      describe: "Include cross-plugin shared data (getSharedPluginData) \u2014 notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node."
+    },
+    {
+      name: "variantVisuals",
+      flag: "--variant-visuals",
+      describe: "Walk each COMPONENT_SET's variant children and record their real layout/fills/radius/tokens/css \u2014 the master-component source of truth, not the component-set wrapper's own selection-chrome visuals. One node walk per variant; noticeably slower on large systems."
+    },
+    {
+      // The odd one out: the others ADD work, this one REMOVES it. Asset export is one exportAsync (a
+      // real render round-trip — SVG per vector, 2x PNG per image) PER NODE, run sequentially, and
+      // unlike getCSSAsync it was never gated despite being the same O(nodes) shape and far more
+      // expensive. On a real design-system page it dominates the export and can outgrow the bridge's
+      // frame limit. Opt-IN to skipping, so the default stays exactly as it was.
+      name: "skipAssets",
+      flag: "--no-assets",
+      describe: "Skip the per-node SVG/PNG render pass \u2014 the dominant cost on a big file. Structure, layout and tokens are unaffected; skipped nodes stay leaves marked `assetSkipped: true`. Asset BYTES are stripped from MCP results anyway, so this is usually pure savings here."
+    }
+  ];
+  function readOptDefaults() {
+    const o = {};
+    for (const d of READ_OPTS) o[d.name] = false;
+    return o;
+  }
+
   // src/state.ts
-  var import_read_opts = __toESM(require_read_opts());
   var assets = [];
-  var runOpts = (0, import_read_opts.readOptDefaults)();
+  var runOpts = readOptDefaults();
   var imageSizeCache = /* @__PURE__ */ new Map();
   var warnings = [];
-  var newStats = () => ({ nodes: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0, truncated: 0 });
+  var newStats = () => ({
+    nodes: 0,
+    assetsFailed: 0,
+    assetsSkipped: 0,
+    assetsSkippedInvisible: 0,
+    assetsGeometry: 0,
+    assetsHidden: 0,
+    hiddenNodes: 0,
+    truncated: 0
+  });
   var stats = newStats();
   function warn(msg) {
     warnings.push(msg);
@@ -849,24 +785,61 @@
   var nodeNameLookup = memoName((id) => figma.getNodeByIdAsync(id));
   var collectionLookup = memoName((id) => figma.variables && figma.variables.getVariableCollectionByIdAsync ? figma.variables.getVariableCollectionByIdAsync(id) : Promise.resolve(null));
   var getCollection = collectionLookup.obj;
+  var queuedRuns = /* @__PURE__ */ new Set();
   var runChain = Promise.resolve();
+  var inChain = 0;
   function serializeRun(fn, run) {
-    const go = () => bracket(fn, run);
+    const ticket = { run, abandoned: false };
+    queuedRuns.add(ticket);
+    if (inChain > 0) postQueued(run);
+    inChain++;
+    const go = () => {
+      queuedRuns.delete(ticket);
+      if (ticket.abandoned) {
+        inChain--;
+        return Promise.reject(abandonedError());
+      }
+      return bracket(fn, run).finally(() => {
+        inChain--;
+      });
+    };
     const next = runChain.then(go, go);
     runChain = next.then(() => {
     }, () => {
     });
     return next;
   }
+  function cancelBridgeRequest(id) {
+    for (const t of queuedRuns) {
+      if (t.run.source === "bridge" && t.run.requestId === id) {
+        t.abandoned = true;
+        return t.run;
+      }
+    }
+    return requestAbandon((r) => r.source === "bridge" && r.requestId === id);
+  }
+  function cancelBridgeRuns() {
+    let hit = 0;
+    for (const t of queuedRuns) {
+      if (t.run.source === "bridge" && !t.abandoned) {
+        t.abandoned = true;
+        hit++;
+      }
+    }
+    if (requestAbandon((r) => r.source === "bridge")) hit++;
+    return hit;
+  }
   async function bracket(fn, run) {
     beginRun(run);
+    let abandoned = false;
     try {
       return await fn();
     } catch (e) {
-      releaseAssets();
+      abandoned = isAbandonment(e);
       throw e;
     } finally {
-      endRun();
+      releaseAssets();
+      endRun(abandoned);
     }
   }
   function releaseAssets() {
@@ -877,7 +850,7 @@
     try {
       await figma.loadAllPagesAsync();
     } catch (e) {
-      warn("loadAllPagesAsync failed (" + consequence + "): " + (0, import_errmsg.errMsg)(e));
+      warn("loadAllPagesAsync failed (" + consequence + "): " + errMsg(e));
     }
   }
   function resetRun() {
@@ -893,8 +866,158 @@
     imageSizeCache.clear();
   }
 
-  // src/collect.ts
-  var import_node_id = __toESM(require_node_id());
+  // ../bridge/src/node-id.ts
+  var ID = "[A-Za-z0-9%:;_-]+";
+  var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
+  function decode(s) {
+    try {
+      return decodeURIComponent(s);
+    } catch (e) {
+      return s;
+    }
+  }
+  function normalizeNodeId(raw) {
+    if (!raw) return void 0;
+    const s = decode(String(raw).trim()).replace(/-/g, ":");
+    return /^I?\d+:\d+(?:[;:]\d+:\d+)*$/.test(s) || /^\d+$/.test(s) ? s : void 0;
+  }
+  function parseNodeId(input) {
+    if (!input) return void 0;
+    const s = String(input).trim();
+    try {
+      const nid = new URL(s).searchParams.get("node-id");
+      if (nid) return normalizeNodeId(nid);
+    } catch (e) {
+    }
+    const m = s.match(NODE_ID_RE);
+    if (m) return normalizeNodeId(m[1]);
+    return normalizeNodeId(s);
+  }
+  function toNodeId(raw) {
+    return parseNodeId(raw) || (raw == null ? "" : String(raw));
+  }
+
+  // ../bridge/src/commands.ts
+  var COMMAND_SET = {
+    ping: true,
+    whoami: true,
+    getSelection: true,
+    listPages: true,
+    listChildren: true,
+    listLibraries: true,
+    exportFull: true,
+    exportDesignSystem: true,
+    exportLibrary: true,
+    exportSelection: true,
+    exportNode: true,
+    screenshot: true,
+    write: true
+  };
+  function isCmd(x) {
+    return Object.prototype.hasOwnProperty.call(COMMAND_SET, x);
+  }
+  var COMMANDS = Object.keys(COMMAND_SET).filter(isCmd);
+  var NO_NODE_ID = "No node id provided.";
+  var isBool = (v) => typeof v === "boolean";
+  var isStr = (v) => typeof v === "string";
+  var isNum = (v) => typeof v === "number";
+  function opt(a, key, ok, what, label = key) {
+    const v = a[key];
+    return v === void 0 || ok(v) ? null : `\`${label}\` is not ${what}`;
+  }
+  function first(errs) {
+    for (const e of errs) if (e !== null) return e;
+    return null;
+  }
+  var READ_OPT_NAMES = READ_OPTS.map((o) => o.name);
+  var readOptArgs = (a) => first(READ_OPT_NAMES.map((k) => opt(a, k, isBool, "a boolean")));
+  var nodeArgs = (a) => a.nodeId === void 0 || a.nodeId === null ? NO_NODE_ID : isStr(a.nodeId) ? null : "`nodeId` is not a string";
+  var designSystemArgs = (a) => opt(a, "variantVisuals", isBool, "a boolean");
+  var isPageSel = (v) => isStr(v) || Array.isArray(v) && v.every(isStr);
+  var WRITE_OP_SET = { createFrame: true, createText: true, setFill: true, setText: true };
+  var isWriteOpName = (v) => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OP_SET, v);
+  var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum);
+  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color"];
+  var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
+  function writeOpError(o, i) {
+    const at = `ops[${i}]`;
+    if (!isRecord(o)) return `\`${at}\` is not an object`;
+    if (!isWriteOpName(o.op)) return `\`${at}.op\` is not one of ${Object.keys(WRITE_OP_SET).join(" | ")}`;
+    return first([
+      ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at}.${k}`)),
+      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum, "a number", `${at}.${k}`)),
+      opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at}.layoutMode`),
+      opt(o, "padding", isPadding, "four numbers", `${at}.padding`)
+    ]);
+  }
+  var writeArgs = (a) => {
+    if (!Array.isArray(a.ops)) return a.ops === void 0 ? "`ops` is missing" : "`ops` is not an array";
+    return first(a.ops.map(writeOpError));
+  };
+  var noArgs = () => null;
+  var ARGS_CHECKS = {
+    ping: noArgs,
+    whoami: noArgs,
+    getSelection: noArgs,
+    listPages: (a) => opt(a, "depth", (v) => v === 1 || v === 2, "1 or 2"),
+    listChildren: nodeArgs,
+    listLibraries: noArgs,
+    exportFull: (a) => first([readOptArgs(a), opt(a, "allPages", isBool, "a boolean"), opt(a, "page", isPageSel, "a string or an array of strings")]),
+    exportDesignSystem: designSystemArgs,
+    exportLibrary: (a) => first([designSystemArgs(a), opt(a, "asLibrary", isStr, "a string")]),
+    exportSelection: readOptArgs,
+    exportNode: (a) => first([nodeArgs(a), readOptArgs(a)]),
+    screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum, "a number")]),
+    write: writeArgs
+  };
+  function argsShapeError(cmd, args) {
+    if (!isRecord(args)) return `bad ${cmd} args: not an object`;
+    const e = ARGS_CHECKS[cmd](args);
+    return e === null || e === NO_NODE_ID ? e : `bad ${cmd} args: ${e}`;
+  }
+  function hasArgs(cmd, a) {
+    return ARGS_CHECKS[cmd](a) === null;
+  }
+  function parseCommandRequest(cmd, args) {
+    if (!isCmd(cmd)) return { ok: false, error: "unknown cmd: " + cmd };
+    const a = isRecord(args) ? args : {};
+    const bad = () => {
+      var _a;
+      return { ok: false, error: (_a = argsShapeError(cmd, a)) != null ? _a : `bad ${cmd} args` };
+    };
+    switch (cmd) {
+      case "ping":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "whoami":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "getSelection":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "listPages":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "listChildren":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "listLibraries":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "exportFull":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "exportDesignSystem":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "exportLibrary":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "exportSelection":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "exportNode":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "screenshot":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "write":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      default: {
+        const exhaustive = cmd;
+        return { ok: false, error: "unknown cmd: " + String(exhaustive) };
+      }
+    }
+  }
 
   // src/layout.ts
   var ALIGN = {
@@ -902,42 +1025,49 @@
     CENTER: "center",
     MAX: "flex-end",
     SPACE_BETWEEN: "space-between",
-    BASELINE: "baseline"
+    SPACE_EVENLY: "space-evenly",
+    SPACE_AROUND: "space-around",
+    BASELINE: "baseline",
+    // AUTO is never looked up (counterAxisAlignContent skips it via the `!== "AUTO"` check below); the
+    // value exists only to make this Record total over AlignKey.
+    AUTO: "flex-start"
   };
   function flexIntent(src) {
     const l = { display: "flex", flexDirection: src.layoutMode === "VERTICAL" ? "column" : "row" };
-    if (src.itemSpacing) l.gap = src.itemSpacing;
+    const isAutoSpacing = src.primaryAxisAlignItems === "SPACE_BETWEEN" || src.primaryAxisAlignItems === "SPACE_EVENLY" || src.primaryAxisAlignItems === "SPACE_AROUND";
+    if (src.itemSpacing && !isAutoSpacing) l.gap = src.itemSpacing;
     const pad = [src.paddingTop, src.paddingRight, src.paddingBottom, src.paddingLeft];
     if (pad.some((p) => p)) l.padding = pad;
     if (src.primaryAxisAlignItems && src.primaryAxisAlignItems !== "MIN") l.justifyContent = ALIGN[src.primaryAxisAlignItems];
     if (src.counterAxisAlignItems && src.counterAxisAlignItems !== "MIN") l.alignItems = ALIGN[src.counterAxisAlignItems];
     if (src.layoutWrap === "WRAP") {
       l.flexWrap = "wrap";
-      if (src.counterAxisSpacing) l.rowGap = src.counterAxisSpacing;
+      if (src.counterAxisSpacing && src.counterAxisAlignContent !== "SPACE_BETWEEN") l.rowGap = src.counterAxisSpacing;
       if (src.counterAxisAlignContent && src.counterAxisAlignContent !== "AUTO") l.alignContent = ALIGN[src.counterAxisAlignContent];
     }
     return l;
   }
   function simplifyGrid(g) {
     if (!g) return void 0;
-    const gg = g;
-    const o = { pattern: gg.pattern ? String(gg.pattern).toLowerCase() : void 0 };
-    if (typeof gg.sectionSize === "number") o.size = round(gg.sectionSize);
-    if (typeof gg.gutterSize === "number") o.gutter = round(gg.gutterSize);
-    if (typeof gg.count === "number" && gg.count !== Infinity) o.count = gg.count;
-    if (typeof gg.offset === "number") o.offset = round(gg.offset);
-    if (gg.alignment) o.alignment = String(gg.alignment).toLowerCase();
-    if (gg.visible === false) o.visible = false;
+    const o = { ...ifDefined("pattern", g.pattern ? lower(g.pattern) : void 0) };
+    if (typeof g.sectionSize === "number") o.size = round(g.sectionSize);
+    if (g.pattern !== "GRID") {
+      if (typeof g.gutterSize === "number") o.gutter = round(g.gutterSize);
+      if (typeof g.count === "number" && g.count !== Infinity) o.count = g.count;
+      if (typeof g.offset === "number") o.offset = round(g.offset);
+      if (g.alignment) o.alignment = lower(g.alignment);
+    }
+    if (g.visible === false) o.visible = false;
     return o;
   }
   function simplifyTrack(t) {
-    if (!t || typeof t !== "object") return t;
-    const o = { type: t.type ? String(t.type).toLowerCase() : void 0 };
+    const o = { ...ifDefined("type", t.type ? lower(t.type) : void 0) };
     if (typeof t.value === "number") o.value = round(t.value);
     return o;
   }
   var GRID_SELF = { MIN: "start", CENTER: "center", MAX: "end" };
   function layout(node) {
+    if (!("children" in node)) return void 0;
     const n = node;
     if (!("layoutMode" in node) || n.layoutMode === "NONE") {
       if ("inferredAutoLayout" in node && n.inferredAutoLayout) {
@@ -968,8 +1098,11 @@
   }
 
   // src/variables.ts
+  function isVariableAlias(v) {
+    return !!v && typeof v === "object" && "type" in v && v.type === "VARIABLE_ALIAS";
+  }
   async function resolveVar(alias) {
-    if (!alias || alias.type !== "VARIABLE_ALIAS") return void 0;
+    if (!isVariableAlias(alias)) return void 0;
     return varName(alias.id);
   }
   async function resolveBoundMap(bound) {
@@ -978,8 +1111,9 @@
     for (const key of Object.keys(bound)) {
       const val = bound[key];
       if (Array.isArray(val)) {
-        const names = (await Promise.all(val.map(resolveVar))).filter(Boolean);
-        if (names.length) out[key] = names.length === 1 ? names[0] : names;
+        const names = (await Promise.all(val.map(resolveVar))).filter((x) => !!x);
+        const [first2, ...rest] = names;
+        if (first2 !== void 0) out[key] = rest.length ? names : first2;
       } else {
         const n = await resolveVar(val);
         if (n) out[key] = n;
@@ -1004,20 +1138,24 @@
   ];
   async function nodeStyles(node) {
     const names = await Promise.all(
-      STYLE_FIELDS.map(([field]) => field in node ? styleName(anyProp(node, field)) : Promise.resolve(void 0))
+      STYLE_FIELDS.map(([field]) => {
+        if (!(field in node)) return Promise.resolve(void 0);
+        const id = anyProp(node, field);
+        return typeof id === "string" || id === figma.mixed ? styleName(id) : Promise.resolve(void 0);
+      })
     );
     const out = {};
     STYLE_FIELDS.forEach(([, key], i) => {
-      if (names[i]) out[key] = names[i];
+      const n = names[i];
+      if (n) out[key] = n;
     });
     return nonEmpty(out);
   }
   async function resolveModeMap(raw, skipSingleMode) {
     if (!raw || !Object.keys(raw).length) return void 0;
     const out = {};
-    for (const collectionId of Object.keys(raw)) {
+    for (const [collectionId, modeId] of Object.entries(raw)) {
       const c = await getCollection(collectionId);
-      const modeId = raw[collectionId];
       if (!c || !Array.isArray(c.modes)) {
         out[collectionId] = modeId;
         continue;
@@ -1034,11 +1172,61 @@
   function resolvedModes(node) {
     return resolveModeMap(node.resolvedVariableModes, true);
   }
+  function isComposedColor(v) {
+    return typeof v === "object" && "opacity" in v && "color" in v;
+  }
+  function isRgb(x) {
+    return !!x && typeof x === "object" && "r" in x && typeof x.r === "number" && "g" in x && typeof x.g === "number" && "b" in x && typeof x.b === "number";
+  }
+  function composedFromExpression(v) {
+    const u = v;
+    if (!u || typeof u !== "object" || !("type" in u) || u.type !== "VARIABLE_EXPRESSION") return null;
+    if (!("expressionFunction" in u) || u.expressionFunction !== "COMPOSE_COLOR") return null;
+    if (!("expressionArguments" in u) || !isUnknownArray(u.expressionArguments) || u.expressionArguments.length !== 2) return null;
+    const [c, o] = u.expressionArguments;
+    if (isVariableAlias(c)) {
+      if (isVariableAlias(o) || typeof o === "number") return { color: c, opacity: o };
+      return null;
+    }
+    return isRgb(c) && isVariableAlias(o) ? { color: c, opacity: o } : null;
+  }
+  function toComposed(v) {
+    return isComposedColor(v) ? v : composedFromExpression(v);
+  }
+  function colorIsAlias(v) {
+    return isVariableAlias(v.color);
+  }
+  function aliasIds(v) {
+    if (isVariableAlias(v)) return v.id ? [v.id] : [];
+    const c = toComposed(v);
+    if (!c) return [];
+    const out = [];
+    if (isVariableAlias(c.color) && c.color.id) out.push(c.color.id);
+    if (isVariableAlias(c.opacity) && c.opacity.id) out.push(c.opacity.id);
+    return out;
+  }
+  async function aliasValue(a) {
+    return { aliasOf: await varName(a.id) || a.id };
+  }
+  async function composedValue(v) {
+    if (colorIsAlias(v)) {
+      const [color, opacity] = await Promise.all([aliasValue(v.color), isVariableAlias(v.opacity) ? aliasValue(v.opacity) : v.opacity]);
+      return { composed: { color, opacity } };
+    }
+    return { composed: { color: rgbaToHex(v.color), opacity: await aliasValue(v.opacity) } };
+  }
   async function resolveModeValue(v, resolvedType) {
-    const val = v;
-    if (val && val.type === "VARIABLE_ALIAS") return { aliasOf: await varName(val.id) || val.id };
-    if (resolvedType === "COLOR" && val && typeof val.r === "number") return rgbaToHex(val);
-    return v;
+    if (isVariableAlias(v)) return aliasValue(v);
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+    if (isComposedColor(v)) return composedValue(v);
+    const fromExpression = composedFromExpression(v);
+    if (fromExpression) return composedValue(fromExpression);
+    if (resolvedType === "COLOR" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
+    return verbatimValue(v);
+  }
+  function verbatimValue(v) {
+    const o = v;
+    return o;
   }
   async function dumpVariables(opts) {
     const asLibrary = !!(opts && opts.asLibrary);
@@ -1063,10 +1251,7 @@
     const hygiene = [];
     const aliasTargets = (v) => {
       const out = [];
-      for (const modeId of Object.keys(v.valuesByMode || {})) {
-        const raw = v.valuesByMode[modeId];
-        if (raw && raw.type === "VARIABLE_ALIAS" && raw.id) out.push(raw.id);
-      }
+      for (const value of Object.values(v.valuesByMode || {})) out.push(...aliasIds(value));
       return out;
     };
     const remoteVars = [];
@@ -1095,21 +1280,21 @@
     for (const v of localVars.concat(remoteVars)) {
       const values = {};
       let hasAlias = false;
-      const modeIds = Object.keys(v.valuesByMode);
-      const resolved = await Promise.all(modeIds.map((modeId) => resolveModeValue(v.valuesByMode[modeId], v.resolvedType)));
-      for (let i = 0; i < modeIds.length; i++) {
-        const modeId = modeIds[i];
-        const raw = v.valuesByMode[modeId];
-        if (raw && raw.type === "VARIABLE_ALIAS") {
-          hasAlias = true;
-          if (!resolvedIds.has(raw.id)) hygiene.push("broken alias in '" + v.name + "' \u2014 target " + raw.id + " could not be resolved");
+      const modes = await Promise.all(Object.entries(v.valuesByMode).map(async ([modeId, raw]) => ({ modeId, raw, value: await resolveModeValue(raw, v.resolvedType) })));
+      for (const { modeId, raw, value } of modes) {
+        if (isVariableAlias(raw) || toComposed(raw)) hasAlias = true;
+        for (const id of isVariableAlias(raw) ? [raw.id] : aliasIds(raw)) {
+          if (!resolvedIds.has(id)) hygiene.push("broken alias in '" + v.name + "' \u2014 target " + id + " could not be resolved");
         }
-        values[modeName[modeId] || modeId] = resolved[i];
+        values[modeName[modeId] || modeId] = value;
       }
+      const coll = collOf(v.variableCollectionId);
+      const collKey = coll ? coll.key : void 0;
       const rec = {
         name: v.name,
         type: v.resolvedType,
-        collection: (collOf(v.variableCollectionId) || {}).name,
+        collection: (coll || {}).name,
+        ...ifDefined("collectionKey", typeof collKey === "string" && collKey ? collKey : void 0),
         // tier: alias => semantic; raw+meaningfully-scoped => semantic leaf; raw+unscoped => primitive.
         // ALL_SCOPES is Figma's default catch-all (it pollutes every picker — see the hygiene flag below),
         // so it does NOT count as a meaningful scope; otherwise almost every variable would read semantic.
@@ -1132,12 +1317,18 @@
     }
     if (pendingPublish.length) {
       const st = await Promise.all(pendingPublish.map((p) => publishOf2(p.obj)));
-      for (let i = 0; i < pendingPublish.length; i++) if (st[i]) pendingPublish[i].rec.publish = st[i];
+      for (const [i, p] of pendingPublish.entries()) {
+        const s = st[i];
+        if (s) p.rec.publish = s;
+      }
     }
     const collPublish = {};
     if (asLibrary) {
       const st = await Promise.all(allCollections.map((c) => publishOf2(c)));
-      for (let i = 0; i < allCollections.length; i++) if (st[i]) collPublish[allCollections[i].id] = st[i];
+      for (const [i, c] of allCollections.entries()) {
+        const s = st[i];
+        if (s) collPublish[c.id] = s;
+      }
     }
     return {
       // Local collections plus any LIBRARY collection a referenced remote variable belongs to — the
@@ -1146,16 +1337,16 @@
         name: c.name,
         modes: c.modes.map((m) => m.name),
         // Which mode is the base/`:root` default (vs. the override theme) — codegen otherwise guesses.
-        default: modeName[c.defaultModeId] || void 0,
+        ...ifDefined("default", modeName[c.defaultModeId] || void 0),
         theming: c.modes.length > 1,
         // Extended collection (its modes inherit from a root collection via parentModeId) — codegen
         // should treat it as an override layer, not a standalone theme. Flag it; deep parent-mode
         // resolution (mode.parentModeId -> root mode) is deferred.
-        extended: c.isExtension === true ? true : void 0,
-        hiddenFromPublishing: c.hiddenFromPublishing === true ? true : void 0,
-        key: c.key || void 0,
+        ...ifDefined("extended", c.isExtension === true ? true : void 0),
+        ...ifDefined("hiddenFromPublishing", c.hiddenFromPublishing === true ? true : void 0),
+        ...ifDefined("key", c.key || void 0),
         // durable cross-file collection identity
-        publish: collPublish[c.id] || void 0
+        ...ifDefined("publish", collPublish[c.id] || void 0)
         // library mode only
       })),
       variables,
@@ -1170,7 +1361,8 @@
     const src = f.filters;
     const out = {};
     for (const k of FILTER_KEYS) {
-      if (typeof src[k] === "number" && src[k]) out[k] = round(src[k]);
+      const v = src[k];
+      if (typeof v === "number" && v) out[k] = round(v);
     }
     return nonEmpty(out);
   }
@@ -1180,7 +1372,7 @@
     return o;
   }
   function mediaPaint(f, type, hash, transform) {
-    const o = paintExtras(f, { type, scaleMode: f.scaleMode ? f.scaleMode.toLowerCase() : void 0 });
+    const o = paintExtras(f, { type, ...ifDefined("scaleMode", f.scaleMode ? lower(f.scaleMode) : void 0) });
     if (hash) o.hash = hash;
     if (f.scaleMode === "TILE" && typeof f.scalingFactor === "number") o.scale = f.scalingFactor;
     if (typeof f.rotation === "number" && f.rotation) o.rotation = f.rotation;
@@ -1188,6 +1380,51 @@
     const flt = imageFilters(f);
     if (flt) o.filters = flt;
     return o;
+  }
+  async function shaderColor(c, tokenKey, tokens) {
+    if (isVariableAlias(c)) {
+      const name = await resolveVar(c);
+      if (name) tokens[tokenKey] = name;
+      return void 0;
+    }
+    return rgbaToHex(c);
+  }
+  async function shaderValue(v, defId, tokens) {
+    if (typeof v === "boolean" || typeof v === "string") return v;
+    if (typeof v === "number") return round(v);
+    if (isVariableAlias(v)) {
+      const name = await resolveVar(v);
+      if (name) tokens[defId] = name;
+      return void 0;
+    }
+    if ("stops" in v) {
+      const stops = await Promise.all(v.stops.map(async (s, i) => {
+        const color = await shaderColor(s.color, `${defId}.stops.${i}.color`, tokens);
+        return color === void 0 ? { pos: round(s.position) } : { pos: round(s.position), color };
+      }));
+      return { stops };
+    }
+    if ("color" in v) {
+      const color = await shaderColor(v.color, `${defId}.color`, tokens);
+      return color === void 0 ? xy(v) : { ...xy(v), color };
+    }
+    if ("radius" in v) {
+      return "angle" in v ? { ...xy(v), radius: round(v.radius), angle: round(v.angle) } : { ...xy(v), radius: round(v.radius) };
+    }
+    if ("x2" in v) return { ...xy(v), x2: round(v.x2), y2: round(v.y2) };
+    if ("x" in v) return xy(v);
+    return { color: rgbaToHex(v) };
+  }
+  async function putShaderProperties(o, props) {
+    if (!props || typeof props !== "object") return;
+    const out = {};
+    const tokens = {};
+    for (const [defId, pv] of Object.entries(props)) {
+      const v = await shaderValue(pv, defId, tokens);
+      if (v !== void 0) out[defId] = v;
+    }
+    putNonEmpty(o, "properties", out);
+    putNonEmpty(o, "tokens", tokens);
   }
   async function simplifyFills(fills) {
     if (!fills || fills === figma.mixed || !Array.isArray(fills)) return void 0;
@@ -1200,9 +1437,9 @@
           if (f.blendMode && f.blendMode !== "NORMAL") o.blend = f.blendMode.toLowerCase();
         } else if (f.type.startsWith("GRADIENT")) {
           const g = f;
-          o = paintExtras(g, { type: "gradient", kind: g.type });
-          if (Array.isArray(g.gradientStops)) {
-            o.stops = await Promise.all(
+          const gp = paintExtras(g, { type: "gradient", kind: g.type });
+          if (isList(g.gradientStops)) {
+            gp.stops = await Promise.all(
               g.gradientStops.map(async (s) => {
                 const stop = { pos: round(s.position), color: rgbaToHex(s.color) };
                 const bv = await resolveBoundMap(s.boundVariables);
@@ -1211,36 +1448,47 @@
               })
             );
           }
-          if (Array.isArray(g.gradientTransform)) o.transform = g.gradientTransform;
+          if (Array.isArray(g.gradientTransform)) gp.transform = g.gradientTransform;
+          o = gp;
         } else if (f.type === "IMAGE") {
-          o = mediaPaint(f, "image", f.imageHash, f.imageTransform);
+          const mp = mediaPaint(f, "image", f.imageHash, f.imageTransform);
           const size = await collectSourceImage(f.imageHash);
-          if (size) o.intrinsicSize = size;
+          if (size) mp.intrinsicSize = size;
+          o = mp;
         } else if (f.type === "VIDEO") {
           o = mediaPaint(f, "video", f.videoHash, f.videoTransform);
         } else if (f.type === "PATTERN") {
-          o = paintExtras(f, { type: "pattern" });
-          if (f.sourceNodeId) o.sourceNodeId = f.sourceNodeId;
-          if (f.tileType) o.tileType = String(f.tileType).toLowerCase();
-          if (typeof f.scalingFactor === "number") o.scale = f.scalingFactor;
-          if (f.spacing) o.spacing = xy(f.spacing);
-          if (f.horizontalAlignment) o.align = String(f.horizontalAlignment).toLowerCase();
+          const pp = paintExtras(f, { type: "pattern" });
+          if (f.sourceNodeId) pp.sourceNodeId = f.sourceNodeId;
+          if (f.tileType) pp.tileType = String(f.tileType).toLowerCase();
+          if (typeof f.scalingFactor === "number") pp.scale = f.scalingFactor;
+          if (f.spacing) pp.spacing = xy(f.spacing);
+          if (f.horizontalAlignment) pp.align = String(f.horizontalAlignment).toLowerCase();
+          o = pp;
         } else if (f.type === "SHADER") {
-          o = paintExtras(f, { type: "shader" });
-          if (f.id) o.shaderId = f.id;
+          const sp = paintExtras(f, { type: "shader" });
+          if (f.id) sp.shaderId = f.id;
+          await putShaderProperties(sp, f.properties);
+          o = sp;
         } else {
-          o = paintExtras(f, { type: f.type.toLowerCase() });
+          const future = f;
+          o = paintExtras(future, { type: future.type.toLowerCase() });
         }
-        const pbv = await resolveBoundMap(f.boundVariables);
+        const pbv = f.type === "SOLID" ? await resolveBoundMap(f.boundVariables) : void 0;
         if (pbv) o.tokens = pbv;
         return o;
       })
     );
     return out.length ? out : void 0;
   }
+  var SIDE_WEIGHTS = [
+    ["strokeTopWeight", "top"],
+    ["strokeRightWeight", "right"],
+    ["strokeBottomWeight", "bottom"],
+    ["strokeLeftWeight", "left"]
+  ];
   async function simplifyStrokes(node) {
-    var _a;
-    if (!("strokes" in node) || !Array.isArray(node.strokes)) return void 0;
+    if (!("strokes" in node) || !isList(node.strokes)) return void 0;
     const vis = node.strokes.filter((s) => s.visible !== false);
     if (!vis.length) return void 0;
     const out = {};
@@ -1250,87 +1498,123 @@
       const paints2 = await simplifyFills(vis);
       if (paints2) out.paints = paints2;
     }
-    const strokeWeight = node.strokeWeight;
+    const strokeNode = node;
+    const strokeWeight = strokeNode.strokeWeight;
     if (strokeWeight && strokeWeight !== figma.mixed) {
       out.weight = strokeWeight;
     } else if (strokeWeight === figma.mixed) {
       const sides = {};
-      [
-        ["strokeTopWeight", "top"],
-        ["strokeRightWeight", "right"],
-        ["strokeBottomWeight", "bottom"],
-        ["strokeLeftWeight", "left"]
-      ].forEach(([k, s]) => {
+      SIDE_WEIGHTS.forEach(([k, s]) => {
         const v = numProp(node, k);
         if (v != null) sides[s] = v;
       });
       putNonEmpty(out, "weights", sides);
     }
-    const n = node;
-    if (n.strokeAlign) out.align = String(n.strokeAlign).toLowerCase();
-    if (n.dashPattern && n.dashPattern.length) out.dash = n.dashPattern;
+    const n = strokeNode;
+    if (n.strokeAlign) out.align = lower(n.strokeAlign);
+    if (n.dashPattern && n.dashPattern.length) out.dash = [...n.dashPattern];
     if ("strokeCap" in node && n.strokeCap && n.strokeCap !== figma.mixed && n.strokeCap !== "NONE") out.cap = String(n.strokeCap).toLowerCase();
     if ("strokeJoin" in node && n.strokeJoin && n.strokeJoin !== figma.mixed && n.strokeJoin !== "MITER") out.join = String(n.strokeJoin).toLowerCase();
     if ("strokeMiterLimit" in node && typeof n.strokeMiterLimit === "number" && n.strokeMiterLimit !== 4) out.miter = n.strokeMiterLimit;
     const vw = n.variableWidthStrokeProperties;
-    if (vw && Array.isArray((_a = vw.strokeWeightProfile) == null ? void 0 : _a.mapping) && vw.strokeWeightProfile.mapping.length) {
-      out.variableWidth = {
-        profile: String(vw.strokeWeightProfile.type || "").toLowerCase(),
-        points: vw.strokeWeightProfile.mapping.map((p) => ({ pos: round(p.position), weight: round(p.value) }))
-      };
+    if (vw && vw.widthProfile) {
+      const variableWidth = { profile: lower(vw.widthProfile) };
+      if (vw.widthProfile === "CUSTOM" && isList(vw.variableWidthPoints) && vw.variableWidthPoints.length) {
+        variableWidth.points = vw.variableWidthPoints.map((p) => ({ pos: round(p.position), width: round(p.width) }));
+      }
+      out.variableWidth = variableWidth;
+    }
+    if ("complexStrokeProperties" in node) {
+      const complex = complexStroke(node.complexStrokeProperties);
+      if (complex) out.complex = complex;
     }
     return out;
+  }
+  function complexStroke(c) {
+    if (!c || typeof c !== "object") return void 0;
+    if (c.type === "DYNAMIC") return { type: "dynamic", frequency: round(c.frequency), wiggle: round(c.wiggle), smoothen: round(c.smoothen) };
+    if (c.type !== "BRUSH") return void 0;
+    if (c.brushType === "STRETCH") return { type: "brush", brushType: "stretch", brushName: lower(c.brushName), direction: lower(c.direction) };
+    return {
+      type: "brush",
+      brushType: "scatter",
+      brushName: lower(c.brushName),
+      gap: round(c.gap),
+      wiggle: round(c.wiggle),
+      sizeJitter: round(c.sizeJitter),
+      angularJitter: round(c.angularJitter),
+      rotation: round(c.rotation)
+    };
   }
 
   // src/effects.ts
   var GLASS_FIELDS = ["lightIntensity", "lightAngle", "refraction", "depth", "dispersion", "radius"];
+  function effectBody(e) {
+    if (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW") {
+      const o = { type: lower(e.type) };
+      if (e.color) o.color = rgbaToHex(e.color);
+      if (e.offset) o.offset = xy(e.offset);
+      if (typeof e.radius === "number") o.radius = round(e.radius);
+      if (typeof e.spread === "number" && e.spread) o.spread = round(e.spread);
+      if (e.blendMode && e.blendMode !== "NORMAL") o.blendMode = e.blendMode.toLowerCase();
+      if (e.type === "DROP_SHADOW" && e.showShadowBehindNode) o.behindNode = true;
+      return o;
+    }
+    if (e.type === "LAYER_BLUR" || e.type === "BACKGROUND_BLUR") {
+      const o = { type: lower(e.type) };
+      if (typeof e.radius === "number") o.radius = round(e.radius);
+      if (e.blurType && e.blurType !== "NORMAL") o.blurType = lower(e.blurType);
+      const be = e;
+      putXY(o, "startOffset", be.startOffset);
+      putXY(o, "endOffset", be.endOffset);
+      if (typeof be.startRadius === "number") o.startRadius = round(be.startRadius);
+      return o;
+    }
+    if (e.type === "NOISE") {
+      const o = { type: "noise" };
+      if (e.noiseType) o.noiseType = String(e.noiseType).toLowerCase();
+      if (e.color) o.color = rgbaToHex(e.color);
+      if (typeof e.density === "number") o.density = round(e.density);
+      if (typeof e.noiseSize === "number") o.noiseSize = round(e.noiseSize);
+      putXY(o, "noiseSizeVector", e.noiseSizeVector);
+      if (e.noiseType === "DUOTONE" && e.secondaryColor) o.secondaryColor = rgbaToHex(e.secondaryColor);
+      if (e.noiseType === "MULTITONE" && typeof e.opacity === "number") o.opacity = round(e.opacity);
+      if (e.blendMode && e.blendMode !== "NORMAL") o.blendMode = e.blendMode.toLowerCase();
+      return o;
+    }
+    if (e.type === "GLASS") {
+      const o = { type: "glass" };
+      for (const k of GLASS_FIELDS) {
+        const v = e[k];
+        if (typeof v === "number") o[k] = round(v);
+      }
+      return o;
+    }
+    if (e.type === "TEXTURE") {
+      const o = { type: "texture" };
+      if (typeof e.noiseSize === "number") o.noiseSize = round(e.noiseSize);
+      putXY(o, "noiseSizeVector", e.noiseSizeVector);
+      if (typeof e.radius === "number") o.radius = round(e.radius);
+      if (typeof e.clipToShape === "boolean") o.clipToShape = e.clipToShape;
+      return o;
+    }
+    if (e.type === "SHADER") {
+      const o = { type: "shader" };
+      if (e.id) o.shaderId = e.id;
+      return o;
+    }
+    const future = e;
+    return { type: future.type.toLowerCase() };
+  }
   async function simplifyEffects(effects) {
-    if (!Array.isArray(effects)) return void 0;
+    if (!isList(effects)) return void 0;
     const vis = effects.filter((e) => e.visible !== false);
     const out = await Promise.all(
       vis.map(async (e) => {
-        const o = { type: e.type.toLowerCase() };
-        if (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW") {
-          if (e.color) o.color = rgbaToHex(e.color);
-          if (e.offset) o.offset = xy(e.offset);
-          if (typeof e.radius === "number") o.radius = round(e.radius);
-          if (typeof e.spread === "number" && e.spread) o.spread = round(e.spread);
-          if (e.blendMode && e.blendMode !== "NORMAL") o.blendMode = e.blendMode.toLowerCase();
-          if (e.type === "DROP_SHADOW" && e.showShadowBehindNode) o.behindNode = true;
-        } else if (e.type === "LAYER_BLUR" || e.type === "BACKGROUND_BLUR") {
-          if (typeof e.radius === "number") o.radius = round(e.radius);
-          if (e.blurType && e.blurType !== "NORMAL") o.blurType = e.blurType.toLowerCase();
-          const be = e;
-          putXY(o, "startOffset", be.startOffset);
-          putXY(o, "endOffset", be.endOffset);
-          if (typeof be.startRadius === "number") o.startRadius = round(be.startRadius);
-        } else if (e.type === "NOISE") {
-          const ne = e;
-          if (ne.noiseType) o.noiseType = String(ne.noiseType).toLowerCase();
-          if (ne.color) o.color = rgbaToHex(ne.color);
-          if (typeof ne.density === "number") o.density = round(ne.density);
-          if (typeof ne.noiseSize === "number") o.noiseSize = round(ne.noiseSize);
-          putXY(o, "noiseSizeVector", ne.noiseSizeVector);
-          if (ne.secondaryColor) o.secondaryColor = rgbaToHex(ne.secondaryColor);
-          if (typeof ne.opacity === "number") o.opacity = round(ne.opacity);
-          if (ne.blendMode && ne.blendMode !== "NORMAL") o.blendMode = ne.blendMode.toLowerCase();
-        } else if (e.type === "GLASS") {
-          const ge = e;
-          for (const k of GLASS_FIELDS) {
-            if (typeof ge[k] === "number") o[k] = round(ge[k]);
-          }
-        } else if (e.type === "TEXTURE") {
-          const te = e;
-          if (typeof te.noiseSize === "number") o.noiseSize = round(te.noiseSize);
-          putXY(o, "noiseSizeVector", te.noiseSizeVector);
-          if (typeof te.radius === "number") o.radius = round(te.radius);
-          if (typeof te.clipToShape === "boolean") o.clipToShape = te.clipToShape;
-        } else if (e.type === "SHADER") {
-          const se = e;
-          if (se.id) o.shaderId = se.id;
-        }
-        const bv = await resolveBoundMap(e.boundVariables);
-        if (bv) o.tokens = bv;
+        const o = effectBody(e);
+        if (e.type === "SHADER" && o.type === "shader") await putShaderProperties(o, e.properties);
+        const bv = await resolveBoundMap("boundVariables" in e ? e.boundVariables : void 0);
+        if (bv) o.tokens = o.tokens ? { ...o.tokens, ...bv } : bv;
         return o;
       })
     );
@@ -1358,18 +1642,21 @@
     if (src.fontName && src.fontName !== figma.mixed) {
       f.family = src.fontName.family;
       f.weight = src.fontName.style;
+      const vs = src.fontName.variationSettings;
+      if (vs && Object.keys(vs).length) f.variationSettings = { ...vs };
     }
     if (typeof src.fontWeight === "number") f.weightValue = src.fontWeight;
+    if (src.fontStyle === "ITALIC") f.fontStyle = "italic";
     const lh = lineH(src.lineHeight);
     if (lh) f.lineHeight = lh;
     const ls = letterS(src.letterSpacing);
     if (ls) f.letterSpacing = ls;
-    if (src.textCase && src.textCase !== figma.mixed && src.textCase !== "ORIGINAL") f.case = src.textCase.toLowerCase();
-    if (src.textDecoration && src.textDecoration !== figma.mixed && src.textDecoration !== "NONE") f.decoration = src.textDecoration.toLowerCase();
+    if (src.textCase && src.textCase !== figma.mixed && src.textCase !== "ORIGINAL") f.case = lower(src.textCase);
+    if (src.textDecoration && src.textDecoration !== figma.mixed && src.textDecoration !== "NONE") f.decoration = lower(src.textDecoration);
     if (f.decoration) {
       if (src.textDecorationStyle && src.textDecorationStyle !== figma.mixed && src.textDecorationStyle !== "SOLID") f.decorationStyle = String(src.textDecorationStyle).toLowerCase();
-      const dcv = src.textDecorationColor && src.textDecorationColor.value;
-      const dc = solidFromFills(dcv && dcv !== "AUTO" ? [dcv] : void 0);
+      const tdc = src.textDecorationColor && src.textDecorationColor !== figma.mixed ? src.textDecorationColor.value : void 0;
+      const dc = solidFromFills(tdc && tdc !== "AUTO" ? [tdc] : void 0);
       if (dc) f.decorationColor = dc;
       const th = decoLen(src.textDecorationThickness);
       if (th) f.decorationThickness = th;
@@ -1377,8 +1664,9 @@
       if (off) f.decorationOffset = off;
       if (src.textDecorationSkipInk === false) f.decorationSkipInk = false;
     }
-    if (src.openTypeFeatures && typeof src.openTypeFeatures === "object" && src.openTypeFeatures !== figma.mixed) {
-      const on = Object.keys(src.openTypeFeatures).filter((k) => src.openTypeFeatures[k]);
+    const feats = src.openTypeFeatures;
+    if (feats && feats !== figma.mixed) {
+      const on = Object.keys(feats).filter((k) => feats[k]);
       if (on.length) f.openType = on;
     }
     const color = solidFromFills(src.fills);
@@ -1388,6 +1676,7 @@
   var TEXT_SEG_FIELDS = [
     "fontName",
     "fontSize",
+    "fontWeight",
     "lineHeight",
     "letterSpacing",
     "textCase",
@@ -1405,8 +1694,28 @@
     "openTypeFeatures",
     "textStyleId",
     "fillStyleId",
-    "boundVariables"
+    "boundVariables",
+    "textWrapStyle",
+    "fontStyle",
+    "paragraphIndent",
+    "paragraphSpacing",
+    "textStyleOverrides"
   ];
+  function overrideName(o) {
+    if (typeof o === "string") return o;
+    if (o !== null && typeof o === "object" && "type" in o && typeof o.type === "string") return o.type;
+    return void 0;
+  }
+  function styleOverrides(s) {
+    const ov = s.textStyleOverrides;
+    if (!s.textStyleId || !Array.isArray(ov) || !ov.length) return void 0;
+    const names = [];
+    for (const o of ov) {
+      const n = overrideName(o);
+      if (n !== void 0) names.push(n.toLowerCase());
+    }
+    return names.length ? names : void 0;
+  }
   function inlineExtras(src, out) {
     const hl = src.hyperlink;
     if (hl && hl !== figma.mixed && hl.value) {
@@ -1418,7 +1727,6 @@
     if (typeof src.indentation === "number" && src.indentation) out.indent = src.indentation;
   }
   async function serializeText(node) {
-    const t = node;
     const out = { text: node.characters };
     let segs;
     try {
@@ -1426,7 +1734,12 @@
     } catch (e) {
       segs = void 0;
     }
-    if (segs && segs.length > 1) {
+    let font;
+    const s0 = segs && segs[0];
+    if (segs && segs.length > 1 && s0) {
+      const wrapMixed = "textWrapStyle" in node && node.textWrapStyle === figma.mixed;
+      const spacingMixed = "paragraphSpacing" in node && node.paragraphSpacing === figma.mixed;
+      const indentMixed = "paragraphIndent" in node && node.paragraphIndent === figma.mixed;
       out.runs = await Promise.all(
         segs.map(async (s) => {
           const r = { text: s.characters, font: fontObj(s) };
@@ -1435,46 +1748,62 @@
           if (ts) r.textStyle = ts;
           if (fs) r.fillStyle = fs;
           if (bv) r.tokens = bv;
+          if (wrapMixed && typeof s.textWrapStyle === "string" && s.textWrapStyle !== "AUTO") r.textWrap = lower(s.textWrapStyle);
+          if (spacingMixed && typeof s.paragraphSpacing === "number" && s.paragraphSpacing) r.paragraphSpacing = s.paragraphSpacing;
+          if (indentMixed && typeof s.paragraphIndent === "number" && s.paragraphIndent) r.paragraphIndent = s.paragraphIndent;
+          const ov = styleOverrides(s);
+          if (ov) r.textStyleOverrides = ov;
           return r;
         })
       );
-      out.font = fontObj(segs[0]);
+      font = out.font = fontObj(s0);
     } else {
-      const s0 = segs && segs[0];
-      out.font = fontObj(s0 ? s0 : node);
+      font = out.font = fontObj(s0 ? s0 : node);
       const bv = await resolveBoundMap(s0 ? s0.boundVariables : void 0);
       if (bv) out.textTokens = bv;
-      inlineExtras(s0 || t, out);
+      inlineExtras(s0 || node, out);
+      const ov = s0 ? styleOverrides(s0) : void 0;
+      if (ov) out.textStyleOverrides = ov;
     }
-    if (t.textAlignHorizontal) out.font.align = t.textAlignHorizontal.toLowerCase();
-    if (typeof t.paragraphSpacing === "number" && t.paragraphSpacing) out.font.paragraphSpacing = t.paragraphSpacing;
-    if (typeof t.paragraphIndent === "number" && t.paragraphIndent) out.font.paragraphIndent = t.paragraphIndent;
-    if (typeof t.listSpacing === "number" && t.listSpacing) out.font.listSpacing = t.listSpacing;
-    if (t.leadingTrim && t.leadingTrim !== figma.mixed && t.leadingTrim !== "NONE") out.font.leadingTrim = t.leadingTrim.toLowerCase();
-    if (t.textAlignVertical && t.textAlignVertical !== "TOP") out.font.valign = t.textAlignVertical.toLowerCase();
-    {
-      const tw = t.textWrapStyle;
-      if (typeof tw === "string" && tw && tw !== "AUTO") out.font.textWrap = tw.toLowerCase();
+    if ("textAlignHorizontal" in node && node.textAlignHorizontal) font.align = lower(node.textAlignHorizontal);
+    if ("paragraphSpacing" in node && typeof node.paragraphSpacing === "number" && node.paragraphSpacing) font.paragraphSpacing = node.paragraphSpacing;
+    if ("paragraphIndent" in node && typeof node.paragraphIndent === "number" && node.paragraphIndent) font.paragraphIndent = node.paragraphIndent;
+    if ("listSpacing" in node && typeof node.listSpacing === "number" && node.listSpacing) font.listSpacing = node.listSpacing;
+    if ("leadingTrim" in node && node.leadingTrim && node.leadingTrim !== figma.mixed && node.leadingTrim !== "NONE") font.leadingTrim = node.leadingTrim.toLowerCase();
+    if ("textAlignVertical" in node && node.textAlignVertical && node.textAlignVertical !== "TOP") font.valign = lower(node.textAlignVertical);
+    if ("textWrapStyle" in node) {
+      const tw = node.textWrapStyle;
+      if (typeof tw === "string" && tw !== "AUTO") font.textWrap = lower(tw);
     }
-    if (t.hangingList === true) out.font.hangingList = true;
-    if (t.hangingPunctuation === true) out.font.hangingPunctuation = true;
-    if (t.textAutoResize && t.textAutoResize !== "NONE") out.autoResize = t.textAutoResize.toLowerCase();
-    if (t.textTruncation === "ENDING") out.truncate = true;
-    if (typeof t.maxLines === "number" && t.maxLines) out.maxLines = t.maxLines;
-    if (t.hasMissingFont === true) {
+    if ("hangingList" in node && node.hangingList === true) font.hangingList = true;
+    if ("hangingPunctuation" in node && node.hangingPunctuation === true) font.hangingPunctuation = true;
+    if ("type" in node && node.type === "TEXT") {
+      if (node.textAutoResize && node.textAutoResize !== "NONE") out.autoResize = lower(node.textAutoResize);
+      if (node.textTruncation === "ENDING") out.truncate = true;
+      if (typeof node.maxLines === "number" && node.maxLines) out.maxLines = node.maxLines;
+    }
+    if (node.hasMissingFont === true) {
       out.missingFont = true;
-      warnKind("missing font \u2014 Figma is substituting a fallback; the recorded family may differ from the render", node.name + " (" + node.id + ")");
+      const name = "name" in node ? node.name : void 0;
+      const id = "id" in node ? node.id : void 0;
+      warnKind("missing font \u2014 Figma is substituting a fallback; the recorded family may differ from the render", name + " (" + id + ")");
     }
-    if (node.width === 0) warnKind("zero-width text node (possible collapsed thread)", node.name + " (" + node.id + ")");
+    if ("width" in node && node.width === 0) {
+      const name = "name" in node ? node.name : void 0;
+      const id = "id" in node ? node.id : void 0;
+      warnKind("zero-width text node (possible collapsed thread)", name + " (" + id + ")");
+    }
     return out;
   }
 
   // src/prototype.ts
   function simplifyTransition(tr) {
-    const t = { type: tr.type ? tr.type.toLowerCase() : void 0 };
-    if (tr.direction) t.direction = tr.direction.toLowerCase();
-    if (typeof tr.duration === "number") t.duration = tr.duration;
-    if (typeof tr.matchLayers === "boolean") t.matchLayers = tr.matchLayers;
+    const t = { ...ifDefined("type", tr.type ? tr.type.toLowerCase() : void 0) };
+    if ("direction" in tr) {
+      t.direction = tr.direction.toLowerCase();
+      t.matchLayers = tr.matchLayers;
+    }
+    t.duration = tr.duration;
     const ez = tr.easing;
     if (ez && ez.type) {
       t.easing = ez.type.toLowerCase();
@@ -1485,26 +1814,28 @@
   async function simplifyVariableData(vd) {
     if (!vd || typeof vd !== "object") return vd;
     const v = "value" in vd ? vd.value : vd;
-    if (v && v.type === "VARIABLE_ALIAS") return { token: await varName(v.id) || v.id };
+    if (isVariableAlias(v)) {
+      return { token: await varName(v.id) || v.id };
+    }
     return v;
   }
+  var isAction = (a) => !!a;
   async function serializeAction(a) {
     if (!a) return null;
     const ao = { type: (a.type || "").toLowerCase() };
-    if (a.navigation) ao.navigation = a.navigation.toLowerCase();
-    if (a.url) ao.url = a.url;
-    if (a.destinationId) {
-      ao.destinationId = a.destinationId;
-      const dn = await nodeNameLookup(a.destinationId);
-      if (dn) ao.destination = dn;
-    }
-    if (a.preserveScrollPosition === true) ao.preserveScroll = true;
-    if (a.resetScrollPosition === true) ao.resetScroll = true;
-    if (a.resetVideoPosition === true) ao.resetVideo = true;
-    if (a.resetInteractiveComponents === true) ao.resetInteractive = true;
-    if (a.overlayRelativePosition) ao.overlayOffset = xy(a.overlayRelativePosition);
-    if (a.transition) ao.transition = simplifyTransition(a.transition);
-    if (a.type === "SET_VARIABLE") {
+    if (a.type === "URL") {
+      ao.url = a.url;
+      if (a.openInNewTab === true) ao.openInNewTab = true;
+    } else if (a.type === "UPDATE_MEDIA_RUNTIME") {
+      if (a.destinationId) {
+        ao.destinationId = a.destinationId;
+        const dn = await nodeNameLookup(a.destinationId);
+        if (dn) ao.destination = dn;
+      }
+      ao.mediaAction = String(a.mediaAction).toLowerCase();
+      if (a.mediaAction === "SKIP_FORWARD" || a.mediaAction === "SKIP_BACKWARD") ao.amountToSkip = a.amountToSkip;
+      if (a.mediaAction === "SKIP_TO") ao.newTimestamp = a.newTimestamp;
+    } else if (a.type === "SET_VARIABLE") {
       if (a.variableId) ao.variable = await varName(a.variableId) || a.variableId;
       if (a.variableValue != null) ao.value = await simplifyVariableData(a.variableValue);
     } else if (a.type === "SET_VARIABLE_MODE") {
@@ -1516,57 +1847,77 @@
           ao.mode = m ? m.name : a.variableModeId;
         }
       }
-    } else if (a.type === "UPDATE_MEDIA_RUNTIME") {
-      if (a.mediaAction) ao.mediaAction = String(a.mediaAction).toLowerCase();
-      if (typeof a.amountToSkip === "number") ao.amountToSkip = a.amountToSkip;
-      if (typeof a.newTimestamp === "number") ao.newTimestamp = a.newTimestamp;
-    } else if (a.type === "CONDITIONAL" && Array.isArray(a.conditionalBlocks)) {
+    } else if (a.type === "CONDITIONAL") {
       ao.conditionalBlocks = await Promise.all(
         a.conditionalBlocks.map(async (blk) => {
           const b = {};
           if (blk.condition) b.condition = await simplifyVariableData(blk.condition);
-          if (Array.isArray(blk.actions)) b.actions = (await Promise.all(blk.actions.map(serializeAction))).filter(Boolean);
+          if (Array.isArray(blk.actions)) b.actions = (await Promise.all(blk.actions.map(serializeAction))).filter(isAction);
           return b;
         })
       );
+    } else if (a.type === "NODE") {
+      if (a.destinationId) {
+        ao.destinationId = a.destinationId;
+        const dn = await nodeNameLookup(a.destinationId);
+        if (dn) ao.destination = dn;
+      }
+      if (a.navigation) ao.navigation = a.navigation.toLowerCase();
+      if (a.preserveScrollPosition === true) ao.preserveScroll = true;
+      if (a.resetScrollPosition === true) ao.resetScroll = true;
+      if (a.resetVideoPosition === true) ao.resetVideo = true;
+      if (a.resetInteractiveComponents === true) ao.resetInteractive = true;
+      if (a.overlayRelativePosition) ao.overlayOffset = xy(a.overlayRelativePosition);
+      if (a.transition) ao.transition = simplifyTransition(a.transition);
     }
     return ao;
   }
   async function simplifyReactions(node) {
+    if (!("reactions" in node)) return void 0;
     const reactions = node.reactions;
-    if (!("reactions" in node) || !Array.isArray(reactions) || !reactions.length) return void 0;
+    if (!isList(reactions) || !reactions.length) return void 0;
     const out = [];
     for (const r of reactions) {
       const o = {};
       if (r.trigger) {
-        o.trigger = r.trigger.type ? r.trigger.type.toLowerCase() : "unknown";
-        if (typeof r.trigger.timeout === "number") o.timeout = r.trigger.timeout;
-        if (typeof r.trigger.delay === "number") o.delay = r.trigger.delay;
-        if (Array.isArray(r.trigger.keyCodes) && r.trigger.keyCodes.length) o.keyCodes = r.trigger.keyCodes;
-        if (r.trigger.device) o.device = String(r.trigger.device).toLowerCase();
-        if (typeof r.trigger.mediaHitTime === "number") o.mediaHitTime = r.trigger.mediaHitTime;
+        const tg = r.trigger;
+        o.trigger = tg.type ? tg.type.toLowerCase() : "unknown";
+        if (tg.type === "AFTER_TIMEOUT") o.timeout = tg.timeout;
+        if (tg.type === "MOUSE_UP" || tg.type === "MOUSE_DOWN" || tg.type === "MOUSE_ENTER" || tg.type === "MOUSE_LEAVE") o.delay = tg.delay;
+        if (tg.type === "ON_KEY_DOWN") {
+          if (tg.keyCodes.length) o.keyCodes = [...tg.keyCodes];
+          o.device = String(tg.device).toLowerCase();
+        }
+        if (tg.type === "ON_MEDIA_HIT") o.mediaHitTime = tg.mediaHitTime;
       }
-      const actions = Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : [];
-      const acts = (await Promise.all(actions.map(serializeAction))).filter(Boolean);
+      const actions = isList(r.actions) ? r.actions : r.action ? [r.action] : [];
+      const acts = (await Promise.all(actions.map(serializeAction))).filter(isAction);
       if (acts.length) o.actions = acts;
       if (o.trigger || o.actions) out.push(o);
     }
     return out.length ? out : void 0;
   }
 
+  // ../bridge/src/instance-overrides.ts
+  var OVERRIDE_CAP = 100;
+
   // src/libraries.ts
   var UNKNOWN_LIBRARY = "unknown-library";
   function readRegistry(sink) {
     try {
-      const raw = figma.root.getPluginData && figma.root.getPluginData("libraryRegistry");
+      const root = figma.root;
+      const raw = typeof root.getPluginData === "function" && root.getPluginData("libraryRegistry");
       if (!raw) return {};
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
       const out = {};
-      for (const k of Object.keys(parsed)) if (typeof parsed[k] === "string" && parsed[k]) out[k] = parsed[k];
+      for (const k of Object.keys(parsed)) {
+        const v = parsed[k];
+        if (typeof v === "string" && v) out[k] = v;
+      }
       return out;
     } catch (e) {
-      sink("library registry (document pluginData 'libraryRegistry') is unreadable (" + (0, import_errmsg.errMsg)(e) + ") \u2014 remote components stay unattributed");
+      sink("library registry (document pluginData 'libraryRegistry') is unreadable (" + errMsg(e) + ") \u2014 remote components stay unattributed");
       return {};
     }
   }
@@ -1583,7 +1934,7 @@
         try {
           out.push(...page2.findAllWithCriteria({ types: ["INSTANCE"] }));
         } catch (e) {
-          sink("library scan: page '" + page2.name + "' could not be traversed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 its library components are missing");
+          sink("library scan: page '" + page2.name + "' could not be traversed (" + errMsg(e) + ") \u2014 its library components are missing");
         }
       }
     } finally {
@@ -1611,9 +1962,8 @@
       const defs = main.componentPropertyDefinitions;
       if (!defs || !Object.keys(defs).length) return void 0;
       const props = {};
-      for (const k of Object.keys(defs)) {
-        const d = defs[k];
-        const p = { key: k, type: d.type };
+      for (const [k, d] of Object.entries(defs)) {
+        const p = { key: k, type: propType(d.type) };
         if (d.type === "VARIANT" && Array.isArray(d.variantOptions)) p.options = d.variantOptions;
         if (d.defaultValue !== void 0) p.default = d.defaultValue;
         if (d.type === "INSTANCE_SWAP" && Array.isArray(d.preferredValues) && d.preferredValues.length) {
@@ -1641,7 +1991,7 @@
         const v = cp[k];
         if (!v) continue;
         const name = propName(k);
-        const p = props[name] || (props[name] = { key: k, type: v.type, observed: [] });
+        const p = props[name] || (props[name] = { key: k, type: propType(v.type), observed: [] });
         if (v.value !== void 0 && p.observed.indexOf(v.value) === -1) p.observed.push(v.value);
       }
     }
@@ -1654,7 +2004,7 @@
     const mains = await Promise.all(instances.map((i) => mainOf(i)));
     const byKey = /* @__PURE__ */ new Map();
     let unkeyed = 0;
-    for (let i = 0; i < instances.length; i++) {
+    for (const [i, inst] of instances.entries()) {
       const main = mains[i];
       if (!main) continue;
       if (!main.remote) continue;
@@ -1664,8 +2014,8 @@
         continue;
       }
       const bucket = byKey.get(key);
-      if (bucket) bucket.instances.push(instances[i]);
-      else byKey.set(key, { main, instances: [instances[i]] });
+      if (bucket) bucket.instances.push(inst);
+      else byKey.set(key, { main, instances: [inst] });
     }
     if (unkeyed) sink(unkeyed + " remote component instance(s) have a main component with no publish key \u2014 omitted from the library catalog");
     const out = [];
@@ -1702,7 +2052,7 @@
       collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
     } catch (e) {
       sink(
-        "team-library variables unavailable (" + (0, import_errmsg.errMsg)(e) + ') \u2014 needs manifest permissions:["teamlibrary"] and a plan with shared libraries; library COMPONENTS below are unaffected'
+        "team-library variables unavailable (" + errMsg(e) + ') \u2014 needs manifest permissions:["teamlibrary"] and a plan with shared libraries; library COMPONENTS below are unaffected'
       );
       return byLibrary;
     }
@@ -1718,16 +2068,16 @@
           const vars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(c.key);
           return vars ? vars.length : 0;
         } catch (e) {
-          sink("library collection '" + c.name + "': variables could not be listed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 count omitted");
+          sink("library collection '" + c.name + "': variables could not be listed (" + errMsg(e) + ") \u2014 count omitted");
           return void 0;
         }
       })
     );
-    for (let i = 0; i < collections.length; i++) {
-      const c = collections[i];
+    for (const [i, c] of collections.entries()) {
       const lib = c.libraryName || UNKNOWN_LIBRARY;
       const entry = { key: c.key, name: c.name };
-      if (counts[i] !== void 0) entry.variableCount = counts[i];
+      const count = counts[i];
+      if (count !== void 0) entry.variableCount = count;
       const list = byLibrary.get(lib);
       if (list) list.push(entry);
       else byLibrary.set(lib, [entry]);
@@ -1740,12 +2090,15 @@
     const [varsByLibrary, components] = await Promise.all([
       libraryVariableCollections(sink),
       collectLibraryComponents(sink).catch((e) => {
-        sink("library component scan failed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 component counts are missing, variable collections below are unaffected");
+        sink("library component scan failed (" + errMsg(e) + ") \u2014 component counts are missing, variable collections below are unaffected");
         return [];
       })
     ]);
     const compBySource = /* @__PURE__ */ new Map();
-    for (const c of components) compBySource.set(c.source, (compBySource.get(c.source) || 0) + 1);
+    for (const c of components) {
+      const src = c.source || UNKNOWN_LIBRARY;
+      compBySource.set(src, (compBySource.get(src) || 0) + 1);
+    }
     const libraries = [];
     const localCollections = [];
     try {
@@ -1757,28 +2110,28 @@
       for (const v of vars) perColl.set(v.variableCollectionId, (perColl.get(v.variableCollectionId) || 0) + 1);
       for (const c of colls) localCollections.push({ key: c.key || c.id, name: c.name, variableCount: perColl.get(c.id) || 0 });
     } catch (e) {
-      sink("local variable collections could not be listed (" + (0, import_errmsg.errMsg)(e) + ")");
+      sink("local variable collections could not be listed (" + errMsg(e) + ")");
     }
     libraries.push({
       key: figma.fileKey || "local",
       name: figma.root && figma.root.name || "(this file)",
       kind: "local",
       variableCollections: localCollections,
-      componentCount: void 0,
-      // local components are enumerated properly by the design-system catalog
+      // no componentCount: local components are enumerated properly by the design-system catalog
       note: "this file \u2014 its local components are listed in full by the design-system export, not counted here"
     });
     const seenSources = /* @__PURE__ */ new Set();
     for (const [libName, collections] of varsByLibrary) {
       seenSources.add(libName);
       const componentCount = compBySource.get(libName);
+      const firstCollection = collections[0];
       libraries.push({
-        key: collections.length ? collections[0].key : libName,
+        key: firstCollection ? firstCollection.key : libName,
         // libraries themselves have no key — a collection key is the closest stable handle
         name: libName,
         kind: "library",
         variableCollections: collections,
-        componentCount,
+        ...ifDefined("componentCount", componentCount),
         note: componentCount === void 0 ? "variable collections are complete; component attribution is impossible via the API \u2014 any components from this library are counted under '" + UNKNOWN_LIBRARY + "'" : "componentCount counts components USED IN THIS FILE (attributed by the local registry), not everything the library offers \u2014 library components cannot be enumerated"
       });
     }
@@ -1793,7 +2146,7 @@
         note: source === UNKNOWN_LIBRARY ? "components consumed from published libraries that the API cannot attribute to a source (only VARIABLES carry a libraryName). componentCount counts DISTINCT components USED IN THIS FILE, not what any library offers." : "componentCount counts components USED IN THIS FILE (attributed by the local registry), not everything the library offers"
       });
     }
-    return { exportedAt: exportedAt(), file: figma.root && figma.root.name || void 0, libraries, warnings: warnings2 };
+    return { exportedAt: exportedAt(), ...ifDefined("file", figma.root && figma.root.name || void 0), libraries, warnings: warnings2 };
   }
 
   // src/components.ts
@@ -1825,11 +2178,11 @@
     if (!refs) return void 0;
     const out = {};
     for (const k of PROP_REF_KEYS) {
-      if (refs[k]) out[k] = propName(refs[k]);
+      const ref = refs[k];
+      if (ref) out[k] = propName(ref);
     }
     return nonEmpty(out);
   }
-  var OVERRIDE_CAP = 100;
   function instanceOverrides(node) {
     if (node.type !== "INSTANCE") return void 0;
     const overrides = node.overrides;
@@ -1863,7 +2216,9 @@
       else if (node.cornerRadius === figma.mixed) {
         const corners = {};
         for (const [k, s] of VISUAL_CORNER_KEYS) {
-          if (k in node && typeof node[k] === "number" && node[k]) corners[s] = node[k];
+          if (!(k in node)) continue;
+          const r = node[k];
+          if (typeof r === "number" && r) corners[s] = r;
         }
         putNonEmpty(out, "radius", corners);
       }
@@ -1919,7 +2274,7 @@
         try {
           nodes = page2.findAllWithCriteria({ types: ["COMPONENT_SET", "COMPONENT"] });
         } catch (e) {
-          warn("component catalog: page '" + page2.name + "' could not be traversed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 its components are missing");
+          warn("component catalog: page '" + page2.name + "' could not be traversed (" + errMsg(e) + ") \u2014 its components are missing");
           continue;
         }
         for (const n of nodes) {
@@ -1935,35 +2290,44 @@
           if (n.description) entry.description = n.description;
           if (n.remote) entry.remote = true;
           if (n.key) entry.key = n.key;
-          if (Array.isArray(n.documentationLinks) && n.documentationLinks.length) entry.docs = n.documentationLinks.map((d) => d.uri).filter(Boolean);
+          if (isList(n.documentationLinks) && n.documentationLinks.length) entry.docs = n.documentationLinks.map((d) => d.uri).filter(Boolean);
           try {
             const defs = n.componentPropertyDefinitions;
             if (defs && Object.keys(defs).length) {
-              entry.props = {};
+              const props = {};
+              entry.props = props;
               let variantCombos = 1;
-              const keys = Object.keys(defs);
-              const boundPerKey = await Promise.all(keys.map((k) => resolveBoundMap(defs[k].boundVariables)));
-              for (let i = 0; i < keys.length; i++) {
-                const k = keys[i];
-                const d = defs[k];
-                const p = { key: k, type: d.type };
+              const defEntries = Object.entries(defs);
+              const boundPerKey = await Promise.all(defEntries.map(([, d]) => resolveBoundMap(d.boundVariables)));
+              for (const [i, [k, d]] of defEntries.entries()) {
+                const p = { key: k, type: propType(d.type) };
                 if (d.type === "VARIANT") {
-                  p.options = d.variantOptions;
+                  if (d.variantOptions !== void 0) p.options = d.variantOptions;
                   variantCombos *= d.variantOptions ? d.variantOptions.length : 1;
                 }
                 if (d.defaultValue !== void 0) p.default = d.defaultValue;
-                if (d.type === "INSTANCE_SWAP" && Array.isArray(d.preferredValues) && d.preferredValues.length) {
+                if ((d.type === "INSTANCE_SWAP" || d.type === "SLOT") && Array.isArray(d.preferredValues) && d.preferredValues.length) {
                   p.preferredValues = d.preferredValues.map((v) => ({ type: v.type, key: v.key }));
                 }
                 if (d.description) p.description = d.description;
+                if (d.type === "SLOT" && d.slotSettings) {
+                  const ss = d.slotSettings;
+                  const slot = {};
+                  if (typeof ss.stretchChildOnInsert === "boolean") slot.stretchChildOnInsert = ss.stretchChildOnInsert;
+                  if (typeof ss.displayEmptyByDefault === "boolean") slot.displayEmptyByDefault = ss.displayEmptyByDefault;
+                  if (typeof ss.minChildren === "number") slot.minChildren = ss.minChildren;
+                  if (typeof ss.maxChildren === "number") slot.maxChildren = ss.maxChildren;
+                  if (typeof ss.allowPreferredValuesOnly === "boolean") slot.allowPreferredValuesOnly = ss.allowPreferredValuesOnly;
+                  putNonEmpty(p, "slotSettings", slot);
+                }
                 const dbv = boundPerKey[i];
                 if (dbv) p.tokens = dbv;
-                entry.props[propName(k)] = p;
+                props[propName(k)] = p;
               }
               if (variantCombos > 30) hygiene.push("variant explosion: '" + n.name + "' has " + variantCombos + " combinations (>30 \u2014 consider boolean/instance-swap props)");
             }
           } catch (e) {
-            warn("component '" + n.name + "': property definitions unreadable (" + (0, import_errmsg.errMsg)(e) + ") \u2014 props omitted");
+            warn("component '" + n.name + "': property definitions unreadable (" + errMsg(e) + ") \u2014 props omitted");
           }
           if (/^(Component|Frame)\s*\d+$/.test(n.name)) hygiene.push("unnamed component: '" + n.name + "'");
           if (seenNames.has(n.name)) hygiene.push("duplicate component name: '" + n.name + "'");
@@ -1972,7 +2336,7 @@
             const visuals = await simplifyVisuals(n);
             if (visuals) entry.visuals = visuals;
           } catch (e) {
-            warn("component '" + n.name + "': visuals unreadable (" + (0, import_errmsg.errMsg)(e) + ") \u2014 visuals omitted");
+            warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 visuals omitted");
           }
           if (asLibrary) pendingPublish.push({ entry, node: n });
           if (runOpts.variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
@@ -1981,7 +2345,7 @@
               const node = await serializeVariant(n, serialize2);
               if (node) entry.node = node;
             } catch (e) {
-              warn("component '" + n.name + "': visuals unreadable (" + (0, import_errmsg.errMsg)(e) + ") \u2014 node tree omitted");
+              warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 node tree omitted");
             }
           }
           components.push(entry);
@@ -2008,7 +2372,7 @@
             if (node) o.node = node;
             out.push(o);
           } catch (e) {
-            warn("component '" + v.name + "': variant visuals unreadable (" + (0, import_errmsg.errMsg)(e) + ") \u2014 omitted");
+            warn("component '" + v.name + "': variant visuals unreadable (" + errMsg(e) + ") \u2014 omitted");
           }
         }
         if (out.length) entry.variants = out;
@@ -2016,8 +2380,9 @@
     }
     if (pendingPublish.length) {
       const statuses = await Promise.all(pendingPublish.map((p) => publishOf(p.node)));
-      for (let i = 0; i < pendingPublish.length; i++) {
-        if (statuses[i]) pendingPublish[i].entry.publish = statuses[i];
+      for (const [i, p] of pendingPublish.entries()) {
+        const s = statuses[i];
+        if (s) p.entry.publish = s;
       }
     }
     return components;
@@ -2069,7 +2434,7 @@
         );
       }
     } catch (e) {
-      warn("library component catalog failed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 components consumed from published libraries are missing from the catalog");
+      warn("library component catalog failed (" + errMsg(e) + ") \u2014 components consumed from published libraries are missing from the catalog");
     }
     let colorProfile;
     try {
@@ -2081,7 +2446,7 @@
       if (s.key) m.key = s.key;
       if (s.id) m.id = s.id;
       if (s.remote) m.remote = true;
-      if (Array.isArray(s.documentationLinks) && s.documentationLinks.length) {
+      if (isList(s.documentationLinks) && s.documentationLinks.length) {
         m.docs = s.documentationLinks.map((d) => d.uri).filter(Boolean);
       }
       if (asLibrary) {
@@ -2094,31 +2459,31 @@
       // Paint styles carry their ACTUAL colors, not just a name.
       // `tokens` (boundVariables) was read for TEXT styles only, so a paint style bound to a color
       // variable silently lost that link — the binding is what makes it a token rather than a hex.
-      Promise.all(paint.map(async (s) => ({ name: s.name, paints: await simplifyFills(s.paints), tokens: await resolveBoundMap(s.boundVariables), description: s.description || void 0, ...await styleMeta(s) }))),
+      Promise.all(paint.map(async (s) => ({ name: s.name, ...ifDefined("paints", await simplifyFills(s.paints)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || void 0), ...await styleMeta(s) }))),
       Promise.all(
         text.map(async (s) => ({
           name: s.name,
           size: s.fontSize,
           font: s.fontName && s.fontName.family,
           weight: s.fontName && s.fontName.style,
-          lineHeight: lineH(s.lineHeight),
-          letterSpacing: letterS(s.letterSpacing),
-          case: s.textCase && s.textCase !== "ORIGINAL" ? s.textCase.toLowerCase() : void 0,
-          decoration: s.textDecoration && s.textDecoration !== "NONE" ? s.textDecoration.toLowerCase() : void 0,
-          paragraphSpacing: s.paragraphSpacing || void 0,
-          paragraphIndent: s.paragraphIndent || void 0,
-          leadingTrim: s.leadingTrim && s.leadingTrim !== "NONE" ? String(s.leadingTrim).toLowerCase() : void 0,
-          listSpacing: s.listSpacing || void 0,
+          ...ifDefined("lineHeight", lineH(s.lineHeight)),
+          ...ifDefined("letterSpacing", letterS(s.letterSpacing)),
+          ...ifDefined("case", s.textCase && s.textCase !== "ORIGINAL" ? s.textCase.toLowerCase() : void 0),
+          ...ifDefined("decoration", s.textDecoration && s.textDecoration !== "NONE" ? s.textDecoration.toLowerCase() : void 0),
+          ...ifDefined("paragraphSpacing", s.paragraphSpacing || void 0),
+          ...ifDefined("paragraphIndent", s.paragraphIndent || void 0),
+          ...ifDefined("leadingTrim", s.leadingTrim && s.leadingTrim !== "NONE" ? String(s.leadingTrim).toLowerCase() : void 0),
+          ...ifDefined("listSpacing", s.listSpacing || void 0),
           // TextStyle.textWrapStyle (Plugin API 2026-08-14) — AUTO | BALANCE | PRETTY; AUTO is the
           // default and is skipped. Maps 1:1 onto CSS `text-wrap`. Same read as text.ts's per-node
           // one, minus the mixed guard: a TextStyle is uniform by definition.
-          textWrap: s.textWrapStyle && s.textWrapStyle !== "AUTO" ? String(s.textWrapStyle).toLowerCase() : void 0,
-          tokens: await resolveBoundMap(s.boundVariables),
-          description: s.description || void 0,
+          ...ifDefined("textWrap", s.textWrapStyle && s.textWrapStyle !== "AUTO" ? String(s.textWrapStyle).toLowerCase() : void 0),
+          ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
+          ...ifDefined("description", s.description || void 0),
           ...await styleMeta(s)
         }))
       ),
-      Promise.all(effect.map(async (s) => ({ name: s.name, effects: await simplifyEffects(s.effects), tokens: await resolveBoundMap(s.boundVariables), description: s.description || void 0, ...await styleMeta(s) })))
+      Promise.all(effect.map(async (s) => ({ name: s.name, ...ifDefined("effects", await simplifyEffects(s.effects)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || void 0), ...await styleMeta(s) })))
     ]);
     const styles = {
       paint: paintStyles,
@@ -2129,9 +2494,9 @@
       grid: await Promise.all(
         grid.map(async (s) => ({
           name: s.name,
-          grids: Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter(Boolean) : void 0,
-          tokens: await resolveBoundMap(s.boundVariables),
-          description: s.description || void 0,
+          ...ifDefined("grids", Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter((g) => !!g) : void 0),
+          ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
+          ...ifDefined("description", s.description || void 0),
           ...await styleMeta(s)
         }))
       )
@@ -2147,17 +2512,17 @@
       if (!fileKey) hygiene.push("figma.fileKey unavailable \u2014 the library output directory falls back to a name slug, so a RENAMED library will land in a new directory");
       source = {
         role: "library",
-        libraryName: opts && opts.asLibrary || figma.root && figma.root.name || void 0,
-        fileKey,
-        collectionKeys: vars.collections.map((c) => c.key).filter(Boolean)
+        ...ifDefined("libraryName", opts && opts.asLibrary || figma.root && figma.root.name || void 0),
+        ...ifDefined("fileKey", fileKey),
+        collectionKeys: vars.collections.map((c) => c.key).filter((k) => !!k)
       };
     }
     return {
       exportedAt: exportedAt(),
-      file: figma.root && figma.root.name || void 0,
-      source,
-      colorProfile,
-      // legacy | srgb | display-p3 — whether emitted colors should be sRGB or wide-gamut
+      ...ifDefined("file", figma.root && figma.root.name || void 0),
+      ...ifDefined("source", source),
+      ...ifDefined("colorProfile", colorProfile),
+      // legacy | srgb | display_p3 — whether emitted colors should be sRGB or wide-gamut
       collections: vars.collections,
       variables: vars.variables,
       styles,
@@ -2176,76 +2541,160 @@
       case "COLOR":
         return kv.value ? rgbaToHex(kv.value) : void 0;
       case "VECTOR":
-        return kv.value ? xy(kv.value) : void 0;
+        return kv.value ? { ...xy(kv.value) } : void 0;
       case "CIRCLE":
         return kv.value ? { ...xy(kv.value), radius: round(kv.value.radius) } : void 0;
       case "LINE":
         return kv.value ? { ...xy(kv.value), x2: round(kv.value.x2), y2: round(kv.value.y2) } : void 0;
-      default:
+      case "BOOL":
+      case "TEXT_DATA":
+      case "CIRCLE_POINT":
         return kv.value;
+      // no transformation needed
+      // RGBA is an interface (no index signature), so the colour is re-spread into a plain object literal —
+      // same keys, same order, same JSON.
+      case "COLOR_POINT": {
+        const cp = kv.value;
+        return cp ? { ...cp, color: { ...cp.color } } : asJson(cp);
+      }
+      default: {
+        const unknownMember = kv;
+        return asJson(unknownMember.value);
+      }
     }
   }
-  function motionEasing(ez) {
+  async function aliasValue2(id) {
+    return { aliasOf: await varName(id) || id };
+  }
+  async function motionEasing(ez) {
     if (!ez || !ez.type) return void 0;
+    if (ez.type === "VARIABLE_ALIAS") return aliasValue2(ez.id);
     return { type: String(ez.type).toLowerCase(), ...easingCurve(ez) };
   }
-  function keyframes(list) {
-    if (!Array.isArray(list) || !list.length) return void 0;
-    return list.map((k) => {
-      const o = { t: round(k.timelinePosition), value: keyframeValue(k.value) };
-      const ez = motionEasing(k.easing);
+  async function keyframes(list) {
+    if (!isList(list) || !list.length) return void 0;
+    return Promise.all(list.map(async (k) => {
+      const o = { t: round(k.timelinePosition), ...ifDefined("value", keyframeValue(k.value)) };
+      const ez = await motionEasing(k.easing);
       if (ez) o.easing = ez;
       return o;
-    });
+    }));
   }
-  function trackMap(map) {
+  async function manualTrack(binding) {
+    if (!binding || typeof binding !== "object") return void 0;
+    const o = {};
+    const base = keyframeValue(binding.baseValue);
+    if (base !== void 0) o.base = base;
+    const kf = await keyframes(binding.keyframes);
+    if (kf) o.keyframes = kf;
+    return o;
+  }
+  async function animationTrack(binding) {
+    if (!binding || typeof binding !== "object") return void 0;
+    const o = {};
+    const base = keyframeValue(binding.baseValue);
+    if (base !== void 0) o.base = base;
+    if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
+    if (isList(binding.tracks) && binding.tracks.length) {
+      o.tracks = await Promise.all(binding.tracks.map(async (t) => {
+        const to = {};
+        if (t.keyframeOperation === "OFFSET" || t.keyframeOperation === "SCALE") to.op = t.keyframeOperation === "OFFSET" ? "offset" : "scale";
+        const kf = await keyframes(t.keyframes);
+        if (kf) to.keyframes = kf;
+        return to;
+      }));
+    }
+    return o;
+  }
+  async function stylePropValue(v) {
+    if (v === void 0 || v === null) return void 0;
+    if (typeof v === "object") return motionEasing(v);
+    return v;
+  }
+  function isPropertyBindings(t) {
+    return "properties" in t;
+  }
+  async function bindingMap(map, conv) {
+    if (!map || typeof map !== "object") return void 0;
+    const entries = Object.entries(map);
+    const converted = await Promise.all(entries.map(([, binding]) => conv(binding)));
+    const out = {};
+    entries.forEach(([key], i) => putNonEmpty(out, key, converted[i]));
+    return nonEmpty(out);
+  }
+  async function paintMap(map, conv) {
     if (!map || typeof map !== "object") return void 0;
     const out = {};
-    for (const field of Object.keys(map)) {
-      const binding = map[field];
-      if (!binding || typeof binding !== "object") continue;
-      const o = {};
-      if (binding.baseValue !== void 0) o.base = keyframeValue(binding.baseValue);
-      if (typeof binding.keyframeOperation === "string" && binding.keyframeOperation !== "SET") o.op = binding.keyframeOperation.toLowerCase();
-      const kf = keyframes(binding.keyframes);
-      if (kf) o.keyframes = kf;
-      putNonEmpty(out, field, o);
+    for (const [index, entry] of Object.entries(map)) {
+      if (!entry || typeof entry !== "object") continue;
+      if (isPropertyBindings(entry)) {
+        const properties = await bindingMap(entry.properties, conv);
+        if (properties) out[index] = { properties };
+      } else {
+        putNonEmpty(out, index, await conv(entry));
+      }
     }
     return nonEmpty(out);
   }
-  function collectMotion(node) {
-    const n = node;
+  async function effectMap(map, conv) {
+    var _a;
+    if (!map || typeof map !== "object") return void 0;
     const out = {};
-    if (Array.isArray(n.timelines) && n.timelines.length) out.timelines = n.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
-    const tracks = trackMap(n.manualKeyframeTracks);
-    if (tracks) out.manualTracks = tracks;
-    const anims = trackMap(n.animations);
-    if (anims) out.animations = anims;
-    if (Array.isArray(n.animationStyles) && n.animationStyles.length) {
-      out.styles = n.animationStyles.map((s) => {
-        const o = { name: s.name, styleId: s.styleId };
+    for (const [index, entry] of Object.entries(map)) {
+      if (!entry || typeof entry !== "object") continue;
+      const { properties, ...fields } = entry;
+      const extra = {};
+      putNonEmpty(extra, "properties", await bindingMap(properties, conv));
+      putNonEmpty(out, index, Object.assign((_a = await bindingMap(fields, conv)) != null ? _a : {}, extra));
+    }
+    return nonEmpty(out);
+  }
+  async function motionMap(map, conv) {
+    var _a;
+    if (!map || typeof map !== "object") return void 0;
+    const { fills, strokes, effects, ...scalars } = map;
+    const indexed = {};
+    putNonEmpty(indexed, "fills", await paintMap(fills, conv));
+    putNonEmpty(indexed, "strokes", await paintMap(strokes, conv));
+    putNonEmpty(indexed, "effects", await effectMap(effects, conv));
+    return nonEmpty(Object.assign((_a = await bindingMap(scalars, conv)) != null ? _a : {}, indexed));
+  }
+  async function collectMotion(node) {
+    const out = {};
+    if ("timelines" in node && isList(node.timelines) && node.timelines.length) {
+      out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
+    }
+    if ("manualKeyframeTracks" in node) {
+      const tracks = await motionMap(node.manualKeyframeTracks, manualTrack);
+      if (tracks) out.manualTracks = tracks;
+    }
+    if ("animations" in node) {
+      const anims = await motionMap(node.animations, animationTrack);
+      if (anims) out.animations = anims;
+    }
+    if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
+      out.styles = await Promise.all(node.animationStyles.map(async (s) => {
+        const o = { id: s.id, name: s.name, styleId: s.styleId };
         if (typeof s.duration === "number") o.duration = round(s.duration);
         if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
+        if (s.props) {
+          const entries = Object.entries(s.props);
+          const converted = await Promise.all(entries.map(([, v]) => stylePropValue(v)));
+          const props = {};
+          entries.forEach(([key], i) => {
+            const c = converted[i];
+            if (c !== void 0) props[key] = c;
+          });
+          if (Object.keys(props).length) o.props = props;
+        }
         return o;
-      });
+      }));
     }
     return nonEmpty(out);
   }
 
   // src/serialize.ts
   var MAX_DEPTH = 60;
-  var LOWER_ENUMS = [
-    ["layoutAlign", "alignSelf", "INHERIT"],
-    // FIXED is the default on nearly every node — two keys of pure noise per node. Only FILL/HUG
-    // (the values that actually change the generated CSS) are worth emitting.
-    ["layoutSizingHorizontal", "widthMode", "FIXED"],
-    ["layoutSizingVertical", "heightMode", "FIXED"],
-    ["overflowDirection", "scroll", "NONE"]
-  ];
-  var GRID_SELF_ENUMS = [
-    ["gridChildHorizontalAlign", "gridJustifySelf"],
-    ["gridChildVerticalAlign", "gridAlignSelf"]
-  ];
   var SIZE_LIMIT_KEYS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
   var CORNER_KEYS = [
     ["topLeftRadius", "tl"],
@@ -2264,11 +2713,9 @@
     return round(Math.min(w === void 0 ? Infinity : w, h === void 0 ? Infinity : h) / 2);
   }
   function pluginData(node) {
-    const n = node;
-    if (typeof n.getPluginDataKeys !== "function") return void 0;
     let keys = [];
     try {
-      keys = n.getPluginDataKeys();
+      keys = node.getPluginDataKeys();
     } catch (e) {
       return void 0;
     }
@@ -2276,7 +2723,7 @@
     const out = {};
     for (const k of keys) {
       try {
-        const v = n.getPluginData(k);
+        const v = node.getPluginData(k);
         if (v) out[k] = v;
       } catch (e) {
       }
@@ -2285,20 +2732,18 @@
   }
   var SHARED_NAMESPACES = ["tokens"];
   function sharedData(node) {
-    const n = node;
-    if (typeof n.getSharedPluginDataKeys !== "function" || typeof n.getSharedPluginData !== "function") return void 0;
     const out = {};
     for (const ns of SHARED_NAMESPACES) {
       let keys = [];
       try {
-        keys = n.getSharedPluginDataKeys(ns) || [];
+        keys = node.getSharedPluginDataKeys(ns) || [];
       } catch (e) {
         continue;
       }
       const bucket = {};
       for (const k of keys) {
         try {
-          const v = n.getSharedPluginData(ns, k);
+          const v = node.getSharedPluginData(ns, k);
           if (v) bucket[k] = v;
         } catch (e) {
         }
@@ -2308,32 +2753,52 @@
     return nonEmpty(out);
   }
   async function nodeCss(node) {
-    const n = node;
-    if (typeof n.getCSSAsync !== "function") return void 0;
     try {
-      const css = await n.getCSSAsync();
+      const css = await node.getCSSAsync();
       return css && Object.keys(css).length ? css : void 0;
     } catch (e) {
       return void 0;
     }
   }
-  async function serialize(node, depth, parentControlsLayout) {
+  function leaf(out) {
+    delete out.layout;
+    return out;
+  }
+  function bakeTransform(out) {
+    const st = {};
+    if (out.rotation !== void 0) {
+      st.rotation = out.rotation;
+      delete out.rotation;
+    }
+    if (out.flipped) {
+      st.flipped = true;
+      delete out.flipped;
+    }
+    if (out.skew !== void 0) {
+      st.skew = out.skew;
+      delete out.skew;
+    }
+    putNonEmpty(out, "sourceTransform", st);
+  }
+  async function serialize(node, depth, parentControlsLayout, underHidden, inGrid) {
+    checkCancelled();
     if (depth > MAX_DEPTH) {
       stats.truncated++;
       if (stats.truncated === 1) warn("depth limit " + MAX_DEPTH + " reached \u2014 deep subtrees truncated (first: " + node.name + ")");
       return null;
     }
     stats.nodes++;
-    const n = node;
     const out = { type: node.type, name: node.name, id: node.id };
-    if (n.visible === false) out.hidden = true;
+    if ("visible" in node && node.visible === false) out.hidden = true;
+    const hidden = !!out.hidden || !!underHidden;
+    if (hidden) stats.hiddenNodes++;
     if (node.type === "INSTANCE" && node.componentProperties) {
       const props = {};
       const propTokens = {};
-      const keys = Object.keys(node.componentProperties);
-      const bound = await Promise.all(keys.map((k) => resolveBoundMap(node.componentProperties[k].boundVariables)));
-      keys.forEach((k, i) => {
-        props[propName(k)] = node.componentProperties[k].value;
+      const propEntries = Object.entries(node.componentProperties);
+      const bound = await Promise.all(propEntries.map(([, cp]) => resolveBoundMap(cp.boundVariables)));
+      propEntries.forEach(([k, cp], i) => {
+        props[propName(k)] = cp.value;
         const bv = bound[i];
         if (bv && bv.value) propTokens[propName(k)] = bv.value;
       });
@@ -2343,89 +2808,92 @@
     if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") out.component = node.name;
     const lay = layout(node);
     if (lay) out.layout = lay;
-    const absoluteInParent = "layoutPositioning" in node && n.layoutPositioning === "ABSOLUTE";
+    const absoluteInParent = "layoutPositioning" in node && node.layoutPositioning === "ABSOLUTE";
     if (absoluteInParent) out.absolute = true;
-    if ("layoutGrow" in node && n.layoutGrow) out.grow = n.layoutGrow;
-    for (const [field, key, skip] of LOWER_ENUMS) {
-      const v = n[field];
-      if (typeof v === "string" && v && v !== skip) out[key] = v.toLowerCase();
+    if ("layoutGrow" in node && node.layoutGrow) out.grow = node.layoutGrow;
+    if ("layoutAlign" in node && node.layoutAlign && node.layoutAlign !== "INHERIT") out.alignSelf = lower(node.layoutAlign);
+    if ("layoutSizingHorizontal" in node && node.layoutSizingHorizontal && node.layoutSizingHorizontal !== "FIXED") out.widthMode = lower(node.layoutSizingHorizontal);
+    if ("layoutSizingVertical" in node && node.layoutSizingVertical && node.layoutSizingVertical !== "FIXED") out.heightMode = lower(node.layoutSizingVertical);
+    if ("overflowDirection" in node && node.overflowDirection && node.overflowDirection !== "NONE") out.scroll = lower(node.overflowDirection);
+    if (inGrid && !absoluteInParent) {
+      if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
+      if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
+      if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number" && node.gridColumnAnchorIndex >= 0) out.gridColumnStart = node.gridColumnAnchorIndex;
+      if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number" && node.gridRowAnchorIndex >= 0) out.gridRowStart = node.gridRowAnchorIndex;
+      if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
+      if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
     }
-    if ("gridColumnSpan" in node && typeof n.gridColumnSpan === "number" && n.gridColumnSpan !== 1) out.gridColumnSpan = n.gridColumnSpan;
-    if ("gridRowSpan" in node && typeof n.gridRowSpan === "number" && n.gridRowSpan !== 1) out.gridRowSpan = n.gridRowSpan;
-    if ("gridColumnAnchorIndex" in node && typeof n.gridColumnAnchorIndex === "number") out.gridColumnStart = n.gridColumnAnchorIndex;
-    if ("gridRowAnchorIndex" in node && typeof n.gridRowAnchorIndex === "number") out.gridRowStart = n.gridRowAnchorIndex;
-    for (const [field, key] of GRID_SELF_ENUMS) {
-      const v = n[field];
-      if (v && v !== "AUTO") out[key] = GRID_SELF[v];
+    if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof node.x === "number") {
+      out.x = round(node.x);
+      out.y = round(node.y);
     }
-    if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof n.x === "number") {
-      out.x = round(n.x);
-      out.y = round(n.y);
-    }
-    if ("absoluteBoundingBox" in node && n.absoluteBoundingBox) {
-      const b = n.absoluteBoundingBox;
-      out.box = { w: round(b.width), h: round(b.height) };
+    if ("absoluteBoundingBox" in node && node.absoluteBoundingBox) {
+      const b = node.absoluteBoundingBox;
+      const box = { w: round(b.width), h: round(b.height) };
+      out.box = box;
       if (!parentControlsLayout || absoluteInParent) {
-        out.box.x = round(b.x);
-        out.box.y = round(b.y);
+        box.x = round(b.x);
+        box.y = round(b.y);
       }
-      const rb = n.absoluteRenderBounds;
+      const rb = "absoluteRenderBounds" in node ? node.absoluteRenderBounds : null;
       if (rb && (rb.x !== b.x || rb.y !== b.y || rb.width !== b.width || rb.height !== b.height)) {
         out.renderBox = { ...xy(rb), w: round(rb.width), h: round(rb.height) };
       }
     }
-    if ("layoutGrids" in node && Array.isArray(n.layoutGrids) && n.layoutGrids.length) {
-      out.layoutGrids = n.layoutGrids.map(simplifyGrid).filter(Boolean);
+    if ("layoutGrids" in node && Array.isArray(node.layoutGrids) && node.layoutGrids.length) {
+      out.layoutGrids = node.layoutGrids.map(simplifyGrid).filter((g) => !!g);
     }
-    if ("annotations" in node && Array.isArray(n.annotations) && n.annotations.length) {
-      out.annotations = n.annotations.map((a) => {
+    if ("annotations" in node && isList(node.annotations) && node.annotations.length) {
+      out.annotations = node.annotations.map((a) => {
         const o = {};
         if (a.label) o.label = a.label;
         if (a.labelMarkdown) o.markdown = a.labelMarkdown;
         if (a.categoryId) o.categoryId = a.categoryId;
-        if (Array.isArray(a.properties) && a.properties.length) o.props = a.properties.map((p) => p.type);
+        if (isList(a.properties) && a.properties.length) o.props = a.properties.map((p) => p.type);
         return o;
       });
     }
-    if ("devStatus" in node && n.devStatus && n.devStatus.type) {
-      out.devStatus = n.devStatus.type.toLowerCase();
-      if (n.devStatus.description) out.devStatusNote = n.devStatus.description;
+    if ("devStatus" in node && node.devStatus && node.devStatus.type) {
+      out.devStatus = lower(node.devStatus.type);
+      if (node.devStatus.description) out.devStatusNote = node.devStatus.description;
     }
     let sizeLimits;
     for (const k of SIZE_LIMIT_KEYS) {
-      if (k in node && typeof n[k] === "number") (sizeLimits || (sizeLimits = {}))[k] = round(n[k]);
+      const v = numProp(node, k);
+      if (k in node && typeof v === "number") (sizeLimits || (sizeLimits = {}))[k] = round(v);
     }
     if (sizeLimits) out.sizeLimits = sizeLimits;
-    if ("constraints" in node && n.constraints && (n.constraints.horizontal !== "MIN" || n.constraints.vertical !== "MIN")) {
-      out.pin = { h: n.constraints.horizontal.toLowerCase(), v: n.constraints.vertical.toLowerCase() };
+    if ("constraints" in node && node.constraints && (node.constraints.horizontal !== "MIN" || node.constraints.vertical !== "MIN")) {
+      out.pin = { h: lower(node.constraints.horizontal), v: lower(node.constraints.vertical) };
     }
-    if ("numberOfFixedChildren" in node && typeof n.numberOfFixedChildren === "number" && n.numberOfFixedChildren > 0) {
-      out.fixedChildren = n.numberOfFixedChildren;
+    if ("numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) {
+      out.fixedChildren = node.numberOfFixedChildren;
     }
-    if ("clipsContent" in node && n.clipsContent) out.clip = true;
+    if ("clipsContent" in node && node.clipsContent) out.clip = true;
     const [fills, strokes, effects] = await Promise.all([
-      simplifyFills("fills" in node ? n.fills : void 0),
+      simplifyFills("fills" in node ? node.fills : void 0),
       simplifyStrokes(node),
-      simplifyEffects("effects" in node ? n.effects : void 0)
+      simplifyEffects("effects" in node ? node.effects : void 0)
     ]);
     if (fills) out.fills = fills;
     if (strokes) out.strokes = strokes;
-    if ("strokesIncludedInLayout" in node && n.strokesIncludedInLayout) out.strokesInLayout = true;
+    if ("strokesIncludedInLayout" in node && node.strokesIncludedInLayout) out.strokesInLayout = true;
     if (effects) out.effects = effects;
     if ("cornerRadius" in node) {
-      if (n.cornerRadius !== figma.mixed && n.cornerRadius) out.radius = radiusOut(out, n.cornerRadius);
-      else if (n.cornerRadius === figma.mixed) {
+      if (node.cornerRadius !== figma.mixed && node.cornerRadius) out.radius = radiusOut(out, node.cornerRadius);
+      else if (node.cornerRadius === figma.mixed) {
         const corners = {};
         for (const [k, s] of CORNER_KEYS) {
-          if (k in node && typeof n[k] === "number" && n[k]) corners[s] = radiusOut(out, n[k]);
+          const v = numProp(node, k);
+          if (k in node && typeof v === "number" && v) corners[s] = radiusOut(out, v);
         }
         putNonEmpty(out, "radius", corners);
       }
     }
-    if ("opacity" in node && n.opacity < 1) out.opacity = round(n.opacity);
-    if ("rotation" in node && n.rotation) out.rotation = round(n.rotation);
-    if ("relativeTransform" in node && Array.isArray(n.relativeTransform) && n.relativeTransform.length === 2) {
-      const m = n.relativeTransform;
+    if ("opacity" in node && node.opacity < 1) out.opacity = round(node.opacity);
+    if ("rotation" in node && node.rotation) out.rotation = round(node.rotation);
+    if ("relativeTransform" in node && Array.isArray(node.relativeTransform) && node.relativeTransform.length === 2) {
+      const m = node.relativeTransform;
       const a = m[0][0], c = m[0][1], b = m[1][0], d = m[1][1];
       if (a * d - c * b < 0) out.flipped = true;
       const sx = Math.sqrt(a * a + b * b);
@@ -2434,13 +2902,13 @@
         if (Math.abs(skewDeg) > 0.01) out.skew = round(skewDeg);
       }
     }
-    if ("blendMode" in node && n.blendMode && n.blendMode !== "NORMAL" && n.blendMode !== "PASS_THROUGH") out.blendMode = n.blendMode.toLowerCase();
-    if ("isMask" in node && n.isMask) out.mask = true;
-    if (out.mask && "maskType" in node && n.maskType && n.maskType !== "ALPHA") out.maskType = String(n.maskType).toLowerCase();
-    if ("cornerSmoothing" in node && typeof n.cornerSmoothing === "number" && n.cornerSmoothing) out.cornerSmoothing = round(n.cornerSmoothing);
-    if ("targetAspectRatio" in node && n.targetAspectRatio && n.targetAspectRatio.y) out.aspectRatio = round(n.targetAspectRatio.x / n.targetAspectRatio.y);
-    if (node.type === "ELLIPSE" && n.arcData) {
-      const a = n.arcData;
+    if ("blendMode" in node && node.blendMode && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") out.blendMode = node.blendMode.toLowerCase();
+    if ("isMask" in node && node.isMask) out.mask = true;
+    if (out.mask && "maskType" in node && node.maskType && node.maskType !== "ALPHA") out.maskType = String(node.maskType).toLowerCase();
+    if ("cornerSmoothing" in node && typeof node.cornerSmoothing === "number" && node.cornerSmoothing) out.cornerSmoothing = round(node.cornerSmoothing);
+    if ("targetAspectRatio" in node && node.targetAspectRatio && node.targetAspectRatio.y) out.aspectRatio = round(node.targetAspectRatio.x / node.targetAspectRatio.y);
+    if (node.type === "ELLIPSE" && node.arcData) {
+      const a = node.arcData;
       const isFull = (!a.startingAngle || a.startingAngle === 0) && Math.abs((a.endingAngle || 0) - Math.PI * 2) < 1e-4 && !a.innerRadius;
       if (!isFull) {
         const arc = {};
@@ -2452,41 +2920,41 @@
     }
     if (node.type === "STAR") {
       const shape = {};
-      if (typeof n.pointCount === "number") shape.points = n.pointCount;
-      if (typeof n.innerRadius === "number") shape.innerRadius = round(n.innerRadius);
+      if (typeof node.pointCount === "number") shape.points = node.pointCount;
+      if (typeof node.innerRadius === "number") shape.innerRadius = round(node.innerRadius);
       putNonEmpty(out, "shape", shape);
     }
-    if (node.type === "POLYGON" && typeof n.pointCount === "number") out.shape = { points: n.pointCount };
-    if (node.type === "BOOLEAN_OPERATION" && n.booleanOperation) out.booleanOp = String(n.booleanOperation).toLowerCase();
-    if ("exportSettings" in node && Array.isArray(n.exportSettings) && n.exportSettings.length) {
-      out.exportSettings = n.exportSettings.map((es) => {
+    if (node.type === "POLYGON" && typeof node.pointCount === "number") out.shape = { points: node.pointCount };
+    if (node.type === "BOOLEAN_OPERATION" && node.booleanOperation) out.booleanOp = lower(node.booleanOperation);
+    if ("exportSettings" in node && isList(node.exportSettings) && node.exportSettings.length) {
+      out.exportSettings = node.exportSettings.map((es) => {
         const o = { format: String(es.format || "").toLowerCase() };
-        if (es.suffix) o.suffix = es.suffix;
-        const con = es.constraint;
+        if ("suffix" in es && es.suffix) o.suffix = es.suffix;
+        const con = "constraint" in es ? es.constraint : void 0;
         if (con && typeof con.value === "number" && !(con.type === "SCALE" && con.value === 1)) {
           o.constraint = { type: String(con.type || "").toLowerCase(), value: round(con.value) };
         }
         return o;
       });
     }
-    if ("detachedInfo" in node && n.detachedInfo) {
-      out.detachedFrom = n.detachedInfo.type === "library" ? { key: n.detachedInfo.componentKey } : { componentId: n.detachedInfo.componentId };
+    if ("detachedInfo" in node && node.detachedInfo) {
+      out.detachedFrom = node.detachedInfo.type === "library" ? { key: node.detachedInfo.componentKey } : { componentId: node.detachedInfo.componentId };
     }
     if (node.type === "INSTANCE" && "exposedInstances" in node) {
       try {
-        if (Array.isArray(n.exposedInstances) && n.exposedInstances.length) out.exposedInstances = n.exposedInstances.map((i) => i.id);
+        if (Array.isArray(node.exposedInstances) && node.exposedInstances.length) out.exposedInstances = node.exposedInstances.map((i) => i.id);
       } catch (e) {
       }
     }
     if ("overlayPositionType" in node) {
-      const hasScrim = n.overlayBackground && n.overlayBackground.type === "SOLID_COLOR" && n.overlayBackground.color;
-      const closeOutside = n.overlayBackgroundInteraction === "CLOSE_ON_CLICK_OUTSIDE";
-      const posSet = n.overlayPositionType && n.overlayPositionType !== "CENTER";
+      const hasScrim = node.overlayBackground && node.overlayBackground.type === "SOLID_COLOR" && node.overlayBackground.color;
+      const closeOutside = node.overlayBackgroundInteraction === "CLOSE_ON_CLICK_OUTSIDE";
+      const posSet = node.overlayPositionType && node.overlayPositionType !== "CENTER";
       if (hasScrim || closeOutside || posSet) {
         const ov = {};
-        if (n.overlayPositionType) ov.position = n.overlayPositionType.toLowerCase();
+        if (node.overlayPositionType) ov.position = node.overlayPositionType.toLowerCase();
         if (closeOutside) ov.closeOnClickOutside = true;
-        if (hasScrim) ov.background = rgbaToHex(n.overlayBackground.color);
+        if (hasScrim && node.overlayBackground.type === "SOLID_COLOR") ov.background = rgbaToHex(node.overlayBackground.color);
         out.overlay = ov;
       }
     }
@@ -2500,7 +2968,7 @@
       if (pd) out.pluginData = pd;
     }
     if (runOpts.motion) {
-      const m = collectMotion(node);
+      const m = await collectMotion(node);
       if (m) out.motion = m;
     }
     if (runOpts.sharedData) {
@@ -2511,7 +2979,7 @@
       instanceComponentRef(node),
       boundTokens(node),
       nodeStyles(node),
-      collectAsset(node),
+      collectAsset(node, hidden),
       simplifyReactions(node),
       variableModes(node),
       runOpts.css ? nodeCss(node) : Promise.resolve(void 0)
@@ -2526,23 +2994,24 @@
     if (varModes) out.variableModes = varModes;
     if (css) out.css = css;
     if (asset && "skipped" in asset) {
-      out.assetSkipped = true;
-      return out;
+      out.assetSkipped = asset.skipped;
+      return leaf(out);
     }
     if (asset && "geometry" in asset) {
       out.geometry = asset.geometry;
-      return out;
+      return leaf(out);
     }
     if (asset) {
       out.asset = asset.path;
-      return out;
+      bakeTransform(out);
+      return leaf(out);
     }
-    if (node.type === "TABLE" && typeof n.numRows === "number" && typeof n.numColumns === "number") {
+    if (node.type === "TABLE" && typeof node.numRows === "number" && typeof node.numColumns === "number") {
       const grid = await Promise.all(
-        Array.from({ length: n.numRows }, (_, r) => Promise.all(
-          Array.from({ length: n.numColumns }, async (__, cc) => {
+        Array.from({ length: node.numRows }, (_, r) => Promise.all(
+          Array.from({ length: node.numColumns }, async (__, cc) => {
             try {
-              const cell = n.cellAt(r, cc);
+              const cell = node.cellAt(r, cc);
               if (!cell) return void 0;
               const co = { row: r, col: cc };
               if (cell.text) Object.assign(co, await serializeText(cell.text));
@@ -2558,12 +3027,17 @@
       const rows = grid.map((row) => row.filter((c) => !!c)).filter((row) => row.length);
       if (rows.length) out.tableCells = rows;
     }
-    const children = "children" in node ? n.children : void 0;
+    const children = "children" in node ? node.children : void 0;
     if (children && children.length) {
-      const controlsChildren = "layoutMode" in node && n.layoutMode && n.layoutMode !== "NONE";
+      const controlsChildren = "layoutMode" in node && !!node.layoutMode && node.layoutMode !== "NONE";
+      const grid = "layoutMode" in node && node.layoutMode === "GRID";
+      const nFixed = "numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" ? node.numberOfFixedChildren : 0;
+      const pinnedFrom = children.length - nFixed;
       const kids = [];
-      for (const c of children) {
-        const s = await serialize(c, depth + 1, controlsChildren);
+      for (let i = 0; i < children.length; i++) {
+        const c = children[i];
+        if (!c) continue;
+        const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid);
         if (s) kids.push(s);
       }
       if (kids.length) out.children = kids;
@@ -2572,15 +3046,26 @@
   }
 
   // src/collect.ts
-  async function serializeWithRefs(node) {
-    const tree = await serialize(node, 0);
+  async function serializeWithRefs(node, underHidden) {
+    const tree = await serialize(node, 0, void 0, underHidden);
     if (!tree) return { tree: null };
     const [ref, dev, modes] = await Promise.all([collectReference(node), devResources(node), resolvedModes(node)]);
     if (modes) tree.resolvedModes = modes;
-    return { tree, ref: ref || void 0, dev: dev || void 0 };
+    return { tree, ...ifDefined("ref", ref || void 0), ...ifDefined("dev", dev || void 0) };
+  }
+  function hiddenAncestor(node) {
+    for (let p = node.parent; p && p.type !== "PAGE" && p.type !== "DOCUMENT"; p = p.parent) {
+      if ("visible" in p && p.visible === false) return true;
+    }
+    return false;
   }
   async function rootTree(node) {
-    const { tree, ref, dev } = await serializeWithRefs(node);
+    const self = "visible" in node && node.visible === false;
+    const underHidden = hiddenAncestor(node);
+    if (self || underHidden) {
+      warn("'" + node.name + "' (" + node.id + ") is hidden " + (self ? "itself" : "under a hidden ancestor") + ' \u2014 its graphics are not exported (assetSkipped:"hidden") and its reference image may be blank');
+    }
+    const { tree, ref, dev } = await serializeWithRefs(node, underHidden);
     if (!tree) return null;
     if (ref) tree.reference = ref;
     if (dev) tree.devResources = dev;
@@ -2596,7 +3081,7 @@
     if (origin && origin.nodeId) screen.nodeId = origin.nodeId;
     const measurements = collectMeasurements();
     if (measurements) screen.measurements = measurements;
-    const out = { screenName: (0, import_pages_layout.safe)(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
+    const out = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
     if (page2) {
       out.page = page2.name;
       out.pageId = page2.id;
@@ -2610,15 +3095,141 @@
       o.w = Math.round(nd.width);
       o.h = Math.round(nd.height);
     }
-    if (nd.visible === false) o.hidden = true;
+    if ("visible" in nd && nd.visible === false) o.hidden = true;
+    if ("children" in nd) {
+      try {
+        o.childCount = nd.children.length;
+      } catch (e) {
+      }
+    }
     return o;
+  }
+  function collisionGroups(rows) {
+    const by = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      if (typeof r.w !== "number") continue;
+      const k = JSON.stringify([r.name, r.w, r.h]);
+      const g = by.get(k);
+      if (g) g.push(r);
+      else by.set(k, [r]);
+    }
+    return Array.from(by.values()).filter((g) => g.length > 1);
+  }
+  function collisionNote(g, what, tellBy) {
+    const first2 = g[0];
+    const name = first2 ? first2.name : "";
+    const size = first2 ? first2.w + "\xD7" + first2.h : "";
+    return g.length + " " + what + " share name '" + name + "' and size " + size + " \u2014 told apart by " + tellBy + "; when those match too, `dtwin screenshot <id> --scale 0.25` each (" + g.map((r) => r.id).join(", ") + ")";
+  }
+  var TITLE_VISIT_CAP = 5e3;
+  var TitleCapReached = class extends Error {
+  };
+  function spend(b, fresh) {
+    if (b.listing && b.listing.spent) return false;
+    if (++b.visits > b.cap) {
+      if (!b.soft) throw new TitleCapReached();
+      b.capped = true;
+      return false;
+    }
+    if (fresh && b.listing && ++b.listing.reads > b.listing.cap) {
+      b.listing.spent = true;
+      return false;
+    }
+    return true;
+  }
+  function liveWalkNode(n, ref) {
+    let src;
+    const kids = [];
+    const children = {
+      [Symbol.iterator]: () => {
+        let i = 0;
+        return {
+          next: () => {
+            if (!src) src = "children" in n ? n.children : [];
+            const c = src[i];
+            if (!c || !spend(ref.budget, !kids[i])) return { done: true, value: void 0 };
+            const w = kids[i] || (kids[i] = liveWalkNode(c, ref));
+            i++;
+            return { done: false, value: w };
+          }
+        };
+      }
+    };
+    return {
+      name: n.name,
+      type: n.type,
+      hidden: "visible" in n && n.visible === false,
+      get text() {
+        return n.type === "TEXT" ? n.characters : "";
+      },
+      // read only when a walker hits a TEXT
+      children
+    };
+  }
+  function rowWalk(node) {
+    const ref = { budget: { visits: 0, cap: TITLE_VISIT_CAP } };
+    return { root: liveWalkNode(node, ref), ref };
+  }
+  function titleOf(w) {
+    w.ref.budget = { visits: 1, cap: TITLE_VISIT_CAP };
+    try {
+      return deriveTitle(w.root);
+    } catch (e) {
+      if (!(e instanceof TitleCapReached)) throw e;
+    }
+    w.ref.budget.visits = 1;
+    return firstText(w.root) || void 0;
+  }
+  var DISTINCT_TEXTS = 3;
+  var DISTINCT_TEXT_CHARS = 60;
+  var DISTINCT_TEXT_SCAN = 200;
+  var DISTINCT_TEXT_LISTING_READS = 2e4;
+  var oneLine = (t) => t.replace(/\s+/g, " ").trim();
+  function titlesTellApart(g) {
+    const titles = g.map((r) => r.title);
+    return titles.every((t) => !!t) && new Set(titles).size === g.length;
+  }
+  function addDistinctTexts(g, walks, listing, sink) {
+    let skipped = 0;
+    const textsOf = g.map((row) => {
+      const w = walks.get(row.id);
+      if (!w) return { texts: /* @__PURE__ */ new Set(), cut: false };
+      if (listing.spent) {
+        skipped++;
+        return void 0;
+      }
+      const budget = { visits: 1, cap: TITLE_VISIT_CAP, soft: true, listing };
+      w.ref.budget = budget;
+      const texts = collectTexts(w.root, DISTINCT_TEXT_SCAN).map(oneLine).filter((t) => t && !PLACEHOLDER_TEXT.has(t.toLowerCase()));
+      if (listing.spent) {
+        skipped++;
+        return { texts: new Set(texts), cut: true };
+      }
+      if (budget.capped) sink("`distinctTexts` for '" + row.name + "' (" + row.id + ") read only its first " + TITLE_VISIT_CAP + " nodes");
+      return { texts: new Set(texts), cut: false };
+    });
+    if (skipped) return g.filter((row) => walks.has(row.id)).map((row) => row.id);
+    g.forEach((row, i) => {
+      const mine = textsOf[i];
+      if (!mine || mine.cut) return;
+      const others = textsOf.filter((o, j) => j !== i && !!o).map((o) => o.texts);
+      const unique = [];
+      const notCommon = [];
+      for (const t of mine.texts) {
+        if (others.every((o) => !o.has(t))) unique.push(t);
+        else if (others.some((o) => !o.has(t))) notCommon.push(t);
+      }
+      const picked = unique.concat(notCommon).slice(0, DISTINCT_TEXTS).map((t) => Array.from(t).slice(0, DISTINCT_TEXT_CHARS).join(""));
+      if (picked.length) row.distinctTexts = picked;
+    });
+    return [];
   }
   async function loadPageSafely(page2, sink, what) {
     if (typeof page2.loadAsync !== "function") return false;
     try {
       await page2.loadAsync();
     } catch (e) {
-      sink("page '" + page2.name + "' failed to load" + (what ? " " + what : "") + ": " + (0, import_errmsg.errMsg)(e));
+      sink("page '" + page2.name + "' failed to load" + (what ? " " + what : "") + ": " + errMsg(e));
       return false;
     }
     return true;
@@ -2627,7 +3238,7 @@
     try {
       return page2.children;
     } catch (e) {
-      sink("page '" + page2.name + "' could not be read (not loaded) \u2014 " + consequence + ": " + (0, import_errmsg.errMsg)(e));
+      sink("page '" + page2.name + "' could not be read (not loaded) \u2014 " + consequence + ": " + errMsg(e));
       return null;
     }
   }
@@ -2646,12 +3257,12 @@
   function resolvePages(wanted, all) {
     const avail = () => all.map((p) => `${p.id} ${JSON.stringify(p.name)}`).join("\n  ");
     const pick = (sel, matches, how) => {
-      if (matches.length === 1) return matches[0];
+      var _a;
       if (matches.length > 1) {
         throw new Error(`page name ${JSON.stringify(sel)} is ambiguous (${matches.length} pages ${how}) \u2014 use its id. Available pages:
   ${avail()}`);
       }
-      return null;
+      return (_a = matches[0]) != null ? _a : null;
     };
     const resolveOne = (sel) => {
       const byId = all.find((p) => p.id === sel);
@@ -2680,7 +3291,7 @@
     while (stack.length) {
       const n = stack.pop();
       if (++count > CSS_AUTO_NODE_CAP) return false;
-      if (n && "children" in n && Array.isArray(n.children)) {
+      if (n && "children" in n && isList(n.children)) {
         for (const c of n.children) stack.push(c);
       }
     }
@@ -2693,15 +3304,16 @@
   }
   var DEFAULT_PAGE_BG = ["#ffffff", "#f5f5f5", "#e5e5e5"];
   function isDefaultBg(f) {
-    return !f || f.length === 1 && f[0].type === "solid" && DEFAULT_PAGE_BG.indexOf(f[0].color) !== -1;
+    if (!f) return true;
+    const only = f[0];
+    return f.length === 1 && only !== void 0 && only.type === "solid" && DEFAULT_PAGE_BG.indexOf(only.color) !== -1;
   }
   async function pageBackground(page2) {
-    const p = page2;
     const out = {};
-    const bg = await simplifyFills(p.backgrounds);
-    if (!isDefaultBg(bg)) out.background = bg;
-    const proto = await simplifyFills(p.prototypeBackgrounds);
-    if (!isDefaultBg(proto)) out.prototypeBackground = proto;
+    const bg = await simplifyFills(page2.backgrounds);
+    if (bg && !isDefaultBg(bg)) out.background = bg;
+    const proto = await simplifyFills(page2.prototypeBackgrounds);
+    if (proto && !isDefaultBg(proto)) out.prototypeBackground = proto;
     return nonEmpty(out);
   }
   function countNodes(tree) {
@@ -2715,20 +3327,19 @@
     const targets = pages && pages.length ? pages : [figma.currentPage];
     const out = [];
     for (const page2 of targets) {
-      const p = page2;
-      if (typeof p.getMeasurements !== "function") continue;
+      if (typeof page2.getMeasurements !== "function") continue;
       try {
-        const ms = p.getMeasurements();
+        const ms = page2.getMeasurements();
         if (!Array.isArray(ms) || !ms.length) continue;
         const side = (e) => e ? { nodeId: e.node && e.node.id, side: e.side } : void 0;
         for (const m of ms) {
-          const o = { page: page2.name, pageId: page2.id, start: side(m.start), end: side(m.end) };
+          const o = { page: page2.name, pageId: page2.id, ...ifDefined("start", side(m.start)), ...ifDefined("end", side(m.end)) };
           if (m.freeText) o.text = m.freeText;
           if (m.offset != null) o.offset = m.offset;
           out.push(o);
         }
       } catch (e) {
-        warn("measurements unavailable for page '" + page2.name + "': " + (0, import_errmsg.errMsg)(e));
+        warn("measurements unavailable for page '" + page2.name + "': " + errMsg(e));
       }
     }
     return out.length ? out : void 0;
@@ -2736,14 +3347,15 @@
   async function collectSelection(opts) {
     resetRun();
     const sel = figma.currentPage.selection;
-    if (!sel.length) throw new Error("Select at least one frame first.");
-    applyOpts(sel.length === 1 ? autoCss(opts, sel[0]) : opts);
+    const first2 = sel[0];
+    if (!first2) throw new Error("Select at least one frame first.");
+    applyOpts(sel.length === 1 ? autoCss(opts, first2) : opts);
     const nodes = [];
     for (const nd of sel) {
       const tree = await rootTree(nd);
       if (tree) nodes.push(tree);
     }
-    return screenResult(sel.length === 1 ? sel[0].name : "selection", sel[0].name, nodes, { page: figma.currentPage, nodeId: sel[0].id });
+    return screenResult(sel.length === 1 ? first2.name : "selection", first2.name, nodes, { page: figma.currentPage, nodeId: first2.id });
   }
   function pageOf(node) {
     let n = node;
@@ -2752,8 +3364,8 @@
   }
   async function collectNode(rawId, opts) {
     resetRun();
-    const nodeId = (0, import_node_id.toNodeId)(rawId);
-    if (!nodeId) throw new Error("No node id provided.");
+    const nodeId = toNodeId(rawId);
+    if (!nodeId) throw new Error(NO_NODE_ID);
     const node = await findNodeById(nodeId, warn);
     applyOpts(autoCss(opts, node));
     try {
@@ -2769,14 +3381,15 @@
   }
   async function collectScreenshot(rawId, opts) {
     resetRun();
-    const nodeId = (0, import_node_id.toNodeId)(rawId);
-    if (!nodeId) throw new Error("No node id provided.");
+    const nodeId = toNodeId(rawId);
+    if (!nodeId) throw new Error(NO_NODE_ID);
     const node = await findNodeById(nodeId, warn);
     const reference = await collectReference(node, opts);
     if (!reference) {
       throw new Error("Node " + nodeId + " could not be rendered (hidden, zero-size, or the export failed \u2014 see warnings).");
     }
-    return { id: node.id, name: node.name, type: node.type, reference, manifest: manifest(), assets: assets.slice() };
+    const size = "width" in node && "height" in node ? { w: round(node.width), h: round(node.height) } : {};
+    return { id: node.id, name: node.name, type: node.type, ...size, scale: referenceScale(node, opts), reference, manifest: manifest(), assets: assets.slice() };
   }
   var TOP_LEVEL_TYPES = /* @__PURE__ */ new Set([
     "FRAME",
@@ -2817,6 +3430,7 @@
           continue;
         }
         const frames = children.filter((nd) => TOP_LEVEL_TYPES.has(nd.type)).map(summarize);
+        for (const g of collisionGroups(frames)) sink("page '" + page2.name + "': " + collisionNote(g, "frames", "`childCount`"));
         frameCount += frames.length;
         entry.frames = frames;
       }
@@ -2827,27 +3441,53 @@
       file: figma.root.name,
       depth,
       pages,
-      manifest: { pages: pages.length, frames: depth >= 2 ? frameCount : void 0, warnings: localWarnings }
+      manifest: { pages: pages.length, ...ifDefined("frames", depth >= 2 ? frameCount : void 0), warnings: localWarnings }
     };
   }
   async function listChildren(rawId) {
-    const nodeId = (0, import_node_id.toNodeId)(rawId);
-    if (!nodeId) throw new Error("No node id provided.");
+    const nodeId = toNodeId(rawId);
+    if (!nodeId) throw new Error(NO_NODE_ID);
     const localWarnings = [];
-    const node = await findNodeById(nodeId, (m) => localWarnings.push(m));
+    const sink = (m) => localWarnings.push(m);
+    const node = await findNodeById(nodeId, sink);
     if (!("children" in node)) throw new Error("Node " + nodeId + " (" + node.type + ") is a leaf \u2014 it has no children to list.");
+    if (node.type === "PAGE") await loadPageSafely(node, sink, "before listing its children");
     let kids;
     try {
       kids = node.children;
     } catch (e) {
-      throw new Error("Node " + nodeId + "'s children could not be read: " + (0, import_errmsg.errMsg)(e));
+      throw new Error("Node " + nodeId + "'s children could not be read: " + errMsg(e));
     }
     const children = [];
+    if (node.type === "DOCUMENT") {
+      await Promise.all(kids.map((p) => loadPageSafely(p, sink, "\u2014 hasChildren omitted")));
+    }
     for (const nd of kids) {
       const c = summarize(nd);
-      if ("children" in nd) c.hasChildren = nd.children.length > 0;
+      if (c.childCount !== void 0) c.hasChildren = c.childCount > 0;
       children.push(c);
     }
+    const listing = { reads: 0, cap: DISTINCT_TEXT_LISTING_READS };
+    const noDistinct = [];
+    for (const g of collisionGroups(children)) {
+      const walks = /* @__PURE__ */ new Map();
+      for (const row of g) {
+        const nd = kids.find((k) => k.id === row.id);
+        if (!nd) continue;
+        const w = rowWalk(nd);
+        walks.set(row.id, w);
+        try {
+          const t = titleOf(w);
+          if (t) row.title = t;
+        } catch (e) {
+          if (!(e instanceof TitleCapReached)) throw e;
+          sink("no title for '" + row.name + "' (" + row.id + "): more than " + TITLE_VISIT_CAP + " nodes to search");
+        }
+      }
+      if (!titlesTellApart(g)) noDistinct.push(...addDistinctTexts(g, walks, listing, sink));
+      sink(collisionNote(g, "children", "`title`/`childCount`/`distinctTexts`"));
+    }
+    if (noDistinct.length) sink("`distinctTexts` skipped for " + noDistinct.length + " row(s) (" + noDistinct.slice(0, 6).join(", ") + (noDistinct.length > 6 ? ", \u2026" : "") + "): the listing's budget of " + DISTINCT_TEXT_LISTING_READS + " node reads ran out, and a group with a row not read in full gets none");
     return {
       exportedAt: exportedAt(),
       id: node.id,
@@ -2861,10 +3501,13 @@
     resetRun();
     applyOpts(opts);
     const designSystem = await buildDesignSystem(void 0, serialize);
-    designSystem.hygiene = [
-      "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced \u2014 pull a page for the full set.",
-      ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
-    ];
+    checkCancelled();
+    if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true)) {
+      designSystem.hygiene = [
+        'design-system pull of a file that consumes libraries: library (remote) variables are only the ones this file references \u2014 this is not the library\'s catalog; open the library file and run `dtwin pull --as-library "<name>"` for it.',
+        ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
+      ];
+    }
     return { designSystem };
   }
   async function collectLibraryFile(opts) {
@@ -2872,6 +3515,7 @@
     applyOpts(opts);
     const asLibrary = opts && opts.asLibrary || figma.root && figma.root.name || "library";
     const designSystem = await buildDesignSystem({ asLibrary }, serialize);
+    checkCancelled();
     designSystem.hygiene = [
       "library pull: this is the COMPLETE local catalog of '" + asLibrary + "' \u2014 variables, styles and components, with full per-mode values. It is a snapshot of the library file's CURRENT state, which is not necessarily what consumers see: `publish` reports each object's own status (current | changed | unpublished).",
       ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
@@ -2879,6 +3523,7 @@
     return { designSystem };
   }
   async function collectFull(opts) {
+    var _a;
     resetRun();
     applyOpts(opts);
     const allPages = !!(opts && opts.allPages);
@@ -2913,7 +3558,7 @@
       if (!children) continue;
       const bg = await pageBackground(page2);
       if (bg) pageSettings.push({ page: page2.name, pageId: page2.id, ...bg });
-      if (Array.isArray(page2.flowStartingPoints)) {
+      if (isList(page2.flowStartingPoints)) {
         for (const fp of page2.flowStartingPoints) flows.push({ page: page2.name, pageId: page2.id, nodeId: fp.nodeId, name: fp.name });
       }
       const frames = [];
@@ -2925,7 +3570,7 @@
         checkCancelled();
         const { tree, ref, dev } = await serializeWithRefs(f);
         if (tree) {
-          layers.push({ name: f.name, id: f.id, page: page2.name, pageId: page2.id, tree, reference: ref, devResources: dev });
+          layers.push({ name: f.name, id: f.id, page: page2.name, pageId: page2.id, tree, ...ifDefined("reference", ref), ...ifDefined("devResources", dev) });
           index.push({
             name: f.name,
             id: f.id,
@@ -2942,6 +3587,7 @@
     checkCancelled();
     progress("design-system", { nodes: stats.nodes, assets: assets.length }, true);
     const designSystem = await buildDesignSystem(void 0, serialize);
+    checkCancelled();
     const measurements = collectMeasurements(pages);
     const layersDoc = {
       exportedAt: exportedAt(),
@@ -2950,11 +3596,11 @@
       // never exported (the named page is loaded, NOT made current — so figma.currentPage is still
       // whatever the user happens to be looking at).
       scope: allPages ? "all-pages" : wanted.length ? "page" : "current-page",
-      page: allPages || pages.length !== 1 ? void 0 : pages[0].name,
-      pages: allPages || pages.length > 1 ? pages.map((p) => p.name) : void 0,
-      flows: flows.length ? flows : void 0,
-      pageSettings: pageSettings.length ? pageSettings : void 0,
-      measurements: measurements || void 0,
+      ...ifDefined("page", allPages || pages.length !== 1 ? void 0 : (_a = pages[0]) == null ? void 0 : _a.name),
+      ...ifDefined("pages", allPages || pages.length > 1 ? pages.map((p) => p.name) : void 0),
+      ...ifDefined("flows", flows.length ? flows : void 0),
+      ...ifDefined("pageSettings", pageSettings.length ? pageSettings : void 0),
+      ...ifDefined("measurements", measurements || void 0),
       index,
       layers,
       manifest: manifest()
@@ -2963,22 +3609,11 @@
   }
 
   // src/writes.ts
-  function parseHex(hex) {
-    let h = (hex || "#000000").replace(/^#/, "").trim();
-    if (h.length === 3 || h.length === 4) h = h.split("").map((c) => c + c).join("");
-    const chan = (s) => {
-      const v = parseInt(s, 16);
-      return Number.isFinite(v) ? v / 255 : 0;
-    };
-    return {
-      color: { r: chan(h.slice(0, 2)), g: chan(h.slice(2, 4)), b: chan(h.slice(4, 6)) },
-      opacity: h.length >= 8 ? chan(h.slice(6, 8)) : void 0
-    };
-  }
-  function solidPaint(hex) {
-    const { color, opacity } = parseHex(hex);
-    const p = { type: "SOLID", color };
-    if (opacity !== void 0) p.opacity = opacity;
+  function solidPaint(hex, what) {
+    const c = parseHexColor(hex);
+    if (!c) throw new Error(what + ": '" + String(hex) + "' is not a valid colour \u2014 expected " + HEX_COLOR_HINT);
+    const p = { type: "SOLID", color: { r: c.r, g: c.g, b: c.b } };
+    if (c.a !== void 0) p.opacity = c.a;
     return p;
   }
   async function loadNodeFonts(node) {
@@ -2998,6 +3633,7 @@
     switch (op.op) {
       case "createFrame": {
         const parent = await resolveParent(op.parentId);
+        const fill = op.fill ? solidPaint(op.fill, "createFrame fill") : null;
         const f = figma.createFrame();
         if (op.name) f.name = op.name;
         if (op.width && op.height) f.resize(op.width, op.height);
@@ -3009,17 +3645,18 @@
           f.paddingBottom = op.padding[2];
           f.paddingLeft = op.padding[3];
         }
-        if (op.fill) f.fills = [solidPaint(op.fill)];
+        if (fill) f.fills = [fill];
         parent.appendChild(f);
         return { id: f.id };
       }
       case "createText": {
         const parent = await resolveParent(op.parentId);
+        const fill = op.fill ? solidPaint(op.fill, "createText fill") : null;
         const t = figma.createText();
         await figma.loadFontAsync(t.fontName);
         t.characters = op.text || "";
         if (op.fontSize) t.fontSize = op.fontSize;
-        if (op.fill) t.fills = [solidPaint(op.fill)];
+        if (fill) t.fills = [fill];
         parent.appendChild(t);
         return { id: t.id };
       }
@@ -3028,19 +3665,19 @@
       // not every node type carries fills/characters. Returning {id} in those cases reported a write
       // that never happened — over MCP the agent reads that as success and builds on a false premise.
       case "setFill": {
-        const nd = await figma.getNodeByIdAsync(op.nodeId);
+        const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
         if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
-        nd.fills = [solidPaint(op.color)];
-        return { id: op.nodeId };
+        nd.fills = [solidPaint(op.color, "setFill color")];
+        return ifDefined("id", op.nodeId);
       }
       case "setText": {
-        const nd = await figma.getNodeByIdAsync(op.nodeId);
+        const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
         if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
         await loadNodeFonts(nd);
         nd.characters = op.text || "";
-        return { id: op.nodeId };
+        return ifDefined("id", op.nodeId);
       }
       default:
         throw new Error("unknown write op: " + op.op);
@@ -3050,24 +3687,25 @@
     const list = Array.isArray(ops) ? ops : [];
     const applied = [];
     if (list.length && figma.editorType === "dev") {
+      const first2 = list[0];
       return {
         ok: false,
         applied,
         failedAt: 0,
-        failedOp: list[0] && list[0].op,
+        ...ifDefined("failedOp", first2 && first2.op),
         error: "the file is open in Dev Mode, which is read-only for plugins \u2014 switch to Design mode (Shift+D) and re-run the plugin to write. Reads and exports work in Dev Mode."
       };
     }
-    for (let i = 0; i < list.length; i++) {
+    for (const [i, op] of list.entries()) {
       try {
-        applied.push(await applyWrite(list[i]));
+        applied.push(await applyWrite(op));
       } catch (e) {
         return {
           ok: false,
           applied,
           failedAt: i,
-          failedOp: list[i] && list[i].op,
-          error: (0, import_errmsg.errMsg)(e)
+          failedOp: op && op.op,
+          error: errMsg(e)
         };
       }
     }
@@ -3075,11 +3713,23 @@
   }
 
   // src/bridge.ts
-  var bridgeRun = (cmd) => ({ source: "bridge", label: cmd });
+  var bridgeRun = (cmd, id) => ({ source: "bridge", label: cmd, ...ifDefined("requestId", id) });
   var INSTANCE_ID = "fig-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
   var INSTANCE_STARTED_AT = Date.now();
-  async function handleBridge(cmd, args) {
-    switch (cmd) {
+  function readFileKey() {
+    try {
+      return typeof figma.fileKey === "string" ? figma.fileKey : void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  async function handleBridge(cmd, args, id) {
+    const parsed = parseCommandRequest(cmd, args);
+    if (!parsed.ok) throw new Error(parsed.error);
+    return dispatch(parsed.req, id);
+  }
+  async function dispatch(req, id) {
+    switch (req.cmd) {
       // The probe for the multi-file question: run it in two files at once and compare `instanceId`.
       // UNQUEUED (like ping/getSelection) on purpose — it must stay answerable DURING a long export,
       // since "is the other file's connection still alive while this one works?" is half of what it
@@ -3093,6 +3743,7 @@
       //     a locally-imported plugin, so routing must fall back to a server-minted connection id.
       //   file / page                      — human labels for a connection listing, never routing keys.
       case "whoami": {
+        const fileKey = readFileKey();
         const r = {
           instanceId: INSTANCE_ID,
           startedAt: INSTANCE_STARTED_AT,
@@ -3101,51 +3752,57 @@
           page: figma.currentPage.name,
           pageId: figma.currentPage.id,
           editorType: figma.editorType,
-          // Finding 327: baked in at build time (build.js's esbuild `define`) from
+          // Baked in at build time (build.ts's esbuild `define`) from
           // figma-plugin/package.json — the one way to tell a stale plugin in Figma apart from a
           // freshly reloaded one, since neither startedAt nor code.js's mtime can. Reused verbatim by
           // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,
           // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
-          pluginVersion: "0.1.0"
+          pluginVersion: "0.1.0",
+          fileKey: fileKey != null ? fileKey : null,
+          fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0
         };
-        try {
-          r.fileKey = typeof figma.fileKey !== "undefined" ? figma.fileKey : null;
-        } catch (e) {
-          r.fileKey = null;
-        }
-        r.fileKeyAvailable = typeof r.fileKey === "string" && r.fileKey.length > 0;
         return r;
       }
       case "ping": {
         const r = { pong: true, page: figma.currentPage.name, file: figma.root.name };
-        try {
-          if (typeof figma.fileKey !== "undefined") r.fileKey = figma.fileKey;
-        } catch (e) {
-        }
+        const fileKey = readFileKey();
+        if (fileKey !== void 0) r.fileKey = fileKey;
         return r;
       }
       // The extraction/write commands mutate shared per-run state (and the document), so they go through
       // serializeRun — this is the same chain the UI's manual runs use, so a bridge pull and a manual
       // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
-      case "exportFull":
-        return await serializeRun(() => collectFull(args), bridgeRun(cmd));
+      case "exportFull": {
+        const a = req.args;
+        return serializeRun(() => collectFull(a), bridgeRun(req.cmd, id));
+      }
       // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
       // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
-      case "exportDesignSystem":
-        return await serializeRun(() => collectDesignSystemOnly(args), bridgeRun(cmd));
+      case "exportDesignSystem": {
+        const a = req.args;
+        return serializeRun(() => collectDesignSystemOnly(a), bridgeRun(req.cmd, id));
+      }
       // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
       // the full catalog build and mutates the same per-run state they do.
-      case "exportLibrary":
-        return await serializeRun(() => collectLibraryFile(args), bridgeRun(cmd));
-      case "exportSelection":
-        return await serializeRun(() => collectSelection(args), bridgeRun(cmd));
-      case "exportNode":
-        return await serializeRun(() => collectNode(args && args.nodeId, args), bridgeRun(cmd));
+      case "exportLibrary": {
+        const a = req.args;
+        return serializeRun(() => collectLibraryFile(a), bridgeRun(req.cmd, id));
+      }
+      case "exportSelection": {
+        const a = req.args;
+        return serializeRun(() => collectSelection(a), bridgeRun(req.cmd, id));
+      }
+      case "exportNode": {
+        const a = req.args;
+        return serializeRun(() => collectNode(a.nodeId, a), bridgeRun(req.cmd, id));
+      }
       // The on-demand single-node screenshot — deliberately its own op rather than a mode of exportNode:
       // it skips serialize() and the recursive asset walk entirely (see collectScreenshot's comment), so
       // routing it through exportNode's shape would mislead a caller into thinking it got a tree back.
-      case "screenshot":
-        return await serializeRun(() => collectScreenshot(args && args.nodeId, { scale: args && args.scale }), bridgeRun(cmd));
+      case "screenshot": {
+        const a = req.args;
+        return serializeRun(() => collectScreenshot(a.nodeId, ifDefined("scale", a.scale)), bridgeRun(req.cmd, id));
+      }
       case "getSelection":
         return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
       // UNQUEUED on purpose, both of them. These are the cheap maps you consult to decide WHICH deep
@@ -3153,40 +3810,60 @@
       // exist to avoid — a 12-minute --all-pages would block "what's in this file?" for 12 minutes.
       // They only READ page/child metadata and mutate none of the per-run state serializeRun protects.
       case "listPages":
-        return await listPages(args || {});
+        return listPages(req.args);
       case "listChildren":
-        return await listChildren(args && args.nodeId);
+        return listChildren(req.args.nodeId);
       // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"
       // map you consult BEFORE deciding what to pull, it mutates no per-run state, and queueing it
       // behind a long export would defeat the point of asking. Its document walk is one
       // findAllWithCriteria per page with skipInvisibleInstanceChildren on — the same cost class as
       // listPages depth 2, not that of an export.
       case "listLibraries":
-        return await listLibraries();
-      case "write":
-        return await serializeRun(() => applyWrites(args && args.ops), bridgeRun(cmd));
-      default:
-        throw new Error("unknown cmd: " + cmd);
+        return listLibraries();
+      case "write": {
+        const ops = req.args.ops;
+        return serializeRun(() => applyWrites(ops), bridgeRun(req.cmd, id));
+      }
+      default: {
+        const exhaustive = req;
+        throw new Error("unknown cmd: " + String(exhaustive));
+      }
     }
+  }
+
+  // src/messages.ts
+  var UI_TO_MAIN_TYPES = /* @__PURE__ */ new Set([
+    "get-token",
+    "set-token",
+    "get-identity",
+    "run-selection",
+    "run-full",
+    "cancel",
+    "bridge"
+  ]);
+  function isUIToMain(x) {
+    if (!x || typeof x !== "object") return false;
+    const t = x.type;
+    return typeof t === "string" && UI_TO_MAIN_TYPES.has(t);
   }
 
   // src/main.ts
   globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
   figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
+  var post2 = (m) => figma.ui.postMessage(m);
   async function runExport(label, collect, toFiles) {
     let r;
     try {
       r = await serializeRun(collect, { source: "ui", label });
     } catch (e) {
-      figma.ui.postMessage({ type: "error", message: (0, import_errmsg.errMsg)(e) });
+      post2({ type: "error", message: errMsg(e) });
       return;
     }
     const { files, layerFiles, summary, warnings: warnings2 } = toFiles(r);
-    figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary, warnings: warnings2 ? warnings2.length : 0 });
-    releaseAssets();
+    post2({ type: "files", files, ...ifDefined("layerFiles", layerFiles), assets: r.assets, summary, warnings: warnings2 ? warnings2.length : 0 });
   }
-  var runSelection = () => runExport("current selection", collectSelection, (r) => ({
+  var runSelection = () => runExport("current selection", () => collectSelection(), (r) => ({
     files: [
       { name: `${r.screenName}.json`, content: JSON.stringify(r.screen, null, 2), copyable: true },
       { name: "variables.json", content: JSON.stringify(r.variables, null, 2) }
@@ -3195,9 +3872,9 @@
     warnings: r.screen.manifest && r.screen.manifest.warnings
   }));
   var SEP = "__";
-  var runFull = () => runExport("design system + page frames", collectFull, (r) => {
-    const { meta, layerFiles, indexFiles, rootIndex } = (0, import_pages_layout2.buildPageLayout)(r.layersDoc, SEP);
-    const ds = (0, import_design_system_layout.buildDesignSystemLayout)(r.designSystem, SEP);
+  var runFull = () => runExport("design system + page frames", () => collectFull(), (r) => {
+    const { meta, layerFiles, indexFiles, rootIndex } = buildPageLayout(r.layersDoc, SEP);
+    const ds = buildDesignSystemLayout(r.designSystem, SEP);
     const dsParts = ds.files.filter((f) => f.path !== "design-system.json");
     const batch = [...layerFiles, ...indexFiles, ...dsParts].map((f) => ({ name: f.path, content: JSON.stringify(f.data, null, 2) }));
     return {
@@ -3206,46 +3883,73 @@
         { name: rootIndex, content: JSON.stringify(meta, null, 2) }
       ],
       layerFiles: batch,
-      summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${r.designSystem.variables.length} vars, ${r.designSystem.components.length} components, ${r.assets.length} asset(s)`,
-      warnings: r.layersDoc.manifest && r.layersDoc.manifest.warnings
+      summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${(r.designSystem.variables || []).length} vars, ${(r.designSystem.components || []).length} components, ${r.assets.length} asset(s)`,
+      ...ifDefined("warnings", r.layersDoc.manifest && r.layersDoc.manifest.warnings)
     };
   });
   function notifySelection() {
     const sel = figma.currentPage.selection;
-    figma.ui.postMessage({ type: "selection", count: sel.length, name: sel.length ? sel[0].name : null });
+    const first2 = sel[0];
+    post2({ type: "selection", count: sel.length, name: first2 ? first2.name : null });
   }
-  figma.ui.onmessage = async (msg) => {
-    if (!msg) return;
-    if (msg.type === "get-token") {
-      const token = await figma.clientStorage.getAsync("bridgeToken");
-      figma.ui.postMessage({ type: "token", token: token || "" });
-    } else if (msg.type === "set-token") {
-      await figma.clientStorage.setAsync("bridgeToken", msg.token || "");
-    } else if (msg.type === "get-identity") {
-      let identity = {};
-      try {
-        identity = await handleBridge("whoami", {});
-      } catch (e) {
-        identity = { error: (0, import_errmsg.errMsg)(e) };
+  figma.ui.onmessage = async (raw) => {
+    if (!isUIToMain(raw)) return;
+    switch (raw.type) {
+      case "get-token": {
+        const token = await figma.clientStorage.getAsync("bridgeToken");
+        post2({ type: "token", token: typeof token === "string" ? token : "" });
+        break;
       }
-      figma.ui.postMessage({ type: "identity", identity });
-    } else if (msg.type === "run-selection") {
-      await runSelection();
-    } else if (msg.type === "run-full") {
-      await runFull();
-    } else if (msg.type === "cancel") {
-      const hit = requestCancel();
-      figma.ui.postMessage({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
-    } else if (msg.type === "bridge") {
-      let result;
-      let error;
-      try {
-        result = await handleBridge(msg.cmd, msg.args);
-      } catch (e) {
-        error = (0, import_errmsg.errMsg)(e);
+      case "set-token": {
+        await figma.clientStorage.setAsync("bridgeToken", raw.token || "");
+        break;
       }
-      figma.ui.postMessage({ type: "bridge-result", id: msg.id, ok: !error, result, error });
-      releaseAssets();
+      case "get-identity": {
+        let identity = {};
+        try {
+          identity = await handleBridge("whoami", {});
+        } catch (e) {
+          identity = { error: errMsg(e) };
+        }
+        post2({ type: "identity", identity });
+        break;
+      }
+      case "run-selection": {
+        await runSelection();
+        break;
+      }
+      case "run-full": {
+        await runFull();
+        break;
+      }
+      case "cancel": {
+        if (raw.id !== void 0) {
+          cancelBridgeRequest(raw.id);
+          break;
+        }
+        if (raw.scope === "bridge") {
+          cancelBridgeRuns();
+          break;
+        }
+        const hit = requestCancel();
+        post2({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
+        break;
+      }
+      case "bridge": {
+        let result;
+        let error;
+        try {
+          result = await handleBridge(raw.cmd, raw.args, raw.id);
+        } catch (e) {
+          error = errMsg(e);
+        }
+        post2({ type: "bridge-result", ...ifDefined("id", raw.id), ok: !error, result, ...ifDefined("error", error) });
+        break;
+      }
+      default: {
+        const _exhaustive = raw;
+        void _exhaustive;
+      }
     }
   };
   figma.on("selectionchange", notifySelection);

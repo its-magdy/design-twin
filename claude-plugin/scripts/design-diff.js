@@ -1,391 +1,588 @@
 #!/usr/bin/env node
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __commonJS = (cb, mod) => function __require() {
+
+
+// design-to-code/design-diff.ts
+import fs4 from "node:fs";
+import path2 from "node:path";
+import { execFileSync } from "node:child_process";
+
+// design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+function bag(o) {
+  const u = o;
+  return u;
+}
+
+// design-to-code/export-shape.ts
+function isIrNode(x) {
+  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
+}
+function isScreenExport(x) {
+  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
+}
+function isLayerFile(x) {
+  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
+}
+function isScreenDoc(x) {
+  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
+}
+isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
+function screenRoots(doc) {
+  if (isScreenExport(doc)) return doc.nodes;
+  if (isLayerFile(doc)) return [doc.tree];
+  if (isIrNode(doc)) return [doc];
+  return [];
+}
+function manifestOf(doc) {
+  return isScreenExport(doc) || isLayerFile(doc) ? doc.manifest : void 0;
+}
+
+// design-to-code/read-json.ts
+import fs from "node:fs";
+
+// bridge/src/errmsg.ts
+var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+
+// design-to-code/read-json.ts
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
+  let buf;
   try {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+    buf = fs.readFileSync(file);
   } catch (e) {
-    throw mod = 0, e;
+    return readFailure(e);
+  }
+  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
+    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
+  }
+  let raw = buf.toString("utf8");
+  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
+  let parsed;
+  try {
+    const value = JSON.parse(raw);
+    parsed = value;
+  } catch (e) {
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
+}
+
+// design-to-code/catalog-input.ts
+function readJsonFile(file, what, hint) {
+  return readDocFile(file, what, anyJson, hint);
+}
+function readDocFile(file, what, guard, hint) {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : ""));
+  process.exit(2);
+}
+
+// bridge/src/json-util.ts
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
+
+// design-to-code/doc-guards.ts
+function optArrayOf(x, each) {
+  return x === void 0 || Array.isArray(x) && x.every(each);
+}
+var isObj = isJsonObject;
+var optObj = (x) => x === void 0 || isObj(x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var anyObject = (x) => isObj(x);
+function isVariable(x) {
+  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
+}
+function isVariableCollection(x) {
+  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
+}
+function isTokensDoc(x) {
+  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+}
+isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
+function isCatalogComponent(x) {
+  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+}
+function isComponentsCatalog(x) {
+  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+}
+isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
+function isComponentDetailFile(x) {
+  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+}
+isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
+function isTextStylesDoc(x) {
+  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
+}
+isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+var SEVERITIES = ["blocker", "warning", "info"];
+function isAuditOverridesDoc(x) {
+  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
+function isAuditReport(x) {
+  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
+}
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
+function isProposal(x) {
+  return isObj(x) && typeof x.name === "string";
+}
+function isProposalList(x) {
+  return Array.isArray(x) && x.every(isProposal);
+}
+isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
+function isIndexRowLike(x) {
+  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
+}
+function isPagesRootIndex(x) {
+  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+}
+isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
+function isPageIndex(x) {
+  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+}
+isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
+function isVerifyExpectation(x) {
+  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+}
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+function isProbeIdentity(x) {
+  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+function isBuildIdentity(x) {
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
+var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
+var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+function isMeasuredVisual(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+var MEASURED_EXTRAS = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // the run it belongs to and the build it was served
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // the steps replayed, the page's overflow, the behaviour/a11y block
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // the visual diff (informational)
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
+];
+function isMeasuredCore(x) {
+  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+function isVerifyMeasured(x) {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
+}
+isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
+function isEvidence(x) {
+  return isObj(x) && typeof x.nodeId === "string";
+}
+function isInteractionEvidenceList(x) {
+  return Array.isArray(x) && x.every(isEvidence);
+}
+isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isMeasuredComponentList(x) {
+  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
+}
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_OBJECTS = ["anchors", "verification", "counts"];
+var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
+function planProblem(x) {
+  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
+  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
+    const list = x[k];
+    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+  }
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
+  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  return null;
+}
+function isPlan(x) {
+  return planProblem(x) === null;
+}
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+var reqStr = (v) => typeof v === "string" && v.trim() !== "";
+function isPlanWaiver(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+function isPlanDescope(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isStringRecord(x) {
+  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
+}
+isStringRecord.expected = "an object of strings";
+
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
+// design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
+  try {
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      failure = unknownFlags();
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
+    } else {
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
+    }
+  }
+  console.error(failure);
+  process.exit(exitCode);
+}
+
+// design-to-code/design-diff.ts
+import { parseArgs as parseArgs2 } from "node:util";
+
+// bridge/src/asset-compare.ts
+import crypto from "node:crypto";
+import fs2 from "node:fs";
+
+// bridge/src/svg-normalize.ts
+var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
+function normalizeSvgText(svg) {
+  return svg.replace(NUM_RE, (m) => {
+    const n = Number(m);
+    if (!Number.isFinite(n)) return m;
+    const fixed = n.toFixed(1);
+    return fixed === "-0.0" ? "0.0" : fixed;
+  });
+}
+function isSvgName(fileName) {
+  return /\.svg$/i.test(String(fileName || ""));
+}
+var ID_DEF_RE = /(?<![\w:-])id\s*=\s*(["'])(.*?)\1/g;
+var ID_MARK = "\0";
+var TOKEN_RE = /(\u0000id\d+\u0000)|(#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-]))|(base64,[A-Za-z0-9+/=]+)|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/g;
+var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function canonicalIds(svg) {
+  const order = /* @__PURE__ */ new Map();
+  ID_DEF_RE.lastIndex = 0;
+  for (let m = ID_DEF_RE.exec(svg); m; m = ID_DEF_RE.exec(svg)) {
+    const id = m[2];
+    if (id && !order.has(id)) order.set(id, ID_MARK + "id" + order.size + ID_MARK);
+  }
+  if (!order.size) return svg;
+  const alts = [...order.keys()].sort((x, y) => y.length - x.length).map(escapeRe).join("|");
+  const re = new RegExp(`(?<![\\w:-])(id\\s*=\\s*["'])(` + alts + `)(?=["'])|#(` + alts + ")(?![\\w.:-])", "g");
+  return svg.replace(re, (m, attr, defined, ref) => {
+    if (attr !== void 0 && defined !== void 0) return attr + (order.get(defined) ?? defined);
+    if (ref !== void 0) return "#" + (order.get(ref) ?? ref);
+    return m;
+  });
+}
+var REL_TAG_RE = /<(?:use|image|pattern)\b[^>]*>/g;
+var TRANSFORM_ATTR_RE = /(?<![\w:-])transform\s*=\s*(["'])([^"']*)\1/g;
+var PATTERN_ATTR_RE = /(?<![\w:-])(?:x|y|width|height|patternTransform)\s*=\s*(["'])([^"']*)\1/g;
+function relSpans(svg) {
+  const spans = [];
+  REL_TAG_RE.lastIndex = 0;
+  for (let t = REL_TAG_RE.exec(svg); t; t = REL_TAG_RE.exec(svg)) {
+    const re = t[0].startsWith("<pattern") ? /patternUnits\s*=\s*["']userSpaceOnUse/.test(t[0]) ? null : PATTERN_ATTR_RE : TRANSFORM_ATTR_RE;
+    if (!re) continue;
+    re.lastIndex = 0;
+    for (let a = re.exec(t[0]); a; a = re.exec(t[0])) {
+      const start = t.index + a.index + a[0].length - 1 - (a[2] || "").length;
+      spans.push([start, start + (a[2] || "").length]);
+    }
+  }
+  return spans;
+}
+function svgFingerprint(svg) {
+  const nums = [];
+  const rel = [];
+  const text = canonicalIds(svg);
+  const spans = relSpans(text);
+  const inRel = (at) => spans.some(([s, e]) => at >= s && at < e);
+  const skeleton = text.replace(TOKEN_RE, (m, _id, _hex, _b64, num, at) => {
+    if (num === void 0) return m;
+    if (spans.length && inRel(at)) {
+      rel.push(Number(num));
+      return "%";
+    }
+    nums.push(Number(num));
+    return "#";
+  });
+  return { skeleton, nums: Float64Array.from(nums), rel: Float64Array.from(rel) };
+}
+
+// bridge/src/asset-compare.ts
+function normalizeForCompare(fileName, content) {
+  const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
+  if (!isSvgName(fileName)) return buf;
+  return Buffer.from(normalizeSvgText(buf.toString("utf8")), "utf8");
+}
+function sha1Hex(buf) {
+  return crypto.createHash("sha1").update(buf).digest("hex");
+}
+var EMPTY_NUMS = new Float64Array(0);
+function contentKey(fileName, content) {
+  const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
+  if (!isSvgName(fileName)) return { key: "b:" + sha1Hex(buf), nums: EMPTY_NUMS, rel: EMPTY_NUMS };
+  const fp = svgFingerprint(buf.toString("utf8"));
+  return { key: "s:" + sha1Hex(fp.skeleton), nums: fp.nums, rel: fp.rel };
+}
+var FileKeyCache = class {
+  entries = /* @__PURE__ */ new Map();
+  recentMs;
+  maxEntries;
+  now;
+  constructor(o = {}) {
+    this.recentMs = o.recentMs ?? 2e3;
+    this.maxEntries = o.maxEntries ?? 5e4;
+    this.now = o.now ?? Date.now;
+  }
+  get size() {
+    return this.entries.size;
+  }
+  clear() {
+    this.entries.clear();
+  }
+  /** contentKey(name, <the bytes of `file`>), or undefined when the file cannot be read. */
+  keyOf(file, name) {
+    let st;
+    try {
+      st = fs2.statSync(file);
+    } catch {
+      return void 0;
+    }
+    if (!st.isFile()) {
+      try {
+        return contentKey(name, fs2.readFileSync(file));
+      } catch {
+        return void 0;
+      }
+    }
+    const hit = this.entries.get(file);
+    if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs && hit.ctimeMs === st.ctimeMs && hit.ino === st.ino && hit.dev === st.dev) {
+      this.entries.delete(file);
+      this.entries.set(file, hit);
+      return hit.key;
+    }
+    this.entries.delete(file);
+    let bytes;
+    try {
+      bytes = fs2.readFileSync(file);
+    } catch {
+      return void 0;
+    }
+    const key = contentKey(name, bytes);
+    if (Math.max(st.mtimeMs, st.ctimeMs) <= this.now() - this.recentMs) {
+      this.entries.set(file, { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, ino: st.ino, dev: st.dev, key });
+      for (const oldest of this.entries.keys()) {
+        if (this.entries.size <= this.maxEntries) break;
+        this.entries.delete(oldest);
+      }
+    }
+    return key;
   }
 };
+var fileKeyCache = new FileKeyCache();
 
-// bridge/svg-normalize.js
-var require_svg_normalize = __commonJS({
-  "bridge/svg-normalize.js"(exports2, module2) {
-    "use strict";
-    var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
-    function normalizeSvgText(svg) {
-      return svg.replace(NUM_RE, (m) => {
-        const n = Number(m);
-        if (!Number.isFinite(n)) return m;
-        const fixed = n.toFixed(1);
-        return fixed === "-0.0" ? "0.0" : fixed;
-      });
-    }
-    function isSvgName(fileName) {
-      return /\.svg$/i.test(String(fileName || ""));
-    }
-    module2.exports = { normalizeSvgText, isSvgName };
+// bridge/src/design-system-layout.ts
+var DIR = "design-system";
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var STYLES_PAINT = "styles.paint.json";
+var STYLES_TEXT = "styles.text.json";
+var STYLES_EFFECT = "styles.effect.json";
+var STYLES_GRID = "styles.grid.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var DESIGN_SYSTEM_DIR = DIR;
+var DESIGN_SYSTEM_FILES = {
+  TOKENS,
+  STYLES_PAINT,
+  STYLES_TEXT,
+  STYLES_EFFECT,
+  STYLES_GRID,
+  COMPONENTS_LOCAL,
+  COMPONENTS_LIBRARY,
+  COMPONENTS_DIR,
+  HYGIENE,
+  MANIFEST
+};
+
+// bridge/src/is-main.ts
+import fs3 from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs3.realpathSync(argv1) === fs3.realpathSync(fileURLToPath2(metaUrl));
+  } catch {
+    return false;
   }
-});
+}
 
-// bridge/asset-compare.js
-var require_asset_compare = __commonJS({
-  "bridge/asset-compare.js"(exports2, module2) {
-    "use strict";
-    var { normalizeSvgText, isSvgName } = require_svg_normalize();
-    function normalizeForCompare2(fileName, content) {
-      const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
-      if (!isSvgName(fileName)) return buf;
-      return Buffer.from(normalizeSvgText(buf.toString("utf8")), "utf8");
-    }
-    function sha1Hex2(buf) {
-      return require("crypto").createHash("sha1").update(buf).digest("hex");
-    }
-    function sameAsset(fileName, a, b) {
-      return Buffer.compare(normalizeForCompare2(fileName, a), normalizeForCompare2(fileName, b)) === 0;
-    }
-    module2.exports = { normalizeForCompare: normalizeForCompare2, sha1Hex: sha1Hex2, sameAsset };
-  }
-});
-
-// bridge/pages-layout.js
-var require_pages_layout = __commonJS({
-  "bridge/pages-layout.js"(exports2, module2) {
-    "use strict";
-    function safe(id) {
-      return String(id).replace(/[^a-zA-Z0-9]/g, "_");
-    }
-    function firstByName(node, name) {
-      if (!node || typeof node !== "object") return null;
-      if (node.name === name) return node;
-      for (const c of node.children || []) {
-        const found = firstByName(c, name);
-        if (found) return found;
-      }
-      return null;
-    }
-    var PLACEHOLDER_TEXT = /* @__PURE__ */ new Set(["text", "label"]);
-    function firstText(node) {
-      if (!node || typeof node !== "object") return null;
-      if (node.type === "TEXT" && typeof node.text === "string") {
-        const t = node.text.trim();
-        if (t && !PLACEHOLDER_TEXT.has(t.toLowerCase())) return node.text;
-      }
-      for (const c of node.children || []) {
-        const found = firstText(c);
-        if (found) return found;
-      }
-      return null;
-    }
-    function firstNamedText(node, name) {
-      if (!node || typeof node !== "object") return null;
-      if (node.type === "TEXT" && node.name === name && typeof node.text === "string" && node.text.trim()) {
-        return node.text;
-      }
-      for (const c of node.children || []) {
-        const found = firstNamedText(c, name);
-        if (found) return found;
-      }
-      return null;
-    }
-    function deriveTitle(root) {
-      const slot = firstByName(root, "Page Title");
-      if (slot) {
-        const named = firstNamedText(slot, "Title");
-        if (named) return named;
-        const anyText = firstText(slot);
-        if (anyText) return anyText;
-      }
-      const fallback = firstText(root);
-      return fallback || void 0;
-    }
-    function collectTexts(root, limit) {
-      const n = limit || 8;
-      const seen = /* @__PURE__ */ new Set();
-      const out = [];
-      (function walk(node) {
-        if (!node || typeof node !== "object" || out.length >= n) return;
-        if (node.type === "TEXT" && typeof node.text === "string") {
-          const t = node.text.trim();
-          if (t && !seen.has(t)) {
-            seen.add(t);
-            out.push(t);
-          }
-        }
-        for (const c of node.children || []) {
-          if (out.length >= n) break;
-          walk(c);
-        }
-      })(root);
-      return out;
-    }
-    function buildPageLayout(layersDoc, sep) {
-      const { layers, index: index2, ...meta } = layersDoc || {};
-      const join = (...parts) => ["pages"].concat(parts).join(sep);
-      const byPage = /* @__PURE__ */ new Map();
-      const pages = [];
-      const layerFiles = [];
-      const usedDirs = /* @__PURE__ */ new Set();
-      const uniqueDir = (name) => {
-        const base = safe(name) || "page";
-        if (!usedDirs.has(base)) {
-          usedDirs.add(base);
-          return base;
-        }
-        let i = 2;
-        while (usedDirs.has(base + "_" + i)) i++;
-        usedDirs.add(base + "_" + i);
-        return base + "_" + i;
-      };
-      (layers || []).forEach((l, i) => {
-        const pageName = l.page || "(no page)";
-        const key = l.pageId || "name:" + pageName;
-        let bucket = byPage.get(key);
-        if (!bucket) {
-          bucket = { page: pageName, pageId: l.pageId, dir: uniqueDir(pageName), entries: [] };
-          byPage.set(key, bucket);
-          bucket.index = join(bucket.dir, "index.json");
-          pages.push(bucket);
-        }
-        const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
-        const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
-        layerFiles.push({
-          path: join(bucket.dir, base),
-          data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, ...src, tree: l.tree, reference: l.reference, devResources: l.devResources }
-        });
-        const title = l.tree ? deriveTitle(l.tree) : void 0;
-        const texts = l.tree ? collectTexts(l.tree) : void 0;
-        bucket.entries.push({ ...(index2 || [])[i], title, texts, ...src, file: join(bucket.dir, base) });
-      });
-      meta.pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
-      meta.layers = pages.flatMap((b) => b.entries);
-      const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
-      return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
-    }
-    var NO_PAGE_DIR = "_unfiled";
-    function screenPaths(screenDoc, sep) {
-      const join = (...parts) => ["pages"].concat(parts).join(sep);
-      const page = screenDoc.page || screenDoc.screen && screenDoc.screen.page;
-      const pageId = screenDoc.pageId || screenDoc.screen && screenDoc.screen.pageId;
-      const dir = page ? safe(page) : NO_PAGE_DIR;
-      const nodeId = screenDoc.nodeId || screenDoc.screen && screenDoc.screen.nodeId;
-      const base = safe(screenDoc.screenName || "screen") + (nodeId ? "__" + safe(nodeId) : "");
-      return {
-        page: page || null,
-        pageId: pageId || null,
-        nodeId: nodeId || null,
-        dir,
-        base,
-        screen: join(dir, base + ".json"),
-        variables: join(dir, base + ".vars.json"),
-        assets: join(dir, base + ".assets.json"),
-        index: join(dir, "index.json"),
-        rootIndex: join("index.json")
-      };
-    }
-    function mergeScreenIndex(prev, entry) {
-      const base = prev && typeof prev === "object" ? prev : {};
-      const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
-      layers.push(entry);
-      return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
-    }
-    function mergeRootIndex(prev, paths, layerCount, entry) {
-      const base = prev && typeof prev === "object" ? prev : {};
-      const pageDirs = Array.isArray(base.pageDirs) ? base.pageDirs.filter((p) => p && p.dir !== paths.dir) : [];
-      pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
-      const result = Object.assign({}, base, { pageDirs });
-      if (entry) {
-        const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
-        layers.push(entry);
-        result.layers = layers;
-      }
-      return result;
-    }
-    module2.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, firstByName, firstText, safe, NO_PAGE_DIR };
-  }
-});
-
-// bridge/design-system-layout.js
-var require_design_system_layout = __commonJS({
-  "bridge/design-system-layout.js"(exports2, module2) {
-    "use strict";
-    var { safe } = require_pages_layout();
-    var DIR = "design-system";
-    var COMPONENTS_DIR = "components";
-    var TOKENS = "tokens.json";
-    var STYLES_PAINT = "styles.paint.json";
-    var STYLES_TEXT = "styles.text.json";
-    var STYLES_EFFECT = "styles.effect.json";
-    var STYLES_GRID = "styles.grid.json";
-    var COMPONENTS_LOCAL = "components.local.json";
-    var COMPONENTS_LIBRARY = "components.library.json";
-    var HYGIENE = "hygiene.json";
-    var MANIFEST = "design-system.json";
-    function isLibraryEntry(c) {
-      return !!(c && c.remote === true);
-    }
-    function buildDesignSystemLayout(ds, sep) {
-      const d = ds || {};
-      const join = (name) => DIR + (sep || "/") + name;
-      const stamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
-      const components = Array.isArray(d.components) ? d.components : [];
-      const rawLocal = components.filter((c) => !isLibraryEntry(c));
-      const library = components.filter(isLibraryEntry);
-      const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
-      const usedNames = /* @__PURE__ */ new Set();
-      const uniqueDetailName = (name, id) => {
-        const base = safe(name || "component") + "__" + safe(id);
-        if (!usedNames.has(base)) {
-          usedNames.add(base);
-          return base;
-        }
-        let i = 2;
-        while (usedNames.has(base + "_" + i)) i++;
-        usedNames.add(base + "_" + i);
-        return base + "_" + i;
-      };
-      const componentFiles = [];
-      const local = rawLocal.map((c) => {
-        if (c.type === "COMPONENT" && c.node) {
-          const { node, ...rest } = c;
-          const detailName2 = uniqueDetailName(c.name, c.id);
-          const detailPath2 = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName2 + ".json";
-          componentFiles.push({
-            path: detailPath2,
-            data: { ...stamp, id: c.id, key: c.key, name: c.name, node }
-          });
-          return { ...rest, nodeFile: detailPath2 };
-        }
-        if (c.type !== "COMPONENT_SET" || !Array.isArray(c.variants) || !c.variants.some((v) => v && v.node)) {
-          return c;
-        }
-        const slimVariants = c.variants.map((v) => {
-          const { node, ...rest } = v || {};
-          return rest;
-        });
-        const detailName = uniqueDetailName(c.name, c.id);
-        const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
-        componentFiles.push({
-          path: detailPath,
-          data: { ...stamp, setId: c.id, setKey: c.key, name: c.name, variants: c.variants }
-        });
-        return { ...c, variants: slimVariants, variantsFile: detailPath };
-      });
-      const styles = d.styles || {};
-      const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
-      const stylesText = Array.isArray(styles.text) ? styles.text : [];
-      const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
-      const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
-      const files = [
-        { path: join(TOKENS), data: { ...stamp, collections: d.collections, variables: d.variables } },
-        { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
-        { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
-        { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
-        { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
-        { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
-        { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
-        { path: join(HYGIENE), data: { ...stamp, hygiene } },
-        ...componentFiles
-      ];
-      const counts = {
-        collections: (d.collections || []).length,
-        variables: (d.variables || []).length,
-        stylesPaint: stylesPaint.length,
-        stylesText: stylesText.length,
-        stylesEffect: stylesEffect.length,
-        stylesGrid: stylesGrid.length,
-        components: local.length,
-        libraryComponents: library.length,
-        hygiene: hygiene.length
-      };
-      const manifest = {
-        ...stamp,
-        files: {
-          tokens: join(TOKENS),
-          stylesPaint: join(STYLES_PAINT),
-          stylesText: join(STYLES_TEXT),
-          stylesEffect: join(STYLES_EFFECT),
-          stylesGrid: join(STYLES_GRID),
-          componentsLocal: join(COMPONENTS_LOCAL),
-          componentsLibrary: join(COMPONENTS_LIBRARY),
-          hygiene: join(HYGIENE)
-        },
-        counts
-      };
-      const detailPrefix = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/");
-      if (files.some((f) => String(f.path).startsWith(detailPrefix))) {
-        manifest.files.componentsDir = DIR + (sep || "/") + COMPONENTS_DIR;
-      }
-      files.push({ path: MANIFEST, data: manifest });
-      return { files, manifest, counts, dir: DIR };
-    }
-    module2.exports = {
-      buildDesignSystemLayout,
-      isLibraryEntry,
-      DESIGN_SYSTEM_DIR: DIR,
-      DESIGN_SYSTEM_FILES: {
-        TOKENS,
-        STYLES_PAINT,
-        STYLES_TEXT,
-        STYLES_EFFECT,
-        STYLES_GRID,
-        COMPONENTS_LOCAL,
-        COMPONENTS_LIBRARY,
-        COMPONENTS_DIR,
-        HYGIENE,
-        MANIFEST
-      }
-    };
-  }
-});
-
-// design-to-code/catalog-input.js
-var require_catalog_input = __commonJS({
-  "design-to-code/catalog-input.js"(exports2, module2) {
-    function isManifest2(doc, payloadKey) {
-      return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
-    }
-    function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-      if (isManifest2(doc, payloadKey)) {
-        console.error(
-          `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
-       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-        );
-        process.exit(2);
-      }
-    }
-    function readJsonFile(file, what, hint) {
-      const fs2 = require("fs");
-      let raw;
-      try {
-        raw = fs2.readFileSync(file, "utf8");
-      } catch (e) {
-        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
-        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
-       ${hint}` : ""));
-        process.exit(2);
-      }
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
-        process.exit(2);
-      }
-    }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
-    module2.exports = { assertNotManifest, isManifest: isManifest2, readJsonFile, NO_DESIGN_SYSTEM_HINT };
-  }
-});
-
-// design-to-code/design-diff.js
-var fs = require("fs");
-var path = require("path");
-var { execFileSync } = require("child_process");
+// design-to-code/design-diff.ts
 var CATEGORY = {
   text: ["text", "runs", "truncate", "maxLines", "autoResize"],
-  typography: ["font", "textTokens", "missingFont"],
+  typography: ["font", "textTokens", "missingFont", "textStyleOverrides"],
+  // overrides sit over the text STYLE the font came from
   paint: ["fills", "strokes", "effects", "opacity", "blendMode", "mask", "maskType"],
   layout: [
     "layout",
@@ -407,34 +604,36 @@ var CATEGORY = {
     "gridRowStart",
     "gridJustifySelf",
     "gridAlignSelf",
-    "size"
+    "size",
+    "scroll"
   ],
-  shape: ["radius", "cornerSmoothing", "rotation", "flipped", "skew", "arc", "shape", "booleanOp"],
+  shape: ["radius", "cornerSmoothing", "rotation", "flipped", "skew", "sourceTransform", "arc", "shape", "booleanOp"],
   tokens: ["tokens", "styles", "variableModes", "propTokens"],
   component: ["component", "mainComponent", "props", "propRefs", "overrides", "exposedInstances", "detachedFrom", "tableCells"],
   visibility: ["hidden"],
-  asset: ["asset", "geometry", "assetSkipped", "exportSettings"],
+  asset: ["asset", "assetFrom", "geometry", "assetSkipped", "exportSettings"],
   interaction: ["reactions", "overlay", "motion"],
   handoff: ["annotations", "devStatus", "devStatusNote", "name", "type"]
 };
-var CATEGORY_OF = new Map(Object.entries(CATEGORY).flatMap(([cat, fields]) => fields.map((f) => [f, cat])));
+var isDiffCategory = (k) => Object.hasOwn(CATEGORY, k);
+var CATEGORY_OF = /* @__PURE__ */ new Map();
+for (const cat of Object.keys(CATEGORY)) if (isDiffCategory(cat)) for (const f of CATEGORY[cat] || []) CATEGORY_OF.set(f, cat);
 var IGNORED = /* @__PURE__ */ new Set(["children", "box", "renderBox", "id", "css", "measurements", "pluginData", "sharedData"]);
-var roots = (doc) => Array.isArray(doc.nodes) ? doc.nodes : doc.tree && typeof doc.tree === "object" ? [doc.tree] : [];
 var same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 var brief = (v) => {
   const s = typeof v === "string" ? v : JSON.stringify(v);
   return s === void 0 ? void 0 : s.length > 160 ? s.slice(0, 157) + "\u2026" : s;
 };
 var MAX_LEAVES = 12;
-var isObj = (v) => v !== null && typeof v === "object";
+var isObj2 = (v) => v !== null && typeof v === "object";
 function leaves(before, after, at, out = []) {
   if (same(before, after)) return out;
-  if (!isObj(before) || !isObj(after) || Array.isArray(before) !== Array.isArray(after)) {
+  if (!isObj2(before) || !isObj2(after) || Array.isArray(before) !== Array.isArray(after)) {
     out.push({ at, before, after });
     return out;
   }
-  const keys = Array.isArray(before) ? Array.from({ length: Math.max(before.length, after.length) }, (_, i) => i) : [.../* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])];
-  for (const k of keys) leaves(before[k], after[k], typeof k === "number" ? `${at}[${k}]` : `${at}.${k}`, out);
+  const keys = Array.isArray(before) && Array.isArray(after) ? Array.from({ length: Math.max(before.length, after.length) }, (_, i) => i) : [.../* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])];
+  for (const k of keys) leaves(bag(before)[k], bag(after)[k], typeof k === "number" ? `${at}[${k}]` : `${at}.${k}`, out);
   return out;
 }
 function fieldDiffs(key, before, after, category) {
@@ -445,14 +644,14 @@ function fieldDiffs(key, before, after, category) {
 }
 function index(doc) {
   const out = /* @__PURE__ */ new Map();
-  const walk = (node, parentId, trail) => {
+  const walk = (node, parent, trail) => {
     if (!node || typeof node !== "object" || node.id === void 0) return;
     const here = [...trail, node.name || node.type || node.id];
     const kids = Array.isArray(node.children) ? node.children : [];
-    out.set(String(node.id), { node, parentId, path: here.join(" > "), childIds: kids.map((k) => String(k && k.id)) });
-    for (const k of kids) walk(k, String(node.id), here);
+    out.set(String(node.id), { node, parent, parentId: parent ? String(parent.id) : null, path: here.join(" > "), childIds: kids.map((k) => String(k && k.id)) });
+    for (const k of kids) walk(k, node, here);
   };
-  for (const r of roots(doc)) walk(r, null, []);
+  for (const r of screenRoots(doc)) walk(r, null, []);
   return out;
 }
 var ROOT_IGNORED = /* @__PURE__ */ new Set(["tree", "nodes", "exportedAt", "manifest", "snapshot", "assets", "screen", "file", "reference"]);
@@ -461,29 +660,63 @@ var nameOf = (idx, id) => {
   return e ? e.node.name || e.node.type || id : id;
 };
 var describe = (e) => ({ id: String(e.node.id), name: e.node.name, type: e.node.type, path: e.path, parentId: e.parentId });
-function nodeFields(before, after) {
+var CONTAINERS = /* @__PURE__ */ new Set([
+  "FRAME",
+  "COMPONENT",
+  "COMPONENT_SET",
+  "INSTANCE",
+  "GROUP",
+  "BOOLEAN_OPERATION",
+  "SECTION",
+  "TRANSFORM_GROUP",
+  "SLOT",
+  "SLIDE",
+  "SLIDE_ROW",
+  "SLIDE_GRID",
+  "PAGE"
+]);
+var GRID_CHILD_KEYS = ["gridColumnStart", "gridRowStart", "gridColumnSpan", "gridRowSpan", "gridJustifySelf", "gridAlignSelf"];
+var ABSOLUTE_ONLY = /* @__PURE__ */ new Set(["mode", "width", "height"]);
+function formatNoise(n, parent) {
+  const lay = n.layout, isAssetLeaf = n.asset !== void 0 || n.geometry !== void 0 || n.assetSkipped !== void 0;
+  const gridItem = !!parent && !n.absolute && parent.layout?.display === "grid";
+  const dropGrid = GRID_CHILD_KEYS.filter((k) => n[k] !== void 0 && (!gridItem || (k === "gridColumnStart" || k === "gridRowStart") && n[k] === -1));
+  const dropLayout = !!lay && !n.children && (isAssetLeaf || !CONTAINERS.has(n.type) && lay.mode === "absolute" && Object.keys(lay).every((k) => ABSOLUTE_ONLY.has(k)));
+  if (!dropGrid.length && !dropLayout) return n;
+  const out = { ...n };
+  for (const k of dropGrid) delete out[k];
+  if (dropLayout) delete out.layout;
+  return out;
+}
+var hasNoise = (e) => formatNoise(e.node, e.parent) !== e.node;
+function nodeFields(old, neu, raw = false) {
+  const before = raw ? old.node : formatNoise(old.node, old.parent), after = raw ? neu.node : formatNoise(neu.node, neu.parent);
   const fields = [];
   for (const key of /* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (IGNORED.has(key) || same(before[key], after[key])) continue;
-    fields.push(...fieldDiffs(key, before[key], after[key], CATEGORY_OF.get(key) || "other"));
+    if (IGNORED.has(key) || same(bag(before)[key], bag(after)[key])) continue;
+    fields.push(...fieldDiffs(key, bag(before)[key], bag(after)[key], CATEGORY_OF.get(key) || "other"));
   }
   const fixedW = !after.widthMode && !before.widthMode, fixedH = !after.heightMode && !before.heightMode;
   const b = before.box || {}, a = after.box || {};
   if (fixedW && b.w !== a.w || fixedH && b.h !== a.h) fields.push({ field: "size", category: "layout", before: `${b.w}\xD7${b.h}`, after: `${a.w}\xD7${a.h}` });
   return fields;
 }
+var truncatedOf = (m) => m && m.truncated;
 function diffScreens(oldDoc, newDoc, opts = {}) {
   const redrawn = opts.redrawn || /* @__PURE__ */ new Set();
   const A = index(oldDoc), B = index(newDoc);
   const added = [], removed = [], changed = [], reordered = [];
-  let positionOnly = 0;
+  let positionOnly = 0, formatOnly = 0;
   const swapped = /* @__PURE__ */ new Map();
   for (const [id, b] of B) {
     const a = A.get(id);
     if (a && !same(a.node.mainComponent, b.node.mainComponent)) swapped.set(id, { gone: 0, came: 0 });
   }
   const underSwap = (idx, e) => {
-    for (let p = e.parentId; p !== null && p !== void 0; p = (idx.get(p) || {}).parentId) if (swapped.has(p)) return swapped.get(p);
+    for (let p = e.parentId; p !== null && p !== void 0; p = idx.get(p)?.parentId) {
+      const sw = swapped.get(p);
+      if (sw) return sw;
+    }
     return null;
   };
   for (const [id, e] of B) if (!A.has(id)) {
@@ -499,24 +732,26 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
   for (const [id, b] of B) {
     const a = A.get(id);
     if (!a) continue;
-    const fields = nodeFields(a.node, b.node);
+    const fields = nodeFields(a, b);
     if (a.parentId !== b.parentId) fields.push({ field: "parent", category: "layout", before: a.path, after: b.path });
     if (typeof b.node.asset === "string" && b.node.asset === a.node.asset && redrawn.has(b.node.asset)) fields.push({ field: "asset bytes", category: "asset", before: "the previous render", after: `re-drawn \u2014 ${b.node.asset} has different contents under the same node id` });
     const sw = swapped.get(id);
     if (sw && (sw.gone || sw.came)) fields.push({ field: "sublayers", category: "component", before: `${sw.gone} from the old main component`, after: `${sw.came} from the new one (regenerated by the swap \u2014 not listed)` });
     if (fields.length) changed.push({ ...describe(b), categories: [...new Set(fields.map((f) => f.category))], fields });
+    else if (hasNoise(a) !== hasNoise(b) && nodeFields(a, b, true).length) formatOnly++;
     else if (!same(a.node.box, b.node.box)) positionOnly++;
     const keptBefore = a.childIds.filter((c) => b.childIds.includes(c)), keptAfter = b.childIds.filter((c) => a.childIds.includes(c));
     if (!same(keptBefore, keptAfter)) reordered.push({ ...describe(b), before: keptBefore.map((c) => nameOf(A, c)), after: keptAfter.map((c) => nameOf(B, c)) });
   }
   const document = [];
   for (const key of /* @__PURE__ */ new Set([...Object.keys(oldDoc), ...Object.keys(newDoc)])) {
-    if (!ROOT_IGNORED.has(key)) document.push(...fieldDiffs(key, oldDoc[key], newDoc[key], "document"));
+    if (!ROOT_IGNORED.has(key)) document.push(...fieldDiffs(key, bag(oldDoc)[key], bag(newDoc)[key], "document"));
   }
   const warnings = [];
-  const trunc = newDoc.manifest && newDoc.manifest.truncated;
+  const trunc = truncatedOf(manifestOf(newDoc));
   if (trunc) warnings.push(`the NEW export is truncated (${trunc === true ? "some" : trunc} subtree(s) past the depth limit) \u2014 anything under "Removed" may simply not have been exported. Re-pull a narrower scope before acting on removals.`);
-  return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly }, warnings, added, removed, reordered, changed, document };
+  if (formatOnly) warnings.push(`${formatOnly} node(s) differ only by the exporter's format (an export from an older plugin: grid-child fields off a grid, layout on text/shapes/leaves or asset leaves) \u2014 not listed. The export's content hash changed, so verification reopens once: re-run verify-screen --expect and --compare.`);
+  return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly, formatOnly }, warnings, added, removed, reordered, changed, document };
 }
 function diffTokens(oldDoc, newDoc) {
   const idOf = (v) => typeof v.key === "string" && v.key ? "k:" + v.key : "n:" + JSON.stringify([v.collection || "", v.name]);
@@ -542,8 +777,7 @@ function diffTokens(oldDoc, newDoc) {
   const pairedA = new Set(pairs.values());
   const identities = /* @__PURE__ */ new Map();
   for (const v of [...A.values(), ...B.values()]) {
-    if (!identities.has(v.name)) identities.set(v.name, /* @__PURE__ */ new Map());
-    identities.get(v.name).set(idOf(v), v.collection || "");
+    getOrInit(identities, v.name, () => /* @__PURE__ */ new Map()).set(idOf(v), v.collection || "");
   }
   const label = (v) => {
     const ids = identities.get(v.name);
@@ -555,29 +789,30 @@ function diffTokens(oldDoc, newDoc) {
   const removed = [...A].filter(([k]) => !pairedA.has(k)).map(([, v]) => label(v));
   const changed = [];
   for (const [k, b] of B) {
-    const a = pairs.has(k) ? A.get(pairs.get(k)) : null;
+    const pk = pairs.get(k);
+    const a = pk !== void 0 ? A.get(pk) : null;
     if (!a) continue;
     const modes = [.../* @__PURE__ */ new Set([...Object.keys(a.values || {}), ...Object.keys(b.values || {})])].filter((m) => !same((a.values || {})[m], (b.values || {})[m]));
-    if (modes.length) changed.push({ name: label(b), collection: b.collection, key: b.key, modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
+    if (modes.length) changed.push({ name: label(b), ...ifDefined("collection", b.collection), ...ifDefined("key", b.key), modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
   }
   const collNames = /* @__PURE__ */ new Map();
   for (const c of [...oldDoc.collections || [], ...newDoc.collections || []]) collNames.set(c.name, (collNames.get(c.name) || /* @__PURE__ */ new Set()).add(c.key || c.name));
-  const colLabel = (c) => collNames.get(c.name).size > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}\u2026)` : c.name;
-  const cols = (doc) => new Map((doc.collections || []).map((c) => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, default: c.default } }]));
+  const colLabel = (c) => (collNames.get(c.name)?.size ?? 0) > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}\u2026)` : c.name;
+  const cols = (doc) => new Map((doc.collections || []).map((c) => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, ...ifDefined("default", c.default) } }]));
   const CA = cols(oldDoc), CB = cols(newDoc), collections = [];
-  for (const id of /* @__PURE__ */ new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs((CB.get(id) || CA.get(id)).label, (CA.get(id) || {}).v, (CB.get(id) || {}).v, "collection"));
+  for (const [id, e] of new Map([...CA, ...CB])) collections.push(...fieldDiffs(e.label, CA.get(id)?.v, CB.get(id)?.v, "collection"));
   return { kind: "tokens", summary: { added: added.length, removed: removed.length, changed: changed.length + (collections.length ? 1 : 0) }, warnings: [], added, removed, changed, collections };
 }
 function diffCatalog(oldDoc, newDoc) {
   const keyed = (doc) => new Map((doc.components || []).map((c) => [String(c.key || c.id), c]));
   const A = keyed(oldDoc), B = keyed(newDoc);
-  const brief1 = (c) => ({ key: c.key, id: c.id, name: c.name, type: c.type });
+  const brief1 = (c) => ({ ...ifDefined("key", c.key), ...ifDefined("id", c.id), name: c.name, type: c.type });
   const added = [...B].filter(([k]) => !A.has(k)).map(([, c]) => brief1(c)), removed = [...A].filter(([k]) => !B.has(k)).map(([, c]) => brief1(c)), changed = [];
   for (const [k, b] of B) {
     const a = A.get(k);
     if (!a) continue;
     const fields = [];
-    for (const key of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)])) if (!CATALOG_IGNORED.has(key)) fields.push(...fieldDiffs(key, a[key], b[key], "component"));
+    for (const key of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)])) if (!CATALOG_IGNORED.has(key)) fields.push(...fieldDiffs(key, bag(a)[key], bag(b)[key], "component"));
     if (fields.length) changed.push({ ...brief1(b), fields });
   }
   return { kind: "catalog", summary: { added: added.length, removed: removed.length, changed: changed.length }, warnings: [], added, removed, changed };
@@ -590,7 +825,7 @@ var STYLE_IGNORED = /* @__PURE__ */ new Set(["key", "id"]);
 function diffStyles(oldDoc, newDoc) {
   const keyed = (doc) => new Map((doc.styles || []).map((s) => [styleKey(s), s]));
   const A = keyed(oldDoc), B = keyed(newDoc);
-  const brief2 = (s) => ({ key: s.key, id: s.id, name: s.name });
+  const brief2 = (s) => ({ ...ifDefined("key", s.key), ...ifDefined("id", s.id), name: s.name });
   const added = [...B].filter(([k]) => !A.has(k)).map(([, s]) => brief2(s));
   const removed = [...A].filter(([k]) => !B.has(k)).map(([, s]) => brief2(s));
   const changed = [];
@@ -598,7 +833,7 @@ function diffStyles(oldDoc, newDoc) {
     const a = A.get(k);
     if (!a) continue;
     const fields = [];
-    for (const key of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)])) if (!STYLE_IGNORED.has(key)) fields.push(...fieldDiffs(key, a[key], b[key], "style"));
+    for (const key of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)])) if (!STYLE_IGNORED.has(key)) fields.push(...fieldDiffs(key, bag(a)[key], bag(b)[key], "style"));
     if (fields.length) changed.push({ ...brief2(b), fields });
   }
   return { kind: "styles", summary: { added: added.length, removed: removed.length, changed: changed.length }, warnings: [], added, removed, changed };
@@ -614,30 +849,39 @@ function diffManifest(oldDoc, newDoc) {
   const fields = [];
   for (const key of /* @__PURE__ */ new Set([...Object.keys(oldDoc || {}), ...Object.keys(newDoc || {})])) {
     if (MANIFEST_IGNORED.has(key)) continue;
-    fields.push(...fieldDiffs(key, (oldDoc || {})[key], (newDoc || {})[key], "manifest"));
+    fields.push(...fieldDiffs(key, bag(oldDoc || {})[key], bag(newDoc || {})[key], "manifest"));
   }
   return { kind: "manifest", summary: { added: 0, removed: 0, changed: fields.length ? 1 : 0 }, warnings: [], fields };
 }
-var isTokens = (doc) => Array.isArray(doc && doc.variables);
-var isCatalog = (doc) => Array.isArray(doc && doc.components);
-var isManifest = (doc) => !!doc && typeof doc.counts === "object" && doc.counts !== null && !Array.isArray(doc.counts) && typeof doc.files === "object" && doc.files !== null && !Array.isArray(doc.files);
-var isStyles = (doc) => Array.isArray(doc && doc.styles);
-var isHygiene = (doc) => Array.isArray(doc && doc.hygiene);
-var isScreen = (doc) => !!doc && (Array.isArray(doc.nodes) || doc.tree && typeof doc.tree === "object");
+var hasArray = (doc, key) => isJsonObject(doc) && Array.isArray(doc[key]);
+var isManifest = (doc) => isJsonObject(doc) && isJsonObject(doc.counts) && isJsonObject(doc.files);
+var isStyles = (doc) => isJsonObject(doc) && Array.isArray(doc.styles) && doc.styles.every((st) => isJsonObject(st) && typeof st.name === "string");
+isStyles.expected = "a style sheet: an object with a `styles` array of {name, key?, \u2026}";
+var isHygiene = (doc) => isJsonObject(doc) && isStringArray(doc.hygiene);
+isHygiene.expected = "hygiene.json: an object with a `hygiene` array of strings";
+var isScreen = (doc) => isScreenExport(doc) || isLayerFile(doc);
+isScreen.expected = "a screen export: an object whose `nodes` is an array of nodes {id, type, \u2026}, or a layer file whose `tree` is one";
+function checked(doc, guard) {
+  if (guard(doc)) return doc;
+  throw new Error(`is not ${guard.expected || "a document of that kind"}`);
+}
 function diffDocs(oldDoc, newDoc, opts) {
-  if (isTokens(newDoc)) return diffTokens(oldDoc, newDoc);
-  if (isCatalog(newDoc)) return diffCatalog(oldDoc, newDoc);
-  if (isStyles(newDoc)) return diffStyles(oldDoc, newDoc);
-  if (isHygiene(newDoc)) return diffHygiene(oldDoc, newDoc);
-  if (isScreen(newDoc)) return diffScreens(oldDoc, newDoc, opts);
-  if (isManifest(newDoc)) return diffManifest(oldDoc, newDoc);
+  if (hasArray(newDoc, "variables")) return diffTokens(isTokensDoc(oldDoc) ? oldDoc : {}, checked(newDoc, isTokensDoc));
+  if (hasArray(newDoc, "components")) return diffCatalog(isComponentsCatalog(oldDoc) ? oldDoc : { components: [] }, checked(newDoc, isComponentsCatalog));
+  if (hasArray(newDoc, "styles")) return diffStyles(isStyles(oldDoc) ? oldDoc : { styles: [] }, checked(newDoc, isStyles));
+  if (hasArray(newDoc, "hygiene")) return diffHygiene(isHygiene(oldDoc) ? oldDoc : { hygiene: [] }, checked(newDoc, isHygiene));
+  if (hasArray(newDoc, "nodes") || isJsonObject(newDoc) && isJsonObject(newDoc.tree)) return diffScreens(isScreen(oldDoc) ? oldDoc : { nodes: [] }, checked(newDoc, isScreen), opts);
+  if (isManifest(newDoc)) return diffManifest(isManifest(oldDoc) ? oldDoc : null, newDoc);
   throw new Error("not a screen export, a token file, a component catalog, a style sheet, hygiene.json or the design-system manifest (no `tree`/`nodes`, `variables`, `components`, `styles`, `hygiene` or `counts`+`files` at the top level) \u2014 nothing here can be diffed");
 }
 function markdown(d, label) {
   const s = d.summary, L = [`# What changed \u2014 ${label}`, ""];
   for (const w of d.warnings || []) L.push(`> **Warning:** ${w}`, "");
   const total = s.added + s.removed + s.changed + (s.reordered || 0);
-  if (!total) return L.concat(d.kind === "screen" && s.positionOnly ? `Nothing changed (${s.positionOnly} node(s) only moved with their surroundings).` : "Nothing changed.").join("\n") + "\n";
+  if (!total) {
+    const why = d.kind === "screen" ? [s.positionOnly ? `${s.positionOnly} node(s) only moved with their surroundings` : "", s.formatOnly ? `${s.formatOnly} node(s) differ only by the exporter's format` : ""].filter(Boolean) : [];
+    return L.concat(why.length ? `Nothing changed (${why.join("; ")}).` : "Nothing changed.").join("\n") + "\n";
+  }
   const line = (f) => `  - \`${f.field}\`: ${f.before === void 0 ? "\u2014" : f.before} \u2192 ${f.after === void 0 ? "\u2014" : f.after}`;
   if (d.kind === "tokens") {
     if (d.changed.length) L.push("## Token values changed", ...d.changed.map((c) => `- \`${c.name}\` \u2014 ${c.modes.map((m) => `${m.mode}: ${m.before} \u2192 ${m.after}`).join("; ")}`), "");
@@ -676,14 +920,14 @@ function markdown(d, label) {
   if (d.removed.length) L.push("## Removed (each stands for its whole subtree)", ...d.removed.map((n) => `- **${n.path}** (\`${n.id}\`, ${n.type})`), "");
   if (d.reordered.length) L.push("## Reordered children", ...d.reordered.map((r) => `- **${r.path}**: ${r.before.join(", ")} \u2192 ${r.after.join(", ")}`), "");
   if (s.positionOnly) L.push(`_${s.positionOnly} other node(s) only moved with their surroundings \u2014 not listed._`, "");
+  if (s.formatOnly) L.push(`_${s.formatOnly} other node(s) differ only by the exporter's format \u2014 not listed._`, "");
   return L.join("\n") + "\n";
 }
 function snapshotPath(file, cwd = process.cwd()) {
-  const rel = path.relative(path.join(cwd, "design"), path.resolve(cwd, file));
-  const flat = (rel.startsWith("..") ? path.basename(file) : rel).split(path.sep).join("__");
-  return path.join(cwd, "design", ".sync", flat);
+  const rel = path2.relative(path2.join(cwd, "design"), path2.resolve(cwd, file));
+  const flat = (rel.startsWith("..") ? path2.basename(file) : rel).split(path2.sep).join("__");
+  return path2.join(cwd, "design", ".sync", flat);
 }
-var { normalizeForCompare, sha1Hex } = require_asset_compare();
 function hashAssetBytes(fileName, buf) {
   return sha1Hex(normalizeForCompare(fileName, buf));
 }
@@ -694,19 +938,19 @@ function assetPaths(doc) {
     if (typeof n.asset === "string") out.add(n.asset);
     for (const k of Array.isArray(n.children) ? n.children : []) walk(k);
   };
-  for (const r of roots(doc)) walk(r);
+  for (const r of screenRoots(doc)) walk(r);
   return [...out];
 }
 function assetRoot(file, assets) {
-  let dir = path.dirname(path.resolve(file));
-  for (let i = 0; i < 6; i++, dir = path.dirname(dir)) if (assets.some((a) => fs.existsSync(path.join(dir, a)))) return dir;
+  let dir = path2.dirname(path2.resolve(file));
+  for (let i = 0; i < 6; i++, dir = path2.dirname(dir)) if (assets.some((a) => fs4.existsSync(path2.join(dir, a)))) return dir;
   return null;
 }
 function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
   if (root) for (const a of assets) {
     try {
-      out[a] = hashAssetBytes(a, fs.readFileSync(path.join(root, a)));
+      out[a] = hashAssetBytes(a, fs4.readFileSync(path2.join(root, a)));
     } catch {
     }
   }
@@ -720,7 +964,7 @@ function redrawnAssets(file, newDoc, prev, cwd) {
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
     else if (prev.kind === "git") {
       try {
-        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path.relative(cwd, path.join(now.root, a)).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
+        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path2.relative(cwd, path2.join(now.root, a)).split(path2.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
       } catch {
       }
     }
@@ -729,40 +973,36 @@ function redrawnAssets(file, newDoc, prev, cwd) {
   return out;
 }
 function previous(file, against, cwd = process.cwd(), current = null) {
-  if (against) return { doc: JSON.parse(fs.readFileSync(against, "utf8")), source: against, kind: "file", notes: [] };
+  if (against) {
+    return { doc: readJsonFile(against, "baseline (--against)"), source: against, kind: "file", notes: [] };
+  }
   const found = [];
   const snap = snapshotPath(file, cwd);
-  if (fs.existsSync(snap)) {
-    let assets = null;
-    try {
-      assets = JSON.parse(fs.readFileSync(snap + ".assets.json", "utf8"));
-    } catch {
-    }
-    found.push({ doc: JSON.parse(fs.readFileSync(snap, "utf8")), source: path.relative(cwd, snap), kind: "snapshot", assets });
+  if (fs4.existsSync(snap)) {
+    const assets = readJsonOrNull(snap + ".assets.json", isStringRecord);
+    const r = readJson(snap, anyJson);
+    if (!("doc" in r)) throw new Error(`the snapshot ${path2.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force, or pass --against <an older copy>`);
+    found.push({ doc: r.doc, source: path2.relative(cwd, snap), kind: "snapshot", assets });
   }
-  if (fs.existsSync(snap + ".prev")) {
-    let assets = null;
-    try {
-      assets = JSON.parse(fs.readFileSync(snap + ".assets.json.prev", "utf8"));
-    } catch {
-    }
-    try {
-      found.push({ doc: JSON.parse(fs.readFileSync(snap + ".prev", "utf8")), source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
-    } catch {
-    }
+  if (fs4.existsSync(snap + ".prev")) {
+    const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord);
+    const r = readJson(snap + ".prev", anyJson);
+    if ("doc" in r) found.push({ doc: r.doc, source: path2.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
   }
   try {
-    const rel = path.relative(cwd, path.resolve(cwd, file)).split(path.sep).join("/");
+    const rel = path2.relative(cwd, path2.resolve(cwd, file)).split(path2.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
-    found.push({ doc: JSON.parse(text), source: "git HEAD", kind: "git" });
+    const doc = JSON.parse(text);
+    found.push({ doc, source: "git HEAD", kind: "git" });
   } catch {
   }
-  if (!found.length) return null;
+  const firstFound = found[0];
+  if (firstFound === void 0) return null;
   const at = (d) => {
-    if (!d) return null;
-    if (typeof d.exportedAt === "string") return d.exportedAt;
-    if (Array.isArray(d._slices) && d._slices.length) {
-      const times = d._slices.map((s) => s && typeof s.at === "string" ? s.at : null).filter(Boolean);
+    if (!d || typeof d !== "object") return null;
+    if ("exportedAt" in d && typeof d.exportedAt === "string") return d.exportedAt;
+    if ("_slices" in d && Array.isArray(d._slices) && d._slices.length) {
+      const times = d._slices.map((s) => s && typeof s === "object" && "at" in s && typeof s.at === "string" ? s.at : null).filter((t) => !!t);
       if (times.length) return times.reduce((mx, t) => t > mx ? t : mx);
     }
     return null;
@@ -770,146 +1010,156 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   const now = at(current), notes = [];
   const useful = found.filter((c) => !(now && at(c.doc) === now));
   for (const c of found) if (!useful.includes(c)) notes.push(`${c.source} is the SAME export as ${file} (exportedAt ${now}) \u2014 ${c.kind === "snapshot" ? "the snapshot was taken after the re-pull" : "the new export is already committed"}, so it was not used as the baseline.`);
-  if (!useful.length) return { ...found[0], notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
   useful.sort((x, y) => String(at(y.doc) || "").localeCompare(String(at(x.doc) || "")));
-  if (useful.length > 1 && at(useful[0].doc) !== at(useful[1].doc)) notes.push(`${useful[1].source} is older than ${useful[0].source} \u2014 used the newer one, so changes already applied are not listed again.`);
-  return { ...useful[0], notes };
+  const [newest, older] = useful;
+  if (newest === void 0) return { ...firstFound, notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
+  if (older !== void 0 && at(newest.doc) !== at(older.doc)) notes.push(`${older.source} is older than ${newest.source} \u2014 used the newer one, so changes already applied are not listed again.`);
+  return { ...newest, notes };
 }
-var { DESIGN_SYSTEM_FILES } = require_design_system_layout();
 var DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
 function siblingFilesOf(f) {
-  const abs = path.resolve(f);
-  const dir = path.dirname(abs);
-  const base = path.basename(abs);
+  const abs = path2.resolve(f);
+  const dir = path2.dirname(abs);
+  const base = path2.basename(abs);
   const out = [];
   if (DS_FILE_NAMES.includes(base)) {
-    const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path.dirname(dir);
+    const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path2.dirname(dir);
     for (const name of DS_FILE_NAMES) {
       if (name === base) continue;
-      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path.join(dsRoot, "design-system");
-      out.push(path.relative(process.cwd(), path.join(siblingDir, name)));
+      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path2.join(dsRoot, DESIGN_SYSTEM_DIR);
+      out.push(path2.relative(process.cwd(), path2.join(siblingDir, name)));
     }
     return out;
   }
   const m = /\.json$/i.test(base) ? base.slice(0, -5) : null;
   if (m) {
     for (const suf of [".vars.json", ".assets.json"]) {
-      const p = path.join(dir, m + suf);
-      if (fs.existsSync(p)) out.push(path.relative(process.cwd(), p));
+      const p = path2.join(dir, m + suf);
+      if (fs4.existsSync(p)) out.push(path2.relative(process.cwd(), p));
     }
   }
   const pageDir = dir;
-  const pagesDir = path.dirname(pageDir);
-  if (path.basename(pagesDir) === "pages") {
-    const idx = path.join(pagesDir, "index.json");
-    if (fs.existsSync(idx)) out.push(path.relative(process.cwd(), idx));
+  const pagesDir = path2.dirname(pageDir);
+  if (path2.basename(pagesDir) === "pages") {
+    const idx = path2.join(pagesDir, "index.json");
+    if (fs4.existsSync(idx)) out.push(path2.relative(process.cwd(), idx));
   }
   return out;
 }
 function main(argv) {
-  const USAGE = "usage: node design-diff.js --snapshot <file.json>... [--force]\n       node design-diff.js <file.json> [--against <old.json>] [--json] [--out <file>]";
+  const USAGE = `usage: ${scriptCmd("design-diff")} --snapshot <file.json>... [--force]
+       ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]`;
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) {
     console.error(USAGE);
-    process.exit(argv.length ? 0 : 2);
+    return argv.length ? 0 : 2;
   }
-  const KNOWN = ["--snapshot", "--against", "--out", "--json", "--help", "--force"];
-  const unknown = argv.filter((a) => a.startsWith("-") && !KNOWN.includes(a));
-  if (unknown.length) {
-    console.error(`design-diff: unknown flag ${unknown.join(", ")} (known: ${KNOWN.join(" ")})
-${USAGE}`);
-    process.exit(2);
-  }
-  if (argv[0] === "--snapshot") {
-    const force = argv.includes("--force");
-    const requested = argv.slice(1).filter((a) => a !== "--force");
+  const OPTIONS = { snapshot: { type: "boolean" }, against: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" } };
+  const { values: flags, positionals } = cliParse("design-diff", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
+  if (flags.snapshot) {
+    const force = !!flags.force;
+    const requested = positionals;
     if (!requested.length) {
       console.error(USAGE);
-      process.exit(2);
+      return 2;
     }
     const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
     let refused = 0;
     for (const f of files) {
-      if (!fs.existsSync(f)) {
+      if (!fs4.existsSync(f)) {
         console.error(`design-diff: ${f} not found \u2014 nothing to snapshot (first pull?)`);
         continue;
       }
       const dest = snapshotPath(f);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs4.mkdirSync(path2.dirname(dest), { recursive: true });
       let identical = false;
-      if (fs.existsSync(dest)) {
+      if (fs4.existsSync(dest)) {
         try {
-          identical = Buffer.compare(fs.readFileSync(dest), fs.readFileSync(f)) === 0;
+          identical = Buffer.compare(fs4.readFileSync(dest), fs4.readFileSync(f)) === 0;
         } catch {
         }
       }
-      if (fs.existsSync(dest) && !identical && !force) {
-        console.error(`design-diff: ${path.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
+      if (fs4.existsSync(dest) && !identical && !force) {
+        console.error(`design-diff: ${path2.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
         refused++;
         continue;
       }
-      if (fs.existsSync(dest) && !identical && force) {
+      if (fs4.existsSync(dest) && !identical && force) {
         try {
-          fs.copyFileSync(dest, dest + ".prev");
+          fs4.copyFileSync(dest, dest + ".prev");
         } catch {
         }
         try {
-          if (fs.existsSync(dest + ".assets.json")) fs.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
+          if (fs4.existsSync(dest + ".assets.json")) fs4.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
         } catch {
         }
       }
-      if (!identical) fs.copyFileSync(f, dest);
+      if (!identical) fs4.copyFileSync(f, dest);
       let n = 0;
       try {
-        const parsed = JSON.parse(fs.readFileSync(f, "utf8"));
-        if (isScreen(parsed)) {
+        const parsed = readJsonOrNull(f, isScreen);
+        if (parsed) {
           const h = assetHashes(f, parsed).hashes;
           n = Object.keys(h).length;
-          fs.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
+          fs4.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
         }
       } catch {
       }
-      console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
+      console.log(`snapshot: ${f} -> ${path2.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
     }
-    if (refused) process.exitCode = 1;
-    return;
+    return refused ? 1 : 0;
   }
-  const take = (flag) => {
-    const i = argv.indexOf(flag);
-    if (i < 0) return void 0;
-    const v = argv[i + 1];
-    argv.splice(i, 2);
-    return v;
-  };
-  const against = take("--against"), out = take("--out");
-  const json = argv.includes("--json");
-  const file = argv.find((a) => !a.startsWith("--"));
+  const { against, out } = flags;
+  const json = !!flags.json;
+  const file = positionals[0];
   if (!file) {
     console.error(USAGE);
-    process.exit(2);
+    return 2;
   }
-  const { readJsonFile } = require_catalog_input();
   const current = readJsonFile(file, "export");
-  const prev = previous(file, against, process.cwd(), current);
+  const failed = (e) => {
+    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
+    console.error(`design-diff: ${file}: ${String(message)}`);
+    return 2;
+  };
+  let prev = null;
+  try {
+    prev = previous(file, against, process.cwd(), current);
+  } catch (e) {
+    return failed(e);
+  }
   if (!prev) {
     console.error(`design-diff: nothing to compare ${file} against \u2014 no snapshot in design/.sync/, and it is not committed in git.
-Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
-    process.exit(2);
+Next time run \`${scriptCmd("design-diff")} --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
+    return 2;
   }
   let diff;
   try {
     diff = diffDocs(prev.doc, current, { redrawn: isScreen(current) ? redrawnAssets(file, current, prev, process.cwd()) : /* @__PURE__ */ new Set() });
   } catch (e) {
-    console.error(`design-diff: ${file}: ${e.message}`);
-    process.exit(2);
+    return failed(e);
   }
   diff.warnings = [...prev.notes, ...diff.warnings || []];
   const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) {
-    fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
-    fs.writeFileSync(out, text);
+    fs4.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
+    fs4.writeFileSync(out, text);
     console.log(`wrote ${out} \u2014 ${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`);
   } else process.stdout.write(text);
+  return 0;
 }
-if (require.main === module) main(process.argv.slice(2));
-module.exports = { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffManifest, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+export {
+  assetHashes,
+  diffCatalog,
+  diffDocs,
+  diffHygiene,
+  diffManifest,
+  diffScreens,
+  diffStyles,
+  diffTokens,
+  markdown,
+  previous,
+  redrawnAssets,
+  snapshotPath
+};

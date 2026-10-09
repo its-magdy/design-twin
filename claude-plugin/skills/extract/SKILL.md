@@ -26,7 +26,7 @@ Not imported yet? That's one-time setup — send them to `/designtwin:help`.
 human or a later step owns, and no pull touches them.
 
 That boundary is the point: `rm -rf design/export && re-pull` is the natural way to recover from a
-bad export, and it used to take a hand-mapped component map with it. `design/README.md` (written by
+bad export, and it does not take the hand-mapped component map with it. `design/README.md` (written by
 `dtwin init`) says the same thing where someone deleting files will actually see it.
 
 A project created before this split keeps its export directly in `design/`; every tool still finds
@@ -34,8 +34,8 @@ it, and `dtwin doctor` says which layout it found.
 
 ## Pick a path
 
-Four ways to get data out: click the plugin's export buttons (manual), run the `dtwin` CLI, hold it
-open as a daemon (`dtwin serve`) for several pulls in a row, or go through a registered MCP server.
+Three ways to get data out: click the plugin's export buttons (manual), run the `dtwin` CLI (one-shot,
+or held open as a daemon with `dtwin serve` for several pulls in a row), or go through a registered MCP server.
 What each is, when to reach for it, and how a connection actually gets opened is the **help**
 skill's job, not this one — use it if the user hasn't got a connection working yet.
 
@@ -46,10 +46,10 @@ works; walking a user through CLI/token setup mid-task is worse than just clicki
 server is already running, use its own export tools with `writeToDisk: true` instead of also trying
 the CLI.
 
-**Where `dtwin` comes from.** Check `which dtwin` first — it is usually already on PATH, installed
-globally from the `designtwin` npm package (and it can be on PATH by other means; don't assume npm).
+**Where `dtwin` comes from.** Check `which dtwin` first — it is on PATH when it was linked from a clone
+(`npm link --workspace bridge`; the package is not on npm).
 Only if it is missing are you inside a clone of the Design Twin repo, where every `dtwin` below is
-`node bridge/figma-pull.js`. If neither works, the CLI isn't installed: fall back to the plugin's own
+`node bridge/src/figma-pull.ts`. If neither works, the CLI isn't installed: fall back to the plugin's own
 export buttons, which need nothing.
 
 ## Discover, then scope — never open with a whole-file pull
@@ -66,8 +66,16 @@ dtwin pull --page <id>         # or a whole page
 dtwin list libraries          # which design libraries this file draws on — SLOW, see below
 ```
 
-Every command answers `--help` with its own page (`dtwin screenshot --help`, `dtwin list --help`),
-and none of them does anything else while doing so. If a command hangs or times out, run
+Every command answers `--help` with its own page (`dtwin screenshot --help`, `dtwin whoami --help`,
+`dtwin list --help`), and none of them does anything else while doing so. The output directory is
+positional and defaults to `design/export` (`dtwin pull` writes there; never `--out`, and never bare
+`design`, which makes a parallel export tree nothing else reads); the port is chosen only by `FIGMA_BRIDGE_PORT`
+(8787/8788/8789). A direct run ends with `done in Xs — waited Ys for the plugin to connect · export Zs ·
+write Ws`: a long "waited" is the plugin re-dialling a fresh bridge, not a slow export, and
+`dtwin serve` (another terminal) keeps the plugin connected so later commands skip it. `dtwin screenshot`
+prints `{id, name, type, w, h, scale, png:{w,h}, reference}` — size, render scale and PNG pixel size.
+If a command stalls with "the plugin is connected but sent nothing", the plugin is busy with an earlier
+export in that file: retry, or use `dtwin serve`. If a command hangs or times out, run
 **`dtwin doctor`** first: it says whether the cause is the token, the port, the daemon or the plugin.
 
 **`dtwin list` reports LAYERS, not screens.** Its top-level array carries SECTION, GROUP, INSTANCE,
@@ -76,9 +84,10 @@ inside SECTIONs 9,000-36,000px wide. The summary line breaks the count down by t
 carries `type` per row; when you see SECTIONs, `list children <section id>` is the next call, not a
 pull.
 
-**`dtwin list libraries` is the slowest read there is** — 5-15s against half a second for `list`,
-because it asks Figma about every enabled library's variable collections one at a time. It prints
-progress while it works. Run it when you need to know which library owns a token, not as a warm-up.
+**`dtwin list libraries` is the slowest read there is** — a few seconds up to ~15 s against half a
+second for `list` (about 2 s on a file with no libraries enabled): it walks every instance in the file
+and makes one Figma call per enabled library variable collection. It prints progress while
+it works. Run it when you need to know which library owns a token, not as a warm-up.
 
 **More than one Figma file open? Every command above needs `--client`.** The bridge routes per
 connected plugin, so with two files connected it refuses rather than guessing:
@@ -96,20 +105,39 @@ self-imported plugin (the free-plan setup this tool targets) `figma.fileKey` is 
 `null` — so that form addresses nothing here. `dtwin doctor` names each connected file and says when
 disambiguation will be needed. MCP twin: a `client: "<id|name>"` argument on every plugin-reaching tool.
 
-MCP twins: `figma_list_libraries` → `figma_list_pages` → `figma_list_children` →
-`figma_export_full({page:[id]})`.
+MCP twins, in the same order: `figma_status` (which files; pass a row's connId as `client`) →
+`figma_list_pages {depth:1}` → `figma_list_children {nodeId:<page or section id>}` → (`figma_screenshot
+{nodeId, scale:0.25, writeToDisk:true}` for look-alikes) → `figma_export_url {url:"<node id>",
+writeToDisk:true}` for one screen. `figma_export_full({page:[id]})` is for a whole page only, and
+`figma_list_libraries` stays out of the default sequence (it is the slow one).
 
 Two narrower pulls worth knowing: `dtwin pull --design-system` gets tokens/styles/components with **no**
-page walk and no assets; `dtwin pull --as-library "<name>"` gets a library file's complete catalog (run it
-with the *library* open, not the file consuming it).
+page walk and no assets (~15–40 s on a real file; progress shows only for clients that send a progress
+token); `dtwin pull --as-library "<name>"` gets a library file's complete catalog (run it with the
+*library* open, not the file consuming it).
+
+**On a file that CONSUMES a library, `--design-system` returns that file's OWN tokens, styles and
+components plus only the library variables something in the file references** (a page pull adds the ones
+its nodes bind) — never the library's catalog. For that, open the LIBRARY file and
+`dtwin pull --as-library "<name>"` (CLI only); theme from `libraries/<slug>/tokens.json`. The tell:
+`remote: true` on the variables, and `hygiene.json`'s count line.
+
+Pulling a design system to BUILD from (component states, variant looks)? Add `--variant-visuals` (MCP:
+`variantVisuals: true`) — without it `get-component.js` / `design_get_component` return the prop list
+only. A library's components need it on the `--as-library` pull (in the library file).
 
 **Several frames with the same name?** Real files have them — one page held two frames with the same
-name and the same size, and `list children` returns only name/id/type/size, so nothing in that output
-tells them apart. Don't take the first id: `dtwin screenshot <id>` renders ONE node to
+name and the same size. `list children` gives every row a `childCount`, and rows that share name + size a
+`title` (the first visible text) plus one warning per group — often enough. When the titles collide too
+(a shared section heading), those rows also get `distinctTexts` (up to 3 texts that row shows and its twins
+do not) — read them before pulling; when a listing is so large that its node-read budget runs out, the
+remaining rows get none and one warning says `distinctTexts` was skipped. When `distinctTexts` is empty or
+missing, don't take the first id: `dtwin screenshot <id>` renders ONE node to
 `design/export/assets/<id>_ref.png` cheaply (no `serialize()`, no asset walk, well under a second
-warm). Shoot each candidate, look, then pull the right one. That PNG lands in exactly the place a
-later `--node` pull of the same frame writes its own reference, so shooting first costs nothing and
-leaves no duplicate. Ask the user if the renders don't settle it.
+warm). Shoot each candidate, look, then pull the right one. At the default scale that PNG lands in
+exactly the place a later `--node` pull of the same frame writes its own reference, so shooting first
+costs nothing and leaves no duplicate. A cheap `--scale 0.25` thumbnail is written as
+`<id>_shot@0.25x.png` instead, so it never stands in for the full-size reference. Ask the user if the renders don't settle it.
 
 **A state you need may be a sibling frame, not a missing design.** Before reporting "there is no
 populated/empty/error state", run `dtwin list children <the parent section>`. On the live file the
@@ -122,13 +150,22 @@ rather than guessing; an unknown flag is refused with a suggestion. This skill o
 
 ## Through the MCP instead
 
-The server is registered as `designtwin`, so a tool's full name is `mcp__designtwin__<tool>` (e.g.
-`mcp__designtwin__figma_list_pages`) — call it by that name if the short one isn't found.
+A server registered as `designtwin` in the project's `.mcp.json` (what `dtwin init --mcp` writes) names its
+tools `mcp__designtwin__<tool>` (e.g. `mcp__designtwin__figma_list_pages`) — call it by that name if the
+short one isn't found; under another registration the prefix differs.
 
 **Pass `writeToDisk: true` on any export past a quick look.** Inline results are capped (25k tokens by
 default). An export too large to return is written to disk on its own and the result's `note` says
 so, but asking for it up front is cheaper than discovering it — and asset bytes are never returned
-inline at all, so it's the only way to get `assets/`.
+inline at all, so it's the only way to get `assets/`. The inline cap is also never above 48,000
+characters. Every export result (written or inline) carries `sourceFile` — the Figma file it came from —
+and `durationMs`; when an implicit spill replaces a file whose content differs (the `exportedAt`/`generatedAt` stamps aside), the old one is
+kept one level and the `note` names it — a screen spill keeps ONLY `<screen>.json.prev` (`wrote.prev`;
+its `.vars.json`/`.assets.json`, `pages/index.json` and `variables.json` are replaced with no copy), a
+page/full/design-system spill a `<file>.prev` per changed JSON under `pages/`, `design-system/` and
+`design-system.json` (`wrote.prevKept`). `figma_status` shows `lastScreenExport` and `lastWrite`.
+With `writeToDisk`/`outDir`, a bad `outDir` is refused before the export runs.
+A cancelled tool call cancels the read in the plugin.
 
 ## Check what landed before declaring success
 
@@ -141,11 +178,19 @@ obviously about failure:
 | `truncated`, `skipped` | the export did not finish the tree — treat as a failed pull |
 | `assetsFailed` | a render failed and nothing replaced it |
 | `warnings` | read every line |
-| `assetsGeometry` | that many nodes took the **fallback** path: the render failed and their vector paths were inlined instead. `assetsFailed` stays 0, so the three obvious fields say "clean" while 13% of the nodes took a degraded route. Expect to hand-check those nodes. |
+| `assetsHidden` | hidden graphics not exported (`assetSkipped:"hidden"`). Normal, not a failure; the pull prints an info line, and the bridge reuses a visible twin's file where one matches. |
+| `hiddenNodes` | nodes hidden themselves or under a hidden ancestor, kept in the tree (only the first carry `hidden:true`). Informational. |
+| `assetsGeometry` | that many VISIBLE nodes took the **fallback** path: the render failed and their vector paths were inlined instead (any fallback warns and names them). `assetsFailed` stays 0, so the three obvious fields say "clean" while 13% of the nodes took a degraded route. Expect to hand-check those nodes. |
 | `assetsSkippedInvisible` | vector nodes with nothing visible to render. Normal, and not a failure. |
+
+Before scripting against these files (a walker, a count, a check), read **`design/export/SCHEMA.md`** —
+the scripting quick keys (`text` not `characters`, `box.w` not `width`, `hidden` on ancestors, `scroll`,
+`fixedChildren`…), written beside the data and the same text as the top of `ir-fields.md`. It is
+rewritten only when its text changes, and a `SCHEMA.md` you wrote yourself is never touched.
 
 **What lands depends on the pull**, so check for what your command actually produces:
 
+- Every pull that writes to disk also leaves **`design/export/SCHEMA.md`** (the scripting quick keys).
 - `--node <id>` / a selection → `design/export/pages/<Page>/<Screen>__<node-id>.json` (keys:
   `exportedAt`, `screen`, `page`, `pageId`, `nodeId`, `nodes[]`, `manifest`), plus three siblings:
   `…__<id>.vars.json` (the tokens THIS screen binds), `…__<id>.assets.json` (which assets it uses,
@@ -163,14 +208,19 @@ page are two different screens, and a name ending in a space sanitises to a trai
 **root** `design/export/pages/index.json` rather than reconstructing filenames or opening a page
 directory's own `index.json` one hop down — it carries a row per screen with the Figma layer `name`,
 the visible `title` (the text on the frame's own title slot, NOT a sidebar/nav label that repeats on
-every sibling screen), a `texts[]` fingerprint, `page`, `pageId`, `id`, `w`/`h` and the paths to all
-three sibling files.
+every sibling screen), a `texts[]` fingerprint, `page`, `pageId`, `id` and the screen `file`. A
+`--node`/selection row also carries `w`/`h` and, when written, `reference` and the paths to its
+`.vars.json` / `.assets.json` siblings; a page-walk row (`--page`, `--all-pages`, a bare `dtwin pull`) carries `bytes` (and `nodes`)
+but no `w`/`h`; its `reference` sits in the layer file, and it has no `.vars.json`/`.assets.json`.
 
 **Resolving a screen by the name a user types (not the layer name Figma gave it):** the visible title
-is very often NOT the Figma layer name — a layer named `positions ` (trailing space) can be the frame
-whose on-screen `<h1>` reads "Job Roles". Use the one shared procedure,
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name-or-id>" [planDir]`, rather
-than re-deriving name matching here. First, a node id (e.g. `7314:87192`) is tried alone and, if it
+is very often NOT the Figma layer name — a layer named `people ` (trailing space) can be the frame
+whose on-screen `<h1>` reads "Members". Use the one shared procedure,
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name-or-id>" design/plan`, rather
+than re-deriving name matching here. The query may also be a `<Layer>__<id>` basename or a path to the
+screen's `.json` (or `.vars.json`) — the id it carries resolves like a node id. Pointing it at a folder
+that is not an export root (no `pages/index.json`) prints `not an export root` and the root to pass
+instead. First, a node id (e.g. `7314:87192`) is tried alone and, if it
 matches, wins outright — an id is unique and never ambiguous with a name/title. Otherwise, THREE exact
 checks — layer name, indexed `title`, a plan's `screenName`/`route` (each trimmed, case-insensitive)
 — are evaluated TOGETHER as one pool, not as a sequence tried one after another: any row matching
@@ -179,12 +229,12 @@ prints every candidate (name, id, size, node count, `dtwin screenshot <id>`, and
 matched on) — never guessing the nearest, and never resolving on whichever field happened to be
 checked first. (Evaluating them as an in-order sequence is itself the bug a sequence looks safe but
 isn't: a case-insensitive layer-name hit can resolve and return before ever reaching the title stage,
-hiding a second row that is ALSO titled the same thing — the empty-state sibling of "Job Roles",
-layered `Job roles`, is exactly this case.) If the pool is empty, a final, looser stage — a
+hiding a second row that is ALSO titled the same thing — the empty-state sibling of "Members",
+layered `members`, is exactly this case.) If the pool is empty, a final, looser stage — a
 case-insensitive substring over `name`/`title`/`texts[]` — runs, but **a hit there is never a result,
 only a candidate list**, even when there is exactly one hit: print the candidate(s) and ask the user
-to confirm by node id rather than building/auditing/verifying it. (This is what closed finding 70 for
-real — a single substring hit auto-resolving is the bug, not just multiple hits.) If NOT ONE row in
+to confirm by node id rather than building/auditing/verifying it. (Even a single substring hit never auto-resolves,
+not only multiple hits.) If NOT ONE row in
 the index carries a `title` at all, say so explicitly: the export predates title indexing, and a
 re-pull of the screen (`dtwin pull --node <id>`) — not a cleverer query — is what fixes it. **A screen
 that has never been pulled at all cannot be named by its title yet** — `dtwin list`/`dtwin
@@ -199,12 +249,14 @@ variables this file merely *references* from a published library, flagged `remot
 questions.
 
 **`design/export/variables.json` accumulates — it is not per-pull state.** Each single-screen pull
-merges its slice in, keyed on each variable's Figma key, so pulling screen B no longer deletes screen
+merges its slice in, keyed on each variable's Figma key, so pulling screen B keeps screen
 A's tokens. The raw per-pull slice is also kept verbatim as the screen's `.vars.json` (every variable
 in the collections that screen references — more than the ones its nodes actually bind). Names are
 not unique across the union: two different variables (two keys) can both be called `Space 4` with
 different values. Such a pair, and a variable two pulls resolve differently, is recorded under
 `_conflicts` and as a `CONFLICT` line in `hygiene` — read those before generating a theme.
+`variables.json` holds only variables bound by pulled nodes — look up library colours with `--lookup` on
+the library catalog (see below).
 
 **Check the reference screenshot landed.** Every export renders one PNG per top-level frame and
 points at it from a `reference` field holding a path relative to the export dir
@@ -239,17 +291,33 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" design/export/pages/<Page>/<
   --design-system design/export/design-system
 ```
 
-Run it after any pull that produced both, and report its blockers before offering to build. It reads
+Run it after any pull that produced both, and report its blockers and every warning that carries a
+`confirm` question (asked, with the default the build takes) before offering to build. It reads
 the screen's own `.vars.json` beside it, so a token collision is reported against the screen that
 actually carries the colliding variable; a collision that belongs to another screen is only an
 `info` note naming that screen — do not "fix" this screen's value to match it.
+
+**`foreign-token-library` — read its offline counts first.** The message carries "Offline check (no
+Figma needed): of the N variables in those collections, A … D … U … M …" (the same counts are the
+finding's `nameMap {agree, differ, undecidable, absent}`; the counts are absent, and `nameMap` all zero,
+when no screen variable sits in the flagged collections): A have a design-system variable of the same name
+resolving the same in every shared mode, D resolve differently (each listed as `token-name-collision`), U
+cannot be compared (no shared mode), M have no same-name variable. **D = 0 → mapping by NAME is safe for the
+A**: say so in the plan; the screen's own `.vars.json` is the ground truth for names and values. A = 0 with
+M = N → none of them exists here by name, so this is not the screen's library: pull the one it uses.
+The counts go by collection and variable NAME, not key: when the screen uses two collections of one name
+(two `Spacing`, different keys) and only one is flagged, the other's variables are counted in too. The
+live route (`dtwin list libraries`, then `--as-library`) is only for finding the owning file.
 
 **`catalog-rekeyed` is not "wrong design system".** Duplicating a Figma file re-mints every component
 key, so a copied design system matches its screens 0% by key while names and prop signatures still
 agree. When that is what cross-check finds, it lists name + prop-signature matches under
 `componentProposals` in its JSON (`--out design/audit/<screen>.cross` writes it), every one
 `"confirmed": false`. Show the user that list — name, catalog id, evidence — and let them accept
-entries; set `"confirmed": true` on the accepted ones, then
+entries. Pass `--map design/codeconnect.local.json` (found by default) and each proposal is labelled:
+`alreadyMapped` (a key of it is already in the map — confirm only the others) and `sharedWith: N` (N other
+exported screens use the same component; confirm once, it covers them all). The report lists them in
+that order — shared, this screen only, already mapped — and nothing is confirmed for you; set `"confirmed": true` on the accepted ones, then
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json --from-proposals design/audit/<screen>.cross.json`
 stubs exactly those, filed under the screen's own instance keys. Never confirm on the user's behalf:
 the confirmation is the only thing that separates a real match from two components that share a name.
@@ -263,8 +331,11 @@ those. Turn them into the stack's own theme file once, instead of re-mapping val
 
 **Choose the input by what the theme is for — the choice changes values, not just coverage:**
 
-1. `design/export/design-system/tokens.json` when you pulled the design system — it is the library's
-   own definition of every token, one variable per name.
+1. `design/export/libraries/<slug>/tokens.json` (from `--as-library`) when the screens CONSUME a
+   library — the library's own definition of every token, one variable per name.
+   `design/export/design-system/tokens.json` is that only when it was pulled from the file that DEFINES
+   the tokens (its variables are not `remote: true`); pulled from a consuming file it holds just the
+   library variables something there references.
 2. Otherwise, the screen's own `design/export/pages/<Page>/<Screen>__<id>.vars.json` — the variables
    that screen's file references, so its names mean what that screen means.
 3. `design/export/variables.json` (the union of every pull) only when you need every screen's tokens
@@ -289,13 +360,22 @@ only that target's file to the given directory by default — pass `--also-gener
 generic handoff set (`tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json`, `tokens/`) written
 there, and keep that set under `design/`, not the app's source tree.
 
+Each CSS / native file starts with a `designtwin-source: <dir>/<input> · <n> variables · sha256 <12>` line.
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> --check <generated file>` writes nothing and
+says whether the file is still current (exit 0), stale after a re-pull (1) or has no such line (2,
+regenerate once) — also 2 when it was generated from a different file (it names that file: check against it,
+never regenerate from a narrower one; a design-system and a library `tokens.json` are told apart by their parent directory) or the command line is wrong (usage errors in `--check`/`--lookup` are 2, never 1); a later pull that merges new variables says the generated file is now behind. To find
+the variable behind a colour: `tokens.js <library tokens.json> --lookup <hex>` (repeatable; COLOR
+variables, per mode, through aliases; exit 1 when none, 2 on a usage error; pass `ffbc1c` or a quoted `'#ffbc1c'` — an unquoted
+`#` starts a shell comment).
+
 Pick the output by stack; the build-screen profile for the stack says which flag and what the
 generated names look like. `tokens.css` (no flag) is plain `:root` custom properties for CSS
 Modules or vanilla CSS; `--web tailwind` writes a Tailwind v4 `theme.css`; `--native <profile>`
 writes one native token file. Import the result as the app's theme. Do not hand-write a theme from
 bound token names: that is the per-screen re-mapping this step exists to stop.
 
-**Read the warnings it prints.** Nothing is dropped any more, but one warning changes names: `N
+**Read the warnings it prints.** Nothing is dropped, but one warning changes names: `N
 different Figma variables share the name 'X' … resolve DIFFERENTLY` means both were emitted, each
 suffixed with the first 8 characters of its key, and the warning lists each key's values and the
 screens it came from. Pick the one the screen binds (by key, via the screen's `.vars.json`) — or
@@ -311,9 +391,10 @@ it; show the user the difference and ask which is the source of truth.
 ## Then hand off
 
 Report briefly: what landed, anything the manifest flagged, whether the PNG exists, and any
-cross-check blocker. Then **`/designtwin:audit-design <screen>`** to check the design is buildable
-(missing states, contrast, touch targets, designer questions), and
+cross-check blocker or `confirm` question. Then **`/designtwin:audit-design <screen>`** to check the design is buildable
+(missing states, contrast, touch targets, designer questions) — its `prototype-target-not-exported` names the dialogs and overlays the screen opens that nobody pulled: pull those too — and
 **`/designtwin:build-screen <screen>`** to build it.
 
 If something failed — bridge offline, `EADDRINUSE`, empty library list, 401 — the symptom→fix list is
-the **help** skill's `references/troubleshooting.md`. Load it; don't debug from memory.
+the **help** skill's `references/troubleshooting.md` (`${CLAUDE_PLUGIN_ROOT}/skills/help/references/troubleshooting.md`;
+where it says `<plugin>` it means `${CLAUDE_PLUGIN_ROOT}`). Load it; don't debug from memory.

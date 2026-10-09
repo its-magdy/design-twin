@@ -13,8 +13,9 @@ Describe how to translate the neutral export IR into this stack. Keep it short a
   `autoTracks`, and per-child `gridColumnSpan`/`gridRowSpan`/`gridColumnStart`/`gridRowStart`/
   `gridJustifySelf`/`gridAlignSelf` → your stack's native grid construct (see the other profiles for
   worked examples per stack).
-- `clip`/`layout.scroll` → overflow/scroll container; `fixedChildren` (if present) → sticky/fixed leading
-  children inside a scroll container.
+- `clip`/`scroll` (a node field, not under `layout`) → overflow/scroll container; `fixedChildren:N` (if
+  present) → the LAST N entries of `children[]` are the sticky/fixed ones inside the scroll container;
+  place each by its `y` (top bar → sticky top, bottom bar → sticky bottom).
 
 **Behavior & theming** — `reactions`/`flows` (prototype interactions) → navigation/state, not markup;
 `resolvedModes`/`variableModes` → light/dark theming. `layoutGrids`/`measurements`/`devStatus`/

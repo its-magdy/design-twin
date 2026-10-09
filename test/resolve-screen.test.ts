@@ -1,0 +1,472 @@
+// test/resolve-screen.test.ts — screen resolution: title, layer name, text search, same-named frames.
+//
+// Fixture: test/fixtures/livetest3/pages/ is copied VERBATIM (node trees pruned to
+// type/name/id/text/children/box/manifest/page/pageId/nodeId/screen/exportedAt — the fields
+// deriveTitle/collectTexts/resolveScreen actually read) from a live-test export (names replaced), five
+// real screens: `positions ` (visible title "Jet Roles"), `Studio Configurations` (visible title
+// "Guided Policies"), `Jet Role Details`, and two same-named `Create Assembly Type` frames. The root
+// pages/index.json in the fixture was regenerated the way bridge/write-out.js does it —
+// pageDirs unchanged, `layers` added with title/texts derived by bridge/pages-layout.js's own
+// deriveTitle/collectTexts run over each screen's real node tree — so this is exactly the shape a
+// re-pull produces, not a hand-written approximation.
+//
+// test/identity.test.ts ALSO uses fixtures at
+// pages/__Optimization_management_/positions___7314_87192.json,
+// .../Studio_Configurations__1359_21337.json and pages/In_progress/Create_Assembly_Type__18411_84111.json
+// — pruned differently (mainComponent/props/component/tokens kept, TEXT
+// nodes/box/manifest/exportedAt dropped), so identity.test.js's component-identity checks have what
+// they need. Two prompts need two different prunings of the SAME three real screens under the SAME
+// canonical path; the canonical path
+// stays identity.test.ts's (it hardcodes it), and this suite's own copies of exactly those three
+// files — pruned the way THIS suite needs (TEXT nodes, box, manifest, exportedAt kept) — live under
+// the sibling `pages-titled/` instead. Nothing here reads test/fixtures/livetest3/pages/<those three
+// paths> for title/texts derivation; `Jet_Role_Details` and the second `Create_Assembly_Type` (both
+// untouched by identity.test.ts) stay under `pages/`.
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { spawnSync } from "node:child_process";
+import { check as ok, report } from "./assert.ts";
+import { deriveTitle, collectTexts } from "../bridge/src/pages-layout.ts";
+import { listPlans } from "../bridge/src/project-layout.ts";
+import { resolveScreen } from "../design-to-code/resolve-screen.ts";
+import type { ResolveScreenResult, PagesRootIndex } from "../design-to-code/types.ts";
+import type { TextWalkNode } from "../bridge/src/pages-layout.ts";
+import { must, readFixture } from "./fixtures.ts";
+import { isPagesRootIndex } from "../design-to-code/doc-guards.ts";
+import { isScreenExport } from "../design-to-code/export-shape.ts";
+
+type Unresolved = Exclude<ResolveScreenResult, { status: "resolved" }>;
+// The arm a check expects; any other arm is a named failure (not a TypeError on a missing field).
+const unresolved = (r: ResolveScreenResult): Unresolved => must(r.status === "resolved" ? null : r, "an unresolved result");
+
+const FIXTURE = path.join(import.meta.dirname, "fixtures", "livetest3");
+
+console.log("resolve-screen — title/texts derivation over the REAL export:");
+
+// The fixture files as this suite reads them: a screen export and the root index, each checked by its guard.
+const readRoot = (dir: string): PagesRootIndex => readFixture(path.join(dir, "pages", "index.json"), isPagesRootIndex);
+
+function screenRoot(pageDir: string, file: string, base?: string): TextWalkNode {
+  return must(readFixture(path.join(FIXTURE, base || "pages", pageDir, file), isScreenExport).nodes[0], "a root node");
+}
+
+ok("[title] `positions ` (trailing space, layer name) visibly reads 'Jet Roles' — deriveTitle finds it, not the sidebar nav item",
+  deriveTitle(screenRoot("__Optimization_management_", "positions___7314_87192.json", "pages-titled")) === "Jet Roles");
+
+ok("[title] `Studio Configurations` visibly reads 'Guided Policies' — NOT the `Sub titles` nav label of the same text",
+  deriveTitle(screenRoot("__Optimization_management_", "Studio_Configurations__1359_21337.json", "pages-titled")) === "Guided Policies");
+
+ok("[title] `Jet Role Details` (a real, different screen from 'Jet Roles') keeps its own title",
+  deriveTitle(screenRoot("__Optimization_management_", "Jet_Role_Details__20174_143363.json")) === "Jet Role Details");
+
+ok("[title] both same-named `Create Assembly Type` frames resolve their OWN Page Title text",
+  deriveTitle(screenRoot("In_progress", "Create_Assembly_Type__18411_84111.json", "pages-titled")) === "Add Assembly Type" &&
+  deriveTitle(screenRoot("In_progress", "Create_Assembly_Type__18411_84502.json")) === "Add Assembly Type");
+
+ok("[title] a Page Title instance's leading Breadcrumb placeholder ('Text') is never mistaken for the title",
+  deriveTitle(screenRoot("__Optimization_management_", "positions___7314_87192.json", "pages-titled")) !== "Text");
+
+ok("[texts] collectTexts returns deduped, non-empty strings in reading order, capped",
+  (() => {
+    const texts = collectTexts(screenRoot("__Optimization_management_", "positions___7314_87192.json", "pages-titled"));
+    return texts.length > 0 && texts.length <= 8 && new Set(texts).size === texts.length && texts.every((t) => t.trim());
+  })());
+
+console.log("\nresolve-screen — the resolution procedure (title, layer name, text search):");
+
+ok("[resolve] 'Jet Roles' (visible title; the layer is named `positions ` with a trailing space) resolves to 7314:87192, not nothing",
+  (() => { const r = resolveScreen(FIXTURE, "Jet Roles"); return r.status === "resolved" && r.row.id === "7314:87192"; })());
+
+ok("[resolve] 'Jet Roles' never resolves to 'Jet Role Details' (20174:143363) — no fuzzy fallback",
+  (() => { const r = resolveScreen(FIXTURE, "Jet Roles"); return r.status === "resolved" && r.row.id !== "20174:143363"; })());
+
+ok("[resolve] 'Guided Policies' resolves to the ONE screen actually titled that (1359:21337), not the sidebar match on all three",
+  (() => { const r = resolveScreen(FIXTURE, "Guided Policies"); return r.status === "resolved" && r.row.id === "1359:21337"; })());
+
+// a text-search hit is NEVER auto-resolved, even the single-hit case (verbatim
+// on an export without titles) — it is always `needs-confirmation`, a candidate list to pick from by id.
+ok("[resolve] an ambiguous partial name ('Jet Role') STOPS as needs-confirmation and lists candidates rather than guessing",
+  (() => {
+    const r = resolveScreen(FIXTURE, "Jet Role");
+    return r.status === "needs-confirmation" && r.stage === "text search" && r.candidates.length >= 2 &&
+      r.candidates.some((c) => c.id === "20174:143363") && r.candidates.some((c) => c.id === "7314:87192");
+  })());
+
+ok("[resolve] a name matching nothing STOPS and lists every known layer (never the nearest string)",
+  (() => {
+    const r = resolveScreen(FIXTURE, "Totally Unknown Screen Name");
+    return r.status === "not-found" && r.candidates.length === 5;
+  })());
+
+ok("[resolve] a bare node id resolves directly, ahead of any name stage",
+  (() => { const r = resolveScreen(FIXTURE, "7314:87192"); return r.status === "resolved" && r.stage === "node id"; })());
+
+ok("[resolve] two same-named `Create Assembly Type` frames are ambiguous and distinguishable by id, node count and reference",
+  (() => {
+    const r = resolveScreen(FIXTURE, "Create Assembly Type");
+    if (r.status !== "ambiguous") return false;
+    const ids = r.candidates.map((c) => c.id).sort();
+    const nodes = r.candidates.map((c) => c.nodes);
+    return ids.join("|") === "18411:84111|18411:84502" && new Set(nodes).size === r.candidates.length &&
+      r.candidates.every((c) => c.reference && c.screenshot === `dtwin screenshot ${c.id}`);
+  })());
+
+ok("[resolve] node id ALWAYS beats a name stage, even if the id string also happens to be a substring elsewhere",
+  (() => { const r = resolveScreen(FIXTURE, "20174:143363"); return r.status === "resolved" && r.row.name === "Jet Role Details"; })());
+
+// The query is trimmed before matching (a human typing a query rarely means a trailing space), so
+// 'positions ' (with the trailing space the layer itself carries) matches via text search rather
+// than the exact-name stage — either way it must resolve to the ONE right screen.
+ok("[resolve] 'positions ' (the layer's own trailing-space name) still resolves to the one screen it names",
+  (() => { const r = resolveScreen(FIXTURE, "positions "); return r.status === "resolved" && r.row.id === "7314:87192"; })());
+
+ok("[resolve] the untrimmed exact layer name matches byte for byte when queried without surrounding whitespace to strip",
+  (() => { const r = resolveScreen(FIXTURE, "Studio Configurations"); return r.status === "resolved" && r.row.id === "1359:21337" && r.stage === "exact layer name"; })());
+
+console.log("\nresolve-screen — root index shape:");
+
+ok("[index] the fixture's root pages/index.json carries a row with name 'positions ' AND title 'Jet Roles'",
+  (() => {
+    const root = readRoot(FIXTURE);
+    return (root.layers || []).some((l) => l.name === "positions " && l.title === "Jet Roles");
+  })());
+
+ok("[index] and a row with name 'Studio Configurations' AND title 'Guided Policies'",
+  (() => {
+    const root = readRoot(FIXTURE);
+    return (root.layers || []).some((l) => l.name === "Studio Configurations" && l.title === "Guided Policies");
+  })());
+
+// A literal `grep -i "jet roles" pages/index.json` also matches a nav-label mention of
+// "Jet Roles" inside OTHER screens' `texts[]` (it is drawn in the sidebar of every Optimization-
+// management screen — the very trap this guards against) — grep on raw text cannot tell "the
+// visible page title" from "a word that also appears in a sidebar". The row-level `title` field is
+// exactly what lets a consumer (or this test) ask that question precisely.
+ok("[index] exactly one row's `title` is 'Jet Roles', and it is 7314:87192",
+  (() => {
+    const root = readRoot(FIXTURE);
+    const hits = (root.layers || []).filter((l) => l.title === "Jet Roles");
+    return hits.length === 1 && hits[0]?.id === "7314:87192";
+  })());
+
+console.log("\nresolve-screen — text search never auto-resolves, and a title-less export says so:");
+
+// LEGACY fixture: the real root+page index from before titles were indexed (test/fixtures/livetest3/pages-legacy/,
+// pruned from a live-test export, names replaced). resolveScreen reads <exportDir>/pages/index.json, so build a
+// throwaway exportDir whose pages/ IS this legacy content, rather than teaching the resolver a
+// second index location it will never see in a real project.
+function legacyExportDir() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-legacy-"));
+  const pagesDir = path.join(tmp, "pages");
+  fs.mkdirSync(path.join(pagesDir, "__Optimization_management_"), { recursive: true });
+  fs.copyFileSync(path.join(FIXTURE, "pages-legacy", "index.json"), path.join(pagesDir, "index.json"));
+  fs.copyFileSync(
+    path.join(FIXTURE, "pages-legacy", "__Optimization_management_", "index.json"),
+    path.join(pagesDir, "__Optimization_management_", "index.json")
+  );
+  return tmp;
+}
+const LEGACY = legacyExportDir();
+
+ok("[legacy] the legacy index really has no titles at all (sanity check on the fixture itself)",
+  (() => { const root = readRoot(LEGACY); return !root.layers; })());
+
+ok("'Jet Role' on the LEGACY (title-less) export does NOT resolve — needs-confirmation, exit-worthy, not a silent wrong answer",
+  (() => { const r = resolveScreen(LEGACY, "Jet Role"); return r.status === "needs-confirmation" && r.stage === "text search"; })());
+
+ok("and the message says the export predates title indexing",
+  (() => { const r = unresolved(resolveScreen(LEGACY, "Jet Role")); return "noTitles" in r && r.noTitles === true; })());
+
+ok("a query matching NOTHING on the legacy export also flags noTitles",
+  (() => { const r = resolveScreen(LEGACY, "Totally Unknown"); return r.status === "not-found" && r.noTitles === true; })());
+
+ok("'positions' (no trailing space, no case match needed) resolves at 'exact layer name', not text search",
+  (() => { const r = resolveScreen(FIXTURE, "positions"); return r.status === "resolved" && r.row.id === "7314:87192" && r.stage === "exact layer name"; })());
+
+ok("'POSITIONS' (case-folded) also resolves at 'exact layer name'",
+  (() => { const r = resolveScreen(FIXTURE, "POSITIONS"); return r.status === "resolved" && r.row.id === "7314:87192" && r.stage === "exact layer name"; })());
+
+ok("'Guided Policies' on the NEW (titled) export resolves at 'indexed title', not text search",
+  (() => { const r = resolveScreen(FIXTURE, "Guided Policies"); return r.status === "resolved" && r.row.id === "1359:21337" && r.stage === "indexed title"; })());
+
+ok("a query that hits only texts[] ('Units') is needs-confirmation, never resolved, and lists the hits",
+  (() => {
+    const r = resolveScreen(FIXTURE, "Units");
+    return r.status === "needs-confirmation" && r.stage === "text search" && r.candidates.length >= 1 &&
+      !r.noTitles; // this export DOES carry titles — only the legacy one should ever set noTitles
+  })());
+
+// "Jet Role" above IS the single-substring-hit case (matches only "Jet Role Details" on the legacy,
+// title-less export) and is already asserted `needs-confirmation`, not `resolved` — the case as it
+// occurs on a real export without titles.
+
+console.log("\nresolve-screen — the empty-state sibling collision:");
+
+// The real empty-state sibling of "Jet Roles" — node 7314:83742, layer name `Jet roles` (lowercase
+// r), visible title ALSO "Jet Roles" — pulled live with this worktree's bridge
+// (`node bridge/figma-pull.js /tmp/p3-pull-310 --node 7314:83742 --client "TideStack (Copy)"`) and
+// pruned into test/fixtures/livetest3/pages-titled/__Optimization_management_/Jet_roles__7314_83742.json
+// the same way as the fixture's other pages-titled/ files. The row below is exactly what write-out.js
+// would index for it (name/title/texts/id/w/h/nodes/reference all copied from that real pull's own
+// pages/index.json output, reproduced from that pull).
+function fixtureWithEmptyStateSibling() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-310-"));
+  const pagesDir = path.join(tmp, "pages", "__Optimization_management_");
+  fs.mkdirSync(pagesDir, { recursive: true });
+  const root = readRoot(FIXTURE);
+  const sibling = readFixture(path.join(FIXTURE, "pages-titled", "__Optimization_management_", "Jet_roles__7314_83742.json"), isScreenExport);
+  // deriveTitle/collectTexts are the same top-level import as line 29 — no need to re-require them.
+  const siblingRoot = sibling.nodes[0];
+  if (root.layers) root.layers = root.layers.concat([{
+    name: "Jet roles",
+    id: "7314:83742",
+    type: "FRAME",
+    page: "✅ Optimization management ",
+    pageId: "5282:58823",
+    title: deriveTitle(siblingRoot),
+    texts: collectTexts(siblingRoot),
+    file: "pages/__Optimization_management_/Jet_roles__7314_83742.json",
+    reference: "assets/7314_83742_ref.png",
+    nodes: 209,
+    w: 1440,
+    h: 1236,
+  }]);
+  fs.writeFileSync(path.join(tmp, "pages", "index.json"), JSON.stringify(root, null, 2));
+  return tmp;
+}
+const SIBLING_FIXTURE = fixtureWithEmptyStateSibling();
+
+ok("the sibling really is titled 'Jet Roles' too (sanity check on the real pulled data)",
+  (() => {
+    const root = readRoot(SIBLING_FIXTURE);
+    const sib = root.layers?.find((l) => l.id === "7314:83742");
+    return sib !== undefined && sib.name === "Jet roles" && sib.title === "Jet Roles";
+  })());
+
+ok("'Jet Roles' with BOTH a layer-name hit (Jet roles, case-insensitive) AND a title hit (positions ) STOPS as ambiguous, never resolves to either",
+  (() => {
+    const r = resolveScreen(SIBLING_FIXTURE, "Jet Roles");
+    return r.status === "ambiguous" && r.candidates.length === 2 &&
+      r.candidates.some((c) => c.id === "7314:83742") && r.candidates.some((c) => c.id === "7314:87192");
+  })());
+
+ok("the candidate list says WHICH field each row matched on",
+  (() => {
+    const r = unresolved(resolveScreen(SIBLING_FIXTURE, "Jet Roles"));
+    const empty = r.candidates.find((c) => c.id === "7314:83742");
+    const real = r.candidates.find((c) => c.id === "7314:87192");
+    return (empty?.matchedVia || []).includes("exact layer name") && (real?.matchedVia || []).includes("indexed title");
+  })());
+
+ok("lower/upper case of the layer name ('jet roles') still joins the SAME union, still stops",
+  (() => { const r = resolveScreen(SIBLING_FIXTURE, "jet roles"); return r.status === "ambiguous" && r.candidates.length === 2; })());
+
+ok("a node id still wins alone even with the sibling present",
+  (() => { const r = resolveScreen(SIBLING_FIXTURE, "7314:83742"); return r.status === "resolved" && r.stage === "node id" && r.row.id === "7314:83742"; })());
+
+ok("'positions' (exact layer name only, no title collision on THIS query string) still resolves cleanly",
+  (() => { const r = resolveScreen(SIBLING_FIXTURE, "positions"); return r.status === "resolved" && r.row.id === "7314:87192"; })());
+
+
+// ---------- an index that is not an index is treated as no index (doc-guards.ts) — not iterated as one ----------
+ok("[shape] a pages/index.json whose pageDirs is a string resolves nothing (was: each CHARACTER walked as a page dir)", (() => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-shape-"));
+  fs.mkdirSync(path.join(tmp, "pages"), { recursive: true });
+  fs.writeFileSync(path.join(tmp, "pages", "index.json"), JSON.stringify({ pageDirs: "__Optimization_management_" }));
+  const r = resolveScreen(tmp, "Jet Roles");
+  return r.status === "not-found" && r.candidates.length === 0;
+})());
+
+// ---------- hidden nodes (and their subtrees) are invisible to the text walkers ----------
+const txt = (text: string, extra: Record<string, unknown> = {}) => ({ type: "TEXT", name: "t", text, ...extra });
+const hiddenTree = {
+  type: "FRAME", name: "Screen",
+  children: [
+    txt("Ghost label", { hidden: true }),
+    { type: "FRAME", name: "Ghost panel", hidden: true, children: [txt("Ghost inside"), { type: "FRAME", name: "Page Title", children: [txt("Ghost title")] }] },
+    txt("Visible label"),
+  ],
+};
+ok("hidden TEXT and hidden FRAME's TEXT are excluded from texts; the visible sibling stays",
+  JSON.stringify(collectTexts(hiddenTree)) === JSON.stringify(["Visible label"]));
+ok("title skips hidden TEXT, hidden subtree and a hidden 'Page Title' slot",
+  deriveTitle(hiddenTree) === "Visible label");
+ok("hidden:false behaves like absent",
+  JSON.stringify(collectTexts({ type: "FRAME", name: "S", children: [txt("A", { hidden: false }), txt("B")] })) === JSON.stringify(["A", "B"]));
+ok("DEFAULT (hidden absent) still collects every text and derives the first as title", (() => {
+  const tree = { type: "FRAME", name: "S", children: [{ type: "FRAME", name: "Box", children: [txt("A")] }, txt("B")] };
+  return JSON.stringify(collectTexts(tree)) === JSON.stringify(["A", "B"]) && deriveTitle(tree) === "A";
+})());
+
+// ---------- a HIDDEN ROOT keeps its title and texts — only hidden DESCENDANTS are skipped ----------
+// (a hidden top-level frame in a page walk, a hidden frame pulled by id, a hidden listChildren row)
+const hiddenRoot = { ...hiddenTree, hidden: true };
+// The walkers do not return early on the root's own flag (title and texts are not undefined/[]).
+ok("a hidden root's texts are its visible descendants' (the hidden ones still skipped)",
+  JSON.stringify(collectTexts(hiddenRoot)) === JSON.stringify(["Visible label"]));
+ok("a hidden root still gets its title", deriveTitle(hiddenRoot) === "Visible label");
+ok("the 'Page Title' slot inside a hidden root is found",
+  deriveTitle({ type: "FRAME", name: "Popup", hidden: true, children: [txt("Close"), { type: "FRAME", name: "Page Title", children: [txt("Edit profile", { name: "Title" })] }] }) === "Edit profile");
+ok("a hidden TEXT root is its own text", deriveTitle(txt("Lonely", { hidden: true })) === "Lonely" && JSON.stringify(collectTexts(txt("Lonely", { hidden: true }))) === JSON.stringify(["Lonely"]));
+
+// ---------- not an export root; the basename / path / dash id forms ----------
+console.log("\nresolve-screen — a non-root dir says so; <Layer>__<a>_<b> basenames, .json paths and dash ids resolve:");
+{
+  const pageDir = path.join(FIXTURE, "pages", "__Optimization_management_");
+  const nr = resolveScreen(pageDir, "Jet Roles");
+  ok("a page subdir is not-found with noIndex naming the export root (not a silent empty list)",
+    nr.status === "not-found" && !!nr.noIndex && nr.noIndex.dir === pageDir && nr.noIndex.hint === FIXTURE && nr.candidates.length === 0);
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "rs-noroot-"));
+  const nr2 = resolveScreen(empty, "x");
+  ok("a dir with no root above or below: noIndex.hint is null", nr2.status === "not-found" && !!nr2.noIndex && nr2.noIndex.hint === null);
+  fs.mkdirSync(path.join(empty, "design", "export"), { recursive: true });
+  fs.cpSync(path.join(FIXTURE, "pages"), path.join(empty, "design", "export", "pages"), { recursive: true });
+  const nr3 = resolveScreen(empty, "x");
+  ok("the root found BELOW the dir (design/export) is named", nr3.status === "not-found" && nr3.noIndex?.hint === path.join(empty, "design", "export"));
+  fs.rmSync(empty, { recursive: true, force: true });
+  ok("a real root has no noIndex", (() => { const r = resolveScreen(FIXTURE, "no such screen"); return r.status === "not-found" && !r.noIndex && r.candidates.length > 0; })());
+
+  const idOf = (q: string): string | null => { const r = resolveScreen(FIXTURE, q); return r.status === "resolved" ? r.row.id : null; };
+  ok("the basename `positions___7314_87192` resolves by node id", idOf("positions___7314_87192") === "7314:87192");
+  ok("a path to the .json resolves by node id",
+    idOf("pages/__Optimization_management_/positions___7314_87192.json") === "7314:87192");
+  ok("a `.vars.json` / `.expected.json` tail is stripped too",
+    idOf("Studio_Configurations__1359_21337.vars.json") === "1359:21337" && idOf("design/verify/Studio_Configurations__1359_21337.expected.json") === "1359:21337");
+  ok("the resolved stage is 'node id'", (() => { const r = resolveScreen(FIXTURE, "positions___7314_87192"); return r.status === "resolved" && r.stage === "node id"; })());
+  ok("a dash id `7314-87192` resolves", idOf("7314-87192") === "7314:87192");
+  ok("a URL-ish `?node-id=7314-87192` resolves", idOf("https://www.figma.com/design/KEY/Name?node-id=7314-87192") === "7314:87192");
+  const cli = (...a: string[]): { status: number | null; err: string } => {
+    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), ...a], { encoding: "utf8" });
+    return { status: r.status, err: r.stderr };
+  };
+  const c1 = cli(pageDir, "Jet Roles");
+  ok("the CLI says 'not an export root' and names the root — no empty 'Known layers:'",
+    c1.status === 1 && /not an export root/.test(c1.err) && c1.err.includes(`pass ${FIXTURE}`) && !/Known layers/.test(c1.err));
+  ok("the CLI resolves a basename", cli(FIXTURE, "positions___7314_87192").status === 0);
+  ok("a basename whose id is not in the export is still not-found (never a fuzzy pick)", idOf("Ghost__1_2") === null);
+}
+{
+  // a layer actually NAMED `<x>__<a>_<b>` resolves by its exact name, not as the id a:b.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rs-l3-"));
+  fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [
+    { name: "Home", id: "1:2", type: "FRAME", page: "P", file: "pages/P/Home__1_2.json" },
+    { name: "Wizard__1_2", id: "7:8", type: "FRAME", page: "P", file: "pages/P/Wizard__1_2__7_8.json" },
+  ] }));
+  const r = resolveScreen(dir, "Wizard__1_2");
+  ok(`a layer named "Wizard__1_2" resolves by exact layer name, not to id 1:2 (got ${r.status === "resolved" ? `${r.row.name} via ${r.stage}` : r.status})`,
+    r.status === "resolved" && r.row.id === "7:8" && r.stage === "exact layer name");
+  const b = resolveScreen(dir, "Home__1_2");
+  ok("control: a basename no layer is named still resolves by its id", b.status === "resolved" && b.row.id === "1:2" && b.stage === "node id");
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+{
+  // a plan file's name ("SeedSwaps", "StaffRoles") finds the screen named "Seed Swaps" /
+  // "Staff Roles": no exact match -> compare with whitespace removed and case folded. Exact still wins; 2+ hits stay ambiguous.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rs-fold-"));
+  fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "plan"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [
+    { name: "Seed Swaps", id: "1:1", type: "FRAME", page: "P", file: "pages/P/Seed_Swaps__1_1.json" },
+    { name: "Frame 9", title: "Staff Roles", id: "2:1", type: "FRAME", page: "P", file: "pages/P/Frame_9__2_1.json" },
+    { name: "Staff roles", id: "2:2", type: "FRAME", page: "P", file: "pages/P/Staff_roles__2_2.json" },
+    { name: "Shift Rota", id: "3:1", type: "FRAME", page: "P", file: "pages/P/Shift_Rota__3_1.json" },
+    { name: "ShiftRota", id: "3:2", type: "FRAME", page: "P", file: "pages/P/ShiftRota__3_2.json" },
+    { name: "Rota Settings", id: "4:1", type: "FRAME", page: "P", file: "pages/P/Rota_Settings__4_1.json" },
+  ] }));
+  fs.writeFileSync(path.join(dir, "plan", "RotaSettings.json"), JSON.stringify({ file: "RotaSettings.json", screenName: "Rota Prefs", nodeId: "4:1" }));
+  const pub = resolveScreen(dir, "SeedSwaps");
+  ok(`[fold] 'SeedSwaps' finds the layer "Seed Swaps" (got ${pub.status})`, pub.status === "resolved" && pub.row.id === "1:1");
+  ok("[fold] a lower-case, spaced-differently query ('seed  SWAPS') exact-folds as before", (() => { const r = resolveScreen(dir, "seed swaps"); return r.status === "resolved" && r.stage === "exact layer name"; })());
+  const staff = resolveScreen(dir, "StaffRoles");
+  ok(`[fold] 'StaffRoles' matching a title AND a layer name of different rows is AMBIGUOUS, listing both node ids (got ${staff.status})`,
+    staff.status === "ambiguous" && staff.candidates.map((c) => c.id).sort().join() === "2:1,2:2");
+  const rota = resolveScreen(dir, "Shift Rota");
+  ok("[fold] exact beats fold: 'Shift Rota' resolves to the layer so named, not ambiguous with 'ShiftRota'", rota.status === "resolved" && rota.row.id === "3:1" && rota.stage === "exact layer name");
+  const rota2 = resolveScreen(dir, "SHIFTROTA");
+  ok("[fold] exact beats fold: 'SHIFTROTA' (case-fold exact) resolves to 3:2 alone", rota2.status === "resolved" && rota2.row.id === "3:2");
+  const rota3 = resolveScreen(dir, "shiftrota ");
+  ok("[fold] a trailing space does not change the exact match", rota3.status === "resolved" && rota3.row.id === "3:2");
+  const noPlan = resolveScreen(dir, "RotaPrefs");
+  ok("[fold] control: with no plan dir, 'RotaPrefs' matches nothing", noPlan.status === "not-found");
+  const planFold = resolveScreen(dir, "RotaPrefs", { planDir: path.join(dir, "plan") });
+  ok("[fold] the plan header's screenName is folded too ('RotaPrefs' -> 'Rota Prefs' -> 4:1)", planFold.status === "resolved" && planFold.row.id === "4:1");
+  ok("[fold] a fold never reaches into a substring: 'Swap' is still a text-search candidate list, not a resolve", resolveScreen(dir, "Swap").status === "needs-confirmation");
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+{
+  // A plan file's name or path, a kebab/snake-case slug and a differently-cased name all find the screen; a fold
+  // that makes two screens equal stays ambiguous.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rs-query-"));
+  fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "plan"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [
+    { name: "Crop Plans", id: "1:1", type: "FRAME", page: "P", file: "pages/P/Crop_Plans__1_1.json" },
+    { name: "Seed Swaps", id: "2:1", type: "FRAME", page: "P", file: "pages/P/Seed_Swaps__2_1.json" },
+    { name: "Yield Map", id: "3:1", type: "FRAME", page: "P", file: "pages/P/Yield_Map__3_1.json" },
+    { name: "Yield-Map", id: "3:2", type: "FRAME", page: "P", file: "pages/P/Yield-Map__3_2.json" },
+    { name: "Soil Tests", id: "4:1", type: "FRAME", page: "P", file: "pages/P/Soil_Tests__4_1.json" },
+    { name: "Settings / Profile", id: "5:1", type: "FRAME", page: "P", file: "pages/P/Settings_Profile__5_1.json" },
+    { name: "Profile", id: "5:2", type: "FRAME", page: "P", file: "pages/P/Profile__5_2.json" },
+    { name: "Compost Bins", id: "6:1", type: "FRAME", page: "P", file: "pages/P/Compost_Bins__6_1.json" },
+    { name: "Login", id: "7:1", type: "FRAME", page: "P", file: "pages/P/Login__7_1.json" },
+  ] }));
+  fs.writeFileSync(path.join(dir, "plan", "Unnamed.json"), JSON.stringify({ file: "Unnamed.json", nodeId: "6:1" }));
+  fs.writeFileSync(path.join(dir, "plan", "Orchard.json"), JSON.stringify({ file: "Orchard.json", screenName: "Orchard Rows", nodeId: "4:1", route: "/Orchard/Rows" }));
+  const idOf = (q: string, plan?: boolean): string | null => {
+    const r = resolveScreen(dir, q, plan ? { planDir: path.join(dir, "plan") } : undefined);
+    return r.status === "resolved" ? r.row.id : null;
+  };
+  ok("[query] 'CropPlans.json' finds the layer \"Crop Plans\"", idOf("CropPlans.json") === "1:1");
+  ok("[query] 'CropPlans.JSON' (extension case) finds it too", idOf("CropPlans.JSON") === "1:1");
+  ok("[query] a path 'design/plan/CropPlans.json' finds it", idOf("design/plan/CropPlans.json") === "1:1");
+  ok("[query] a Windows path 'design\\plan\\CropPlans.json' finds it", idOf("design\\plan\\CropPlans.json") === "1:1");
+  ok("[query] a path without an extension 'design/plan/CropPlans' finds it", idOf("design/plan/CropPlans") === "1:1");
+  ok("[query] a screenshot name 'design/verify/Crop_Plans.png' finds it", idOf("design/verify/Crop_Plans.png") === "1:1");
+  ok("[query] a verify artefact name 'Crop_Plans.measured.json' finds it", idOf("design/verify/Crop_Plans.measured.json") === "1:1");
+  ok("[query] 'crop-plans' (kebab) finds the layer \"Crop Plans\"", idOf("crop-plans") === "1:1");
+  ok("[query] 'seed-swaps' finds \"Seed Swaps\"; so does 'seed_swaps.json'", idOf("seed-swaps") === "2:1" && idOf("seed_swaps.json") === "2:1");
+  const cased = resolveScreen(dir, "CROP PLANS");
+  ok("[query] a case-different exact name resolves in the exact stage", cased.status === "resolved" && cased.row.id === "1:1" && cased.stage === "exact layer name");
+  const ys = resolveScreen(dir, "yield_map.json");
+  ok(`[query] a fold that makes two screens equal ('Yield Map' / 'Yield-Map') is ambiguous, not a pick (got ${ys.status})`,
+    ys.status === "ambiguous" && ys.candidates.map((c) => c.id).sort().join() === "3:1,3:2");
+  ok("[query] exact still beats the fold: 'Yield-Map' resolves to 3:2 alone", idOf("Yield-Map") === "3:2");
+  ok("[query] a layer name with a slash still resolves exactly ('Settings / Profile' -> 5:1)", idOf("Settings / Profile") === "5:1");
+  ok("[query] a spaced 'Nope / Profile' does not fall back to its last segment ('Profile')", idOf("Nope / Profile") === null);
+  ok("[query] a slash name without spaces ('Admin/Login') does not fall back to the screen 'Login'",
+    idOf("Admin/Login") === null && idOf("Login") === "7:1" && idOf("design/plan/Login.json") === "7:1");
+  ok("[query] control: a path to a screen that does not exist is not found", resolveScreen(dir, "design/plan/Nothing.json").status === "not-found");
+  ok("[query] a bare '.json' is not found (empty after the tail)", resolveScreen(dir, ".json").status !== "resolved");
+  ok("[query] the plan header's screenName is case-folded in the exact stage ('ORCHARD rows' -> 4:1)", (() => {
+    const r = resolveScreen(dir, "ORCHARD rows", { planDir: path.join(dir, "plan") });
+    return r.status === "resolved" && r.row.id === "4:1" && r.stage === "plan screenName/route";
+  })());
+  ok("[query] the plan header's route is case-folded too ('/ORCHARD/rows' -> 4:1 in the exact stage)", (() => {
+    const r = resolveScreen(dir, "/ORCHARD/rows", { planDir: path.join(dir, "plan") });
+    return r.status === "resolved" && r.row.id === "4:1" && r.stage === "plan screenName/route";
+  })());
+  ok("[query] control: without the plan dir 'ORCHARD rows' matches nothing", resolveScreen(dir, "ORCHARD rows").status === "not-found");
+  ok("[query] a plan file name 'design/plan/OrchardRows.json' finds the plan's screen through the fold", idOf("design/plan/OrchardRows.json", true) === "4:1");
+  ok("[query] an empty query matches no plan header (a plan without a screenName does not fold to it)", (() => {
+    const r = resolveScreen(dir, "  ", { planDir: path.join(dir, "plan") });
+    return r.status !== "resolved";
+  })());
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ---- listPlans: the one plan-directory listing (resolve-screen, verify-screen and verify-build all read through it)
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-listplans-"));
+  for (const f of ["b.json", "a.json", "notes.md", "c.json.bak", ".hidden.json"]) fs.writeFileSync(path.join(dir, f), "{}");
+  fs.mkdirSync(path.join(dir, "sub"));
+  ok("[listPlans] every *.json name, sorted; other files and subdirectories are left out",
+    JSON.stringify(listPlans(dir)) === JSON.stringify([".hidden.json", "a.json", "b.json"]));
+  ok("[listPlans] a directory that does not exist holds no plans", listPlans(path.join(dir, "missing")).length === 0);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+report();

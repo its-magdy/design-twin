@@ -11,7 +11,7 @@ This document is the source of truth for the layer that turns the extractor's fa
 
 ## Problem
 
-`figma-plugin/code.js` extracts *what a design looks like* (comprehensively — see the read-gaps audit).
+`figma-plugin/code.js` extracts *what a design looks like* (comprehensively).
 But codegen only ever sees the JSON, so:
 
 1. A Figma component instance has no link to your code component → the AI regenerates a worse copy
@@ -83,7 +83,7 @@ Figma ──▶ extractor ─────┤                        ──▶ pe
 - **No-eval is validated by Figma's own design:** Code Connect transforms are declarative value-tables;
   "files are not executed." The map is plain JSON data. Computed transforms only via a **whitelisted
   named-op registry** (e.g. `{ "transform": "pxToRem", "base": 16 }`), never inline functions.
-- **One source of truth for the map shape.** `design-to-code/map-validate.js` both defines and enforces it,
+- **One source of truth for the map shape.** `design-to-code/map-validate.ts` both defines and enforces it,
   with structured errors and no runtime dependency (matches this repo's zero-dep style). A parallel
   hand-mirrored `map-schema.json` was deleted — nothing read it, and two representations synced by hand
   are the drift this directory exists to catch. If a published JSON Schema is ever needed, generate it
@@ -91,7 +91,7 @@ Figma ──▶ extractor ─────┤                        ──▶ pe
   upgrade path.
 - **Drift-lint beats the paid tool.** Figma Code Connect keys on node-id and has an open, unfixed bug
   (github.com/figma/code-connect/issues/337): a deleted/moved mapped component makes `publish` succeed
-  *silently* with a broken link. Because we key on the stable `key`, `design-to-code/drift-lint.js` catches
+  *silently* with a broken link. Because we key on the stable `key`, `design-to-code/drift-lint.ts` catches
   exactly that — plus unmapped components, prop-name mismatches, and prop-type/enum-value mismatches —
   at lint time. A pure rename produces zero drift.
 
@@ -114,25 +114,23 @@ only when the fidelity grade is low:
 
 ## Form factor
 Push determinism into scripts + hooks; reserve skills/agents for judgment.
-- Scripts (`design-to-code/*.js`): token emitter, validator, drift-lint, bootstrap, the mechanical parts of normalize.
-- Hook: run drift-lint on export / pre-commit so drift is caught automatically.
+- Scripts `design-to-code/*.ts`: token emitter, validator, drift-lint, bootstrap, the mechanical parts of normalize.
+- drift-lint: `build-screen` and `sync-design` run it as a step; wire it into your own CI / pre-commit to
+  catch drift automatically. The plugin ships no drift-lint hook — its one hook is the `verify-build.ts`
+  plan gate (a Stop hook on `build-screen`/`sync-design`, a SubagentStop hook on `screen-builder`).
 - Skill: the fuzzy-match confirm loop and the codegen resolver live in `build-screen`, where model
-  judgment meets the map. Multi-screen runs fan out to plain subagents carrying that same skill —
-  context isolation, not a separate agent definition.
+  judgment meets the map. Multi-screen runs fan out to the `screen-builder` agent, which preloads that
+  same skill — one screen per agent, so each screen's node JSON stays out of the main context.
 
 ## Build status
-- **Built (repo-agnostic, harness-tested + adversarially reviewed):** `design-to-code/tokens.js`,
-  `design-to-code/map-validate.js`, `design-to-code/drift-lint.js`, `design-to-code/map-bootstrap.js`.
-  Adversarially reviewed across **FOUR rounds** (4 agents each, all node-proven), findings converging
-  28 → ~6 → 1 → ~0 real: round 1 found 28 confirmed bugs (validator too lenient vs its schema; drift-lint
-  name-fallback masking the deleted-component case it advertises; token collisions/shorthand-hex/alpha-
-  dropping fallback/unitless CSS; bootstrap merge data-loss); round 2 (reviewing the fixes) found ~6 fix-
-  introduced regressions; round 3 found 1 more (a bootstrap stub-refresh destroying half-finished human
-  edits → reverted to always-preserve); round 4 found one narrow fix (the ambiguous-prop guard was
-  asymmetric — catalog-only; now symmetric) and otherwise only LOW/pathological or test-coverage items,
-  and confirmed the whole pipeline composes end-to-end. All fixed; the validator is ajv-verified (0
-  divergences / 10,733 inputs). `test/design-to-code.test.js` hardened 33→122 checks, a tagged regression test per
-  finding, assertions pin values. Validate on real data via the **Layer C checklist in TESTING.md**.
+- **Built (repo-agnostic, harness-tested + adversarially reviewed):** `design-to-code/tokens.ts`,
+  `design-to-code/map-validate.ts`, `design-to-code/drift-lint.ts`, `design-to-code/map-bootstrap.ts`.
+  drift-lint matches by key, so a deleted component is reported even when another has its name; the
+  ambiguous-prop guard applies to both the map and the catalog side; bootstrap always preserves an
+  existing entry (a human may have half-edited a stub). The validator is checked against an ajv oracle (0
+  divergences / 10,733 inputs) and the whole pipeline composes end-to-end. `test/design-to-code.test.ts`
+  has a tagged regression test per fixed bug, and its assertions pin values. Validate on real data via the
+  **Layer C checklist in TESTING.md**.
 
   **Documented low/pathological limitations (not fixed — would risk regressions for scenarios normal use
   can't produce):** (1) bootstrap leaves a stale *guessed* export on an untouched, catalog-renamed stub —
@@ -146,4 +144,4 @@ Push determinism into scripts + hooks; reserve skills/agents for judgment.
 ## Sources
 Figma Code Connect (react/swiftui/compose docs, CLI reference, issues #337 & #194) · W3C DTCG format
 (designtokens.org) · Style Dictionary (styledictionary.com) · Tokens Studio · Anima / Locofy / Builder.io
-design-to-code writeups · Figma REST component-types. Full URL list in the session research transcripts.
+design-to-code writeups · Figma REST component-types.

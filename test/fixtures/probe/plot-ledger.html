@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Plot Ledger (probe fixture)</title>
+<style>
+  /* A single-page app whose sections are picked by component state, not by the URL (L-1): the Beds screen
+     (data-dt-node 70:1) exists only after its sidebar button is clicked. */
+  html, body { margin: 0; font-family: Arial, sans-serif; }
+  .app { position: relative; width: 1024px; height: 640px; background: #f5f5f0; }
+  nav { position: absolute; left: 0; top: 0; width: 200px; height: 640px; box-sizing: border-box; padding: 16px;
+        background: #2f3a2f; display: flex; flex-direction: column; gap: 8px; }
+  .nav-btn { display: block; width: 168px; height: 32px; padding: 6px 8px; border: 0; background: none; color: #ffffff;
+             font: 14px/20px Arial, sans-serif; text-align: left; }
+  .find { display: flex; gap: 4px; margin-top: 16px; }
+  .find input { width: 110px; }
+  main { position: absolute; left: 220px; top: 16px; width: 780px; }
+  h1 { margin: 0 0 16px; font: 600 20px/28px Arial, sans-serif; color: #1d1d1f; }
+  table { border-collapse: collapse; width: 760px; }
+  td { height: 40px; padding: 0 8px; font: 14px/20px Arial, sans-serif; color: #1d1d1f; }
+  tr.bed { background: #ffffff; }
+  tr.bed-hover { background: #ffffff; }
+  tr.bed-hover:hover { background: #e6efe6; }
+  /* F-70 / DT-60 shape: the row action shows only while its row is hovered */
+  .edit { visibility: hidden; width: 56px; height: 28px; border: 0; background: #3b7a3b; color: #ffffff; }
+  tr.bed:hover .edit { visibility: visible; }
+  .actions { display: flex; gap: 8px; margin-top: 16px; position: relative; }
+  .actions button { width: 96px; height: 28px; border: 0; background: #3b7a3b; color: #ffffff; font: 13px/20px Arial, sans-serif; }
+  .slot { position: relative; display: inline-block; }
+  /* a transparent layer over the Move button: a real mouse click lands on it, not on the button */
+  .cover { position: absolute; inset: 0; background: rgba(0, 0, 0, 0); }
+  dialog { width: 480px; padding: 0; border: 0; }
+  .form { padding: 24px; background: #ffffff; }
+  .modal-div { display: none; position: fixed; left: 272px; top: 160px; width: 480px; height: 320px; background: #ffffff; }
+  .modal-div.open { display: block; }
+  .notes { display: none; margin-top: 12px; width: 480px; height: 120px; background: #ffffff; }
+  .notes.open { display: block; }
+  /* D43: wide content in the Beds section only (?mode=wide) */
+  .wide { width: 1700px; height: 24px; margin-top: 12px; background: #dddddd; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<!-- the overlays: closed until an opener opens them; each designed one carries the destination frame's id -->
+<dialog id="dlg-edit"><div class="form" data-dt-node="70:60"><h2>Bed details</h2></div></dialog>
+<div class="modal-div" id="dlg-split" role="dialog" aria-modal="true"><div class="form" data-dt-node="70:60"><h2>Split bed</h2></div></div>
+<dialog id="dlg-rename"><div class="form"><h2>Rename bed</h2></div></dialog>
+<dialog id="dlg-move"><div class="form" data-dt-node="70:60"><h2>Move bed</h2></div></dialog>
+<dialog id="dlg-add" data-dt-node="70:60"><div class="form"><h2>Add bed</h2></div></dialog>
+<script>
+  const mode = new URLSearchParams(location.search).get("mode");
+  let section = "harvest";
+  // a framework-like open: state changes on the click, the dialog opens a frame later (an effect)
+  const later = (f) => setTimeout(f, 30);
+  function render() {
+    const beds = section === "beds";
+    document.getElementById("root").innerHTML =
+      `<div class="app" data-dt-node="${beds ? "70:1" : "71:1"}">
+        <nav data-dt-node="70:20">
+          <button class="nav-btn" type="button" data-dt-node="70:31" id="go-harvest">Harvest Log</button>
+          <button class="nav-btn" type="button" data-dt-node="70:30" id="go-beds">Beds</button>
+          <form class="find" onsubmit="event.preventDefault(); window.__submitted = (window.__submitted || 0) + 1;"><input aria-label="Find"><button>Find</button></form>
+        </nav>
+        <main>` + (beds ? `
+          <h1 data-dt-node="70:2">Beds</h1>
+          <table data-dt-node="70:40">
+            <tr class="bed" data-dt-node="70:41"><td data-dt-node="70:42">North Bed</td><td><button class="edit" data-dt-node="70:44" id="edit">Edit</button></td></tr>
+            <tr class="bed-hover" data-dt-node="70:52"><td data-dt-node="70:54">South Bed</td><td></td></tr>
+          </table>
+          <div class="actions" data-dt-node="70:56">
+            <button data-dt-node="70:45" id="split">Split</button>
+            <button data-dt-node="70:46" id="rename">Rename</button>
+            <button data-dt-node="70:47">Archive</button>
+            <button data-dt-node="70:48" id="refresh">Refresh</button>
+            <span class="slot"><button data-dt-node="70:49" id="move">Move</button><span class="cover"></span></span>
+            <button data-dt-node="70:53" id="notes">Notes</button>
+            <button data-dt-node="70:50" id="add">Add bed</button>
+          </div>
+          <section class="notes" data-dt-node="70:60" id="notes-panel"><p>Notes</p></section>` + (mode === "wide" ? `<div class="wide" data-dt-node="70:57"></div>` : "") : `
+          <h1 data-dt-node="71:2">Harvest Log</h1><p>No harvests yet.</p>`) + `
+        </main>
+      </div>`;
+    document.getElementById("go-beds").onclick = () => { section = "beds"; history.pushState(null, "", "#beds"); render(); };
+    document.getElementById("go-harvest").onclick = () => { section = "harvest"; history.pushState(null, "", "#harvest"); render(); };
+    if (!beds) return;
+    const open = (id) => () => later(() => document.getElementById(id).showModal());
+    document.getElementById("edit").onclick = open("dlg-edit");
+    document.getElementById("rename").onclick = open("dlg-rename");
+    document.getElementById("move").onclick = open("dlg-move");
+    document.getElementById("add").onclick = open("dlg-add");
+    document.getElementById("split").onclick = () => later(() => document.getElementById("dlg-split").classList.add("open"));
+    document.getElementById("notes").onclick = () => later(() => document.getElementById("notes-panel").classList.add("open"));
+    document.getElementById("refresh").onclick = () => location.reload();
+    if (mode === "reload-on-first-hover") {
+      // D19: the first hover of the hovered row reloads the page (a one-shot flag in sessionStorage)
+      document.querySelector("tr.bed-hover").addEventListener("mouseenter", () => {
+        if (!sessionStorage.getItem("hovered")) { sessionStorage.setItem("hovered", "1"); location.reload(); }
+      });
+    }
+  }
+  render();
+  // facts-12a §1: a router that rewrites the URL in place after load (same document — no navigation)
+  if (mode === "replace-state") setTimeout(() => history.replaceState(null, "", location.pathname + "?mode=replace-state&tab=harvest"), 100);
+</script>
+</body>
+</html>

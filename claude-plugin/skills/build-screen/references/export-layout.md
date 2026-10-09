@@ -15,6 +15,11 @@ about to delete files will see it.
 A project created before this split keeps its export directly in `design/`. Every path below works
 either way — drop the `export/` segment — and `dtwin doctor` reports which layout it found.
 
+`design/export/SCHEMA.md` holds the scripting quick keys (the same text as the top of `ir-fields.md`) —
+read it before writing any script against the export. Every CLI pull and MCP `writeToDisk` export
+writes it, rewritten only when its text changes; a `SCHEMA.md` without dtwin's first-line marker is
+yours and is never touched. A browser-downloaded export has none.
+
 ## Contents
 - [Read the manifest first](#read-the-manifest-first)
 - [`design-system.json` + `design-system/`](#design-systemjson--design-system)
@@ -62,7 +67,7 @@ above — to learn the system before building.
   pointer with the **`design_get_component`** MCP tool (`{handle:"<key|id|name>"}` — no Figma connection
   needed, it reads the export on disk), or on the command line:
   ```
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/get-component.js" design/export/design-system/components.local.json <key|id|name>
+  node "<scripts>/get-component.js" design/export/design-system/components.local.json <key|id|name>
   ```
 - **`design-system/components.library.json`** — the same shape for components consumed from a
   published LIBRARY (`remote: true`). These are recovered by walking instances, so their props are a
@@ -71,7 +76,7 @@ above — to learn the system before building.
 - **`design-system/hygiene.json`** — `hygiene`, design-system smells at the CATALOG level: variables
   with ALL_SCOPES, semantic variables holding raw values, broken aliases, variant explosion (>30
   combos), unnamed/duplicate components. It does **not** check whether individual nodes use unbound
-  raw values — `node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js"` (the audit-design skill) does that per screen.
+  raw values — `node "<scripts>/audit.js"` (the audit-design skill) does that per screen.
 - **`design/audit/<screen>.{md,json}`** — the pre-build audit, if one was run (`/designtwin:audit-design`):
   verdict, findings, component state coverage, designer questions and the defaults assumed.
 
@@ -147,11 +152,21 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   `--node <id>` or a selection. Root keys are `exportedAt`, `screen` (the human label), `page`,
   `pageId`, `nodeId`, `nodes[]` (the trees, same shape as a layer file's `tree`) and `manifest`.
   It writes three siblings and one shared file:
-  - `…__<id>.vars.json` — exactly the variables THIS screen binds, verbatim, as this pull saw them.
+  - `…__<id>.vars.json` — exactly the variables THIS screen binds, verbatim, as this pull saw them; each row
+    names its `collection` and (newer exports) `collectionKey` — collection names repeat, the key does not.
   - `…__<id>.assets.json` — every asset the screen references, with a content hash per file, plus
-    `duplicates` (byte-identical files under different names), `monochrome` (SVGs whose every
+    `duplicates` (the same artwork under different names — compared tolerantly: def ids and numbers
+    within ±0.01 are ignored, colours are not; an embedded image's scale/offset/tile — a transform on
+    `<use>`/`<image>`, a `<pattern>`'s x/y/width/height — relatively, within 1 %), `monochrome` (SVGs whose every
     fill/stroke is one colour — the ones safe to recolour to `currentColor` at render time) and
-    `heavy` (too large to inline).
+    `heavy` (too large to inline; `embeddedRaster` with under 50 `paths` = a raster inside an SVG shell,
+    not vector paths).
+    Each `files` row also carries `name` (the layer name), `owner` (`component`, `variant`,
+    `componentId`, `componentKey`, `instance`, `self`, `paintOverrides`), `context` (the instance above
+    the owner), `usedBy` (node ids in this screen, with `usedByCount` when capped), `hiddenUses` and
+    `reuseKey`. **Search `owner`/`name`, not file names** — a file is named after a generic layer.
+    A row with `reusedFrom` (the twin's node id) is a file ANOTHER screen's pull exported, listed here
+    because a hidden node of this screen reuses it.
   - a row in `pages/<Page>/index.json` and `pages/index.json`.
   - `design/export/variables.json` — the **union** of every screen pulled into this directory. It
     accumulates: a second pull merges into it, keyed on each variable's Figma key, so an earlier
@@ -162,7 +177,11 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
 - The reference PNG is rendered **above 1x** (a 1440x1100 frame came back 2048x1565, ~1.42x) — the
   scale is chosen to fit a pixel budget, so it is not a round number and not worth assuming. Read the
   image's real dimensions and compare against `box.w`/`box.h` rather than treating the PNG's pixels as
-  layout units (px / pt / dp — Figma px at 1x, whatever your stack calls them).
+  layout units (px / pt / dp — Figma px at 1x, whatever your stack calls them). A single-screen pull
+  records both on the index row: `referenceScale` (PNG px per design px) and `referenceOffset` (where
+  the PNG's top-left sits relative to `box`, in design px). The render covers the node's shadows and
+  outside strokes, so a popup with a 21 px shadow has `referenceOffset: {x: -21, y: -1}` while a
+  shadowless frame has `{x: 0, y: 0}` — subtract it before comparing a crop against box coordinates.
 - The reference screenshot (visual ground truth) — held by the `reference` field — **`nodes[0].reference` in a single-screen
   `design/<screen>.json`** (the field sits on the node, and there is one per exported node), or the
   **root `reference`** of a page-walk layer file (`design/export/pages/<page>/<name>__<id>.json`, where it
@@ -196,14 +215,14 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   Do not redraw the illustration, do not hand-simplify the paths, and do not chase the speckle with
   a blur or an opacity tweak in your own stack: all three replace a faithful asset with a guess, and
   the next re-pull silently undoes them. Report it as a real visual difference and say what it is.
-- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <design/export/design-system/tokens.json or design/export/variables.json> design/`;
+- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node "<scripts>/tokens.js" <design/export/design-system/tokens.json or design/export/variables.json> design/`;
   add `--web tailwind` for a Tailwind v4 `theme.css`, `--native <profile>` for a native token file),
   with `design/tokens.json` as the hand-written override layer: Figma variable/value → **your** code
   token, in the form your target uses.
 - `design/codeconnect.local.json` — Figma component → **your** code component +
   import path, keyed by the component's stable publish **`key`** so a rename in Figma can't silently
-  unmap it. Scaffold from the Figma side with `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json`, or auto-seed the code
-  side from **Code Connect files** in the repo with `node bridge/seed-components.js`. Check it with
+  unmap it. Scaffold from the Figma side with `node "<scripts>/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json`, or auto-seed the code
+  side from **Code Connect files** in the repo with `dtwin seed` (the same as `node bridge/src/seed-components.ts`). Check it with
   the **`design_drift_lint`** MCP tool before building. If it's missing/thin, offer to run those.
   *(Older projects keep this file at the repo ROOT; `dtwin doctor` finds either and says which. A
   legacy `design/components.json` keyed by component NAME also exists in some projects; it cannot

@@ -19,7 +19,8 @@ own and cannot regenerate, so `rm -rf design/export && re-pull` is always safe. 
 
 **Your job when this skill is invoked: figure out what the user is trying to do and give them the
 exact next step.** Orientation → this file. Something broken → read
-[`references/troubleshooting.md`](references/troubleshooting.md), match the symptom, give the fix —
+[`references/troubleshooting.md`](references/troubleshooting.md) (where it says `<plugin>` it means
+`${CLAUDE_PLUGIN_ROOT}`, the installed plugin folder), match the symptom, give the fix —
 don't debug a bridge error from memory.
 
 Nothing here is headless: the target Figma file must be **open in the desktop app with the "Design
@@ -29,21 +30,28 @@ Twin" plugin running** (Figma desktop → Plugins → Development → Design Twi
 
 | | Manual export | `dtwin` CLI | `figma-mcp` server |
 |---|---|---|---|
-| What it is | Clicking the plugin's own export buttons, saving downloads into `design/` | A one-shot (or `--serve` daemon) local process that pulls data and writes it to `design/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
-| Setup | **None** — no bridge, no token | `npm install` once; the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration — same token, nothing extra |
+| What it is | Clicking the plugin's own export buttons, saving downloads into `design/export/` | A one-shot (or `--serve` daemon) local process that pulls data and writes it to `design/export/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
+| Setup | **None** — no bridge, no token | Once, from a clone: `npm install`, `npm run build --workspace bridge`, `npm link --workspace bridge`; the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration — same token, nothing extra |
 | Direction | Read only | Read only | Read **and** a small set of safe writes (create a frame/text, set a fill, set text) |
 | Best for | One screen, or a first try before setting anything up | Bulk/repeated pulls, CI-style extraction | Interactive back-and-forth, "check this, now pull that", code → design writes |
 
-**Default to manual export for a brand-new user** — it needs nothing installed and always works.
-Reach for the CLI or MCP once someone's pulling repeatedly or wants Claude to query Figma live.
+**Use what is already set up.** `mcp__designtwin__*` tools in this session (a `.mcp.json` registering
+`designtwin`, e.g. from `dtwin init --mcp`; under another registration key the prefix differs — the same
+`figma_*` tools count) → the MCP tools; else `dtwin` on PATH → the CLI; nothing
+installed → the plugin's export buttons (manual export needs nothing and always works). Reach for the CLI
+or MCP once someone's pulling repeatedly or wants Claude to query Figma live.
 
 **The one thing to say up front: port 8787 (loopback) has one owner at a time, and the owner shares.**
 - While the **MCP server** or a **daemon** (`dtwin serve`) holds it, ordinary `dtwin` commands and a
   second Claude Code session's MCP server work normally — they detect the owner and route through
   it. Nothing changes in how you invoke them. Inside an MCP session, `writeToDisk: true` on the
   export tools is still the simplest way to get files, and the **only** MCP way to get asset bytes.
-- The exception is a plain one-shot `dtwin pull` with no daemon: it does not share, so an MCP server
-  or second pull started while it runs exits with `EADDRINUSE`. Wait for it, or use `dtwin serve`.
+- An MCP server that holds the bridge **exits when its client goes away**, unless another process has used
+  its shared socket; then it keeps serving and idles out after `FIGMA_DAEMON_IDLE_MIN` (default 120 min,
+  `0` = never). SIGINT/SIGTERM cancel in-flight reads, free the socket and exit 0.
+- The exception is a plain one-shot `dtwin pull` with no daemon: it does not share, so a second pull
+  started while it runs exits with `EADDRINUSE`, and an MCP tool call made meanwhile errors (the server
+  stays up; retry the call). Wait for it, or use `dtwin serve`.
 - To run two bridges deliberately, set `FIGMA_BRIDGE_PORT` on one (`8788` or `8789` — the only other
   ports the plugin can dial).
 
@@ -51,10 +59,12 @@ Reach for the CLI or MCP once someone's pulling repeatedly or wants Claude to qu
 
 **Through the CLI**, Claude runs `dtwin`. Check `which dtwin` first — it is normally already a
 global binary, and only if it is missing are you inside a clone of the Design Twin repo, where every
-`dtwin` is `node bridge/figma-pull.js`. `dtwin help` prints a quick start, the commands and every
+`dtwin` is `node bridge/src/figma-pull.ts`. `dtwin help` prints a quick start, the commands and every
 flag, and each command answers `--help` with its own page (`dtwin screenshot --help`,
-`dtwin list --help`, `dtwin pull --help`, `dtwin mcp --help`) without doing anything else while doing
-so. A mistyped flag is refused, not ignored. Each command is shorthand for a flag (`dtwin list pages`
+`dtwin list --help`, `dtwin pull --help`, `dtwin whoami --help`, `dtwin mcp --help` — every verb has one)
+without doing anything else while doing so. The output directory is positional and defaults to `design/export` (`dtwin pull`
+writes there; give a path only for somewhere else — there is no `--out`, and never bare `design`, which
+makes a parallel export tree nothing else reads) and the port comes only from `FIGMA_BRIDGE_PORT` (8787/8788/8789; no `--port`). A mistyped flag is refused, not ignored. Each command is shorthand for a flag (`dtwin list pages`
 = `dtwin --list-pages`) and the flag spellings keep working — use either.
 - **Anything not working → `dtwin doctor` first.** It checks the token, the port, the daemon, whether
   the plugin can connect (and whether it has the *right* token) and the project, changes nothing, and
@@ -63,22 +73,33 @@ so. A mistyped flag is refused, not ignored. Each command is shorthand for a fla
   `dtwin list clients`, `dtwin list pages` / `dtwin list` (pages + their top-level LAYERS with ids —
   SECTIONs and groups too, so on a sectioned file the real screens are one `list children` deeper),
   `dtwin list children <id>` (peek one frame). `dtwin list libraries` answers which library owns a
-  token but is the slowest read there is (5-15s); it prints progress while it works.
-- Pull a real export: `dtwin pull design` (current page; `dtwin design` is the same), `--all-pages`,
+  token but is the slowest read there is — a few seconds up to ~15 s (about 2 s on a file with no
+  libraries enabled): it walks every instance in the file and makes one Figma call per enabled
+  library variable collection. It prints progress while it works.
+- Pull a real export: `dtwin pull` (current page, into `design/export`), `--all-pages`,
   `--selection`, `--page <id>`, `--node <id|figma-url>`, `--design-system` (tokens/styles/components
   only, no page walk), `--as-library "<name>"` (a whole library file's catalog — run with the *library* open).
+  On a file that CONSUMES a library, `--design-system` returns that file's OWN tokens, styles and components
+  plus only the library variables something in the file references — never the library's catalog; for that,
+  open the LIBRARY file and pull `--as-library` (CLI only). Add `--variant-visuals` for component variant looks.
 - Visually check ONE component after generating code for it: `dtwin screenshot <id>` — an on-demand PNG,
   cheaper than re-exporting and tighter than the one whole-frame reference PNG every export carries.
 - Keep the connection warm across several pulls with `dtwin serve` (`dtwin stop` / `dtwin status`)
-  instead of reconnecting every time.
+  instead of reconnecting every time: a direct pull ends with `done in Xs — waited Ys for the plugin to
+  connect · export Zs · write Ws`, and a long "waited" is the plugin re-dialling a fresh bridge, not a
+  slow export — `dtwin serve` keeps the plugin connected so later commands skip it.
 
-**Through the MCP server**, once registered in the target project (as `designtwin`, so each tool's full
-name is `mcp__designtwin__<tool>`), Claude gets live tools instead of shelling out: `figma_status`, `figma_whoami`, `figma_list_clients`, `figma_get_selection`,
+**Through the MCP server**, once registered in the target project (as `designtwin` in its `.mcp.json`, so each
+tool's full name is `mcp__designtwin__<tool>`), Claude gets live tools instead of shelling out: `figma_status`, `figma_whoami`, `figma_list_clients`, `figma_get_selection`,
 `figma_list_libraries`, `figma_list_pages`, `figma_list_children`, `figma_export_full` /
 `figma_export_design_system` / `figma_export_selection` / `figma_export_url`, `figma_screenshot`,
 `design_get_component`, `design_drift_lint`, and `figma_write` for the small set of safe writes. The
 standout move is pasting a Figma link mid-conversation — `figma_export_url` reads that exact node
 live, so "what spacing does this use?" gets answered from the real file, not a stale export.
+
+MCP first calls: `figma_status` (which files; pass a row's connId as `client`) → `figma_list_pages
+{depth:1}` → `figma_list_children {nodeId:<page or section id>}` → (`figma_screenshot {nodeId, scale:0.25,
+writeToDisk:true}` for look-alikes) → `figma_export_url {url:"<node id>", writeToDisk:true}`.
 
 ## One-time setup (once per machine)
 
@@ -93,9 +114,10 @@ manual version:
    manifest…** → pick `figma-plugin/manifest.json` from a clone of the Design Twin repo.
 2. **Pick a lane:**
    - **Just one screen, nothing installed** → click the plugin's export buttons and save the downloads
-     into `design/`. Done.
-   - **The CLI** → `which dtwin`; if it isn't there, install the `designtwin` package, or in a clone
-     of this repo `cd bridge && npm install`. There is no token to make by hand: the first bridge start generates one, saves it per-user
+     into `design/export/`. Done.
+   - **The CLI** → `which dtwin`; if it isn't there, in a clone of this repo run `npm install`,
+     `npm run build --workspace bridge` and `npm link --workspace bridge` (it is not on npm), or use
+     `node bridge/src/figma-pull.ts` in place of `dtwin`. There is no token to make by hand: the first bridge start generates one, saves it per-user
      (`~/.config/design-twin/bridge-token`, `0600`; `%APPDATA%` on Windows) and prints it once — paste
      it into the plugin's **Bridge token** field (Save) and neither side asks again.
      `dtwin token show` reprints it, `dtwin token rotate` replaces it, `dtwin token` says which token
@@ -109,8 +131,9 @@ manual version:
      file name is the form to reach for: `figma.fileKey` is gated to private plugins, so on a
      self-imported plugin it is `null` and cannot address anything.
    - **Live MCP tools in the project being built** → same install as the CLI, plus a `.mcp.json` *in
-     that project* pointing at the absolute path of `bridge/figma-mcp.mjs` (`dtwin init --mcp` writes
-     it); enable it via `/mcp` and restart. No token goes in that file — the MCP server reads the same per-user stored token.
+     that project* pointing at the absolute path of `bridge/dist/figma-mcp.js` (built and linked) or
+     `bridge/src/figma-mcp.ts` (repo checkout) (`dtwin init --mcp` writes it); enable it via `/mcp` and
+     restart. No token goes in that file — the MCP server reads the same per-user stored token.
 3. **(Optional) config maps** so the agent reuses your components/tokens instead of regenerating —
    `design/target.json` (stack, auto-detected if absent), `design/tokens.json` (Figma variable → your
    code token — hand-authored; do NOT confuse with the generated `design/export/design-system/tokens.json`,
@@ -126,10 +149,11 @@ the most common way to conclude an export "failed" when it did exactly what was 
 
 | Pull | Writes (all under `design/export/`) |
 |---|---|
-| `dtwin pull --node <id>` (or a selection) | `pages/<Page>/<Screen>__<node-id>.json` (`exportedAt`, `screen`, `page`, `nodeId`, `nodes[]`, `manifest`, `sourceFile` — the connected Figma file this pull actually talked to, absent on a screen pulled before this field existed — the reference PNG path is `nodes[0].reference`), plus `…__<id>.vars.json` (that screen's tokens) and `…__<id>.assets.json` (its assets, with content hashes) beside it, a row in `pages/index.json` (also carrying `sourceFile`), the merged `variables.json`, and `assets/` |
+| `dtwin pull --node <id>` (or a selection) | `pages/<Page>/<Screen>__<node-id>.json` (`exportedAt`, `screen`, `page`, `nodeId`, `nodes[]`, `manifest`, `sourceFile` — the connected Figma file this pull actually talked to, absent on a screen pulled by an older dtwin — the reference PNG path is `nodes[0].reference`), plus `…__<id>.vars.json` (that screen's tokens) and `…__<id>.assets.json` (its assets, with content hashes) beside it, a row in `pages/index.json` (also carrying `sourceFile`), the merged `variables.json`, and `assets/` |
 | `dtwin pull --page <id>` / `--all-pages` | the same `pages/` tree, one file per top-level layer (each with a ROOT `reference`), and `assets/` |
 | `dtwin pull --design-system` | `design-system.json` (slim pointer manifest) + `design-system/` (`tokens.json`, `components.local.json`, `components.library.json`, `styles.*.json`, `hygiene.json`). No page walk, no assets |
-| `dtwin screenshot <id>` | `assets/<id>_ref.png` — the same place a later `--node` pull of that frame writes its own reference, so there is never a second copy |
+| every pull that writes to disk | `SCHEMA.md` — the scripting quick keys (the same text as the top of the build-screen skill's `ir-fields.md`); read it before scripting against the JSON. Rewritten only when its text changes; a `SCHEMA.md` you wrote yourself is left alone |
+| `dtwin screenshot <id>` | `assets/<id>_ref.png` — the same place a later `--node` pull of that frame writes its own reference, so there is never a second copy. With `--scale N`: `assets/<id>_shot@<N>x.png`, which never takes the reference's name |
 
 Single screens and whole pages land in **one** tree, so nothing downstream has to know which pull
 produced a file. The node id is in the filename because a frame NAME does not identify a frame: two
@@ -155,7 +179,7 @@ plugin and is always readable. The repository docs are a different thing: `READM
 config-map shapes), `bridge/README.md` (full CLI + MCP surface, token, daemon, limits),
 `figma-plugin/README.md` (the plugin's UI and outputs), `ARCHITECTURE.md` (CLI vs MCP front-ends,
 security). Point a user at those only if they actually have a clone — the one-time setup step that
-imports the Figma plugin does need one, since the npm package ships no `manifest.json`.
+imports the Figma plugin does need one, since `figma-plugin/manifest.json` exists only there.
 
 ## Subagents this plugin ships
 
@@ -164,8 +188,10 @@ imports the Figma plugin does need one, since the npm package ships no `manifest
 - **`designtwin:visual-verifier`** — renders a built screen, measures every node against the design's
   own numbers, checks that every component on the frame was actually built and that every designed
   interaction works, and writes the measurements to `design/verify/`. It returns measurements rather
-  than a verdict: `verify-screen.js --compare` computes that, so "pass" is never something anyone
-  asserts. Never edits app code.
+  than a verdict: `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` computes that, so "pass" is never something anyone
+  asserts. Never edits app code. If the probe exits 3 (no usable browser), the install line it prints is the
+  user's call; a Chromium they already have cached works too — `verify-probe.js --browser-path <executable>` (on macOS
+  the binary inside the `.app`, `…/Contents/MacOS/…`; only guaranteed with the bundled Chromium).
 
 ## Related
 

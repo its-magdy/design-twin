@@ -1,0 +1,9 @@
+{
+  // Exists for oxlint's type-aware mode: tsgolint types each file by the NEAREST tsconfig, and without
+  // this one every design-to-code file typed as `error`. test/tsconfig.json still type-checks these files.
+  "extends": "../test/tsconfig.json",
+  // Both flags are inherited from test/tsconfig.json now; restated here so this shipped code keeps them
+  // if the test config ever relaxes.
+  "compilerOptions": { "exactOptionalPropertyTypes": true, "noUncheckedIndexedAccess": true },
+  "include": ["./**/*.ts"]
+}

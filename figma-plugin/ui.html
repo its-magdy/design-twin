@@ -236,13 +236,32 @@
         return;
       }
       // ---- run lifecycle + progress (both manual and bridge-triggered runs) ----
-      if (m.type === "run-begin") { runBegin(m); return; }
+      if (m.type === "run-begin") {
+        // A bridge run has really started: tell the bridge at once, as a progress frame (the one kind
+        // every bridge already reads as life). Until the walk's first asset/page tick — a cold page
+        // load plus a long serialize can take a minute — this is the caller's only sign that the run
+        // began, and without it the one-shot CLI's stall check read a working export as silence. A UI
+        // run sends nothing: no bridge caller is waiting on it.
+        // `requestId` (when the run's bridge frame carried one) lets the bridge deliver this to THAT request
+        // only; an id-less frame (an older plugin) still reaches every request pending on the connection.
+        if (m.source === "bridge" && ws && ws.readyState === 1) {
+          var startFrame = { type: "progress", phase: "start" };
+          if (typeof m.requestId === "string") startFrame.requestId = m.requestId;
+          ws.send(JSON.stringify(startFrame));
+        }
+        runBegin(m);
+        return;
+      }
       if (m.type === "run-end") {
         var wasCancelled = cancelSent;
         runEnd();
         // Bridge-triggered runs never produce a `files`/`error` message here, so this is the ONLY
         // place a designer learns their cancel took effect on one.
         if (wasCancelled) setStatus("Export cancelled — nothing was delivered.", true);
+        // `abandoned` is set only when the run died because the BRIDGE gave up on the request that
+        // asked for it (its caller timed out, stalled out, or disconnected) — no one here clicked
+        // anything, so the button's sentence would be a lie. The designer's own cancel wins if both.
+        else if (m.abandoned) setStatus("Export cancelled — the caller went away.", true);
         return;
       }
       if (m.type === "progress") {
@@ -254,8 +273,14 @@
         // once a daemon keeps the plugin warm). Throttled the same as the DOM update (progress() on
         // the sandbox side already throttles to one frame per ~250ms), so this costs nothing extra.
         if (m.source === "bridge" && ws && ws.readyState === 1) {
-          ws.send(JSON.stringify({ type: "progress", phase: m.phase, page: m.page, nodes: m.nodes, assets: m.assets }));
+          var tickFrame = { type: "progress", phase: m.phase, page: m.page, nodes: m.nodes, assets: m.assets };
+          if (typeof m.requestId === "string") tickFrame.requestId = m.requestId; // a `queued` frame names its run
+          ws.send(JSON.stringify(tickFrame));
         }
+        // `queued`: a bridge run waiting behind the run that is executing (state.ts serializeRun). It
+        // has not begun, so it is relayed (above) and nothing here changes — the window keeps showing
+        // the run that IS walking the file, or stays idle.
+        if (m.phase === "queued") return;
         if (!running) runBegin(m); // a frame that outran its run-begin — never show progress with no chrome
         if (cancelSent) return;    // "Cancelling…" must not be overwritten by in-flight frames
         var pg = m.page;
@@ -338,7 +363,7 @@
             file: idn.file || null,
             fileKey: idn.fileKeyAvailable ? idn.fileKey : null,
             page: idn.page || null,
-            // Finding 327: the plugin's own build version (baked in at build time — see build.js),
+            // Finding 327: the plugin's own build version (baked in at build time — see build.ts),
             // so the bridge can tell a stale plugin apart from a freshly reloaded one.
             pluginVersion: idn.pluginVersion || null
           }));
@@ -434,6 +459,12 @@
       s.onclose = function (ev) {
         if (s !== ws) return;
         ws = null;
+        // The socket that asked for any bridge work is gone. We reconnect to whatever bridge answers
+        // next, and a reply carrying an id nobody there knows is dropped — so finishing a bridge run
+        // is pure waste that queues every later command behind it. Abandon them all (UI-started runs
+        // are untouched). Also on CLOSE_BAD_TOKEN: nothing can collect the result there either. Not
+        // on onerror — it closes the socket, and this handler follows.
+        parent.postMessage({ pluginMessage: { type: "cancel", scope: "bridge" } }, "*");
         if (ev && ev.code === CLOSE_BAD_TOKEN) {
           // A bridge IS there — stay on its port instead of walking on to the next one — and this is
           // the one state only the user can fix, so open the section and say exactly what to do. Retry
@@ -456,6 +487,15 @@
         if (s !== ws) return;
         var cmd;
         try { cmd = JSON.parse(ev.data); } catch (e) { return; }
+        // `{ type: "cancel", id }` with no `cmd`: the bridge gave up on request <id> (its caller timed
+        // out, stalled out, or went away). Forwarded to the main thread, which aborts that run if it
+        // is executing or drops it if it is still queued. Anything else keeps today's path.
+        // A cancel frame with no string id is DROPPED, never forwarded: an id-less `cancel` is the
+        // designer's button to the main thread, and the bridge must not be able to press it.
+        if (cmd && cmd.type === "cancel" && cmd.cmd === undefined) {
+          if (typeof cmd.id === "string") parent.postMessage({ pluginMessage: { type: "cancel", id: cmd.id } }, "*");
+          return;
+        }
         parent.postMessage({ pluginMessage: { type: "bridge", id: cmd.id, cmd: cmd.cmd, args: cmd.args } }, "*");
       };
     }
@@ -470,8 +510,8 @@
           cancelSent = true;
           cb.disabled = true;
           cb.textContent = "Cancelling…";
-          // Honest about the latency: the walk only aborts where it already awaits (between pages,
-          // between top-level frames, at each asset export), so the last exportAsync still finishes.
+          // Honest about the latency: the walk only aborts at its safe points (each node, between
+          // pages and top-level frames, at each asset export), so the last exportAsync still finishes.
           setStatus("Cancelling — the export stops at its next safe point…");
           parent.postMessage({ pluginMessage: { type: "cancel" } }, "*");
         };

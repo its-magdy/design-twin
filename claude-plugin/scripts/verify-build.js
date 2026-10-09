@@ -1,2298 +1,1005 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __commonJS = (cb, mod) => function __require() {
-  try {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-  } catch (e) {
-    throw mod = 0, e;
+
+
+// design-to-code/verify-build.ts
+import fs8 from "node:fs";
+import path6 from "node:path";
+import { parseArgs as parseArgs2 } from "node:util";
+
+// bridge/src/hash.ts
+import crypto from "node:crypto";
+var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
+
+// design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// design-to-code/export-shape.ts
+function isIrNode(x) {
+  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
+}
+function isScreenExport(x) {
+  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
+}
+function isLayerFile(x) {
+  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
+}
+function isScreenDoc(x) {
+  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
+}
+isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
+function screenRoots(doc) {
+  if (isScreenExport(doc)) return doc.nodes;
+  if (isLayerFile(doc)) return [doc.tree];
+  if (isIrNode(doc)) return [doc];
+  return [];
+}
+function screenExportOf(doc) {
+  return isScreenExport(doc) ? doc : null;
+}
+
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
+function isRecord(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+function isUnknownArray(x) {
+  return Array.isArray(x);
+}
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
+
+// design-to-code/map-util.ts
+var alnumKey = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
+// design-to-code/hidden.ts
+var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
+var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
+function walkWithHidden(root, fn, opts) {
+  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+  (function go(node, parentHidden, path7, parent, depth) {
+    if (!node || typeof node !== "object") return;
+    const hidden = isHidden(node, parentHidden);
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path7, parent, depth });
+    const kids = Array.isArray(node.children) ? node.children : [];
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path7 ? path7 + " > " : "") + pathOf(kid, i), node, depth + 1);
+  })(root, false, root ? pathOf(root, 0) : "", null, 0);
+}
+
+// design-to-code/audit-gate.ts
+import fs4 from "node:fs";
+import path3 from "node:path";
+
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var comp = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
+var clamp = (n, hi) => Math.min(hi, Math.max(0, n));
+var alphaOf = (x) => x === void 0 ? 1 : clamp(comp(x, 1), 1);
+function parseCssColor(v) {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+  if (t.startsWith("#")) return parseHex(t);
+  const leg = RGB_LEGACY.exec(t);
+  const rgb = leg ? leg[1] !== void 0 ? leg.slice(1, 5) : leg.slice(5, 9) : RGB_MODERN.exec(t)?.slice(1, 5);
+  if (rgb) {
+    const ch = (x) => clamp(comp(x, 255), 255);
+    const c = { r: ch(rgb[0]), g: ch(rgb[1]), b: ch(rgb[2]), a: alphaOf(rgb[3]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
   }
+  const ok = OK.exec(t);
+  if (ok) {
+    const L = comp(ok[2], 1);
+    let a, b;
+    if (ok[1] === "oklab") {
+      a = comp(ok[3], 0.4);
+      b = comp(ok[4], 0.4);
+    } else {
+      const C = comp(ok[3], 0.4), h = comp(ok[4], 1) * Math.PI / 180;
+      a = C * Math.cos(h);
+      b = C * Math.sin(h);
+    }
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const enc = (c2) => Math.round(255 * clamp(c2 <= 31308e-7 ? 12.92 * c2 : 1.055 * c2 ** (1 / 2.4) - 0.055, 1));
+    const c = {
+      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
+      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
+      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
+      a: alphaOf(ok[5])
+    };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const srgb = SRGB.exec(t);
+  if (srgb) {
+    const ch = (x) => Math.round(clamp(comp(x, 1) * 255, 255));
+    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  return null;
+}
+
+// design-to-code/finding-id.ts
+function findingIds(findings) {
+  const seen = /* @__PURE__ */ new Map();
+  return findings.map((f) => {
+    const base = f.nodeId ? `${f.code}@${f.nodeId}` : f.code;
+    const n = (seen.get(base) || 0) + 1;
+    seen.set(base, n);
+    return n === 1 ? base : `${base}~${n}`;
+  });
+}
+function legacyBlockerIds(findings) {
+  return findings.filter((f) => f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
+}
+
+// design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+
+// bridge/src/errmsg.ts
+var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+
+// design-to-code/cli-args.ts
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
+  try {
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      failure = unknownFlags();
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
+    } else {
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
+    }
+  }
+  console.error(failure);
+  process.exit(exitCode);
+}
+
+// design-to-code/read-json.ts
+import fs from "node:fs";
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
+  let buf;
+  try {
+    buf = fs.readFileSync(file);
+  } catch (e) {
+    return readFailure(e);
+  }
+  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
+    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
+  }
+  let raw = buf.toString("utf8");
+  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
+  let parsed;
+  try {
+    const value = JSON.parse(raw);
+    parsed = value;
+  } catch (e) {
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
+}
+
+// bridge/src/is-main.ts
+import fs2 from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
+  } catch {
+    return false;
+  }
+}
+
+// design-to-code/map-validate.ts
+var STATUSES = ["active", "deprecated", "needs-review"];
+var KEYS = {
+  root: ["version", "figmaFileKey", "components"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
+  figma: ["key", "id", "name", "unstable"],
+  code: ["module", "export", "targets"],
+  target: ["module", "export"],
+  vo: ["when", "code"],
+  voCode: ["module", "export"],
+  children: ["layerNamePattern", "slot"],
+  prop: Object.assign(nullProto(), {
+    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
+    boolean: ["kind", "codeProp", "default", "omitDefault"],
+    string: ["kind", "codeProp"],
+    instance: ["kind", "codeProp", "slot"]
+  })
+};
+var PROP_KINDS = Object.keys(KEYS.prop);
+var isStr = (v) => typeof v === "string";
+var isBool = (v) => typeof v === "boolean";
+var noExtra = (obj, allowed, at, err) => {
+  if (!Array.isArray(allowed)) return;
+  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)");
+};
+var optStrings = (obj, keys, at, err) => {
+  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at}.${k}`, "must be a string");
+};
+function validateMap(map) {
+  const errors = [];
+  const err = (path7, message) => errors.push({ path: path7, message });
+  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  noExtra(map, KEYS.root, "", err);
+  if (map.version !== 1) err("version", "must be 1");
+  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
+  if (!isRecord(map.components)) {
+    err("components", "must be an object");
+    return { ok: false, errors };
+  }
+  for (const key of Object.keys(map.components)) {
+    const e = map.components[key];
+    const at = `components.${key}`;
+    if (!isRecord(e)) {
+      err(at, "entry must be an object");
+      continue;
+    }
+    noExtra(e, KEYS.entry, at, err);
+    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
+    else {
+      noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
+      if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
+      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
+      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
+    }
+    if (!isRecord(e.code)) err(`${at}.code`, "required object");
+    else {
+      noExtra(e.code, KEYS.code, `${at}.code`, err);
+      if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
+      if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
+      if (e.code.targets !== void 0) {
+        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        else for (const t of Object.keys(e.code.targets)) {
+          const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
+          if (!isRecord(tv)) err(ta, "must be an object");
+          else {
+            noExtra(tv, KEYS.target, ta, err);
+            optStrings(tv, ["module", "export"], ta, err);
+          }
+        }
+      }
+    }
+    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
+    if (e.props !== void 0) {
+      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
+      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
+    }
+    if (e.variantOverrides !== void 0) {
+      if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
+      else e.variantOverrides.forEach((vo, i) => {
+        const va = `${at}.variantOverrides[${i}]`;
+        if (!isRecord(vo)) {
+          err(va, "must be an object");
+          return;
+        }
+        noExtra(vo, KEYS.vo, va, err);
+        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
+        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
+        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
+        else {
+          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
+          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
+          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
+        }
+      });
+    }
+    if (e.childrenByLayer !== void 0) {
+      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      else {
+        noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
+        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+function validateProp(p, at, err) {
+  if (!isRecord(p)) {
+    err(at, "prop must be an object");
+    return;
+  }
+  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
+  if (!Array.isArray(allowed)) {
+    err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
+    return;
+  }
+  noExtra(p, allowed, at, err);
+  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at}.codeProp`, "required string");
+  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
+  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
+  if (p.kind === "enum") {
+    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
+      const t = typeof p.values[k];
+      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
+    }
+    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
+  }
+  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
+  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
+}
+function isCodeConnectMap(x) {
+  return validateMap(x).ok;
+}
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/doc-guards.ts
+function optArrayOf(x, each) {
+  return x === void 0 || Array.isArray(x) && x.every(each);
+}
+var isObj = isJsonObject;
+var optObj = (x) => x === void 0 || isObj(x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var anyObject = (x) => isObj(x);
+function isVariable(x) {
+  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
+}
+function isVariableCollection(x) {
+  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
+}
+function isTokensDoc(x) {
+  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+}
+isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
+function isCatalogComponent(x) {
+  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+}
+function isComponentsCatalog(x) {
+  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+}
+isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
+function isComponentDetailFile(x) {
+  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+}
+isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
+function isTextStylesDoc(x) {
+  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
+}
+isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+var SEVERITIES = ["blocker", "warning", "info"];
+function isAuditOverridesDoc(x) {
+  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
+function isAuditReport(x) {
+  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
+}
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
+function isProposal(x) {
+  return isObj(x) && typeof x.name === "string";
+}
+function isProposalList(x) {
+  return Array.isArray(x) && x.every(isProposal);
+}
+isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
+function isIndexRowLike(x) {
+  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
+}
+function isPagesRootIndex(x) {
+  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+}
+isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
+function isPageIndex(x) {
+  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+}
+isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
+function isVerifyExpectation(x) {
+  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+}
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+function isProbeIdentity(x) {
+  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+function isBuildIdentity(x) {
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
+var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
+var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+function isMeasuredVisual(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+function isReportBehaviour(x) {
+  return isObj(x) && typeof x.ran === "boolean" && isObj(x.summary) && ["pass", "fail", "warn", "notRun", "unsupported"].every((k) => isObj(x.summary) && isNum(x.summary[k])) && Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) && optStr(x.why) && optStr(x.headline);
+}
+var MEASURED_EXTRAS = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // the run it belongs to and the build it was served
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // the steps replayed, the page's overflow, the behaviour/a11y block
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // the visual diff (informational)
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
+];
+function isMeasuredCore(x) {
+  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+function isVerifyMeasured(x) {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
+}
+isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
+function isEvidence(x) {
+  return isObj(x) && typeof x.nodeId === "string";
+}
+function isInteractionEvidenceList(x) {
+  return Array.isArray(x) && x.every(isEvidence);
+}
+isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isMeasuredComponentList(x) {
+  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
+}
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_OBJECTS = ["anchors", "verification", "counts"];
+var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
+function planProblem(x) {
+  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
+  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
+    const list = x[k];
+    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+  }
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
+  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  return null;
+}
+function isPlan(x) {
+  return planProblem(x) === null;
+}
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+function parsePlan(x) {
+  return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
+}
+var reqStr = (v) => typeof v === "string" && v.trim() !== "";
+function isPlanWaiver(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+function isPlanDescope(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isStringRecord(x) {
+  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
+}
+isStringRecord.expected = "an object of strings";
+
+// bridge/src/design-system-layout.ts
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var STYLES_PAINT = "styles.paint.json";
+var STYLES_TEXT = "styles.text.json";
+var STYLES_EFFECT = "styles.effect.json";
+var STYLES_GRID = "styles.grid.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var DESIGN_SYSTEM_FILES = {
+  TOKENS,
+  STYLES_PAINT,
+  STYLES_TEXT,
+  STYLES_EFFECT,
+  STYLES_GRID,
+  COMPONENTS_LOCAL,
+  COMPONENTS_LIBRARY,
+  COMPONENTS_DIR,
+  HYGIENE,
+  MANIFEST
 };
 
-// design-to-code/component-match.js
-var require_component_match = __commonJS({
-  "design-to-code/component-match.js"(exports2, module2) {
-    function visibleInstances(doc, label) {
-      const out = [];
-      const roots = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc] : [];
-      const walk = (n) => {
-        if (!n || typeof n !== "object" || n.hidden === true || n.visible === false) return;
-        if (n.type === "INSTANCE" && n.mainComponent) {
-          const mc = n.mainComponent;
-          out.push({
-            screen: label,
-            nodeId: n.id,
-            layer: n.name,
-            name: mc.setName || mc.name || n.name,
-            key: mc.key,
-            setKey: mc.setKey,
-            remote: mc.remote === true,
-            variant: parseVariant(n.component) || parseVariant(mc.variant),
-            props: n.props && typeof n.props === "object" ? n.props : {}
-          });
-        }
-        for (const c of n.children || []) walk(c);
-      };
-      for (const r of roots) walk(r);
-      return out;
-    }
-    function parseVariant(s) {
-      if (s && typeof s === "object" && !Array.isArray(s)) return Object.keys(s).length ? Object.assign({}, s) : null;
-      if (!s || typeof s !== "string" || !s.includes("=")) return null;
-      const out = {};
-      for (const part of s.split(/,\s*(?=[^,=]+=)/)) {
-        const i = part.indexOf("=");
-        if (i < 0) continue;
-        out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
-      }
-      return Object.keys(out).length ? out : null;
-    }
-    var baseProp = (p) => String(p).split("#")[0];
-    var SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
-    function signature(inst, cand) {
-      const props = {};
-      for (const [k, v] of Object.entries(cand.props || {})) props[baseProp(k)] = v;
-      const reasons = [];
-      let score = 40, verified = true;
-      reasons.push("name matches catalog entry verbatim");
-      const variant = inst.variant;
-      if (variant) {
-        const axes = Object.keys(variant);
-        const known = axes.filter((k) => props[k] && props[k].type === "VARIANT");
-        if (known.length === axes.length) {
-          score += 25;
-          reasons.push(`all ${axes.length} variant prop name(s) exist as VARIANT props`);
-        } else {
-          verified = false;
-          score += known.length ? 10 : -15;
-          reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate");
-        }
-        const bad = known.filter((k) => !(props[k].options || []).includes(variant[k]));
-        if (known.length && !bad.length) {
-          score += 25;
-          reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`);
-        } else if (bad.length) {
-          verified = false;
-          score -= 20;
-          reasons.push(`variant value(s) not in option list (${bad.map((k) => `${k}=${variant[k]}`).join(", ")})`);
-        }
-      } else if (cand.type === "COMPONENT") {
-        score += 15;
-        reasons.push("instance has no variant string and the catalog entry is a plain COMPONENT");
-      } else {
-        verified = false;
-        reasons.push(`instance sets no variant but the catalog entry is a ${cand.type}`);
-      }
-      const own = Object.keys(inst.props || {}).filter((k) => !variant || !(baseProp(k) in variant));
-      if (own.length) {
-        const typed = own.filter((k) => {
-          const d = props[baseProp(k)], v = inst.props[k];
-          if (!d) return false;
-          if (typeof v === "boolean") return d.type === "BOOLEAN";
-          return d.type === "TEXT" || d.type === "INSTANCE_SWAP" || d.type === "VARIANT";
-        });
-        if (typed.length === own.length) {
-          score += 15;
-          reasons.push(`all ${own.length} non-variant prop name(s) exist on the definition`);
-        } else {
-          verified = false;
-          score += typed.length ? 5 : -10;
-          reasons.push(typed.length ? `${typed.length}/${own.length} non-variant prop names exist with a matching type` : "none of the instance prop names exist on this definition");
-        }
-      }
-      if (SHARED_PAGE.test(String(cand.page || ""))) {
-        score += 5;
-        reasons.push(`lives on a shared page (${cand.page})`);
-      }
-      return { verified, score, reasons };
-    }
-    var sigOf = (c) => JSON.stringify(Object.entries(c.props || {}).map(([k, v]) => [baseProp(k), v.type, v.options || null]).sort());
-    function matchByNameAndSignature(instances, catalog, library) {
-      const comps = catalog && catalog.components || [];
-      const byName = /* @__PURE__ */ new Map();
-      comps.forEach((c, i) => {
-        if (!byName.has(c.name)) byName.set(c.name, []);
-        byName.get(c.name).push(Object.assign({ _order: i }, c));
-      });
-      const catKeys = new Set(comps.map((c) => c.key).filter(Boolean));
-      const libKeys = new Set((library && library.components || []).map((c) => c.key).filter(Boolean));
-      const libNames = new Set((library && library.components || []).map((c) => c.name));
-      const groups = /* @__PURE__ */ new Map();
-      for (const inst of instances) {
-        if (!groups.has(inst.name)) groups.set(inst.name, []);
-        groups.get(inst.name).push(inst);
-      }
-      const rows = [];
-      for (const [name, list] of groups) {
-        const byKey = list.some((i) => catKeys.has(i.key) || catKeys.has(i.setKey));
-        const row = {
-          name,
-          instances: list.length,
-          nodeIds: list.map((i) => i.nodeId),
-          screens: [...new Set(list.map((i) => i.screen).filter(Boolean))],
-          instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter(Boolean))],
-          remote: list.every((i) => i.remote),
-          byKey,
-          match: null,
-          alternatives: [],
-          reasons: []
-        };
-        const cands = byName.get(name) || [];
-        if (!cands.length) {
-          const inLibrary = list.some((i) => libKeys.has(i.key) || libKeys.has(i.setKey));
-          row.reasons.push(`no catalog entry named ${JSON.stringify(name)}`);
-          row.reasons.push(inLibrary ? "its key IS in components.library.json \u2014 a third-party library both files consume, not the design system's own component" : libNames.has(name) ? "the name appears in components.library.json \u2014 a third-party library the design system consumes, not one of its own components" : "not a component of the exported design system (typically an external icon library) \u2014 expected, not a miss");
-          rows.push(row);
-          continue;
-        }
-        const scored = cands.map((c) => {
-          const per = list.map((i) => signature(i, c));
-          return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: per[0].reasons, failing: per.find((p) => !p.verified) };
-        }).sort((a, b) => b.verified - a.verified || b.score - a.score || a.c._order - b.c._order);
-        const best = scored[0];
-        if (!best.verified) {
-          row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` + (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") + " \u2014 a name alone is not a match");
-          rows.push(row);
-          continue;
-        }
-        const verifiedOnes = scored.filter((s) => s.verified);
-        const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
-        row.match = { id: best.c.id, key: best.c.key, name: best.c.name, type: best.c.type, page: best.c.page };
-        row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
-        row.reasons = best.reasons.slice();
-        if (ties.length) {
-          const identical = ties.every((t) => sigOf(t.c) === sigOf(best.c));
-          row.reasons.push(identical ? `${ties.length + 1} catalog entries named "${name}" score identically \u2014 they are duplicates of one definition (same props, same variants); the first in the catalog is used` : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures \u2014 the first in the catalog is used; confirm which one`);
-          row.tie = identical ? "duplicate-definitions" : "different-signatures";
-        } else if (scored.length > 1) {
-          row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
-        }
-        row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
-        row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
-        rows.push(row);
-      }
-      const proposals = rows.filter((r) => r.match && !r.byKey);
-      return {
-        rows,
-        proposals,
-        summary: {
-          instances: instances.length,
-          names: rows.length,
-          byKey: rows.filter((r) => r.byKey).length,
-          proposed: proposals.length,
-          proposedWithSignature: proposals.filter((r) => r.evidence === "name+signature").length,
-          withCandidates: rows.filter((r) => (byName.get(r.name) || []).length).length,
-          unmatched: rows.filter((r) => !r.match).length,
-          remote: instances.filter((i) => i.remote).length
-        }
-      };
-    }
-    var REKEY_MIN_PROPOSALS = 3;
-    var REKEY_MIN_SHARE = 0.5;
-    function isRekeyed(result) {
-      const s = result.summary;
-      return s.names > 0 && s.byKey / s.names <= 0.05 && s.proposedWithSignature >= REKEY_MIN_PROPOSALS && s.withCandidates > 0 && s.proposedWithSignature / s.withCandidates >= REKEY_MIN_SHARE;
-    }
-    module2.exports = { visibleInstances, parseVariant, matchByNameAndSignature, isRekeyed, REKEY_MIN_PROPOSALS, REKEY_MIN_SHARE };
-  }
-});
+// bridge/src/library-layout.ts
+var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
 
-// design-to-code/hidden.js
-var require_hidden = __commonJS({
-  "design-to-code/hidden.js"(exports2, module2) {
-    var hiddenSelf = (node) => !!(node && typeof node === "object" && node.hidden);
-    var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
-    function walkWithHidden(root, fn, opts) {
-      const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-      (function go(node, parentHidden, path2, parent, depth) {
-        if (!node || typeof node !== "object") return;
-        const hidden = isHidden(node, parentHidden);
-        fn(node, { hidden, parentHidden: !!parentHidden, path: path2, parent, depth });
-        const kids = Array.isArray(node.children) ? node.children : [];
-        for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path2 ? path2 + " > " : "") + pathOf(kids[i], i), node, depth + 1);
-      })(root, false, root && pathOf(root, 0), null, 0);
-    }
-    function hiddenIds(roots) {
-      const out = [];
-      for (const r of roots || []) walkWithHidden(r, (n, c) => {
-        if (c.hidden && n.id) out.push(n.id);
-      });
-      return out;
-    }
-    function hiddenRoots(roots) {
-      const out = [];
-      for (const r of roots || []) walkWithHidden(r, (n, c) => {
-        if (c.hidden && !c.parentHidden) out.push(n);
-      });
-      return out;
-    }
-    module2.exports = { hiddenSelf, isHidden, walkWithHidden, hiddenIds, hiddenRoots };
-  }
-});
+// design-to-code/design-system-dir.ts
+var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 
-// design-to-code/catalog-input.js
-var require_catalog_input = __commonJS({
-  "design-to-code/catalog-input.js"(exports2, module2) {
-    function isManifest(doc, payloadKey) {
-      return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
-    }
-    function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-      if (isManifest(doc, payloadKey)) {
-        console.error(
-          `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
-       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-        );
-        process.exit(2);
-      }
-    }
-    function readJsonFile(file, what, hint) {
-      const fs2 = require("fs");
-      let raw;
-      try {
-        raw = fs2.readFileSync(file, "utf8");
-      } catch (e) {
-        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
-        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
-       ${hint}` : ""));
-        process.exit(2);
-      }
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
-        process.exit(2);
-      }
-    }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
-    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
-  }
-});
+// bridge/src/project-layout.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path2.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path2.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path2.join(DESIGN_DIR, "codeconnect.local.json");
+var LEGACY_MAP_FILE = "codeconnect.local.json";
+var PLAN_DIR = path2.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path2.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path2.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+function listPlans(dir) {
+  if (!fs3.existsSync(dir)) return [];
+  return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+}
 
-// design-to-code/slice-sources.js
-var require_slice_sources = __commonJS({
-  "design-to-code/slice-sources.js"(exports2, module2) {
-    function sourcesOf(doc, docPath, fs2, path2) {
-      const out = /* @__PURE__ */ new Map();
-      const add = (key, screen) => {
-        if (typeof key !== "string" || !key || !screen) return;
-        if (!out.has(key)) out.set(key, []);
-        if (!out.get(key).includes(screen)) out.get(key).push(screen);
-      };
-      const base = docPath ? path2.dirname(docPath) : ".";
-      for (const sl of Array.isArray(doc && doc._slices) ? doc._slices : []) {
-        if (!sl) continue;
-        let read = false;
-        if (typeof sl.file === "string" && fs2 && path2) {
-          try {
-            const slice = JSON.parse(fs2.readFileSync(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), "utf8"));
-            for (const v of slice.variables || []) add(v && v.key, sl.screen);
-            read = true;
-          } catch (_) {
-          }
-        }
-        if (!read) for (const k of Array.isArray(sl.keys) ? sl.keys : []) add(k, sl.screen);
-      }
-      for (const c of Array.isArray(doc && doc._conflicts) ? doc._conflicts : []) {
-        for (const vr of c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
-      }
-      if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-        for (const v of doc && doc.variables || []) add(v && v.key, path2.basename(docPath, ".vars.json"));
-      }
-      return out;
-    }
-    function variablesContext(screenFiles, varsFile, fs2, path2, opts) {
-      const readJson = (f) => {
-        try {
-          return f && fs2.existsSync(f) ? JSON.parse(fs2.readFileSync(f, "utf8")) : null;
-        } catch (_) {
-          return null;
-        }
-      };
-      const files = screenFiles || [];
-      const own = files.map((f) => readJson(String(f).replace(/\.json$/, ".vars.json")));
-      let variablesPath = varsFile || null;
-      if (!variablesPath && files.length) {
-        const exportRoot = path2.resolve(path2.dirname(files[0]), "..", "..");
-        const rootVars = path2.join(exportRoot, "variables.json");
-        const sibling = path2.join(path2.dirname(files[0]), "variables.json");
-        if (fs2.existsSync(rootVars)) variablesPath = rootVars;
-        else if (fs2.existsSync(sibling)) variablesPath = sibling;
-        else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(files[0]).replace(/\.json$/, ".vars.json");
-      }
-      const variablesDoc = readJson(variablesPath);
-      let staleLegacy = null;
-      if (files.length) {
-        const legacy = path2.join(path2.resolve(path2.dirname(files[0]), "..", ".."), "..", "variables.json");
-        if (fs2.existsSync(legacy) && path2.resolve(legacy) !== path2.resolve(variablesPath || "")) staleLegacy = legacy;
-      }
-      return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath, fs2, path2) : null, staleLegacy };
-    }
-    module2.exports = { sourcesOf, variablesContext };
-  }
-});
+// design-to-code/cross-check.ts
+if (false) process.exitCode = main(process.argv.slice(2));
 
-// design-to-code/cross-check.js
-var require_cross_check = __commonJS({
-  "design-to-code/cross-check.js"(exports2, module2) {
-    var { visibleInstances, matchByNameAndSignature, isRekeyed } = require_component_match();
-    var { hiddenSelf } = require_hidden();
-    var SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
-    var ABSURD_NUMBER = 1e4;
-    var WRONG_CATALOG_PCT = 5;
-    function walk(node, fn) {
-      if (!node || typeof node !== "object") return;
-      if (hiddenSelf(node)) return;
-      fn(node);
-      for (const c of node.children || []) walk(c, fn);
-    }
-    function rootsOf2(doc) {
-      if (!doc) return [];
-      if (Array.isArray(doc.nodes)) return doc.nodes;
-      if (doc.tree) return [doc.tree];
-      if (doc.id || doc.type) return [doc];
-      return [];
-    }
-    var norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-    function crossCheck(input) {
-      const screens = input.screens || [];
-      const variables = input.variables || null;
-      const tokens = input.tokens || null;
-      const components = input.components || null;
-      const componentsLibrary = input.componentsLibrary || null;
-      const stylesText = input.stylesText || null;
-      const findings = [];
-      const notChecked = [];
-      const push = (severity, code, message, extra) => findings.push(Object.assign({ severity, code, message }, extra || {}));
-      const usedTokenNames = /* @__PURE__ */ new Map();
-      const instances = [];
-      const fonts = /* @__PURE__ */ new Map();
-      const textStyles = /* @__PURE__ */ new Map();
-      const resolvedModes = /* @__PURE__ */ new Map();
-      for (const s of screens) {
-        const label = s.label || s.doc && s.doc.screen || "screen";
-        for (const root of rootsOf2(s.doc)) {
-          if (root && root.resolvedModes) {
-            for (const [coll, mode] of Object.entries(root.resolvedModes)) {
-              if (!resolvedModes.has(coll)) resolvedModes.set(coll, /* @__PURE__ */ new Set());
-              resolvedModes.get(coll).add(mode);
-            }
-          }
-          walk(root, (n) => {
-            for (const [field, name] of Object.entries(n.tokens || {})) {
-              if (typeof name !== "string") continue;
-              if (!usedTokenNames.has(name)) usedTokenNames.set(name, []);
-              usedTokenNames.get(name).push({ screen: label, nodeId: n.id, field });
-            }
-            for (const f of n.fills || []) {
-              const t = f && f.tokens && f.tokens.color;
-              if (typeof t === "string") {
-                if (!usedTokenNames.has(t)) usedTokenNames.set(t, []);
-                usedTokenNames.get(t).push({ screen: label, nodeId: n.id, field: "fills" });
-              }
-            }
-            if (n.font && n.font.family) fonts.set(n.font.family, (fonts.get(n.font.family) || 0) + 1);
-            const ts = n.styles && n.styles.text;
-            if (ts) textStyles.set(ts, (textStyles.get(ts) || 0) + 1);
-          });
-        }
-      }
-      const visible = [];
-      screens.forEach((s) => {
-        const label = s.label || s.doc && s.doc.screen || "screen";
-        for (const i of visibleInstances(s.doc, label)) {
-          visible.push(i);
-          instances.push({ screen: label, nodeId: i.nodeId, name: i.layer, key: i.key, setKey: i.setKey, setName: i.name, propNames: Object.keys(i.props || {}) });
-        }
-      });
-      const dsCollByKey = /* @__PURE__ */ new Map();
-      const dsCollByName = /* @__PURE__ */ new Map();
-      for (const c of tokens && tokens.collections || []) {
-        if (c.key) dsCollByKey.set(c.key, c);
-        if (c.name) dsCollByName.set(norm(c.name), c);
-      }
-      const screenColls = variables && variables.collections || [];
-      if (!tokens) {
-        notChecked.push(
-          "collection provenance \u2014 no design-system tokens.json was given, so nothing could verify that the screen's variables come from the design system you exported. Run `dtwin pull --design-system` and pass it."
-        );
-      } else if (!screenColls.length) {
-        notChecked.push(
-          input.variablesPath ? `collection provenance \u2014 ${input.variablesPath} was checked but carries no collections for this screen, so its own token library is unknown.` : `collection provenance \u2014 no variables.json was found (looked in design/export/variables.json), so the screen's own token library is unknown.`
-        );
-      } else {
-        const foreign = [];
-        for (const c of screenColls) {
-          if (c.key && dsCollByKey.has(c.key)) continue;
-          const twin = dsCollByName.get(norm(c.name));
-          foreign.push({ name: c.name, key: c.key, twinKey: twin && twin.key, twinName: twin && twin.name });
-        }
-        if (foreign.length) {
-          const sameNameDifferentKey = foreign.filter((f) => f.twinKey);
-          const severity = foreign.length === screenColls.length ? "blocker" : "warning";
-          push(
-            severity,
-            "foreign-token-library",
-            `${foreign.length} of ${screenColls.length} variable collection(s) the screen binds are NOT in the design-system export \u2014 the screen consumes a DIFFERENT library than the one you pulled. ` + (sameNameDifferentKey.length ? `${sameNameDifferentKey.length} of them carry a design-system collection's name under a different key (${sameNameDifferentKey.slice(0, 3).map((f) => `'${f.name}'`).join(", ")}), which is the signature of a DUPLICATED Figma file: duplicating a library re-keys everything while leaving names and values identical. ` : "") + `Names and values may still line up (check the collisions below), but nothing here is the same variable. To find the real owner: run \`dtwin list libraries --client <the screen's file>\` \u2014 variable collections are the ONE thing Figma attributes to a library by name \u2014 then open that file and export it with \`dtwin pull --as-library "<name>"\`.`,
-            { collections: foreign }
-          );
-        } else {
-          push("info", "token-library-matches", `all ${screenColls.length} variable collection(s) the screen binds resolve to the design-system export by key.`, {});
-        }
-      }
-      const dsVarByName = /* @__PURE__ */ new Map();
-      for (const v of tokens && tokens.variables || []) if (v.name) dsVarByName.set(v.name, v);
-      const sliceSources = input.sliceSources || null;
-      const labels = screens.map((s) => s.label || s.doc && s.doc.screen || "screen");
-      const own = screens.map((s) => s && s.vars && Array.isArray(s.vars.variables) ? s.vars.variables : null);
-      let varScope = "own";
-      let screenVars = [];
-      if (own.length && own.every(Boolean)) {
-        screenVars = [].concat(...own);
-      } else if (variables && sliceSources && sliceSources.size) {
-        varScope = "union-by-source";
-        screenVars = (variables && variables.variables || []).filter((v) => !v.key || !sliceSources.has(v.key) || sliceSources.get(v.key).some((sc) => labels.includes(sc)));
-      } else {
-        varScope = "union";
-        screenVars = variables && variables.variables || [];
-      }
-      const screenVarsByName = /* @__PURE__ */ new Map();
-      for (const v of screenVars) {
-        if (!v || !v.name) continue;
-        if (!screenVarsByName.has(v.name)) screenVarsByName.set(v.name, []);
-        const list = screenVarsByName.get(v.name);
-        if (!list.some((x) => x.key && x.key === v.key || !x.key && !v.key && x.collection === v.collection)) list.push(v);
-      }
-      const screenVarByName = new Map([...screenVarsByName].map(([n, l]) => [n, l[0]]));
-      const shortKey = (v) => v && typeof v.key === "string" && v.key ? v.key.slice(0, 8) + "\u2026" : null;
-      const fromWhere = (v) => {
-        const sc = v && v.key && sliceSources && sliceSources.get(v.key);
-        return sc && sc.length ? ` (from ${sc.join(", ")})` : "";
-      };
-      function flatten(v) {
-        const out = {};
-        for (const [mode, val] of Object.entries(v && v.values || {})) {
-          out[mode] = val && typeof val === "object" ? val.aliasOf != null ? "-> " + val.aliasOf : JSON.stringify(val) : String(val);
-        }
-        return out;
-      }
-      function valueSet(v) {
-        return new Set(Object.values(flatten(v)));
-      }
-      function sameResolution(a, b) {
-        const fa = flatten(a), fb = flatten(b);
-        const shared = Object.keys(fa).filter((m) => m in fb);
-        if (shared.length) return shared.every((m) => fa[m] === fb[m]);
-        const sa = valueSet(a), sb = valueSet(b);
-        if (!sa.size || !sb.size) return null;
-        for (const x of sa) if (sb.has(x)) return null;
-        return false;
-      }
-      if (tokens && screenVarByName.size) {
-        const collisions = [], missing = [];
-        for (const [name, list] of screenVarsByName) {
-          const dv = dsVarByName.get(name);
-          if (!dv) {
-            let near = null;
-            for (const dname of dsVarByName.keys()) if (norm(dname) === norm(name) && dname !== name) {
-              near = dname;
-              break;
-            }
-            if (usedTokenNames.has(name) || near) missing.push({ name, near });
-            continue;
-          }
-          for (const sv of list) {
-            if (sameResolution(sv, dv) === false) {
-              collisions.push({ name, key: sv.key, twins: list, sv, screen: flatten(sv), designSystem: flatten(dv), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
-            }
-          }
-        }
-        const dsByNorm = /* @__PURE__ */ new Map();
-        for (const [dname, dv] of dsVarByName) {
-          const k = norm(dname);
-          if (!dsByNorm.has(k)) dsByNorm.set(k, []);
-          dsByNorm.get(k).push({ name: dname, v: dv });
-        }
-        for (const [name, list] of screenVarsByName) {
-          if (dsVarByName.has(name)) continue;
-          for (const cand of dsByNorm.get(norm(name)) || []) {
-            for (const sv of list) {
-              if (sameResolution(sv, cand.v) === false) {
-                collisions.push({ name, key: sv.key, twins: list, sv, alsoKnownAs: cand.name, screen: flatten(sv), designSystem: flatten(cand.v), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
-              }
-            }
-          }
-        }
-        const scopeNote = varScope === "own" ? "" : varScope === "union-by-source" ? " (read from the merged variables.json, restricted to the variables its slice records for this screen \u2014 pass the screen's .vars.json to be exact)" : " (read from the MERGED variables.json: this screen's own .vars.json was not available, so this may be another screen's variable \u2014 check its key)";
-        for (const c of collisions) {
-          const twinNote = c.twins.length > 1 ? ` This screen's own variables include ${c.twins.length} DIFFERENT variables called '${c.name}': ` + c.twins.map((t) => `${shortKey(t) ? "key " + shortKey(t) : "'" + (t.collection || "") + "'"} = ${JSON.stringify(flatten(t))}${fromWhere(t)}`).join(" vs ") + ` \u2014 only the one(s) listed as colliding differ from the design system.` : "";
-          push(
-            "blocker",
-            "token-name-collision",
-            // Both subjects are named, whether the names are identical or only near-identical (livetest-3 #326).
-            `The screen's '${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""} and the design system's '${c.alsoKnownAs || c.name}' ${c.alsoKnownAs ? "differ only by case or punctuation" : "share a name"} but resolve DIFFERENTLY: screen ${JSON.stringify(c.screen)} vs design system ${JSON.stringify(c.designSystem)}` + (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " \u2014 no mode name is shared and the two value sets are disjoint. ") + `Slugging the name onto the existing token would silently apply the wrong value \u2014 namespace the screen's copy, or confirm which library is authoritative.` + twinNote + scopeNote,
-            { token: c.name, key: c.key, alsoKnownAs: c.alsoKnownAs, screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
-          );
-        }
-        if (variables && varScope !== "union") {
-          const mine = new Set(screenVars.map((v) => v.key).filter(Boolean));
-          const unionByName = /* @__PURE__ */ new Map();
-          for (const v of variables && variables.variables || []) {
-            if (!v || !v.name || !v.key) continue;
-            if (!unionByName.has(v.name)) unionByName.set(v.name, /* @__PURE__ */ new Map());
-            unionByName.get(v.name).set(v.key, v);
-          }
-          for (const [name, byKey] of unionByName) {
-            if (byKey.size < 2) continue;
-            const all = [...byKey.values()];
-            const others = all.filter((v) => !mine.has(v.key));
-            if (!others.length) continue;
-            if (new Set(all.flatMap((v) => Object.values(flatten(v)))).size <= 1) continue;
-            if (all.every((v) => JSON.stringify(flatten(v)) === JSON.stringify(flatten(all[0])))) continue;
-            const ours = all.filter((v) => mine.has(v.key));
-            push(
-              "info",
-              "token-name-collision-elsewhere",
-              `'${name}' is ${all.length} different variables in the merged variables.json \u2014 ` + all.map((v) => `key ${shortKey(v)} = ${JSON.stringify(flatten(v))}${fromWhere(v)}`).join(" vs ") + ". " + (ours.length ? `THIS screen's own variables carry only key ${ours.map(shortKey).join(", ")}, so the ambiguity belongs to ${[...new Set(others.flatMap((v) => sliceSources && sliceSources.get(v.key) || []))].join(", ") || "another screen"} \u2014 do not change this screen's value to match it.` : `THIS screen carries none of them.`) + ` Generate this screen's theme from its own .vars.json (or design-system/tokens.json), not from the union.`,
-              { token: name, keys: all.map((v) => v.key), mine: ours.map((v) => v.key) }
-            );
-          }
-        }
-        if (missing.length) {
-          push(
-            "warning",
-            "token-absent-from-design-system",
-            `${missing.length} token name(s) the screen binds do not exist in the design-system export` + (missing.some((m) => m.near) ? ` (${missing.filter((m) => m.near).length} differ from a design-system name only by case or punctuation \u2014 e.g. ` + missing.filter((m) => m.near).slice(0, 2).map((m) => `'${m.name}' vs '${m.near}'`).join(", ") + ")" : "") + `: ${missing.slice(0, 8).map((m) => "'" + m.name + "'").join(", ")}${missing.length > 8 ? ", \u2026" : ""}. Build these as literals with a recorded decision \u2014 do not invent a design-system token for them.`,
-            { tokens: missing }
-          );
-        }
-      }
-      if (variables || varScope === "own") {
-        const dangling = [];
-        for (const name of usedTokenNames.keys()) {
-          if (screenVarByName.has(name) || dsVarByName.has(name)) continue;
-          dangling.push(name);
-        }
-        if (dangling.length) {
-          push(
-            "warning",
-            "unresolvable-token",
-            `${dangling.length} token name(s) are bound by a node but defined in NEITHER design/variables.json nor the design-system export: ${dangling.slice(0, 8).map((n) => "'" + n + "'").join(", ")}${dangling.length > 8 ? ", \u2026" : ""}. Re-pull the screen (variables.json now merges, so nothing is lost) or treat the node's raw value as authoritative.`,
-            { tokens: dangling }
-          );
-        }
-      }
-      let rekey = null;
-      const coverage = { instances: instances.length, distinct: 0, matchedByKey: 0, matchedByLocalKey: 0, matchedByName: 0, ambiguousName: 0, unmatched: 0, pct: null, localPct: null, entries: [] };
-      const localComps = components && components.components || [];
-      const localKeys = new Set(localComps.map((c) => c.key).filter(Boolean));
-      const catalog = [].concat(localComps, componentsLibrary && componentsLibrary.components || []);
-      if (!catalog.length) {
-        notChecked.push("component coverage \u2014 no components.local.json was given, so every instance counts as new by default.");
-      } else if (!instances.length) {
-        notChecked.push("component coverage \u2014 the screen export contains no INSTANCE nodes to compare.");
-      } else {
-        const byKey = /* @__PURE__ */ new Map();
-        const byName = /* @__PURE__ */ new Map();
-        for (const c of catalog) {
-          if (c.key) byKey.set(c.key, c);
-          const k = norm(c.name);
-          if (!byName.has(k)) byName.set(k, []);
-          byName.get(k).push(c);
-        }
-        const distinct = /* @__PURE__ */ new Map();
-        for (const i of instances) {
-          const id = i.setKey || i.key || "name:" + norm(i.setName);
-          if (!distinct.has(id)) distinct.set(id, Object.assign({ count: 0 }, i));
-          distinct.get(id).count++;
-        }
-        coverage.distinct = distinct.size;
-        for (const [id, i] of distinct) {
-          const byKeyHit = i.setKey && byKey.get(i.setKey) || i.key && byKey.get(i.key);
-          if (byKeyHit) {
-            coverage.matchedByKey++;
-            const local = localKeys.has(byKeyHit.key);
-            if (local) coverage.matchedByLocalKey++;
-            coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
-            continue;
-          }
-          const cands = byName.get(norm(i.setName)) || [];
-          let best = null;
-          for (const c of cands) {
-            const props = Object.keys(c.props || {}).map((p) => norm(String(p).split("#")[0]));
-            const want = i.propNames.map((p) => norm(String(p).split("#")[0]));
-            const hit = want.filter((p) => props.includes(p)).length;
-            const score = want.length ? hit / want.length : props.length ? 0 : 0.5;
-            if (!best || score > best.score) best = { c, score, hit, of: want.length };
-          }
-          if (best && cands.length > 1) {
-            coverage.ambiguousName++;
-            coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
-          } else if (best && (best.score >= 0.5 || cands.length === 1)) {
-            coverage.matchedByName++;
-            coverage.entries.push({
-              setName: i.setName,
-              key: i.setKey || i.key,
-              matchedBy: "name",
-              verified: false,
-              catalogName: best.c.name,
-              catalogKey: best.c.key,
-              propOverlap: `${best.hit}/${best.of}`,
-              instances: i.count
-            });
-          } else {
-            coverage.unmatched++;
-            coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, verified: false, instances: i.count });
-          }
-        }
-        const matched = coverage.matchedByKey + coverage.matchedByName;
-        coverage.pct = Math.round(coverage.matchedByKey / coverage.distinct * 100);
-        coverage.localPct = Math.round(coverage.matchedByLocalKey / coverage.distinct * 100);
-        const pctAny = Math.round(matched / coverage.distinct * 100);
-        rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
-        const rekeyed = !!rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey);
-        coverage.rekey = rekey ? Object.assign({ rekeyed }, rekey.summary) : null;
-        const proposedNames = new Set(rekeyed ? rekey.proposals.map((r) => r.name) : []);
-        const buckets = { localKey: 0, libraryKey: 0, proposed: 0, nameOnly: 0, ambiguous: 0, newWork: 0 };
-        for (const e of coverage.entries) {
-          const b = e.matchedBy === "key" ? e.scope === "local" ? "localKey" : "libraryKey" : proposedNames.has(e.setName) ? "proposed" : e.matchedBy === "name" ? "nameOnly" : e.ambiguous ? "ambiguous" : "newWork";
-          e.bucket = b;
-          buckets[b]++;
-        }
-        coverage.buckets = buckets;
-        const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + norm(i.setName)));
-        const hiddenOnly = /* @__PURE__ */ new Set();
-        const everyInstance = (n) => {
-          if (!n || typeof n !== "object") return;
-          if (n.type === "INSTANCE" && n.mainComponent) {
-            const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + norm(mc.setName || mc.name);
-            if (!visibleSets.has(id)) hiddenOnly.add(id);
-          }
-          for (const c of n.children || []) everyInstance(c);
-        };
-        for (const s of screens) for (const root of rootsOf2(s.doc)) everyInstance(root);
-        coverage.hiddenOnly = hiddenOnly.size;
-        if (rekeyed) {
-          const s = rekey.summary, props = rekey.proposals;
-          const residual = rekey.rows.filter((r) => !r.match);
-          push(
-            "blocker",
-            "catalog-rekeyed",
-            `0 of ${s.names} component(s) on this screen resolve to components.local.json by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. That is not a foreign library \u2014 it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every component key), or the library was re-published. Proposed matches (confirm each before reuse \u2014 nothing is auto-accepted): ` + props.slice(0, 12).map((r) => `'${r.name}' \u2192 ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare \u2014 weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") + (props.length > 12 ? `, \u2026 (${props.length} in all \u2014 see componentProposals)` : "") + `. ${residual.length} name(s) are not in components.local.json` + (buckets.libraryKey + buckets.nameOnly ? ` \u2014 of the table's rows, ${buckets.libraryKey + buckets.nameOnly} are third-party components.library.json matches and ${buckets.newWork} new work` : ` and stay new work`) + (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", \u2026" : ""})` : "") + `. To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run \`map-bootstrap.js <components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\` \u2014 it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
-            { rekey: s, proposals: props.length }
-          );
-        } else if (coverage.localPct <= WRONG_CATALOG_PCT) {
-          push(
-            "blocker",
-            "catalog-covers-nothing",
-            `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) used on this screen (${coverage.localPct}%) are in components.local.json by key \u2014 the catalog you exported is not the library this screen is built from. ` + (coverage.matchedByKey > coverage.matchedByLocalKey ? `${coverage.matchedByKey - coverage.matchedByLocalKey} more match components.library.json, which only means both files consume the same third-party set. ` : "") + (coverage.matchedByName ? `${coverage.matchedByName} match BY NAME only and are marked unverified: a lead, not a mapping. ` : "") + (coverage.ambiguousName ? `${coverage.ambiguousName} more share a name with SEVERAL catalog entries ('Component 1'-class names) and are deliberately left unmatched. ` : "") + `A "318/318 mapped" count measures the catalog against itself and means nothing here. To find the owning library: open any instance in Figma and use right-click > "Go to main component" \u2014 it jumps to the file that defines it. Then connect that file and run \`dtwin pull --as-library "<name>"\`. Until then every instance is correctly a \`verdict:"new"\` build, not a port of the catalog.` + (rekey && rekey.summary.withCandidates ? ` (Checked for the duplicated-file case too: only ${rekey.summary.proposedWithSignature} of the ${rekey.summary.withCandidates} name twin(s) also agree on prop signature \u2014 too few to call it the same library under new keys.)` : ""),
-            { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, ambiguousName: coverage.ambiguousName, localPct: coverage.localPct } }
-          );
-        } else if (coverage.localPct < 100) {
-          push(
-            "warning",
-            "partial-catalog-coverage",
-            `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) on this screen (${coverage.localPct}%) resolve to components.local.json by key` + (coverage.matchedByName ? `, ${coverage.matchedByName} more by name only (unverified)` : "") + `. The rest are new work: ${coverage.entries.filter((e) => !e.matchedBy).slice(0, 6).map((e) => "'" + e.setName + "'").join(", ")}.`,
-            { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, localPct: coverage.localPct } }
-          );
-        } else {
-          push("info", "catalog-covers-screen", `all ${coverage.distinct} component(s) on this screen resolve to components.local.json by key.`, {});
-        }
-        const named = coverage.entries.filter((e) => e.matchedBy === "name" && !proposedNames.has(e.setName));
-        if (named.length) {
-          push(
-            "info",
-            "name-matched-components",
-            `${named.length} component(s) have no key in the catalog but DO have an exact name twin there: ` + named.slice(0, 10).map((e) => `'${e.setName}' (props ${e.propOverlap})`).join(", ") + (named.length > 10 ? `, \u2026` : "") + `. Mapped BY NAME, UNVERIFIED \u2014 confirm one with "Go to main component" before reusing any of their code; if that one instance points at the catalog's file, the rest almost certainly do too.`,
-            { components: named.map((e) => ({ setName: e.setName, catalogName: e.catalogName, catalogKey: e.catalogKey, propOverlap: e.propOverlap, verified: false })) }
-          );
-        }
-        const amb = coverage.entries.filter((e) => e.ambiguous && !proposedNames.has(e.setName));
-        if (amb.length) {
-          push(
-            "warning",
-            "ambiguous-component-name",
-            `${amb.length} component(s) share their name with SEVERAL catalog entries and were left unmatched on purpose: ` + amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", \u2026" : "") + `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed \u2014 binding code to one of them by name would be a guess with a 1-in-${amb[0].candidates} chance.`,
-            { components: amb.map((e) => ({ setName: e.setName, candidates: e.candidates })) }
-          );
-        }
-      }
-      if (fonts.size > 1) {
-        const sorted = [...fonts.entries()].sort((a, b) => b[1] - a[1]);
-        const [mainFamily, mainCount] = sorted[0];
-        const strays = sorted.slice(1);
-        const total = sorted.reduce((n, [, c]) => n + c, 0);
-        push(
-          "warning",
-          "font-family-stray",
-          `${total} text node(s) use ${sorted.length} different font families: ${sorted.map(([f, c]) => `${f} (${c})`).join(", ")}. '${mainFamily}' carries ${mainCount}; the rest are strays \u2014 usually a starter-kit style (Figma's Material 3 kit leaks \`material-theme/*\`) left on a layer. Ask the designer before shipping a second webfont for ${strays.reduce((n, [, c]) => n + c, 0)} node(s).`,
-          { families: sorted.map(([family, count2]) => ({ family, count: count2 })) }
-        );
-      }
-      if (stylesText && stylesText.styles && fonts.size) {
-        const dsFamilies = new Set((stylesText.styles || []).map((s) => s.font).filter(Boolean));
-        const foreign = [...fonts.keys()].filter((f) => dsFamilies.size && !dsFamilies.has(f));
-        if (foreign.length) {
-          push(
-            "warning",
-            "font-not-in-design-system",
-            `font ${foreign.map((f) => `'${f}'`).join(", ")} appears on the screen but NO design-system text style uses it (the design system's text styles are all ${[...dsFamilies].join(", ")}). Nothing in the export declares a font file or a webfont for either, so "is it installed and licensed" is a question only the designer can answer.`,
-            { fonts: foreign, designSystemFonts: [...dsFamilies] }
-          );
-        }
-      }
-      if (stylesText && stylesText.styles && textStyles.size) {
-        const dsByName = new Map((stylesText.styles || []).map((s) => [s.name, s]));
-        const dsNorm = /* @__PURE__ */ new Map();
-        for (const s of stylesText.styles || []) dsNorm.set(norm(s.name), s.name);
-        const absent = [], nearMiss = [];
-        for (const name of textStyles.keys()) {
-          if (dsByName.has(name)) continue;
-          const near = dsNorm.get(norm(name));
-          if (near) nearMiss.push({ name, near });
-          else absent.push(name);
-        }
-        if (nearMiss.length) {
-          push(
-            "blocker",
-            "text-style-near-miss",
-            `${nearMiss.length} text style name(s) differ from a design-system style ONLY by case or punctuation: ` + nearMiss.map((n) => `'${n.name}' vs '${n.near}'`).join(", ") + `. That is the exact near-miss a name-based mapping binds wrongly and silently. Confirm they are the same style before reusing it.`,
-            { styles: nearMiss }
-          );
-        }
-        if (absent.length) {
-          push(
-            "warning",
-            "text-style-absent",
-            `${absent.length} of ${textStyles.size} text style(s) used on the screen are not in the design-system export: ` + absent.slice(0, 8).map((n) => "'" + n + "'").join(", ") + (absent.length > 8 ? ", \u2026" : "") + ".",
-            { styles: absent }
-          );
-        }
-      }
-      const absurd = [];
-      const seenAbsurd = /* @__PURE__ */ new Set();
-      for (const v of [].concat(tokens && tokens.variables || [], variables && variables.variables || [])) {
-        for (const [mode, val] of Object.entries(v && v.values || {})) {
-          const n = typeof val === "number" ? val : val && typeof val === "object" && typeof val.value === "number" ? val.value : null;
-          if (n == null || Math.abs(n) < ABSURD_NUMBER) continue;
-          const id = `${v.collection}/${v.name}/${mode}`;
-          if (seenAbsurd.has(id)) continue;
-          seenAbsurd.add(id);
-          absurd.push({ name: v.name, collection: v.collection, mode, value: n });
-        }
-      }
-      if (absurd.length) {
-        push(
-          "warning",
-          "sentinel-token-value",
-          `${absurd.length} token value(s) are sentinels, not measurements: ` + absurd.slice(0, 4).map((a) => `'${a.name}' = ${a.value} (${a.mode})`).join(", ") + (absurd.length > 4 ? ", \u2026" : "") + `. Figma's "fully rounded" corner exports as a literal 1e9. Emit these as the platform's own idiom (CSS 9999px or 50%, SwiftUI .infinity, Compose CircleShape) \u2014 never as \`${absurd[0].value}px\`.`,
-          { tokens: absurd }
-        );
-      }
-      const multiModeColls = [];
-      const seenColl = /* @__PURE__ */ new Set();
-      for (const c of [].concat(tokens && tokens.collections || [], screenColls)) {
-        if (!Array.isArray(c.modes) || c.modes.length <= 1) continue;
-        if (seenColl.has(c.name)) continue;
-        seenColl.add(c.name);
-        multiModeColls.push(c);
-      }
-      for (const c of multiModeColls) {
-        const seen = resolvedModes.get(c.name);
-        if (!seen || !seen.size) continue;
-        if (seen.size === 1 && c.modes.length > 1) {
-          const only = [...seen][0];
-          const rest = c.modes.filter((m) => m !== only);
-          push(
-            "warning",
-            "single-mode-export",
-            `every exported frame resolved collection '${c.name}' in mode '${only}', but it defines ${c.modes.length} modes (${c.modes.join(", ")}). The other ${rest.length} mode(s) are DERIVED from variable values, never seen rendered \u2014 so any element whose ${only}-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in ${rest.map((m) => `'${m}'`).join(" / ")} too, or have the designer confirm the derivation before it ships.`,
-            { collection: c.name, exportedMode: only, modes: c.modes }
-          );
-        }
-      }
-      contrastPerMode(screens, variables, tokens, push, resolvedModes);
-      findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
-      const count = (s) => findings.filter((f) => f.severity === s).length;
-      return {
-        summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
-        coverage,
-        // The confirmation list (catalog-rekeyed). Every entry starts unconfirmed; map-bootstrap.js
-        // --from-proposals stubs only the ones a person set "confirmed": true on.
-        componentProposals: rekey && coverage.rekey && coverage.rekey.rekeyed ? rekey.proposals.map((r) => ({
-          name: r.name,
-          instances: r.instances,
-          screens: r.screens,
-          instanceKeys: r.instanceKeys,
-          remote: r.remote,
-          catalog: r.match,
-          evidence: r.evidence,
-          tie: r.tie || null,
-          alternatives: r.alternatives,
-          reasons: r.reasons,
-          confirmed: false
-        })) : [],
-        componentResidual: rekey && coverage.rekey && coverage.rekey.rekeyed ? rekey.rows.filter((r) => !r.match).map((r) => ({ name: r.name, instances: r.instances, reasons: r.reasons })) : [],
-        findings,
-        notChecked,
-        inputs: {
-          screens: screens.map((s) => s.label),
-          variables: !!variables,
-          tokens: !!tokens,
-          components: !!components,
-          stylesText: !!stylesText
-        }
-      };
-    }
-    function hexToRgb(hex) {
-      const m = /^#?([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(String(hex || ""));
-      if (!m) return null;
-      const n = parseInt(m[1], 16);
-      return { r: n >> 16 & 255, g: n >> 8 & 255, b: n & 255, a: m[2] ? parseInt(m[2], 16) / 255 : 1 };
-    }
-    function relLuminance(c) {
-      const ch = (v) => {
-        v /= 255;
-        return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-      };
-      return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
-    }
-    function ratio(a, b) {
-      const [hi, lo] = [relLuminance(a), relLuminance(b)].sort((x, y) => y - x);
-      return (hi + 0.05) / (lo + 0.05);
-    }
-    var MIN_CONTRAST = 4.5;
-    function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
-      const defs = /* @__PURE__ */ new Map();
-      for (const v of tokens && tokens.variables || []) if (v.name) defs.set(v.name, v);
-      for (const v of variables && variables.variables || []) if (v.name) defs.set(v.name, v);
-      if (!defs.size) return;
-      function resolve(name, mode, depth) {
-        if (depth > 8) return null;
-        const v = defs.get(name);
-        if (!v || !v.values) return null;
-        let val = v.values[mode];
-        if (val === void 0) {
-          const keys = Object.keys(v.values);
-          if (keys.length !== 1) return null;
-          val = v.values[keys[0]];
-        }
-        if (typeof val === "string") return hexToRgb(val);
-        if (val && typeof val === "object" && val.aliasOf) return resolve(val.aliasOf, mode, depth + 1);
-        return null;
-      }
-      const modes = /* @__PURE__ */ new Set();
-      for (const c of [].concat(tokens && tokens.collections || [], variables && variables.collections || [])) {
-        for (const m of c && c.modes || []) modes.add(m);
-      }
-      const rendered = /* @__PURE__ */ new Set();
-      for (const set of (resolvedModes || /* @__PURE__ */ new Map()).values()) for (const m of set) rendered.add(m);
-      for (const m of rendered) modes.delete(m);
-      if (!modes.size) return;
-      if (!rendered.size) return;
-      const pairs = /* @__PURE__ */ new Map();
-      for (const s of screens) {
-        for (const root of rootsOf2(s.doc)) {
-          walkWithBg(root, null, (n, bgToken) => {
-            if (n.type !== "TEXT" || !bgToken) return;
-            const fg = n.tokens && (n.tokens.fills || n.tokens.textRangeFills) || (n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
-            if (!fg || typeof fg !== "string") return;
-            const key = fg + "|" + bgToken;
-            if (!pairs.has(key)) pairs.set(key, { fg, bg: bgToken, nodes: [], sample: n.name });
-            if (pairs.get(key).nodes.length < 4) pairs.get(key).nodes.push(n.id);
-          });
-        }
-      }
-      if (!pairs.size) return;
-      const failures = [];
-      for (const p of pairs.values()) {
-        for (const mode of modes) {
-          const fg = resolve(p.fg, mode, 0);
-          const bg = resolve(p.bg, mode, 0);
-          if (!fg || !bg) continue;
-          const r = ratio(fg, bg);
-          if (r >= MIN_CONTRAST) continue;
-          failures.push({ mode, fg: p.fg, bg: p.bg, ratio: Number(r.toFixed(2)), nodes: p.nodes, sample: p.sample });
-        }
-      }
-      if (!failures.length) return;
-      const byMode = /* @__PURE__ */ new Map();
-      for (const f of failures) {
-        if (!byMode.has(f.mode)) byMode.set(f.mode, []);
-        byMode.get(f.mode).push(f);
-      }
-      for (const [mode, list] of byMode) {
-        push(
-          "blocker",
-          "derived-mode-contrast",
-          `in mode '${mode}', ${list.length} text/background token pair(s) fall below WCAG AA (${MIN_CONTRAST}:1): ` + list.slice(0, 4).map((f) => `'${f.fg}' on '${f.bg}' = ${f.ratio}:1 (e.g. ${f.sample})`).join("; ") + (list.length > 4 ? ", \u2026" : "") + `. No frame was exported in '${mode}', so this mode is DERIVED from variable values and nobody has ever seen it rendered \u2014 the derivation is mechanically correct and visually broken. Export a '${mode}' frame, or get the designer to say which token each of these should use there. Do not invent an override and call it done.`,
-          { mode, pairs: list }
-        );
-      }
-    }
-    function walkWithBg(node, bgToken, fn) {
-      if (!node || typeof node !== "object") return;
-      if (hiddenSelf(node)) return;
-      let bg = bgToken;
-      const own = node.tokens && node.tokens.fills || (node.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
-      if (own && typeof own === "string" && node.type !== "TEXT") bg = own;
-      fn(node, bg);
-      for (const c of node.children || []) walkWithBg(c, bg, fn);
-    }
-    function toMarkdown(res) {
-      const L = [];
-      L.push(`# Cross-file check \u2014 ${res.inputs.screens.join(", ") || "(no screens)"}`, "");
-      L.push(
-        `**${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info. Every check here is a JOIN between the screen and the design system \u2014 none of it is visible from either file alone.`,
-        ""
-      );
-      const c = res.coverage;
-      if (c && c.distinct) {
-        L.push("## Component coverage of THIS screen", "");
-        L.push(`| | count |`, `|---|---|`);
-        L.push(`| visible instances on the screen | ${c.instances} |`);
-        L.push(`| **distinct components** (each lands in exactly one row below) | **${c.distinct}** |`);
-        const b = c.buckets || {};
-        L.push(`| in **components.local.json** by key (verified) | ${b.localKey || 0} (${c.localPct}%) |`);
-        L.push(`| in components.library.json by key (a shared third-party set) | ${b.libraryKey || 0} |`);
-        if (c.rekey && c.rekey.rekeyed) L.push(`| same name **and** prop signature as a catalog entry \u2014 proposed, confirm below | ${b.proposed || 0} |`);
-        L.push(`| exact name twin only (**unverified**) | ${b.nameOnly || 0} |`);
-        L.push(`| name shared with several catalog entries \u2014 left unmatched | ${b.ambiguous || 0} |`);
-        L.push(`| no match at all \u2014 new work | ${b.newWork || 0} |`);
-        if (c.hiddenOnly) L.push(`| *(not counted: components used only on hidden layers \u2014 not built)* | ${c.hiddenOnly} |`);
-        L.push("");
-      }
-      if (res.componentProposals && res.componentProposals.length) {
-        L.push("## Proposed component matches \u2014 confirm before reuse", "");
-        L.push(
-          "*Matched by name + prop signature because the keys were re-minted (a duplicated file or a re-published library).",
-          'Nothing here is accepted until a person sets `"confirmed": true` on the entry in the JSON report.*',
-          ""
-        );
-        L.push("| instance name | \xD7 | \u2192 catalog | id | page | evidence | why |", "|---|--:|---|---|---|---|---|");
-        for (const p of res.componentProposals) {
-          L.push(`| \`${p.name}\` | ${p.instances} | \`${p.catalog.name}\` | ${p.catalog.id} | ${p.catalog.page || ""} | ${p.evidence}${p.tie ? ` (${p.tie})` : ""} | ${p.reasons.join("; ")} |`);
-        }
-        L.push("");
-        if (res.componentResidual && res.componentResidual.length) {
-          const twin = new Set((c && c.entries ? c.entries : []).filter((e) => e.bucket === "nameOnly" || e.bucket === "libraryKey").map((e) => e.setName));
-          const fresh = res.componentResidual.filter((r) => !twin.has(r.name)), known = res.componentResidual.filter((r) => twin.has(r.name));
-          L.push(`**Not in components.local.json (${res.componentResidual.length}):** ` + (known.length ? `${known.length} are in (or named like an entry of) components.library.json \u2014 third-party, see the table: ${known.map((r) => `\`${r.name}\``).join(", ")}. ` : "") + `${fresh.length} are new work${fresh.length ? ": " + fresh.map((r) => `\`${r.name}\``).join(", ") : ""}.`, "");
-        }
-      }
-      for (const sev of ["blocker", "warning", "info"]) {
-        const fs2 = res.findings.filter((f) => f.severity === sev);
-        if (!fs2.length) continue;
-        L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs2.length})`, "");
-        for (const f of fs2) L.push(`- \`${f.code}\` ${f.message}`);
-        L.push("");
-      }
-      if (res.notChecked.length) {
-        L.push("## Not checked", "", "*These are gaps in the INPUT, not clean results:*", "");
-        for (const n of res.notChecked) L.push(`- ${n}`);
-        L.push("");
-      }
-      return L.join("\n") + "\n";
-    }
-    module2.exports = { crossCheck, toMarkdown, ABSURD_NUMBER, WRONG_CATALOG_PCT };
-    if (require.main === module2) {
-      const fs2 = require("fs");
-      const path2 = require("path");
-      const { readJsonFile } = require_catalog_input();
-      const argv = process.argv.slice(2);
-      const take = (flag) => {
-        const i = argv.indexOf(flag);
-        if (i === -1) return void 0;
-        const v = argv[i + 1];
-        argv.splice(i, 2);
-        return v;
-      };
-      const strip = (flag) => {
-        const i = argv.indexOf(flag);
-        if (i === -1) return false;
-        argv.splice(i, 1);
-        return true;
-      };
-      const dsDir = take("--design-system");
-      const varsFile = take("--variables");
-      const out = take("--out");
-      const jsonOnly = strip("--json"), gate = strip("--gate");
-      const USAGE2 = "usage: node design-to-code/cross-check.js <screen.json>... [--design-system design/design-system] [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
-      if (argv.includes("--help") || argv.includes("-h")) {
-        console.log(USAGE2);
-        process.exit(0);
-      }
-      const stray = argv.filter((a) => a.startsWith("-"));
-      if (stray.length || !argv.length) {
-        console.error((stray.length ? `cross-check: unknown flag ${stray.join(", ")}
-` : "") + USAGE2);
-        process.exit(2);
-      }
-      const maybe = (f) => f && fs2.existsSync(f) ? JSON.parse(fs2.readFileSync(f, "utf8")) : null;
-      const ctx = require_slice_sources().variablesContext(argv, varsFile, fs2, path2);
-      const screens = argv.map((f, i) => ({ doc: readJsonFile(f, "screen export"), label: path2.basename(f, ".json"), vars: ctx.own[i] }));
-      const dsBase = dsDir || "design/design-system";
-      const { variablesPath, variablesDoc } = ctx;
-      if (variablesPath) console.error(`variables: ${variablesPath}`);
-      if (ctx.staleLegacy) {
-        console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-      }
-      const res = crossCheck({
-        screens,
-        sliceSources: ctx.sliceSources,
-        variables: variablesDoc,
-        variablesPath,
-        tokens: maybe(path2.join(dsBase, "tokens.json")),
-        components: maybe(path2.join(dsBase, "components.local.json")),
-        componentsLibrary: maybe(path2.join(dsBase, "components.library.json")),
-        stylesText: maybe(path2.join(dsBase, "styles.text.json"))
-      });
-      if (jsonOnly) {
-        process.stdout.write(JSON.stringify(res, null, 2) + "\n");
-      } else if (out) {
-        fs2.mkdirSync(path2.dirname(out), { recursive: true });
-        fs2.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-        fs2.writeFileSync(out + ".md", toMarkdown(res));
-        console.error(`wrote ${out}.json and ${out}.md`);
-      } else {
-        process.stdout.write(toMarkdown(res));
-      }
-      console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
-      for (const n of res.notChecked) console.error(`note  not checked: ${n}`);
-      process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
-    }
-  }
-});
+// design-to-code/audit.ts
+var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
+var PLATFORMS = Object.keys(TOUCH_MIN);
+function blockerIds(auditDoc) {
+  const findings = reportFindings(auditDoc);
+  const ids = findingIds(findings.map((f) => ({ code: f.code || "blocker", nodeId: f.nodeId })));
+  return findings.flatMap((f, i) => f.severity === "blocker" ? [f.id || ids[i] || f.code || "blocker"] : []);
+}
+function reportFindings(auditDoc) {
+  const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
+  const str = (v) => typeof v === "string" && v ? v : void 0;
+  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
+}
+if (false) process.exitCode = main(process.argv.slice(2));
 
-// design-to-code/audit.js
-var require_audit = __commonJS({
-  "design-to-code/audit.js"(exports2, module2) {
-    var { isHidden, hiddenSelf } = require_hidden();
-    var SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
-    var omit = (o, keys) => {
-      const out = {};
-      for (const k of Object.keys(o)) if (!keys.includes(k)) out[k] = o[k];
-      return out;
+// design-to-code/audit-gate.ts
+function locateAuditFile(cwd, screenFile, screenName) {
+  const dir = path3.join(cwd, AUDIT_DIR);
+  if (!fs4.existsSync(dir)) return null;
+  const base = screenFile ? path3.basename(screenFile, ".json") : null;
+  const candidates = [];
+  if (base) candidates.push(path3.join(dir, base + ".json"));
+  let entries = [];
+  try {
+    entries = fs4.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes("."));
+  } catch {
+    entries = [];
+  }
+  for (const c of candidates) if (fs4.existsSync(c)) return path3.relative(cwd, c).split(path3.sep).join("/");
+  const wantSlug = alnumKey(screenName);
+  if (wantSlug) {
+    const stem = (f) => f.replace(/\.json$/, "");
+    const nameOf = (f) => {
+      const s = stem(f);
+      const i = s.lastIndexOf("__");
+      return i > 0 ? s.slice(0, i) : null;
     };
-    var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
-    var PLATFORMS = Object.keys(TOUCH_MIN);
-    function parseHex(hex) {
-      const m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(String(hex || ""));
-      if (!m) return null;
-      const n = parseInt(m[1], 16);
-      return { r: n >> 16 & 255, g: n >> 8 & 255, b: n & 255, a: m[2] ? parseInt(m[2], 16) / 255 : 1 };
-    }
-    var over = (fg, bg) => ({
-      r: fg.r * fg.a + bg.r * (1 - fg.a),
-      g: fg.g * fg.a + bg.g * (1 - fg.a),
-      b: fg.b * fg.a + bg.b * (1 - fg.a),
-      a: 1
+    const hit = entries.find((f) => alnumKey(stem(f)) === wantSlug) ?? entries.find((f) => {
+      const n = nameOf(f);
+      return n !== null && alnumKey(n) === wantSlug;
     });
-    function luminance(c) {
-      const ch = (v) => {
-        v /= 255;
-        return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-      };
-      return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
+    if (hit) return path3.relative(cwd, path3.join(dir, hit)).split(path3.sep).join("/");
+  }
+  return null;
+}
+function auditGateStatus(cwd, screenFile, screenName) {
+  const rel = locateAuditFile(cwd, screenFile, screenName);
+  if (!rel) return { auditFile: null, blockers: [], legacyBlockers: [] };
+  const r = readJson(path3.join(cwd, rel), isAuditReport);
+  if (!("doc" in r)) return { auditFile: rel, blockers: [], legacyBlockers: [], unreadable: true, error: r.error };
+  return { auditFile: rel, blockers: blockerIds(r.doc), legacyBlockers: legacyBlockerIds(reportFindings(r.doc)) };
+}
+
+// bridge/src/json-file.ts
+import fs6 from "node:fs";
+
+// bridge/src/atomic-write.ts
+import crypto2 from "node:crypto";
+import fs5 from "node:fs";
+import path4 from "node:path";
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
+function writeFileAtomic(file, data, opts = {}) {
+  fs5.mkdirSync(path4.dirname(path4.resolve(file)), { recursive: true });
+  const tmp = file + tmpSuffix();
+  try {
+    fs5.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.mode !== void 0) fs5.chmodSync(tmp, opts.mode);
+    fs5.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs5.rmSync(tmp, { force: true });
+    } catch {
     }
-    function contrastRatio(a, b) {
-      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-      return (hi + 0.05) / (lo + 0.05);
-    }
-    function toLab(c) {
-      const lin = (v) => {
-        v /= 255;
-        return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-      };
-      const R = lin(c.r), G = lin(c.g), B = lin(c.b);
-      const f = (t) => t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116;
-      const x = f((R * 0.4124 + G * 0.3576 + B * 0.1805) / 0.95047);
-      const y = f(R * 0.2126 + G * 0.7152 + B * 0.0722);
-      const z = f((R * 0.0193 + G * 0.1192 + B * 0.9505) / 1.08883);
-      return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
-    }
-    var labDist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
-    var deltaE = (a, b) => labDist(toLab(a), toLab(b));
-    var INTERACTIVE_NAME = /\b(button|btn|cta|link|tab|chip|toggle|switch|checkbox|check box|radio|input|text ?field|textfield|search|select|dropdown|menu item|icon ?button|close|back|segmented|stepper|slider)\b/i;
-    var TAP_TRIGGER = /click|press|tap|drag/;
-    var CHROME_TOP = /status ?bar|9:41|battery|signal|dynamic island|notch/i;
-    var CHROME_BOTTOM = /home ?indicator|gesture ?bar|navigation ?handle/i;
-    var STATE_WORDS = {
-      loading: /\b(loading|skeleton|spinner|shimmer|placeholder)\b/i,
-      empty: /\b(empty|no results?|no data|nothing (here|found)|zero ?state)\b/i,
-      error: /\b(error|failed|failure|offline|retry|something went wrong|not found|404|500)\b/i
-    };
-    var STATE_SYNONYMS = {
-      hover: /^(hover|hovered|mouse ?over)$/,
-      pressed: /^(pressed|press|active|tapped|down)$/,
-      focus: /^(focus|focused|focus[- ]visible|keyboard ?focus)$/,
-      disabled: /^(disabled|inactive|is ?disabled)$/,
-      // Not "danger"/"destructive": those are button STYLE variants (a red button), not an error state.
-      error: /^(error|invalid|has ?error|is ?invalid)$/,
-      selected: /^(selected|checked|on|active|current|is ?selected)$/,
-      loading: /^(loading|busy|in ?progress|is ?loading)$/
-    };
-    function requiredStates(kind, platform) {
-      const pointer = platform === "web";
-      switch (kind) {
-        case "button":
-          return pointer ? ["hover", "pressed", "focus", "disabled"] : ["pressed", "disabled"];
-        case "input":
-          return ["focus", "error", "disabled"];
-        case "toggle":
-          return ["selected", "disabled"];
-        case "tab":
-          return ["selected"];
-        case "link":
-          return pointer ? ["hover", "focus"] : ["pressed"];
-        default:
-          return [];
-      }
-    }
-    function controlKind(name) {
-      const s = String(name || "");
-      if (/\b(input|text ?field|textfield|search|select|dropdown|textarea)\b/i.test(s)) return "input";
-      if (/\b(checkbox|check box|radio|switch|toggle)\b/i.test(s)) return "toggle";
-      if (/\b(tab|tabs|segmented|nav ?item|navigation item)\b/i.test(s)) return "tab";
-      if (/\blink\b/i.test(s)) return "link";
-      if (/\b(button|btn|cta|icon ?button|chip)\b/i.test(s)) return "button";
-      return null;
-    }
-    function rootsOf2(doc, label) {
-      if (!doc || typeof doc !== "object") return [];
-      if (Array.isArray(doc)) return doc.flatMap((d, i) => rootsOf2(d, `${label}[${i}]`));
-      if (Array.isArray(doc.nodes)) return doc.nodes.map((n) => ({ tree: n, label: doc.screen || n.name || label, manifest: doc.manifest }));
-      if (doc.tree && typeof doc.tree === "object") return [{ tree: doc.tree, label: doc.tree.name || label, manifest: doc.manifest }];
-      if (doc.type && doc.id) return [{ tree: doc, label: doc.name || label, manifest: doc.manifest }];
-      return [];
-    }
-    var r1 = (v) => Math.round(v * 100) / 100;
-    var hasTok = (node, ...keys) => !!(node.tokens && keys.some((k) => node.tokens[k] != null));
-    function audit(input, opts = {}) {
-      const platformAssumed = !PLATFORMS.includes(opts.platform);
-      const platform = platformAssumed ? "web" : opts.platform;
-      const gridAssumed = !(opts.grid > 0);
-      const grid = gridAssumed ? 4 : opts.grid;
-      let gridMismatch = null;
-      if (gridAssumed) {
-        const dsTokens = opts.designSystem && opts.designSystem.tokens;
-        const spacingValues = [];
-        for (const c of dsTokens && dsTokens.collections || []) {
-          if (!/spac|space/i.test(c.name || "")) continue;
-          for (const v of c.variables || []) {
-            for (const mv of Object.values(v.valuesByMode || v.values || {})) {
-              const n = typeof mv === "number" ? mv : typeof mv === "string" && /^-?\d+(\.\d+)?$/.test(mv) ? Number(mv) : null;
-              if (n !== null && Number.isFinite(n) && n > 0) spacingValues.push(Math.abs(n));
-            }
-          }
-        }
-        if (spacingValues.length >= 2) {
-          const gcd2 = (a, b) => b === 0 ? a : gcd2(b, a % b);
-          const step = spacingValues.map(Math.round).reduce((a, b) => gcd2(a, b));
-          if (step > 0 && step !== grid) gridMismatch = step;
-        }
-      }
-      const docs = Array.isArray(input) ? input : [input];
-      const roots = docs.flatMap((d, i) => rootsOf2(d && d.doc !== void 0 ? d.doc : d, d && d.label || `input${i}`));
-      const catalog = opts.catalog && Array.isArray(opts.catalog.components) ? opts.catalog.components : [];
-      const findings = [];
-      const add = (severity, code, message, node, ctx, extra) => findings.push(Object.assign(
-        { severity, code, message },
-        node ? { nodeId: node.id, nodeName: node.name } : {},
-        ctx ? { screen: ctx.label, path: ctx.path } : {},
-        extra || {}
-      ));
-      const binding = { color: [0, 0], typography: [0, 0], spacing: [0, 0], radius: [0, 0], effects: [0, 0] };
-      const tally = (cat, bound) => {
-        binding[cat][1]++;
-        if (bound) binding[cat][0]++;
-      };
-      const rawColors = /* @__PURE__ */ new Map();
-      const usedComponents = /* @__PURE__ */ new Map();
-      const stateHits = { loading: [], empty: [], error: [] };
-      const annotations = [];
-      const hiddenIds = /* @__PURE__ */ new Set();
-      for (const root of roots) {
-        const m = root.manifest || {};
-        if (m.truncated) add("blocker", "export-truncated", `export of '${root.label}' was truncated (${m.truncated} subtree(s) past the depth limit) \u2014 the tree is incomplete; re-export a narrower scope before building`, null, { label: root.label });
-        if (m.assetsFailed) add("blocker", "assets-failed", `${m.assetsFailed} asset export(s) failed in '${root.label}' \u2014 those nodes have no file (look for \`geometry\` fallbacks)`, null, { label: root.label });
-        if (root.tree.devStatus && root.tree.devStatus !== "ready_for_dev" && root.tree.devStatus !== "completed") {
-          add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${root.tree.devStatus}' \u2014 confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
-        }
-        walk(root.tree, [], { label: root.label, rootBox: root.tree.box });
-      }
-      function walk(node, ancestors, ctx) {
-        if (!node || typeof node !== "object") return;
-        const path2 = [...ancestors.map((a) => a.name), node.name].join(" > ");
-        const here = { label: ctx.label, path: path2 };
-        const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
-        if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: a.label || a.markdown });
-        if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
-        for (const [state, re] of Object.entries(STATE_WORDS)) {
-          if (re.test(node.name || "") || node.type === "TEXT" && ancestors.length <= 6 && re.test(node.text || "")) {
-            stateHits[state].push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
-          }
-        }
-        if (hiddenBranch) {
-          if (node.id) hiddenIds.add(node.id);
-          const self = { name: node.name, hidden: true, fills: [], __tappable: false, __beneath: [] };
-          for (const child of Array.isArray(node.children) ? node.children : []) walk(child, [...ancestors, self], ctx);
-          return;
-        }
-        if (node.mainComponent || node.component) {
-          const mc = node.mainComponent || {};
-          const name = mc.setName || node.component;
-          const key = mc.setKey || mc.key || name;
-          if (key && !usedComponents.has(key)) usedComponents.set(key, { name, key: mc.setKey || mc.key, remote: !!mc.remote, nodeId: node.id });
-        }
-        if (node.detachedFrom) add("warning", "detached-instance", `'${node.name}' is a detached component instance \u2014 map it back to the component unless the detach was deliberate`, node, here);
-        if (node.missingFont) add("blocker", "missing-font", `'${node.name}' uses a font Figma couldn't load \u2014 the recorded family/weight may not match the render; confirm the font files and license`, node, here);
-        if (node.layout && node.layout.mode === "absolute" && Array.isArray(node.children) && node.children.length > 1 && node.type !== "GROUP" && ancestors.length > 0) {
-          add("info", "no-auto-layout", `'${node.name}' has no auto layout (${node.children.length} children placed by coordinates) \u2014 infer a flow layout and ask how it should resize`, node, here);
-        }
-        if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && Array.isArray(node.children) && node.children.length) {
-          const [padTop, , padBottom] = node.layout.padding;
-          const kids = node.children.filter((c) => c && c.box && typeof c.box.h === "number");
-          if (kids.length === node.children.length && kids.length) {
-            const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
-            const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
-            let expectedH = null;
-            if (direction === "row") expectedH = padTop + padBottom + Math.max(...kids.map((c) => c.box.h));
-            else if (direction === "column") expectedH = padTop + padBottom + kids.reduce((s, c) => s + c.box.h, 0) + gap * (kids.length - 1);
-            const heightMode = node.heightMode || "fixed";
-            const delta = expectedH === null ? 0 : expectedH - node.box.h;
-            const overflow = expectedH !== null && delta > 1;
-            const hugMismatch = expectedH !== null && heightMode === "hug" && Math.abs(delta) > 1;
-            if (overflow || hugMismatch) {
-              const how = direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom);
-              const why = heightMode === "hug" ? `heightMode:"hug" means this box's height IS the content height, but its own padding + children compute ${expectedH}, not the declared ${node.box.h}` : `content (padding + children) computes ${expectedH}, which OVERFLOWS the declared box.h=${node.box.h} by ${delta}px`;
-              add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h} (heightMode:${JSON.stringify(heightMode)}) \u2014 ${why}: ${padTop}+${how}+${padBottom} = ${expectedH}. The export contradicts itself \u2014 decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH, heightMode });
-            }
-          }
-        }
-        if (ancestors.length <= 2 && node.box && ctx.rootBox && platform !== "web") {
-          const label = `${node.name || ""} ${node.component || ""} ${node.mainComponent && node.mainComponent.setName || ""}`;
-          if (CHROME_TOP.test(label) && node.box.h <= 64) add("warning", "fake-status-bar", `'${node.name}' looks like a drawn status bar \u2014 don't build it; apply the system safe-area/status-bar inset instead`, node, here);
-          else if (CHROME_BOTTOM.test(label) && node.box.h <= 40) add("warning", "fake-home-indicator", `'${node.name}' looks like a drawn home indicator/gesture bar \u2014 use the bottom safe-area inset instead`, node, here);
-        }
-        const isAssetLeaf = !!(node.asset || node.geometry);
-        if (!isAssetLeaf && node.type !== "TEXT" && Array.isArray(node.fills)) {
-          for (const f of node.fills) {
-            if (f.type === "solid") {
-              const bound = !!(f.tokens || hasTok(node, "fills") || node.styles && node.styles.fill);
-              tally("color", bound);
-              if (!bound) noteRaw(f.color, node);
-            }
-            if (f.type === "gradient" && /DIAMOND/.test(f.kind || "") && platform !== "flutter") add("info", "diamond-gradient", `'${node.name}' uses a diamond gradient \u2014 no native equivalent; use the exported asset or approximate`, node, here);
-            if (f.type === "image" && (f.scaleMode === "crop" || f.scaleMode === "tile")) add("info", "image-scale-mode", `'${node.name}' image fill uses scaleMode '${f.scaleMode}' \u2014 not a plain cover/contain; read the crop transform / tile scale`, node, here);
-          }
-        }
-        if (!isAssetLeaf && node.strokes && (node.strokes.align === "outside" || node.strokes.align === "center") && (node.strokes.weight || node.strokes.weights)) {
-          const how = { web: "a CSS border is inside the box \u2014 use outline/box-shadow (no layout) or grow the box", ios: "SwiftUI .strokeBorder is inside, .stroke is centered \u2014 pad an overlay for outside", android: "Modifier.border draws inside \u2014 compensate with padding or drawBehind", "react-native": "borderWidth is inside \u2014 wrap or add padding", flutter: "use BorderSide.strokeAlign outside/center" }[platform];
-          add("info", "stroke-align", `'${node.name}' has a ${node.strokes.align} stroke \u2014 ${how}; the rendered size differs from box`, node, here);
-        }
-        if (!isAssetLeaf && node.strokes && Array.isArray(node.strokes.colors)) {
-          for (const c of node.strokes.colors) {
-            const bound = !!(hasTok(node, "strokes") || node.styles && node.styles.stroke || (node.strokes.paints || []).some((p) => p.tokens));
-            tally("color", bound);
-            if (!bound) noteRaw(c, node);
-          }
-        }
-        if (node.type === "TEXT") {
-          const runs = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ font: node.font, tokens: node.textTokens, textStyle: node.styles && node.styles.text }];
-          for (const r of runs) {
-            const typoBound = !!(r.textStyle || node.styles && node.styles.text || r.tokens && (r.tokens.fontSize || r.tokens.fontFamily || r.tokens.lineHeight) || node.textTokens && (node.textTokens.fontSize || node.textTokens.fontFamily));
-            tally("typography", typoBound);
-            if (r.font && r.font.color) {
-              const cBound = !!(r.tokens && r.tokens.fills || r.fillStyle || node.textTokens && node.textTokens.fills || hasTok(node, "fills") || node.styles && node.styles.fill);
-              tally("color", cBound);
-              if (!cBound) noteRaw(r.font.color, node);
-            }
-          }
-          if (!hiddenBranch) textChecks(node, ancestors, here);
-        }
-        if (node.layout) {
-          const L = node.layout;
-          const spacing = [];
-          if (typeof L.gap === "number") spacing.push(["gap", L.gap, hasTok(node, "itemSpacing")]);
-          if (typeof L.rowGap === "number") spacing.push(["rowGap", L.rowGap, hasTok(node, "counterAxisSpacing")]);
-          if (typeof L.columnGap === "number") spacing.push(["columnGap", L.columnGap, hasTok(node, "gridColumnGap")]);
-          if (Array.isArray(L.padding)) {
-            ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].forEach((k, j) => {
-              if (L.padding[j]) spacing.push([k, L.padding[j], hasTok(node, k)]);
-            });
-          }
-          const offGrid = [];
-          for (const [k, v, bound] of spacing) {
-            tally("spacing", bound);
-            if (v < 0) add("info", "negative-spacing", `'${node.name}' ${k} is ${v} (overlap) \u2014 Compose Arrangement.spacedBy rejects negatives; use offset/overlay`, node, here);
-            else if (!bound && (v % grid !== 0 || !Number.isInteger(v))) offGrid.push(`${k}=${v}`);
-          }
-          if (offGrid.length) add("info", "off-grid-spacing", `'${node.name}' has unbound spacing off the ${grid}px grid (${offGrid.join(", ")}) \u2014 likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY \u2014 it must not round them to the grid`, node, here);
-        }
-        if (node.radius != null) {
-          const vals = typeof node.radius === "number" ? [node.radius] : Object.values(node.radius);
-          const bound = hasTok(node, "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius");
-          vals.forEach(() => tally("radius", bound));
-          if (node.cornerSmoothing && (platform === "android" || platform === "web" || platform === "react-native")) {
-            add("info", "corner-smoothing", `'${node.name}' uses corner smoothing ${node.cornerSmoothing} (squircle) \u2014 ${platform} has no native continuous corners; plain radius or a custom shape`, node, here);
-          }
-        }
-        if (Array.isArray(node.effects)) {
-          for (const e of node.effects) {
-            tally("effects", !!(e.tokens || node.styles && node.styles.effect));
-            if ((e.type === "drop_shadow" || e.type === "inner_shadow") && e.spread && (platform === "ios" || platform === "android")) {
-              add("info", "shadow-spread", `'${node.name}' shadow has spread ${e.spread} \u2014 ${platform === "ios" ? "SwiftUI .shadow/CALayer have no spread (use shadowPath or a padded shape)" : "Modifier.shadow can't express it (use Compose 1.9+ Modifier.dropShadow)"}`, node, here);
-            }
-            if (e.type === "background_blur" && (platform === "android" || platform === "react-native")) add("info", "background-blur", `'${node.name}' uses a background blur \u2014 ${platform === "android" ? "no backdrop blur below API 31 / needs window blur or a library" : "needs expo-blur or a native blur view"}`, node, here);
-            if (e.blurType === "progressive") add("info", "progressive-blur", `'${node.name}' uses a progressive blur \u2014 no direct equivalent on any platform; mask a blur with a gradient or use the asset`, node, here);
-            if (["noise", "glass", "texture", "shader"].includes(e.type)) add("info", "exotic-effect", `'${node.name}' uses a '${e.type}' effect \u2014 no code equivalent; rasterize via the exported asset if it's load-bearing`, node, here);
-          }
-        }
-        if (node.blendMode && (platform === "android" || platform === "react-native")) add("info", "blend-mode", `'${node.name}' uses blend mode '${node.blendMode}' \u2014 limited support on ${platform}; flag or bake into an asset`, node, here);
-        const tappable = !hiddenBranch && isTappable(node);
-        if (tappable && node.box && !ancestors.some((a) => a.__tappable)) {
-          const min = TOUCH_MIN[platform];
-          if (node.box.w < min || node.box.h < min) {
-            add("warning", "small-touch-target", `'${node.name}' is ${node.box.w}\xD7${node.box.h} \u2014 below the ${min}\xD7${min} ${platform} minimum; expand the hit area (padding/hitSlop/contentShape) even if the visual stays small`, node, here, { size: { w: node.box.w, h: node.box.h }, min });
-          }
-        }
-        if (Array.isArray(node.children)) {
-          const stacks = !node.layout || node.layout.mode === "absolute";
-          const beneath = [];
-          const self = { name: node.name, hidden: node.hidden, fills: node.fills, __tappable: tappable, __beneath: beneath };
-          const chain = [...ancestors, self];
-          for (const child of node.children) {
-            self.__beneath = stacks || child.absolute ? beneath : [];
-            walk(child, chain, ctx);
-            if (!child.hidden && Array.isArray(child.fills)) beneath.push(...child.fills);
-          }
-        }
-      }
-      function isTappable(node) {
-        if (Array.isArray(node.reactions) && node.reactions.some((r) => TAP_TRIGGER.test(r.trigger || ""))) return true;
-        const compName = node.mainComponent && node.mainComponent.setName || node.component || "";
-        if (node.type === "INSTANCE" && controlKind(compName)) return true;
-        return (node.type === "INSTANCE" || node.type === "FRAME" || node.type === "COMPONENT") && INTERACTIVE_NAME.test(node.name || "") && !/\b(group|container|list|bar|section|row)s?\b/i.test(node.name || "");
-      }
-      function noteRaw(hex, node) {
-        const h = String(hex || "").toLowerCase();
-        if (!parseHex(h)) return;
-        const e = rawColors.get(h) || { count: 0, nodeId: node.id, nodeName: node.name };
-        e.count++;
-        rawColors.set(h, e);
-      }
-      function textChecks(node, ancestors, here) {
-        const font = node.font || {};
-        if (!node.autoResize && !node.truncate && !node.maxLines) {
-          add("warning", "fixed-size-text", `'${node.name}' is a fixed-size text box with no truncation rule \u2014 it will clip under font scaling or longer translations; decide wrap / truncate / grow`, node, here);
-        }
-        const fg = parseHex(font.color);
-        if (!fg) return;
-        let bg = null, complex = false;
-        for (const a of ancestors) {
-          const layers = [...Array.isArray(a.fills) ? a.fills : [], ...a.__beneath || []];
-          for (const f of layers) {
-            if (f.type === "solid") {
-              const c = parseHex(f.color);
-              if (!c) continue;
-              bg = bg ? over(c, bg) : c.a >= 1 ? c : over(c, { r: 255, g: 255, b: 255, a: 1 });
-              if (c.a >= 1) complex = false;
-            } else if (f.type === "gradient" || f.type === "image" || f.type === "video") {
-              complex = true;
-            }
-          }
-        }
-        const size = typeof font.size === "number" ? font.size : null;
-        const bold = font.weightValue && font.weightValue >= 700 || /bold|black|heavy/i.test(font.weight || "");
-        const large = size != null && (size >= 24 || size >= 18.66 && bold);
-        const need = large ? 3 : 4.5;
-        if (complex) {
-          add("info", "contrast-manual", `'${node.name}' sits on a gradient/image \u2014 check text contrast manually (needs ${need}:1)`, node, here);
-          return;
-        }
-        const assumed = !bg;
-        const base = bg || { r: 255, g: 255, b: 255, a: 1 };
-        const ratio = contrastRatio(over(fg, base), base);
-        if (ratio < need) {
-          add(assumed ? "info" : "warning", "low-contrast", `'${node.name}' text contrast ${r1(ratio)}:1 is below WCAG AA ${need}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need });
-        }
-      }
-      const raws = [...rawColors.entries()].map(([hex, e]) => ({ hex, rgb: parseHex(hex), ...e })).filter((x) => x.rgb.a >= 1);
-      const labs = raws.map((x) => toLab(x.rgb));
-      const seen = /* @__PURE__ */ new Set();
-      for (let a = 0; a < raws.length; a++) {
-        if (seen.has(raws[a].hex)) continue;
-        const cluster = [raws[a]];
-        for (let b = a + 1; b < raws.length; b++) {
-          if (!seen.has(raws[b].hex) && labDist(labs[a], labs[b]) < 3) {
-            cluster.push(raws[b]);
-            seen.add(raws[b].hex);
-          }
-        }
-        if (cluster.length > 1) add("info", "near-duplicate-colors", `unbound colors ${cluster.map((c) => `${c.hex}\xD7${c.count}`).join(", ")} are visually indistinguishable (\u0394E<3) \u2014 probably one token`, null, null, { colors: cluster.map((c) => c.hex) });
-      }
-      const components = [];
-      const byKey = /* @__PURE__ */ new Map(), byName = /* @__PURE__ */ new Map();
-      for (const c of catalog) {
-        if (c.key) byKey.set(c.key, c);
-        if (c.name) byName.set(c.name, c);
-      }
-      const candidates = usedComponents.size ? [...usedComponents.values()].map((u) => ({ use: u, def: u.key && byKey.get(u.key) || byName.get(u.name) })) : catalog.filter((c) => c.type === "COMPONENT_SET" || c.type === "COMPONENT").map((c) => ({ use: { name: c.name }, def: c }));
-      for (const { use, def } of candidates) {
-        const kind = controlKind(use.name) || def && controlKind(def.name);
-        if (!kind) continue;
-        const need = requiredStates(kind, platform);
-        if (!def) {
-          components.push({ name: use.name, kind, known: false, present: [], missing: [], note: "not in the component catalog \u2014 states unknown" });
-          continue;
-        }
-        const values = [];
-        for (const p of Object.values(def.props || {})) {
-          if (p.type === "VARIANT" && Array.isArray(p.options)) values.push(...p.options);
-          if (p.type === "BOOLEAN") values.push(String(p.key || "").split("#")[0]);
-        }
-        const norm = values.map((v) => String(v).trim().toLowerCase());
-        const present = Object.keys(STATE_SYNONYMS).filter((s) => norm.some((v) => STATE_SYNONYMS[s].test(v)));
-        const missing = need.filter((s) => !present.includes(s));
-        const sampled = !!(use.remote || def.remote);
-        components.push({ name: def.name, kind, known: true, sampled, present, missing });
-        if (missing.length) {
-          add(sampled ? "info" : "warning", "missing-component-states", `${kind} '${def.name}' has no ${missing.join("/")} state${missing.length > 1 ? "s" : ""} in its variants${sampled ? " (library component \u2014 props are sampled, so this may be incomplete rather than missing)" : ""} \u2014 ask the designer or derive from tokens, and say so`, null, null, { component: def.name, missing });
-        }
-      }
-      const screenStates = {};
-      for (const s of Object.keys(stateHits)) screenStates[s] = stateHits[s].length ? "designed" : "not-found";
-      const screenStatesScope = { rootsAudited: roots.length, singleFrame: roots.length === 1 };
-      const tokenBinding = {};
-      for (const [k, [b, t]] of Object.entries(binding)) tokenBinding[k] = { bound: b, total: t, pct: t ? Math.round(b / t * 100) : null };
-      for (const [k, v] of Object.entries(tokenBinding)) {
-        if (v.total >= 5 && v.pct < 50) add("warning", "low-token-binding", `only ${v.pct}% of ${k} values are bound to tokens/styles (${v.bound}/${v.total}) \u2014 expect to carry raw values through EXACTLY and report each as unbound; do not snap them to the nearest token`, null, null, { category: k });
-      }
-      const questions = [];
-      const STATE_QUESTION = {
-        loading: "what shows while data loads (skeleton vs spinner, delay before showing)?",
-        empty: "what shows when there's no data (first use vs no results vs cleared)?",
-        error: "what shows when a request fails (inline vs full-screen, retry, offline)?"
-      };
-      for (const s of ["loading", "empty", "error"]) if (screenStates[s] === "not-found") questions.push(`No ${s} state was found in the exported layers \u2014 ${STATE_QUESTION[s]}`);
-      for (const c of components.filter((c2) => c2.missing && c2.missing.length)) questions.push(`'${c.name}' has no ${c.missing.join("/")} design \u2014 use the design-system default, or is there a spec?`);
-      if (findings.some((f) => f.code === "fixed-size-text")) questions.push("Several text boxes are fixed-size \u2014 at 200% font scale or in a longer language, should they wrap, truncate (how many lines), or grow?");
-      let crossFile = null;
-      let hiddenFindingsOmitted = 0;
-      if (opts.designSystem || opts.variables) {
-        const { crossCheck } = require_cross_check();
-        crossFile = crossCheck({
-          // Each screen's OWN variables (d.vars — its <Screen>.vars.json) travel with it: the collision
-          // check is about the variables THIS screen carries, not the merged union's (livetest-3 #311 —
-          // without them this gate raised another screen's `Space 4` blocker against Job Roles).
-          screens: docs.map((d, i) => ({ doc: d && d.doc !== void 0 ? d.doc : d, label: d && d.label || `input${i}`, vars: d && d.vars || null })),
-          variables: opts.variables || null,
-          sliceSources: opts.sliceSources || null,
-          tokens: opts.designSystem && opts.designSystem.tokens || null,
-          components: opts.designSystem && opts.designSystem.components || opts.catalog || null,
-          componentsLibrary: opts.designSystem && opts.designSystem.componentsLibrary || null,
-          stylesText: opts.designSystem && opts.designSystem.stylesText || null
-        });
-        for (const f of crossFile.findings) {
-          if (f.severity === "info") continue;
-          if (f.nodeId && hiddenIds.has(f.nodeId)) {
-            hiddenFindingsOmitted++;
-            continue;
-          }
-          findings.push(Object.assign({ severity: f.severity, code: f.code, message: f.message, crossFile: true }, omit(f, ["severity", "code", "message"])));
-        }
-      } else {
-        crossFile = {
-          summary: { blockers: 0, warnings: 0, info: 0 },
-          findings: [],
-          coverage: null,
-          notChecked: [
-            `the whole cross-FILE pass \u2014 no design system was given. Every token-binding percentage below means "resolves to some variable in this screen's own file", NOT "matches your design system". Re-run with --design-system design/design-system to tell the two apart.`
-          ],
-          inputs: {}
-        };
-      }
-      findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
-      const count = (s) => findings.filter((f) => f.severity === s).length;
-      return {
-        platform,
-        platformAssumed,
-        crossFile,
-        grid,
-        gridAssumed,
-        gridMismatch,
-        screenStatesScope,
-        screens: roots.map((r) => r.label),
-        // The root node id(s) audited — additive, read only by the CLI's finding-315 duplicate-artefact
-        // check (P3 round 3): it lets a re-run find an EARLIER report for the same screen under a
-        // different name without re-parsing every screen export in the directory.
-        nodeIds: roots.map((r) => r.tree && r.tree.id).filter(Boolean),
-        summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
-        hiddenLayers: { nodesSkipped: hiddenIds.size, crossFileFindingsOmitted: hiddenFindingsOmitted },
-        tokenBinding,
-        components,
-        screenStates,
-        annotations,
-        questions,
-        findings
-      };
-    }
-    function toMarkdown(res) {
-      const L = [];
-      L.push(`# Design audit \u2014 ${res.screens.join(", ") || "(no screens)"}`, "");
-      const gridNote = res.gridAssumed ? res.gridMismatch ? ` *(DEFAULT \u2014 not given; this system's own spacing tokens step by ${res.gridMismatch}px, not ${res.grid}px \u2014 pass \`--grid ${res.gridMismatch}\`)*` : " *(default \u2014 not given)*" : "";
-      L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED \u2014 not given)*" : ""} \xB7 grid ${res.grid}px${gridNote} \xB7 **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
-      if (res.hiddenLayers && res.hiddenLayers.nodesSkipped) L.push(`*${res.hiddenLayers.nodesSkipped} node(s) on hidden layers (switched off in Figma) were skipped \u2014 they are not built, and no finding below cites one.*`, "");
-      if (res.platformAssumed) {
-        L.push(
-          `> \u26A0\uFE0F **No platform was given, so this audit assumed \`web\`.** Touch-target minimums, shadow`,
-          `> spread, blur and blend-mode support all differ per platform \u2014 on the wrong one, every one of`,
-          `> those findings is wrong. Confirm it, then re-run with \`--platform ios|android|react-native|flutter\``,
-          `> (or write \`design/target.json\`, which both this audit and build-screen read).`,
-          ""
-        );
-      }
-      const cf = res.crossFile;
-      if (cf) {
-        L.push("## Does this screen come from that design system?", "");
-        if (cf.coverage && cf.coverage.distinct) {
-          const c = cf.coverage;
-          L.push(
-            `**${c.matchedByLocalKey}/${c.distinct} (${c.localPct}%)** of the components on this screen resolve to \`components.local.json\` **by key**` + (c.matchedByName ? `; ${c.matchedByName} more match by NAME only and are unverified` : "") + (c.ambiguousName ? `; ${c.ambiguousName} share a name with several catalog entries and were left unmatched` : "") + ".",
-            ""
-          );
-          if (c.rekey && c.rekey.rekeyed) {
-            L.push(
-              `**This is the re-keyed-copy case, not a foreign library:** ${c.rekey.proposed} of the ${c.rekey.withCandidates} component(s) whose name is in the catalog also match it by prop signature. The proposed matches are listed under \`crossFile.componentProposals\` \u2014 confirm them with the user, then \`map-bootstrap.js \u2026 --from-proposals\` stubs exactly those.`,
-              ""
-            );
-          }
-        }
-        const cfBlock = cf.findings.filter((f) => f.severity !== "info" || f.code === "token-name-collision-elsewhere");
-        if (cfBlock.length) {
-          for (const f of cfBlock) L.push(`- **${f.severity}** \`${f.code}\` ${f.message}`);
-          L.push("");
-        } else if (cf.inputs && cf.inputs.tokens) {
-          L.push("No cross-file problem found: the screen's tokens, text styles and components all trace to the design system you exported.", "");
-        }
-        if (cf.notChecked && cf.notChecked.length) {
-          L.push("*Not checked \u2014 these are gaps in the INPUT, not clean results:*", "");
-          for (const n of cf.notChecked) L.push(`- ${n}`);
-          L.push("");
-        }
-      }
-      L.push("## Token binding", "");
-      L.push(
-        '*"Bound" means the node binds SOME variable \u2014 read it together with the section above, which says whether',
-        "that variable is one the design system defines.*",
-        "",
-        "| Category | Bound | Total | % |",
-        "|---|---|---|---|"
-      );
-      for (const [k, v] of Object.entries(res.tokenBinding)) L.push(`| ${k} | ${v.bound} | ${v.total} | ${v.pct == null ? "\u2013" : v.pct + "%"} |`);
-      L.push("", "## Screen states", "");
-      const scope = res.screenStatesScope || {};
-      if (scope.singleFrame) {
-        L.push(
-          `*Scope: **one frame** was audited. "not found" below means "not in this frame" \u2014 it does not`,
-          `mean the state is missing from the Figma file. Export the other frames to tell the two apart.*`,
-          ""
-        );
-      } else if (scope.rootsAudited > 1) {
-        L.push(`*Scope: ${scope.rootsAudited} frames audited \u2014 "not found" means none of them drew it.*`, "");
-      }
-      for (const [k, v] of Object.entries(res.screenStates)) {
-        L.push(`- ${k}: ${v === "designed" ? "designed" : scope.singleFrame ? "**not in this frame \u2014 ask**" : "**not found \u2014 ask**"}`);
-      }
-      if (res.components.length) {
-        L.push("", "## Component states", "", "| Component | Kind | Present | Missing |", "|---|---|---|---|");
-        for (const c of res.components) L.push(`| ${c.name} | ${c.kind} | ${c.present.join(", ") || "\u2013"} | ${c.known ? c.missing.join(", ") || "none" : c.note}${c.sampled ? " (sampled)" : ""} |`);
-      }
-      for (const sev of ["blocker", "warning", "info"]) {
-        const fs2 = res.findings.filter((f) => f.severity === sev);
-        if (!fs2.length) continue;
-        L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs2.length})`, "");
-        for (const f of fs2) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}`);
-      }
-      if (res.annotations.length) {
-        L.push("", "## Designer annotations", "");
-        for (const a of res.annotations) L.push(`- **${a.nodeName}** (\`${a.nodeId}\`): ${a.label}`);
-      }
-      if (res.questions.length) {
-        L.push("", "## Questions for the designer", "");
-        res.questions.forEach((q, i) => L.push(`${i + 1}. ${q}`));
-      }
-      return L.join("\n") + "\n";
-    }
-    function blockerIds(auditDoc) {
-      const findings = auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
-      return findings.filter((f) => f && f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
-    }
-    function findExistingAuditFor(dir, nodeId, ownTarget) {
-      const fs2 = require("fs");
-      const path2 = require("path");
-      if (!nodeId || !fs2.existsSync(dir)) return null;
-      for (const f of fs2.readdirSync(dir)) {
-        if (!f.endsWith(".json")) continue;
-        const full = path2.join(dir, f);
-        if (path2.resolve(full) === path2.resolve(ownTarget)) continue;
-        let doc;
-        try {
-          doc = JSON.parse(fs2.readFileSync(full, "utf8"));
-        } catch (e) {
-          continue;
-        }
-        if (doc && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
-      }
-      return null;
-    }
-    module2.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, findExistingAuditFor };
-    if (require.main === module2) {
-      const fs2 = require("fs");
-      const path2 = require("path");
-      const argv = process.argv.slice(2);
-      const take = (flag) => {
-        const i = argv.indexOf(flag);
-        if (i === -1) return void 0;
-        const v = argv[i + 1];
-        argv.splice(i, 2);
-        return v;
-      };
-      const platform = take("--platform");
-      const catalogFile = take("--catalog");
-      const dsDir = take("--design-system");
-      const varsFile = take("--variables");
-      const gridArg = take("--grid");
-      const out = take("--out");
-      const strip = (flag) => {
-        const i = argv.indexOf(flag);
-        if (i === -1) return false;
-        argv.splice(i, 1);
-        return true;
-      };
-      const jsonOnly = strip("--json"), gate = strip("--gate"), force = strip("--force");
-      const USAGE2 = `usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter]
-       [--design-system design/design-system] [--variables design/variables.json]
-       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]
-  --design-system turns on the cross-FILE pass (does this screen come from that design system?).
-  Without it every token-binding % below means "binds SOME variable", not "matches your design system".
-  --out defaults to design/audit/<input file's own basename> \u2014 the same <LayerName>__<node-id>
-  name write-out.js gave the screen file, so re-auditing the same screen always lands on the same
-  report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same
-  directory already covers this node under a DIFFERENT name \u2014 pass --force to write a second one.`;
-      if (argv.includes("--help") || argv.includes("-h")) {
-        console.log(USAGE2);
-        process.exit(0);
-      }
-      const stray = argv.filter((a) => a.startsWith("-"));
-      if (stray.length || !argv.length) {
-        console.error((stray.length ? `audit: unknown flag ${stray.join(", ")}
-` : "") + USAGE2);
-        process.exit(2);
-      }
-      if (platform && !PLATFORMS.includes(platform)) {
-        console.error(`--platform must be one of ${PLATFORMS.join(", ")}`);
-        process.exit(2);
-      }
-      const { readJsonFile } = require_catalog_input();
-      const read = (f, what) => readJsonFile(f, what);
-      const ctx = require_slice_sources().variablesContext(argv, varsFile, fs2, path2, { sliceFallback: true });
-      const inputs = argv.map((f, i) => ({ doc: read(f, "screen export"), label: path2.basename(f, ".json"), vars: ctx.own[i] }));
-      const catalog = catalogFile ? read(catalogFile, "component catalog") : void 0;
-      const maybe = (f) => f && fs2.existsSync(f) ? JSON.parse(fs2.readFileSync(f, "utf8")) : null;
-      const designSystem = dsDir ? {
-        tokens: maybe(path2.join(dsDir, "tokens.json")),
-        components: maybe(path2.join(dsDir, "components.local.json")) || catalog,
-        componentsLibrary: maybe(path2.join(dsDir, "components.library.json")),
-        stylesText: maybe(path2.join(dsDir, "styles.text.json"))
-      } : void 0;
-      const variables = ctx.variablesDoc;
-      if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-      const res = audit(inputs, { platform, catalog, designSystem, variables, sliceSources: ctx.sliceSources, grid: gridArg ? Number(gridArg) : void 0 });
-      const md = jsonOnly ? "" : toMarkdown(res);
-      const outBase = out || (argv[0] ? path2.join("design", "audit", path2.basename(argv[0], ".json")) : void 0);
-      if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
-        const dup = findExistingAuditFor(path2.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
-        if (dup && !force) {
-          console.error(
-            `error  node ${res.nodeIds[0]} already has an audit report at ${dup} \u2014 refusing to also write ${outBase}.json/.md (one screen, one report pair). Use that existing name, or pass --force to write this one anyway.`
-          );
-          process.exit(1);
-        }
-      }
-      if (jsonOnly) {
-        process.stdout.write(JSON.stringify(res, null, 2) + "\n");
-      } else if (outBase) {
-        fs2.mkdirSync(path2.dirname(outBase), { recursive: true });
-        fs2.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
-        fs2.writeFileSync(outBase + ".md", md);
-        console.error(`wrote ${outBase}.json and ${outBase}.md`);
-      } else {
-        process.stdout.write(md);
-      }
-      if (res.platformAssumed) console.error("warn  no --platform given \u2014 assumed 'web'. Touch targets, shadow spread and blur support differ per platform; pass --platform or write design/target.json.");
-      if (!jsonOnly) console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
-      for (const n of res.crossFile && res.crossFile.notChecked || []) console.error(`note  not checked: ${n}`);
-      process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
+    throw e;
+  }
+}
+
+// bridge/src/json-file.ts
+var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+function formatJsonLike(value, raw) {
+  if (raw === null) return JSON.stringify(value, null, 2) + "\n";
+  const bom = raw.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const text = raw.slice(bom.length);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
+}
+function writeJsonLike(file, value, raw) {
+  let was = raw ?? null;
+  if (raw === void 0) try {
+    was = fs6.readFileSync(file, "utf8");
+  } catch {
+    was = null;
+  }
+  const out = formatJsonLike(value, was);
+  if (out === was) return false;
+  writeFileAtomic(file, out);
+  return true;
+}
+
+// design-to-code/content-hash.ts
+import fs7 from "node:fs";
+import path5 from "node:path";
+function stripPullTimes(v, parentKey) {
+  if (isUnknownArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
+  if (!v || typeof v !== "object") return v;
+  const out = {};
+  for (const [k, x] of Object.entries(v)) {
+    if (k === "exportedAt") continue;
+    if (k === "at" && parentKey === "_slices") continue;
+    out[k] = stripPullTimes(x, k);
+  }
+  return out;
+}
+function exportContentSha256(docs) {
+  const list = isUnknownArray(docs) ? docs : [docs];
+  return sha256Hex(JSON.stringify(list.map((d) => stripPullTimes(d))));
+}
+function fileHashes(files, cwd, cached) {
+  const out = {};
+  for (const rel of isUnknownArray(files) ? files.map(String) : []) {
+    try {
+      out[rel] = sha256Hex(cached?.(rel) ?? fs7.readFileSync(path5.join(cwd, rel))).slice(0, 16);
+    } catch {
+      out[rel] = null;
     }
   }
-});
-
-// design-to-code/audit-gate.js
-var require_audit_gate = __commonJS({
-  "design-to-code/audit-gate.js"(exports2, module2) {
-    var fs2 = require("fs");
-    var path2 = require("path");
-    var { blockerIds } = require_audit();
-    function slug2(s) {
-      return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-    }
-    function locateAuditFile(cwd, screenFile, screenName) {
-      const dir = path2.join(cwd, "design", "audit");
-      if (!fs2.existsSync(dir)) return null;
-      const base = screenFile ? path2.basename(screenFile, ".json") : null;
-      const candidates = [];
-      if (base) candidates.push(path2.join(dir, base + ".json"));
-      let entries = [];
-      try {
-        entries = fs2.readdirSync(dir).filter((f) => f.endsWith(".json"));
-      } catch {
-        entries = [];
-      }
-      for (const c of candidates) if (fs2.existsSync(c)) return path2.relative(cwd, c).split(path2.sep).join("/");
-      const wantSlug = slug2(screenName);
-      if (wantSlug) {
-        const hit = entries.find((f) => slug2(f.replace(/\.json$/, "")) === wantSlug || slug2(f.replace(/\.json$/, "")).startsWith(wantSlug) || wantSlug.startsWith(slug2(f.replace(/\.json$/, ""))));
-        if (hit) return path2.relative(cwd, path2.join(dir, hit)).split(path2.sep).join("/");
-      }
-      return null;
-    }
-    function auditGateStatus(cwd, screenFile, screenName) {
-      const rel = locateAuditFile(cwd, screenFile, screenName);
-      if (!rel) return { auditFile: null, blockers: [] };
-      let doc;
-      try {
-        doc = JSON.parse(fs2.readFileSync(path2.join(cwd, rel), "utf8"));
-      } catch {
-        return { auditFile: rel, blockers: [], unreadable: true };
-      }
-      return { auditFile: rel, blockers: blockerIds(doc), doc };
-    }
-    module2.exports = { locateAuditFile, auditGateStatus, blockerIds, slug: slug2 };
+  return out;
+}
+var RESOLVE_EXT = ["tsx", "ts", "jsx", "js"];
+var isFile = (abs) => {
+  try {
+    return fs7.statSync(abs).isFile();
+  } catch {
+    return false;
   }
-});
-
-// design-to-code/plan-skeleton.js
-var require_plan_skeleton = __commonJS({
-  "design-to-code/plan-skeleton.js"(exports2, module2) {
-    var fs2 = require("fs");
-    var path2 = require("path");
-    var { matchByNameAndSignature, parseVariant } = require_component_match();
-    var { walkWithHidden } = require_hidden();
-    var USAGE2 = [
-      "usage: node plan-skeleton.js <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>]",
-      "",
-      "  Emits the build-screen plan skeleton for one screen, derived from the export:",
-      "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
-      "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping)",
-      "    anchors{}     every VISIBLE node id, mapModule empty \u2014 fill it on sections and instances",
-      "    hidden[]      roots of hidden subtrees (hidden: true or a hidden ancestor) \u2014 never built, never anchored",
-      "    screenName / nodeId / file / route   the header every skill resolves a plan by",
-      "",
-      "  You fill in: codeToken, mapModule, verdict, decision, route, deviations[] (and files[], architecture,",
-      "  verification as you build).",
-      "",
-      "  <design-system dir>  design/export/design-system (tokens.json, components.local.json). A missing",
-      "                       directory is allowed (single-screen pull): values then come from the screen's",
-      "                       own .vars.json and no catalog match is attempted \u2014 stderr says so.",
-      "  --out <file>         write the plan there (default: stdout). An existing plan is MERGED, never",
-      "                       overwritten: every field you filled is kept.",
-      "  --map <file>         codeconnect.local.json (default: design/codeconnect.local.json or",
-      "                       codeconnect.local.json in the current directory, when present).",
-      "  --route <route>      the app route this screen will live at (else left null for you to fill)."
-    ].join("\n");
-    var readJson = (f) => JSON.parse(fs2.readFileSync(f, "utf8"));
-    var readJsonOr2 = (f, fallback) => {
-      try {
-        return readJson(f);
-      } catch {
-        return fallback;
-      }
-    };
-    function rootsOf2(doc) {
-      if (!doc) return [];
-      if (Array.isArray(doc.nodes)) return doc.nodes;
-      if (doc.tree) return [doc.tree];
-      if (doc.id || doc.type) return [doc];
-      return [];
-    }
-    function walkNodes(doc, visit) {
-      const instAbove = /* @__PURE__ */ new Map();
-      for (const r of rootsOf2(doc)) {
-        walkWithHidden(r, (n, c) => {
-          const above = c.parent ? c.parent.type === "INSTANCE" ? c.parent.id : instAbove.get(c.parent) || null : null;
-          instAbove.set(n, above);
-          visit(n, { parent: c.parent, hidden: c.hidden, hiddenRoot: c.hidden && !c.parentHidden, insideInstance: above });
-        });
-      }
-    }
-    function visibility2(doc) {
-      const visible = /* @__PURE__ */ new Map(), hidden = /* @__PURE__ */ new Set(), hiddenRoots = [];
-      const count = /* @__PURE__ */ new Map();
-      walkNodes(doc, (n, ctx) => {
-        if (!n.id) return;
-        if (ctx.hidden) {
-          hidden.add(n.id);
-          if (ctx.hiddenRoot) {
-            hiddenRoots.push({ id: n.id, name: n.name, type: n.type, nodes: 0 });
-            count.set(n.id, hiddenRoots[hiddenRoots.length - 1]);
-          }
-        } else visible.set(n.id, { node: n, parentId: ctx.parent ? ctx.parent.id : null, insideInstance: ctx.insideInstance });
-      });
-      const tally = (n, root) => {
-        if (!n || typeof n !== "object") return;
-        const r = root || (count.has(n.id) ? n.id : null);
-        if (r) count.get(r).nodes++;
-        for (const c of n.children || []) tally(c, r);
-      };
-      for (const r of rootsOf2(doc)) tally(r, null);
-      return { visible, hidden, hiddenRoots };
-    }
-    function bindingsOf(node) {
-      const out = [];
-      const collect = (o, where) => {
-        if (Array.isArray(o)) {
-          for (const x of o) collect(x, where);
-          return;
-        }
-        if (!o || typeof o !== "object") return;
-        if (o.tokens && typeof o.tokens === "object") {
-          for (const [field, v] of Object.entries(o.tokens)) for (const name of [].concat(v)) if (typeof name === "string") out.push({ name, field: where ? `${where}.${field}` : field });
-        }
-        for (const [k, v] of Object.entries(o)) if (k !== "tokens" && k !== "children" && v && typeof v === "object") collect(v, where || k);
-      };
-      collect(Object.assign({}, node, { children: void 0 }), "");
-      return out;
-    }
-    function kindOf(variable, fields) {
-      const t = variable && variable.type;
-      if (t === "COLOR") return "color";
-      if (t === "STRING") return /fontStyle|fontFamily|fontName/.test(fields.join(" ")) ? "fontStyle" : "string";
-      if (t === "BOOLEAN") return "boolean";
-      const f = fields.join(" ");
-      if (/Radius/i.test(f)) return "radius";
-      if (/fontSize/.test(f)) return "fontSize";
-      if (/fontWeight/.test(f)) return "fontWeight";
-      if (/lineHeight/.test(f)) return "lineHeight";
-      if (/letterSpacing/.test(f)) return "letterSpacing";
-      if (/padding|itemSpacing|counterAxisSpacing|gap/i.test(f)) return "spacing";
-      if (/strokeWeight|strokeTopWeight|strokeWidth/i.test(f)) return "borderWidth";
-      if (/width|height/i.test(f)) return "size";
-      if (/opacity/i.test(f)) return "opacity";
-      return "number";
-    }
-    var isAlias = (v) => v && typeof v === "object" && typeof v.aliasOf === "string";
-    function resolver(sources, resolvedModes) {
-      const byName = /* @__PURE__ */ new Map();
-      const collections = /* @__PURE__ */ new Map();
-      for (const src of sources) {
-        for (const v of src && src.variables || []) if (v && v.name && !byName.has(v.name)) byName.set(v.name, v);
-        for (const c of src && src.collections || []) if (c && c.name && !collections.has(c.name)) collections.set(c.name, c);
-      }
-      const modeFor = (v) => {
-        const vals = v.values || {};
-        const keys = Object.keys(vals);
-        const want = resolvedModes && resolvedModes[v.collection];
-        if (want !== void 0 && want in vals) return want;
-        if (want !== void 0) {
-          const k = keys.find((x) => x.toLowerCase() === String(want).toLowerCase());
-          if (k) return k;
-        }
-        const c = collections.get(v.collection);
-        if (c && c.default && c.default in vals) return c.default;
-        return keys[0];
-      };
-      function resolve(v, depth) {
-        if (!v || depth > 10) return { value: null, mode: null };
-        const mode = modeFor(v);
-        const raw = (v.values || {})[mode];
-        if (isAlias(raw)) {
-          const target = byName.get(raw.aliasOf);
-          const r = resolve(target, depth + 1);
-          return { value: r.value, mode, via: raw.aliasOf };
-        }
-        return { value: normValue(v.type, raw), mode };
-      }
-      return (v) => resolve(v, 0);
-    }
-    function normValue(type, raw) {
-      if (raw === void 0 || raw === null) return null;
-      if (type === "COLOR" && typeof raw === "string") {
-        const h = raw.trim().toLowerCase();
-        return /^#[0-9a-f]{8}$/.test(h) && h.endsWith("ff") ? h.slice(0, 7) : h;
-      }
-      if (type === "COLOR" && typeof raw === "object" && "r" in raw) {
-        const to = (x) => Math.round(Math.max(0, Math.min(1, x)) * 255).toString(16).padStart(2, "0");
-        const a = raw.a === void 0 ? 1 : raw.a;
-        return "#" + to(raw.r) + to(raw.g) + to(raw.b) + (a < 1 ? to(a) : "");
-      }
-      return raw;
-    }
-    function buildTokens(doc, vis, vars, ds, resolvedModes) {
-      const uses = /* @__PURE__ */ new Map();
-      walkNodes(doc, (n, ctx) => {
-        for (const b of bindingsOf(n)) {
-          if (!uses.has(b.name)) uses.set(b.name, { fields: /* @__PURE__ */ new Set(), visible: 0, hidden: 0 });
-          const u = uses.get(b.name);
-          u.fields.add(b.field);
-          if (ctx.hidden) u.hidden++;
-          else u.visible++;
-        }
-      });
-      const own = /* @__PURE__ */ new Map();
-      for (const v of vars && vars.variables || []) {
-        if (!own.has(v.name)) own.set(v.name, []);
-        own.get(v.name).push(v);
-      }
-      const dsByKey = /* @__PURE__ */ new Map(), dsByName = /* @__PURE__ */ new Map();
-      for (const v of ds && ds.variables || []) {
-        if (v.key) dsByKey.set(v.key, v);
-        if (!dsByName.has(v.name)) dsByName.set(v.name, []);
-        dsByName.get(v.name).push(v);
-      }
-      const ownResolve = resolver([vars, ds], resolvedModes);
-      const dsResolve = resolver([ds], resolvedModes);
-      const rows = [];
-      for (const [name, u] of uses) {
-        const fields = [...u.fields].sort();
-        const cands = own.get(name) || [];
-        const v = cands[0] || null;
-        const r = v ? ownResolve(v) : { value: null, mode: null };
-        const row = {
-          figmaName: name,
-          key: cands.length === 1 ? v.key || null : null,
-          collection: v ? v.collection : null,
-          kind: kindOf(v, fields),
-          value: r.value,
-          mode: r.mode,
-          bindings: fields,
-          sites: { visible: u.visible, hidden: u.hidden }
-        };
-        if (r.via) row.aliasOf = r.via;
-        if (cands.length > 1) {
-          const vals = cands.map((c) => ({ key: c.key, collection: c.collection, value: ownResolve(c).value }));
-          row.keyCandidates = vals;
-          row.note = `${cands.length} variables in this screen's .vars.json are named '${name}'` + (new Set(vals.map((x) => JSON.stringify(x.value))).size > 1 ? " WITH DIFFERENT VALUES \u2014 decide which one the design means before mapping it" : " (same value) \u2014 either key describes it");
-        }
-        if (!v) row.note = `'${name}' is bound on the frame but not defined in the screen's .vars.json \u2014 re-pull the screen`;
-        let dv = null, how = null;
-        for (const c of cands) if (c.key && dsByKey.has(c.key)) {
-          dv = dsByKey.get(c.key);
-          how = "key";
-          break;
-        }
-        if (!dv && dsByName.has(name)) {
-          const same = dsByName.get(name).filter((x) => !v || x.collection === v.collection);
-          dv = (same.length ? same : dsByName.get(name))[0];
-          how = "name";
-        }
-        if (dv) {
-          const dr = dsResolve(dv);
-          row.designSystem = { match: how, key: dv.key || null, value: dr.value, agrees: JSON.stringify(dr.value) === JSON.stringify(r.value) };
-        } else row.designSystem = null;
-        row.codeToken = null;
-        if (!u.visible) {
-          row.verdict = "hidden-only";
-          row.decision = "bound only by hidden layers \u2014 not built, so no code token is needed";
-        } else row.verdict = null;
-        rows.push(row);
-      }
-      rows.sort((a, b) => (b.sites.visible > 0) - (a.sites.visible > 0) || a.figmaName.localeCompare(b.figmaName));
-      return rows;
-    }
-    function loadMap(file) {
-      const map = readJsonOr2(file, null);
-      const keys = /* @__PURE__ */ new Map();
-      for (const [name, e] of Object.entries(map && map.components || {})) {
-        if (!e || !e.figma) continue;
-        const entry = { name: e.figma.name || name, module: e.code && e.code.module || null, export: e.code && e.code.export || null, status: e.status || null };
-        if (e.figma.key) keys.set(e.figma.key, entry);
-        if (!keys.has(name)) keys.set(name, entry);
-      }
-      return keys;
-    }
-    function buildComponents(doc, catalog, library, mapKeys) {
-      const insts = [];
-      walkNodes(doc, (n, ctx) => {
-        if (ctx.hidden || n.type !== "INSTANCE") return;
-        const mc = n.mainComponent || {};
-        insts.push({
-          nodeId: n.id,
-          layer: n.name,
-          name: mc.setName || mc.name || n.name,
-          key: mc.key || null,
-          setKey: mc.setKey || null,
-          remote: mc.remote === true,
-          variant: parseVariant(n.component) || parseVariant(mc.variant),
-          props: n.props && typeof n.props === "object" ? n.props : {},
-          insideInstance: ctx.insideInstance || null
-        });
-      });
-      const catKeys = /* @__PURE__ */ new Map();
-      for (const c of catalog && catalog.components || []) if (c.key) catKeys.set(c.key, c);
-      const byName = /* @__PURE__ */ new Map();
-      if (catalog) for (const r of matchByNameAndSignature(insts, catalog, library).rows) byName.set(r.name, r);
-      return insts.map((i) => {
-        let match = null;
-        const k = [i.key, i.setKey].find((x) => x && catKeys.has(x));
-        if (k) {
-          const c = catKeys.get(k);
-          match = { by: "key", id: c.id, key: c.key, name: c.name };
-        } else if (byName.has(i.name) && byName.get(i.name).match) {
-          const r = byName.get(i.name);
-          match = { by: r.evidence || "name+signature", id: r.match.id, key: r.match.key, name: r.match.name, confirmed: false };
-        }
-        const mapped = [i.key, i.setKey].map((x) => x && mapKeys.get(x)).find(Boolean) || null;
-        const row = {
-          nodeId: i.nodeId,
-          name: i.name,
-          layer: i.layer,
-          key: i.key,
-          setKey: i.setKey,
-          variant: i.variant,
-          props: i.props,
-          catalog: match,
-          mapped: mapped ? { module: mapped.module, export: mapped.export, status: mapped.status } : null,
-          mapModule: mapped && mapped.module && !/^TODO/.test(mapped.module) ? mapped.module : "",
-          verdict: null
-        };
-        if (i.insideInstance) row.insideInstance = i.insideInstance;
-        return row;
-      });
-    }
-    function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, route, indexRow }) {
-      const vis = visibility2(doc);
-      const roots = rootsOf2(doc);
-      const root = roots[0] || {};
-      const resolvedModes = root.resolvedModes || {};
-      const tokens = buildTokens(doc, vis, vars, ds, resolvedModes);
-      const components = buildComponents(doc, catalog, library, mapKeys || /* @__PURE__ */ new Map());
-      const anchors = {};
-      for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };
-      const nodeId = doc.nodeId || root.id || null;
-      const title = indexRow && indexRow.title;
-      const rel = screenFile ? path2.relative(cwd || process.cwd(), path2.resolve(screenFile)).split(path2.sep).join("/") : null;
-      const screenName = String(title || doc.screen || root.name || "").trim() || null;
-      let auditGate = null;
-      try {
-        const { auditGateStatus } = require_audit_gate();
-        const g = auditGateStatus(cwd || process.cwd(), screenFile, screenName);
-        if (g.auditFile && g.blockers.length) {
-          auditGate = { auditFile: g.auditFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
-        }
-      } catch {
-      }
-      return {
-        schema: "designtwin/plan@2",
-        screen: screenFile ? path2.basename(screenFile).replace(/\.json$/, "") : null,
-        screenName,
-        nodeId,
-        route: route || null,
-        file: rel,
-        exportedAt: doc.exportedAt || null,
-        status: "pending",
-        target: null,
-        architecture: null,
-        files: [],
-        tokens,
-        components,
-        anchors,
-        hidden: vis.hiddenRoots,
-        deviations: [],
-        auditGate,
-        counts: {
-          tokens: tokens.length,
-          tokensVisible: tokens.filter((t) => t.sites.visible > 0).length,
-          instances: components.length,
-          anchors: Object.keys(anchors).length,
-          hiddenNodes: vis.hidden.size
-        }
-      };
-    }
-    var FILLED_TOKEN = ["codeToken", "verdict", "decision"];
-    var FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName"];
-    function merge(fresh, prev) {
-      if (!prev || typeof prev !== "object") return { plan: fresh, dropped: { tokens: 0, components: 0, anchors: 0 } };
-      const out = Object.assign({}, prev, {
-        schema: fresh.schema,
-        screenName: prev.screenName || fresh.screenName,
-        nodeId: fresh.nodeId,
-        route: prev.route || fresh.route,
-        file: fresh.file,
-        exportedAt: fresh.exportedAt,
-        hidden: fresh.hidden,
-        // Never clear a decided auditGate; only fill one in if the plan never had one.
-        auditGate: prev.auditGate && typeof prev.auditGate === "object" ? prev.auditGate : fresh.auditGate,
-        counts: fresh.counts
-      });
-      const dropped = { tokens: 0, components: 0, anchors: 0 };
-      const tk = (t) => t.key || t.figmaName;
-      const prevTok = new Map((Array.isArray(prev.tokens) ? prev.tokens : []).map((t) => [tk(t), t]));
-      out.tokens = fresh.tokens.map((t) => {
-        const p = prevTok.get(tk(t)) || prevTok.get(t.figmaName);
-        const row = Object.assign({}, t);
-        if (p) {
-          for (const f of FILLED_TOKEN) if (p[f] !== void 0 && p[f] !== null && p[f] !== "") row[f] = p[f];
-        }
-        return row;
-      });
-      dropped.tokens = [...prevTok.keys()].filter((k) => !fresh.tokens.some((t) => tk(t) === k || t.figmaName === k)).length;
-      const prevComp = new Map((Array.isArray(prev.components) ? prev.components : []).filter((c) => c && c.nodeId).map((c) => [c.nodeId, c]));
-      out.components = fresh.components.map((c) => {
-        const p = prevComp.get(c.nodeId);
-        const row = Object.assign({}, c);
-        if (p) {
-          for (const f of FILLED_COMPONENT) if (p[f] !== void 0 && p[f] !== null && p[f] !== "") row[f] = p[f];
-        }
-        return row;
-      });
-      dropped.components = [...prevComp.keys()].filter((id) => !fresh.components.some((c) => c.nodeId === id)).length;
-      const pa = prev.anchors && typeof prev.anchors === "object" ? prev.anchors : {};
-      out.anchors = {};
-      for (const [id, a] of Object.entries(fresh.anchors)) {
-        const p = pa[id];
-        out.anchors[id] = Object.assign({}, a, p && typeof p === "object" ? Object.fromEntries(Object.entries(p).filter(([k, v]) => !["name", "type", "parent"].includes(k) && v !== "" && v != null)) : {});
-      }
-      dropped.anchors = Object.keys(pa).filter((id) => !(id in fresh.anchors)).length;
-      return { plan: out, dropped };
-    }
-    function findIndexRow(screenFile, nodeId) {
-      const dir = path2.dirname(path2.resolve(screenFile));
-      for (const idx of [path2.join(dir, "..", "index.json"), path2.join(dir, "index.json")]) {
-        const d = readJsonOr2(idx, null);
-        const rows = d && Array.isArray(d.layers) ? d.layers : [];
-        const hit = rows.find((r) => r.id === nodeId);
-        if (hit) return hit;
-      }
-      return null;
-    }
-    function main2(argv) {
-      const args = argv.slice();
-      if (args.includes("--help") || args.includes("-h")) {
-        console.log(USAGE2);
-        return 0;
-      }
-      const take = (flag) => {
-        const i = args.indexOf(flag);
-        if (i === -1) return void 0;
-        const v = args[i + 1];
-        args.splice(i, 2);
-        return v;
-      };
-      const out = take("--out"), mapFlag = take("--map"), route = take("--route");
-      const stray = args.filter((a) => a.startsWith("-"));
-      if (stray.length || args.length !== 3 || [out, mapFlag, route].some((v) => v === "")) {
-        console.error((stray.length ? `plan-skeleton: unknown flag ${stray.join(", ")}
-` : "") + USAGE2);
-        return 2;
-      }
-      const [screenFile, varsFile, dsDir] = args;
-      let doc, vars;
-      try {
-        doc = readJson(screenFile);
-      } catch (e) {
-        console.error(`plan-skeleton: cannot read the screen JSON ${screenFile}: ${e.message}`);
-        return 1;
-      }
-      try {
-        vars = readJson(varsFile);
-      } catch (e) {
-        console.error(`plan-skeleton: cannot read the screen's variables ${varsFile}: ${e.message}`);
-        return 1;
-      }
-      const hasDs = dsDir && fs2.existsSync(dsDir) && fs2.statSync(dsDir).isDirectory();
-      if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
-      const ds = hasDs ? readJsonOr2(path2.join(dsDir, "tokens.json"), null) : null;
-      const catalog = hasDs ? readJsonOr2(path2.join(dsDir, "components.local.json"), null) : null;
-      const library = hasDs ? readJsonOr2(path2.join(dsDir, "components.library.json"), null) : null;
-      const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs2.existsSync(f));
-      const mapKeys = mapFile ? loadMap(mapFile) : /* @__PURE__ */ new Map();
-      const nodeId = doc.nodeId || (rootsOf2(doc)[0] || {}).id;
-      const fresh = skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd: process.cwd(), route, indexRow: findIndexRow(screenFile, nodeId) });
-      const c = fresh.counts;
-      if (!out) {
-        process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");
-      } else {
-        const prev = fs2.existsSync(out) ? readJsonOr2(out, void 0) : null;
-        if (prev === void 0) {
-          console.error(`plan-skeleton: ${out} exists but is not valid JSON \u2014 refusing to overwrite it`);
-          return 1;
-        }
-        const { plan, dropped } = merge(fresh, prev);
-        fs2.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
-        fs2.writeFileSync(out, JSON.stringify(plan, null, 2) + "\n");
-        console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
-      }
-      console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded`);
-      return 0;
-    }
-    module2.exports = { skeleton, merge, visibility: visibility2, walkNodes, rootsOf: rootsOf2, bindingsOf, buildTokens, buildComponents, USAGE: USAGE2 };
-    if (require.main === module2) process.exitCode = main2(process.argv.slice(2));
+};
+function mappedModulePath(raw, cwd) {
+  if (typeof raw !== "string") return null;
+  const s = (raw.split("#")[0] ?? "").trim().split("\\").join("/");
+  if (!s || s.startsWith("/") || /^[A-Za-z]:/.test(s) || /^[@~]/.test(s) || s.includes(":")) return null;
+  const rel = path5.posix.normalize(s).replace(/\/+$/, "");
+  if (rel === ".." || rel.startsWith("../") || rel === "." || !rel) return null;
+  const dotted = /\.[A-Za-z0-9]+$/.test(path5.posix.basename(rel));
+  if (cwd === void 0) return dotted ? rel : null;
+  if (dotted && isFile(path5.join(cwd, rel))) return rel;
+  const tries = [...RESOLVE_EXT.map((e) => `${rel}.${e}`), ...RESOLVE_EXT.map((e) => `${rel}/index.${e}`)];
+  return tries.find((t) => isFile(path5.join(cwd, t))) ?? (dotted ? rel : null);
+}
+function mapModules(plan) {
+  const out = [];
+  if (isRecord(plan.anchors)) {
+    for (const a of Object.values(plan.anchors)) if (isRecord(a)) out.push(a.mapModule);
   }
-});
-
-// design-to-code/content-hash.js
-var require_content_hash = __commonJS({
-  "design-to-code/content-hash.js"(exports2, module2) {
-    var fs2 = require("fs");
-    var path2 = require("path");
-    var crypto2 = require("crypto");
-    var sha256 = (s) => crypto2.createHash("sha256").update(s).digest("hex");
-    function stripPullTimes(v, parentKey) {
-      if (Array.isArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
-      if (!v || typeof v !== "object") return v;
-      const out = {};
-      for (const [k, x] of Object.entries(v)) {
-        if (k === "exportedAt") continue;
-        if (k === "at" && parentKey === "_slices") continue;
-        out[k] = stripPullTimes(x, k);
-      }
-      return out;
-    }
-    function exportContentSha256(docs) {
-      const list = Array.isArray(docs) ? docs : [docs];
-      return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
-    }
-    function fileHashes2(files, cwd) {
-      const out = {};
-      for (const rel of Array.isArray(files) ? files.map(String) : []) {
-        try {
-          out[rel] = sha256(fs2.readFileSync(path2.join(cwd, rel))).slice(0, 16);
-        } catch {
-          out[rel] = null;
-        }
-      }
-      return out;
-    }
-    function gitHead(cwd) {
-      try {
-        const r = require("child_process").spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
-        const h = r.status === 0 && String(r.stdout || "").trim();
-        return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
-      } catch {
-        return null;
-      }
-    }
-    module2.exports = { stripPullTimes, exportContentSha256, fileHashes: fileHashes2, gitHead };
+  if (isUnknownArray(plan.components)) {
+    for (const c of plan.components) if (isRecord(c)) out.push(c.mapModule);
   }
-});
+  return out;
+}
+function planCodeFiles(plan, cwd) {
+  const listed = isUnknownArray(plan.files) ? plan.files.map(String) : [];
+  const seen = new Set(listed.map((f) => path5.posix.normalize(f.trim().split("\\").join("/"))));
+  const extra = /* @__PURE__ */ new Set();
+  for (const m of mapModules(plan)) {
+    const rel = mappedModulePath(m, cwd);
+    if (rel !== null && !seen.has(rel)) extra.add(rel);
+  }
+  return [...listed, ...[...extra].sort()];
+}
+function planCodeSkipped(plan, cwd) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of mapModules(plan)) {
+    if (typeof m !== "string" || !m.trim()) continue;
+    const rel = mappedModulePath(m, cwd);
+    if (rel === null || !isFile(path5.join(cwd, rel))) out.add(m.trim());
+  }
+  return [...out].sort();
+}
+function planCodeSkippedNote(plan, cwd) {
+  const s = planCodeSkipped(plan, cwd);
+  return s.length ? `mapModule path(s) not hashed with this plan's code: ${s.slice(0, 6).join(", ")}${s.length > 6 ? `, +${s.length - 6} more` : ""} \u2014 not a file under the project (an \`@/\`/\`~/\` alias, a package, a path outside the project, or a path that names no file even with .tsx/.ts/.jsx/.js or /index added), so an edit to it does not reopen the plan; for code this project owns write the project-relative file path` : null;
+}
+function planHash(plan) {
+  const copy = { ...plan || {} };
+  delete copy.status;
+  delete copy.waivers;
+  delete copy.descopes;
+  delete copy.verification;
+  return sha256Hex(JSON.stringify(copy)).slice(0, 16);
+}
+function legacyPlanHash(plan) {
+  const copy = structuredClone({ ...plan || {} });
+  delete copy.status;
+  delete copy.waivers;
+  delete copy.descopes;
+  if (isRecord(copy.verification)) {
+    const v = { ...copy.verification };
+    delete v.hook;
+    if (Object.keys(v).length) copy.verification = v;
+    else delete copy.verification;
+  }
+  return sha256Hex(JSON.stringify(copy)).slice(0, 16);
+}
 
-// design-to-code/verify-build.js
-var fs = require("fs");
-var path = require("path");
-var crypto = require("crypto");
-var { visibility, rootsOf } = require_plan_skeleton();
-var contentHash = require_content_hash();
+// design-to-code/plan-record.ts
+var writePlan = writeJsonLike;
+
+// design-to-code/plan-skeleton.ts
+var USAGE = [
+  `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
+  "",
+  "  Emits the build-screen plan skeleton for one screen, derived from the export:",
+  "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
+  "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping)",
+  "    anchors{}     every VISIBLE node id, mapModule empty \u2014 fill it on sections and instances",
+  "    anchorsSuggested[]  the few anchors worth filling first (the screen frame, root sections, outermost instances, repeated lists)",
+  "    hidden[]      roots of hidden subtrees (hidden: true or a hidden ancestor) \u2014 never built, never anchored",
+  "    screenName / nodeId / file / route   the header every skill resolves a plan by",
+  "",
+  "  You fill in: codeToken, mapModule, verdict, decision, route, deviations[] (and files[], architecture,",
+  "  verification as you build).",
+  "",
+  "  <design-system dir>  design/export/design-system (tokens.json, components.local.json). A missing",
+  "                       directory is allowed (single-screen pull): values then come from the screen's",
+  "                       own .vars.json and no catalog match is attempted \u2014 stderr says so.",
+  "  --out <file>         write the plan there (default: stdout). An existing plan is MERGED, never",
+  "                       overwritten: every field you filled is kept.",
+  "  --map <file>         codeconnect.local.json (default: design/codeconnect.local.json or",
+  "                       codeconnect.local.json in the current directory, when present).",
+  "  --route <route>      the app route this screen will live at (else left null for you to fill).",
+  "  --seed-from <plan>   a sibling screen's plan (repeatable; the first that has an answer wins). A row still",
+  "                       empty here takes that plan's answer when it is the SAME thing: a token with the same",
+  "                       key (or, both keyless, the same Figma name) AND the same value \u2192 codeToken/verdict/",
+  "                       decision; a component with the same setKey (else key) \u2192 mapModule/verdict/decision.",
+  "                       Nothing filled is ever overwritten. Seeded rows carry `seededFrom` \u2014 review them."
+].join("\n");
+function walkNodes(doc, visit) {
+  const instAbove = /* @__PURE__ */ new Map();
+  for (const r of screenRoots(doc)) {
+    walkWithHidden(r, (n, c) => {
+      const above = c.parent ? c.parent.type === "INSTANCE" ? c.parent.id : instAbove.get(c.parent) || null : null;
+      instAbove.set(n, above);
+      visit(n, { parent: c.parent, hidden: c.hidden, hiddenRoot: c.hidden && !c.parentHidden, insideInstance: above });
+    });
+  }
+}
+function visibility(doc) {
+  const visible = /* @__PURE__ */ new Map(), hidden = /* @__PURE__ */ new Set(), hiddenRoots = [];
+  const count = /* @__PURE__ */ new Map();
+  walkNodes(doc, (n, ctx) => {
+    if (!n.id) return;
+    if (ctx.hidden) {
+      hidden.add(n.id);
+      if (ctx.hiddenRoot) {
+        const root = { id: n.id, name: n.name, type: n.type, nodes: 0 };
+        hiddenRoots.push(root);
+        count.set(n.id, root);
+      }
+    } else visible.set(n.id, { node: n, parentId: ctx.parent ? ctx.parent.id : null, insideInstance: ctx.insideInstance });
+  });
+  const tally = (n, root) => {
+    if (!n || typeof n !== "object") return;
+    const r = root || (count.has(n.id) ? n.id : null);
+    const entry = r ? count.get(r) : void 0;
+    if (entry) entry.nodes++;
+    for (const c of n.children || []) tally(c, r);
+  };
+  for (const r of screenRoots(doc)) tally(r, null);
+  return { visible, hidden, hiddenRoots };
+}
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/plan-waivers.ts
+var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
+function isPassingVerdict(v) {
+  return typeof v === "string" && PASSING_VERDICTS.includes(v);
+}
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+function waiversHash(plan) {
+  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
+  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
+  return sha256Hex(canonical({ descopes, waivers }));
+}
+
+// design-to-code/verify-build.ts
 var HOOK_TIMEOUT_MS = () => Number(process.env.DTWIN_HOOK_TIMEOUT_MS) || 6e4;
 var STDIN_WAIT_MS = () => {
   const n = Number(process.env.DTWIN_HOOK_STDIN_WAIT_MS);
@@ -2306,20 +1013,22 @@ function readHookInput() {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st;
   try {
-    st = fs.fstatSync(0);
+    st = fs8.fstatSync(0);
   } catch {
     return Promise.resolve({ payload: {}, source: "closed" });
   }
   const parse = (raw) => {
+    if (!raw.trim()) return {};
     try {
-      return raw.trim() ? JSON.parse(raw) : {};
+      const v = JSON.parse(raw);
+      return isJsonObject(v) ? v : {};
     } catch {
       return {};
     }
   };
   if (st.isFile() || st.isCharacterDevice()) {
     try {
-      return Promise.resolve({ payload: parse(fs.readFileSync(0, "utf8")), source: "file" });
+      return Promise.resolve({ payload: parse(fs8.readFileSync(0, "utf8")), source: "file" });
     } catch {
       return Promise.resolve({ payload: {}, source: "unreadable" });
     }
@@ -2344,7 +1053,7 @@ function readHookInput() {
     const first = setTimeout(() => {
       if (!bytes) done({ payload: {}, source: "silent-pipe" });
     }, STDIN_WAIT_MS());
-    const hard = setTimeout(() => done({ error: `timed out after ${Math.round(HOOK_TIMEOUT_MS() / 1e3)} s waiting for the hook payload on stdin (${bytes} byte(s) received, no end-of-file) \u2014 pass the plan path as an argument instead, or pipe the payload: echo '{"cwd":"\u2026"}' | node verify-build.js` }), Math.max(50, HOOK_TIMEOUT_MS() - 250));
+    const hard = setTimeout(() => done({ error: `timed out after ${Math.round(HOOK_TIMEOUT_MS() / 1e3)} s waiting for the hook payload on stdin (${bytes} byte(s) received, no end-of-file) \u2014 pass the plan path as an argument instead, or pipe the payload: echo '{"cwd":"\u2026"}' | ${scriptCmd("verify-build")}` }), Math.max(50, HOOK_TIMEOUT_MS() - 250));
     process.stdin.on("data", (c) => {
       bytes += c.length;
       chunks.push(c);
@@ -2364,64 +1073,69 @@ function isStale(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs.statSync(file).mtimeMs > cutoff;
+    return now - fs8.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
 }
 function readPlan(file) {
-  try {
-    return { file, plan: JSON.parse(fs.readFileSync(file, "utf8")) };
-  } catch {
-    return null;
-  }
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return { file, error: r.error };
+  const p = parsePlan(r.doc);
+  return "plan" in p ? { file, plan: p.plan } : { file, error: p.error };
 }
+var isPlanFile = (p) => "plan" in p;
 function findPlans(cwd) {
-  const dir = path.join(cwd, "design", "plan");
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path.join(dir, f))).filter(Boolean);
+  const dir = path6.join(cwd, PLAN_DIR);
+  const read = listPlans(dir).map((f) => readPlan(path6.join(dir, f)));
+  return { plans: read.filter(isPlanFile), bad: read.filter((p) => !isPlanFile(p)) };
 }
 function rootOfPlan(file, fallback) {
-  const abs = path.resolve(file);
-  const dir = path.dirname(abs);
-  if (path.basename(dir) === "plan" && path.basename(path.dirname(dir)) === "design") return path.dirname(path.dirname(dir));
+  const abs = path6.resolve(file);
+  const dir = path6.dirname(abs);
+  if (dir.endsWith(path6.sep + PLAN_DIR)) return path6.dirname(path6.dirname(dir));
   return fallback || process.cwd();
 }
 var REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
 var LIFECYCLE = /* @__PURE__ */ new Set(["pending", "awaiting-user", "abandoned"]);
-var COMPUTED_STORED = /* @__PURE__ */ new Set(["verified", "static-only"]);
+var COMPUTED_STORED = /* @__PURE__ */ new Set(["verified", "verified-with-deviations", "static-only"]);
+var isLifecycle = (s) => LIFECYCLE.has(s);
 var lifecycleOf = (plan) => {
   const s = String(plan && plan.status || "pending").trim().toLowerCase();
-  return LIFECYCLE.has(s) ? s : "pending";
+  return isLifecycle(s) ? s : "pending";
 };
-var sha = (buf) => crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
-function fileHashes(plan, cwd) {
-  return contentHash.fileHashes(plan && plan.files, cwd);
+function fileHashes2(plan, cwd, cached) {
+  return fileHashes(planCodeFiles(plan || {}, cwd), cwd, cached);
 }
-function planHash(plan) {
-  const copy = JSON.parse(JSON.stringify(plan || {}));
-  delete copy.status;
-  if (copy.verification && typeof copy.verification === "object") {
-    delete copy.verification.hook;
-    if (!Object.keys(copy.verification).length) delete copy.verification;
-  }
-  return sha(JSON.stringify(copy));
-}
-function changedFiles(plan, cwd) {
+var planHash2 = (plan) => planHash(plan);
+var hookHashMatches = (hook, plan) => hook.planHash === planHash2(plan) || hook.planHash === legacyPlanHash(plan);
+function hookFileDiff(plan, cwd, cached) {
   const hook = plan.verification && plan.verification.hook;
   if (!hook || !hook.files) return null;
-  const now = fileHashes(plan, cwd);
-  const changed = [];
+  const now = fileHashes2(plan, cwd, cached);
+  const listed = new Set(Array.isArray(plan.files) ? plan.files.map(String) : []);
+  const changed = [], unhashed = [];
   const all = /* @__PURE__ */ new Set([...Object.keys(hook.files), ...Object.keys(now)]);
-  for (const f of all) if (hook.files[f] !== now[f]) changed.push(now[f] === void 0 ? `${f} (no longer in files[])` : hook.files[f] === void 0 ? `${f} (added to files[])` : now[f] === null ? `${f} (missing)` : f);
-  return changed;
+  for (const f of all) {
+    if (hook.files[f] === now[f]) continue;
+    if (now[f] === void 0) changed.push(`${f} (no longer hashed: not in files[] nor a mapped module that resolves)`);
+    else if (hook.files[f] === void 0) {
+      if (listed.has(f)) changed.push(`${f} (added to files[])`);
+      else unhashed.push(`${f} (now hashed: mapped module)`);
+    } else changed.push(now[f] === null ? `${f} (missing)` : f);
+  }
+  return { changed, unhashed };
+}
+function changedFiles(plan, cwd) {
+  const d = hookFileDiff(plan, cwd);
+  return d && d.changed;
 }
 function isOpen(p, cwd) {
   if (lifecycleOf(p.plan) !== "pending") return false;
   if (isStale(p.file)) return false;
   const hook = p.plan.verification && p.plan.verification.hook;
   if (!hook || hook.result !== "pass") return true;
-  if (hook.planHash !== planHash(p.plan)) return true;
+  if (!hookHashMatches(hook, p.plan)) return true;
   const ch = changedFiles(p.plan, cwd);
   return !ch || ch.length > 0;
 }
@@ -2454,7 +1168,7 @@ var SOURCE_EXT = /* @__PURE__ */ new Set([
   "cs",
   "xaml"
 ]);
-var extOf = (rel) => String(rel).toLowerCase().split(".").pop();
+var extOf = (rel) => String(rel).toLowerCase().split(".").pop() ?? "";
 var isSourceFile = (rel) => SOURCE_EXT.has(extOf(rel));
 var PROSE = /\b[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}\b/;
 var isProse = (s) => PROSE.test(s) && !/-\[|\[#/.test(s);
@@ -2502,19 +1216,6 @@ function scanText(rel, text) {
   }
   return out;
 }
-function hex6(value) {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(value).trim());
-  if (!m) return null;
-  const h = m[1].toLowerCase();
-  return h.length === 3 ? h.split("").map((c) => c + c).join("") : h.slice(0, 6);
-}
-function colorKey(value) {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(value).trim());
-  if (!m) return null;
-  const h = m[1].toLowerCase();
-  const full = h.length <= 4 ? h.split("").map((c) => c + c).join("") : h;
-  return full.length === 6 ? full + "ff" : full;
-}
 function colorLiterals(source) {
   const found = /* @__PURE__ */ new Map();
   const add = (h, lit) => {
@@ -2522,20 +1223,16 @@ function colorLiterals(source) {
   };
   for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g)) add(colorKey(m[1]), m[0]);
   for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) {
-    const h = m[1].toLowerCase();
-    add(h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff", m[0]);
+    const g = m[1];
+    if (g === void 0) continue;
+    const h = g.toLowerCase();
+    add("#" + (h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff"), m[0]);
   }
-  for (const m of source.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})(?:[\s,/]+([\d.]+%?))?[^)]*\)/g)) {
-    const rgb = [m[1], m[2], m[3]].map((x) => Math.min(255, Number(x)).toString(16).padStart(2, "0")).join("");
-    add(rgb + alphaHex(m[4]), m[0]);
+  for (const m of source.matchAll(/rgba?\([^()]*\)/g)) {
+    const c = parseCssColor(m[0]);
+    if (c) add(colorKey(formatHex(c)), m[0]);
   }
   return found;
-}
-function alphaHex(a) {
-  if (a === void 0 || a === "") return "ff";
-  const n = String(a).endsWith("%") ? Number(String(a).slice(0, -1)) / 100 : Number(a);
-  if (!Number.isFinite(n)) return "ff";
-  return Math.round(Math.min(1, Math.max(0, n)) * 255).toString(16).padStart(2, "0");
 }
 var UTILITY_KIND = [
   [/^rounded(-[a-z]+)?$/, "radius"],
@@ -2573,7 +1270,7 @@ function arbitraryPx(source) {
   const found = /* @__PURE__ */ new Map();
   for (const m of source.matchAll(/(?:^|[\s"'`{(])([a-z-]+)-\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
     const px = Number(m[2]) * (m[3] === "rem" ? 16 : 1);
-    const entry = { literal: `[${m[2]}${m[3]}]`, utility: m[1] };
+    const entry = { literal: `[${m[2]}${m[3]}]`, utility: m[1] ?? null };
     const list = found.get(px) || [];
     if (!list.some((e) => e.utility === entry.utility)) list.push(entry);
     found.set(px, list);
@@ -2587,30 +1284,39 @@ function arbitraryPx(source) {
 function importsOf(text) {
   const out = [];
   const re = /\bimport\s+(?:[^'"`;]*?\sfrom\s+)?["'`]([^"'`]+)["'`]|\bexport\s+[^'"`;]*?\sfrom\s+["'`]([^"'`]+)["'`]|\b(?:require|import)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|@import\s+(?:url\()?["']([^"']+)["']/g;
-  for (const m of text.matchAll(re)) out.push(m[1] || m[2] || m[3] || m[4]);
+  for (const m of text.matchAll(re)) {
+    const spec = m[1] || m[2] || m[3] || m[4];
+    if (spec !== void 0) out.push(spec);
+  }
   return out;
 }
 var SRC_EXT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro|css|scss|swift|kt|dart)$/i;
 function moduleSegments(spec) {
   let s = String(spec || "").trim().replace(/\\/g, "/").replace(SRC_EXT_RE, "").replace(/\/index$/i, "");
   const segs = s.split("/").filter((x) => x && x !== "." && x !== "..");
-  if (segs.length && /^[@~#]$/.test(segs[0])) segs.shift();
+  const [first] = segs;
+  if (first !== void 0 && /^[@~#]$/.test(first)) segs.shift();
   return segs;
 }
+var importCache = /* @__PURE__ */ new Map();
+var cachedImports = (text) => getOrInit(importCache, text, () => importsOf(text));
 function moduleImported(mapModule, byFile, cwd) {
   const want = moduleSegments(mapModule);
   if (!want.length) return true;
   const suffixMatch = (have) => {
     const k = Math.min(have.length, want.length);
     if (!k) return false;
-    for (let i = 1; i <= k; i++) if (have[have.length - i].toLowerCase() !== want[want.length - i].toLowerCase()) return false;
+    for (let i = 1; i <= k; i++) {
+      const h = have[have.length - i], w = want[want.length - i];
+      if (h === void 0 || w === void 0 || h.toLowerCase() !== w.toLowerCase()) return false;
+    }
     return true;
   };
-  const wantAbs = moduleSegments(path.relative(cwd, path.resolve(cwd, String(mapModule))));
+  const wantAbs = moduleSegments(path6.relative(cwd, path6.resolve(cwd, String(mapModule))));
   for (const f of byFile) {
-    for (const spec of importsOf(f.text)) {
+    for (const spec of cachedImports(f.text)) {
       if (spec.startsWith(".")) {
-        const resolved = moduleSegments(path.relative(cwd, path.resolve(cwd, path.dirname(f.rel), spec)));
+        const resolved = moduleSegments(path6.relative(cwd, path6.resolve(cwd, path6.dirname(f.rel), spec)));
         if (resolved.join("/").toLowerCase() === wantAbs.join("/").toLowerCase() || suffixMatch(resolved)) return true;
       } else if (suffixMatch(moduleSegments(spec))) return true;
     }
@@ -2621,29 +1327,22 @@ function moduleImported(mapModule, byFile, cwd) {
   }
   return false;
 }
-function readJsonOr(file, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
 function exportDirOf(cwd) {
-  const e = path.join(cwd, "design", "export");
-  return fs.existsSync(path.join(e, "pages")) ? e : path.join(cwd, "design");
+  const e = path6.join(cwd, EXPORT_DIR);
+  return fs8.existsSync(path6.join(e, "pages")) ? e : path6.join(cwd, DESIGN_DIR);
 }
 var idFromStem = (s) => {
   const m = /__(I?\d+)_(\d+)$/.exec(String(s || ""));
   return m ? `${m[1]}:${m[2]}` : null;
 };
 function indexRows(exportDir) {
-  const root = readJsonOr(path.join(exportDir, "pages", "index.json"), null);
+  const root = readJsonOrNull(path6.join(exportDir, "pages", "index.json"), isPagesRootIndex);
   if (!root) return [];
-  if (Array.isArray(root.layers)) return root.layers;
+  if (root.layers) return root.layers;
   const rows = [];
-  for (const pd of root.pageDirs || []) {
-    const idx = readJsonOr(path.join(exportDir, pd.index || path.join("pages", pd.dir || "", "index.json")), null);
-    if (idx && Array.isArray(idx.layers)) rows.push(...idx.layers);
+  for (const pd of root.pageDirs) {
+    const idx = readJsonOrNull(path6.join(exportDir, pd.index || path6.join("pages", pd.dir || "", "index.json")), isPageIndex);
+    if (idx) rows.push(...idx.layers);
   }
   return rows;
 }
@@ -2651,45 +1350,54 @@ function locateExport(plan, planFile, cwd) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
     if (!rel) return null;
-    for (const f of [path.resolve(cwd, rel), path.resolve(exportDir, rel)]) {
-      const doc = fs.existsSync(f) ? readJsonOr(f, null) : null;
+    for (const f of [path6.resolve(cwd, rel), path6.resolve(exportDir, rel)]) {
+      const doc = readJsonOrNull(f, isScreenDoc);
       if (doc) return { file: f, doc };
     }
     return null;
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
   const rows = indexRows(exportDir);
-  const ids = [plan.nodeId, idFromStem(plan.screen), planFile ? idFromStem(path.basename(planFile, ".json")) : null].filter(Boolean);
+  const ids = [plan.nodeId, idFromStem(plan.screen), planFile ? idFromStem(path6.basename(planFile, ".json")) : null].filter((id) => !!id);
   let row = null;
   for (const id of ids) {
-    row = rows.find((r) => r.id === id);
+    row = rows.find((r) => r.id === id) || null;
     if (row) break;
   }
   if (!hit && row) hit = tryFile(row.file);
   if (!hit) return null;
-  const root = rootsOf(hit.doc)[0] || {};
-  if (!row) row = rows.find((r) => r.id === (hit.doc.nodeId || root.id)) || null;
-  return Object.assign(hit, { row, nodeId: hit.doc.nodeId || root.id || null, layerName: String(hit.doc.screen || root.name || ""), sameNameRows: rows.filter((r) => String(r.name || "").trim() === String(hit.doc.screen || root.name || "").trim()).length });
+  const root = screenRoots(hit.doc)[0];
+  const exp = screenExportOf(hit.doc);
+  const nodeId = exp && exp.nodeId || root && root.id || null;
+  const layerName = String(exp && exp.screen || root && root.name || "");
+  if (!row) row = rows.find((r) => r.id === nodeId) || null;
+  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length });
 }
-var anchored = (a) => !!a && typeof a === "object" && ["mapModule", "file", "symbol", "omitted"].some((k) => typeof a[k] === "string" && a[k].trim());
+var anchored = (a) => !!a && typeof a === "object" && ["mapModule", "file", "symbol", "omitted"].some((k) => {
+  const v = a[k];
+  return typeof v === "string" && !!v.trim();
+});
 function anchorCoverage(plan, doc) {
   const { visible, hidden } = visibility(doc);
-  const anchors = plan.anchors && typeof plan.anchors === "object" ? plan.anchors : {};
+  const anchors = plan.anchors || {};
   const covered = /* @__PURE__ */ new Map();
   const isCovered = (id) => {
-    if (covered.has(id)) return covered.get(id);
+    const known = covered.get(id);
+    if (known !== void 0) return known;
     const v = visible.get(id);
     const r = anchored(anchors[id]) || !!v && !!v.parentId && visible.has(v.parentId) && isCovered(v.parentId);
     covered.set(id, r);
     return r;
   };
   const hasAnchoredBelow = /* @__PURE__ */ new Set();
-  for (const id of visible.keys()) {
+  for (const [id, v] of visible) {
     if (!anchored(anchors[id])) continue;
-    let p = visible.get(id).parentId;
-    while (p && visible.has(p) && !hasAnchoredBelow.has(p)) {
+    let p = v.parentId;
+    while (p && !hasAnchoredBelow.has(p)) {
+      const pv = visible.get(p);
+      if (!pv) break;
       hasAnchoredBelow.add(p);
-      p = visible.get(p).parentId;
+      p = pv.parentId;
     }
   }
   const unmapped = [], wrappers = [];
@@ -2716,12 +1424,12 @@ var verdictOf = (row) => String(row && row.verdict || "").trim().toLowerCase();
 var NO_TOKEN = /* @__PURE__ */ new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
 var hasToken = (row) => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
 function loadMapKeys(cwd) {
-  for (const f of [path.join(cwd, "design", "codeconnect.local.json"), path.join(cwd, "codeconnect.local.json")]) {
-    const map = readJsonOr(f, null);
+  for (const f of [path6.join(cwd, MAP_FILE), path6.join(cwd, LEGACY_MAP_FILE)]) {
+    const map = readJsonOrNull(f, isCodeConnectMap);
     if (!map) continue;
     const keys = /* @__PURE__ */ new Map();
-    for (const [name, e] of Object.entries(map.components || {})) {
-      if (e && e.figma && e.figma.key && e.code && e.code.module && e.status !== "deprecated") keys.set(e.figma.key, { name, module: e.code.module });
+    for (const [name, e] of Object.entries(map.components)) {
+      if (e.figma.key && e.status !== "deprecated") keys.set(e.figma.key, { name, module: e.code.module });
     }
     return keys;
   }
@@ -2733,9 +1441,14 @@ function checkVerification(plan, cwd) {
     return ['no `verification.mode` in the plan \u2014 record how the build was checked: {mode:"rendered", renderer, artifacts:[\u2026], deltas:[\u2026]} after rendering and comparing (references/verify.md), or {mode:"static-only", reason} if the project genuinely has no way to render'];
   }
   if (v.mode === "rendered") {
+    const shape = (x) => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
+    const wrongShape = [];
+    if (v.artifacts !== void 0 && !Array.isArray(v.artifacts)) wrongShape.push(`verification.artifacts must be an array of paths, got ${shape(v.artifacts)} \u2014 e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
+    if (v.deltas !== void 0 && !Array.isArray(v.deltas)) wrongShape.push(`verification.deltas must be an array of the residual differences, got ${shape(v.deltas)} \u2014 the counts live in the report; list each difference ([] if none were found)`);
+    if (wrongShape.length) return v.deltas === void 0 ? [...wrongShape, "verification.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)"] : wrongShape;
     const artifacts = Array.isArray(v.artifacts) ? v.artifacts : [];
     if (!artifacts.length) return ['verification.mode is "rendered" but `artifacts` is empty \u2014 list the screenshot(s)/report the render produced'];
-    const missing = artifacts.filter((a) => !fs.existsSync(path.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs8.existsSync(path6.join(cwd, String(a))));
     if (missing.length) return [`verification artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(v.deltas)) return ["verification.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)"];
     return [];
@@ -2751,8 +1464,67 @@ function verificationWarnings(plan) {
   const out = [];
   const c = v.coverage;
   if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push('verification.coverage is missing \u2014 record {rendered:[\u2026], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, "Beyond the ideal frame")');
-  if (!v.a11y) out.push("verification.a11y is missing \u2014 no accessibility check is recorded (web: @axe-core/playwright on the rendered page); say so in the report rather than implying one ran");
+  if (!v.a11y) out.push("verification.a11y is missing \u2014 copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) \u2014 `verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded \u2014 say so in the report rather than implying one ran");
   return out;
+}
+function recordedReportWarnings(plan, cwd) {
+  const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
+  if (!rec || typeof rec !== "object" || typeof rec.report !== "string" || !rec.report) return [];
+  let bytes;
+  try {
+    bytes = fs8.readFileSync(path6.resolve(cwd, rec.report));
+  } catch {
+    return [];
+  }
+  const now = sha256Hex(bytes);
+  return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} \u2014 re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
+}
+var newestOwn = (reports) => {
+  const own = reports.filter((r) => r.matchedBy === "name");
+  return (own.length ? own : reports).reduce((best, r) => !best || r.mtimeMs > best.mtimeMs ? r : best, null);
+};
+function a11yReportOf(named, reports, ctx = {}) {
+  if (named === void 0 || !named.trim()) return { ref: newestOwn(reports) };
+  const json = (x) => x.replace(/\.report\.md$/, ".report.json");
+  const slash = (x) => x.split(path6.sep).join("/").split("\\").join("/");
+  const want = slash(named.trim());
+  const rels = /* @__PURE__ */ new Set([json(want.replace(/^\.\//, ""))]);
+  if (ctx.cwd !== void 0) {
+    rels.add(json(slash(path6.relative(ctx.cwd, path6.resolve(ctx.cwd, named.trim())))));
+    if (ctx.planFile !== void 0) rels.add(json(slash(path6.relative(ctx.cwd, path6.resolve(path6.dirname(path6.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
+  }
+  const exact = reports.find((r) => rels.has(r.rel));
+  if (exact) return { ref: exact };
+  const base = json(path6.posix.basename(want));
+  const byBase = reports.filter((r) => path6.posix.basename(r.rel) === base);
+  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
+  return { ref: null, missing: want };
+}
+function behaviourWarnings(plan, reports, ctx = {}) {
+  const out = [];
+  const all = reports || [];
+  const a11y = plan.verification && typeof plan.verification === "object" ? plan.verification.a11y : void 0;
+  const recorded = a11y && typeof a11y === "object" ? a11y.violations : void 0;
+  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : void 0, all, ctx);
+  if (recorded !== void 0 && target.missing !== void 0 && all.some((r2) => r2.behaviour && r2.behaviour.ran)) out.push(`verification.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ \u2014 the a11y count was not checked against it`);
+  const r = target.ref ?? newestOwn(all);
+  const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+  const failWarning = (ref, fail, failed) => {
+    const ids = [...new Set(failed)];
+    return `${ref.rel}: behaviour/a11y \u2014 ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) \u2014 not the fidelity verdict, but a measurable accessibility failure is never waived: fix it or raise a designer question`;
+  };
+  const others = all.filter((x) => x !== r);
+  const otherFails = others.flatMap((x) => x.behaviour && x.behaviour.ran && x.behaviour.fail > 0 ? [failWarning(x, x.behaviour.fail, x.behaviour.failed)] : []);
+  const b = r ? r.behaviour : null;
+  if (!r || !b) return [...out, ...otherFails];
+  if (!b.ran) {
+    if (b.why !== "--behaviour off" && !r.shippedProbe) return out;
+    out.push(b.why === "--behaviour off" ? `${r.rel}: behaviour/a11y checks were not run (--behaviour off) \u2014 the skills never pass that switch; re-run the probe without it before claiming accessibility` : `${r.rel}: behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 re-run the shipped probe, or say in the report that accessibility was not checked`);
+    return [...out, ...otherFails];
+  }
+  if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
+  if (recorded !== void 0 && target.missing === void 0 && recorded !== b.fail) out.push(`verification.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} \u2014 copy report.behaviour.summary`);
+  return [...out, ...otherFails];
 }
 var A11Y = /\b(a11y|axe|accessib)/i;
 function verificationContradictions(plan, reports) {
@@ -2764,15 +1536,17 @@ function verificationContradictions(plan, reports) {
   const rendered = v.coverage && Array.isArray(v.coverage.rendered) ? v.coverage.rendered.map((x) => String(x).trim().toLowerCase()) : [];
   if (v.a11y && typeof v.a11y === "object" && v.a11y.violations !== void 0) {
     const nc = notChecked.find((e) => A11Y.test(what(e)));
-    if (nc) out.push(`verification contradicts itself: \`a11y\` records ${JSON.stringify(v.a11y.violations)} violation(s) from ${JSON.stringify(v.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says "${what(nc)}" was not checked${nc.why ? ` (${nc.why})` : ""} \u2014 keep the one that is true`);
+    if (nc) out.push(`verification contradicts itself: \`a11y\` records ${JSON.stringify(v.a11y.violations)} violation(s) from ${JSON.stringify(v.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says "${what(nc)}" was not checked${typeof nc === "object" && nc.why ? ` (${nc.why})` : ""} \u2014 keep the one that is true`);
   }
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
   for (const r of reports || []) {
-    if (Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 copy them (or the ones you judged real, with why) into the plan`);
+    const recordedHere = !!(v.recorded && typeof v.recorded === "object" && v.recorded.report === r.rel);
+    if (!recordedHere && Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 copy them (or the ones you judged real, with why) into the plan`);
     for (const k of ["verifyScreenVerdict", "verdict"]) {
       const claimed = v[k];
       const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
-      if (typeof s === "string" && /pass/i.test(s) && r.verdict !== "pass") out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} \u2014 the report is the verdict; the plan cannot overrule it`);
+      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict)) out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} \u2014 the report is the verdict; the plan cannot overrule it`);
+      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations") out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" \u2014 say the accepted deviations, not a plain pass`);
     }
   }
   return out;
@@ -2780,7 +1554,6 @@ function verificationContradictions(plan, reports) {
 var DEVIATION_FIELDS = ["nodeId", "field", "designed", "built", "reason"];
 function deviationWarnings(plan) {
   if (plan.deviations === void 0) return [];
-  if (!Array.isArray(plan.deviations)) return ["`deviations` must be an array of {nodeId, field, designed, built, reason}"];
   const bad = [];
   plan.deviations.forEach((d, i) => {
     const miss = DEVIATION_FIELDS.filter((k) => {
@@ -2795,41 +1568,329 @@ function validatePlanHeader(plan) {
   const missing = ["screenName", "nodeId", "route", "file"].filter((k) => plan[k] === void 0 || plan[k] === null || plan[k] === "");
   if (!missing.length) return [];
   return [
-    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} \u2014 other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (plan-skeleton.js writes the header; only the route is yours to fill)`
+    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} \u2014 other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (the plan-skeleton script writes the header; only the route is yours to fill)`
   ];
 }
 var DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
-var slug = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 function tokenCore(x) {
   let s = String(x || "").toLowerCase().replace(/^--/, "").replace(/^var\(--|\)$/g, "");
   s = s.replace(/^(color|colors|spacing|space|radius|rounded|text|font|font-size|font-weight|leading|tracking|shadow|bg|border|fill|stroke|ring|outline|gap|gap-[xy]|p[xytrbl]?|m[xytrbl]?|w|h|size|inset|top|left|right|bottom)-/, "");
   s = s.replace(/^figma-/, "").replace(/-[0-9a-f]{8}$/, "");
-  return slug(s);
+  return alnumKey(s);
 }
-function declaresToken(line, literal, codeToken) {
-  const at = line.indexOf(literal);
-  if (at === -1) return false;
+var STYLESHEET_EXT = /* @__PURE__ */ new Set(["css", "scss", "sass", "less", "styl"]);
+var isStylesheet = (rel) => STYLESHEET_EXT.has(extOf(rel));
+var COLOUR_UTILITY = /^(bg|text|border|ring|fill|stroke|outline|divide|placeholder|decoration|accent|caret|from|via|to|shadow)-(.+)$/;
+var TW_PALETTE = /^(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}$/;
+var TW_KEYWORD = /* @__PURE__ */ new Set(["white", "black", "transparent", "current", "inherit"]);
+function tokenParts(codeToken) {
+  const out = [];
+  for (const raw of codeToken.replace(/var\(\s*(--[\w-]+)\s*,[^)]*\)/g, "var($1)").split(/[\s,]+/)) {
+    let t = raw.trim().toLowerCase().replace(/!$/, "");
+    if (!t || t === "/") continue;
+    const v = /^var\((--[\w-]+)\)$/.exec(t);
+    if (v && v[1]) {
+      out.push({ text: v[1], prop: v[1], builtin: false });
+      continue;
+    }
+    if (t.startsWith("--")) {
+      const n = t.replace(/:$/, "");
+      out.push({ text: n, prop: n, builtin: false });
+      continue;
+    }
+    t = t.slice(t.lastIndexOf(":") + 1).replace(/^!/, "").replace(/\/[\w.[\]%]+$/, "");
+    const v4 = /^[a-z-]+-\((--[\w-]+)\)$/.exec(t);
+    if (v4 && v4[1]) {
+      out.push({ text: t, prop: v4[1], builtin: false });
+      continue;
+    }
+    const name = COLOUR_UTILITY.exec(t)?.[2];
+    if (!name) {
+      out.push({ text: t, prop: null, builtin: false });
+      continue;
+    }
+    out.push({ text: t, prop: `--color-${name}`, builtin: TW_KEYWORD.has(name) || TW_PALETTE.test(name) || /^[\d.]+$|^\[/.test(name) });
+  }
+  return out;
+}
+var tokenCandidates = (codeToken) => [.../* @__PURE__ */ new Set([codeToken, ...tokenParts(codeToken).flatMap((p) => p.prop ? [p.text, p.prop] : [p.text])])];
+function namesToken(name, codeToken, stylesheet) {
+  if (stylesheet && !name.startsWith("--")) return false;
+  const declared = alnumKey(name), dc = tokenCore(name);
+  if (!declared) return false;
+  return tokenCandidates(codeToken).some((c) => {
+    const tc = tokenCore(c);
+    return declared === alnumKey(c) || !!dc && dc === tc;
+  });
+}
+function declaresTokenAt(line, at, codeToken, stylesheet) {
   const m = DECLARATION.exec(line.slice(0, at));
-  if (!m) return false;
-  const declared = slug(m[2]), token = slug(codeToken);
-  if (!declared || !token) return false;
-  const dc = tokenCore(m[2]), tc = tokenCore(codeToken);
-  return declared === token || declared.includes(token) || token.includes(declared) || !!dc && !!tc && (dc === tc || dc.includes(tc) || tc.includes(dc));
+  return !!m && namesToken(m[2] ?? "", codeToken, stylesheet);
+}
+function definesAny(line, literal, codeTokens, stylesheet) {
+  let at = line.indexOf(literal);
+  if (at === -1) return false;
+  while (at !== -1) {
+    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, stylesheet))) return false;
+    at = line.indexOf(literal, at + literal.length);
+  }
+  return true;
+}
+var isAcknowledged = (row) => typeof row.acknowledged === "string" && !!row.acknowledged.trim();
+function readFiles(rels, cwd, bytes) {
+  const out = [];
+  for (const rel of rels) {
+    const abs = path6.join(cwd, rel);
+    try {
+      if (!fs8.statSync(abs).isFile()) continue;
+      const buf = fs8.readFileSync(abs);
+      out.push({ rel, text: buf.toString("utf8") });
+      bytes?.set(rel, buf);
+    } catch {
+    }
+  }
+  return out;
+}
+var SCRIPT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro)$/i;
+function buildGraph(cwd, extra = [], plans) {
+  const listCount = /* @__PURE__ */ new Map();
+  for (const p of plans ?? findPlans(cwd).plans) for (const f of new Set(p.plan.files || [])) listCount.set(f, (listCount.get(f) || 0) + 1);
+  const bytes = /* @__PURE__ */ new Map();
+  const files = readFiles([.../* @__PURE__ */ new Set([...listCount.keys(), ...extra])], cwd, bytes);
+  const byRel = new Map(files.map((f) => [f.rel, f]));
+  const rewritten = /* @__PURE__ */ new Set();
+  const cached = (rel) => rewritten.has(path6.resolve(cwd, rel)) ? void 0 : bytes.get(rel);
+  const rewrote = (file) => {
+    rewritten.add(path6.resolve(cwd, file));
+  };
+  const scripts = files.filter((f) => SCRIPT_RE.test(f.rel));
+  const lower = (segs) => segs.map((x) => x.toLowerCase()).join("/");
+  const bySuffix = /* @__PURE__ */ new Map(), byFull = /* @__PURE__ */ new Map();
+  for (const f of scripts) {
+    const segs = moduleSegments(f.rel);
+    getOrInit(byFull, lower(segs), () => []).push(f.rel);
+    for (let i = 0; i < segs.length; i++) getOrInit(bySuffix, lower(segs.slice(i)), () => []).push(f.rel);
+  }
+  const kids = /* @__PURE__ */ new Map(), parents = /* @__PURE__ */ new Map();
+  for (const f of scripts) {
+    const found = /* @__PURE__ */ new Set();
+    for (const spec of cachedImports(f.text)) {
+      const segs = spec.startsWith(".") ? moduleSegments(path6.relative(cwd, path6.resolve(cwd, path6.dirname(f.rel), spec))) : moduleSegments(spec);
+      if (!segs.length) continue;
+      for (const r of bySuffix.get(lower(segs)) || []) found.add(r);
+      for (let i = 1; i < segs.length; i++) for (const r of byFull.get(lower(segs.slice(i))) || []) found.add(r);
+    }
+    found.delete(f.rel);
+    kids.set(f.rel, [...found]);
+    for (const r of found) getOrInit(parents, r, () => []).push(f.rel);
+  }
+  let scanned = null;
+  const scan = () => {
+    if (scanned) return scanned;
+    const walked = projectScan(cwd);
+    const dirs = /* @__PURE__ */ new Set([path6.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
+    return scanned = { css: walked.css, tailwindConfig: walked.tailwindConfig || [...dirs].some(hasTwConfig) };
+  };
+  return { files, listCount, kids, parents, byRel, scan, cached, rewrote };
+}
+function reachableFor(g, own) {
+  const mine = new Set(own);
+  const ancestors = /* @__PURE__ */ new Set();
+  const queue = own.filter((r) => g.kids.has(r));
+  for (let i = 0; i < queue.length; i++) {
+    for (const par of g.parents.get(queue[i] ?? "") || []) if (!mine.has(par) && !ancestors.has(par)) {
+      ancestors.add(par);
+      queue.push(par);
+    }
+  }
+  const out = /* @__PURE__ */ new Set([...mine, ...ancestors]);
+  for (const r of mine) for (const k of g.kids.get(r) || []) out.add(k);
+  const steppable = (r) => mine.has(r) || (g.listCount.get(r) || 0) !== 1;
+  for (const r of ancestors) for (const k of g.kids.get(r) || []) if (steppable(k)) out.add(k);
+  return [...out].map((r) => g.byRel.get(r)).filter((f) => !!f);
+}
+function profileOf(plan, cwd) {
+  const t = plan.target;
+  if (typeof t === "string" && t.trim()) return t.trim();
+  if (t && typeof t === "object" && typeof t.profile === "string" && t.profile.trim()) return t.profile.trim();
+  const doc = readJsonOrNull(path6.join(cwd, TARGET_FILE), isJsonObject);
+  return doc && typeof doc.profile === "string" && doc.profile.trim() ? doc.profile.trim() : null;
+}
+var isWebProfile = (p) => !!p && /^web(-|$)/i.test(p);
+function tagCoverageOf(plan, exp, files) {
+  const anchors = plan.anchors || {};
+  const vis = exp ? visibility(exp.doc).visible : null;
+  const ids = Object.keys(anchors).filter((id) => {
+    const a = anchors[id];
+    return anchored(a) && !(a && typeof a.omitted === "string" && a.omitted.trim()) && (!vis || vis.has(id));
+  });
+  const attribute = files.some((f) => f.text.includes("data-dt-node"));
+  const untagged = attribute ? ids.filter((id) => !files.some((f) => f.text.includes(`"${id}"`) || f.text.includes(`'${id}'`) || f.text.includes("`" + id + "`"))) : ids;
+  return { tagged: ids.length - untagged.length, anchored: ids.length, attribute, untagged };
+}
+var SKIP_DIRS = /* @__PURE__ */ new Set([
+  "node_modules",
+  "dist",
+  "build",
+  ".git",
+  "design",
+  ".next",
+  "out",
+  "coverage",
+  ".turbo",
+  ".svelte-kit",
+  ".nuxt",
+  ".output",
+  "Pods",
+  ".venv",
+  "venv",
+  "vendor",
+  "target",
+  "tmp"
+]);
+var TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
+var hasTwConfig = (dir) => {
+  try {
+    return fs8.readdirSync(dir).some((n) => TW_CONFIG.test(n));
+  } catch {
+    return false;
+  }
+};
+function packageDirOf(cwd, rel) {
+  const root = path6.resolve(cwd);
+  for (let d = path6.dirname(path6.resolve(cwd, rel)); d.startsWith(root); d = path6.dirname(d)) {
+    if (fs8.existsSync(path6.join(d, "package.json"))) return d;
+    if (d === root) break;
+  }
+  return root;
+}
+function projectScan(cwd, limit = 2e3) {
+  const css = [];
+  let tailwindConfig = false;
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs8.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (css.length >= limit) return;
+      const abs = path6.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) walk(abs);
+      } else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
+      else if (e.isFile() && /\.css$/i.test(e.name)) {
+        try {
+          css.push({ rel: path6.relative(cwd, abs).split(path6.sep).join("/"), text: fs8.readFileSync(abs, "utf8") });
+        } catch {
+        }
+      }
+    }
+  };
+  walk(cwd);
+  return { css, tailwindConfig };
+}
+function declaredCustomProps(files) {
+  const out = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    const text = isSourceFile(f.rel) ? scanText(f.rel, f.text) : f.text;
+    for (const m of text.matchAll(/(--[\w-]+)\s*:/g)) {
+      const n = m[1];
+      if (n !== void 0) out.add(n.toLowerCase());
+    }
+  }
+  return out;
+}
+var requiredCustomProps = (codeToken) => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
+function undeclaredColourTokens(live, g) {
+  const colour = [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() === "color").map((r) => String(r.codeToken).trim()))];
+  const wanted = colour.map((t) => ({ t, props: requiredCustomProps(t) })).filter((x) => x.props.length);
+  if (!wanted.length) return [];
+  const scan = g.scan();
+  if (scan.tailwindConfig) return [];
+  const declared = declaredCustomProps([...g.files, ...scan.css]);
+  const missing = wanted.filter((x) => x.props.some((p) => !declared.has(p)));
+  if (!missing.length) return [];
+  const show = missing.slice(0, 8).map((x) => `'${x.t}' (needs ${x.props.filter((p) => !declared.has(p)).join(", ")})`).join(", ");
+  return [`${missing.length} colour code token(s) are declared nowhere \u2014 not in any plan's files[] nor in a .css file of the project: ${show}${missing.length > 8 ? `, +${missing.length - 8} more` : ""} \u2014 a utility or variable with no definition renders nothing; add the alias to the theme (e.g. in the @theme block the tokens script writes)`];
+}
+var STYLE_FIELDS = /* @__PURE__ */ new Set([
+  "effects",
+  "shadow",
+  "fill",
+  "fills",
+  "stroke",
+  "strokes",
+  "radius",
+  "cornerradius",
+  "opacity",
+  "padding",
+  "gap",
+  "font",
+  "typography",
+  "color",
+  "background",
+  "border",
+  "blur",
+  "size",
+  "width",
+  "height",
+  "fontsize",
+  "fontweight",
+  "lineheight",
+  "letterspacing",
+  "borderradius",
+  "borderwidth",
+  "textalign",
+  "textcase"
+]);
+function deviationConflicts(plan) {
+  const out = [];
+  const anchors = plan.anchors || {};
+  (plan.deviations || []).forEach((d, i) => {
+    if (!d) return;
+    const field = typeof d.field === "string" ? d.field.trim().toLowerCase().split(/[.[\]\s/]+/).filter(Boolean).pop() ?? "" : "";
+    if (STYLE_FIELDS.has(field)) return;
+    const built = d.built;
+    const omitted = built === null || built === false || typeof built === "string" && /^(omitted|not built|not rendered|removed)/i.test(built.trim());
+    if (!omitted) return;
+    const ids = [...typeof d.nodeId === "string" && d.nodeId ? [d.nodeId] : [], ...Array.isArray(d.nodeIds) ? d.nodeIds : []];
+    for (const id of ids) {
+      const comp2 = (plan.components || []).find((c) => c.nodeId === id && verdictOf(c) === "reused");
+      const a = anchors[id];
+      const mod = a && typeof a.mapModule === "string" && a.mapModule.trim() ? a.mapModule : null;
+      if (!comp2 && !mod) continue;
+      const says = [comp2 ? `components[] marks '${comp2.name}' "reused"${comp2.mapModule ? ` from ${comp2.mapModule}` : ""}` : null, mod ? `anchors["${id}"] maps it to ${mod}` : null].filter(Boolean).join(" and ");
+      out.push(`deviation #${i}${d.id ? ` (${d.id})` : ""} says node ${id} was not built, but ${says} \u2014 one of them is wrong: if it was left out, anchor it as {"omitted": "<why>"} and drop the reuse claim; if it was built, correct the deviation`);
+    }
+  });
+  return out;
 }
 function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
-  const listed = Array.isArray(plan.files) ? plan.files.map(String) : [];
-  const absent = listed.filter((f) => !fs.existsSync(path.join(cwd, f)));
+  const listed = plan.files || [];
+  const absent = listed.filter((f) => !fs8.existsSync(path6.join(cwd, f)));
   if (!listed.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
-  const byFile = listed.filter((rel) => fs.existsSync(path.join(cwd, rel)) && fs.statSync(path.join(cwd, rel)).isFile()).map((rel) => ({ rel, text: fs.readFileSync(path.join(cwd, rel), "utf8") }));
+  let built = null;
+  const graph = () => built || (built = o.graph ? o.graph() : buildGraph(cwd, listed));
+  const g = graph();
+  const isFileNow = (rel) => {
+    try {
+      return fs8.statSync(path6.join(cwd, rel)).isFile();
+    } catch {
+      return false;
+    }
+  };
+  const byFile = listed.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs8.readFileSync(path6.join(cwd, rel), "utf8") });
   const code = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
   const allowedFiles = (plan.allowedLiterals || []).filter((a) => a && a.reason && a.file).map((a) => String(a.file));
   const isAllowed = (row, literal) => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
-  function definedOnlyInTokenSource(literal, codeToken) {
+  function definedOnlyInTokenSource(literal, codeTokens) {
     if (!literal) return false;
     let seen = false;
     for (const f of code) {
@@ -2840,22 +1901,25 @@ function checkPlan({ plan, file }, cwd, opts) {
       }
       for (const line of f.text.split("\n")) {
         if (!line.includes(literal)) continue;
-        if (!declaresToken(line, literal, codeToken)) return false;
+        if (!definesAny(line, literal, codeTokens, isStylesheet(f.rel))) return false;
         seen = true;
       }
     }
     return seen;
   }
-  const tokens = Array.isArray(plan.tokens) ? plan.tokens : [];
+  const tokens = plan.tokens || [];
   const live = tokens.filter((r) => verdictOf(r) !== "hidden-only");
+  const colourTokensOf = (key) => [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() === "color" && colorKey(r.value) === key).map((r) => String(r.codeToken)))];
+  const dimTokensOf = (n) => [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() !== "color" && parseFloat(String(r.value)) === n).map((r) => String(r.codeToken)))];
   const undecided = live.filter((row) => (verdictOf(row) === "missing" || !hasToken(row)) && !row.decision);
   if (undecided.length) {
-    const show = undecided.slice(0, 8).map((row) => `${row.figmaName ? `'${row.figmaName}' ` : ""}${row.value} (${row.kind})`).join(", ");
+    const show = undecided.slice(0, 8).map((row) => `${row.figmaName ? `'${row.figmaName}' ` : ""}${String(row.value)} (${row.kind})`).join(", ");
     warnings.push(`${undecided.length} token row(s) have no token and no recorded decision: ${show}${undecided.length > 8 ? `, +${undecided.length - 8} more` : ""} \u2014 fill codeToken, or say what you did about it in \`decision\` (a one-off literal is a legitimate answer; say so)`);
   }
+  for (const row of live) if (row.acknowledged !== void 0 && !isAcknowledged(row)) warnings.push(`token row '${row.figmaName || String(row.value)}' has an empty \`acknowledged\` \u2014 say why the shared code token is right, or remove the field`);
   const byCodeToken = /* @__PURE__ */ new Map();
   for (const row of live) {
-    if (!hasToken(row) || !row.figmaName) continue;
+    if (!hasToken(row) || !row.figmaName || isAcknowledged(row)) continue;
     const c = String(row.codeToken).trim();
     const names = byCodeToken.get(c) || /* @__PURE__ */ new Map();
     if (!names.has(row.figmaName)) names.set(row.figmaName, row.value);
@@ -2863,8 +1927,8 @@ function checkPlan({ plan, file }, cwd, opts) {
   }
   for (const [c, names] of byCodeToken) {
     if (names.size < 2) continue;
-    const l = [...names].map(([n, v]) => `'${n}' (${v})`).join(" and ");
-    warnings.push(`code token '${c}' is mapped from ${names.size} DIFFERENT Figma tokens \u2014 ${l}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name`);
+    const l = [...names].map(([n, v]) => `'${n}' (${String(v)})`).join(" and ");
+    warnings.push(`code token '${c}' is mapped from ${names.size} DIFFERENT Figma tokens \u2014 ${l}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name (or, if sharing is deliberate, add "acknowledged": "<why>" to the row that shares it)`);
   }
   const colors = colorLiterals(source);
   const colourHits = /* @__PURE__ */ new Map();
@@ -2872,66 +1936,85 @@ function checkPlan({ plan, file }, cwd, opts) {
     if (!hasToken(row) || String(row.kind).toLowerCase() !== "color") continue;
     const h = colorKey(row.value);
     const lit = h && colors.get(h);
-    if (lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, row.codeToken)) {
-      if (!colourHits.has(lit)) colourHits.set(lit, { value: row.value, tokens: [] });
-      const e = colourHits.get(lit);
+    if (h && lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, colourTokensOf(h))) {
+      const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [], defs: colourTokensOf(h) }));
       if (!e.tokens.includes(row.codeToken)) e.tokens.push(row.codeToken);
     }
   }
   for (const [lit, e] of colourHits) {
-    const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel) && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => e.tokens.some((t) => declaresToken(l, lit, t)))).map((f) => f.rel);
-    blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${e.value} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} \u2014 use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "\u2026"}, matched on the exact value string, or name the file that defines the tokens: {"file": "\u2026", "reason": "\u2026"}`);
+    const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel) && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => definesAny(l, lit, e.defs, isStylesheet(f.rel)))).map((f) => f.rel);
+    if (!where.length) continue;
+    blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${String(e.value)} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} \u2014 use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "\u2026"}, matched on the exact value string, or name the file that defines the tokens: {"file": "\u2026", "reason": "\u2026"}`);
   }
   const dims = arbitraryPx(source);
   for (const row of live) {
     if (!hasToken(row) || String(row.kind).toLowerCase() === "color") continue;
-    const n = parseFloat(row.value);
+    const n = parseFloat(String(row.value));
     const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
-    const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, row.codeToken));
-    if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${row.value} (${row.kind}) to token '${row.codeToken}' \u2014 use the token (or add it to allowedLiterals with a reason)`);
+    const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, dimTokensOf(n)));
+    if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${String(row.value)} (${row.kind}) to token '${String(row.codeToken)}' \u2014 use the token (or add it to allowedLiterals with a reason)`);
   }
+  const sharedByFile = () => graph().files.filter((f) => !listed.includes(f.rel));
+  let reach = null;
+  const reachable = () => reach || (reach = reachableFor(graph(), listed));
   const mapped = loadMapKeys(cwd);
   const seenModule = /* @__PURE__ */ new Set();
-  for (const row of Array.isArray(plan.components) ? plan.components : []) {
+  for (const row of plan.components || []) {
     const verdict = verdictOf(row);
     if (verdict === "reused" && row.mapModule && !seenModule.has(row.mapModule)) {
       seenModule.add(row.mapModule);
-      if (!moduleImported(row.mapModule, byFile, cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) \u2014 was it regenerated instead of reused?`);
+      if (!moduleImported(row.mapModule, byFile, cwd) && !moduleImported(row.mapModule, reachable(), cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (neither this plan's files, nor a plan file they import, nor one that renders them \u2014 an app shell \u2014 or its direct imports; compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) \u2014 was it regenerated instead of reused? If it is rendered by a shared layout above this screen (e.g. an app shell), list that layout file in this plan's files[] too`);
     }
-    if (verdict === "new" && row.key && mapped.has(row.key)) {
-      warnings.push(`component '${row.name}' is marked "new" in the plan, but its Figma key is mapped to ${mapped.get(row.key).module} in codeconnect.local.json \u2014 reuse the existing component`);
+    const mappedTo = verdict === "new" && row.key ? mapped.get(row.key) : void 0;
+    if (mappedTo) {
+      warnings.push(`component '${row.name}' is marked "new" in the plan, but its Figma key is mapped to ${mappedTo.module} in codeconnect.local.json \u2014 reuse the existing component`);
     }
     if (verdict === "missing") warnings.push(`component '${row.name}' has no recorded reuse/new decision`);
   }
   const exp = o.export === void 0 ? locateExport(plan, file, cwd) : o.export;
   if (!exp) {
-    warnings.push("could not find this plan's screen export (no `file`/`nodeId` header, and no node id in its name) \u2014 the anchor check did not run; plan-skeleton.js writes the header");
+    warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) \u2014 the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
     const cov = anchorCoverage(plan, exp.doc);
     if (cov.unmapped.length) {
       const show = cov.unmapped.slice(0, 10).map((u) => `${u.id} '${String(u.name).trim()}' (${u.type})`).join(", ");
-      blocking.push(`${cov.unmappedNodes} visible design node(s) have no anchor in the plan \u2014 neither they nor any ancestor map to code. Top of each unmapped subtree: ${show}${cov.unmapped.length > 10 ? `, +${cov.unmapped.length - 10} more` : ""}. Add anchors["<id>"] = {"mapModule": "<the file that renders it>"} on the subtree's top (children inherit it), or {"omitted": "<why it is not built>"} \u2014 plan-skeleton.js lists every visible node`);
+      blocking.push(`${cov.unmappedNodes} visible design node(s) have no anchor in the plan \u2014 neither they nor any ancestor map to code. Top of each unmapped subtree: ${show}${cov.unmapped.length > 10 ? `, +${cov.unmapped.length - 10} more` : ""}. Add anchors["<id>"] = {"mapModule": "<the file that renders it>"} on the subtree's top (children inherit it), or {"omitted": "<why it is not built>"} \u2014 the plan-skeleton script lists every visible node`);
     }
     if (cov.wrappers.length) warnings.push(`${cov.wrappers.length} visible container(s) have anchored children but no anchor of their own (e.g. ${cov.wrappers.slice(0, 3).map((w) => `${w.id} '${String(w.name).trim()}'`).join(", ")}) \u2014 anchor the frame to the screen component so sync-design can place a change to it`);
     if (cov.hiddenAnchored.length) warnings.push(`${cov.hiddenAnchored.length} anchor(s) point at HIDDEN nodes (${cov.hiddenAnchored.slice(0, 4).join(", ")}${cov.hiddenAnchored.length > 4 ? ", \u2026" : ""}) \u2014 hidden layers are not built; remove them`);
     if (cov.unknown.length) warnings.push(`${cov.unknown.length} anchor(s) name node ids that are not on this frame (${cov.unknown.slice(0, 4).join(", ")}${cov.unknown.length > 4 ? ", \u2026" : ""}) \u2014 e.g. a shared shell tagged with another frame's instance ids; anchor THIS frame's ids`);
   }
+  let tagCoverage;
+  if (isWebProfile(profileOf(plan, cwd))) {
+    const optOut = plan.tagging;
+    const reason = optOut && optOut.off === true && typeof optOut.reason === "string" ? optOut.reason.trim() : "";
+    if (optOut && optOut.off === true && !reason) warnings.push("`tagging.off` is set with no `reason` \u2014 the opt-out is ignored until it says why this project cannot carry data-dt-node tags");
+    if (!reason && listed.length) {
+      const tagged = tagCoverageOf(plan, exp, [...code, ...sharedByFile().filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }))]);
+      if (tagged.anchored > 0) {
+        tagCoverage = { tagged: tagged.tagged, anchored: tagged.anchored };
+        const pct = Math.round(100 * tagged.tagged / tagged.anchored);
+        const how = 'tag every element that implements a design node one-to-one with data-dt-node="<node id>" (an id from a lookup table counts: the id string only has to appear in a listed file), so the verify step measures the right element instead of guessing';
+        if (!tagged.attribute) blocking.push(`web build with no data-dt-node tags: none of the files in any plan's files[] carries the attribute, so 0 of ${tagged.anchored} anchored visible node(s) can be measured \u2014 ${how}. A project that genuinely cannot tag records "tagging": {"off": true, "reason": "\u2026"} in the plan`);
+        else if (tagged.tagged * 2 < tagged.anchored) warnings.push(`data-dt-node tag coverage is ${tagged.tagged}/${tagged.anchored} anchored visible node(s) (${pct}%), below 50% \u2014 ${how}${tagged.untagged.length ? `; untagged e.g. ${tagged.untagged.slice(0, 5).join(", ")}` : ""}`);
+      }
+    }
+  }
+  warnings.push(...undeclaredColourTokens(live, graph()));
   warnings.push(...checkVerification(plan, cwd));
   warnings.push(...verificationWarnings(plan));
-  warnings.push(...verificationContradictions(plan, o.reports || locateReports(plan, file, cwd, exp)));
+  warnings.push(...recordedReportWarnings(plan, cwd));
+  const reports = o.reports || locateReports(plan, file, cwd, exp);
+  warnings.push(...verificationContradictions(plan, reports));
+  warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
   warnings.push(...deviationWarnings(plan));
+  warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
   warnings.push(...auditGateWarnings(plan, cwd, exp));
-  return { blocking, warnings };
+  return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...tagCoverage ? { tagCoverage } : {} };
 }
 function auditGateWarnings(plan, cwd, exp) {
-  let auditGateStatus;
-  try {
-    ({ auditGateStatus } = require_audit_gate());
-  } catch {
-    return [];
-  }
-  const screenFile = plan.file ? path.resolve(cwd, plan.file) : null;
+  const screenFile = plan.file ? path6.resolve(cwd, plan.file) : null;
   const screenName = plan.screenName || exp && exp.layerName || null;
   let g;
   try {
@@ -2939,107 +2022,135 @@ function auditGateWarnings(plan, cwd, exp) {
   } catch {
     return [];
   }
-  if (!g || !g.auditFile || !g.blockers || !g.blockers.length) return [];
+  if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} \u2014 the audit gate was NOT checked; re-run the audit script for this screen`];
+  if (!g.auditFile || !g.blockers.length) return [];
   const gate = plan.auditGate;
-  if (!gate || typeof gate !== "object") {
+  if (!gate) {
     return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` \u2014 either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
   }
   const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
-  const uncovered = g.blockers.filter((id) => !overridden.has(id));
-  if (uncovered.length) return [`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} \u2014 either resolve them or add them with a reason`];
-  if (!gate.reason) return [`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` \u2014 say why it is safe to build past ${g.auditFile}`];
-  return [];
+  const out = [];
+  const uncovered = g.blockers.filter((id, i) => !overridden.has(id) && !overridden.has(g.legacyBlockers[i] ?? id));
+  if (uncovered.length) out.push(`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} \u2014 either resolve them or add them with a reason`);
+  else if (!gate.reason) out.push(`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` \u2014 say why it is safe to build past ${g.auditFile}`);
+  const legacySet = new Set(g.legacyBlockers);
+  const viaLegacy = [];
+  g.blockers.forEach((id, i) => {
+    const old = g.legacyBlockers[i];
+    if (old !== void 0 && !overridden.has(id) && overridden.has(old)) viaLegacy.push(`${old} \u2192 ${id}`);
+  });
+  const staleLegacy = [...overridden].filter((e) => typeof e === "string" && /^[^@#~]+#\d+$/.test(e) && !legacySet.has(e));
+  if (viaLegacy.length || staleLegacy.length) {
+    const parts = [...viaLegacy, ...staleLegacy.length ? [`no current blocker: ${staleLegacy.map((e) => `${e} (drop it)`).join(", ")}`] : []];
+    out.push(`${g.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id \u2014 a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker \u2014 if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
+  }
+  return out;
+}
+function behaviourRef(x) {
+  if (!isReportBehaviour(x)) return null;
+  return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
 function locateReports(plan, planFile, cwd, exp) {
-  const dir = path.join(cwd, "design", "verify");
-  if (!fs.existsSync(dir)) return [];
+  const dir = path6.join(cwd, VERIFY_DIR);
+  if (!fs8.existsSync(dir)) return [];
   const e = exp === void 0 ? locateExport(plan, planFile, cwd) : exp;
   const stems = new Set([
-    plan.file ? path.basename(String(plan.file)).replace(/\.json$/i, "") : null,
-    e ? path.basename(e.file).replace(/\.json$/i, "") : null,
-    planFile ? path.basename(planFile, ".json") : null,
+    plan.file ? path6.basename(String(plan.file)).replace(/\.json$/i, "") : null,
+    e ? path6.basename(e.file).replace(/\.json$/i, "") : null,
+    planFile ? path6.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null
-  ].filter(Boolean));
-  const nodeId = plan.nodeId || e && e.nodeId || idFromStem(plan.screen) || (planFile ? idFromStem(path.basename(planFile, ".json")) : null);
+  ].filter((s) => !!s));
+  const nodeId = plan.nodeId || e && e.nodeId || idFromStem(plan.screen) || (planFile ? idFromStem(path6.basename(planFile, ".json")) : null);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
-  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
-    const abs = path.join(dir, f);
-    const r = readJsonOr(abs, null);
+  for (const f of fs8.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+    const abs = path6.join(dir, f);
+    const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
     let by = null;
-    const expFile = path.join(dir, stem + ".expected.json");
+    const expFile = path6.join(dir, stem + ".expected.json");
+    if (!fs8.existsSync(expFile) && fs8.existsSync(expFile + ".retired")) continue;
     const expFrame = () => {
-      const x = readJsonOr(expFile, null);
-      return x && x.frame && x.frame.nodeId;
+      const x = readJsonOrNull(expFile, isJsonObject);
+      return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null;
     };
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
-    else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
-    else if (layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
+    else if (nodeId && fs8.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
+    else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try {
-      mtimeMs = fs.statSync(abs).mtimeMs;
+      mtimeMs = fs8.statSync(abs).mtimeMs;
     } catch {
     }
     const want = r.inputs && r.inputs.expectationSha256;
     let expectationChanged = false;
-    if (want && fs.existsSync(expFile)) {
+    if (want && fs8.existsSync(expFile)) {
       try {
-        expectationChanged = crypto.createHash("sha256").update(fs.readFileSync(expFile)).digest("hex") !== want;
+        expectationChanged = sha256Hex(fs8.readFileSync(expFile)) !== want;
       } catch {
       }
     }
     out.push({
-      rel: path.relative(cwd, abs).split(path.sep).join("/"),
+      rel: path6.relative(cwd, abs).split(path6.sep).join("/"),
       matchedBy: by,
       schema: r.schema || null,
       verdict: r.verdict || null,
       headline: r.headline || null,
-      why: Array.isArray(r.why) ? r.why : [],
-      deltas: Array.isArray(r.deltas) ? r.deltas : null,
+      why: r.why || [],
+      deltas: r.deltas || null,
       exportedAt: r.exportedAt || null,
       measuredAt: r.measuredAt || null,
       mtimeMs,
       exportContentSha256: r.inputs && r.inputs.exportContentSha256 || null,
       code: r.inputs && r.inputs.code || null,
       expectationChanged,
-      expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null
+      expectationRel: expectationChanged ? path6.relative(cwd, expFile).split(path6.sep).join("/") : null,
+      waiversSha256: r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256 || null,
+      behaviour: behaviourRef(r.behaviour),
+      shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe)
     });
   }
   return out;
 }
-function reportVerdict(plan, cwd, exp, reports) {
-  const mode = plan.verification && plan.verification.mode;
+var NO_WAIVERS = waiversHash(null);
+var waiversChanged = (r, now) => (r.waiversSha256 || NO_WAIVERS) !== now;
+var WAIVERS_CHANGED = "waivers changed since the last compare \u2014 re-run --compare (with --plan <plan.json> when several plans describe the frame)";
+function reportVerdict(plan, cwd, exp, reports, cached) {
+  const v = plan.verification;
   if (!reports.length) {
-    if (mode === "static-only") return { status: "static-only", reasons: [`built and checked statically \u2014 not rendered (${plan.verification.reason || "no reason recorded"})`] };
-    return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ \u2014 run verify-screen.js --expect/--compare (the report's verdict is what grants "verified")`] };
+    if (v && v.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically \u2014 not rendered (${v.reason || "no reason recorded"})`] };
+    return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ \u2014 run ${scriptCmd("verify-screen")} --expect/--compare (the report's verdict is what grants "verified")`] };
   }
-  const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
-  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) \u2014 it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: verify-screen.js --expect, then --compare`) };
+  const legacy2 = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
+  if (legacy2.length) return { status: "unverified", reasons: legacy2.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) \u2014 it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
   const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
+  const waiversNow = waiversHash(plan);
   const failing = reports.filter((r) => r.verdict === "fail");
-  if (failing.length) return { status: "failed", reasons: failing.map(said) };
-  const notPass = reports.filter((r) => r.verdict !== "pass");
+  if (failing.length) return { status: "failed", reasons: failing.map((r) => said(r) + (waiversChanged(r, waiversNow) ? ` \u2014 ${WAIVERS_CHANGED}` : "")) };
+  const notPass = reports.filter((r) => !isPassingVerdict(r.verdict));
   if (notPass.length) return { status: "unverified", reasons: notPass.map(said) };
-  const expSha = exp && exp.doc ? contentHash.exportContentSha256(exp.doc) : null;
+  const expSha = exp && exp.doc ? exportContentSha256(exp.doc) : null;
   for (const r of reports) {
     if (!r.exportContentSha256) {
       if (r.expectationChanged) return { status: "unverified", reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`] };
-      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run verify-screen.js --expect and --compare`] };
+      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run ${scriptCmd("verify-screen")} --expect and --compare`] };
     }
     if (!expSha) return { status: "unverified", reasons: [`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`] };
     if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}\u2026 \u2192 ${expSha.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`] };
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
-    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) \u2014 re-run verify-screen.js --compare from the project root, where design/plan/ lists this screen's files`] };
-    const now = fileHashes(plan, cwd);
-    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]);
+    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) \u2014 re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
+    const now = fileHashes2(plan, cwd, cached);
+    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => measured[f] === void 0 ? `${f} (not recorded)` : f);
     if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code \u2014 changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} \u2014 re-run --compare`] };
+    if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
   }
   const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
-  return { status: "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} says pass and measured this design and exactly these files (by content)${head ? ` \u2014 at git ${head.slice(0, 12)}` : ""}`] };
+  const withDeviations = reports.filter((r) => r.verdict === "pass-with-deviations");
+  const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations \u2014 accepted deltas / descoped interactions are listed in the report)` : "says pass";
+  return { status: withDeviations.length ? "verified-with-deviations" : "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} ${says} and measured this design and exactly these files (by content)${head ? ` \u2014 at git ${head.slice(0, 12)}` : ""}`] };
 }
 function computeStatus(plan, opts) {
   const o = opts || {};
@@ -3051,123 +2162,347 @@ function computeStatus(plan, opts) {
   if (life !== "pending") return { status: life, reasons: [life === "abandoned" ? 'retired by hand ("status": "abandoned")' : 'paused on a question for the user ("status": "awaiting-user")'], reports: [] };
   const exp = o.export === void 0 ? locateExport(plan, o.planFile, cwd) : o.export;
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
-  const rv = reportVerdict(plan, cwd, exp, reports);
+  const rv = reportVerdict(plan, cwd, exp, reports, o.cached);
   const hook = plan.verification && plan.verification.hook;
-  let hookState = null, hookWhy = [];
+  let hookState = null, hookWhy = [], unhashedWhy = [];
   if (!hook || !hook.result) {
     hookState = "pending";
     hookWhy = ["the build-screen Stop hook has not checked this plan"];
-  } else if (hook.planHash && hook.planHash !== planHash(plan)) {
+  } else if (hook.planHash && !hookHashMatches(hook, plan)) {
     hookState = "pending";
     hookWhy = ["the plan changed after the hook's last check"];
   } else if (hook.result !== "pass") {
     hookState = "blocked";
     hookWhy = hook.blocking && hook.blocking.length ? hook.blocking : ["the hook's last check blocked"];
   } else {
-    const ch = changedFiles(plan, cwd) || [];
+    const d = hookFileDiff(plan, cwd, o.cached);
+    const ch = d ? d.changed : [];
     if (ch.length) {
       hookState = "stale";
       hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`];
     }
+    if (d && d.unhashed.length) unhashedWhy = [`hook: not hashed by the hook's last check (its record predates hashing of mapped modules), so not a change: ${d.unhashed.slice(0, 6).join(", ")}${d.unhashed.length > 6 ? `, +${d.unhashed.length - 6} more` : ""} \u2014 the hook's next check of this plan records it; until then an edit to it does not reopen the plan (\`verify-build <plan>\` re-checks now)`];
   }
   const reportWhy = rv.reasons.map((r) => (hookState ? "report: " : "") + r);
-  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h)), reports };
-  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy), reports };
-  return { status: rv.status, reasons: notes.concat(rv.status === "verified" ? ["hook passed; " + rv.reasons[0]] : rv.reasons), reports };
+  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h), unhashedWhy), reports };
+  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy, unhashedWhy), reports };
+  return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons, unhashedWhy), reports };
 }
-function ownPlans(open, input, all) {
-  const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
-  if (!file) return open;
-  let text;
+var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+function lineActions(line, ownOnly, out) {
+  if (!line.trim()) return;
+  let v = null;
   try {
-    text = fs.readFileSync(file, "utf8");
+    const parsed = JSON.parse(line);
+    v = parsed;
   } catch {
-    return open;
+    return;
   }
-  const mentioned = (p) => {
-    const base = path.basename(p.file);
-    return text.includes("plan/" + base) || text.includes("plan\\\\" + base);
+  if (!isJsonObject(v) || ownOnly && v.isSidechain === true || !isJsonObject(v.message) || !Array.isArray(v.message.content)) return;
+  for (const item of v.message.content) {
+    if (!isJsonObject(item) || item.type !== "tool_use" || typeof item.name !== "string" || !isJsonObject(item.input)) continue;
+    const inp = item.input;
+    const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
+    if (WRITE_TOOLS.has(item.name)) {
+      for (const k of ["file_path", "notebook_path"]) {
+        const f = inp[k];
+        if (typeof f === "string") out.push({ path: f, base });
+      }
+    } else if (item.name === "Bash" && typeof inp.command === "string") for (const f of bashWriteTargets(inp.command)) out.push({ path: f, base });
+  }
+}
+var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:_|\\u005f)(?:u|\\u0075)(?:s|\\u0073)(?:e|\\u0065)"/i;
+var mayHoldToolUse = (line) => line.includes('"tool_use"') || line.includes("\\u") && TOOL_USE_ESCAPED.test(line);
+var LINE_CHUNK = 1 << 20;
+function forEachLine(file, onLine, chunk = LINE_CHUNK) {
+  const fd = fs8.openSync(file, "r");
+  try {
+    const buf = Buffer.allocUnsafe(chunk);
+    let carry = [];
+    for (; ; ) {
+      const n = fs8.readSync(fd, buf, 0, chunk, null);
+      if (n === 0) break;
+      const cut = buf.subarray(0, n).lastIndexOf(10);
+      if (cut < 0) {
+        carry.push(Buffer.from(buf.subarray(0, n)));
+        continue;
+      }
+      const head = buf.subarray(0, cut);
+      const text = (carry.length ? Buffer.concat([...carry, head]) : head).toString("utf8");
+      for (const line of text.split("\n")) onLine(line);
+      carry = cut + 1 < n ? [Buffer.from(buf.subarray(cut + 1, n))] : [];
+    }
+    onLine(Buffer.concat(carry).toString("utf8"));
+  } finally {
+    fs8.closeSync(fd);
+  }
+}
+function transcriptActions(file, ownOnly) {
+  const out = [];
+  forEachLine(file, (line) => {
+    if (mayHoldToolUse(line)) lineActions(line, ownOnly, out);
+  });
+  return out;
+}
+function bashWriteTargets(cmd) {
+  const kept = [];
+  let delim = null;
+  for (const line of cmd.split("\n")) {
+    if (delim !== null) {
+      if (line.trim() === delim) delim = null;
+      continue;
+    }
+    kept.push(line);
+    const h = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
+    if (h && h[2]) delim = h[2];
+  }
+  const toks = [];
+  const text = kept.join("\n");
+  let i = 0, word = null;
+  const flush = () => {
+    if (word !== null) {
+      toks.push({ word });
+      word = null;
+    }
+  };
+  while (i < text.length) {
+    const c = text[i] ?? "";
+    if (c === "'" || c === '"') {
+      const j = text.indexOf(c, i + 1);
+      const end = j === -1 ? text.length : j;
+      word = (word ?? "") + text.slice(i + 1, end).replace(/\\(.)/g, c === '"' ? "$1" : "\\$1");
+      i = end + 1;
+      continue;
+    }
+    if (c === "\\" && i + 1 < text.length) {
+      word = (word ?? "") + (text[i + 1] ?? "");
+      i += 2;
+      continue;
+    }
+    if (/\s/.test(c) && c !== "\n") {
+      flush();
+      i++;
+      continue;
+    }
+    const two = text.slice(i, i + 2);
+    const fdThenFlush = () => {
+      if (word !== null && /^\d+$/.test(word)) word = null;
+      else flush();
+    };
+    if (two === ">>" || two === "&>") {
+      fdThenFlush();
+      toks.push({ op: two === "&>" ? ">" : ">>" });
+      i += 2;
+      continue;
+    }
+    if (c === ">") {
+      fdThenFlush();
+      toks.push({ op: ">" });
+      i++;
+      continue;
+    }
+    if (two === "&&" || two === "||" || two === "<<") {
+      flush();
+      toks.push({ op: two });
+      i += 2;
+      continue;
+    }
+    if ([";", "|", "\n", "<", "&", "(", ")"].includes(c)) {
+      flush();
+      toks.push({ op: c });
+      i++;
+      continue;
+    }
+    word = (word ?? "") + c;
+    i++;
+  }
+  flush();
+  const out = [];
+  let cmdWords = [];
+  const endCommand = () => {
+    const [head, ...args] = cmdWords;
+    const name = head === void 0 ? "" : path6.posix.basename(head.replace(/\\/g, "/"));
+    const plain = args.filter((w) => !w.startsWith("-"));
+    if (["cp", "mv", "install", "ln"].includes(name) && plain.length >= 2) out.push(plain[plain.length - 1] ?? "");
+    if (name === "sed" && args.some((w) => w === "-i" || w.startsWith("-i") || w.startsWith("--in-place")) || name === "perl" && args.some((w) => /^-\w*i/.test(w))) {
+      let script = false;
+      for (let k = 0; k < args.length; k++) {
+        const w = args[k] ?? "";
+        if (w === "-i" && args[k + 1] === "") {
+          k++;
+          continue;
+        }
+        if (w === "-e" || w === "-f" || name === "perl" && /^-\w*e$/.test(w)) {
+          k++;
+          script = true;
+          continue;
+        }
+        if (w.startsWith("-")) continue;
+        if (!script && name === "sed") {
+          script = true;
+          continue;
+        }
+        out.push(w);
+      }
+    }
+    if (/^(python3?|node)$/.test(name)) {
+      const at = args.findIndex((w) => w === "-c" || w === "-e");
+      const code = at === -1 ? void 0 : args[at + 1];
+      if (code) {
+        for (const m of code.matchAll(/['"`]([^'"`\n]+)['"`]/g)) if (m[1]) out.push(m[1]);
+      }
+    }
+    if (cmdWords.some((w) => /plan-skeleton/.test(w))) out.push(...cmdWords.filter((w) => !w.startsWith("-")));
+    const tee = cmdWords.findIndex((w) => w === "tee" || w.endsWith("/tee"));
+    if (tee !== -1) out.push(...cmdWords.slice(tee + 1).filter((w) => !w.startsWith("-")));
+    cmdWords.forEach((w, k) => {
+      if ((w === "--out" || w === "-o") && cmdWords[k + 1] !== void 0) out.push(cmdWords[k + 1] ?? "");
+      const eq = /^--out=(.+)$/.exec(w);
+      if (eq && eq[1]) out.push(eq[1]);
+    });
+    cmdWords = [];
+  };
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k];
+    if (!t) continue;
+    if ("word" in t) {
+      cmdWords.push(t.word);
+      continue;
+    }
+    if (t.op === ">" || t.op === ">>") {
+      const n = toks[k + 1];
+      if (n && "word" in n) {
+        out.push(n.word);
+        k++;
+      }
+      continue;
+    }
+    if (t.op === "<" || t.op === "<<") {
+      const n = toks[k + 1];
+      if (n && "word" in n) k++;
+      continue;
+    }
+    endCommand();
+  }
+  endCommand();
+  return out.filter(Boolean);
+}
+function sameFile(w, rel, cwd) {
+  const c = w.path.trim().replace(/\\/g, "/");
+  if (!c) return false;
+  const want = path6.resolve(cwd, rel).replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path6.posix.normalize(c).toLowerCase().endsWith("/" + path6.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
+  const got = path6.resolve(w.base || cwd, c).replace(/\\/g, "/");
+  return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
+}
+function ownPlans(open, input, all, cwd) {
+  const agent = typeof input.agent_transcript_path === "string" && !!input.agent_transcript_path;
+  const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
+  if (!file || typeof file !== "string") return { plans: open, scope: "unscoped" };
+  let writes;
+  try {
+    writes = transcriptActions(file, !agent);
+  } catch {
+    return { plans: open, scope: "unscoped" };
+  }
+  const listers = /* @__PURE__ */ new Map();
+  for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
+  const owns = (p) => {
+    const planRel = path6.relative(cwd, path6.resolve(p.file));
+    if (writes.some((w) => sameFile(w, planRel, cwd))) return true;
+    return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile(w, f, cwd)));
   };
   const known = all && all.length ? all : open;
-  if (!known.some(mentioned)) return open;
-  return open.filter(mentioned);
+  if (!known.some(owns)) return { plans: [], scope: "none-named" };
+  return { plans: open.filter(owns), scope: "named" };
 }
-var USAGE = [
-  "usage: node verify-build.js                     (Stop hook: reads the hook JSON from stdin when stdin is not a terminal)",
-  "       node verify-build.js <plan.json>\u2026        check these plans now (no stdin read)",
-  "       node verify-build.js --status [<plan.json>\u2026] [--json]   print each plan's computed status (all of design/plan/ by default); never writes",
+var USAGE2 = [
+  `usage: ${scriptCmd("verify-build")}                     (Stop hook: reads the hook JSON from stdin when stdin is not a terminal)`,
+  `       ${scriptCmd("verify-build")} <plan.json>\u2026        check these plans now (no stdin read)`,
+  `       ${scriptCmd("verify-build")} --status [<plan.json>\u2026] [--json]   print each plan's computed status (all of design/plan/ by default); never writes`,
   "",
-  "Blocks (exit 2) on exactly two things: a raw colour the plan resolved to a token, in a source file of",
-  "files[] (comments, prose strings and .svg/.json/non-source files are not scanned); and a visible",
-  "design node with no anchor (itself or an ancestor) in anchors{}. Everything else is a warning (exit 0).",
+  "Blocks (exit 2) on: a raw colour the plan resolved to a token, in a source file of files[] (comments,",
+  "prose strings and .svg/.json/non-source files are not scanned); a visible design node with no anchor",
+  "(itself or an ancestor) in anchors{}; and, on web profiles, no data-dt-node tag in any plan's files[]",
+  '(opt out: "tagging": {"off": true, "reason": "\u2026"}). Everything else is a warning (exit 0).',
+  "Hook mode checks the plans the stopping agent's transcript names; a transcript that names none checks nothing.",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<\u2026>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
   "  2. failed       a verify-report@2 for this screen says fail (never hidden behind the hook's state)",
   "  3. blocked      the Stop hook's last check blocked",
-  "  4. stale        a file in files[] changed (by content) since the hook passed",
+  "  4. stale        a file in files[] or a module anchors/components map changed (by content) since the hook passed",
   "  5. pending      the hook has not checked this version of the plan",
-  "  6. unverified | static-only | verified   what the report says: verified only for an @2 'pass' that",
-  "     measured this design and these files, by content hash (no report / a pre-@2 report / other",
-  '     design or code -> unverified). A stored "verified" is ignored.',
+  "  6. unverified | static-only | verified | verified-with-deviations   what the report says: verified",
+  "     only for an @2 'pass' that measured this design, these files and the plan's current waivers[]/",
+  "     descopes[], by content hash (no report / a pre-@2 report / other design, code or waivers ->",
+  "     unverified); verified-with-deviations when every report passes and >=1 says 'pass-with-deviations'.",
+  `     A stored "verified" is ignored. waivers[]/descopes[] and verification{} are not part of the hook's`,
+  "     planHash (a hook record with the older formula, which hashed verification, is still accepted).",
   "Every non-verified status carries a non-empty why: the hook's state AND what the report says (a",
   "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}."
 ].join("\n");
-function checkAndRecord(p, cwd, input) {
+function checkAndRecord(p, cwd, graph) {
   const exp = locateExport(p.plan, p.file, cwd);
   const reports = locateReports(p.plan, p.file, cwd, exp);
-  setPhase(`checking ${path.basename(p.file)}`);
-  const { blocking, warnings } = checkPlan(p, cwd, { export: exp, reports });
+  setPhase(`checking ${path6.basename(p.file)}`);
+  const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...graph ? { graph } : {} });
   const plan = p.plan;
   const cleared = COMPUTED_STORED.has(String(plan.status || "").toLowerCase()) ? plan.status : null;
   if (cleared) delete plan.status;
-  if (!plan.verification || typeof plan.verification !== "object") plan.verification = {};
-  setPhase(`hashing files[] of ${path.basename(p.file)}`);
+  if (!plan.verification) plan.verification = {};
+  setPhase(`hashing files[] of ${path6.basename(p.file)}`);
+  const cached = graph ? graph().cached : void 0;
   plan.verification.hook = {
     result: blocking.length ? "blocked" : "pass",
     checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
     blocking,
     warnings: warnings.length,
-    planHash: planHash(plan),
-    files: fileHashes(plan, cwd)
+    planHash: planHash2(plan),
+    files: fileHashes2(plan, cwd, cached),
+    ...tagCoverage ? { tagCoverage } : {}
   };
   let times = null;
   try {
-    const s = fs.statSync(p.file);
+    const s = fs8.statSync(p.file);
     times = [s.atime, s.mtime];
   } catch {
   }
-  fs.writeFileSync(p.file, JSON.stringify(plan, null, 2) + "\n");
+  writePlan(p.file, plan);
   if (times) try {
-    fs.utimesSync(p.file, times[0], times[1]);
+    fs8.utimesSync(p.file, times[0], times[1]);
   } catch {
   }
-  const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports });
+  if (graph) graph().rewrote(p.file);
+  const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports, ...cached ? { cached } : {} });
   return { blocking, warnings, cleared, status: st };
 }
 async function main(argv) {
-  const args = argv.slice();
-  if (args.includes("--help") || args.includes("-h")) {
-    console.log(USAGE);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(USAGE2);
     return 0;
   }
-  const statusMode = args.includes("--status");
-  const json = args.includes("--json");
-  const planArgs = args.filter((a) => !a.startsWith("-"));
-  const stray = args.filter((a) => a.startsWith("-") && !["--status", "--json"].includes(a));
-  if (stray.length) {
-    console.error(`verify-build: unknown flag ${stray.join(", ")}
-${USAGE}`);
-    return 2;
+  const OPTIONS = { status: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" } };
+  const { values: flags, positionals: planArgs } = cliParse("verify-build", argv, OPTIONS, USAGE2, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) {
+    console.log(USAGE2);
+    return 0;
   }
+  const statusMode = !!flags.status, json = !!flags.json;
   if (statusMode) {
     setPhase("computing plan status");
-    const plans = planArgs.length ? planArgs.map((f) => readPlan(path.resolve(f))).filter(Boolean) : findPlans(process.cwd());
+    const found = planArgs.length ? planArgs.map((f) => readPlan(path6.resolve(f))) : null;
+    const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p) => !isPlanFile(p)) } : findPlans(process.cwd());
+    for (const b of bad) console.error(`verify-build: cannot read plan ${b.file}: ${b.error}`);
     const show = (f) => {
-      const r = path.relative(process.cwd(), f);
+      const r = path6.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;
     };
-    const rows = plans.map((p) => Object.assign({ plan: show(p.file) }, computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) })));
+    const rows = plans.map((p) => {
+      const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });
+      const skipped = planCodeSkippedNote(p.plan, rootOfPlan(p.file));
+      return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
+    });
     if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" \xB7 ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
     else for (const r of rows) console.log(`${r.plan}: ${r.status}${r.reasons.length ? "\n  - " + r.reasons.join("\n  - ") : ""}`);
     if (!plans.length) console.error("verify-build: no plans found (design/plan/*.json)");
@@ -3176,12 +2511,13 @@ ${USAGE}`);
   let input = {};
   let targets;
   if (planArgs.length) {
-    targets = planArgs.map((f) => readPlan(path.resolve(f)));
-    const bad = planArgs.filter((f, i) => !targets[i]);
+    const read = planArgs.map((f) => readPlan(path6.resolve(f)));
+    const bad = read.filter((p) => !isPlanFile(p));
     if (bad.length) {
-      console.error(`verify-build: cannot read plan(s): ${bad.join(", ")}`);
+      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path6.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
       return 1;
     }
+    targets = read.filter(isPlanFile);
   } else {
     setPhase("reading the hook payload on stdin");
     const r = await readHookInput();
@@ -3193,34 +2529,47 @@ ${USAGE}`);
     if (input.stop_hook_active) return 0;
   }
   const all = [];
+  let hookCwd = null, hookPlans;
   if (targets) {
     for (const p of targets) {
       const cwd = rootOfPlan(p.file);
       const life = lifecycleOf(p.plan);
       if (life !== "pending") {
-        console.error(`verify-build: ${path.basename(p.file)} is "${life}" \u2014 not checked`);
+        console.error(`verify-build: ${path6.basename(p.file)} is "${life}" \u2014 not checked`);
         continue;
       }
       all.push({ p, cwd });
     }
   } else {
-    const cwd = input.cwd || process.cwd();
+    const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
     setPhase("finding open plans in design/plan/");
-    const plans = findPlans(cwd);
+    const { plans, bad } = findPlans(cwd);
+    hookCwd = cwd;
+    hookPlans = plans;
+    for (const b of bad) console.error(`verify-build: warning: ${path6.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
     const open = plans.filter((p) => isOpen(p, cwd));
     if (!open.length) return 0;
-    for (const p of ownPlans(open, input, plans)) all.push({ p, cwd });
+    const own = ownPlans(open, input, plans, cwd);
+    if (own.scope === "none-named") {
+      console.error(`verify-build: this session wrote or ran nothing naming a plan under design/plan/ \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
+      return 0;
+    }
+    for (const p of own.plans) all.push({ p, cwd });
   }
-  const blockedOut = [];
+  const blockedOut = [], lines = [];
+  const warned = /* @__PURE__ */ new Map();
+  const graphs = /* @__PURE__ */ new Map();
   for (const { p, cwd } of all) {
-    const res = checkAndRecord(p, cwd, input);
-    const name = path.basename(p.file);
-    if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (verify-build.js --status), never stored`);
-    for (const w of res.warnings) console.error(`verify-build: warning (${name}): ${w}`);
+    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : void 0)));
+    const name = path6.basename(p.file);
+    if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
+    for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
     if (res.blocking.length) blockedOut.push(`# ${name}`, ...res.blocking.map((m) => `  - ${m}`));
     const why = res.blocking.length ? "see below" : res.status.reasons[res.status.reasons.length - 1];
-    console.error(`verify-build: ${name}: hook ${res.blocking.length ? "BLOCKED" : "passed"} \xB7 computed status: ${res.status.status}${why ? ` \u2014 ${why}` : ""}`);
+    lines.push(`verify-build: ${name}: hook ${res.blocking.length ? "BLOCKED" : "passed"} \xB7 computed status: ${res.status.status}${why ? ` \u2014 ${why}` : ""}`);
   }
+  for (const [w, names] of warned) console.error(`verify-build: warning (${names.join(", ")}): ${w}`);
+  for (const l of lines) console.error(l);
   if (blockedOut.length) {
     console.error("\nverify-build: build-screen check failed \u2014 do not report this screen as done until these are resolved");
     console.error('(a plan that will not be finished: set its status to "abandoned"; a build paused on a question for the user: "awaiting-user", then ask):\n');
@@ -3229,45 +2578,51 @@ ${USAGE}`);
   }
   return 0;
 }
-module.exports = {
-  checkPlan,
-  computeStatus,
-  locateReports,
-  locateExport,
-  anchorCoverage,
-  moduleImported,
-  importsOf,
-  scanText,
-  isSourceFile,
-  verificationWarnings,
-  verificationContradictions,
-  deviationWarnings,
-  validatePlanHeader,
-  ownPlans,
-  checkVerification,
-  auditGateWarnings,
-  colorLiterals,
-  arbitraryPx,
-  hex6,
-  colorKey,
-  isStale,
-  isOpen,
-  planHash,
-  fileHashes,
-  readHookInput,
-  main,
-  USAGE
-};
-if (require.main === module) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const watchdog = setTimeout(() => {
-    console.error(`verify-build: gave up after ${Math.round(HOOK_TIMEOUT_MS() / 1e3)} s while ${phase} \u2014 nothing was blocked; re-run \`node verify-build.js <plan.json>\` to check the plan directly`);
+    console.error(`verify-build: gave up after ${Math.round(HOOK_TIMEOUT_MS() / 1e3)} s while ${phase} \u2014 nothing was blocked; re-run \`${scriptCmd("verify-build")} <plan.json>\` to check the plan directly`);
     process.exit(1);
   }, HOOK_TIMEOUT_MS());
   watchdog.unref();
   main(process.argv.slice(2)).then((code) => {
     process.exitCode = code;
   }, (e) => {
-    console.error(`verify-build: ${e && e.stack || e}`);
+    console.error(`verify-build: ${e instanceof Error && e.stack || String(e)}`);
     process.exitCode = 1;
   });
 }
+export {
+  USAGE2 as USAGE,
+  anchorCoverage,
+  arbitraryPx,
+  auditGateWarnings,
+  behaviourWarnings,
+  buildGraph,
+  checkPlan,
+  checkVerification,
+  colorKey,
+  colorLiterals,
+  computeStatus,
+  deviationConflicts,
+  deviationWarnings,
+  fileHashes2 as fileHashes,
+  forEachLine,
+  importsOf,
+  isOpen,
+  isSourceFile,
+  isStale,
+  locateExport,
+  locateReports,
+  main,
+  mayHoldToolUse,
+  moduleImported,
+  ownPlans,
+  planHash2 as planHash,
+  readHookInput,
+  recordedReportWarnings,
+  scanText,
+  transcriptActions,
+  validatePlanHeader,
+  verificationContradictions,
+  verificationWarnings
+};

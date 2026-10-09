@@ -1,436 +1,882 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __commonJS = (cb, mod) => function __require() {
+
+
+// design-to-code/tokens.ts
+import fs3 from "node:fs";
+import path4 from "node:path";
+
+// design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// design-to-code/read-json.ts
+import fs from "node:fs";
+
+// bridge/src/errmsg.ts
+var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+
+// design-to-code/read-json.ts
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
+  let buf;
   try {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+    buf = fs.readFileSync(file);
   } catch (e) {
-    throw mod = 0, e;
+    return readFailure(e);
   }
-};
-
-// design-to-code/tokens-native.js
-var require_tokens_native = __commonJS({
-  "design-to-code/tokens-native.js"(exports2, module2) {
-    module2.exports = function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defaultModeName: defaultModeName2, baseValue: baseValue2, unitDecision: unitDecision2, isSentinel: isSentinel2 }) {
-      const FULL = Object.freeze({ fullyRounded: true });
-      const PLATFORMS = {
-        swiftui: { file: "DesignTokens.swift" },
-        compose: { file: "DesignTokens.kt" },
-        flutter: { file: "design_tokens.dart" },
-        "react-native": { file: "designTokens.ts" }
-      };
-      const PROFILE_ALIASES = { "android-compose": "compose", ios: "swiftui", swift: "swiftui", android: "compose", rn: "react-native", dart: "flutter" };
-      const RESERVED = new Set("default,class,object,in,is,as,do,if,else,for,while,return,var,val,let,func,fun,import,package,switch,case,break,continue,true,false,null,nil,self,super,this,new,static,final,const,enum,struct,extension,protocol,init,internal,public,private,open,operator,typealias,interface,when,try,catch,throw,void,with,get,set,dynamic,external,factory,mixin,part,required,show,hide,on,type,function,delete,export,yield,await,async,inout,repeat,guard,defer,where,any,some,lerp,copyWith,hashCode,toString,description".split(","));
-      const words = (s) => String(s).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
-      function camel(parts) {
-        const w = parts.flatMap(words);
-        let id = w.map((x, i) => i === 0 ? x.charAt(0).toLowerCase() + x.slice(1) : x.charAt(0).toUpperCase() + x.slice(1)).join("");
-        if (!id) id = "token";
-        if (/^[0-9]/.test(id)) id = "n" + id;
-        if (RESERVED.has(id)) id += "Token";
-        return id;
-      }
-      const pascal = (parts) => {
-        const c = camel(parts);
-        return c.charAt(0).toUpperCase() + c.slice(1);
-      };
-      function isFontSize(v) {
-        const scopes = v.scopes || [];
-        if (scopes.length && !scopes.every((s) => s === "ALL_SCOPES")) return scopes.includes("FONT_SIZE");
-        return /font.?size|text.?size|type.?size/i.test(v.collection + "/" + v.name);
-      }
-      function kindOf(v, opts) {
-        if (v.type === "COLOR") return "color";
-        if (v.type === "BOOLEAN") return "bool";
-        if (v.type === "STRING") return "string";
-        if (v.type === "FLOAT") return unitDecision2(v, opts) === "px" ? isFontSize(v) ? "fontSize" : "dimension" : "number";
-        return null;
-      }
-      function resolve(byName, collections, v, mode, seen) {
-        const values = v.values || {};
-        let raw = values[mode];
-        if (raw === void 0) raw = baseValue2(v, collections, defaultModeName2(v, collections));
-        if (!isAlias2(raw)) return raw;
-        const target = byName.get(raw.aliasOf);
-        if (!target || seen && seen.has(target.name)) return void 0;
-        const next = new Set(seen || []).add(v.name);
-        const tMode = target.values && target.values[mode] !== void 0 ? mode : defaultModeName2(target, collections);
-        return resolve(byName, collections, target, tMode, next);
-      }
-      function model(designSystem, warnings, opts) {
-        const collections = designSystem && designSystem.collections || [];
-        const vars = designSystem && designSystem.variables || [];
-        const byName = new Map(vars.map((v) => [v.name, v]));
-        const typeNames = /* @__PURE__ */ new Set();
-        const out = [];
-        for (const c of collections) {
-          const mine = vars.filter((v) => v.collection === c.name);
-          const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
-          if (!mine.length || !modeNames.length) continue;
-          let type = pascal([c.name]) + "Tokens";
-          for (let n = 2; typeNames.has(type); n++) type = pascal([c.name]) + "Tokens" + n;
-          typeNames.add(type);
-          const ids = /* @__PURE__ */ new Set();
-          const fields = [];
-          const cands = [];
-          for (const v of mine) {
-            const kind = kindOf(v, opts);
-            if (!kind || !segs2(v.name).length) continue;
-            const values = {};
-            let ok = true;
-            for (const m of modeNames) {
-              const r = resolve(byName, collections, v, m);
-              if (r === void 0 || kind === "color" && !normHex2(r)) {
-                ok = false;
-                break;
-              }
-              values[m] = isSentinel2 && isSentinel2(v, r) ? FULL : r;
-            }
-            if (!ok) {
-              warnings.push(`${v.name}: skipped \u2014 its value could not be resolved inside this file (an alias to a library variable that was not exported?)`);
-              continue;
-            }
-            cands.push({ v, kind, values, id: camel(segs2(v.name)) });
-          }
-          const tag = (v) => v.key ? String(v.key).slice(0, 8).toLowerCase() : null;
-          const label = (x) => `${x.v.name}${x.v.key ? ` (key ${tag(x.v)}\u2026)` : ""} = ${JSON.stringify(x.v.values || {})}`;
-          const byId = /* @__PURE__ */ new Map();
-          for (const x of cands) {
-            if (!byId.has(x.id)) byId.set(x.id, []);
-            byId.get(x.id).push(x);
-          }
-          for (const [id, list] of byId) {
-            const distinct = [];
-            for (const x of list) if (!distinct.some((d) => JSON.stringify(d.values) === JSON.stringify(x.values))) distinct.push(x);
-            if (list.length > distinct.length) warnings.push(`${list.map(label).join(" and ")}: identical in every mode, so "${id}" in ${type} is emitted once`);
-            if (distinct.length === 1) {
-              distinct[0].final = id;
-              continue;
-            }
-            const sameName = distinct.every((x) => x.v.name === distinct[0].v.name);
-            const lossless = distinct.filter((x) => /^[A-Za-z0-9 /_-]+$/.test(String(x.v.name)));
-            const keeper = sameName ? null : lossless.length === 1 ? lossless[0] : distinct[0];
-            const names = [];
-            distinct.forEach((x, i) => {
-              if (x === keeper) {
-                x.final = id;
-                ids.add(id);
-                names.push(`${label(x)} \u2192 "${id}"`);
-                return;
-              }
-              let next = tag(x.v) ? `${id}_${tag(x.v)}` : `${id}${i + 1}`;
-              for (let n = 2; ids.has(next) || byId.has(next); n++) next = (tag(x.v) ? `${id}_${tag(x.v)}` : id) + n;
-              ids.add(next);
-              x.final = next;
-              names.push(`${label(x)} \u2192 "${next}"`);
-            });
-            warnings.push(`${distinct.length} different variables fold onto "${id}" in ${type} and DIFFER \u2014 none is dropped: ${names.join("; ")}`);
-          }
-          for (const x of cands) {
-            if (!x.final) continue;
-            if (ids.has(x.final) && fields.some((f) => f.id === x.final)) continue;
-            ids.add(x.final);
-            fields.push({ id: x.final, kind: x.kind, source: x.v.name, values: x.values });
-          }
-          if (!fields.length) continue;
-          const units = fields.reduce((n, f) => n + (f.kind === "color" || f.kind === "fontSize" ? 2 : 1), 0) + Math.ceil(fields.length / 32) + 2;
-          if (modeNames.length > 1 && units > 255) warnings.push(`${c.name}: ${fields.length} tokens in one multi-mode collection need ${units} JVM parameter units (Color and TextUnit count double) \u2014 over the 255 limit, so the Compose data class will not compile; split the collection in Figma`);
-          const modeIds = /* @__PURE__ */ new Set();
-          const modes = modeNames.map((name) => {
-            let id = camel([name]);
-            if (ids.has(id)) id += "Mode";
-            for (let n = 2, base = id; modeIds.has(id); n++) id = base + n;
-            modeIds.add(id);
-            return { name, id };
-          });
-          const def = modeNames.includes(String(c.default)) ? String(c.default) : modeNames[0];
-          out.push({ name: c.name, type, modes, default: def, defaultId: modes.find((m) => m.name === def).id, fields });
-        }
-        return out;
-      }
-      const num = (raw) => {
-        const n = Number(raw);
-        return Number.isFinite(n) ? String(Math.round(n * 1e4) / 1e4) : "0";
-      };
-      const str = (raw) => JSON.stringify(String(raw));
-      const bool = (raw) => String(raw === true || raw === "true");
-      const argb = (raw) => {
-        const h = normHex2(raw);
-        return "0x" + (h.length === 8 ? h.slice(6) + h.slice(0, 6) : "ff" + h).toUpperCase();
-      };
-      const HEADER = "GENERATED by Design Twin (tokens.js --native) from design-system/tokens.json \u2014 do not edit by hand; re-run after a token pull.";
-      function compose(cols, opts) {
-        const T = { color: "Color", dimension: "Dp", fontSize: "TextUnit", number: "Float", bool: "Boolean", string: "String" };
-        const lit = (k, r) => r === FULL ? k === "fontSize" ? "9999.sp" : k === "number" ? "9999f" : "9999.dp /* Figma 'fully rounded' \u2014 use CircleShape */" : k === "color" ? `Color(${argb(r)})` : k === "dimension" ? `${num(r)}.dp` : k === "fontSize" ? `${num(r)}.sp` : k === "number" ? `${num(r)}f` : k === "bool" ? bool(r) : str(r).replace(/\$/g, "\\$");
-        const L = [
-          `// ${HEADER}`,
-          `package ${opts && opts.package || "design.tokens"}`,
-          "",
-          "import androidx.compose.runtime.Immutable",
-          "import androidx.compose.runtime.staticCompositionLocalOf",
-          "import androidx.compose.ui.graphics.Color",
-          "import androidx.compose.ui.unit.Dp",
-          "import androidx.compose.ui.unit.TextUnit",
-          "import androidx.compose.ui.unit.dp",
-          "import androidx.compose.ui.unit.sp"
-        ];
-        for (const c of cols) {
-          L.push("", `// Figma collection "${c.name}"`);
-          if (c.modes.length === 1) {
-            L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, f.values[c.modes[0].name])} // ${f.source}`), "}");
-            continue;
-          }
-          L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
-          for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, f.values[m.name])},`), ")");
-          L.push(
-            "",
-            `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([c.modes.find((m) => m.name !== c.default).id])}) { \u2026 }`,
-            `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`
-          );
-        }
-        return L.join("\n") + "\n";
-      }
-      function swiftModeHint(c) {
-        const ids = c.modes.map((m) => m.id);
-        if (ids.includes("light") && ids.includes("dark")) return "colorScheme == .dark ? .dark : .light" + (ids.length > 2 ? ` /* also: ${ids.filter((i) => i !== "light" && i !== "dark").map((i) => "." + i).join(", ")} */` : "");
-        return `.${(c.modes.find((m) => m.name !== c.default) || c.modes[0]).id} /* one of: ${ids.map((i) => "." + i).join(", ")} \u2014 the app picks */`;
-      }
-      function swiftui(cols) {
-        const T = { color: "Color", dimension: "CGFloat", fontSize: "CGFloat", number: "Double", bool: "Bool", string: "String" };
-        const chan = (h, i) => num(parseInt(h.slice(i, i + 2), 16) / 255);
-        const lit = (k, r) => {
-          if (r === FULL) return ".infinity";
-          if (k === "color") {
-            const h = normHex2(r);
-            return `Color(.sRGB, red: ${chan(h, 0)}, green: ${chan(h, 2)}, blue: ${chan(h, 4)}, opacity: ${h.length === 8 ? chan(h, 6) : "1"})`;
-          }
-          return k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\\u([0-9a-fA-F]{4})/g, "\\u{$1}") : num(r);
-        };
-        const L = [`// ${HEADER}`, "import SwiftUI"];
-        for (const c of cols) {
-          L.push("", `// Figma collection "${c.name}"`);
-          if (c.modes.length === 1) {
-            L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, f.values[c.modes[0].name])} // ${f.source}`), "}");
-            continue;
-          }
-          L.push(
-            `public struct ${c.type}: Sendable, Equatable {`,
-            ...c.fields.map((f) => `    public let ${f.id}: ${T[f.kind]} // ${f.source}`),
-            "",
-            `    public init(${c.fields.map((f) => `${f.id}: ${T[f.kind]}`).join(", ")}) {`,
-            ...c.fields.map((f) => `        self.${f.id} = ${f.id}`),
-            "    }"
-          );
-          for (const m of c.modes) L.push("", `    public static let ${m.id} = ${c.type}(`, c.fields.map((f) => `        ${f.id}: ${lit(f.kind, f.values[m.name])}`).join(",\n"), "    )");
-          const env = c.type.charAt(0).toLowerCase() + c.type.slice(1);
-          const defId = c.defaultId;
-          L.push(
-            "}",
-            "",
-            `private struct ${c.type}Key: EnvironmentKey { static let defaultValue = ${c.type}.${defId} }`,
-            "public extension EnvironmentValues {",
-            `    // Set once near the root: .environment(\\.${env}, ${swiftModeHint(c)}); read with @Environment(\\.${env}).`,
-            `    var ${env}: ${c.type} {`,
-            `        get { self[${c.type}Key.self] }`,
-            `        set { self[${c.type}Key.self] = newValue }`,
-            "    }",
-            "}"
-          );
-        }
-        return L.join("\n") + "\n";
-      }
-      function flutter(cols) {
-        const T = { color: "Color", dimension: "double", fontSize: "double", number: "double", bool: "bool", string: "String" };
-        const lit = (k, r) => r === FULL ? "double.infinity" : k === "color" ? `Color(${argb(r)})` : k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\$/g, "\\$") : num(r);
-        const lerp = (f) => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
-        const L = [`// ${HEADER}`, "// ignore_for_file: constant_identifier_names", "import 'dart:ui' show lerpDouble;", "", "import 'package:flutter/material.dart';"];
-        for (const c of cols) {
-          L.push("", `/// Figma collection "${c.name}"`);
-          if (c.modes.length === 1) {
-            L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, f.values[c.modes[0].name])}; // ${f.source}`), "}");
-            continue;
-          }
-          L.push(
-            `/// Register per theme: ThemeData(extensions: [${c.type}.${c.modes[0].id}]); read: Theme.of(context).extension<${c.type}>()!`,
-            "@immutable",
-            `class ${c.type} extends ThemeExtension<${c.type}> {`,
-            `  const ${c.type}({`,
-            ...c.fields.map((f) => `    required this.${f.id},`),
-            "  });",
-            "",
-            ...c.fields.map((f) => `  final ${T[f.kind]} ${f.id}; // ${f.source}`)
-          );
-          for (const m of c.modes) L.push("", `  static const ${m.id} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, f.values[m.name])},`), "  );");
-          L.push(
-            "",
-            "  @override",
-            `  ${c.type} copyWith({`,
-            ...c.fields.map((f) => `    ${T[f.kind]}? ${f.id},`),
-            "  }) {",
-            `    return ${c.type}(`,
-            ...c.fields.map((f) => `      ${f.id}: ${f.id} ?? this.${f.id},`),
-            "    );",
-            "  }",
-            "",
-            "  @override",
-            `  ${c.type} lerp(ThemeExtension<${c.type}>? other, double t) {`,
-            `    if (other is! ${c.type}) return this;`,
-            `    return ${c.type}(`,
-            ...c.fields.map((f) => `      ${f.id}: ${lerp(f)},`),
-            "    );",
-            "  }",
-            "}"
-          );
-        }
-        return L.join("\n") + "\n";
-      }
-      function reactNative(cols) {
-        const T = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
-        const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str("#" + normHex2(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
-        const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
-        for (const c of cols) {
-          const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
-          L.push("", `/** Figma collection "${c.name}" */`);
-          if (c.modes.length === 1) {
-            L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, f.values[c.modes[0].name])}, // ${f.source}`), "} as const;");
-            continue;
-          }
-          L.push(
-            `export interface ${c.type} {`,
-            ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${f.source}`),
-            "}",
-            "",
-            `export type ${c.type}Mode = ${c.modes.map((m) => str(m.id)).join(" | ")};`,
-            `export const ${v}DefaultMode: ${c.type}Mode = ${str(c.defaultId)};`,
-            "",
-            `export const ${v}: Record<${c.type}Mode, ${c.type}> = {`
-          );
-          for (const m of c.modes) L.push(`  ${m.id}: {`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, f.values[m.name])},`), "  },");
-          L.push("};");
-        }
-        return L.join("\n") + "\n";
-      }
-      const EMIT = { compose, swiftui, flutter, "react-native": reactNative };
-      function platformOf(name) {
-        const key = String(name || "").toLowerCase();
-        const p = PROFILE_ALIASES[key] || key;
-        return PLATFORMS[p] ? p : null;
-      }
-      function toNative(designSystem, platform, opts) {
-        const p = platformOf(platform);
-        if (!p) throw new Error(`unknown native platform "${platform}" \u2014 use one of: ${Object.keys(PLATFORMS).join(", ")}`);
-        const warnings = [];
-        const cols = model(designSystem, warnings, opts);
-        return { file: PLATFORMS[p].file, text: EMIT[p](cols, opts), warnings };
-      }
-      return { toNative, platformOf, PLATFORMS };
-    };
+  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
+    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
   }
-});
+  let raw = buf.toString("utf8");
+  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
+  let parsed;
+  try {
+    const value = JSON.parse(raw);
+    parsed = value;
+  } catch (e) {
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
+}
 
-// design-to-code/catalog-input.js
-var require_catalog_input = __commonJS({
-  "design-to-code/catalog-input.js"(exports2, module2) {
-    function isManifest(doc, payloadKey) {
-      return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
-    }
-    function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-      if (isManifest(doc, payloadKey)) {
-        console.error(
-          `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
+// design-to-code/catalog-input.ts
+function isManifest(doc, payloadKey) {
+  return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
+}
+function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
+  if (isManifest(doc, payloadKey)) {
+    console.error(
+      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
        Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-        );
-        process.exit(2);
-      }
-    }
-    function readJsonFile(file, what, hint) {
-      const fs = require("fs");
-      let raw;
-      try {
-        raw = fs.readFileSync(file, "utf8");
-      } catch (e) {
-        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
-        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+    );
+    process.exit(2);
+  }
+}
+function readJsonFile(file, what, hint) {
+  return readDocFile(file, what, anyJson, hint);
+}
+function readDocFile(file, what, guard, hint) {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
        ${hint}` : ""));
-        process.exit(2);
+  process.exit(2);
+}
+function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
+  const doc = readJsonFile(file, what, hint);
+  assertNotManifest(doc, file, payloadKey, wantFile);
+  if (guard(doc)) return doc;
+  console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
+  process.exit(2);
+}
+var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/export/design-system/. Run `dtwin pull --design-system` to create it.";
+
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
+
+// design-to-code/doc-guards.ts
+function optArrayOf(x, each) {
+  return x === void 0 || Array.isArray(x) && x.every(each);
+}
+var isObj = isJsonObject;
+var optObj = (x) => x === void 0 || isObj(x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var anyObject = (x) => isObj(x);
+var isAlias = (v) => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
+var isComposed = (v) => {
+  if (!v || typeof v !== "object" || !("composed" in v)) return false;
+  const c = v.composed;
+  if (!c || typeof c !== "object" || !("color" in c) || !("opacity" in c)) return false;
+  const colorOk = typeof c.color === "string" || isAlias(c.color);
+  const opacityOk = typeof c.opacity === "number" || isAlias(c.opacity);
+  return colorOk && opacityOk && (isAlias(c.color) || isAlias(c.opacity));
+};
+var NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
+function isVariable(x) {
+  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
+}
+function isVariableCollection(x) {
+  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
+}
+function isTokensDoc(x) {
+  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+}
+isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
+function isCatalogComponent(x) {
+  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+}
+function isComponentsCatalog(x) {
+  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+}
+isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
+function isComponentDetailFile(x) {
+  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+}
+isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
+function isTextStylesDoc(x) {
+  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
+}
+isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+var SEVERITIES = ["blocker", "warning", "info"];
+function isAuditOverridesDoc(x) {
+  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
+function isAuditReport(x) {
+  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
+}
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
+function isProposal(x) {
+  return isObj(x) && typeof x.name === "string";
+}
+function isProposalList(x) {
+  return Array.isArray(x) && x.every(isProposal);
+}
+isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
+function isIndexRowLike(x) {
+  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
+}
+function isPagesRootIndex(x) {
+  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+}
+isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
+function isPageIndex(x) {
+  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+}
+isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
+function isVerifyExpectation(x) {
+  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+}
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+function isProbeIdentity(x) {
+  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+function isBuildIdentity(x) {
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
+var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
+var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+function isMeasuredVisual(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+var MEASURED_EXTRAS = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // the run it belongs to and the build it was served
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // the steps replayed, the page's overflow, the behaviour/a11y block
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // the visual diff (informational)
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
+];
+function isMeasuredCore(x) {
+  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+function isVerifyMeasured(x) {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
+}
+isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
+function isEvidence(x) {
+  return isObj(x) && typeof x.nodeId === "string";
+}
+function isInteractionEvidenceList(x) {
+  return Array.isArray(x) && x.every(isEvidence);
+}
+isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isMeasuredComponentList(x) {
+  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
+}
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_OBJECTS = ["anchors", "verification", "counts"];
+var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
+function planProblem(x) {
+  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
+  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
+    const list = x[k];
+    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+  }
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
+  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  return null;
+}
+function isPlan(x) {
+  return planProblem(x) === null;
+}
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+var reqStr = (v) => typeof v === "string" && v.trim() !== "";
+function isPlanWaiver(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+function isPlanDescope(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isStringRecord(x) {
+  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
+}
+isStringRecord.expected = "an object of strings";
+
+// design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
       }
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
-        process.exit(2);
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
       }
     }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
-    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
+    if (!ok) bad.push(a);
   }
-});
+  return bad;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
+  try {
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      failure = unknownFlags();
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
+    } else {
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
+    }
+  }
+  console.error(failure);
+  process.exit(exitCode);
+}
 
-// design-to-code/slice-sources.js
-var require_slice_sources = __commonJS({
-  "design-to-code/slice-sources.js"(exports2, module2) {
-    function sourcesOf(doc, docPath, fs, path) {
-      const out = /* @__PURE__ */ new Map();
-      const add = (key, screen) => {
-        if (typeof key !== "string" || !key || !screen) return;
-        if (!out.has(key)) out.set(key, []);
-        if (!out.get(key).includes(screen)) out.get(key).push(screen);
-      };
-      const base = docPath ? path.dirname(docPath) : ".";
-      for (const sl of Array.isArray(doc && doc._slices) ? doc._slices : []) {
-        if (!sl) continue;
-        let read = false;
-        if (typeof sl.file === "string" && fs && path) {
-          try {
-            const slice = JSON.parse(fs.readFileSync(path.join(base, sl.file.replace(/\.json$/, ".vars.json")), "utf8"));
-            for (const v of slice.variables || []) add(v && v.key, sl.screen);
-            read = true;
-          } catch (_) {
+// design-to-code/tokens.ts
+import { parseArgs as parseArgs2 } from "node:util";
+
+// design-to-code/slice-sources.ts
+import path2 from "node:path";
+function sourcesOf(doc, docPath) {
+  const out = /* @__PURE__ */ new Map();
+  const add = (key, screen) => {
+    if (typeof key !== "string" || !key || !screen) return;
+    const list = out.get(key) || [];
+    if (!list.includes(screen)) list.push(screen);
+    out.set(key, list);
+  };
+  const base = docPath ? path2.dirname(docPath) : ".";
+  for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
+    if (!sl) continue;
+    let read = false;
+    if (typeof sl.file === "string") {
+      const slice = readJsonOrNull(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      if (slice) {
+        for (const v of slice.variables || []) add(v.key, sl.screen);
+        read = true;
+      }
+    }
+    if (!read) for (const k of Array.isArray(sl.keys) ? sl.keys : []) add(k, sl.screen);
+  }
+  for (const c of doc && Array.isArray(doc._conflicts) ? doc._conflicts : []) {
+    for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
+  }
+  if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
+    for (const v of doc && doc.variables || []) add(v.key, path2.basename(docPath, ".vars.json"));
+  }
+  return out;
+}
+
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+function clampOpacityPct(n) {
+  return Math.min(100, Math.max(0, n));
+}
+function composeAlpha(alpha, opacityPct) {
+  return alpha * (clampOpacityPct(opacityPct) / 100);
+}
+
+// design-to-code/tokens-native.ts
+var FULL = Object.freeze({ fullyRounded: true });
+function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaultModeName2, baseValue: baseValue2, unitDecision: unitDecision2, isSentinel: isSentinel2, percentOpacity: percentOpacity2 }) {
+  const PLATFORMS2 = {
+    swiftui: { file: "DesignTokens.swift" },
+    compose: { file: "DesignTokens.kt" },
+    flutter: { file: "design_tokens.dart" },
+    "react-native": { file: "designTokens.ts" }
+  };
+  const PROFILE_ALIASES = { "android-compose": "compose", ios: "swiftui", swift: "swiftui", android: "compose", rn: "react-native", dart: "flutter" };
+  const RESERVED = new Set("default,class,object,in,is,as,do,if,else,for,while,return,var,val,let,func,fun,import,package,switch,case,break,continue,true,false,null,nil,self,super,this,new,static,final,const,enum,struct,extension,protocol,init,internal,public,private,open,operator,typealias,interface,when,try,catch,throw,void,with,get,set,dynamic,external,factory,mixin,part,required,show,hide,on,type,function,delete,export,yield,await,async,inout,repeat,guard,defer,where,any,some,lerp,copyWith,hashCode,toString,description".split(","));
+  const words = (s) => String(s).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
+  function camel(parts) {
+    const w = parts.flatMap(words);
+    let id = w.map((x, i) => i === 0 ? x.charAt(0).toLowerCase() + x.slice(1) : x.charAt(0).toUpperCase() + x.slice(1)).join("");
+    if (!id) id = "token";
+    if (/^[0-9]/.test(id)) id = "n" + id;
+    if (RESERVED.has(id)) id += "Token";
+    return id;
+  }
+  const pascal = (parts) => {
+    const c = camel(parts);
+    return c.charAt(0).toUpperCase() + c.slice(1);
+  };
+  function isFontSize(v) {
+    const scopes = v.scopes || [];
+    if (scopes.length && !scopes.every((s) => s === "ALL_SCOPES")) return scopes.includes("FONT_SIZE");
+    return /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name);
+  }
+  function kindOf(v, opts) {
+    if (v.type === "COLOR") return "color";
+    if (v.type === "BOOLEAN") return "bool";
+    if (v.type === "STRING") return "string";
+    if (v.type === "FLOAT") return unitDecision2(v, opts) === "px" ? isFontSize(v) ? "fontSize" : "dimension" : "number";
+    return null;
+  }
+  const hasComposedKey = (x) => !!x && typeof x === "object" && "composed" in x;
+  const isNativeScalar = (x) => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
+  function resolve(byName, collections, v, mode, seen) {
+    const values = v.values || {};
+    let raw = values[mode];
+    if (raw === void 0) raw = baseValue2(v, collections, defaultModeName2(v, collections));
+    const next = new Set(seen || []).add(v.name);
+    const follow = (a) => {
+      const target = byName.get(a.aliasOf);
+      if (!target || seen && seen.has(target.name)) return void 0;
+      const tMode = target.values && target.values[mode] !== void 0 ? mode : defaultModeName2(target, collections);
+      if (tMode === void 0) return void 0;
+      return resolve(byName, collections, target, tMode, next);
+    };
+    if (raw && typeof raw === "object" && "composed" in raw) {
+      const { color, opacity } = raw.composed;
+      const c = typeof color === "string" ? color : isAlias2(color) ? follow(color) : void 0;
+      const o = typeof opacity === "number" ? opacity : isAlias2(opacity) ? follow(opacity) : void 0;
+      const rgba = parseHex(c);
+      if (!rgba || typeof o !== "number" || !Number.isFinite(o)) return void 0;
+      return formatHex({ ...rgba, a: composeAlpha(rgba.a, o) });
+    }
+    if (!isAlias2(raw)) return isNativeScalar(raw) ? raw : void 0;
+    return follow(raw);
+  }
+  function opacityNumber(r) {
+    const n = typeof r === "number" ? r : typeof r === "string" && NUMERIC_TEXT.test(r) ? Number(r) : NaN;
+    return Number.isFinite(n) ? n : null;
+  }
+  function model(designSystem, warnings, opts) {
+    const collections = designSystem && designSystem.collections || [];
+    const vars = designSystem && designSystem.variables || [];
+    const byName = new Map(vars.map((v) => [v.name, v]));
+    const typeNames = /* @__PURE__ */ new Set();
+    const out = [];
+    for (const c of collections) {
+      const mine = vars.filter((v) => v.collection === c.name);
+      const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
+      const [firstModeName, ...otherModeNames] = modeNames;
+      if (!mine.length || firstModeName === void 0) continue;
+      let type = `${pascal([c.name])}Tokens`;
+      for (let n = 2; typeNames.has(type); n++) type = `${pascal([c.name])}Tokens${n}`;
+      typeNames.add(type);
+      const ids = /* @__PURE__ */ new Set();
+      const fields = [];
+      const cands = [];
+      for (const v of mine) {
+        const kind = kindOf(v, opts);
+        if (!segs2(v.name).length) continue;
+        if (!kind) {
+          warnings.push(`${v.name}: skipped \u2014 a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`);
+          continue;
+        }
+        const pct = kind === "number" && percentOpacity2(v, opts);
+        const values = {};
+        let ok = true;
+        for (const m of modeNames) {
+          const r = resolve(byName, collections, v, m);
+          if (r === void 0 || kind === "color" && !normHex(r)) {
+            ok = false;
+            break;
           }
+          if (pct) {
+            const n = opacityNumber(r);
+            if (n === null) {
+              ok = false;
+              break;
+            }
+            const clamped = clampOpacityPct(n);
+            if (clamped !== n) warnings.push(`${v.name} (mode ${m}): opacity ${n} is outside Figma's 0\u2013100 range; clamped to ${clamped} (as Figma does) and written as ${clamped / 100}`);
+            values[m] = clamped / 100;
+            continue;
+          }
+          values[m] = isSentinel2 && isSentinel2(v, r) ? FULL : r;
         }
-        if (!read) for (const k of Array.isArray(sl.keys) ? sl.keys : []) add(k, sl.screen);
-      }
-      for (const c of Array.isArray(doc && doc._conflicts) ? doc._conflicts : []) {
-        for (const vr of c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
-      }
-      if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-        for (const v of doc && doc.variables || []) add(v && v.key, path.basename(docPath, ".vars.json"));
-      }
-      return out;
-    }
-    function variablesContext(screenFiles, varsFile, fs, path, opts) {
-      const readJson = (f) => {
-        try {
-          return f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null;
-        } catch (_) {
-          return null;
+        if (!ok && Object.values(v.values || {}).some(hasComposedKey)) {
+          warnings.push(`${v.name}: skipped \u2014 a composed colour (colour + separate opacity) whose colour or opacity could not be resolved inside this file has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
+          continue;
         }
+        if (!ok) {
+          warnings.push(`${v.name}: skipped \u2014 its value could not be resolved inside this file (an alias to a library variable that was not exported?)`);
+          continue;
+        }
+        cands.push({ v, kind, values, id: camel(segs2(v.name)) });
+      }
+      const tag = (v) => v.key ? String(v.key).slice(0, 8).toLowerCase() : null;
+      const label = (x) => `${x.v.name}${x.v.key ? ` (key ${tag(x.v)}\u2026)` : ""} = ${JSON.stringify(x.v.values || {})}`;
+      const byId = /* @__PURE__ */ new Map();
+      for (const x of cands) {
+        const list = byId.get(x.id);
+        if (list) list.push(x);
+        else byId.set(x.id, [x]);
+      }
+      for (const [id, list] of byId) {
+        const distinct = [list[0]];
+        for (const x of list.slice(1)) if (!distinct.some((d) => JSON.stringify(d.values) === JSON.stringify(x.values))) distinct.push(x);
+        if (list.length > distinct.length) warnings.push(`${list.map(label).join(" and ")}: identical in every mode, so "${id}" in ${type} is emitted once`);
+        if (distinct.length === 1) {
+          distinct[0].final = id;
+          continue;
+        }
+        const sameName = distinct.every((x) => x.v.name === distinct[0].v.name);
+        const lossless = distinct.filter((x) => /^[A-Za-z0-9 /_-]+$/.test(String(x.v.name)));
+        const keeper = sameName ? null : lossless.length === 1 ? lossless[0] : distinct[0];
+        const names = [];
+        distinct.forEach((x, i) => {
+          if (x === keeper) {
+            x.final = id;
+            ids.add(id);
+            names.push(`${label(x)} \u2192 "${id}"`);
+            return;
+          }
+          let next = tag(x.v) ? `${id}_${tag(x.v)}` : `${id}${i + 1}`;
+          for (let n = 2; ids.has(next) || byId.has(next); n++) next = (tag(x.v) ? `${id}_${tag(x.v)}` : id) + n;
+          ids.add(next);
+          x.final = next;
+          names.push(`${label(x)} \u2192 "${next}"`);
+        });
+        warnings.push(`${distinct.length} different variables fold onto "${id}" in ${type} and DIFFER \u2014 none is dropped: ${names.join("; ")}`);
+      }
+      for (const x of cands) {
+        if (!x.final) continue;
+        if (ids.has(x.final) && fields.some((f) => f.id === x.final)) continue;
+        ids.add(x.final);
+        fields.push({ id: x.final, kind: x.kind, source: x.v.name, values: x.values });
+      }
+      if (!fields.length) continue;
+      const units = fields.reduce((n, f) => n + (f.kind === "color" || f.kind === "fontSize" ? 2 : 1), 0) + Math.ceil(fields.length / 32) + 2;
+      if (modeNames.length > 1 && units > 255) warnings.push(`${c.name}: ${fields.length} tokens in one multi-mode collection need ${units} JVM parameter units (Color and TextUnit count double) \u2014 over the 255 limit, so the Compose data class will not compile; split the collection in Figma`);
+      const modeIds = /* @__PURE__ */ new Set();
+      const modeOf = (name) => {
+        let id = camel([name]);
+        if (ids.has(id)) id += "Mode";
+        for (let n = 2, base = id; modeIds.has(id); n++) id = base + n;
+        modeIds.add(id);
+        return { name, id };
       };
-      const files = screenFiles || [];
-      const own = files.map((f) => readJson(String(f).replace(/\.json$/, ".vars.json")));
-      let variablesPath = varsFile || null;
-      if (!variablesPath && files.length) {
-        const exportRoot = path.resolve(path.dirname(files[0]), "..", "..");
-        const rootVars = path.join(exportRoot, "variables.json");
-        const sibling = path.join(path.dirname(files[0]), "variables.json");
-        if (fs.existsSync(rootVars)) variablesPath = rootVars;
-        else if (fs.existsSync(sibling)) variablesPath = sibling;
-        else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(files[0]).replace(/\.json$/, ".vars.json");
-      }
-      const variablesDoc = readJson(variablesPath);
-      let staleLegacy = null;
-      if (files.length) {
-        const legacy = path.join(path.resolve(path.dirname(files[0]), "..", ".."), "..", "variables.json");
-        if (fs.existsSync(legacy) && path.resolve(legacy) !== path.resolve(variablesPath || "")) staleLegacy = legacy;
-      }
-      return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath, fs, path) : null, staleLegacy };
+      const modes = [modeOf(firstModeName), ...otherModeNames.map(modeOf)];
+      const defMode = modes.find((m) => m.name === String(c.default)) ?? modes[0];
+      out.push({ name: c.name, type, modes, default: defMode.name, defaultId: defMode.id, fields });
     }
-    module2.exports = { sourcesOf, variablesContext };
+    return out;
   }
-});
+  const num = (raw) => {
+    const n = Number(raw);
+    return Number.isFinite(n) ? String(Math.round(n * 1e4) / 1e4) : "0";
+  };
+  const str = (raw) => JSON.stringify(String(raw));
+  const bool = (raw) => String(raw === true || raw === "true");
+  const hexOf = (raw) => {
+    const h = normHex(raw);
+    if (h === null) throw new Error(`tokens-native: colour value ${JSON.stringify(raw)} was not validated`);
+    return h;
+  };
+  const argb = (raw) => {
+    const h = hexOf(raw);
+    return "0x" + (h.length === 9 ? h.slice(7) + h.slice(1, 7) : "ff" + h.slice(1)).toUpperCase();
+  };
+  const valueIn = (f, mode) => {
+    const r = f.values[mode];
+    if (r === void 0) throw new Error(`tokens-native: field ${f.id} has no value for mode ${JSON.stringify(mode)}`);
+    return r;
+  };
+  const HEADER = "GENERATED by Design Twin (tokens.js --native) from design-system/tokens.json \u2014 do not edit by hand; re-run after a token pull.";
+  function compose(cols, opts) {
+    const T = { color: "Color", dimension: "Dp", fontSize: "TextUnit", number: "Float", bool: "Boolean", string: "String" };
+    const lit = (k, r) => r === FULL ? k === "fontSize" ? "9999.sp" : k === "number" ? "9999f" : "9999.dp /* Figma 'fully rounded' \u2014 use CircleShape */" : k === "color" ? `Color(${argb(r)})` : k === "dimension" ? `${num(r)}.dp` : k === "fontSize" ? `${num(r)}.sp` : k === "number" ? `${num(r)}f` : k === "bool" ? bool(r) : str(r).replace(/\$/g, "\\$");
+    const L = [
+      `// ${HEADER}`,
+      `package ${opts && opts.package || "design.tokens"}`,
+      "",
+      "import androidx.compose.runtime.Immutable",
+      "import androidx.compose.runtime.staticCompositionLocalOf",
+      "import androidx.compose.ui.graphics.Color",
+      "import androidx.compose.ui.unit.Dp",
+      "import androidx.compose.ui.unit.TextUnit",
+      "import androidx.compose.ui.unit.dp",
+      "import androidx.compose.ui.unit.sp"
+    ];
+    for (const c of cols) {
+      L.push("", `// Figma collection "${c.name}"`);
+      const [m0, m1] = c.modes;
+      if (m1 === void 0) {
+        L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, m0.name))} // ${f.source}`), "}");
+        continue;
+      }
+      L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
+      for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
+      const active = c.modes.find((m) => m.name !== c.default) ?? m1;
+      L.push(
+        "",
+        `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([active.id])}) { \u2026 }`,
+        `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`
+      );
+    }
+    return L.join("\n") + "\n";
+  }
+  function swiftModeHint(c) {
+    const ids = c.modes.map((m) => m.id);
+    if (ids.includes("light") && ids.includes("dark")) return "colorScheme == .dark ? .dark : .light" + (ids.length > 2 ? ` /* also: ${ids.filter((i) => i !== "light" && i !== "dark").map((i) => "." + i).join(", ")} */` : "");
+    return `.${(c.modes.find((m) => m.name !== c.default) || c.modes[0]).id} /* one of: ${ids.map((i) => "." + i).join(", ")} \u2014 the app picks */`;
+  }
+  function swiftui(cols) {
+    const T = { color: "Color", dimension: "CGFloat", fontSize: "CGFloat", number: "Double", bool: "Bool", string: "String" };
+    const chan = (h, i) => num(parseInt(h.slice(i, i + 2), 16) / 255);
+    const lit = (k, r) => {
+      if (r === FULL) return ".infinity";
+      if (k === "color") {
+        const h = hexOf(r);
+        return `Color(.sRGB, red: ${chan(h, 1)}, green: ${chan(h, 3)}, blue: ${chan(h, 5)}, opacity: ${h.length === 9 ? chan(h, 7) : "1"})`;
+      }
+      return k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\\u([0-9a-fA-F]{4})/g, "\\u{$1}") : num(r);
+    };
+    const L = [`// ${HEADER}`, "import SwiftUI"];
+    for (const c of cols) {
+      L.push("", `// Figma collection "${c.name}"`);
+      if (c.modes.length === 1) {
+        L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${f.source}`), "}");
+        continue;
+      }
+      L.push(
+        `public struct ${c.type}: Sendable, Equatable {`,
+        ...c.fields.map((f) => `    public let ${f.id}: ${T[f.kind]} // ${f.source}`),
+        "",
+        `    public init(${c.fields.map((f) => `${f.id}: ${T[f.kind]}`).join(", ")}) {`,
+        ...c.fields.map((f) => `        self.${f.id} = ${f.id}`),
+        "    }"
+      );
+      for (const m of c.modes) L.push("", `    public static let ${m.id} = ${c.type}(`, c.fields.map((f) => `        ${f.id}: ${lit(f.kind, valueIn(f, m.name))}`).join(",\n"), "    )");
+      const env = c.type.charAt(0).toLowerCase() + c.type.slice(1);
+      const defId = c.defaultId;
+      L.push(
+        "}",
+        "",
+        `private struct ${c.type}Key: EnvironmentKey { static let defaultValue = ${c.type}.${defId} }`,
+        "public extension EnvironmentValues {",
+        `    // Set once near the root: .environment(\\.${env}, ${swiftModeHint(c)}); read with @Environment(\\.${env}).`,
+        `    var ${env}: ${c.type} {`,
+        `        get { self[${c.type}Key.self] }`,
+        `        set { self[${c.type}Key.self] = newValue }`,
+        "    }",
+        "}"
+      );
+    }
+    return L.join("\n") + "\n";
+  }
+  function flutter(cols) {
+    const T = { color: "Color", dimension: "double", fontSize: "double", number: "double", bool: "bool", string: "String" };
+    const lit = (k, r) => r === FULL ? "double.infinity" : k === "color" ? `Color(${argb(r)})` : k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\$/g, "\\$") : num(r);
+    const lerp = (f) => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
+    const L = [`// ${HEADER}`, "// ignore_for_file: constant_identifier_names", "import 'dart:ui' show lerpDouble;", "", "import 'package:flutter/material.dart';"];
+    for (const c of cols) {
+      L.push("", `/// Figma collection "${c.name}"`);
+      if (c.modes.length === 1) {
+        L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, valueIn(f, c.modes[0].name))}; // ${f.source}`), "}");
+        continue;
+      }
+      L.push(
+        `/// Register per theme: ThemeData(extensions: [${c.type}.${c.modes[0].id}]); read: Theme.of(context).extension<${c.type}>()!`,
+        "@immutable",
+        `class ${c.type} extends ThemeExtension<${c.type}> {`,
+        `  const ${c.type}({`,
+        ...c.fields.map((f) => `    required this.${f.id},`),
+        "  });",
+        "",
+        ...c.fields.map((f) => `  final ${T[f.kind]} ${f.id}; // ${f.source}`)
+      );
+      for (const m of c.modes) L.push("", `  static const ${m.id} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  );");
+      L.push(
+        "",
+        "  @override",
+        `  ${c.type} copyWith({`,
+        ...c.fields.map((f) => `    ${T[f.kind]}? ${f.id},`),
+        "  }) {",
+        `    return ${c.type}(`,
+        ...c.fields.map((f) => `      ${f.id}: ${f.id} ?? this.${f.id},`),
+        "    );",
+        "  }",
+        "",
+        "  @override",
+        `  ${c.type} lerp(ThemeExtension<${c.type}>? other, double t) {`,
+        `    if (other is! ${c.type}) return this;`,
+        `    return ${c.type}(`,
+        ...c.fields.map((f) => `      ${f.id}: ${lerp(f)},`),
+        "    );",
+        "  }",
+        "}"
+      );
+    }
+    return L.join("\n") + "\n";
+  }
+  function reactNative(cols) {
+    const T = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
+    const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str(hexOf(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
+    const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
+    for (const c of cols) {
+      const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
+      L.push("", `/** Figma collection "${c.name}" */`);
+      if (c.modes.length === 1) {
+        L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, valueIn(f, c.modes[0].name))}, // ${f.source}`), "} as const;");
+        continue;
+      }
+      L.push(
+        `export interface ${c.type} {`,
+        ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${f.source}`),
+        "}",
+        "",
+        `export type ${c.type}Mode = ${c.modes.map((m) => str(m.id)).join(" | ")};`,
+        `export const ${v}DefaultMode: ${c.type}Mode = ${str(c.defaultId)};`,
+        "",
+        `export const ${v}: Record<${c.type}Mode, ${c.type}> = {`
+      );
+      for (const m of c.modes) L.push(`  ${m.id}: {`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  },");
+      L.push("};");
+    }
+    return L.join("\n") + "\n";
+  }
+  const EMIT = { compose, swiftui, flutter, "react-native": reactNative };
+  function platformOf2(name) {
+    const key = String(name || "").toLowerCase();
+    const p = PROFILE_ALIASES[key] || key;
+    return PLATFORMS2[p] ? p : null;
+  }
+  function toNative2(designSystem, platform, opts) {
+    const p = platformOf2(platform);
+    if (!p) throw new Error(`unknown native platform "${String(platform)}" \u2014 use one of: ${Object.keys(PLATFORMS2).join(", ")}`);
+    const warnings = [];
+    const cols = model(designSystem, warnings, opts);
+    const target = PLATFORMS2[p], emit = EMIT[p];
+    if (target === void 0 || emit === void 0) throw new Error(`tokens-native: platform "${p}" has no emitter`);
+    return { file: target.file, text: emit(cols, opts), warnings };
+  }
+  return { toNative: toNative2, platformOf: platformOf2, PLATFORMS: PLATFORMS2 };
+}
 
-// design-to-code/tokens.js
+// bridge/src/hash.ts
+import crypto from "node:crypto";
+var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
+
+// bridge/src/is-main.ts
+import fs2 from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
+  } catch {
+    return false;
+  }
+}
+
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
+// bridge/src/project-layout.ts
+import path3 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+
+// design-to-code/tokens.ts
+var isLeaf = (n) => n !== void 0 && n.$value !== void 0;
 var round = (x) => Math.round(x * 1e4) / 1e4;
 var segsCache = /* @__PURE__ */ new Map();
 function segs(name) {
@@ -473,10 +919,9 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
   for (const v of vars) {
     const id = idOf(v);
     if (id == null) continue;
-    if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push(v);
+    getOrInit(groups, id, () => []).push(v);
   }
-  const ids = /* @__PURE__ */ new Map(), canonical = /* @__PURE__ */ new Set(), notes = [];
+  const ids = /* @__PURE__ */ new Map(), canonical = /* @__PURE__ */ new Map(), notes = [];
   const taken = new Set(groups.keys());
   for (const [id, list] of groups) {
     const byIdent = /* @__PURE__ */ new Map();
@@ -488,19 +933,22 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
       if (c) c.push(v);
       else clusters.push([v]);
     }
-    if (clusters.length === 1) {
+    const onlyCluster = clusters.length === 1 ? clusters[0] : void 0;
+    if (onlyCluster) {
       for (const v of list) ids.set(v, id);
-      canonical.add(members[0]);
+      canonical.set(onlyCluster[0], id);
       if (members.length > 1) notes.push({ output, id, differ: false, members: members.map((v) => ({ v, id })) });
       continue;
     }
-    const assigned = /* @__PURE__ */ new Map();
+    const assigned = /* @__PURE__ */ new Map(), memberIds = [];
     const exactOnes = exact ? members.filter((v) => exact(v)) : [];
-    const keeper = exactOnes.length === 1 && members.filter((v) => v.name === exactOnes[0].name).length === 1 ? exactOnes[0] : null;
+    const exactOne = exactOnes.length === 1 ? exactOnes[0] : void 0;
+    const keeper = exactOne && members.filter((v) => v.name === exactOne.name).length === 1 ? exactOne : null;
     for (const v of members) {
       if (v === keeper) {
         assigned.set(identityOf(v), id);
-        canonical.add(v);
+        canonical.set(v, id);
+        memberIds.push({ v, id });
         continue;
       }
       const s = shortKey(v) || suffixSlug(v.collection) || "alt";
@@ -508,37 +956,50 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
       for (let n = 2; taken.has(nid); n++) nid = suffix(id, s + "-" + n);
       taken.add(nid);
       assigned.set(identityOf(v), nid);
-      canonical.add(v);
+      canonical.set(v, nid);
+      memberIds.push({ v, id: nid });
     }
-    for (const v of list) ids.set(v, assigned.get(identityOf(v)));
-    notes.push({ output, id, differ: true, members: members.map((v) => ({ v, id: assigned.get(identityOf(v)) })) });
+    for (const v of list) {
+      const got = assigned.get(identityOf(v));
+      if (got !== void 0) ids.set(v, got);
+    }
+    notes.push({ output, id, differ: true, members: memberIds });
   }
   const byName = /* @__PURE__ */ new Map();
   for (const v of vars) {
-    if (!byName.has(v.name)) byName.set(v.name, []);
-    byName.get(v.name).push(v);
+    getOrInit(byName, v.name, () => []).push(v);
   }
   return { id: (v) => ids.get(v), canonical, notes, byName };
 }
-function aliasTarget(plan, name, referrer, warn) {
-  const cands = (plan.byName.get(name) || []).filter((c) => plan.id(c) != null);
-  if (!cands.length) return null;
-  if (new Set(cands.map((c) => plan.id(c))).size === 1) return cands[0];
-  const sameColl = cands.filter((c) => referrer && c.collection === referrer.collection);
-  const pool = (sameColl.length && new Set(sameColl.map((c) => plan.id(c))).size === 1 ? sameColl : cands).slice().sort((a, b) => String(a.key || "").localeCompare(String(b.key || "")));
-  const pick = pool[0];
+function aliasTargetId(plan, name, referrer, warn) {
+  const cands = [];
+  for (const c of plan.byName.get(name) || []) {
+    const id = plan.id(c);
+    if (id != null) cands.push({ v: c, id });
+  }
+  const firstCand = cands[0];
+  if (firstCand === void 0) return null;
+  if (new Set(cands.map((c) => c.id)).size === 1) return firstCand;
+  const sameColl = cands.filter((c) => referrer && c.v.collection === referrer.collection);
+  const pool = (sameColl.length && new Set(sameColl.map((c) => c.id)).size === 1 ? sameColl : cands).slice().sort((a, b) => String(a.v.key || "").localeCompare(String(b.v.key || "")));
+  const pick = pool[0] ?? firstCand;
   if (warn) {
-    warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' (${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "\u2026" : "'" + c.collection + "'") + " " + JSON.stringify(c.values)).join(", ")}) \u2014 pointed at ${plan.id(pick)}; confirm in Figma which one it really aliases`);
+    warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' (${cands.map(({ v: c }) => (shortKey(c) ? "key " + shortKey(c) + "\u2026" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) \u2014 pointed at ${pick.id}; confirm in Figma which one it really aliases`);
   }
   return pick;
+}
+function aliasTarget(plan, name, referrer, warn) {
+  const t = aliasTargetId(plan, name, referrer, warn);
+  return t ? t.v : null;
 }
 function collisionMessages(notes, opts) {
   const sources = opts && opts.sources || null;
   const bySet = /* @__PURE__ */ new Map();
   for (const n of notes) {
     const k = (n.differ ? "D" : "S") + n.members.map((m) => identityOf(m.v)).sort().join("|");
-    if (!bySet.has(k)) bySet.set(k, []);
-    bySet.get(k).push(n);
+    const group = bySet.get(k);
+    if (group) group.push(n);
+    else bySet.set(k, [n]);
   }
   const out = [];
   for (const group of bySet.values()) {
@@ -547,11 +1008,12 @@ function collisionMessages(notes, opts) {
     const names = [...new Set(members.map((v) => v.name))];
     const who = (v) => {
       const k = shortKey(v);
-      const where2 = k && sources && sources.get(v.key);
+      const where2 = k && sources ? sources.get(String(v.key)) : null;
       return (k ? `key ${k}\u2026` : `'${v.collection || ""}'`) + ` = ${JSON.stringify(v.values || {})}` + (where2 && where2.length ? ` (from ${where2.join(", ")})` : "");
     };
-    const oneColl = members.every((v) => v.collection === members[0].collection) && members[0].collection;
-    const subject = names.length === 1 ? `${members.length} different Figma variables share the name '${names[0]}'${oneColl ? ` (collection '${members[0].collection}')` : ""}` : `${members.length} different Figma variables (${names.map((n) => `'${n}'`).join(", ")}) fold onto one identifier`;
+    const m0 = members[0];
+    const oneColl = m0 !== void 0 && members.every((v) => v.collection === m0.collection) && m0.collection;
+    const subject = names.length === 1 ? `${members.length} different Figma variables share the name '${names[0]}'${oneColl ? ` (collection '${oneColl}')` : ""}` : `${members.length} different Figma variables (${names.map((n) => `'${n}'`).join(", ")}) fold onto one identifier`;
     const where = group.map((n) => `${n.output} ${n.members.map((m) => m.id).join(" / ")}`).join("; ");
     if (first.differ) {
       out.push(`${subject} and resolve DIFFERENTLY \u2014 none is dropped, each keeps its own name: ${members.map(who).join(" vs ")}. Emitted as: ${where}. ` + (names.length === 1 ? `Pick by key, never by name. A screen's own .vars.json usually carries only one of them under the plain name \u2014 generate that screen's theme from it (or from design-system/tokens.json), not from the merged variables.json.` : `The name spelled exactly as the identifier keeps it; a name that only reached it by folding punctuation carries its key.`));
@@ -575,17 +1037,18 @@ function isSentinel(v, raw) {
   return Number.isFinite(n) && Math.abs(n) >= SENTINEL_MIN && isRadiusVar(v);
 }
 var webNumber = (v, raw) => isSentinel(v, raw) ? WEB_FULL_ROUND : raw;
-function normHex(v) {
-  if (typeof v !== "string") return null;
-  const h = v.replace(/^#/, "");
-  if (!/^[0-9a-fA-F]+$/.test(h)) return null;
-  const e = h.length === 3 || h.length === 4 ? h.split("").map((c) => c + c).join("") : h;
-  return e.length === 6 || e.length === 8 ? e.toLowerCase() : null;
-}
 var isHexish = (v) => typeof v === "string" && /^#/.test(v);
-var isAlias = (v) => v && typeof v === "object" && typeof v.aliasOf === "string";
+var isScalar = (v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean";
+function aliasNames(v) {
+  if (isAlias(v)) return [v.aliasOf];
+  if (!isComposed(v)) return [];
+  const out = [];
+  if (isAlias(v.composed.color)) out.push(v.composed.color.aliasOf);
+  if (isAlias(v.composed.opacity)) out.push(v.composed.opacity.aliasOf);
+  return out;
+}
 var CSS_UNSAFE = /[\\\n\r\f;{}]/g;
-var hexEsc = (c) => "\\" + c.codePointAt(0).toString(16) + " ";
+var hexEsc = (c) => "\\" + (c.codePointAt(0) ?? 0).toString(16) + " ";
 function cssUnbalanced(s) {
   let depth = 0, dq = 0, sq = 0;
   for (const ch of String(s)) {
@@ -609,16 +1072,19 @@ function cssEscapeText(s) {
   if (cssUnbalanced(raw)) out = out.replace(/[()"']/g, hexEsc);
   return out;
 }
+var isP3 = (colorProfile) => colorProfile === "display_p3" || colorProfile === "display-p3";
 function hexToColorValue(hex, colorProfile) {
   const e = normHex(hex);
   if (!e) return null;
   const n = (i) => parseInt(e.slice(i, i + 2), 16) / 255;
-  const value = { colorSpace: colorProfile === "display-p3" ? "display-p3" : "srgb", components: [round(n(0)), round(n(2)), round(n(4))] };
-  if (e.length === 8) value.alpha = round(n(6));
-  value.hex = "#" + e.slice(0, 6);
+  const value = { colorSpace: isP3(colorProfile) ? "display-p3" : "srgb", components: [round(n(1)), round(n(3)), round(n(5))] };
+  if (e.length === 9) value.alpha = round(n(7));
+  value.hex = e.slice(0, 7);
   return value;
 }
 var DTCG_TYPE = { COLOR: "color", FLOAT: "number", STRING: "string" };
+var EMITTED_TYPES = /* @__PURE__ */ new Set(["COLOR", "FLOAT", "STRING", "BOOLEAN"]);
+var emitted = (v) => EMITTED_TYPES.has(v.type);
 function defaultModeName(variable, collections) {
   const c = (collections || []).find((x) => x.name === variable.collection);
   const modes = variable.values ? Object.keys(variable.values) : [];
@@ -628,18 +1094,28 @@ function defaultModeName(variable, collections) {
 function baseValue(variable, collections, def) {
   const values = variable.values || {};
   if (def === void 0) def = defaultModeName(variable, collections);
-  if (values[def] !== void 0) return values[def];
+  if (def !== void 0 && values[def] !== void 0) return values[def];
   const firstDefined = Object.keys(values).find((m) => values[m] !== void 0);
   return firstDefined !== void 0 ? values[firstDefined] : void 0;
 }
 function dtcgValue(raw, colorProfile, dimension, ref) {
   if (isAlias(raw)) return ref ? ref(raw.aliasOf) : dtcgRef(raw.aliasOf);
+  if (isComposed(raw)) {
+    const { color } = raw.composed;
+    return isAlias(color) ? ref ? ref(color.aliasOf) : dtcgRef(color.aliasOf) : hexToColorValue(color, colorProfile);
+  }
+  if (!isScalar(raw)) return null;
   if (dimension) {
     const n = typeof raw === "number" ? raw : Number(raw);
     return Number.isFinite(n) ? { value: n, unit: "px" } : raw;
   }
   const c = isHexish(raw) ? hexToColorValue(raw, colorProfile) : null;
   return c || raw;
+}
+function dtcgOpacity(raw, ref) {
+  if (!isComposed(raw)) return void 0;
+  const { opacity } = raw.composed;
+  return isAlias(opacity) ? ref ? ref(opacity.aliasOf) : dtcgRef(opacity.aliasOf) : opacity;
 }
 var SKIP = /* @__PURE__ */ Symbol("resolver-set omits this token");
 var DTCG_SEP = "\0";
@@ -659,20 +1135,26 @@ function dtcgPlan(designSystem) {
 }
 function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
   const root = {};
-  const { collections, colorProfile } = designSystem || {};
+  const ds = designSystem || {};
+  const { colorProfile } = ds;
   plan = plan || dtcgPlan(designSystem);
   const ref = (referrer) => (name) => {
-    const t = aliasTarget(plan, name, referrer, warn);
-    return t ? "{" + plan.id(t).split(DTCG_SEP).join(".") + "}" : dtcgRef(name);
+    const t = aliasTargetId(plan, name, referrer, warn);
+    return t ? "{" + t.id.split(DTCG_SEP).join(".") + "}" : dtcgRef(name);
   };
   for (const v of designSystem && designSystem.variables || []) {
     if (!segs(v.name).length) {
       warn(`variable with empty/degenerate name skipped: '${v.name}'`);
       continue;
     }
-    if (!plan.canonical.has(v)) continue;
-    const path = plan.id(v).split(DTCG_SEP);
-    if (path.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
+    if (!emitted(v)) {
+      warn(`token '${v.name}' is a ${v.type} variable \u2014 its values are not colours, numbers or strings, so no DTCG token is emitted for it (skipped)`);
+      continue;
+    }
+    const planned = plan.canonical.get(v);
+    if (planned === void 0) continue;
+    const path5 = planned.split(DTCG_SEP);
+    if (path5.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
       warn(`token '${v.name}' uses a reserved key (__proto__/constructor/prototype) \u2014 skipped`);
       continue;
     }
@@ -683,32 +1165,42 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
       continue;
     }
     let node = root, collided = false;
-    for (let i = 0; i < path.length - 1; i++) {
-      if (node[path[i]] === void 0) node[path[i]] = {};
-      else if (node[path[i]] && node[path[i]].$value !== void 0) {
-        warn(`token '${v.name}' collides with token '${path.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) \u2014 skipped`);
+    for (const [i, seg] of path5.slice(0, -1).entries()) {
+      let child = node[seg];
+      if (child === void 0) child = node[seg] = {};
+      else if (isLeaf(child)) {
+        warn(`token '${v.name}' collides with token '${path5.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) \u2014 skipped`);
         collided = true;
         break;
       }
-      node = node[path[i]];
+      node = child;
     }
     if (collided) continue;
-    const leafKey = path[path.length - 1];
-    if (node[leafKey] !== void 0 && node[leafKey].$value === void 0) {
+    const leafKey = path5[path5.length - 1] ?? "";
+    const existing = node[leafKey];
+    if (existing !== void 0 && !isLeaf(existing)) {
       warn(`token '${v.name}' collides with a group of the same name \u2014 skipped`);
       continue;
     }
-    if (node[leafKey] !== void 0) {
-      warn(`token '${v.name}' lands on '${path.join("/")}', which another token already holds \u2014 skipped, nothing overwritten`);
+    if (existing !== void 0) {
+      warn(`token '${v.name}' lands on '${path5.join("/")}', which another token already holds \u2014 skipped, nothing overwritten`);
       continue;
     }
-    const leaf = {};
     let type = DTCG_TYPE[v.type];
     if (v.type === "COLOR" && isHexish(bv) && !normHex(bv)) warn(`token '${v.name}' has malformed hex '${bv}'`);
     const dimension = v.type === "FLOAT" && unitDecision(v, opts) === "px";
     if (dimension) type = "dimension";
+    if (isComposed(bv) && v.type !== "COLOR") {
+      warn(`token '${v.name}' is a ${v.type} variable holding a composed colour value \u2014 skipped`);
+      continue;
+    }
     const aliasRef = ref(v);
-    let value = dtcgValue(webNumber(v, bv), colorProfile, dimension, aliasRef);
+    const dv = dtcgValue(webNumber(v, bv), colorProfile, dimension, aliasRef);
+    if (dv === null) {
+      warn(`token '${v.name}' has a non-scalar value ${JSON.stringify(bv)} \u2014 skipped`);
+      continue;
+    }
+    let value = dv;
     if (v.type === "BOOLEAN") {
       type = "string";
       if (!isAlias(bv)) value = String(value);
@@ -718,23 +1210,41 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
       warn(`token '${v.name}' (type ${v.type}) maps to no DTCG $type \u2014 skipped (a typeless token is invalid per DTCG 2025.10)`);
       continue;
     }
-    leaf.$type = type;
-    leaf.$value = value;
+    const leaf = { $type: type, $value: value };
     if (v.description) leaf.$description = v.description;
+    const opacity = dtcgOpacity(bv, aliasRef);
     if (!withExtensions) {
+      const setExt = {};
+      if (opacity !== void 0) setExt.opacity = opacity;
+      if (percentOpacity(v, opts)) setExt.unit = "percent";
+      if (Object.keys(setExt).length) leaf.$extensions = { "figma.com": setExt };
       node[leafKey] = leaf;
       continue;
     }
     const values = v.values || {};
     const modeKeys = Object.keys(values);
     const ext = {};
+    if (opacity !== void 0) ext.opacity = opacity;
     if (modeKeys.length > 1) {
-      ext.modes = /* @__PURE__ */ Object.create(null);
-      for (const m of modeKeys) if (values[m] !== void 0) ext.modes[m] = dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef);
+      const modes = nullProto();
+      for (const m of modeKeys) {
+        const mv = values[m] === void 0 ? null : dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef);
+        if (mv !== null) modes[m] = mv;
+      }
+      ext.modes = modes;
+    }
+    if (modeKeys.length > 1 && modeKeys.some((m) => isComposed(values[m]))) {
+      const byMode = nullProto();
+      for (const m of modeKeys) {
+        const o = dtcgOpacity(values[m], aliasRef);
+        if (o !== void 0) byMode[m] = o;
+      }
+      ext.modeOpacity = byMode;
     }
     if (typeof v.key === "string" && v.key) ext.key = v.key;
     if (isSentinel(v, bv)) ext.sentinel = { figmaValue: bv, meaning: "fully rounded \u2014 emitted as the platform idiom" };
     if (v.scopes && v.scopes.length) ext.scopes = v.scopes;
+    if (percentOpacity(v, opts)) ext.unit = "percent";
     if (v.codeSyntax && Object.keys(v.codeSyntax).length) ext.codeSyntax = v.codeSyntax;
     if (v.type === "BOOLEAN") ext.originalType = "boolean";
     if (Object.keys(ext).length) leaf.$extensions = { "figma.com": ext };
@@ -746,14 +1256,14 @@ function toDTCG(designSystem, warnings, opts, notes) {
   const warn = (m) => {
     if (warnings) warnings.push(m);
   };
-  const collections = (designSystem || {}).collections;
+  const collections = designSystem?.collections;
   const plan = dtcgPlan(designSystem);
   const tree = buildTree(designSystem, warn, opts, (v) => baseValue(v, collections), true, plan);
   if (notes) notes.push(...plan.notes);
   else for (const m of collisionMessages(plan.notes, opts)) warn(m);
   return tree;
 }
-var UNITLESS_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "FONT_WEIGHT"]);
+var UNITLESS_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY", "FONT_WEIGHT"]);
 var UNITLESS_NAME_SEGMENTS = /* @__PURE__ */ new Set(["opacity", "fontweight"]);
 function unitlessName(name) {
   return segs(name).some((seg) => UNITLESS_NAME_SEGMENTS.has(seg.replace(/[-_ ]/g, "").toLowerCase()));
@@ -769,16 +1279,34 @@ function unitDecision(variable, opts) {
   if (!narrowed && unitlessName(variable.name)) return "name";
   return "px";
 }
+var PERCENT_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY"]);
+function percentOpacity(variable, opts) {
+  return variable.type === "FLOAT" && unitDecision(variable, opts) === "scopes" && (variable.scopes || []).every((s) => PERCENT_SCOPES.has(s));
+}
 function numberUnit(variable, opts) {
+  if (percentOpacity(variable, opts)) return "%";
   return unitDecision(variable, opts) === "px" ? "px" : "";
 }
-function cssValue(raw, unit, ref) {
+var pctOutOfRange = (n) => n < 0 || n > 100;
+var cssPercent = (s) => (pctOutOfRange(Number(s)) ? String(clampOpacityPct(Number(s))) : s) + "%";
+function cssPercentVar(plan, v, opts, depth = 0) {
+  if (!v || depth > 8 || !percentOpacity(v, opts)) return false;
+  const vals = Object.values(v.values || {}).filter((x) => x !== void 0);
+  return vals.length > 0 && vals.every((x) => isAlias(x) ? cssPercentVar(plan, aliasTarget(plan, x.aliasOf, v), opts, depth + 1) : typeof x === "number" || typeof x === "string" && NUMERIC_TEXT.test(x));
+}
+function cssValue(raw, unit, ref, pctRef) {
   if (isAlias(raw)) return "var(" + (ref ? ref(raw.aliasOf) : cssVarName(raw.aliasOf)) + ")";
+  if (isComposed(raw)) {
+    const { color, opacity } = raw.composed;
+    const c = cssValue(color, "", ref);
+    const pct = isAlias(opacity) ? pctRef && pctRef(opacity.aliasOf) ? cssValue(opacity, "", ref) : null : cssPercent(String(opacity));
+    return pct === null ? c : `color-mix(in srgb, ${c} ${pct}, transparent)`;
+  }
   const e = isHexish(raw) ? normHex(raw) : null;
-  if (e) return "#" + e;
-  const fmtNum = (s) => s === "0" ? "0" : unit ? s + unit : s;
+  if (e) return e;
+  const fmtNum = (s) => unit === "%" ? cssPercent(s) : s === "0" ? "0" : unit ? s + unit : s;
   if (typeof raw === "number") return fmtNum(String(raw));
-  if (typeof raw === "string" && /^-?\d+(?:\.\d+)?$/.test(raw)) return fmtNum(raw);
+  if (typeof raw === "string" && NUMERIC_TEXT.test(raw)) return fmtNum(raw);
   if (typeof raw === "boolean") return String(raw);
   if (typeof raw === "string") return cssEscapeText(raw);
   return String(raw);
@@ -794,41 +1322,124 @@ function cssPlan(designSystem) {
     (v) => cssVarName(v.name) === "--" + segs(v.name).join("-")
   );
 }
+function collectionOf(v, collections) {
+  const named = collections.filter((c) => c.name === v.collection);
+  if (named.length <= 1) return named[0];
+  const modes = Object.keys(v.values || {});
+  return named.find((c) => modes.every((m) => (c.modes || []).includes(m))) ?? named[0];
+}
+function planModeScopes(designSystem) {
+  const collections = designSystem && designSystem.collections || [];
+  const vars = designSystem && designSystem.variables || [];
+  const groupIds = /* @__PURE__ */ new Map();
+  collections.forEach((c, i) => groupIds.set(c, "c" + i));
+  const groupOf = (v) => {
+    const c = collectionOf(v, collections);
+    return c ? groupIds.get(c) ?? "" : "";
+  };
+  const collOfGroup = /* @__PURE__ */ new Map();
+  for (const [c, id] of groupIds) collOfGroup.set(id, c);
+  const groupsPerMode = /* @__PURE__ */ new Map();
+  const declared = (g, v) => {
+    const c = collOfGroup.get(g);
+    if (c) {
+      const def2 = c.default ?? (c.modes || [])[0];
+      return (c.modes || []).filter((m) => m !== def2);
+    }
+    const def = defaultModeName(v, collections);
+    return Object.keys(v.values || {}).filter((m) => m !== def);
+  };
+  for (const v of vars) {
+    if (!segs(v.name).length || !emitted(v)) continue;
+    if (baseValue(v, collections) === void 0) continue;
+    const g = groupOf(v);
+    for (const m of declared(g, v)) {
+      const list = getOrInit(groupsPerMode, m, () => []);
+      if (!list.includes(g)) list.push(g);
+    }
+  }
+  const qualified = /* @__PURE__ */ new Set();
+  for (const list of groupsPerMode.values()) if (list.length > 1) for (const g of list) qualified.add(g);
+  const nameOf = (g) => collOfGroup.get(g)?.name;
+  const slugOf = (g) => suffixSlug(nameOf(g) ?? "no collection") || "collection";
+  const slugCount = /* @__PURE__ */ new Map();
+  for (const g of qualified) slugCount.set(slugOf(g), (slugCount.get(slugOf(g)) ?? 0) + 1);
+  const attrOf = /* @__PURE__ */ new Map();
+  const used = /* @__PURE__ */ new Set();
+  for (const g of qualified) {
+    const slug = slugOf(g);
+    const key = collOfGroup.get(g)?.key;
+    let attr = "data-theme-" + slug + ((slugCount.get(slug) ?? 0) > 1 && key ? "-" + suffixSlug(key.slice(0, KEY_SUFFIX_LEN)) : "");
+    for (let n = 2; used.has(attr); n++) attr = "data-theme-" + slug + "-" + n;
+    used.add(attr);
+    attrOf.set(g, attr);
+  }
+  const warnings = [];
+  for (const [m, list] of groupsPerMode) {
+    if (list.length < 2) continue;
+    const label = (g) => nameOf(g) ?? "(no collection)";
+    warnings.push(`mode '${m}' exists in ${list.length} collections (${list.map(label).join(", ")}); their blocks are scoped per collection instead of [data-theme="${m}"]: set ${list.map((g) => `${attrOf.get(g) ?? "data-theme"}="${m}"`).join(" / ")} on the element that picks each collection's mode`);
+  }
+  const scope = (g, m) => {
+    const list = groupsPerMode.get(m) || [];
+    return { collection: nameOf(g), attribute: list.length > 1 ? attrOf.get(g) ?? "data-theme" : "data-theme" };
+  };
+  return { groupOf, scope, warnings };
+}
+function modeBlocks(plan) {
+  const blocks = /* @__PURE__ */ new Map();
+  return {
+    set(v, mode, prop, line) {
+      const group = plan.groupOf(v);
+      getOrInit(blocks, group + "\0" + mode, () => ({ group, mode, lines: /* @__PURE__ */ new Map() })).lines.set(prop, line);
+    },
+    render(selector) {
+      let out = "";
+      for (const b of blocks.values()) {
+        const sc = plan.scope(b.group, b.mode);
+        out += `
+${selector ? selector(b.mode, sc) : `[${sc.attribute}="${cssAttrEscape(b.mode)}"]`} {
+` + [...b.lines.values()].join("\n") + "\n}\n";
+      }
+      return out;
+    }
+  };
+}
 function toCSS(designSystem, opts, notes) {
   const collections = designSystem && designSystem.collections || [];
   const vars = designSystem && designSystem.variables || [];
-  const selectorFor = (mode) => opts && opts.selector ? opts.selector(mode) : `[data-theme="${cssAttrEscape(mode)}"]`;
   const plan = cssPlan(designSystem);
   if (notes) notes.push(...plan.notes);
   const ref = (referrer) => (name) => {
-    const t = aliasTarget(plan, name, referrer);
-    return t ? plan.id(t) : cssVarName(name);
+    const t = aliasTargetId(plan, name, referrer);
+    return t ? t.id : cssVarName(name);
   };
+  const pctRef = (referrer) => (name) => cssPercentVar(plan, aliasTarget(plan, name, referrer), opts);
   const rootLines = /* @__PURE__ */ new Map();
-  const perMode = /* @__PURE__ */ Object.create(null);
+  const perMode = modeBlocks(planModeScopes(designSystem));
   for (const v of vars) {
     if (!segs(v.name).length) continue;
-    if (!plan.canonical.has(v)) continue;
+    if (!emitted(v)) continue;
+    const varName = plan.canonical.get(v);
+    if (varName === void 0) continue;
     const values = v.values || {};
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === void 0) continue;
     const baseStr = JSON.stringify(base);
     const unit = numberUnit(v, opts);
-    const varName = plan.id(v);
-    const r = ref(v);
-    rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r)};`);
+    const r = ref(v), p = pctRef(v);
+    const font = v.type === "STRING" && twKind(v, opts) === "fontFamily";
+    const val = (raw) => font && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, r, p);
+    rootLines.set(varName, `  ${varName}: ${val(base)};`);
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === void 0) continue;
       if (JSON.stringify(values[m]) === baseStr) continue;
-      (perMode[m] || (perMode[m] = /* @__PURE__ */ new Map())).set(varName, `  ${varName}: ${cssValue(webNumber(v, values[m]), unit, r)};`);
+      perMode.set(v, m, varName, `  ${varName}: ${val(values[m])};`);
     }
   }
-  let out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
-  for (const m of Object.keys(perMode)) out += `
-${selectorFor(m)} {
-` + [...perMode[m].values()].join("\n") + "\n}\n";
-  return out;
+  const out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
+  return out + perMode.render(opts && opts.selector);
 }
 var TW_NAMESPACE = { color: "--color-", dimension: "--spacing-", radius: "--radius-", fontSize: "--text-", fontFamily: "--font-" };
 var TW_PREFIX = "figma-";
@@ -843,16 +1454,24 @@ function twName(v, opts) {
 var RADIUS_SCOPES = /* @__PURE__ */ new Set(["CORNER_RADIUS"]);
 function twKind(v, opts) {
   if (v.type === "COLOR") return "color";
-  if (v.type === "STRING") return /font.?family|typeface/i.test(String(v.collection) + "/" + v.name) ? "fontFamily" : null;
-  if (v.type !== "FLOAT") return null;
-  if (unitDecision(v, opts) !== "px") return null;
   const scopes = v.scopes || [];
   const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
+  if (v.type === "STRING") {
+    if (narrowed) return scopes.includes("FONT_FAMILY") ? "fontFamily" : null;
+    return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
+  }
+  if (v.type !== "FLOAT") return null;
+  if (unitDecision(v, opts) !== "px") return null;
   if (narrowed && scopes.some((x) => RADIUS_SCOPES.has(x))) return "radius";
   if (narrowed && scopes.includes("FONT_SIZE")) return "fontSize";
   if (!narrowed && /radius|corner|rounded/i.test(v.name)) return "radius";
-  if (!narrowed && /font.?size|text.?size|type.?size/i.test(String(v.collection) + "/" + v.name)) return "fontSize";
+  if (!narrowed && /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name)) return "fontSize";
   return "dimension";
+}
+function cssFontFamily(raw) {
+  const s = raw.trim();
+  if (!s || /[,'"]/.test(s) || /^[A-Za-z_-][A-Za-z0-9_-]*$/.test(s)) return cssEscapeText(raw);
+  return '"' + s.replace(/["\\\n\r\f]/g, hexEsc) + '"';
 }
 function toTailwind(designSystem, opts, notes) {
   const collections = designSystem && designSystem.collections || [];
@@ -869,36 +1488,58 @@ function toTailwind(designSystem, opts, notes) {
   if (notes) notes.push(...plan.notes);
   else warnings.push(...collisionMessages(plan.notes, opts));
   const theme = /* @__PURE__ */ new Map();
-  const perMode = /* @__PURE__ */ Object.create(null);
+  const scopes = planModeScopes(designSystem);
+  const perMode = modeBlocks(scopes);
+  warnings.push(...scopes.warnings);
+  const aliasedByFont = /* @__PURE__ */ new Set();
+  const queue = vars.filter((v) => v.type === "STRING" && twKind(v, opts) === "fontFamily");
+  for (let v = queue.pop(); v !== void 0; v = queue.pop()) {
+    for (const m of Object.keys(v.values || {})) for (const n of aliasNames(v.values[m])) {
+      const t = aliasTarget(plan, n, v);
+      if (t && !aliasedByFont.has(t)) {
+        aliasedByFont.add(t);
+        queue.push(t);
+      }
+    }
+  }
+  const leftOut = [];
   let utilities = 0;
   for (const v of vars) {
     if (!segs(v.name).length) continue;
-    if (!plan.canonical.has(v)) continue;
+    if (!emitted(v)) continue;
+    const name = plan.canonical.get(v);
+    if (name === void 0) continue;
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === void 0) continue;
-    const name = plan.id(v);
-    if (twKind(v, opts)) utilities++;
+    const kind = twKind(v, opts);
+    if (v.type === "STRING" && !kind && !aliasedByFont.has(v)) {
+      if (!leftOut.includes(v.name)) leftOut.push(v.name);
+      continue;
+    }
+    if (kind) utilities++;
     const unit = numberUnit(v, opts);
     const ref = (n) => {
-      const t = aliasTarget(plan, n, v);
-      return t ? plan.id(t) : "--" + TW_PREFIX + twSlug(n);
+      const t = aliasTargetId(plan, n, v);
+      return t ? t.id : "--" + TW_PREFIX + twSlug(n);
     };
-    const val = (raw) => cssValue(webNumber(v, raw), unit, ref);
+    const pctRef = (n) => cssPercentVar(plan, aliasTarget(plan, n, v), opts);
+    const val = (raw) => kind === "fontFamily" && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, ref, pctRef);
     const baseStr = JSON.stringify(base);
     theme.set(name, `  ${name}: ${val(base)};`);
     const values = v.values || {};
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === void 0) continue;
       if (JSON.stringify(values[m]) === baseStr) continue;
-      (perMode[m] || (perMode[m] = /* @__PURE__ */ new Map())).set(name, `  ${name}: ${val(values[m])};`);
+      perMode.set(v, m, name, `  ${name}: ${val(values[m])};`);
     }
+  }
+  if (leftOut.length) {
+    warnings.push(`theme.css leaves out ${leftOut.length} STRING token(s) that are not font families (${leftOut.slice(0, 4).map((n) => `'${n}'`).join(", ")}${leftOut.length > 4 ? `, \u2026 +${leftOut.length - 4} more` : ""}) \u2014 a value like 'Semi Bold' is not usable in @theme and generates no utility. They are kept in tokens.dtcg.json and tokens.css (written with --also-generic); scope a font-family STRING to FONT_FAMILY in Figma to get a --font-figma-* utility`);
   }
   let out = '@import "tailwindcss";\n/* GENERATED by Design Twin (tokens.js --web tailwind) \u2014 do not edit by hand; re-run after a token pull.\n   Every design-system variable sits under a `figma-` name (rounded-figma-xl, p-figma-space-4, bg-figma-\u2026),\n   so Tailwind\'s own scale (rounded-xl, p-4, \u2026) keeps its framework meaning. */\n';
   if (theme.size) out += "\n@theme {\n" + [...theme.values()].join("\n") + "\n}\n";
-  for (const m of Object.keys(perMode)) out += `
-[data-theme="${cssAttrEscape(m)}"] {
-` + [...perMode[m].values()].join("\n") + "\n}\n";
+  out += perMode.render();
   return { text: out, utilities, tokens: theme.size, warnings };
 }
 var RESOLVER_VERSION = "2025.10";
@@ -923,8 +1564,7 @@ function toResolver(designSystem, warnings, opts) {
   const groups = /* @__PURE__ */ new Map();
   for (const v of vars) {
     const key = String(v && v.collection || "");
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(v);
+    getOrInit(groups, key, () => []).push(v);
   }
   const declared = /* @__PURE__ */ new Map();
   for (const c of collections) if (c && c.name != null && !declared.has(String(c.name))) declared.set(String(c.name), c);
@@ -953,15 +1593,15 @@ function toResolver(designSystem, warnings, opts) {
     takenKeys[kind].add(candidate);
     return candidate;
   }
-  const sets = /* @__PURE__ */ Object.create(null);
-  const modifiers = /* @__PURE__ */ Object.create(null);
-  const files = /* @__PURE__ */ Object.create(null);
+  const sets = nullProto();
+  const modifiers = nullProto();
+  const files = nullProto();
   const resolutionOrder = [];
   const modifierRefs = [];
   for (const [collName, groupVars] of groups) {
     const c = declared.get(collName);
     const label = collName || "tokens";
-    const sub = { colorProfile: ds.colorProfile, collections, variables: groupVars };
+    const sub = { ...ifDefined("colorProfile", ds.colorProfile), collections, variables: groupVars };
     const base = buildTree(sub, warn, opts, (v) => baseValue(v, collections), false, plan);
     if (!Object.keys(base).length) continue;
     const setName = reserveKey(label, "set");
@@ -973,7 +1613,7 @@ function toResolver(designSystem, warnings, opts) {
     for (const m of c && c.modes || []) if (!modes.includes(m)) modes.push(m);
     for (const v of groupVars) for (const m of Object.keys(v && v.values || {})) if (!modes.includes(m)) modes.push(m);
     if (modes.length < 2) continue;
-    const contexts = /* @__PURE__ */ Object.create(null);
+    const contexts = nullProto();
     let nonEmpty = 0;
     for (const m of modes) {
       const tree = buildTree(sub, warn, opts, (v) => {
@@ -994,17 +1634,23 @@ function toResolver(designSystem, warnings, opts) {
     }
     if (!nonEmpty) continue;
     const modName = reserveKey(label, "modifier");
-    const def = c && c.default != null && modes.includes(c.default) ? c.default : modes[0];
+    const def = c && c.default != null && modes.includes(c.default) ? c.default : modes[0] ?? "";
     modifiers[modName] = { description: `${label} mode`, contexts, default: def, $extensions: { "figma.com": { collection: collName || null, defaultMode: def } } };
     modifierRefs.push({ $ref: `#/modifiers/${ptrEsc(modName)}` });
   }
   for (const r of modifierRefs) resolutionOrder.push(r);
-  const resolver = { $schema: RESOLVER_SCHEMA };
-  if (ds.file) resolver.name = String(ds.file);
-  resolver.version = RESOLVER_VERSION;
-  resolver.sets = sets;
-  if (Object.keys(modifiers).length) resolver.modifiers = modifiers;
-  resolver.resolutionOrder = resolutionOrder;
+  const resolver = {
+    $schema: RESOLVER_SCHEMA,
+    ...ds.file ? { name: String(ds.file) } : {},
+    // optional, but the filename alone rarely says which Figma file
+    version: RESOLVER_VERSION,
+    // REQUIRED, MUST be "2025.10"
+    sets,
+    ...Object.keys(modifiers).length ? { modifiers } : {},
+    // omitted rather than empty: nothing to condition on
+    resolutionOrder
+    // REQUIRED
+  };
   return { resolver, files };
 }
 function lintTokens(designSystem, opts) {
@@ -1017,18 +1663,51 @@ function lintTokens(designSystem, opts) {
   return dedupe(warnings);
 }
 var dedupe = (list) => [...new Set(list)];
+function cssFilesOf(opts) {
+  return opts && opts.cssFiles ? [...opts.cssFiles] : opts && opts.tailwind ? ["tokens.css", "theme.css"] : ["tokens.css"];
+}
 function lintNames(designSystem, opts, warnings) {
   const vars = designSystem && designSystem.variables || [];
+  const files = cssFilesOf(opts);
+  const inCss = files.join("/") || "the CSS";
+  warnings.push(...planModeScopes(designSystem).warnings);
   const names = new Set(vars.map((v) => segs(v.name).join(".")).filter(Boolean));
   for (const v of vars) for (const m of Object.keys(v.values || {})) {
-    const val = v.values[m];
-    if (isAlias(val) && !names.has(segs(val.aliasOf).join("."))) warnings.push(`token '${v.name}' (mode ${m}) references undefined token '${val.aliasOf}'`);
+    for (const target of aliasNames(v.values[m])) {
+      if (!names.has(segs(target).join("."))) warnings.push(`token '${v.name}' (mode ${m}) references undefined token '${target}'`);
+    }
+  }
+  let plan = null;
+  for (const v of vars) {
+    if (v.type !== "COLOR") continue;
+    for (const m of Object.keys(v.values || {})) {
+      const raw = v.values[m];
+      if (!isComposed(raw)) continue;
+      const { opacity } = raw.composed;
+      if (isAlias(opacity)) {
+        plan = plan || cssPlan(designSystem);
+        if (!cssPercentVar(plan, aliasTarget(plan, opacity.aliasOf, v), opts)) {
+          warnings.push(`token '${v.name}' (mode ${m}) is a composed colour whose opacity '${opacity.aliasOf}' is not an OPACITY/COLOR_OPACITY-scoped number (its CSS is not a percentage); ${inCss} carr${files.length > 1 ? "y" : "ies"} the colour only \u2014 the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
+          break;
+        }
+      } else if (pctOutOfRange(opacity)) {
+        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(opacity)}% in ${inCss} (as Figma does); tokens.dtcg.json keeps ${opacity}`);
+      }
+    }
+  }
+  for (const v of vars) {
+    if (!percentOpacity(v, opts)) continue;
+    for (const m of Object.keys(v.values || {})) {
+      const raw = v.values[m];
+      const txt = typeof raw === "number" ? String(raw) : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? raw : null;
+      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(Number(txt))}% in ${inCss} (as Figma does); tokens.dtcg.json keeps ${txt}`);
+    }
   }
   for (const v of vars) {
     if (v.type !== "STRING") continue;
     for (const m of Object.keys(v.values || {})) {
       if (cssNeedsEscape(v.values[m])) {
-        warnings.push(`token '${v.name}' (mode ${m}) contains CSS-structural characters; escaped for safety in tokens.css`);
+        warnings.push(`token '${v.name}' (mode ${m}) contains CSS-structural characters; escaped for safety in ${inCss}`);
         break;
       }
     }
@@ -1037,7 +1716,7 @@ function lintNames(designSystem, opts, warnings) {
   for (const c of designSystem && designSystem.collections || []) for (const m of c.modes || []) modeNames.add(m);
   for (const v of vars) for (const m of Object.keys(v.values || {})) modeNames.add(m);
   for (const m of modeNames) {
-    if (cssAttrNeedsEscape(m)) warnings.push(`mode '${m}' contains a quote or backslash; escaped in its tokens.css selector`);
+    if (cssAttrNeedsEscape(m)) warnings.push(`mode '${m}' contains a quote or backslash; escaped in its ${inCss} selector`);
   }
   for (const v of vars) {
     if (v.type === "FLOAT" && unitDecision(v, opts) === "name") {
@@ -1047,7 +1726,8 @@ function lintNames(designSystem, opts, warnings) {
     if (!s.length) continue;
     const folded = cssVarName(v.name);
     if (folded !== "--" + s.join("-")) {
-      warnings.push(`token '${v.name}' contains characters that are illegal in a CSS custom property; emitted as ${folded}`);
+      const as = files.map((f) => `${f === "theme.css" ? twName(v, opts) : folded} in ${f}`).join(", ");
+      warnings.push(`token '${v.name}' contains characters that are illegal in a CSS custom property; emitted as ${as}`);
     }
   }
   return warnings;
@@ -1060,93 +1740,250 @@ function emitTokens(designSystem, opts) {
   const tailwind = opts && opts.tailwind ? toTailwind(designSystem, opts, notes) : void 0;
   const { resolver, files } = toResolver(designSystem, warnings, opts);
   const collisions = collisionMessages(notes, opts);
+  if (tailwind) warnings.push(...tailwind.warnings);
   lintNames(designSystem, opts, warnings);
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
-module.exports = { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName, TW_PREFIX, WEB_FULL_ROUND };
-Object.assign(module.exports, require_tokens_native()({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision, isSentinel }));
-if (require.main === module) {
-  const fs = require("fs");
-  const path = require("path");
-  const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require_catalog_input();
-  const args = process.argv.slice(2);
-  const flag = (name) => {
-    const i = args.indexOf(name);
-    if (i < 0) return void 0;
-    const v = args[i + 1];
-    args.splice(i, 2);
-    return v === void 0 ? "" : v;
+var { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity });
+var canonJson = (x) => {
+  if (Array.isArray(x)) return "[" + x.map(canonJson).join(",") + "]";
+  if (x && typeof x === "object") {
+    return "{" + Object.entries(x).filter(([, v]) => v !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => JSON.stringify(k) + ":" + canonJson(v)).join(",") + "}";
+  }
+  return JSON.stringify(x) ?? "null";
+};
+var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+function catalogProvenance(ds) {
+  const collections = (ds.collections || []).map((c) => canonJson(c)).sort(cmpStr);
+  const variables = (ds.variables || []).map((v) => ({ sort: [v.collection ?? "", v.name, v.key ?? ""].join("\0"), json: canonJson(v) })).sort((a, b) => cmpStr(a.sort, b.sort) || cmpStr(a.json, b.json)).map((v) => v.json);
+  const sha = sha256Hex(`{"collections":[${collections.join(",")}],"variables":[${variables.join(",")}]}`).slice(0, 12);
+  return { count: (ds.variables || []).length, sha };
+}
+var PROVENANCE_RE = /designtwin-source: (.+?) · (\d+) variables · sha256 ([0-9a-f]{12})/;
+function sourceName(input) {
+  const abs = path4.resolve(input);
+  const parent = path4.basename(path4.dirname(abs));
+  return parent ? `${parent}/${path4.basename(abs)}` : path4.basename(abs);
+}
+function provenanceLine(input, ds, comment) {
+  const { count, sha } = catalogProvenance(ds);
+  const body = `designtwin-source: ${sourceName(input)} \xB7 ${count} variables \xB7 sha256 ${sha}`;
+  return comment === "css" ? `/* ${body} */
+` : `// ${body}
+`;
+}
+function lookupColor(ds, query) {
+  const q = normHex(query);
+  if (q === null) return null;
+  const withAlpha = q.length === 9;
+  const same = (hex) => withAlpha ? (hex.length === 7 ? hex + "ff" : hex) === q : hex.slice(0, 7) === q.slice(0, 7);
+  const collections = ds.collections;
+  const byName = /* @__PURE__ */ new Map();
+  for (const v of ds.variables || []) getOrInit(byName, v.name, () => []).push(v);
+  const target = (name, referrer) => (byName.get(name) || []).slice().sort((a, b) => Number(b.collection === referrer.collection) - Number(a.collection === referrer.collection) || cmpStr(a.key ?? "", b.key ?? ""))[0];
+  const resolve = (v, mode, via) => {
+    if (via.length > 20) return null;
+    const raw = v.values[mode] !== void 0 ? v.values[mode] : baseValue(v, collections);
+    if (isAlias(raw)) {
+      const t = target(raw.aliasOf, v);
+      return t && t.type === "COLOR" ? resolve(t, mode, [...via, raw.aliasOf]) : null;
+    }
+    const hex = isHexish(raw) ? normHex(raw) : null;
+    return hex === null ? null : { hex, via };
   };
-  const native = flag("--native");
-  const web = flag("--web");
-  const kotlinPackage = flag("--package");
-  const alsoGeneric = args.includes("--also-generic") ? (args.splice(args.indexOf("--also-generic"), 1), true) : false;
-  const input = args[0];
-  const outDir = args[1] || ".";
-  const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json | design/variables.json> [outDir]\n       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to\n       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).\n       Without a target flag, only the generic set is written (unchanged).";
-  if (args.includes("--help") || args.includes("-h")) {
+  const hits = [];
+  for (const v of ds.variables || []) {
+    if (v.type !== "COLOR") continue;
+    for (const mode of Object.keys(v.values || {})) {
+      const r = resolve(v, mode, []);
+      if (r && same(r.hex)) hits.push({ name: v.name, collection: v.collection ?? "(no collection)", mode, hex: r.hex, via: r.via });
+    }
+  }
+  return hits;
+}
+function mixedRootModes(ds) {
+  const collections = ds.collections || [];
+  const colour = /* @__PURE__ */ new Set();
+  for (const v of ds.variables || []) {
+    if (v.type !== "COLOR") continue;
+    const c = collectionOf(v, collections);
+    if (c && (c.modes || []).length > 1) colour.add(c);
+  }
+  const list = [...colour];
+  const assumed = (c) => c.default === void 0 || !c.modes.includes(c.default);
+  const defOf = (c) => assumed(c) ? c.modes[0] ?? "?" : c.default ?? "?";
+  const mixed = /* @__PURE__ */ new Set();
+  for (const a of list) {
+    for (const b of list) {
+      if (a !== b && defOf(a) !== defOf(b) && a.modes.some((m) => b.modes.includes(m))) {
+        mixed.add(a);
+        mixed.add(b);
+      }
+    }
+  }
+  if (!mixed.size) return null;
+  const byDefault = /* @__PURE__ */ new Map();
+  for (const c of list) if (mixed.has(c)) getOrInit(byDefault, defOf(c), () => []).push(c);
+  const groups = [...byDefault].sort((x, y) => y[1].length - x[1].length || cmpStr(x[0], y[0]));
+  const named = (cs) => cs.map((c) => `'${c.name}'${assumed(c) ? " (the export names no default mode \u2014 its first mode assumed)" : ""}`).join(", ");
+  return `:root mixes modes: ` + groups.map(([mode, cs], i) => `${named(cs)} ${i ? "" : cs.length > 1 ? "default " : "defaults "}to '${mode}'`).join("; ") + ` \u2014 :root takes each collection's DEFAULT mode, so a screen drawn in one of these modes shows the other mode's values for the other collections' tokens. Set each collection's mode on the screen's root element (its export's resolvedModes says which), or have the designer give these collections one default`;
+}
+function checkGenerated(ds, input, generated, cmd) {
+  let head;
+  try {
+    head = fs3.readFileSync(generated, "utf8").slice(0, 4096);
+  } catch (e) {
+    console.error(`error  --check: '${generated}' could not be read (${errMsg(e)}).`);
+    return 2;
+  }
+  const m = PROVENANCE_RE.exec(head);
+  if (!m) {
+    console.error(`no designtwin-source line in '${generated}' \u2014 it was generated before the line existed, or by hand: regenerate once with ${cmd} <outDir> [the same flags], then --check works.`);
+    return 2;
+  }
+  const now = catalogProvenance(ds);
+  if (m[3] === now.sha) {
+    console.log(`current  ${generated} was generated from ${m[1]} (${m[2]} variables, sha ${m[3]}) \u2014 same content as ${input}`);
+    return 0;
+  }
+  const here = sourceName(input);
+  if (m[1] !== (m[1]?.includes("/") ? here : path4.basename(input))) {
+    console.error(`other source  ${generated} was generated from ${m[1]}, not ${here} \u2014 pass that file: ${scriptCmd("tokens")} <path to ${m[1]}> --check ${shellArg(generated)}`);
+    return 2;
+  }
+  console.error(`stale  ${generated} was generated from ${m[2]} variables (sha ${m[3]}); ${input} now has ${now.count} (sha ${now.sha}) \u2014 re-run ${cmd} <outDir> [the same flags]`);
+  return 1;
+}
+function main(args) {
+  const USAGE = `usage: ${scriptCmd("tokens")} <design/export/design-system/tokens.json | design/export/variables.json> [outDir]
+       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]
+       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to
+       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).
+       Without a target flag, only the generic set is written (unchanged).
+       Every CSS / native file it writes starts with a \`designtwin-source:\` line (input as <parent dir>/<name>, variable count, hash of its content).
+       ${scriptCmd("tokens")} <catalog> --check <generated file>   writes nothing: exit 0 when the file is current, 1 when the catalog has changed since, 2 when it has no source line or was generated from a different file or the command line is wrong
+       ${scriptCmd("tokens")} <catalog> --lookup <hex> [--lookup <hex> \u2026]   writes nothing (ffbc1c, or quote '#ffbc1c': an unquoted # is a shell comment): every COLOR variable that resolves to that hex, per mode, directly or through an alias (exit 1 when none, 2 on a usage error)`;
+  const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, check: { type: "string" }, lookup: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } };
+  const readOnlyRun = args.some((x) => /^--(check|lookup)(=|$)/.test(x));
+  const usageExit = readOnlyRun ? 2 : 1;
+  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, usageExit, (a) => parseArgs2({ args: a, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) {
     console.log(USAGE);
-    process.exit(0);
+    return 0;
   }
-  const stray = args.filter((a) => a.startsWith("-"));
-  if (stray.length) {
-    console.error(`tokens: unknown flag ${stray.join(", ")}
-${USAGE}`);
-    process.exit(1);
-  }
+  const { native, web, package: kotlinPackage } = flags;
+  const alsoGeneric = !!flags["also-generic"];
+  const input = positionals[0];
+  const outDir = positionals[1] || ".";
   if (!input) {
     console.error(USAGE);
-    process.exit(1);
+    return usageExit;
   }
-  const { toNative, platformOf } = module.exports;
   if (native !== void 0 && !platformOf(native)) {
     console.error(`--native: unknown platform "${native}"
 ${USAGE}`);
-    process.exit(1);
+    return usageExit;
   }
   const WEB_TARGETS = { tailwind: "theme.css", "web-tailwind": "theme.css" };
-  if (web !== void 0 && !WEB_TARGETS[web]) {
+  const webFile = web === void 0 ? void 0 : WEB_TARGETS[web];
+  if (web !== void 0 && !webFile) {
     console.error(`--web: unknown target "${web}" (known: tailwind)
 ${USAGE}`);
-    process.exit(1);
+    return usageExit;
   }
-  const ds = readJsonFile(input, "token catalog", NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json \u2014 pass that instead.");
-  assertNotManifest(ds, input, "variables", "design-system/tokens.json");
-  fs.mkdirSync(outDir, { recursive: true });
-  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: require_slice_sources().sourcesOf(ds, input, fs, path) });
+  const ds = readSplitFile(
+    input,
+    "token catalog",
+    isTokensDoc,
+    "variables",
+    "design-system/tokens.json",
+    NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/export/variables.json \u2014 pass that instead."
+  );
+  const lookups = flags.lookup || [];
+  if (flags.check !== void 0 || lookups.length) {
+    if (flags.check !== void 0 && lookups.length) {
+      console.error(`--check and --lookup are separate runs
+${USAGE}`);
+      return usageExit;
+    }
+    const cmd = `${scriptCmd("tokens")} ${shellArg(input)}`;
+    if (flags.check !== void 0) return checkGenerated(ds, input, flags.check, cmd);
+    let status = 0;
+    for (const q of lookups) {
+      const hits = lookupColor(ds, q);
+      if (hits === null) {
+        console.error(`error  --lookup '${q}' is not a hex colour (#rgb, #rrggbb or #rrggbbaa)`);
+        return 2;
+      }
+      for (const h of hits) console.log(`${h.name}  [${h.collection} / ${h.mode}]  ${h.hex}  (${h.via.length ? "via " + h.via.join(" -> ") : "direct"})`);
+      if (!hits.length) {
+        console.error(`no variable in ${input} resolves to ${normHex(q)} in any mode \u2014 a catalog holds only the variables its pulled nodes bind${/[\\/]libraries[\\/]/.test(path4.resolve(input)) ? "" : "; try the library catalog: design/export/libraries/<dir>/tokens.json"}`);
+        status = 1;
+      }
+    }
+    return status;
+  }
+  fs3.mkdirSync(outDir, { recursive: true });
   const hasTarget = web !== void 0 || native !== void 0;
   const writeGeneric = !hasTarget || alsoGeneric;
+  const cssFiles = [...writeGeneric ? ["tokens.css"] : [], ...webFile !== void 0 ? [webFile] : []];
+  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: sourcesOf(ds, input), cssFiles });
   const genericCount = Object.keys(resolverFiles).length;
   if (writeGeneric) {
-    fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
-    fs.writeFileSync(path.join(outDir, "tokens.css"), css);
-    fs.writeFileSync(path.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
+    fs3.writeFileSync(path4.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
+    fs3.writeFileSync(path4.join(outDir, "tokens.css"), provenanceLine(input, ds, "css") + css);
+    fs3.writeFileSync(path4.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
     for (const rel of Object.keys(resolverFiles)) {
-      const dest = path.join(outDir, ...rel.split("/"));
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
+      const dest = path4.join(outDir, ...rel.split("/"));
+      fs3.mkdirSync(path4.dirname(dest), { recursive: true });
+      fs3.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
     }
   }
   let canonicalFile = null;
-  if (web !== void 0) {
-    const tw = tailwind;
-    const file = WEB_TARGETS[web];
-    fs.writeFileSync(path.join(outDir, file), tw.text);
+  const tw = tailwind;
+  if (web !== void 0 && webFile !== void 0 && tw !== void 0) {
+    const file = webFile;
+    fs3.writeFileSync(path4.join(outDir, file), provenanceLine(input, ds, "css") + tw.text);
     canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities \u2014 every token is a plain custom property you must reference with var()`);
-    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
+    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, booleans, strings a font family aliases) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== void 0) {
-    const n = toNative(ds, native, { package: kotlinPackage || void 0 });
-    fs.writeFileSync(path.join(outDir, n.file), n.text);
+    const n = toNative(ds, native, { ...ifDefined("package", kotlinPackage || void 0) });
+    fs3.writeFileSync(path4.join(outDir, n.file), provenanceLine(input, ds, "line") + n.text);
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }
+  const vars = ds.variables || [];
+  const slice = /\.vars\.json$/i.test(input) || path4.basename(input) === "variables.json";
+  if (!slice && vars.length && vars.every((v) => v.remote === true)) {
+    warnings.push(`all ${vars.length} variable(s) in ${input} are remote:true \u2014 this is a design-system pull of a file that CONSUMES a library (only the library variables it references), not the library's catalog; open the library file and run \`dtwin pull --as-library "<name>"\` for the catalog`);
+  }
+  const mixedRoot = mixedRootModes(ds);
+  if (mixedRoot) warnings.push(mixedRoot);
   warnings.forEach((w) => console.error("warn  " + w));
+  if (webFile !== void 0) console.error("note  " + TAILWIND_SOURCE_NOT_NOTE);
   if (hasTarget) {
     const genericNote = writeGeneric ? ` (+ the generic set: tokens.dtcg.json, tokens.css, tokens.resolver.json, ${genericCount} file(s) under ${RESOLVER_DIR}/ \u2014 also written here because --also-generic was passed)` : ` \u2014 the generic handoff set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/) was NOT written here; it belongs under design/, not the app's source tree (pass --also-generic to also write it to ${outDir})`;
     console.log(`wrote ${canonicalFile} to ${outDir} \u2014 this is the file your app should import${genericNote} (${(ds.variables || []).length} variables)`);
   } else {
     console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${genericCount} set files under ${RESOLVER_DIR}/) (${(ds.variables || []).length} variables)`);
   }
+  return 0;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+export {
+  PLATFORMS,
+  TW_PREFIX,
+  WEB_FULL_ROUND,
+  cssVarName,
+  emitTokens,
+  hexToColorValue,
+  lintTokens,
+  platformOf,
+  toCSS,
+  toDTCG,
+  toNative,
+  toResolver,
+  toTailwind
+};

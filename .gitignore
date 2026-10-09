@@ -18,3 +18,7 @@ out-allpages/
 # Local Claude Code settings. (The bridge token no longer lives here: it is stored per-user in
 # ~/.config/design-twin/bridge-token — see bridge/README.md. FIGMA_BRIDGE_TOKEN still overrides it.)
 .claude/settings.local.json
+
+# The bridge's tsc emit (npm run build --workspace bridge / prepack). Not committed: dev runs
+# bridge/src/*.ts directly, and the published package is built on prepack.
+bridge/dist/

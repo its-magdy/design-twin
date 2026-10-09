@@ -16,7 +16,8 @@ Output
   directional, so this is what mirrors the layout under RTL. Only use `.padding(.leading, …)` — never
   reach for a physical-left equivalent.
 - `justifyContent:"center"` → center in stack (add `Spacer()`s or set frame alignment);
-  `"space-between"` → `Spacer()` between children.
+  `"space-between"` → `Spacer()` between children; `"space-evenly"`/`"space-around"` → the same, plus a
+  `Spacer()` before the first and after the last child (edge space too).
 - `alignItems` → the stack's `alignment:` argument (`.leading/.center/.trailing`);
   `"baseline"` → `HStack(alignment: .firstTextBaseline)`.
 - `widthMode:"fill"` → `.frame(maxWidth: .infinity)`; `"hug"` → natural size; `"fixed"` → `.frame(width: N)`.
@@ -31,9 +32,9 @@ Output
   long, scrolling content.
 - `gridJustifySelf`/`gridAlignSelf` → the item's `.gridColumnAlignment` (`Grid`) / frame alignment.
 
-**Scroll, clip & sticky** — `clip:true` → `.clipped()`; `layout.scroll` → `ScrollView` (`.horizontal` when
-`"horizontal"`). `fixedChildren` **if present** (count of leading children pinned while the rest scrolls)
-→ a `LazyVStack(pinnedViews: [.sectionHeaders])` with those children in a `Section(header:)`, or keep them
+**Scroll, clip & sticky** — `clip:true` → `.clipped()`; `scroll` → `ScrollView` (`.horizontal` when
+`"horizontal"`). `fixedChildren` **if present** (the LAST N entries of `children[]` are pinned while the rest scrolls; place
+each by its `y`) → a `LazyVStack(pinnedViews: [.sectionHeaders])` with those children in a `Section(header:)`, or keep them
 outside the `ScrollView` entirely as a fixed header/footer `View`.
 
 **Theming (`resolvedModes`/`variableModes`)** — `resolvedModes` (root) names the effective color scheme
@@ -104,6 +105,8 @@ Charts (`LineMark`/`BarMark`), not transliterated shapes.
 
 **Native controls, not rebuilt ones** — Segmented→`Picker(...).pickerStyle(.segmented)`, Toggle/Switch→`Toggle`,
 Slider→`Slider`, Stepper→`Stepper`, Menu/Picker→`Picker`, Spinner/Progress→`ProgressView`, `TextField`→`TextField`.
+A `Picker`/`DatePicker` draws its own text: set the picker's text colour explicitly to the drawn token (`.tint(…)`
+for a menu-style value, `.foregroundStyle(…)` on its label) and check it in the simulator.
 
 **Don't double-inset.** `List`/`Form`/`NavigationStack`/toolbars + the safe area already pad to platform
 standard — if a Figma edge inset is ~16pt or the standard row inset, omit the modifier. Prefer `.padding()`.

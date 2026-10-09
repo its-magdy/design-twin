@@ -1,0 +1,8 @@
+{
+  // The Node build scripts no Node-typed project owns: figma-plugin/tsconfig.json types the plugin
+  // sandbox (no Node), and claude-plugin/ has no tsconfig. oxlint's type-aware mode falls back to this
+  // ancestor config for a file its nearest tsconfig does not include, and `npm run typecheck` checks it
+  // with `tsc -p tsconfig.json`.
+  "extends": "./test/tsconfig.json",
+  "include": ["figma-plugin/build.ts", "claude-plugin/build-scripts.ts"]
+}
