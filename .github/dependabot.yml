@@ -1,0 +1,26 @@
+# Monthly, grouped version updates (one PR per ecosystem); security updates are not held by this schedule or the cooldown.
+# The cooldown leaves a new release a week to be pulled or flagged before it is proposed.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # the root lockfile covers the workspaces (bridge, figma-plugin)
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+        patterns: ["*"]
