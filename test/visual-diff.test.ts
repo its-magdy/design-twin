@@ -1,4 +1,4 @@
-// Unit tests of the 12c visual diff's pure parts (F-89): the PNG codec (design-to-code/png.ts), the pixelmatch v6.0.0 port and
+// Unit tests of the visual diff's pure parts: the PNG codec (design-to-code/png.ts), the pixelmatch v6.0.0 port and
 // our shift tolerance / regions / attribution / grid (design-to-code/visual-diff.ts), and the capture's budget
 // (design-to-code/probe-visual.ts). No browser.  Run with:  node test/visual-diff.test.ts
 import { deflateSync, crc32 } from "node:zlib";
@@ -238,7 +238,7 @@ const throwsMsg = (f: () => unknown): string => { try { f(); return ""; } catch 
   check("8 explicit cap / reserve", visualBudget(0, 100_000, 10_000, 5_000) === 10_000 && visualBudget(0, 12_000, 10_000, 5_000) === 7_000);
 }
 
-// ---- 12c own check: elapsedMs is the capture's own time + the diff step's, never the behaviour battery in between
+// ---- elapsedMs is the capture's own time + the diff step's, never the behaviour battery in between
 {
   const w = 40, h = 30, a = img(w, h), b = img(w, h); rect(b, 5, 5, 10, 10, [0, 0, 0, 255]);
   const r4 = { x: 0, y: 0, w, h };
@@ -249,14 +249,14 @@ const throwsMsg = (f: () => unknown): string => { try { f(); return ""; } catch 
     diffPath: "design/verify/Firings.diff.png", captureMs: 1234,
   });
   const v = out.visual;
-  check("[12c own] finishVisual elapsedMs = captureMs + the diff step (1234 ≤ elapsed < 1234 + 5000), not time since the capture started",
+  check("[own] finishVisual elapsedMs = captureMs + the diff step (1234 ≤ elapsed < 1234 + 5000), not time since the capture started",
     v.ran === true && v.elapsedMs >= 1234 && v.elapsedMs < 6234);
   if (!v.ran || !(v.elapsedMs >= 1234)) console.log("    got", v.ran ? v.elapsedMs : v.why);
 }
 
-// ---------------------------------------------------------------- 12c fix 1 (review 1, D59)
-console.log("12c fix 1 — review 1 findings:");
-// (namespace lookups: this part runs — and fails cleanly — against a probe-visual without the fix's exports)
+// ---------------------------------------------------------------- malformed and out-of-root reference images
+console.log("finishVisual and prepareVisual guards:");
+// (namespace lookups: this part runs — and fails cleanly — against a probe-visual without these exports)
 const pv: Record<string, unknown> = { ...probeVisual };
 const safe = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch (e) { console.log(`    (threw: ${e instanceof Error ? e.message : String(e)})`); } return check(name, r); };
 const okRef = { usable: true, path: "design/export/assets/90_1_ref.png", sha256: "x", png: { w: 40, h: 30 }, scale: 1, offset: { x: 0, y: 0 }, from: "index", crop: { x: 0, y: 0, w: 40, h: 30 } } as const;
@@ -269,7 +269,7 @@ const fin = (refPng: Rgba, shotPng: Rgba, offset = { x: 0, y: 0 }): MeasuredVisu
     diffPath: "design/verify/Firings.diff.png", captureMs: 0,
   }).visual;
 };
-// F-1: a malformed referenceImage is {ok:false}, never a throw
+// a malformed referenceImage is {ok:false}, never a throw
 {
   const prep = (ri: unknown): string => {
     const exp: Record<string, unknown> = { reference: "assets/90_1_ref.png", frame: { nodeId: "90:1", name: "Firings", w: 40, h: 30 }, referenceImage: ri };
@@ -277,21 +277,21 @@ const fin = (refPng: Rgba, shotPng: Rgba, offset = { x: 0, y: 0 }): MeasuredVisu
     return r.ok ? "(ok)" : r.why;
   };
   const MAL = "the expectation's referenceImage is malformed — re-run --expect";
-  safe("[F-1] referenceImage null → {ok:false} 'malformed — re-run --expect' (no TypeError)", () => prep(null) === MAL);
-  safe("[F-1] referenceImage \"off\" → malformed (never a why-less ran:false)", () => prep("off") === MAL);
-  safe("[F-1] {usable:true} without its fields → malformed (not 'the reference PNG undefined is missing')", () => prep({ usable: true }) === MAL && prep({ usable: "yes", path: 5 }) === MAL);
+  safe("referenceImage null → {ok:false} 'malformed — re-run --expect' (no TypeError)", () => prep(null) === MAL);
+  safe("referenceImage \"off\" → malformed (never a why-less ran:false)", () => prep("off") === MAL);
+  safe("{usable:true} without its fields → malformed (not 'the reference PNG undefined is missing')", () => prep({ usable: true }) === MAL && prep({ usable: "yes", path: 5 }) === MAL);
 }
-// F-2: the reference root is the project owning the expectation
+// the reference root is the project owning the expectation
 {
   // read through a type guard so this file still loads (and fails) against a probe-visual.ts without referenceRoot
   const isRoot = (f: unknown): f is (e: string, p: string) => string => typeof f === "function";
   const rr = pv.referenceRoot;
   const root = (e: string, p: string): string => (isRoot(rr) ? rr(e, p) : "(no referenceRoot)");
   const mono = path.resolve("/r/mono"), app = path.join(mono, "apps", "web");
-  safe("[F-2] --expected <root>/design/verify/S.expected.json → <root>, whatever --project is", () => root(path.join(mono, "design", "verify", "S.expected.json"), app) === mono);
-  safe("[F-2] an expectation elsewhere (a stage dir) → --project", () => root(path.join(mono, ".stage", "S.expected.json"), app) === app && root(path.join(mono, "verify", "S.expected.json"), app) === app);
+  safe("--expected <root>/design/verify/S.expected.json → <root>, whatever --project is", () => root(path.join(mono, "design", "verify", "S.expected.json"), app) === mono);
+  safe("an expectation elsewhere (a stage dir) → --project", () => root(path.join(mono, ".stage", "S.expected.json"), app) === app && root(path.join(mono, "verify", "S.expected.json"), app) === app);
 }
-// F-7: the reference path must stay inside <root>/design/export
+// the reference path must stay inside <root>/design/export
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "visual-diff-f7-"));
   const outside = encodePng(img(40, 30));
@@ -302,39 +302,39 @@ const fin = (refPng: Rgba, shotPng: Rgba, offset = { x: 0, y: 0 }): MeasuredVisu
     const r = probeVisual.prepareVisual({ reference: "assets/x.png", frame: { nodeId: "90:1", name: "Firings", w: 40, h: 30 }, referenceImage: { ...okRef, path: p, sha256: sha } }, dir);
     return r.ok ? "(ok — read)" : r.why;
   };
-  safe(`[F-7] design/export/../../secret.png → not read, 'outside design/export' (${why("design/export/../../secret.png")})`, () => /outside design\/export/.test(why("design/export/../../secret.png")));
-  safe("[F-7] a path not under design/export at all → outside", () => /outside design\/export/.test(why("secret.png")));
+  safe(`design/export/../../secret.png → not read, 'outside design/export' (${why("design/export/../../secret.png")})`, () => /outside design\/export/.test(why("design/export/../../secret.png")));
+  safe("a path not under design/export at all → outside", () => /outside design\/export/.test(why("secret.png")));
   fs.rmSync(dir, { recursive: true, force: true });
 }
-// F-3: the decoder's pixel cap (before inflating) and maxOutputLength
+// the decoder's pixel cap (before inflating) and maxOutputLength
 {
   const huge = Buffer.concat([SIG, ihdr(5000, 5000, 8, 6), chunk("IDAT", deflateSync(Buffer.alloc(10))), chunk("IEND", Buffer.alloc(0))]);
   const t0 = Date.now(), msg = throwsMsg(() => decodePng(huge));
-  safe(`[F-3] a 5000×5000 IHDR → PngError naming the size, before inflating (${msg})`, () => /^PngError: .*5000×5000/.test(msg) && Date.now() - t0 < 1000);
+  safe(`a 5000×5000 IHDR → PngError naming the size, before inflating (${msg})`, () => /^PngError: .*5000×5000/.test(msg) && Date.now() - t0 < 1000);
   // a 4×2 RGB image whose IDAT inflates to far more than (stride+1)·h
   const extra = Buffer.concat([SIG, ihdr(4, 2, 8, 2), chunk("IDAT", deflateSync(Buffer.alloc(1_000_000))), chunk("IEND", Buffer.alloc(0))]);
-  safe(`[F-3] image data inflating past (stride+1)·h → PngError (maxOutputLength) (${throwsMsg(() => decodePng(extra))})`, () => /^PngError: bad image data/.test(throwsMsg(() => decodePng(extra))));
+  safe(`image data inflating past (stride+1)·h → PngError (maxOutputLength) (${throwsMsg(() => decodePng(extra))})`, () => /^PngError: bad image data/.test(throwsMsg(() => decodePng(extra))));
   const exact = handPng(4, 2, 3, 2, new Uint8Array(24).fill(7), 0);
-  safe("[F-3] …an exact-size image still decodes", () => decodePng(exact).w === 4);
+  safe("…an exact-size image still decodes", () => decodePng(exact).w === 4);
 }
-// F-3 / F-6: the 1x fallback never resamples non-uniformly; its note says "resampled"
+// the 1x fallback never resamples non-uniformly; its note says "resampled"
 {
   const g = planGrid({ w: 2048, h: 1000 }, { w: 2048, h: 1024 });
-  safe(`[F-3] reference crop 2048×1000 vs capture 2048×1024 (aspects 2.4 % apart) → grid none, why 'different shapes' (${g.grid})`, () => g.grid === "none" && /different shapes/.test(g.why));
+  safe(`reference crop 2048×1000 vs capture 2048×1024 (aspects 2.4 % apart) → grid none, why 'different shapes' (${g.grid})`, () => g.grid === "none" && /different shapes/.test(g.why));
   const u = planGrid({ w: 1000, h: 500 }, { w: 2048, h: 1024 });
-  safe("[F-3] the same shape at another size → the 1x fallback still runs", () => u.grid === "1x");
-  safe("[F-6] the 1x note says resampling (s < 1 upsamples), never 'downscaling'", () => u.grid === "1x" && /resampling can hide a difference/.test(u.why) && !/downscal/.test(u.why));
+  safe("the same shape at another size → the 1x fallback still runs", () => u.grid === "1x");
+  safe("the 1x note says resampling (s < 1 upsamples), never 'downscaling'", () => u.grid === "1x" && /resampling can hide a difference/.test(u.why) && !/downscal/.test(u.why));
   const v = fin(img(40, 20), img(40, 30));
-  safe(`[F-3] finishVisual: a reference shorter than the frame → ran:false, nothing stretched (${v.ran ? "ran" : v.why})`, () => !v.ran && /different shapes/.test(v.why));
+  safe(`finishVisual: a reference shorter than the frame → ran:false, nothing stretched (${v.ran ? "ran" : v.why})`, () => !v.ran && /different shapes/.test(v.why));
 }
-// F-8 (documented): a positive offset gets a note
+// A positive offset gets a note
 {
   const v = fin(img(40, 30), img(40, 30), { x: 3, y: 0 });
   const v0 = fin(img(40, 30), img(40, 30));
-  safe("[F-8] offset > 0 → a note 'render bounds inside the frame box — alignment unverified'; offset 0 → none", () =>
+  safe("offset > 0 → a note 'render bounds inside the frame box — alignment unverified'; offset 0 → none", () =>
     v.ran && v.notes.some((n) => /render bounds lie inside the frame box \(offset 3,0\) — alignment unverified/.test(n)) && v0.ran && !v0.notes.some((n) => /alignment unverified/.test(n)));
 }
-// hot cells (D59): ≥ max(4, 0.08 · cell²) shift-tolerant differing px
+// hot cells: ≥ max(4, 0.08 · cell²) shift-tolerant differing px
 {
   const k = 1.4222, a = img(300, 120), b = img(300, 120);
   rect(a, 20, 40, 200, 2, [51, 51, 51, 255]); // a dark 1-CSS-px border (2 device px) the build lacks
@@ -357,12 +357,12 @@ const fin = (refPng: Rgba, shotPng: Rgba, offset = { x: 0, y: 0 }): MeasuredVisu
   const vf = fin(img(40, 30), img(40, 30));
   safe("[hot] measured.visual records hotFraction 0.08 and hotMinPx 4", () => vf.ran && vf.hotFraction === 0.08 && vf.hotMinPx === 4);
 }
-// F-5: the probe's line leads with the number the report headline leads with, in the same words
+// the probe's line leads with the number the report headline leads with, in the same words
 {
   const b = img(40, 30); rect(b, 5, 5, 10, 10, [0, 0, 0, 255]);
   const v = fin(img(40, 30), b);
   const line = v.ran ? visualLine({ ...v, differingPct: 0.6, shiftTolerantPct: 0.47 }) : "";
-  safe(`[F-5] visualLine: '0.5% of pixels differ (0.6% before 1-px shift tolerance)' (${line.slice(0, 110)})`, () => /never the verdict\) 0\.5% of pixels differ \(0\.6% before 1-px shift tolerance\)/.test(line));
+  safe(`visualLine: '0.5% of pixels differ (0.6% before 1-px shift tolerance)' (${line.slice(0, 110)})`, () => /never the verdict\) 0\.5% of pixels differ \(0\.6% before 1-px shift tolerance\)/.test(line));
 }
 
 report();

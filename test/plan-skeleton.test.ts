@@ -1,5 +1,5 @@
-// Offline tests for design-to-code/plan-skeleton.ts — the build-screen plan, generated from the export
-// (livetest-3 §2.9 f; P2b). Driven by test/fixtures/livetest3/plan/, the live run's real export pruned
+// Offline tests for design-to-code/plan-skeleton.ts — the build-screen plan, generated from the export.
+// Driven by test/fixtures/livetest3/plan/, the live run's real export pruned
 // by its build.ts (visibility, bindings and instances are the export's own — see the counts below).
 //   node test/plan-skeleton.test.ts
 import fs from "node:fs";
@@ -104,7 +104,7 @@ console.log("tokens[] — a COLOR value is written in color.ts's one spelling, s
   check("the design system's #aabbcc agrees with the screen's #ABC", row("Short")?.designSystem?.agrees === true);
 }
 
-console.log("the P3 header — so every other skill can find the plan:");
+console.log("the plan header — so every other skill can find the plan:");
 check("screenName / nodeId / file are written; route is left for the builder",
   plan.nodeId === "7314:87192" && plan.screenName === "positions" && plan.file === "export/pages/__Optimization_management_/positions___7314_87192.json" && plan.route === null && plan.status === "pending");
 check("--route fills it", planOf(run([screen(JR), vars(JR), DS, "--route", "/jet-roles"]).stdout).route === "/jet-roles");
@@ -124,10 +124,10 @@ check("every other row leaves codeToken/verdict for the model", plan.tokens.filt
 check("the design-system definition is attached, labelled with HOW it matched",
   tok("Medium").designSystem?.match === "key" && tok("Backgrounds/Side menu").designSystem?.match === "name" && tok("(Space 3)").designSystem === null);
 
-console.log("components[] — identity from the catalog, never from a hand-placed attribute (finding 79):");
+console.log("components[] — identity from the catalog, never from a hand-placed attribute:");
 const names = new Set(plan.components.map((c) => c.name));
-const matched = new Set(plan.components.filter((c) => c.catalog && c.catalog.by !== "ambiguous").map((c) => c.name)); // ambiguous (DT-27) is never a match
-check(`41 distinct components, 26 matched to the NIMA catalog by name+prop signature (P1's matcher; mapping.json agrees 26/15) — got ${names.size}/${matched.size}`,
+const matched = new Set(plan.components.filter((c) => c.catalog && c.catalog.by !== "ambiguous").map((c) => c.name)); // ambiguous is never a match
+check(`41 distinct components, 26 matched to the catalog by name+prop signature (the name matcher; mapping.json agrees 26/15) — got ${names.size}/${matched.size}`,
   names.size === 41 && matched.size === 26 && plan.components.filter((c) => c.catalog).every((c) => !!c.catalog && c.catalog.by !== "key" && c.catalog.by !== "ambiguous" && c.catalog.confirmed === false));
 const first = must(plan.components[0], "plan.components[0]");
 check("each row carries key/setKey/name/variant/props and an empty mapModule/verdict to fill",
@@ -165,17 +165,17 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
     again.status === 0 && /merged into/.test(again.stderr) && m.tokens.find((t) => t.figmaName === "Space 4")?.codeToken === "spacing-figma-space-4"
     && m.components[0]?.mapModule === "app/src/layout/Sidebar.tsx" && mAnchor?.mapModule?.endsWith("JetRolesScreen.tsx") === true
     && m.files?.length === 1 && m.route === "/jet-roles" && m.verification?.mode === "static-only" && m.tokens.length === 45);
-  // PR #1 review: --out merges through the one plan writer (plan-record.ts writePlan) — atomic, in the file's own format
+  // --out merges through the one plan writer (plan-record.ts writePlan) — atomic, in the file's own format
   fs.writeFileSync(out, JSON.stringify(m, null, 4).split("\n").join("\r\n") + "\r\n");
   const crlf = run([screen(JR), vars(JR), DS, "--out", out]);
   const crlfText = fs.readFileSync(out, "utf8");
-  // pre-change: fails — rewritten as LF with 2-space indentation
+  // The plan keeps its own format; it is not rewritten as LF with 2-space indentation
   check("re-running --out keeps a hand-edited plan's own format (CRLF, 4-space indent) and leaves no temp file beside it",
     crlf.status === 0 && crlfText.includes("\r\n    \"") && !/[^\r]\n/.test(crlfText) && fs.readdirSync(dir).join() === "plan.json");
   const old = new Date(Date.now() - 24 * 3600 * 1000);
   fs.utimesSync(out, old, old);
   const same = run([screen(JR), vars(JR), DS, "--out", out]);
-  // pre-change: fails — identical bytes were not rewritten, so the plan kept its day-old mtime and verify-build skipped it
+  // An unchanged plan is still rewritten, so its mtime is fresh: verify-build skips a plan with a day-old mtime
   check("re-running --out on an unchanged plan refreshes its mtime (verify-build's staleness cutoff reads it)",
     same.status === 0 && fs.readFileSync(out, "utf8") === crlfText && Date.now() - fs.statSync(out).mtimeMs < 3600 * 1000);
   fs.writeFileSync(out, "{ not json");
@@ -187,7 +187,7 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
   check(`Guided Policies (1359:21337): 50 tokens (PHASE2-TOKENS.md: 50), 42 visible instances, 207 anchors, 0 hidden — got ${gp.tokens.length}/${gp.components.length}/${Object.keys(gp.anchors).length}`,
     gp.tokens.length === 50 && gp.components.length === 42 && Object.keys(gp.anchors).length === 207 && Object.keys(gp.anchors).every((id) => !gh.has(id)));
 }
-check("visibility() never reads `visible` — a component PROPERTY called \"visible\" does not hide a node (finding 34)", (() => {
+check("visibility() never reads `visible` — a component PROPERTY called \"visible\" does not hide a node", (() => {
   // `visible: false` is not a field the producer writes — which is the point: it must not hide anything.
   const v = visibility(screenExport([{ id: "1:1", type: "FRAME", children: [malformed<NodeInput>({ id: "1:2", type: "INSTANCE", props: { visible: "Show Breadcrumb" }, visible: false }), { id: "1:3", type: "FRAME", hidden: true, children: [{ id: "1:4", type: "FRAME" }] }] }]));
   return v.visible.has("1:2") && !v.visible.has("1:3") && v.hidden.has("1:4") && v.hiddenRoots.length === 1 && v.hiddenRoots[0]?.nodes === 2;
@@ -233,20 +233,20 @@ check("the shipped bundle runs from outside the repo", (() => {
   return b.status === 0 && b.stdout === r.stdout;
 })());
 
-// ---------------------------------------------------------------- P6-136: auditGate pre-fill
+// ---------------------------------------------------------------- auditGate pre-fill
 // Real audit: FX/design/audit/Studio_Configurations.json (5 blockers, copied verbatim from the
 // livetest-3 run). Guided Policies (Studio_Configurations__1359_21337) is the screen it belongs to.
-console.log("finding 136 — auditGate is pre-filled from an existing Blocked audit:");
+console.log("auditGate is pre-filled from an existing Blocked audit:");
 {
   const auditCwd = fs.mkdtempSync(path.join(os.tmpdir(), "p6-136-cwd-"));
   fs.mkdirSync(path.join(auditCwd, "design", "audit"), { recursive: true });
   fs.copyFileSync(path.join(FX, "audit", "Studio_Configurations.json"), path.join(auditCwd, "design", "audit", "Studio_Configurations.json"));
   const gp = run([screen(GP), vars(GP), DS], { cwd: auditCwd });
   const p = planOf(gp.stdout);
-  check("[P6-136] a screen with a Blocked audit on disk gets auditGate pre-filled: auditFile, verdict, every blocker id, overridden empty",
+  check("a screen with a Blocked audit on disk gets auditGate pre-filled: auditFile, verdict, every blocker id, overridden empty",
     gp.status === 0 && p.auditGate !== null && p.auditGate.auditFile === "design/audit/Studio_Configurations.json" && p.auditGate.verdict === "blocked"
       && p.auditGate.blockers.length === 5 && Array.isArray(p.auditGate.overridden) && p.auditGate.overridden.length === 0 && p.auditGate.reason === null);
-  check("[P6-136] a screen with no matching audit (Jet Roles: no design/audit/positions*.json in this fixture) gets auditGate: null", planOf(r.stdout).auditGate === null);
+  check("a screen with no matching audit (Jet Roles: no design/audit/positions*.json in this fixture) gets auditGate: null", planOf(r.stdout).auditGate === null);
 
   // merge(): a person's decision (overridden/reason/decidedBy/decidedAt) survives a re-run — the
   // skeleton must never clear what was already decided.
@@ -256,28 +256,28 @@ console.log("finding 136 — auditGate is pre-filled from an existing Blocked au
   fs.writeFileSync(planFile, JSON.stringify(decided, null, 2));
   const merged = run([screen(GP), vars(GP), DS, "--out", planFile], { cwd: auditCwd });
   const after = read(planFile, isSkeletonPlan);
-  check("[P6-136] a re-run (--out onto an existing plan) keeps the decided overridden/reason/decidedBy — never clears it",
+  check("a re-run (--out onto an existing plan) keeps the decided overridden/reason/decidedBy — never clears it",
     merged.status === 0 && after.auditGate?.overridden.length === 5 && after.auditGate.reason === "provenance issues, not build issues" && after.auditGate.decidedBy === "owner");
 
-  // F-44: the gate points at the cross-check report beside the audit, and a merge REFRESHES the skeleton-owned
+  // the gate points at the cross-check report beside the audit, and a merge REFRESHES the skeleton-owned
   // blockers (the audit's current ids) while keeping the person-owned decision. Before: `prev.auditGate ||
   // fresh.auditGate` froze the first run's ids, and there was no crossCheckFile.
-  check("[F44-5] no <audit>.cross.json beside the audit: auditGate.crossCheckFile is null", p.auditGate?.crossCheckFile === null);
+  check("no <audit>.cross.json beside the audit: auditGate.crossCheckFile is null", p.auditGate?.crossCheckFile === null);
   fs.writeFileSync(path.join(auditCwd, "design", "audit", "Studio_Configurations.cross.json"), JSON.stringify({ summary: {}, findings: [] }));
   const stale = Object.assign({}, p, { auditGate: { auditFile: "design/audit/Studio_Configurations.json", verdict: "blocked",
     blockers: ["catalog-covers-nothing#0", "text-style-near-miss#1"], overridden: ["catalog-covers-nothing#0"], reason: "decided on the old ids", decidedBy: "owner", decidedAt: "2026-09-23" } });
   fs.writeFileSync(planFile, JSON.stringify(stale, null, 2));
   const re = run([screen(GP), vars(GP), DS, "--out", planFile], { cwd: auditCwd });
   const g = read(planFile, isSkeletonPlan).auditGate;
-  check(`[F44-5] a merge over an old gate sets crossCheckFile (got ${JSON.stringify(g?.crossCheckFile)})`, re.status === 0 && g?.crossCheckFile === "design/audit/Studio_Configurations.cross.json");
-  check(`[F44-5] …refreshes blockers to the audit's current ids (got ${JSON.stringify(g?.blockers)})`,
+  check(`a merge over an old gate sets crossCheckFile (got ${JSON.stringify(g?.crossCheckFile)})`, re.status === 0 && g?.crossCheckFile === "design/audit/Studio_Configurations.cross.json");
+  check(`…refreshes blockers to the audit's current ids (got ${JSON.stringify(g?.blockers)})`,
     JSON.stringify(g?.blockers) === JSON.stringify(p.auditGate?.blockers) && g?.blockers.includes("catalog-covers-nothing") === true);
-  check("[F44-5] …and keeps the person-owned overridden/reason/decidedBy/decidedAt/verdict as they were",
+  check("…and keeps the person-owned overridden/reason/decidedBy/decidedAt/verdict as they were",
     JSON.stringify(g?.overridden) === JSON.stringify(["catalog-covers-nothing#0"]) && g?.reason === "decided on the old ids" && g.decidedBy === "owner" && g.decidedAt === "2026-09-23" && g.verdict === "blocked");
 }
 
-// ---------------------------------------------------------------- DT-33: --seed-from a sibling plan
-console.log("DT-33 — --seed-from fills a sibling screen's answers (same key + same value), never overwriting:");
+// ---------------------------------------------------------------- --seed-from a sibling plan
+console.log("--seed-from fills a sibling screen's answers (same key + same value), never overwriting:");
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt33-"));
   const put = (name: string, doc: unknown): string => { const f = path.join(dir, name); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
@@ -304,13 +304,13 @@ console.log("DT-33 — --seed-from fills a sibling screen's answers (same key + 
   const b = readB();
   const bt = (n: string) => b?.tokens.find((t) => t.figmaName === n);
   const bc = (n: string) => b?.components.find((c) => c.name === n);
-  check(`[DT33-1] a token with the same key AND value is seeded, marked seededFrom (exit ${rb.status}: ${rb.stderr.trim().split("\n")[0]})`,
+  check(`a token with the same key AND value is seeded, marked seededFrom (exit ${rb.status}: ${rb.stderr.trim().split("\n")[0]})`,
     rb.status === 0 && bt("Space 2")?.codeToken === "--spacing-2" && bt("Space 2")?.verdict === "exact" && bt("Space 2")?.decision === "the spacing scale" && bt("Space 2")?.seededFrom === "A.json");
-  check("[DT33-1] a token with the same key but a DIFFERENT value is left empty (no seededFrom)",
+  check("a token with the same key but a DIFFERENT value is left empty (no seededFrom)",
     !!bt("Radius") && bt("Radius")?.codeToken === null && bt("Radius")?.verdict === null && bt("Radius")?.seededFrom === undefined);
-  check("[DT33-1] components are seeded by setKey (Button) and, with no setKey, by key (Avatar)",
+  check("components are seeded by setKey (Button) and, with no setKey, by key (Avatar)",
     bc("Button")?.mapModule === "src/ui/Button.tsx" && bc("Button")?.verdict === "mapped" && bc("Button")?.seededFrom === "A.json" && bc("Avatar")?.mapModule === "src/ui/Avatar.tsx" && bc("Avatar")?.seededFrom === "A.json");
-  check("[DT33-1] stderr counts what was seeded and asks for a review", /seeded 1 token row\(s\), 2 component row\(s\) from .*A\.json — review them \(seededFrom\)/.test(rb.stderr));
+  check("stderr counts what was seeded and asks for a review", /seeded 1 token row\(s\), 2 component row\(s\) from .*A\.json — review them \(seededFrom\)/.test(rb.stderr));
   // never overwrites: B's own answer stays, and a re-run without --seed-from keeps the seeded rows (they count as filled)
   if (b) {
     const own = <T extends { seededFrom?: string }>(row: T | undefined, what: string, v: Partial<T>): void => { const r = must(row, what); Object.assign(r, v); delete r.seededFrom; };
@@ -320,22 +320,22 @@ console.log("DT-33 — --seed-from fills a sibling screen's answers (same key + 
   }
   const again = run([sB, vB, ds, "--out", planB, "--seed-from", planA], { cwd: dir });
   const b2 = readB();
-  check("[DT33-1] a filled field is never overwritten by a seed (own Button module, own Space 2 token)",
+  check("a filled field is never overwritten by a seed (own Button module, own Space 2 token)",
     again.status === 0 && !!b2 && b2.components.find((c) => c.name === "Button")?.mapModule === "src/ui/OwnButton.tsx" && b2.tokens.find((t) => t.figmaName === "Space 2")?.codeToken === "--own-space"
       && b2.tokens.find((t) => t.figmaName === "Space 2")?.seededFrom === undefined);
   const avatar = () => readB()?.components.find((c) => c.name === "Avatar");
   const plain = run([sB, vB, ds, "--out", planB], { cwd: dir });
-  check("[DT33-1] seeded rows count as filled: a re-run without --seed-from keeps them and their seededFrom",
+  check("seeded rows count as filled: a re-run without --seed-from keeps them and their seededFrom",
     plain.status === 0 && avatar()?.mapModule === "src/ui/Avatar.tsx" && avatar()?.seededFrom === "A.json");
   const bad = run([sB, vB, ds, "--seed-from", put("notplan.json", { tokens: "none" })], { cwd: dir });
-  check("[DT33-1] a --seed-from that is not a plan is refused, one line, exit 1", bad.status === 1 && /cannot read the --seed-from plan .*notplan\.json/.test(bad.stderr) && bad.stdout === "");
-  check("[DT33-1] --seed-from is in --help", /--seed-from <plan>/.test(run(["--help"]).stdout));
+  check("a --seed-from that is not a plan is refused, one line, exit 1", bad.status === 1 && /cannot read the --seed-from plan .*notplan\.json/.test(bad.stderr) && bad.stdout === "");
+  check("--seed-from is in --help", /--seed-from <plan>/.test(run(["--help"]).stdout));
 }
 
-// ---------------------------------------------------------------- F-34: anchorsSuggested
+// ---------------------------------------------------------------- anchorsSuggested
 // A screen has 12-291 anchor slots; the skeleton names the few boundaries worth filling first: the root's
 // sections, each outermost instance, and a container of >= 3 same-shaped children (a `.map()`), covering its subtree.
-console.log("F-34 — anchorsSuggested names the anchors worth filling first:");
+console.log("anchorsSuggested names the anchors worth filling first:");
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "f34-"));
   const put = (name: string, doc: unknown): string => { const f = path.join(dir, name); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
@@ -361,16 +361,16 @@ console.log("F-34 — anchorsSuggested names the anchors worth filling first:");
   // covers = the node + its visible descendants (Body: itself, a text, List 9, Short list 3, Footer 2; Page: itself, Header 3, Body 16)
   const want = ["1:1:screen:20", "2:1:section:3", "2:2:section:16", "2:3:repeat:9", "4:1:instance:1", "4:2:instance:1", "2:5:instance:2"];
   const got = sug(p34);
-  check(`[F34-1] the screen frame first, sections, the repeated list (rows not listed one by one), and the outermost instances, in tree order (got ${JSON.stringify(got)})`,
+  check(`the screen frame first, sections, the repeated list (rows not listed one by one), and the outermost instances, in tree order (got ${JSON.stringify(got)})`,
     r34.status === 0 && JSON.stringify(got) === JSON.stringify(want));
-  check("[F34-1] a list's rows are covered by it: none of 3:1..3:4 nor their texts is suggested; a hidden twin does not make a list",
+  check("a list's rows are covered by it: none of 3:1..3:4 nor their texts is suggested; a hidden twin does not make a list",
     (p34.anchorsSuggested ?? []).every((a) => !a.id.startsWith("3:")) && (p34.anchorsSuggested ?? []).some((a) => a.id === "4:1") && !(p34.anchorsSuggested ?? []).some((a) => a.id === "4:3" || a.id === "2:4"));
-  check("[F34-1] every suggestion is a real visible anchor, with its name; counts.anchors is unchanged by the field",
+  check("every suggestion is a real visible anchor, with its name; counts.anchors is unchanged by the field",
     (p34.anchorsSuggested ?? []).every((a) => a.id in p34.anchors && p34.anchors[a.id]?.name === a.name) && p34.counts.anchors === Object.keys(p34.anchors).length && !("anchorsSuggested" in p34.counts));
-  check("[F34-2] stderr counts the suggested anchor roots", new RegExp(`${(p34.anchorsSuggested ?? []).length} suggested anchor root\\(s\\) \\(anchorsSuggested\\)`).test(r34.stderr));
-  check("[F34-2] --help names anchorsSuggested", /anchorsSuggested\[\]/.test(run(["--help"]).stdout + run(["--help"]).stderr));
+  check("stderr counts the suggested anchor roots", new RegExp(`${(p34.anchorsSuggested ?? []).length} suggested anchor root\\(s\\) \\(anchorsSuggested\\)`).test(r34.stderr));
+  check("--help names anchorsSuggested", /anchorsSuggested\[\]/.test(run(["--help"]).stdout + run(["--help"]).stderr));
 
-  // M-3 (review 1): childless leaves have no shape to repeat, a list's shape must be the majority of its children,
+  // childless leaves have no shape to repeat, a list's shape must be the majority of its children,
   // and the children of a list that are not its rows are still suggested.
   const leaf = (id: string, name: string): NodeInput => ({ id, type: "TEXT", name, text: name });
   const row = (id: string): NodeInput => ({ id, type: "FRAME", name: "row", children: [{ id: id + "0", type: "FRAME", name: "cell" }, { id: id + "1", type: "FRAME", name: "cell" }] });
@@ -385,15 +385,15 @@ console.log("F-34 — anchorsSuggested names the anchors worth filling first:");
   ] }] }], { screen: "Sample" });
   const pm3 = planOf(run([put("M3.json", m3), put("M3.vars.json", { collections: [], variables: [] }), ds], { cwd: dir }).stdout);
   const why = (id: string): string | undefined => (pm3.anchorsSuggested ?? []).find((a) => a.id === id)?.why;
-  check("[F34-1 / M-3] three TEXT siblings are no list: 'Intro' is not a repeat and its Form instance is suggested", why("5:2") === undefined && why("5:6") === "instance");
-  check("[F34-1 / M-3] a list with a search bar above its rows: the list is a repeat, the search bar instance is still suggested, the rows are not",
+  check("three TEXT siblings are no list: 'Intro' is not a repeat and its Form instance is suggested", why("5:2") === undefined && why("5:6") === "instance");
+  check("a list with a search bar above its rows: the list is a repeat, the search bar instance is still suggested, the rows are not",
     why("6:1") === "repeat" && why("6:2") === "instance" && !["6:4", "6:5", "6:6"].some((id) => why(id) !== undefined));
-  check("[F34-1 / M-3] three same rows among seven children are no majority → no repeat; its instances are suggested one by one",
+  check("three same rows among seven children are no majority → no repeat; its instances are suggested one by one",
     why("7:1") === undefined && ["7:5", "7:6", "7:7", "7:8"].every((id) => why(id) === "instance"));
-  check("[F34-1 / M-3] a row variant that keeps the rows' layer name is a row: the table is a repeat and nothing inside its five rows is suggested",
+  check("a row variant that keeps the rows' layer name is a row: the table is a repeat and nothing inside its five rows is suggested",
     why("8:1") === "repeat" && !(pm3.anchorsSuggested ?? []).some((a) => /^8:[5-9]/.test(a.id)) && why("8:2") === undefined);
 
-  // review 18 (group 19): full coverage, divided lists, the screen frame, nested instances, empty and INSTANCE roots.
+  // full coverage, divided lists, the screen frame, nested instances, empty and INSTANCE roots.
   const plan = (name: string, nodes: NodeInput[]) => {
     const r = run([put(name + ".json", screenExport(nodes, { screen: "Sample" })), put(name + ".vars.json", { collections: [], variables: [] }), ds], { cwd: dir });
     return { status: r.status, plan: r.status === 0 ? planOf(r.stdout) : null };
@@ -415,22 +415,22 @@ console.log("F-34 — anchorsSuggested names the anchors worth filling first:");
     text("3:2"), inst("4:1", "k-row", [text("4:10")]), line("5:1"), inst("4:2", "k-row", [text("4:20")]), line("5:2"),
     inst("4:3", "k-row", [text("4:30")]), line("5:3"), inst("4:4", "k-row", [text("4:40")])] }]));
   const gotDivided = divided.plan ? sug(divided.plan) : null;
-  check(`[R18-MED1] a list divided by LINEs under a title is ONE repeat, not one instance per row (got ${JSON.stringify(gotDivided)})`,
+  check(`a list divided by LINEs under a title is ONE repeat, not one instance per row (got ${JSON.stringify(gotDivided)})`,
     JSON.stringify(gotDivided) === JSON.stringify(["1:1:screen:15", "2:1:section:14", "3:1:repeat:13"]));
   // divider INSTANCEs between the rows and a shaped FRAME heading: the dividers ride along with the rows and do not vote
   const dividedI = plan("DividedI", body([{ id: "3:1", type: "FRAME", name: "List", children: [
     { id: "3:2", type: "FRAME", name: "Heading", children: [text("3:3"), text("3:4")] }, inst("4:1", "k-row"), divider("5:1"), inst("4:2", "k-row"), divider("5:2"),
     inst("4:3", "k-row"), divider("5:3"), inst("4:4", "k-row")] }]));
   const gotDividedI = dividedI.plan ? sug(dividedI.plan) : null;
-  check(`[R18-MED1] a list divided by Divider INSTANCEs is ONE repeat; neither a row nor a divider is suggested (got ${JSON.stringify(gotDividedI)})`,
+  check(`a list divided by Divider INSTANCEs is ONE repeat; neither a row nor a divider is suggested (got ${JSON.stringify(gotDividedI)})`,
     JSON.stringify(gotDividedI) === JSON.stringify(["1:1:screen:13", "2:1:section:12", "3:1:repeat:11"]));
 
-  // review-19 MED-2: a form — three text fields with a checkbox, a select and a button between/after them — is no list:
+  // A form — three text fields with a checkbox, a select and a button between/after them — is no list:
   // shaped children between rows are separators only when they share one shape and fill every gap
   const form = plan("Form", body([{ id: "3:1", type: "FRAME", name: "Fields", children: [
     inst("4:1", "k-field"), inst("4:2", "k-check"), inst("4:3", "k-field"), inst("4:4", "k-select"), inst("4:5", "k-field"), inst("4:6", "k-button")] }]));
   const gotForm = form.plan ? sug(form.plan).map((x) => x.split(":").slice(0, 3).join(":")) : null;
-  check(`[R19-MED2] a form's mixed fields are not row separators: no repeat, every field instance suggested (got ${JSON.stringify(gotForm)})`,
+  check(`a form's mixed fields are not row separators: no repeat, every field instance suggested (got ${JSON.stringify(gotForm)})`,
     !!gotForm && !gotForm.includes("3:1:repeat") && ["4:1", "4:2", "4:3", "4:4", "4:5", "4:6"].every((id) => gotForm.includes(`${id}:instance`)));
 
   // review-19 r2 LOW: alternating pairs [Q, A, Q, A, Q, A] are pairs — the A after the last Q is not in a gap, so no A
@@ -438,33 +438,33 @@ console.log("F-34 — anchorsSuggested names the anchors worth filling first:");
   const qa = plan("Pairs", body([{ id: "3:1", type: "FRAME", name: "Faq", children: [
     inst("4:1", "k-q"), inst("4:2", "k-a"), inst("4:3", "k-q"), inst("4:4", "k-a"), inst("4:5", "k-q"), inst("4:6", "k-a")] }]));
   const gotQa = qa.plan ? sug(qa.plan).map((x) => x.split(":").slice(0, 3).join(":")) : null;
-  check(`[R19-r2] alternating Q/A pairs are no repeat with separators: every Q and A instance suggested (got ${JSON.stringify(gotQa)})`,
+  check(`alternating Q/A pairs are no repeat with separators: every Q and A instance suggested (got ${JSON.stringify(gotQa)})`,
     !!gotQa && !gotQa.includes("3:1:repeat") && ["4:1", "4:2", "4:3", "4:4", "4:5", "4:6"].every((id) => gotQa.includes(`${id}:instance`)));
 
-  check("[R18-MED2] the screen frame is suggested first, as \"screen\", covering every visible node",
+  check("the screen frame is suggested first, as \"screen\", covering every visible node",
     [p34, pm3, divided.plan, dividedI.plan].every((p) => !!p && p.anchorsSuggested?.[0]?.why === "screen" && p.anchorsSuggested[0].id === "1:1" && p.anchorsSuggested[0].covers === Object.keys(p.anchors).length));
-  check(`[R18-MED2] every visible anchor is a suggestion or under one, the root included (uncovered: ${JSON.stringify([p34, pm3, divided.plan, dividedI.plan].map(uncovered))})`,
+  check(`every visible anchor is a suggestion or under one, the root included (uncovered: ${JSON.stringify([p34, pm3, divided.plan, dividedI.plan].map(uncovered))})`,
     [p34, pm3, divided.plan, dividedI.plan].every((p) => uncovered(p).length === 0));
 
   // a section instance holding a nested instance and a 3-row list: its internals belong to the component
   const nested = plan("Nested", body([inst("6:1", "k-card", [inst("6:2", "k-avatar"),
     { id: "6:3", type: "FRAME", name: "Items", children: ["6:4", "6:5", "6:6"].map((id): NodeInput => ({ id, type: "FRAME", name: "item", children: [text(id + "0"), text(id + "1")] })) }])]));
   const gotNested = nested.plan ? sug(nested.plan) : null;
-  check(`[R18-MED4] an outermost instance covers its nested instance and inner list; neither is suggested (got ${JSON.stringify(gotNested)})`,
+  check(`an outermost instance covers its nested instance and inner list; neither is suggested (got ${JSON.stringify(gotNested)})`,
     JSON.stringify(gotNested) === JSON.stringify(["1:1:screen:14", "2:1:section:13", "6:1:instance:12"]) && uncovered(nested.plan).length === 0);
   // a root whose only child is hidden: just the frame, exit 0
   const empty = plan("Empty", [{ id: "1:1", type: "FRAME", name: "Page", children: [{ id: "2:1", type: "FRAME", name: "Gone", hidden: true, children: [text("2:2")] }] }]);
-  check(`[R18-MED4] a root with only hidden children: exit 0, the frame alone is suggested (got ${JSON.stringify(empty.plan && sug(empty.plan))})`,
+  check(`a root with only hidden children: exit 0, the frame alone is suggested (got ${JSON.stringify(empty.plan && sug(empty.plan))})`,
     empty.status === 0 && JSON.stringify(empty.plan && sug(empty.plan)) === JSON.stringify(["1:1:screen:1"]));
-  // LOW-1: a screen frame that is a template INSTANCE: its internals are the component's, not sections
+  // a screen frame that is a template INSTANCE: its internals are the component's, not sections
   const tpl = plan("Template", [inst("1:1", "k-tpl", [inst("7:1", "k-nav", [text("7:2")]), { id: "7:3", type: "FRAME", name: "Slot", children: [inst("7:4", "k-btn")] }])]);
-  check(`[R18-LOW1] a screen frame that is an INSTANCE is the only suggestion (got ${JSON.stringify(tpl.plan && sug(tpl.plan))})`,
+  check(`a screen frame that is an INSTANCE is the only suggestion (got ${JSON.stringify(tpl.plan && sug(tpl.plan))})`,
     tpl.status === 0 && JSON.stringify(tpl.plan && sug(tpl.plan)) === JSON.stringify(["1:1:screen:5"]));
   // the real export: the frame, its two sections, the outermost instances and one repeated list (7 before the frame was added)
   const real = planOf(r.stdout).anchorsSuggested ?? [];
-  check(`[R18-MED4] the real fixture's suggestions are pinned: 8, the frame first and every visible anchor covered (got ${real.length})`,
+  check(`the real fixture's suggestions are pinned: 8, the frame first and every visible anchor covered (got ${real.length})`,
     real.length === 8 && real[0]?.why === "screen" && real[0].id === planOf(r.stdout).nodeId && uncovered(planOf(r.stdout)).length === 0);
-  check("[R18-LOW7] a plan's anchorsSuggested must be an array of objects (parsePlan names it)",
+  check("a plan's anchorsSuggested must be an array of objects (parsePlan names it)",
     !isPlan({ anchorsSuggested: {} }) && !isPlan({ anchorsSuggested: ["1:1"] }) && isPlan({ anchorsSuggested: [] }));
 
   // merge: skeleton-owned, so it is REFRESHED (a stale list is replaced), while a filled mapModule survives
@@ -473,21 +473,21 @@ console.log("F-34 — anchorsSuggested names the anchors worth filling first:");
   fs.writeFileSync(planFile, JSON.stringify(stale, null, 2));
   const m34 = run([sf, vf, ds, "--out", planFile], { cwd: dir });
   const after = read(planFile, isSkeletonPlan);
-  check("[F34-3] a merge refreshes anchorsSuggested (the stale 9:9 is gone, the current list is back) and keeps the filled mapModule",
+  check("a merge refreshes anchorsSuggested (the stale 9:9 is gone, the current list is back) and keeps the filled mapModule",
     m34.status === 0 && JSON.stringify(sug(after)) === JSON.stringify(got) && after.anchors["2:1"]?.mapModule === "src/Header.tsx");
 }
 
-// ---------------------------------------------------------------- DT-27: one name rule (shared fixture with cross-check)
+// ---------------------------------------------------------------- one name rule (shared fixture with cross-check)
 // test/fixtures/g14/dt27/ (cross-check.test.ts asserts the same verdicts on its coverage entries): the plan's
 // components[].catalog must say what component-match's nameVerdict says — `by:"ambiguous"` (never a match,
 // with the candidates) for a different-signatures tie. Before: Badge was written as a name match.
-console.log("DT-27 — plan-skeleton's catalog follows the one name rule (nameVerdict):");
+console.log("plan-skeleton's catalog follows the one name rule (nameVerdict):");
 {
   const DT27 = path.join(import.meta.dirname, "fixtures", "g14", "dt27");
   type Expected = { verdicts: Record<string, "matched" | "ambiguous" | "unmatched"> };
   const isExpected = (x: unknown): x is Expected => isJsonObject(x) && isJsonObject(x.verdicts) && Object.values(x.verdicts).every((v) => v === "matched" || v === "ambiguous" || v === "unmatched");
   const have = fs.existsSync(path.join(DT27, "expected.json"));
-  check("[DT27-1] the shared fixture test/fixtures/g14/dt27/ is there", have);
+  check("the shared fixture test/fixtures/g14/dt27/ is there", have);
   if (have) {
     const expected = read(path.join(DT27, "expected.json"), isExpected);
     const r27 = run([path.join(DT27, "Screen__5_6.json"), path.join(DT27, "Screen__5_6.vars.json"), path.join(DT27, "design-system")], { cwd: DT27 });
@@ -498,10 +498,10 @@ console.log("DT-27 — plan-skeleton's catalog follows the one name rule (nameVe
       return !c.catalog ? "unmatched" : c.catalog.by === "ambiguous" ? "ambiguous" : "matched";
     };
     const got = Object.fromEntries(Object.keys(expected.verdicts).map((n) => [n, verdictOf(n)]));
-    check(`[DT27-1] one verdict per name, the same as cross-check's (want ${JSON.stringify(expected.verdicts)}, got ${JSON.stringify(got)})`,
+    check(`one verdict per name, the same as cross-check's (want ${JSON.stringify(expected.verdicts)}, got ${JSON.stringify(got)})`,
       Object.keys(expected.verdicts).length === 3 && JSON.stringify(got) === JSON.stringify(expected.verdicts));
     const badge = p27?.components.find((x) => x.name === "Badge")?.catalog;
-    check("[DT27-1] the ambiguous row lists its candidates (id/key/name, catalog order) and has no name of its own",
+    check("the ambiguous row lists its candidates (id/key/name, catalog order) and has no name of its own",
       !!badge && badge.by === "ambiguous" && JSON.stringify(badge.candidates) === JSON.stringify([{ id: "12:1", key: "acme-badge-a", name: "Badge" }, { id: "12:2", key: "acme-badge-b", name: "Badge" }]) && !("name" in badge));
   }
 }

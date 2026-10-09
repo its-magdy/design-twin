@@ -1,5 +1,4 @@
-// Group 9 — the deviation registry, waivers and grouping (DT-28, F-60, F-61, F-76, F-77, F-103, F-104; owner
-// decisions D5, D20–D23). Expectations come from the real `buildExpectation` over a plugin-shaped screen export
+// the deviation registry, waivers and grouping. Expectations come from the real `buildExpectation` over a plugin-shaped screen export
 // (test/fixtures.ts, invented names); plans have the real Plan shape (design-to-code/types.ts). The last block
 // runs the CLI (--expect / --compare / --accept) in a temp project.
 // Run with:  node test/verify-waivers.test.ts
@@ -68,7 +67,7 @@ function echo(spec: VerifySpec): MeasuredNode {
 }
 type Over = Record<string, MeasuredStyles | null>; // null = not measured
 const VIEWPORT: ProbeFrame = { nodeId: "1:1", selector: "body", via: "viewport", rect: { x: 0, y: 0, w: 1280, h: 1400 } };
-// (D24/F-102: a pass needs an outcome the action produces and no navigation during it)
+// (a pass needs an outcome the action produces and no navigation during it)
 const works = (nodeId: string): InteractionEvidence => ({ nodeId, trigger: "on_click", ok: true, selector: `[data-dt-node="${nodeId}"]`, selectorCount: 1, outcome: "selector-appeared", navEvents: 0 });
 function measure(over: Over = {}, extra: Partial<VerifyMeasured> = {}): VerifyMeasured {
   const nodes: MeasuredNode[] = [];
@@ -93,8 +92,8 @@ safe("the echo build passes (nothing open, nothing accepted) → plain 'pass'", 
 safe("PASSING_VERDICTS: pass and pass-with-deviations pass; fail/incomplete do not", () =>
   isPassingVerdict("pass") && isPassingVerdict("pass-with-deviations") && !isPassingVerdict("fail") && !isPassingVerdict("incomplete") && !isPassingVerdict(undefined));
 
-// ---------------------------------------------------------------- DT-28 / D5 / D21 waivers
-console.log("DT-28 / D5 — a waiver accepts one delta, bound to export + designed + built:");
+// ---------------------------------------------------------------- waivers
+console.log("a waiver accepts one delta, bound to export + designed + built:");
 {
   const m = measure({ "2:1": { fontSize: 16 } });
   const open = run(m);
@@ -114,7 +113,7 @@ console.log("DT-28 / D5 — a waiver accepts one delta, bound to export + design
   const within = run(measure({ "2:1": { fontSize: 16.4 } }), { waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16 })] });
   safe("built value within the field's tolerance (16 → 16.4, tol 0.5): still accepted", () => within.verdict === "pass-with-deviations");
   const reexported = run(m, { waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16, exportContentSha256: "f".repeat(64) })] });
-  safe("export content hash differs (D21: every re-export): reopened 'design re-exported', verdict fail", () =>
+  safe("export content hash differs (every re-export): reopened 'design re-exported', verdict fail", () =>
     reexported.verdict === "fail" && reexported.waivers.reopened.some((w) => /design re-exported/.test(w.why)));
   const redesigned = run(m, { waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 12, built: 16 })] });
   safe("designed value differs: reopened 'designed value changed: was 12, now 14'", () => redesigned.waivers.reopened.some((w) => /designed value changed: was 12, now 14/.test(w.why)) && redesigned.verdict === "fail");
@@ -127,29 +126,29 @@ console.log("DT-28 / D5 — a waiver accepts one delta, bound to export + design
 {
   // never waivable: an absent component, a failed interaction
   const absent = run(measure(), { components: [{ setName: "Order Row", present: false }], waivers: [waiver({ nodeId: "I2:71;5:1", field: "presence", designed: true, built: false })] });
-  safe("[D5] a waiver on an ABSENT component is ignored (unused, says why); verdict fail", () =>
+  safe("a waiver on an ABSENT component is ignored (unused, says why); verdict fail", () =>
     absent.verdict === "fail" && absent.waivers.applied === 0 && absent.waivers.unused.some((w) => w.nodeId === "I2:71;5:1" && /never waivable/.test(w.why || "")));
   const failedM = measure({}, { interactions: [works("2:4"), { nodeId: "2:5", trigger: "on_click", ok: false, selector: '[data-dt-node="2:5"]', selectorCount: 1, detail: "nothing happened" }] });
   const failed = run(failedM, { waivers: [waiver({ nodeId: "2:5", field: "interaction", designed: "navigate", built: "nothing" })] });
-  safe("[D5] a waiver on a FAILED interaction is ignored; it stays fail", () =>
+  safe("a waiver on a FAILED interaction is ignored; it stays fail", () =>
     failed.verdict === "fail" && ia(failed, "2:5")?.result === "fail" && failed.waivers.unused.some((w) => w.nodeId === "2:5" && /failed interaction/.test(w.why || "")));
 
-  // D20 descopes
+  // descopes
   const descope = (d: Partial<PlanDescope> = {}): PlanDescope => ({ nodeId: "2:5", trigger: "on_click", exportContentSha256: SHA, reason: "details page ships next release", decidedBy: "Sam Doe", decidedAt: "2026-09-30T02:00:00Z", ...d });
   const ds = run(failedM, { descopes: [descope()] });
-  safe("[D20] a descoped interaction is removed before grading → result 'descoped', verdict pass-with-deviations", () =>
+  safe("a descoped interaction is removed before grading → result 'descoped', verdict pass-with-deviations", () =>
     ia(ds, "2:5")?.result === "descoped" && ds.verdict === "pass-with-deviations" && ds.coverage.interactionsDescoped === 1 && ds.coverage.interactionsFailed === 0);
-  safe("[D20] …headline counts it ('1 descoped')", () => /1 descoped/.test(ds.headline));
+  safe("…headline counts it ('1 descoped')", () => /1 descoped/.test(ds.headline));
   const dsWorks = run(measure(), { descopes: [descope()] });
-  safe("[D20] descoped but the probe drove it fine → still descoped, note 'descoped but works'", () => ia(dsWorks, "2:5")?.result === "descoped" && /descoped but works/.test(ia(dsWorks, "2:5")?.note || ""));
+  safe("descoped but the probe drove it fine → still descoped, note 'descoped but works'", () => ia(dsWorks, "2:5")?.result === "descoped" && /descoped but works/.test(ia(dsWorks, "2:5")?.note || ""));
   const dsStale = run(failedM, { descopes: [descope({ exportContentSha256: "0".repeat(64) })] });
-  safe("[D20] a descope from an older export is not applied (reopened) → fail", () => dsStale.verdict === "fail" && dsStale.waivers.reopened.some((w) => w.nodeId === "2:5"));
+  safe("a descope from an older export is not applied (reopened) → fail", () => dsStale.verdict === "fail" && dsStale.waivers.reopened.some((w) => w.nodeId === "2:5"));
   const dsDest = run(failedM, { descopes: [descope({ destinationId: "7:7" })] });
-  safe("[D20] a descope naming another destination does not match", () => ia(dsDest, "2:5")?.result === "fail");
+  safe("a descope naming another destination does not match", () => ia(dsDest, "2:5")?.result === "fail");
 }
 
-// ---------------------------------------------------------------- F-60 / D22 undesigned destinations
-console.log("F-60 / D22 — an interaction whose destination was never exported:");
+// ---------------------------------------------------------------- undesigned destinations
+console.log("an interaction whose destination was never exported:");
 {
   const i4 = exp.interactions.find((i) => i.nodeId === "2:4"), i5 = exp.interactions.find((i) => i.nodeId === "2:5");
   safe("--expect: 9:9 is only in ANOTHER file's index rows → destinationExported:false", () => i4?.destinationExported === false);
@@ -157,106 +156,106 @@ console.log("F-60 / D22 — an interaction whose destination was never exported:
   const noIndex = buildExpectation([doc()]);
   safe("--expect without an index: nothing is marked (unknown, graded as before)", () => noIndex.interactions.every((i) => i.destinationExported === undefined));
   const noFile = buildExpectation([doc("")], INDEX);
-  // review M1: the screen names no file, but its own index row (id AND name) names Sample Kit → it is that file's screen
+  // the screen names no file, but its own index row (id AND name) names Sample Kit → it is that file's screen
   safe("--expect when the screen names no source file: its own index row names the file → 9:9 (only another file's) marked, 1:50 not", () =>
     noFile.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false && noFile.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined);
   // the field tests' real shape: an export written before the bridge stamped sourceFile — neither the screen nor
   // any index row names a file, so the index is one (unnamed) file and its ids can be looked up
   const unnamed = buildExpectation([{ doc: screenExport([SCREEN], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders" }), label: "Orders" }],
     { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json" }, { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" }] } });
-  // review H2: the screen names its file, the index rows do not (mixed) → never decided
+  // the screen names its file, the index rows do not (mixed) → never decided
   const mixed = buildExpectation([doc()], { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json" }, { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" }] } });
-  // L-3 (live run): an unnamed row may be this file's, so 1:50 there is never marked; 9:9, in no row at all, was never exported
-  safe("[review H2 / L-3] screen names its file, index rows name none → 1:50 (in a row) not marked, 9:9 (in none) marked", () =>
+  // an unnamed row may be this file's, so 1:50 there is never marked; 9:9, in no row at all, was never exported
+  safe("screen names its file, index rows name none → 1:50 (in a row) not marked, 9:9 (in none) marked", () =>
     mixed.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined && mixed.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false);
-  // review H2: a merged index — an older page walk wrote rows with no sourceFile, a newer pull one with it
+  // a merged index — an older page walk wrote rows with no sourceFile, a newer pull one with it
   const merged = buildExpectation([doc()], { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" }, { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" }] } });
-  safe("[review H2 / L-3] some index rows name a file, some do not → 1:50 (unnamed row, may be this file's) not marked, 9:9 (in no row) marked", () =>
+  safe("some index rows name a file, some do not → 1:50 (unnamed row, may be this file's) not marked, 9:9 (in no row) marked", () =>
     merged.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined && merged.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false);
-  // L-3, the live shape: one screen re-pulled by the current bridge (its row names the file), the rest of the index from an
+  // the live shape: one screen re-pulled by the current bridge (its row names the file), the rest of the index from an
   // older walk (no sourceFile), and 9:9 exported only from ANOTHER named file — still never joined across files
   const repulled = buildExpectation([doc()], { index: { layers: [
     { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
     { id: "1:60", name: "Order List", file: "pages/Main/Order_List__1_60.json" },
     { id: "9:9", name: "Export Dialog", file: "pages/Other/Export_Dialog__9_9.json", sourceFile: "Other Kit" },
   ] } });
-  safe("[L-3] partly re-pulled index: 9:9 only in another named file's row → marked destinationExported:false; 1:50 (in no row) marked too", () =>
+  safe("partly re-pulled index: 9:9 only in another named file's row → marked destinationExported:false; 1:50 (in no row) marked too", () =>
     repulled.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false && repulled.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === false);
   const repulledHas = buildExpectation([doc()], { index: { layers: [
     { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
     { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" },
   ] } });
-  safe("[L-3] partly re-pulled index: 1:50 in an unnamed (older) row → not marked", () => repulledHas.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined);
-  // review M1: an UNNAMED screen against rows of another file only — a row with the same bare id (1:1 recurs across
+  safe("partly re-pulled index: 1:50 in an unnamed (older) row → not marked", () => repulledHas.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined);
+  // an UNNAMED screen against rows of another file only — a row with the same bare id (1:1 recurs across
   // files) but another name is not this screen, so nothing is decided (never join ids across files)
   const unnamedVsOther = buildExpectation([doc("")], { index: { layers: [
     { id: "1:1", name: "Settings", file: "pages/Main/Settings__1_1.json", sourceFile: "Other Kit" },
     { id: "5:5", name: "Profile", file: "pages/Main/Profile__5_5.json", sourceFile: "Other Kit" },
   ] } });
-  safe("[review M1] unnamed screen, index rows only of another file (same id 1:1, other name) → nothing marked", () => unnamedVsOther.interactions.every((i) => i.destinationExported === undefined));
+  safe("unnamed screen, index rows only of another file (same id 1:1, other name) → nothing marked", () => unnamedVsOther.interactions.every((i) => i.destinationExported === undefined));
   // …but an unnamed screen whose own row (id AND name) names one file takes that file: its rows + unnamed ones
   const unnamedOwnRow = buildExpectation([doc("")], { index: { layers: [
     { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
     { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json", sourceFile: "Sample Kit" },
     { id: "9:9", name: "Export Dialog", file: "pages/Other/Export_Dialog__9_9.json", sourceFile: "Other Kit" },
   ] } });
-  safe("[review M1] unnamed screen whose own row names Sample Kit → 9:9 (Other Kit only) marked, 1:50 not", () =>
+  safe("unnamed screen whose own row names Sample Kit → 9:9 (Other Kit only) marked, 1:50 not", () =>
     unnamedOwnRow.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false && unnamedOwnRow.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined);
   const unnamedTwoFiles = buildExpectation([doc("")], { index: { layers: [
     { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
     { id: "1:1", name: "Orders", file: "pages/Copy/Orders__1_1.json", sourceFile: "Sample Kit Copy" },
   ] } });
-  safe("[review M1] unnamed screen whose own row appears under two files → nothing marked", () => unnamedTwoFiles.interactions.every((i) => i.destinationExported === undefined));
-  // review L1: a destination passed as an UNNAMED input (may be this file's) is not "never exported"
+  safe("unnamed screen whose own row appears under two files → nothing marked", () => unnamedTwoFiles.interactions.every((i) => i.destinationExported === undefined));
+  // a destination passed as an UNNAMED input (may be this file's) is not "never exported"
   const DETAILS: NodeInput = { type: "FRAME", id: "1:50", name: "Order Details", box: { x: 0, y: 0, w: 1280, h: 800 }, children: [] };
   const withUnnamedInput = buildExpectation([doc(), { doc: screenExport([DETAILS], { exportedAt: "2026-09-30T00:00:00Z", screen: "Order Details" }), label: "Order Details" }],
     { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" }] } });
-  safe("[review L1] 1:50 given as an unnamed input → not marked; 9:9 still marked", () =>
+  safe("1:50 given as an unnamed input → not marked; 9:9 still marked", () =>
     withUnnamedInput.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined && withUnnamedInput.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false);
-  // D28 (live L-4): a change_to's destination is a component variant → never "undesigned"; a swap (overlay) keeps the rule
+  // a change_to's destination is a component variant → never "undesigned"; a swap (overlay) keeps the rule
   const VARIANTS: NodeInput = { type: "FRAME", id: "1:1", name: "Orders", box: { x: 0, y: 0, w: 1280, h: 800 }, children: [
     { type: "FRAME", id: "3:1", name: "Button", fills: [{ type: "solid", color: "#0000ff" }], reactions: [{ trigger: "on_hover", actions: [{ type: "NODE", navigation: "change_to", destinationId: "88:1" }] }] },
     { type: "FRAME", id: "3:2", name: "Menu", fills: [{ type: "solid", color: "#00aa00" }], reactions: [{ trigger: "on_click", actions: [{ type: "NODE", navigation: "swap", destinationId: "88:2" }] }] },
   ] };
   const variantsExp = buildExpectation([{ doc: screenExport([VARIANTS], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders", nodeId: "1:1", sourceFile: "Sample Kit" }), label: "Orders" }],
     { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" }] } });
-  safe("[D28] change_to to an unexported variant → not marked (a variant is a drawn state, not a screen)", () => {
+  safe("change_to to an unexported variant → not marked (a variant is a drawn state, not a screen)", () => {
     const r = variantsExp.interactions.find((i) => i.nodeId === "3:1"); return !!r && r.action === "change_to" && r.destinationExported === undefined; });
-  safe("[D28] swap (overlay) to an unexported frame → still marked destinationExported:false", () => variantsExp.interactions.find((i) => i.nodeId === "3:2")?.destinationExported === false);
+  safe("swap (overlay) to an unexported frame → still marked destinationExported:false", () => variantsExp.interactions.find((i) => i.nodeId === "3:2")?.destinationExported === false);
   const variantsRep = compare(variantsExp, { nodes: [], interactions: [] });
-  safe("[D28] …and undriven, the change_to is graded not-probed (blocks a pass), the swap undesigned", () =>
+  safe("…and undriven, the change_to is graded not-probed (blocks a pass), the swap undesigned", () =>
     ia(variantsRep, "3:1")?.result === "not-probed" && ia(variantsRep, "3:2")?.result === "undesigned" && variantsRep.verdict !== "pass");
 
-  // review M-a: a multi-frame selection pull is indexed under its FIRST frame's id with the title "selection"
+  // a multi-frame selection pull is indexed under its FIRST frame's id with the title "selection"
   const CART: NodeInput = { type: "FRAME", id: "1:2", name: "Cart", box: { x: 0, y: 0, w: 1280, h: 800 }, children: [] };
   const selection = buildExpectation([{ doc: screenExport([SCREEN, CART], { exportedAt: "2026-09-30T00:00:00Z", screen: "selection", nodeId: "1:1", sourceFile: "Sample Kit" }), label: "selection" }],
     { index: { layers: [{ id: "1:1", name: "selection", file: "pages/Main/selection__1_1.json", sourceFile: "Sample Kit" }, { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json", sourceFile: "Sample Kit" }] } });
-  safe("[review M-a] multi-frame selection pull (row named 'selection') → 9:9 marked, 1:50 not", () =>
+  safe("multi-frame selection pull (row named 'selection') → 9:9 marked, 1:50 not", () =>
     selection.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false && selection.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined);
-  // review LOW-1: the title is accepted only for the frame the pull is filed under (nodeId), never for its other frames
+  // the title is accepted only for the frame the pull is filed under (nodeId), never for its other frames
   const selFiledElsewhere = buildExpectation([{ doc: screenExport([SCREEN, CART], { exportedAt: "2026-09-30T00:00:00Z", screen: "selection", nodeId: "1:2", sourceFile: "Sample Kit" }), label: "selection" }],
     { index: { layers: [{ id: "1:1", name: "selection", file: "pages/Main/selection__1_1.json", sourceFile: "Sample Kit" }] } });
-  safe("[review LOW-1] a 'selection' row on a frame the pull is NOT filed under does not cover it → nothing marked", () => selFiledElsewhere.interactions.every((i) => i.destinationExported === undefined));
-  // review L-a: a named screen whose only id+name row belongs to ANOTHER file (a duplicated file) is not covered
+  safe("a 'selection' row on a frame the pull is NOT filed under does not cover it → nothing marked", () => selFiledElsewhere.interactions.every((i) => i.destinationExported === undefined));
+  // a named screen whose only id+name row belongs to ANOTHER file (a duplicated file) is not covered
   const otherFileRow = buildExpectation([doc()], { index: { layers: [
     { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit Copy" },
     { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json", sourceFile: "Sample Kit Copy" },
   ] } });
-  safe("[review L-a] named screen, its id+name row is another file's → nothing marked", () => otherFileRow.interactions.every((i) => i.destinationExported === undefined));
-  // review L-b: a named screen whose own-id row carries another name is not this screen
+  safe("named screen, its id+name row is another file's → nothing marked", () => otherFileRow.interactions.every((i) => i.destinationExported === undefined));
+  // a named screen whose own-id row carries another name is not this screen
   const renamedRow = buildExpectation([doc()], { index: { layers: [{ id: "1:1", name: "Settings", file: "pages/Main/Settings__1_1.json", sourceFile: "Sample Kit" }] } });
-  safe("[review L-b] named screen, row with its id but another name → nothing marked", () => renamedRow.interactions.every((i) => i.destinationExported === undefined));
-  // review L-c: an unnamed screen whose own rows are one unnamed + one named (a duplicate file) → every row is a candidate
+  safe("named screen, row with its id but another name → nothing marked", () => renamedRow.interactions.every((i) => i.destinationExported === undefined));
+  // an unnamed screen whose own rows are one unnamed + one named (a duplicate file) → every row is a candidate
   const dupFile = buildExpectation([doc("")], { index: { layers: [
     { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json" },
     { id: "1:1", name: "Orders", file: "pages/Copy/Orders__1_1.json", sourceFile: "Sample Kit Copy" },
     { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json", sourceFile: "Sample Kit" },
   ] } });
-  safe("[review L-c] unnamed screen, own rows unnamed + another file's → 1:50 (Sample Kit row) not marked; 9:9 (no row) marked", () =>
+  safe("unnamed screen, own rows unnamed + another file's → 1:50 (Sample Kit row) not marked; 9:9 (no row) marked", () =>
     dupFile.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined && dupFile.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false);
-  // review: an index that covers only ANOTHER file says nothing about this screen's destinations
+  // an index that covers only ANOTHER file says nothing about this screen's destinations
   const other = buildExpectation([doc()], { index: { layers: [{ id: "9:9", name: "Export Dialog", file: "pages/Other/Export_Dialog__9_9.json", sourceFile: "Other Kit" }] } });
-  safe("[review] an index with no row of this screen's file → nothing marked", () => other.interactions.every((i) => i.destinationExported === undefined));
+  safe("an index with no row of this screen's file → nothing marked", () => other.interactions.every((i) => i.destinationExported === undefined));
   safe("--expect: no file named anywhere (one unnamed file) → 9:9 marked destinationExported:false, 1:50 not", () =>
     unnamed.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false && unnamed.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined);
   const m = measure({}, { interactions: [{ nodeId: "2:4", trigger: "on_click", ok: false, selector: '[data-dt-node="2:4"]', selectorCount: 1, detail: "no dialog" }, works("2:5")] });
@@ -268,8 +267,8 @@ console.log("F-60 / D22 — an interaction whose destination was never exported:
   safe("compare: the probe shows it working → pass", () => ia(run(measure()), "2:4")?.result === "pass");
 }
 
-// ---------------------------------------------------------------- F-61 below the fold
-console.log("F-61 — page-root bottom overflow is 'below the fold' (medium) only when it can be:");
+// ---------------------------------------------------------------- below the fold
+console.log("page-root bottom overflow is 'below the fold' (medium) only when it can be:");
 {
   const down = { "2:2": { y: 1300 }, "2:21": { y: 1316 }, "2:22": { y: 1316 }, "2:23": { y: 1316 } };
   const vp = run(measure(down, { frame: VIEWPORT }));
@@ -294,13 +293,13 @@ console.log("F-61 — page-root bottom overflow is 'below the fold' (medium) onl
   // a waiver on a placement delta honours tolerance through its numbers
   const pw = waiver({ nodeId: "2:2", field: "placement", designed: "inside the frame", built: String(p?.actual) });
   const slight = run(measure({ ...down, "2:2": { y: 1301 } }, { frame: VIEWPORT }), { waivers: [pw] });
-  safe("[F-61/D5] placement waiver: the footer 1px lower is still accepted (position tolerance 2)", () => !!delta(slight, "2:2", "placement")?.accepted);
+  safe("placement waiver: the footer 1px lower is still accepted (position tolerance 2)", () => !!delta(slight, "2:2", "placement")?.accepted);
   const far = run(measure({ ...down, "2:2": { y: 1340 } }, { frame: VIEWPORT }), { waivers: [pw] });
-  safe("[F-61/D5] …40px lower reopens it (built value moved)", () => !delta(far, "2:2", "placement")?.accepted && far.waivers.reopened.some((w) => /built value moved/.test(w.why)));
+  safe("…40px lower reopens it (built value moved)", () => !delta(far, "2:2", "placement")?.accepted && far.waivers.reopened.some((w) => /built value moved/.test(w.why)));
 }
 
-// ---------------------------------------------------------------- F-76 grouping
-console.log("F-76 — presentational grouping keeps the counts:");
+// ---------------------------------------------------------------- grouping
+console.log("presentational grouping keeps the counts:");
 {
   const down = { "2:2": { y: 1300 }, "2:21": { y: 1316 }, "2:22": { y: 1316 }, "2:23": { y: 1316 } };
   const r = run(measure(down));
@@ -314,8 +313,8 @@ console.log("F-76 — presentational grouping keeps the counts:");
   safe("the same field/expected/actual on 2 nodes → one group; still 2 high", () => bgs.length === 2 && !!bgs[0]?.group && bgs[0]?.group === bgs[1]?.group && same.summary.high === 2 && /2 high \(1 cause\)/.test(same.headline));
 }
 
-// ---------------------------------------------------------------- F-77 foldedInto
-console.log("F-77 — a plan anchor folds a layout-only wrapper into a measured ancestor:");
+// ---------------------------------------------------------------- foldedInto
+console.log("a plan anchor folds a layout-only wrapper into a measured ancestor:");
 {
   const m = measure({ "2:3": null });
   const plain = run(m);
@@ -330,19 +329,19 @@ console.log("F-77 — a plan anchor folds a layout-only wrapper into a measured 
   const notAnc = run(m, { anchors: { "2:3": { foldedInto: "2:4" } } });
   safe("refused: the target is not an ancestor", () => notAnc.notMeasured.some((n) => n.nodeId === "2:3" && /2:4 is not an ancestor/.test(n.why)));
   const unmeasured = run(measure({ "2:3": null, "2:8": null }), { anchors: { "2:3": { foldedInto: "2:8" } } });
-  // review: a wrapper whose only paint is a shadow (not compared by this method) is still drawn — never folded
+  // a wrapper whose only paint is a shadow (not compared by this method) is still drawn — never folded
   const shadowed = buildExpectation([{ doc: screenExport([{ type: "FRAME", id: "1:1", name: "Orders", box: { x: 0, y: 0, w: 1280, h: 800 }, children: [
     { type: "FRAME", id: "4:1", name: "Card", fills: [{ type: "solid", color: "#ffffff" }], children: [
       { type: "FRAME", id: "4:2", name: "Lift", effects: [{ type: "drop_shadow", color: "#00000033", offset: { x: 0, y: 2 }, radius: 4 }], layout: { display: "flex", flexDirection: "column", padding: [8, 8, 8, 8] }, children: [
         { type: "TEXT", id: "4:3", name: "Label", text: "Total", font: { family: "Inter", size: 14, color: "#111111" } }] }] }] }], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders" }), label: "Orders" }]);
-  safe("[review] expectNode marks a node with a visible effect `decorated`", () => shadowed.nodes.find((n) => n.nodeId === "4:2")?.decorated === true);
+  safe("expectNode marks a node with a visible effect `decorated`", () => shadowed.nodes.find((n) => n.nodeId === "4:2")?.decorated === true);
   const sh = compare(shadowed, { nodes: [{ nodeId: "4:1", styles: { backgroundColor: "rgb(255, 255, 255)" } }, { nodeId: "4:3", styles: { text: "Total", fontSize: 14, fontFamily: "Inter", color: "rgb(17, 17, 17)" } }] }, { anchors: { "4:2": { foldedInto: "4:1" } } });
-  safe("[review] refused: a shadow-only wrapper cannot be folded (it states decorated)", () => sh.notMeasured.some((n) => n.nodeId === "4:2" && /refused: it states decorated/.test(n.why)) && sh.folded.length === 0);
+  safe("refused: a shadow-only wrapper cannot be folded (it states decorated)", () => sh.notMeasured.some((n) => n.nodeId === "4:2" && /refused: it states decorated/.test(n.why)) && sh.folded.length === 0);
   safe("refused: the ancestor was not measured", () => unmeasured.notMeasured.some((n) => n.nodeId === "2:3" && /2:8 was not measured/.test(n.why)));
 }
 
-// ---------------------------------------------------------------- F-104 repeatedText
-console.log("F-104 — repeated placeholder copy in sibling rows:");
+// ---------------------------------------------------------------- repeatedText
+console.log("repeated placeholder copy in sibling rows:");
 {
   const date = (n: number) => `I2:7${n};5:2`, act = (n: number) => `I2:7${n};5:3`;
   safe("--expect marks the 4 identical dates (and actions) in sibling rows repeatedText, one group each", () => {
@@ -357,20 +356,20 @@ console.log("F-104 — repeated placeholder copy in sibling rows:");
   safe("the build's dates differ row to row (real data) → text delta low, with a note", () =>
     [1, 2, 3, 4].every((n) => { const d = delta(r, date(n), "text"); return d?.severity === "low" && /repeated placeholder copy/.test(d.note || ""); }));
   safe("the build's action is 'Remove' in every row (uniform wrong copy) → stays high", () => [1, 2, 3, 4].every((n) => delta(r, act(n), "text")?.severity === "high"));
-  // review H1: a typo in ONE row among correct ones is a copy bug, not real data
+  // a typo in ONE row among correct ones is a copy bug, not real data
   const designed = String(exp.nodes.find((s) => s.nodeId === date(1))?.text ?? "");
   const typo: Over = {};
   [1, 2, 3].forEach((n) => { typo[date(n)] = { text: designed }; });
   typo[date(4)] = { text: designed.replace(/\d/, "9") };
-  safe("[review H1] 3 rows show the designed text, 1 a typo → the typo stays high", () => designed !== "" && delta(run(measure(typo)), date(4), "text")?.severity === "high");
+  safe("3 rows show the designed text, 1 a typo → the typo stays high", () => designed !== "" && delta(run(measure(typo)), date(4), "text")?.severity === "high");
   const two: Over = {};
   [1, 2, 3].forEach((n) => { two[date(n)] = { text: "Pending" }; });
   two[date(4)] = { text: "Pendng" };
-  safe("[review H1] one wrong label everywhere plus a typo (2 distinct values) → high", () => [1, 2, 3, 4].every((n) => delta(run(measure(two)), date(n), "text")?.severity === "high"));
-  // re-review H1: real enum data that includes the designed placeholder value is real data, not a copy bug
+  safe("one wrong label everywhere plus a typo (2 distinct values) → high", () => [1, 2, 3, 4].every((n) => delta(run(measure(two)), date(n), "text")?.severity === "high"));
+  // real enum data that includes the designed placeholder value is real data, not a copy bug
   const en: Over = {};
   en[date(1)] = { text: designed }; en[date(2)] = { text: "1 Jan, 2027" }; en[date(3)] = { text: "2 Feb, 2027" }; en[date(4)] = { text: "3 Mar, 2027" };
-  safe("[re-review H1] the designed value in 1 of 4 rows among 4 distinct values → the others are low", () => [2, 3, 4].every((n) => delta(run(measure(en)), date(n), "text")?.severity === "low"));
+  safe("the designed value in 1 of 4 rows among 4 distinct values → the others are low", () => [2, 3, 4].every((n) => delta(run(measure(en)), date(n), "text")?.severity === "low"));
   const t = run(measure({ "2:1": { text: "Order list" } }));
   safe("a non-repeated text mismatch stays high", () => delta(t, "2:1", "text")?.severity === "high");
 }
@@ -405,7 +404,7 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   const expDoc = readJsonOrNull(path.join(cwd, "design/verify/Orders.expected.json"), isVerifyExpectation);
   safe("--expect (exit 0) reads design/export/pages/index.json: 2:4 → destinationExported:false", () =>
     e.status === 0 && !!expDoc && (expDoc.interactions || []).some((i) => i.nodeId === "2:4" && i.destinationExported === false) && (expDoc.interactions || []).some((i) => i.nodeId === "2:5" && i.destinationExported === undefined));
-  // review H2: a later page walk REPLACED the root index; 9:9 was exported by an earlier walk and is listed only
+  // a later page walk REPLACED the root index; 9:9 was exported by an earlier walk and is listed only
   // in its page's own index — it must not read as "never exported"
   const walked = fs.mkdtempSync(path.join(os.tmpdir(), "verify-waivers-walk-"));
   const putW = (rel: string, v: unknown): string => { fs.mkdirSync(path.dirname(path.join(walked, rel)), { recursive: true }); fs.writeFileSync(path.join(walked, rel), JSON.stringify(v, null, 2)); return rel; };
@@ -414,10 +413,10 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   const wScreen = putW("design/export/pages/Main/Orders__1_1.json", screenExport([SCREEN], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders", sourceFile: "Sample Kit" }));
   const we = spawnSync(process.execPath, [CLI, "--expect", wScreen, "--out", "design/verify/Orders"], { encoding: "utf8", cwd: walked });
   const wDoc = readJsonOrNull(path.join(walked, "design/verify/Orders.expected.json"), isVerifyExpectation);
-  safe("[review H2] 9:9 listed only in pages/Dialogs/index.json (an earlier walk) → not marked undesigned", () =>
+  safe("9:9 listed only in pages/Dialogs/index.json (an earlier walk) → not marked undesigned", () =>
     we.status === 0 && !!wDoc && (wDoc.interactions || []).some((i) => i.nodeId === "2:4" && i.destinationExported === undefined));
   fs.rmSync(walked, { recursive: true, force: true });
-  // review M2: the root index's top-level sourceFile names its LAST walk (another file); an older unnamed row in the page's own
+  // the root index's top-level sourceFile names its LAST walk (another file); an older unnamed row in the page's own
   // index must stay a candidate (it may be this file's) — the top-level name is never applied to the merged page rows
   const m2 = fs.mkdtempSync(path.join(os.tmpdir(), "verify-waivers-m2-"));
   const putM = (rel: string, v: unknown): string => { fs.mkdirSync(path.dirname(path.join(m2, rel)), { recursive: true }); fs.writeFileSync(path.join(m2, rel), JSON.stringify(v, null, 2)); return rel; };
@@ -432,7 +431,7 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   const mScreen = putM("design/export/pages/Main/Orders__1_1.json", screenExport([SCREEN], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders", sourceFile: "Sample Kit" }));
   const me = spawnSync(process.execPath, [CLI, "--expect", mScreen, "--out", "design/verify/Orders"], { encoding: "utf8", cwd: m2 });
   const mDoc = readJsonOrNull(path.join(m2, "design/verify/Orders.expected.json"), isVerifyExpectation);
-  safe("[review M2] CLI: 1:50 in an older unnamed page-index row, root index top-level names another file → 1:50 not marked; 9:9 marked", () =>
+  safe("CLI: 1:50 in an older unnamed page-index row, root index top-level names another file → 1:50 not marked; 9:9 marked", () =>
     me.status === 0 && !!mDoc && (mDoc.interactions || []).some((i) => i.nodeId === "2:5" && i.destinationExported === undefined) && (mDoc.interactions || []).some((i) => i.nodeId === "2:4" && i.destinationExported === false));
   fs.rmSync(m2, { recursive: true, force: true });
   const expSha = (() => { try { return crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, "design/verify/Orders.expected.json"))).digest("hex"); } catch { return ""; } })();
@@ -444,7 +443,7 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   const noReason = cli("--accept", "design/verify/Orders.report.json", "--node", "2:1", "--by", "Sam Doe");
   safe("--accept without --reason → exit 2, nothing written", () => noReason.status === 2 && /--reason/.test(noReason.stderr) && !readPlan()?.waivers);
   const noField = cli("--accept", "design/verify/Orders.report.json", "--node", "2:1", "--reason", "x", "--by", "Sam Doe");
-  safe("[review] --accept --node without --field or --all-fields → exit 2, nothing written", () => noField.status === 2 && /--field "<label>" \/ --all-fields/.test(noField.stderr) && !readPlan()?.waivers);
+  safe("--accept --node without --field or --all-fields → exit 2, nothing written", () => noField.status === 2 && /--field "<label>" \/ --all-fields/.test(noField.stderr) && !readPlan()?.waivers);
   const noDelta = cli("--accept", "design/verify/Orders.report.json", "--node", "2:4", "--all-fields", "--reason", "x", "--by", "Sam Doe");
   safe("--accept on a node with no delta → refused, exit 1", () => noDelta.status === 1 && /refused {2}no delta in the report for 2:4/.test(noDelta.stderr));
   const flagOnCompare = cli("--compare", "design/verify/Orders.expected.json", "design/verify/Orders.measured.json", "--reason", "x");
@@ -461,7 +460,7 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   safe("re-run --compare → pass-with-deviations, exit 0, inputs.waivers.sha256 = waiversHash(plan)", () =>
     c2.status === 0 && r2?.verdict === "pass-with-deviations" && !!plan && r2.inputs?.waivers?.sha256 === waiversHash(plan) && /PASS-WITH-DEVIATIONS/.test(c2.stderr));
   const again = cli("--accept", "design/verify/Orders.report.json", "--node", "2:1", "--field", "font-size", "--reason", "still intended", "--by", "Sam Doe");
-  safe("[review] the plan is written by rename: no temp file is left beside it", () => !fs.readdirSync(path.join(cwd, "design/plan")).some((f) => f.endsWith(".tmp")));
+  safe("the plan is written by rename: no temp file is left beside it", () => !fs.readdirSync(path.join(cwd, "design/plan")).some((f) => f.endsWith(".tmp")));
   safe("accepting the same node + field again replaces the row (one per node + field)", () => again.status === 0 && readPlan()?.waivers?.length === 1 && readPlan()?.waivers?.[0]?.reason === "still intended");
   fs.rmSync(cwd, { recursive: true, force: true });
 }

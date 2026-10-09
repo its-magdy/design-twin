@@ -65,7 +65,7 @@ const DS_TOKENS = tokens({
   ],
 });
 const DS_COMPONENTS = catalog([
-  // DT-27: a plain COMPONENT, so an instance with no variant and a `Btn Text` prop agrees on signature (a
+  // a plain COMPONENT, so an instance with no variant and a `Btn Text` prop agrees on signature (a
   // COMPONENT_SET would need the instance to set a variant — component-match's rule, now cross-check's too)
   { name: "Button", key: "ds-btn", type: "COMPONENT", props: { "Btn Text": { type: "TEXT" } } },
   { name: "Header", key: "ds-hdr", type: "COMPONENT_SET", props: {} },
@@ -82,14 +82,14 @@ console.log("cross-check — the screen's token library vs the design system's:"
     variables: [{ name: "Text/Main", collection: "Sem", key: "screen-k1", type: "COLOR", values: { Dark: "#fff", Light: "#000" } }],
   });
   const res = crossCheck({ screens: [screen("S", [text("2:1", "Poppins", null, "Text/Main")])], variables: duplicated, tokens: DS_TOKENS });
-  // D11: a warning to CONFIRM (the default is the screen's own values), no longer a blocker.
-  ok("[tokens/D11] a screen whose collections are ALL re-keyed is a warning with a confirm question (was: a blocker)",
+  // a warning to CONFIRM (the default is the screen's own values), not a blocker.
+  ok("[tokens] a screen whose collections are ALL re-keyed is a warning with a confirm question (not a blocker)",
     sev(res, "foreign-token-library") === "warning" && /None of the screen's variable collections/.test(get(res, "foreign-token-library").confirm ?? ""));
   const partial = crossCheck({ screens: [screen("S", [])], variables: tokens({ collections: [...(duplicated.collections ?? []), { name: "Sem", key: "ds-sem", modes: ["Dark", "Light"], default: "Dark" }], variables: [] }), tokens: DS_TOKENS });
   const n = (partial.findings.find((f) => f.code === "foreign-token-library")?.collections ?? []).length;
-  ok("[review M2] a partial foreign library's confirm question counts the collections that ARE in the design system",
+  ok("a partial foreign library's confirm question counts the collections that ARE in the design system",
     /^Only 1 of \d+ of the screen's variable collections are in the design system/.test(get(partial, "foreign-token-library").confirm ?? "") && n >= 1);
-  ok("[F-19] the hint names the MCP twin of `dtwin list libraries`, and says the library export is CLI only",
+  ok("the hint names the MCP twin of `dtwin list libraries`, and says the library export is CLI only",
     /figma_list_libraries/.test(get(res, "foreign-token-library").message) && /CLI only/.test(get(res, "foreign-token-library").message));
   ok("[tokens] and the message names the duplicated-file cause rather than just 'not found'",
     /DUPLICATED Figma file/.test(get(res, "foreign-token-library").message));
@@ -108,8 +108,8 @@ console.log("cross-check — the screen's token library vs the design system's:"
     has(res, "token-library-matches") && !has(res, "foreign-token-library"));
 }
 
-// ---------------------------------------------------------------- DT-07: offline name reconciliation
-console.log("cross-check — DT-07: the foreign-library finding classifies the screen's variables by name:");
+// ---------------------------------------------------------------- offline name reconciliation
+console.log("cross-check — the foreign-library finding classifies the screen's variables by name:");
 {
   const FOREIGN_COLL = [{ name: "Sem", key: "screen-sem", modes: ["Dark", "Light"], default: "Dark" }];
   const dup = tokens({
@@ -119,11 +119,11 @@ console.log("cross-check — DT-07: the foreign-library finding classifies the s
   const res = crossCheck({ screens: [screen("S", [text("2:1", "Poppins", null, "Text/Main")])], variables: dup, tokens: DS_TOKENS });
   const f = get(res, "foreign-token-library");
   const offline = f.message.indexOf("Offline check"), live = f.message.indexOf("list libraries");
-  ok("[DT07-1] the message carries the offline counts BEFORE the live advice",
+  ok("the message carries the offline counts BEFORE the live advice",
     offline > 0 && live > offline && /Only to find the owning file: run/.test(f.message));
-  ok("[DT07-1] counts: 1 variable, 1 agrees, 0 differ / undecidable / absent, and says mapping by NAME is safe",
+  ok("counts: 1 variable, 1 agrees, 0 differ / undecidable / absent, and says mapping by NAME is safe",
     /of the 1 variables in those collections, 1 have a design-system variable of the same name resolving the same in every shared mode, 0 resolve differently \(listed as token-name-collision\), 0 cannot be compared \(no shared mode\), 0 have no same-name variable/.test(f.message) && /Mapping by NAME is safe for the 1/.test(f.message));
-  ok("[DT07-1] extras: nameMap {agree:1, differ:0, undecidable:0, absent:0}; severity and collections unchanged",
+  ok("extras: nameMap {agree:1, differ:0, undecidable:0, absent:0}; severity and collections unchanged",
     JSON.stringify(f.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 0 }) && f.severity === "warning" && (f.collections ?? []).length === 1);
 
   // a re-keyed twin with a different value: differ 1 + a token-name-collision finding, no "safe" sentence
@@ -133,7 +133,7 @@ console.log("cross-check — DT-07: the foreign-library finding classifies the s
   });
   const rd = crossCheck({ screens: [screen("S", [text("2:1", "Poppins", null, "Text/Main")])], variables: diff, tokens: DS_TOKENS });
   const fd = get(rd, "foreign-token-library");
-  ok("[DT07-2] a re-keyed twin with a different value: differ 1 (and listed as token-name-collision), no 'safe' claim",
+  ok("a re-keyed twin with a different value: differ 1 (and listed as token-name-collision), no 'safe' claim",
     JSON.stringify(fd.nameMap) === JSON.stringify({ agree: 0, differ: 1, undecidable: 0, absent: 0 }) && has(rd, "token-name-collision") && !/Mapping by NAME is safe/.test(fd.message) && /1 resolve differently/.test(fd.message));
 
   // an unrelated library: nothing exists here by name
@@ -146,7 +146,7 @@ console.log("cross-check — DT-07: the foreign-library finding classifies the s
   });
   const ru = crossCheck({ screens: [screen("S", [])], variables: unrelated, tokens: DS_TOKENS });
   const fu = get(ru, "foreign-token-library");
-  ok("[DT07-2] an unrelated library: agree 0, absent N, and 'not the screen's library'",
+  ok("an unrelated library: agree 0, absent N, and 'not the screen's library'",
     JSON.stringify(fu.nameMap) === JSON.stringify({ agree: 0, differ: 0, undecidable: 0, absent: 2 }) && /none of them exists here by name — this is not the screen's library; pull the one it uses/i.test(fu.message) && !/Mapping by NAME is safe/.test(fu.message));
 
   // no shared mode, overlapping values -> undecidable; a variable outside the foreign collections is not counted
@@ -159,12 +159,12 @@ console.log("cross-check — DT-07: the foreign-library finding classifies the s
   });
   const rn = crossCheck({ screens: [screen("S", [])], variables: und, tokens: DS_TOKENS });
   const fn = get(rn, "foreign-token-library");
-  ok("[DT07-2] no shared mode + overlapping values is undecidable; variables in design-system collections are not counted",
+  ok("no shared mode + overlapping values is undecidable; variables in design-system collections are not counted",
     JSON.stringify(fn.nameMap) === JSON.stringify({ agree: 0, differ: 0, undecidable: 1, absent: 0 }) && /of the 1 variables in those collections/.test(fn.message));
 }
 
-// ---------------------------------------------------------------- FU-namemap: collections told apart by key
-console.log("cross-check — FU-namemap: two collections of one name are told apart by their key:");
+// ---------------------------------------------------------------- collections told apart by key
+console.log("cross-check — two collections of one name are told apart by their key:");
 {
   // The screen binds TWO collections called "Spacing": the design system's own (ds-space) and another library's.
   // Only the second is foreign. Its rows are told apart by `collectionKey`; an export from before that field
@@ -182,16 +182,16 @@ console.log("cross-check — FU-namemap: two collections of one name are told ap
   });
   const run = (withKeys: boolean) => get(crossCheck({ screens: [screen("S", [])], variables: rows(withKeys), tokens: DS_TOKENS }), "foreign-token-library");
   const keyed = run(true);
-  ok("[G21-NM] with collectionKey only the foreign collection's row is counted (n=1, agrees, no ambiguity)",
+  ok("with collectionKey only the foreign collection's row is counted (n=1, agrees, no ambiguity)",
     JSON.stringify(keyed.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 0 }) && /of the 1 variables in those collections/.test(keyed.message) && !/predates collection keys/.test(keyed.message));
   const old = run(false);
-  ok("[G21-NM] without collectionKey both rows go by the name: n=2, and ambiguous counts them",
+  ok("without collectionKey both rows go by the name: n=2, and ambiguous counts them",
     JSON.stringify(old.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 1, ambiguous: 2 }) && /of the 2 variables in those collections/.test(old.message));
-  ok("[G21-NM] the message says 2 of them come from a collection whose name a design-system collection also has, and to re-pull",
+  ok("the message says 2 of them come from a collection whose name a design-system collection also has, and to re-pull",
     /\(2 of them come from a collection whose name a design-system collection also has — this export predates collection keys on variables; re-pull to tell them apart\.\)/.test(old.message));
   // A key the screen's collection list does not know selects nothing: the row falls back to its name (and is ambiguous).
   const stray = get(crossCheck({ screens: [screen("S", [])], variables: tokens({ collections: COLLS, variables: [{ name: "Space 3", collection: "Spacing", collectionKey: "nobody", key: "o-1", type: "FLOAT", values: { "Mode 1": 16 } }] }), tokens: DS_TOKENS }), "foreign-token-library");
-  ok("[G21-NM] a collectionKey no screen collection carries falls back to the name", JSON.stringify(stray.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 0, ambiguous: 1 }));
+  ok("a collectionKey no screen collection carries falls back to the name", JSON.stringify(stray.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 0, ambiguous: 1 }));
   // Both twins foreign (the real-data shape): every row is counted by key or by name alike, nothing ambiguous.
   const bothForeign = get(crossCheck({ screens: [screen("S", [])], variables: tokens({
     collections: [{ name: "Spacing", key: "x-1", modes: ["Mode 1"], default: "Mode 1" }, { name: "Spacing", key: "x-2", modes: ["Mode 1"], default: "Mode 1" }],
@@ -199,7 +199,7 @@ console.log("cross-check — FU-namemap: two collections of one name are told ap
       { name: "Space 3", collection: "Spacing", collectionKey: "x-1", key: "a", type: "FLOAT", values: { "Mode 1": 16 } },
       { name: "Space 9", collection: "Spacing", collectionKey: "x-2", key: "b", type: "FLOAT", values: { "Mode 1": 36 } },
     ] }), tokens: DS_TOKENS }), "foreign-token-library");
-  ok("[G21-NM] two foreign twins: both rows counted, no ambiguity",
+  ok("two foreign twins: both rows counted, no ambiguity",
     JSON.stringify(bothForeign.nameMap) === JSON.stringify({ agree: 1, differ: 0, undecidable: 0, absent: 1 }));
 }
 
@@ -214,20 +214,20 @@ console.log("cross-check — two libraries, one name, two values:");
     variables: [{ name: "(Space 3)", collection: "Spacing", key: "screen-k2", type: "FLOAT", values: { Desktop: 12, Tablet: 8 } }],
   });
   const res = crossCheck({ screens: [screen("S", [])], variables: vars, tokens: DS_TOKENS });
-  // D1: a clash blocks only when a visible layer on the screen binds the token.
-  ok("[collision/D1] a punctuation-only name twin nobody on the screen binds is a warning to confirm (was: a blocker)",
+  // a clash blocks only when a visible layer on the screen binds the token.
+  ok("[collision] a punctuation-only name twin nobody on the screen binds is a warning to confirm (was: a blocker)",
     sev(res, "token-name-collision") === "warning" && /no visible layer on this screen binds it/.test(get(res, "token-name-collision").confirm ?? ""));
   const bound = crossCheck({ screens: [screen("S", [{ id: "3:1", type: "FRAME", name: "Row", tokens: { itemSpacing: "(Space 3)" } }])], variables: vars, tokens: DS_TOKENS });
-  ok("[collision/D1] …and a blocker once a visible layer binds it", sev(bound, "token-name-collision") === "blocker" && get(bound, "token-name-collision").confirm === undefined);
+  ok("[collision] …and a blocker once a visible layer binds it", sev(bound, "token-name-collision") === "blocker" && get(bound, "token-name-collision").confirm === undefined);
   const hiddenBound = crossCheck({ screens: [screen("S", [{ id: "3:2", type: "FRAME", name: "Row", hidden: true, tokens: { itemSpacing: "(Space 3)" } }])], variables: vars, tokens: DS_TOKENS });
-  ok("[collision/D1] a HIDDEN layer binding it does not make it a blocker", sev(hiddenBound, "token-name-collision") === "warning");
+  ok("[collision] a HIDDEN layer binding it does not make it a blocker", sev(hiddenBound, "token-name-collision") === "warning");
   ok("[collision] the message carries BOTH values so the reader can pick", /12/.test(get(res, "token-name-collision").message) && /16/.test(get(res, "token-name-collision").message));
   ok("[collision] and says why no per-mode comparison was possible",
     /no mode name is shared/.test(get(res, "token-name-collision").message));
 }
 {
-  // Aliases that point at the same target agree, even across libraries — the common, safe case. An
-  // early version called every re-keyed variable a conflict, which would have cried wolf on the whole file.
+  // Aliases that point at the same target agree, even across libraries — the common, safe case. Calling every
+  // re-keyed variable a conflict would cry wolf on the whole file.
   const vars = tokens({
     collections: [{ name: "Sem", key: "screen-sem", modes: ["Dark"], default: "Dark" }],
     variables: [{ name: "Text/Main", collection: "Sem", key: "s1", type: "COLOR", values: { Dark: { aliasOf: "Gray/900" } } }],
@@ -244,7 +244,7 @@ console.log("cross-check — does the catalog cover the screen:");
     screens: [screen("S", [instance("2:1", "other-a", "Widget"), instance("2:2", "other-b", "Gadget"), instance("2:3", "other-b", "Gadget")])],
     components: DS_COMPONENTS,
   });
-  ok("[coverage/D11] 0% by key is a warning with a confirm question, not an empty success (was: a blocker)",
+  ok("[coverage] 0% by key is a warning with a confirm question, not an empty success (was: a blocker)",
     sev(res, "catalog-covers-nothing") === "warning" && /components.local.json by key — is that the component library/.test(get(res, "catalog-covers-nothing").confirm ?? ""));
   ok("[coverage] it counts distinct components, not instances", res.coverage?.distinct === 2 && res.coverage?.instances === 3);
   ok("[coverage] and says outright that a catalog-vs-map count means nothing here",
@@ -308,7 +308,7 @@ console.log("cross-check — fonts and text styles:");
 {
   // One capital letter apart. This is a blocker because a name-based mapping binds it silently.
   const res = crossCheck({ screens: [screen("S", [text("2:1", "Poppins", "Medium/14 Medium")])], stylesText: DS_TEXT_STYLES });
-  ok("[styles/D1] a case-only near-miss is a warning to confirm, not a missing style (was: a blocker)",
+  ok("[styles] a case-only near-miss is a warning to confirm, not a missing style (was: a blocker)",
     sev(res, "text-style-near-miss") === "warning" && /the same style\?/.test(get(res, "text-style-near-miss").confirm ?? ""));
   ok("[styles] and it prints both spellings side by side",
     /'Medium\/14 Medium' vs 'Medium\/14 medium'/.test(get(res, "text-style-near-miss").message));
@@ -333,7 +333,7 @@ console.log("cross-check — sentinel values and missing modes:");
     /visually broken/.test(get(res, "single-mode-export").message));
 }
 
-// F-20: the "dark surface" example belongs to colour collections; a number collection gets its own.
+// the "dark surface" example belongs to colour collections; a number collection gets its own.
 {
   const sizes = tokens({
     collections: [{ name: "Font Sizes", key: "c-fs", modes: ["Desktop", "Mobile"], default: "Desktop" }],
@@ -342,11 +342,11 @@ console.log("cross-check — sentinel values and missing modes:");
   const doc = screenExport([{ type: "FRAME", id: "1:1", resolvedModes: { "Font Sizes": "Desktop" } }], { screen: "S" });
   const res = crossCheck({ screens: [{ doc, label: "S" }], variables: sizes });
   const m = get(res, "single-mode-export").message;
-  ok("[F-20] a single-mode FLOAT collection's message has no 'dark surface' example", !/dark surface/.test(m) && /size or spacing value that should differ in 'Mobile'/.test(m));
+  ok("a single-mode FLOAT collection's message has no 'dark surface' example", !/dark surface/.test(m) && /size or spacing value that should differ in 'Mobile'/.test(m));
   const colour = crossCheck({ screens: [screen("S", [])], tokens: DS_TOKENS });
-  ok("[F-20] …while a colour collection keeps it", /dark surface/.test(get(colour, "single-mode-export").message));
+  ok("…while a colour collection keeps it", /dark surface/.test(get(colour, "single-mode-export").message));
 }
-// Group 4 owed: a library dir's catalog is components.json, and the advice is not "export the library you just exported".
+// A library dir's catalog is components.json, and the advice is not "export the library you just exported".
 {
   const res = crossCheck({ screens: [screen("S", [instance("2:1", "other-a", "Widget")])], components: DS_COMPONENTS, componentsFile: "components.json", designSystemIsLibrary: true });
   const m = get(res, "catalog-covers-nothing").message;
@@ -372,7 +372,7 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
     children: [text("2:1", "Poppins", null, "Neutrals/Neutral 500")],
   });
   const res = crossCheck({ screens: [{ doc: { screen: "S", nodes: [sidebar] }, label: "S" }], variables: vars });
-  ok("[contrast/D11] a derived mode's unreadable pair is a warning to confirm (was: a blocker)",
+  ok("[contrast] a derived mode's unreadable pair is a warning to confirm (was: a blocker)",
     sev(res, "derived-mode-contrast") === "warning" && /was never drawn/.test(get(res, "derived-mode-contrast").confirm ?? ""));
   ok("[contrast] it names the mode that was never drawn, not the one that was",
     get(res, "derived-mode-contrast").mode === "Light");
@@ -418,7 +418,7 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
   ok("[composed] a colour with alpha 0.5 at opacity 60 -> alpha 0.3 (multiplied)", near(composedRgba(half, 60)?.a, 0.3));
   ok("[composed] opacity 120 clamps to 100 (alpha 1), -5 clamps to 0", near(composedRgba(red, 120)?.a, 1) && near(composedRgba(red, -5)?.a, 0));
   ok("[composed] an unresolved half stays null", composedRgba(null, 60) === null && composedRgba(red, null) === null);
-  // End to end: the derived mode's contrast now sees a composed text colour (it was skipped as null),
+  // End to end: the derived mode's contrast sees a composed text colour (not skipped as null),
   // through both an aliased colour half and an aliased opacity half.
   const vars = tokens({
     collections: [{ name: "Sem", key: "c1", modes: ["Dark", "Light"], default: "Dark" }],
@@ -469,13 +469,13 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
   ok("[css] Chromium computed rgb(29, 29, 31) / rgba(0, 0, 0, 0.4) / rgb(146.06, 107.46, 131.2) (unrounded; formatHex rounds to #926b83)",
     eq("rgb(29, 29, 31)", 29, 29, 31, 1) && eq("rgba(0, 0, 0, 0.4)", 0, 0, 0, 0.4) && eq("rgb(146.06, 107.46, 131.2)", 146.06, 107.46, 131.2, 1)
     && formatHex(must(parseCssColor("rgb(146.06, 107.46, 131.2)"), "fractional rgb")) === "#926b83");
-  // Modern syntax (§5.1): spaces, `/ alpha`, percentage channels (100% = 255) and alpha, rgba() as an alias; case and outer space ignored.
+  // Modern syntax: spaces, `/ alpha`, percentage channels (100% = 255) and alpha, rgba() as an alias; case and outer space ignored.
   ok("[css] modern rgb(0 0 0 / 40%), RGBA(100% 0% 50%), rgb(1,2,3,0.5) legacy 4-arg rgb()",
     eq("rgb(0 0 0 / 40%)", 0, 0, 0, 0.4) && eq("  RGBA(100% 0% 50%) ", 255, 0, 127.5, 1) && eq("rgb(1,2,3,0.5)", 1, 2, 3, 0.5) && eq("rgba(1, 2, 3)", 1, 2, 3, 1));
-  // §4.4: `none` (a missing component) behaves as zero — alpha included; legacy syntax does not allow it.
+  // `none` (a missing component) behaves as zero — alpha included; legacy syntax does not allow it.
   ok("[css] none is 0: rgb(none 10 20 / none) -> (0, 10, 20, 0); oklab(0 0 0 / none) alpha 0; rgb(none, 0, 0) is not a colour",
     eq("rgb(none 10 20 / none)", 0, 10, 20, 0) && parseCssColor("oklab(0 0 0 / none)")?.a === 0 && parseCssColor("rgb(none, 0, 0)") === null);
-  // §5.1 / §4.2: out-of-range channels and alpha clamp at parsed-value time; they are not invalid.
+  // out-of-range channels and alpha clamp at parsed-value time; they are not invalid.
   ok("[css] clamps rgb(300, -5, 0, 1.5) -> (255, 0, 0, 1)", eq("rgb(300, -5, 0, 1.5)", 255, 0, 0, 1));
   // Hex needs its `#` here (CSS hex notation); 3/4/6/8 digits as color.ts reads them.
   ok("[css] #ABC -> (170, 187, 204, 1), #aabbcc80 alpha 128/255; 'abc', '#abcde', 'red', 'rgb(0, 0 0)' (mixed separators) and a non-string -> null",
@@ -560,7 +560,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   ok("[screen-cov] a real half-match reports 50%, in the map and in the catalog", cov.mapPct === 50 && cov.catalogPct === 50);
 }
 
-// ---------- drift-lint SCREEN COVERAGE says how much of "the screen" is hidden (P2a, 107/139/185) ----------
+// ---------- drift-lint SCREEN COVERAGE says how much of "the screen" is hidden ----------
 // The real Guided Policies export: 87 instances, 45 of them on layers the designer switched off. The
 // coverage line keeps its numbers (it is map/catalog coverage by key) but must say how many of those
 // instances — and which whole sets — will never be built, and that it is NOT a build-coverage number.
@@ -578,7 +578,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
     /SCREEN COVERAGE: \d+\/\d+ .* 87 instance\(s\) total, 45 of them on hidden layers/.test(r.stderr) && /not which ones the build contains/.test(r.stderr));
 }
 
-// ---------- cross-check never cites a hidden layer (P2a; hidden.js predicate in both walks) ----------
+// ---------- cross-check never cites a hidden layer (hidden.js predicate in both walks) ----------
 // Real Jet Roles export (test/fixtures/livetest3/verify/). Before: `walkWithBg` skipped
 // `visible === false` (a flag the export never sets) and the token-usage walk skipped nothing, so
 // `token-name-collision` cited the hidden `I20173:137670;1929:15178` / `;1929:15308` buttons and the
@@ -612,7 +612,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   ok("[hidden] …and never grades a pair used only by hidden text, nor cites a hidden node", dm !== undefined && !(dm.pairs || []).some((p) => p.fg === "Text/Description") && !citesHidden(dm));
 }
 
-// ---------------------------------------------------------------- CLI: auto-discovery of variables.json (P4 #38/#39/#138) ----------
+// ---------------------------------------------------------------- CLI: auto-discovery of variables.json ----------
 // Real layout: test/fixtures/livetest3/pages/<Page>/<Screen>.json + test/fixtures/livetest3/variables.json
 // (the export root, two levels up from the screen file) — the same shape design/export/ has in a real
 // project. Before the fix, the CLI looked in path.dirname(argv[0]) (the <Page> directory) and never
@@ -636,7 +636,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 }
 
 
-// ---------- livetest-3 #318 / #326 on the REAL export (test/fixtures/livetest3/) ----------
+// ---------- on the REAL export (test/fixtures/livetest3/) ----------
 {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3");
   // What the CLI's --json prints (a CrossCheckReport), or the empty stand-in when it printed nothing parseable.
@@ -663,17 +663,17 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
     const res = run(rel), truth = sets(rel);
     const b: Partial<Record<CoverageBucket, number>> = res.coverage?.buckets || {};
     const sum = Object.values(b).reduce((n: number, x: number) => n + x, 0);
-    ok(`[318] ${label}: every visible component set lands in exactly ONE bucket — the rows sum to the ${truth.visible} sets the screen really has`,
+    ok(`${label}: every visible component set lands in exactly ONE bucket — the rows sum to the ${truth.visible} sets the screen really has`,
       truth.visible > 0 && res.coverage?.distinct === truth.visible && sum === truth.visible
         && (res.coverage?.entries || []).every((e) => typeof e.bucket === "string") && (res.coverage?.entries || []).length === truth.visible);
-    ok(`[318] ${label}: sets used only on hidden layers are reported apart (${truth.hiddenOnly}), not mixed into the buckets`,
+    ok(`${label}: sets used only on hidden layers are reported apart (${truth.hiddenOnly}), not mixed into the buckets`,
       res.coverage?.hiddenOnly === truth.hiddenOnly);
-    ok(`[318] ${label}: no name is both a proposal and "new work" or an ambiguous leftover`,
+    ok(`${label}: no name is both a proposal and "new work" or an ambiguous leftover`,
       (res.componentProposals || []).every((p) => !(res.coverage?.entries || []).some((e) => e.setName === p.name && e.bucket !== "proposed")));
   }
   const cat = run("pages/In_progress/Create_Assembly_Type__18411_84111.json");
   const s4 = cat.findings.find((f) => f.code === "token-name-collision" && f.token === "Space 4");
-  ok("[326] an identical-name collision names BOTH subjects: \"The screen's 'Space 4' (key …) and the design system's 'Space 4' share a name\"",
+  ok("an identical-name collision names BOTH subjects: \"The screen's 'Space 4' (key …) and the design system's 'Space 4' share a name\"",
     !!s4 && /^The screen's 'Space 4' \(key 64928e3a…\) and the design system's 'Space 4' share a name but resolve DIFFERENTLY/.test(s4.message));
 }
 
@@ -695,13 +695,13 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   ok("[args] `--out --json` is '--out needs a value' (was: wrote <cwd>/--json.json)", (() => { const r = spawnSync(process.execPath, [CLI, good, "--out", "--json"], { encoding: "utf8", cwd: tmp }); return r.status === 2 && /cross-check: --out needs a value/.test(r.stderr) && !fs.existsSync(path.join(tmp, "--json.json")); })());
 }
 
-// ---------- group 14: one name rule (DT-27), finding ids (F-44), labelled proposals (F-47) ----------
+// ---------- one name rule, finding ids, labelled proposals ----------
 // A fixture read that fails is a ✗ on the check that needed it, never a crash of the whole file.
 const tryRead = <T,>(file: string, guard: DocGuard<T>): T | null => { try { return readFixture(file, guard); } catch { return null; } };
 const tryParse = <T,>(text: string, guard: DocGuard<T>): T | null => { try { return parseAs(text, guard, "cross-check --json"); } catch { return null; } };
-console.log("cross-check — group 14 (DT-27 name rule, F-44 ids, F-47 proposal labels):");
+console.log("cross-check — name rule, finding ids, proposal labels:");
 {
-  // [DT27-1] The fixture plan-skeleton.test.ts reads too (test/fixtures/g14/dt27/, expected.json): no
+  // The fixture plan-skeleton.test.ts reads too (test/fixtures/g14/dt27/, expected.json): no
   // instance key is in the catalog, so every component is decided by NAME, and cross-check's coverage
   // must say what component-match's nameVerdict says — the rule plan-skeleton's catalog column uses.
   const FX = path.join(import.meta.dirname, "fixtures", "g14", "dt27");
@@ -709,7 +709,7 @@ console.log("cross-check — group 14 (DT-27 name rule, F-44 ids, F-47 proposal 
   const doc = tryRead(path.join(FX, "Screen__5_6.json"), isScreenExport);
   const cat = tryRead(path.join(FX, "design-system", "components.local.json"), isComponentsCatalog);
   const want = tryRead(path.join(FX, "expected.json"), isExpected);
-  ok("[DT27-1] the shared fixture reads (screen, catalog, expected verdicts)", !!doc && !!cat && !!want && Object.keys(want.verdicts).length === 3);
+  ok("the shared fixture reads (screen, catalog, expected verdicts)", !!doc && !!cat && !!want && Object.keys(want.verdicts).length === 3);
   if (doc && cat && want) {
     const res = crossCheck({ screens: [{ doc, label: "Screen__5_6" }], components: cat });
     const entries = res.coverage?.entries || [];
@@ -719,26 +719,26 @@ console.log("cross-check — group 14 (DT-27 name rule, F-44 ids, F-47 proposal 
     };
     const rows = new Map(matchByNameAndSignature(visibleInstances(doc, "Screen__5_6"), cat).rows.map((r) => [r.name, nameVerdict(r).status]));
     for (const [name, v] of Object.entries(want.verdicts)) {
-      ok(`[DT27-1] '${name}': cross-check's coverage says ${v} (got ${verdictOf(name)}), the same as nameVerdict (${rows.get(name)})`, verdictOf(name) === v && rows.get(name) === v);
+      ok(`'${name}': cross-check's coverage says ${v} (got ${verdictOf(name)}), the same as nameVerdict (${rows.get(name)})`, verdictOf(name) === v && rows.get(name) === v);
     }
     const bucket = (n: string) => entries.find((e) => e.setName === n)?.bucket;
-    ok("[DT27-1] the buckets follow the verdicts: duplicate-definitions → nameOnly, signature mismatch → newWork, different-signatures tie → ambiguous",
+    ok("the buckets follow the verdicts: duplicate-definitions → nameOnly, signature mismatch → newWork, different-signatures tie → ambiguous",
       bucket("icon/check-circle") === "nameOnly" && bucket("Header") === "newWork" && bucket("Badge") === "ambiguous");
     const b: Partial<Record<CoverageBucket, number>> = res.coverage?.buckets || {};
-    ok("[DT27-1] the buckets still sum to distinct", res.coverage?.distinct === 3 && Object.values(b).reduce((n: number, x: number) => n + x, 0) === 3);
+    ok("the buckets still sum to distinct", res.coverage?.distinct === 3 && Object.values(b).reduce((n: number, x: number) => n + x, 0) === 3);
     const e = (n: string) => entries.find((x) => x.setName === n);
-    ok("[DT27-1] a name match carries component-match's evidence; unmatched/ambiguous entries say why",
+    ok("a name match carries component-match's evidence; unmatched/ambiguous entries say why",
       e("icon/check-circle")?.evidence === "name+no-props" && /no prop signature agrees/.test(e("Header")?.reason ?? "") && /DIFFERENT signatures/.test(e("Badge")?.reason ?? "") && e("Badge")?.candidates === 2);
-    ok("[DT27-1] the ambiguous finding lists Badge, the name-matched one lists the check icon (not the mismatched Header)",
+    ok("the ambiguous finding lists Badge, the name-matched one lists the check icon (not the mismatched Header)",
       (res.findings.find((f) => f.code === "ambiguous-component-name")?.components || []).map((c) => c.setName).join() === "Badge" &&
       (res.findings.find((f) => f.code === "name-matched-components")?.components || []).map((c) => c.setName).join() === "icon/check-circle");
   }
-  // K-5: a name that exists only in components.library.json is no longer a name match (a key hit still is).
+  // a name that exists only in components.library.json is no longer a name match (a key hit still is).
   const libOnly = crossCheck({ screens: [screen("S", [instance("2:1", "x", "icons/linear/book")])], components: DS_COMPONENTS, componentsLibrary: { components: [{ name: "icons/linear/book", key: "lib-icon", type: "COMPONENT" }] } });
-  ok("[DT27-1/K-5] a library-only NAME is new work, not a name match", libOnly.coverage?.matchedByName === 0 && libOnly.coverage?.entries[0]?.bucket === "newWork");
+  ok("a library-only NAME is new work, not a name match", libOnly.coverage?.matchedByName === 0 && libOnly.coverage?.entries[0]?.bucket === "newWork");
 }
 {
-  // [F44-c] every cross-check finding carries the id audit.ts gives it (finding-id.ts): `code` with no
+  // every cross-check finding carries the id audit.ts gives it (finding-id.ts): `code` with no
   // node, `~2` for the second finding with the same base in one report.
   const vars = tokens({
     collections: [{ name: "Spacing", key: "screen-space", modes: ["Desktop"], default: "Desktop" }],
@@ -749,13 +749,13 @@ console.log("cross-check — group 14 (DT-27 name rule, F-44 ids, F-47 proposal 
   });
   const res = crossCheck({ screens: [screen("S", [instance("2:1", "other-a", "Widget")])], variables: vars, tokens: DS_TOKENS, components: DS_COMPONENTS });
   const ids = res.findings.map((f) => f.id);
-  ok("[F44-c] every finding has an id, and it is findingIds() over the report in its final order",
+  ok("every finding has an id, and it is findingIds() over the report in its final order",
     res.findings.length > 3 && ids.every((x) => typeof x === "string") && JSON.stringify(ids) === JSON.stringify(findingIds(res.findings)));
-  ok("[F44-c] ids are unique; a repeated code is `code` then `code~2`",
+  ok("ids are unique; a repeated code is `code` then `code~2`",
     new Set(ids).size === ids.length && ids.includes("token-name-collision") && ids.includes("token-name-collision~2"));
 }
 {
-  // [F47-1] An export with two screens: both use Sidebar and Card, only A uses Grid; the project's map
+  // An export with two screens: both use Sidebar and Card, only A uses Grid; the project's map
   // already has Sidebar. Proposals are LABELLED — alreadyMapped (listed last), sharedWith — and the
   // confirm count drops the mapped one. Nothing is auto-confirmed and the severity does not change.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "g14-f47-"));
@@ -781,24 +781,24 @@ console.log("cross-check — group 14 (DT-27 name rule, F-44 ids, F-47 proposal 
   const res = tryParse(r.stdout, isCrossCheckReport);
   const props = (res && res.componentProposals) || [];
   const p = (n: string) => props.find((x) => x.name === n);
-  ok("[F47-1] the re-keyed screen proposes Sidebar, Grid and Card", props.length === 3 && !!p("Sidebar") && !!p("Grid") && !!p("Card"));
-  ok("[F47-1] Sidebar is alreadyMapped (the default design/codeconnect.local.json has its instance key) and on 1 other screen",
+  ok("the re-keyed screen proposes Sidebar, Grid and Card", props.length === 3 && !!p("Sidebar") && !!p("Grid") && !!p("Card"));
+  ok("Sidebar is alreadyMapped (the default design/codeconnect.local.json has its instance key) and on 1 other screen",
     p("Sidebar")?.alreadyMapped === true && p("Sidebar")?.sharedWith === 1);
-  ok("[F47-1] Grid is this screen only (sharedWith 0, not mapped); Card is shared with 1", p("Grid")?.sharedWith === 0 && p("Grid")?.alreadyMapped === undefined && p("Card")?.sharedWith === 1);
-  ok("[F47-1] order: shared to confirm, then screen-only, then already mapped", props.map((x) => x.name).join() === "Card,Grid,Sidebar");
+  ok("Grid is this screen only (sharedWith 0, not mapped); Card is shared with 1", p("Grid")?.sharedWith === 0 && p("Grid")?.alreadyMapped === undefined && p("Card")?.sharedWith === 1);
+  ok("order: shared to confirm, then screen-only, then already mapped", props.map((x) => x.name).join() === "Card,Grid,Sidebar");
   const rk = res && res.findings.find((f) => f.code === "catalog-rekeyed");
-  ok("[F47-1] the catalog-rekeyed confirm count excludes the mapped one (2, not 3), and the severity is unchanged",
+  ok("the catalog-rekeyed confirm count excludes the mapped one (2, not 3), and the severity is unchanged",
     !!rk && rk.severity === "warning" && /^2 component\(s\) match/.test(rk.confirm ?? "") && /3 proposals, 1 already mapped .* confirm only the other 2/.test(rk.message));
-  ok("[F47-1] nothing is auto-confirmed", props.every((x) => x.confirmed === false));
+  ok("nothing is auto-confirmed", props.every((x) => x.confirmed === false));
   const md = spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system")], { encoding: "utf8", cwd: tmp }).stdout;
-  ok("[F47-1] the markdown splits 'shared — confirm once' / 'this screen only' / 'already mapped'",
+  ok("the markdown splits 'shared — confirm once' / 'this screen only' / 'already mapped'",
     /### Shared with other exported screens — confirm once \(1\)[\s\S]*`Card`[\s\S]*### This screen only \(1\)[\s\S]*`Grid`[\s\S]*### Already in the component map — nothing to confirm \(1\)[\s\S]*`Sidebar`/.test(md));
   // --map names the map explicitly; with no map anywhere there is no alreadyMapped label at all.
   const noMap = tryParse(spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--json"], { encoding: "utf8", cwd: path.join(tmp, "design/export") }).stdout, isCrossCheckReport);
-  ok("[F47-1] no map found → no alreadyMapped label, confirm count 3", !!noMap && (noMap.componentProposals || []).every((x) => x.alreadyMapped === undefined) && /^3 component/.test(noMap.findings.find((f) => f.code === "catalog-rekeyed")?.confirm ?? ""));
+  ok("no map found → no alreadyMapped label, confirm count 3", !!noMap && (noMap.componentProposals || []).every((x) => x.alreadyMapped === undefined) && /^3 component/.test(noMap.findings.find((f) => f.code === "catalog-rekeyed")?.confirm ?? ""));
   const explicit = tryParse(spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--map", path.join(tmp, "design/codeconnect.local.json"), "--json"], { encoding: "utf8", cwd: path.join(tmp, "design/export") }).stdout, isCrossCheckReport);
-  ok("[F47-1] --map <file> labels the same way from any cwd", !!explicit && (explicit.componentProposals || []).find((x) => x.name === "Sidebar")?.alreadyMapped === true);
-  // Review 1 M-2: the map-bootstrap scaffold writes a stub for every CATALOG component, keyed by the catalog key.
+  ok("--map <file> labels the same way from any cwd", !!explicit && (explicit.componentProposals || []).find((x) => x.name === "Sidebar")?.alreadyMapped === true);
+  // the map-bootstrap scaffold writes a stub for every CATALOG component, keyed by the catalog key.
   // None of the re-keyed screen's instance keys are in it, so nothing resolves through it: no proposal is
   // "already mapped" and the confirm count stays 3.
   const stub = put("stub/codeconnect.local.json", codeMap({
@@ -808,17 +808,17 @@ console.log("cross-check — group 14 (DT-27 name rule, F-44 ids, F-47 proposal 
   }));
   const stubbed = tryParse(spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--map", stub, "--json"], { encoding: "utf8", cwd: tmp }).stdout, isCrossCheckReport);
   const stubProps = (stubbed && stubbed.componentProposals) || [];
-  ok("[F47-1 M-2] a catalog-keyed stub map labels nothing alreadyMapped", stubProps.length === 3 && stubProps.every((x) => x.alreadyMapped === undefined));
-  ok("[F47-1 M-2] …and the confirm count stays 3", /^3 component/.test(stubbed?.findings.find((f) => f.code === "catalog-rekeyed")?.confirm ?? ""));
+  ok("a catalog-keyed stub map labels nothing alreadyMapped", stubProps.length === 3 && stubProps.every((x) => x.alreadyMapped === undefined));
+  ok("…and the confirm count stays 3", /^3 component/.test(stubbed?.findings.find((f) => f.code === "catalog-rekeyed")?.confirm ?? ""));
   // In-process: siblings are a thunk, read only when there are proposals.
   let called = 0;
   crossCheck({ screens: [{ doc: A, label: "A" }], components: catalog([{ name: "Other", key: "k", type: "COMPONENT" }]), siblings: () => { called++; return [{ doc: B, label: "B" }]; } });
-  ok("[F47-1] the other screens are not read when there is nothing to label", called === 0);
+  ok("the other screens are not read when there is nothing to label", called === 0);
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-// ---------------------------------------------------------------- F-126: one screen, two modes
-console.log("cross-check — F-126: colour bindings from collections resolved in different modes:");
+// ---------------------------------------------------------------- one screen, two modes
+console.log("cross-check — colour bindings from collections resolved in different modes:");
 {
   // Two theme collections sharing Dark/Light (the screen's own resolves Dark, a starter kit's still Light),
   // and a brand collection on its own vocabulary. Every collection is in resolvedModes, as Figma writes it.
@@ -843,30 +843,30 @@ console.log("cross-check — F-126: colour bindings from collections resolved in
   const res = crossCheck({ screens: [{ doc: doc(ALL, [kitText]), label: "Settings" }], variables: vars });
   const f = res.findings.find((x) => x.code === "mixed-mode-bindings");
   const kitRow = f?.bindings?.find((b) => b.collection === "Kit");
-  ok("[F126-1] a colour bound from a collection resolved Light on a Dark screen is a warning with a confirm question",
+  ok("a colour bound from a collection resolved Light on a Dark screen is a warning with a confirm question",
     f?.severity === "warning" && /'Kit' in 'Light'/.test(f.message) && /in 'Dark'/.test(f.message) && /'Kit\/On Surface' on 'Btn Text'/.test(f.message) && /follow 'Dark'/.test(f.confirm ?? ""));
-  ok("[F126-1] bindings[] names the minority collection's tokens and nodes, and the majority's mode",
+  ok("bindings[] names the minority collection's tokens and nodes, and the majority's mode",
     kitRow?.mode === "Light" && kitRow.tokens.join() === "Kit/On Surface" && kitRow.nodes.join() === "3:1" && f?.bindings?.find((b) => b.collection === "Theme")?.mode === "Dark");
-  ok("[F126-1] nodeId is the first node binding the minority collection", f?.nodeId === "3:1");
-  ok("[F126-2] a collection the screen RESOLVES in Light but binds nothing from is not a mix (every collection is in resolvedModes)",
+  ok("nodeId is the first node binding the minority collection", f?.nodeId === "3:1");
+  ok("a collection the screen RESOLVES in Light but binds nothing from is not a mix (every collection is in resolvedModes)",
     !has(crossCheck({ screens: [{ doc: doc(ALL, []), label: "Settings" }], variables: vars }), "mixed-mode-bindings"));
   const brandText: NodeInput = { type: "TEXT", id: "4:1", name: "Tag", text: "New", font: { family: "Inter", size: 14 }, tokens: { fills: "Brand/Accent" } };
-  ok("[F126-3] a bound collection on another vocabulary (Brand 1 / Brand 2) is not a mix",
+  ok("a bound collection on another vocabulary (Brand 1 / Brand 2) is not a mix",
     !has(crossCheck({ screens: [{ doc: doc(ALL, [brandText]), label: "Settings" }], variables: vars }), "mixed-mode-bindings"));
-  ok("[F126-4] the same binding with the kit pinned to Dark is not a mix",
+  ok("the same binding with the kit pinned to Dark is not a mix",
     !has(crossCheck({ screens: [{ doc: doc({ ...ALL, Kit: "Dark" }, [kitText]), label: "Settings" }], variables: vars }), "mixed-mode-bindings"));
-  // M-1 (review 1): the majority is chosen per mode vocabulary — Brand 1 / Brand 2 bindings, as many as the theme's or
+  // the majority is chosen per mode vocabulary — Brand 1 / Brand 2 bindings, as many as the theme's or
   // more, never mask the Dark/Light mix (they used to win the vote, and no Dark/Light collection declares 'Brand 1').
   for (const n of [2, 3]) {
     const brands = Array.from({ length: n }, (_, i): NodeInput => ({ ...brandText, id: `4:${i + 1}` }));
     const m = crossCheck({ screens: [{ doc: doc(ALL, [kitText, ...brands]), label: "Settings" }], variables: vars }).findings.filter((x) => x.code === "mixed-mode-bindings");
-    ok(`[F126-3 / M-1] ${n} Brand binding(s) beside 2 Theme ones: the Theme Dark / Kit Light mix is still ONE warning, Brand out of it`,
+    ok(`${n} Brand binding(s) beside 2 Theme ones: the Theme Dark / Kit Light mix is still ONE warning, Brand out of it`,
       m.length === 1 && /'Kit' in 'Light'/.test(m[0]?.message ?? "") && !(m[0]?.bindings ?? []).some((x) => x.collection === "Brand"));
   }
 }
 
-// ---------------------------------------------------------------- L6: same-named collections, told apart by collectionKey
-console.log("cross-check — L6: two collections with one name are matched by collectionKey first:");
+// ---------------------------------------------------------------- same-named collections, told apart by collectionKey
+console.log("cross-check — two collections with one name are matched by collectionKey first:");
 {
   // The design system's own `Colors` (Light/Dark, default Light) is listed first; a library's `Colors` beside it.
   const solid = (color: string, token: string) => ({ type: "solid" as const, color, tokens: { color: token } });
@@ -888,7 +888,7 @@ console.log("cross-check — L6: two collections with one name are matched by co
   const mixDoc = screenExport([
     { type: "FRAME", id: "1:1", name: "Settings", resolvedModes: { Theme: "Dark", Colors: "Light" }, tokens: { fills: "Surface/Page" }, children: [text("2:1", "Inter", null, "Text/Main"), inkText] },
   ], { screen: "Settings" });
-  ok("[L6-1] mixed-mode-bindings: a variable whose collectionKey names the ONE-mode `Colors` is not read as the two-mode `Colors` (no mix)",
+  ok("mixed-mode-bindings: a variable whose collectionKey names the ONE-mode `Colors` is not read as the two-mode `Colors` (no mix)",
     !has(crossCheck({ screens: [{ doc: mixDoc, label: "Settings" }], variables: mixVars }), "mixed-mode-bindings"));
 
   // token-pair-contrast: no resolvedModes entry, so each variable renders in its collection's default — the
@@ -908,14 +908,14 @@ console.log("cross-check — L6: two collections with one name are matched by co
       children: [{ type: "TEXT", id: "2:1", name: "Label", text: "Roles", font: { family: "Inter", size: 14 }, tokens: { fills: "Text/Soft" } }] },
   ], { screen: "Profile" });
   const pairsWith = (key: string) => crossCheck({ screens: [{ doc: pairDoc, label: "Profile" }], variables: pairVars(key) }).findings.find((x) => x.code === "token-pair-contrast")?.tokenPairs ?? [];
-  ok("[L6-2] token-pair-contrast: rows keyed to the library `Colors` render in ITS default (Dark: white on near-black passes) — no row",
+  ok("token-pair-contrast: rows keyed to the library `Colors` render in ITS default (Dark: white on near-black passes) — no row",
     pairsWith("k-lib").length === 0);
-  ok("[L6-2] …and the same rows keyed to the design system's `Colors` render in Light (#c0c0c8 on #ffffff fails) — one row in 'Light'",
+  ok("…and the same rows keyed to the design system's `Colors` render in Light (#c0c0c8 on #ffffff fails) — one row in 'Light'",
     (() => { const p = pairsWith("k-sys"); return p.length === 1 && p[0]?.fg === "Text/Soft" && p[0].mode === "Light"; })());
 }
 
-// ---------------------------------------------------------------- DT-63: token pairs in the rendered mode
-console.log("cross-check — DT-63: failing token pairs in the RENDERED mode, one table per run:");
+// ---------------------------------------------------------------- token pairs in the rendered mode
+console.log("cross-check — failing token pairs in the RENDERED mode, one table per run:");
 {
   const vars = tokens({
     collections: [{ name: "Sem", key: "c1", modes: ["Dark", "Light"], default: "Dark" }, { name: "Prim", key: "c2", modes: ["Mode 1"], default: "Mode 1" }],
@@ -950,7 +950,7 @@ console.log("cross-check — DT-63: failing token pairs in the RENDERED mode, on
   ] };
   // a filled switch whose dim border fails on the page, but whose fill stands out 3:1 — the fill is the boundary
   const chip: NodeInput = { type: "INSTANCE", id: "9:2", name: "Switch", tokens: { fills: "Accent", strokes: "Border" }, strokes: STROKE, fills: [{ type: "solid", color: "#c6bfff", tokens: { color: "Accent" } }] };
-  // D126: a badge's border is decoration, not a control's boundary — no stroke row however dim
+  // a badge's border is decoration, not a control's boundary — no stroke row however dim
   const badge: NodeInput = { type: "INSTANCE", id: "9:3", name: "Badge", mainComponent: { name: "Type=Neutral", key: "bk", setKey: "bs", setName: "Badge" }, tokens: { strokes: "Border" }, strokes: STROKE };
   const A = page("Form A", "1:1", [field("1:2"), button, chip, badge, card, text("1:3", "Inter", null, "Text/Main")]);
   const B = page("Form B", "2:1", [field("2:2"), field("2:3", { props: { State: "Disabled" }, mainComponent: { name: "State=Disabled", key: "fk2", setKey: "fs", setName: "Input Field" } })]);
@@ -958,27 +958,27 @@ console.log("cross-check — DT-63: failing token pairs in the RENDERED mode, on
   const all = res.findings.filter((x) => x.code === "token-pair-contrast");
   const rows = all[0]?.tokenPairs ?? [];
   const row = rows[0];
-  ok("[DT63-T1] two screens with the same stroke/background pair -> ONE info, ONE row covering both screens",
+  ok("two screens with the same stroke/background pair -> ONE info, ONE row covering both screens",
     all.length === 1 && all[0]?.severity === "info" && rows.length === 1 && row?.screens.join() === "Form A,Form B");
-  ok("[DT63-T1] the row: non-text, the border against the PAGE around the field (not the field's own fill), in the rendered mode, 1.99:1 < 3:1",
+  ok("the row: non-text, the border against the PAGE around the field (not the field's own fill), in the rendered mode, 1.99:1 < 3:1",
     row?.kind === "non-text" && row.fg === "Border" && row.bg === "Bg/Page" && row.mode === "Dark" && row.ratio === 1.99 && row.required === 3);
-  ok("[DT63-T1] nodes: the two enabled fields only (the Disabled variant is exempt)", row?.nodes.join() === "1:2,2:2");
-  ok("[DT63-T2] a stroke equal to its own fill, on a page that fill contrasts with, is no row (WCAG 1.4.11: the colour outside the control)",
+  ok("nodes: the two enabled fields only (the Disabled variant is exempt)", row?.nodes.join() === "1:2,2:2");
+  ok("a stroke equal to its own fill, on a page that fill contrasts with, is no row (WCAG 1.4.11: the colour outside the control)",
     !rows.some((r) => r.fg === "Accent"));
-  ok("[DT63-T2] a dim border around a fill that contrasts 3:1 with the page is no node of the row (the fill rescues it)",
+  ok("a dim border around a fill that contrasts 3:1 with the page is no node of the row (the fill rescues it)",
     !(row?.nodes ?? []).includes("9:2"));
-  ok("[DT63-T2/D126] a badge's dim border is no row (stroke rows cover inputs, selects and toggles only)",
+  ok("a badge's dim border is no row (stroke rows cover inputs, selects and toggles only)",
     !(row?.nodes ?? []).includes("9:3") && rows.length === 1);
-  ok("[DT63-T2] a border that passes against the card around it is no row, though it fails against its own fill",
+  ok("a border that passes against the card around it is no row, though it fails against its own fill",
     !rows.some((r) => r.fg === "Border/Strong"));
-  ok("[DT63-T3] the message is a question once per pair, and the field `pairs` stays derived-mode-contrast's",
+  ok("the message is a question once per pair, and the field `pairs` stays derived-mode-contrast's",
     /^1 token pair\(s\) fail WCAG in the rendered mode\(s\) — ask the designer once per pair: stroke 'Border' on 'Bg\/Page' \(Dark\) 1\.99:1 < 3:1 — 2 screen\(s\)/.test(all[0]?.message ?? "") && all[0]?.pairs === undefined);
-  ok("[DT63-T3] the cross-check markdown prints the table", /## Token pairs below WCAG in the rendered modes[\s\S]*\| non-text \| `Border` \| `Bg\/Page` \| Dark \| 1\.99:1 \| 3:1 \| 2: Form A, Form B \|/.test(toMarkdown(res)));
+  ok("the cross-check markdown prints the table", /## Token pairs below WCAG in the rendered modes[\s\S]*\| non-text \| `Border` \| `Bg\/Page` \| Dark \| 1\.99:1 \| 3:1 \| 2: Form A, Form B \|/.test(toMarkdown(res)));
   // Text pairs: 4.5:1, 3:1 for large text (≥ 24px).
   const dim: NodeInput = { type: "TEXT", id: "5:1", name: "Hint", text: "Search", font: { family: "Inter", size: 14 }, tokens: { fills: "Border" } };
   const big: NodeInput = { type: "TEXT", id: "5:2", name: "Title", text: "Search", font: { family: "Inter", size: 28 }, tokens: { fills: "Accent" } };
   const t = crossCheck({ screens: [page("Form C", "3:1", [dim, big])], variables: vars }).findings.find((x) => x.code === "token-pair-contrast")?.tokenPairs ?? [];
-  ok("[DT63-T4] text on its backdrop at 4.5:1 is a text row; large text that passes 3:1 is none",
+  ok("text on its backdrop at 4.5:1 is a text row; large text that passes 3:1 is none",
     t.length === 1 && t[0]?.kind === "text" && t[0].fg === "Border" && t[0].required === 4.5);
   // The per-screen audit does not merge cross-file info: the run's table is not doubled into its findings.
   // Real-shaped: what the CLI passes — the screen's own .vars.json slice, the merged variables.json and the
@@ -986,13 +986,13 @@ console.log("cross-check — DT-63: failing token pairs in the RENDERED mode, on
   for (const [how, opts] of [["variables only", { variables: vars }], ["--design-system", { variables: vars, designSystem: { tokens: vars } }]] as const) {
     const au = audit([{ doc: A.doc ?? null, label: "Form A", vars }], opts);
     const cf = (au.crossFile && au.crossFile.findings) || [];
-    ok(`[DT63-T5] audit (${how}): the table is in crossFile as info only, never a merged audit finding`,
+    ok(`audit (${how}): the table is in crossFile as info only, never a merged audit finding`,
       au.findings.every((x) => x.code !== "token-pair-contrast") && cf.filter((x) => x.code === "token-pair-contrast").map((x) => x.severity).join() === "info");
   }
 }
 
-// ---------------------------------------------------------------- review 1 of groups 18+19, fix pass 1 (D127)
-console.log("cross-check — token pairs, fix pass 1 (unknown backdrops, the colour outside the control, rendered mode, large text, disabled):");
+// ---------------------------------------------------------------- token pairs
+console.log("cross-check — token pairs (unknown backdrops, the colour outside the control, rendered mode, large text, disabled):");
 {
   const vars = tokens({
     collections: [{ name: "Sem", key: "c1", modes: ["Dark", "Light"], default: "Dark" }],
@@ -1019,50 +1019,50 @@ console.log("cross-check — token pairs, fix pass 1 (unknown backdrops, the col
   const pairs = (...screens: CrossCheckScreen[]) => crossCheck({ screens, variables: vars }).findings.find((x) => x.code === "token-pair-contrast")?.tokenPairs ?? [];
   const frame = (id: string, fills: NonNullable<NodeInput["fills"]>, children: NodeInput[], extra: Partial<NodeInput> = {}): NodeInput => ({ type: "FRAME", id, name: "Selected item", fills, children, ...extra });
 
-  // H-1: an untokenised gradient / raw / translucent fill between the text and the nearest token backdrop makes it unknown.
+  // an untokenised gradient / raw / translucent fill between the text and the nearest token backdrop makes it unknown.
   const grad = { type: "gradient" as const, kind: "GRADIENT_LINEAR" as const, stops: [{ pos: 0, color: "#c6bfff" }, { pos: 1, color: "#ffffff" }] };
-  ok("[H-1] black text on a gradient highlight inside a dark token page → no row (the audit's contrast-manual covers it)", pairs(scr("Side menu", [frame("2:1", [grad], [label("2:2", "Static/Black")])])).length === 0);
-  ok("[H-1] …nor on a raw, untokenised #f4f4f4 card", pairs(scr("Side menu", [frame("2:1", [solid("#f4f4f4")], [label("2:2", "Static/Black")])])).length === 0);
-  ok("[H-1] …nor on a translucent token-bound fill (the composite is no token's value)", pairs(scr("Side menu", [frame("2:1", [solid("#1d1d1f80", "Bg/Card")], [label("2:2", "Static/Black")])])).length === 0);
+  ok("black text on a gradient highlight inside a dark token page → no row (the audit's contrast-manual covers it)", pairs(scr("Side menu", [frame("2:1", [grad], [label("2:2", "Static/Black")])])).length === 0);
+  ok("…nor on a raw, untokenised #f4f4f4 card", pairs(scr("Side menu", [frame("2:1", [solid("#f4f4f4")], [label("2:2", "Static/Black")])])).length === 0);
+  ok("…nor on a translucent token-bound fill (the composite is no token's value)", pairs(scr("Side menu", [frame("2:1", [solid("#1d1d1f80", "Bg/Card")], [label("2:2", "Static/Black")])])).length === 0);
   const card = pairs(scr("Side menu", [frame("2:1", [solid("#1d1d1f", "Bg/Card")], [label("2:2", "Static/Black")])]));
-  ok("[H-1] control: on an opaque token-bound card the pair is judged against the CARD", card.length === 1 && card[0]?.fg === "Static/Black" && card[0].bg === "Bg/Card");
-  ok("[H-1] a fully transparent raw fill paints nothing: the page token stays the backdrop",
+  ok("control: on an opaque token-bound card the pair is judged against the CARD", card.length === 1 && card[0]?.fg === "Static/Black" && card[0].bg === "Bg/Card");
+  ok("a fully transparent raw fill paints nothing: the page token stays the backdrop",
     pairs(scr("Side menu", [frame("2:1", [solid("#f4f4f400")], [label("2:2", "Static/Black")])]))[0]?.bg === "Bg/Page");
   // …and the derived-mode check walks the same backdrop (walkWithBg): Text/Muted fails on the page only in Light.
   const derived = (kids: NodeInput[]) => crossCheck({ screens: [scr("Side menu", kids)], variables: vars }).findings.some((x) => x.code === "derived-mode-contrast");
-  ok("[H-1] derived-mode-contrast: a text on the page is judged in the undrawn Light mode", derived([label("2:2", "Text/Muted")]));
-  ok("[H-1] derived-mode-contrast: the same text on a gradient highlight is not (its backdrop is unknown)", !derived([frame("2:1", [grad], [label("2:2", "Text/Muted")])]));
+  ok("derived-mode-contrast: a text on the page is judged in the undrawn Light mode", derived([label("2:2", "Text/Muted")]));
+  ok("derived-mode-contrast: the same text on a gradient highlight is not (its backdrop is unknown)", !derived([frame("2:1", [grad], [label("2:2", "Text/Muted")])]));
 
-  // M-6: the RENDERED mode is the root's resolvedModes entry, not the collection's default.
+  // the RENDERED mode is the root's resolvedModes entry, not the collection's default.
   const light = pairs(scr("Profile", [label("3:1", "Text/Muted"), label("3:2", "Text/Faint")], "Light"));
-  ok("[M-6] a Light screen (default Dark): the pair failing only in Light is a row in mode 'Light' (#c0c0c8 on #ffffff 1.81:1)",
+  ok("a Light screen (default Dark): the pair failing only in Light is a row in mode 'Light' (#c0c0c8 on #ffffff 1.81:1)",
     light.length === 1 && light[0]?.fg === "Text/Muted" && light[0].mode === "Light" && light[0].ratio === 1.81);
-  ok("[M-6] …and the pair failing only in Dark is absent", !light.some((p) => p.fg === "Text/Faint"));
+  ok("…and the pair failing only in Dark is absent", !light.some((p) => p.fg === "Text/Faint"));
 
-  // L-1 / C6: large text needs 3:1 — a 28px label at 4.37:1 passes, the same label at 14px does not.
-  ok("[L-1 C6] large text (28px) at 4.37:1 is no row; at 14px it is one (needs 4.5:1)",
+  // Large text needs 3:1 — a 28px label at 4.37:1 passes, the same label at 14px does not.
+  ok("large text (28px) at 4.37:1 is no row; at 14px it is one (needs 4.5:1)",
     pairs(scr("Profile", [label("3:3", "Text/Large", 28)])).length === 0 && pairs(scr("Profile", [label("3:3", "Text/Large", 14)]))[0]?.required === 4.5);
 
-  // M-2: the border vs the colour OUTSIDE the control, also when the fill is on the instance and the border on an inner frame.
+  // the border vs the colour OUTSIDE the control, also when the fill is on the instance and the border on an inner frame.
   const field = (id: string, instFill: string, fillTok: string, strokeTok: string, strokeHex: string, extra: Partial<NodeInput> = {}): NodeInput => ({
     type: "INSTANCE", id, name: "Input Field", mainComponent: { name: "State=Default", key: "fk", setKey: "fs", setName: "Input Field" },
     tokens: { fills: fillTok }, fills: [solid(instFill, fillTok)], ...extra,
     children: [{ type: "FRAME", id: `I${id};1`, name: "Container", tokens: { strokes: strokeTok }, strokes: { colors: [strokeHex], weight: 1, align: "inside" } }],
   });
   const onCard = frame("4:1", [solid("#ffffff", "Bg/White")], [field("4:2", "#e0e0e0", "Bg/Soft", "Border/Strong", "#8a8a8a")], { name: "Card" });
-  ok("[M-2] split layers: a border that passes against the white card around the control (3.4:1) but not against the instance's own fill (2.6:1) is no row",
+  ok("split layers: a border that passes against the white card around the control (3.4:1) but not against the instance's own fill (2.6:1) is no row",
     !pairs(scr("Form", [onCard])).some((p) => p.fg === "Border/Strong"));
   const dark = pairs(scr("Form", [field("4:3", "#1d1d1f", "Bg/Input", "Border", "#46464f")]));
-  ok("[M-2] split layers: a border that fails is a row against the PAGE (the colour outside), never the instance's Bg/Input",
+  ok("split layers: a border that fails is a row against the PAGE (the colour outside), never the instance's Bg/Input",
     dark.length === 1 && dark[0]?.fg === "Border" && dark[0].bg === "Bg/Page" && dark[0].nodes.join() === "I4:3;1");
-  ok("[M-2] split layers: the instance's fill reaching 3:1 against the page draws the boundary → no row",
+  ok("split layers: the instance's fill reaching 3:1 against the page draws the boundary → no row",
     pairs(scr("Form", [field("4:4", "#ffffff", "Bg/White", "Border", "#46464f")])).length === 0);
 
-  // M-5: 'Disabled=True' is a disabled variant here too (one helper with the audit).
-  ok("[M-5] a 'Size=M, Disabled=True' field (props Disabled: \"True\") is exempt",
+  // 'Disabled=True' is a disabled variant here too (one helper with the audit).
+  ok("a 'Size=M, Disabled=True' field (props Disabled: \"True\") is exempt",
     pairs(scr("Form", [field("4:5", "#1d1d1f", "Bg/Input", "Border", "#46464f", { props: { Size: "M", Disabled: "True" }, mainComponent: { name: "Size=M, Disabled=True", key: "fk3", setKey: "fs", setName: "Input Field" } })])).length === 0);
-  // L-2: a fully transparent stroke paints no border.
-  ok("[L-2] a 0-opacity border (#46464f00) is no row", pairs(scr("Form", [field("4:6", "#1d1d1f", "Bg/Input", "Border", "#46464f00")])).length === 0);
+  // a fully transparent stroke paints no border.
+  ok("a 0-opacity border (#46464f00) is no row", pairs(scr("Form", [field("4:6", "#1d1d1f", "Bg/Input", "Border", "#46464f00")])).length === 0);
 }
 
 // ---------- no --design-system: the project's own design-system dir is found, current or legacy layout ----------

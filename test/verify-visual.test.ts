@@ -1,6 +1,6 @@
-// Group 12c (slice A) — the visual diff's expectation and compare halves: expectation.referenceImage at --expect (index
-// first, the export's own geometry as the fallback, F-08 thumbnails and unreadable files refused, colour profile, crop,
-// sha256), and report.visual at --compare (always written, a third headline, an md section, the lenient guard, and D4:
+// the visual diff's expectation and compare halves: expectation.referenceImage at --expect (index
+// first, the export's own geometry as the fallback, thumbnails and unreadable files refused, colour profile, crop,
+// sha256), and report.visual at --compare (always written, a third headline, an md section, the lenient guard, and that
 // the diff never reaches the verdict). Screens are plugin-shaped exports (test/fixtures.ts) with the real index-row and
 // reference-PNG shapes (IHDR, pHYs, sRGB, gAMA, tEXt, IDAT, IEND); every name is invented ("Kiln Log").
 // Run with:  node test/verify-visual.test.ts
@@ -22,7 +22,7 @@ import type { NodeInput } from "./fixtures.ts";
 import { check, report } from "./assert.ts";
 
 const safe = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch (e) { console.log(`    (threw: ${e instanceof Error ? e.message : String(e)})`); } return check(name, r); };
-// (namespace lookups: this file runs — and fails cleanly — against a verify-screen that predates 12c)
+// (namespace lookups: this file runs — and fails cleanly — against a verify-screen that predates the reference-image checks)
 const ns: Record<string, unknown> = { ...verifyScreen, ...guards };
 const has = (name: string): boolean => typeof ns[name] === "function";
 
@@ -75,7 +75,7 @@ const FIRINGS: NodeInput = {
 };
 const doc = (root: NodeInput): ScreenDoc => screenExport([root], { exportedAt: "2026-10-06T00:00:00Z", screen: String(root.name), nodeId: root.id, page: "Studio", pageId: "1:2", sourceFile: KILN });
 const screen: ExpectInput = { doc: doc(FIRINGS), label: "Firings__90_1" };
-// the index row exactly as write-out.ts writeScreen writes it (F-118: referenceScale 4 decimals, referenceOffset design px)
+// the index row exactly as write-out.ts writeScreen writes it (referenceScale 4 decimals, referenceOffset design px)
 const indexRow = (more: Partial<IndexRow> = {}): IndexRow => ({
   name: "Firings", id: "90:1", type: "FRAME", page: "Studio", pageId: "1:2", title: "Firings", texts: ["Firings", "Cone 4"], exportedAt: "2026-10-06T00:00:00Z", sourceFile: KILN,
   file: "pages/Studio/Firings__90_1.json", variables: "pages/Studio/Firings__90_1.vars.json", assets: "pages/Studio/Firings__90_1.assets.json",
@@ -162,10 +162,10 @@ console.log("[10] --expect: an export with no referenceScale — recomputed exac
 }
 
 // ---------------------------------------------------------------- 11: thumbnails and unreadable references
-console.log("[11] --expect: an F-08 thumbnail or an unreadable file is refused with why:");
+console.log("[11] --expect: a thumbnail or an unreadable file is refused with why:");
 {
   const thumb = refOf(expect({ index: { layers: [noScaleRow()] }, readReference: reader({ [REF]: png(360, 309) }) }, without(FIRINGS, "renderBox")));
-  safe("[11] a 360×309 discovery thumbnail of a 1440 frame → usable:false, the F-08 why (never diffed at 0.25)", () =>
+  safe("[11] a 360×309 discovery thumbnail of a 1440 frame → usable:false, the thumbnail why (never diffed at 0.25)", () =>
     !!thumb && thumb.usable === false && thumb.path === "design/export/" + REF
     && thumb.why === "the reference is a 360 px image, not the export reference (a discovery thumbnail) — re-pull the screen");
   const thumbRow = refOf(expect({ index: { layers: [indexRow({ referenceScale: 0.25, referenceOffset: { x: 0, y: 0 } })] }, readReference: reader({ [REF]: png(360, 309) }) }, without(FIRINGS, "renderBox")));
@@ -187,27 +187,27 @@ console.log("[11] --expect: an F-08 thumbnail or an unreadable file is refused w
   safe("[11] no frame.w/h → usable:false", () => !!noSize && noSize.usable === false && /no size/.test(noSize.why));
 }
 
-// ---------------------------------------------------------------- 12c fix 1: the PNG's height, the pointer's place (--expect)
-console.log("[11] --expect (12c fix 1): width AND height of the PNG checked; the pointer confined to design/export:");
+// ---------------------------------------------------------------- the PNG's height, the pointer's place (--expect)
+console.log("[11] --expect: width AND height of the PNG checked; the pointer confined to design/export:");
 {
   const tall = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: png(REF_W, 150000) }) }));
-  safe("[F-3] the right width but 150000 px tall → usable:false naming both sizes (never decoded by the probe)", () =>
+  safe("the right width but 150000 px tall → usable:false naming both sizes (never decoded by the probe)", () =>
     !!tall && tall.usable === false && /is 2082×150000 px, but the frame's render bounds at 1\.4222x are 2082×1058/.test(tall.why) && /re-run --expect/.test(tall.why));
   const short = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: png(REF_W, REF_H - 40) }) }));
-  safe("[F-3] a PNG 40 px shorter than the render bounds (a stale reference) → usable:false", () => !!short && short.usable === false && /render bounds/.test(short.why));
+  safe("a PNG 40 px shorter than the render bounds (a stale reference) → usable:false", () => !!short && short.usable === false && /render bounds/.test(short.why));
   const near = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: png(REF_W, REF_H + 2) }) }));
-  safe("[F-3] ±2 px of rounding is still usable", () => !!near && near.usable === true);
+  safe("±2 px of rounding is still usable", () => !!near && near.usable === true);
   // a tall narrow frame: the scale comes from png.w (164 px), so round(5000 · 0.41) = 2050 is not the PNG's 2048 — allowed
   const LEDGER: NodeInput = { type: "FRAME", id: "90:50", name: "Kiln Ledger", box: { x: 3000, y: 0, w: 400, h: 5000 }, reference: "assets/90_50_ref.png", fills: [{ type: "solid", color: "#f7f3ee" }], children: [] };
   const led = [164, 163].map((w) => refOf(expect({ readReference: reader({ "assets/90_50_ref.png": png(w, 2048) }) }, LEDGER)));
-  safe("[F-3] a 400×5000 frame's 164×2048 / 163×2048 reference stays usable (the height tolerance carries the scale's own rounding)", () => led.every((r) => !!r && r.usable === true));
+  safe("a 400×5000 frame's 164×2048 / 163×2048 reference stays usable (the height tolerance carries the scale's own rounding)", () => led.every((r) => !!r && r.usable === true));
   const evil = refOf(expect({ readReference: () => REF_PNG }, { ...FIRINGS, reference: "../../outside/x.png" }));
-  safe("[F-7] a pointer with ../.. → usable:false 'leads outside design/export' (never read, hashed or decoded)", () => !!evil && evil.usable === false && /leads outside design\/export/.test(evil.why));
+  safe("a pointer with ../.. → usable:false 'leads outside design/export' (never read, hashed or decoded)", () => !!evil && evil.usable === false && /leads outside design\/export/.test(evil.why));
   const inner = refOf(expect({ readReference: reader({ "assets/sub/../90_1.png": REF_PNG }) }, { ...FIRINGS, reference: "assets/sub/../90_1.png" }));
-  safe("[F-7] a `..` that stays inside design/export is fine", () => !!inner && inner.usable === true);
-  // review 2 L-4: a sibling directory sharing the prefix ("design/export-evil") is outside too
+  safe("a `..` that stays inside design/export is fine", () => !!inner && inner.usable === true);
+  // a sibling directory sharing the prefix ("design/export-evil") is outside too
   const ex = path.resolve("/r", "design", "export");
-  safe("[F-7] resolveInside refuses a sibling sharing the prefix (design/export-evil) and accepts a file inside", () =>
+  safe("resolveInside refuses a sibling sharing the prefix (design/export-evil) and accepts a file inside", () =>
     verifyScreen.resolveInside(ex, "../export-evil/x.png") === null && verifyScreen.resolveInside(ex, "assets/x.png") === path.join(ex, "assets", "x.png"));
 }
 
@@ -292,17 +292,17 @@ console.log("[13] --compare: report.visual from measured.visual, always written:
   const { probe: _probe, ...handBase } = base();
   const hand = compare(exp, handBase);
   const handV = visualOf(hand);
-  safe("[F-12] no probe block, no visual → ran:false 'not applicable (no web probe)', headline '… — not applicable (no web probe)', md 'Not applicable'", () =>
+  safe("no probe block, no visual → ran:false 'not applicable (no web probe)', headline '… — not applicable (no web probe)', md 'Not applicable'", () =>
     !!handV && handV.ran === false && handV.why === "not applicable (no web probe)" && handV.headline === "VISUAL (informational — never the verdict) — not applicable (no web probe)"
     && /## Visual diff — informational, not part of the verdict[\s\S]*Not applicable \(no web probe\)\./.test(reportToMarkdown(hand)));
-  safe("[F-12] …D4: the verdict and why are the probe-less file's own (the same as without the change)", () => {
+  safe("…the verdict and why are the probe-less file's own (the same as without the change)", () => {
     const withProbe = compare(exp, base());
     return hand.verdict !== undefined && JSON.stringify(hand.deltas) === JSON.stringify(withProbe.deltas);
   });
   const notRun = visualOf(compare(exp, base({ visual: { version: 1, ran: false, why: "no time left within --max-time after measuring and driving" } })));
   safe("[13] the probe's ran:false why is carried", () => notRun?.ran === false && notRun.why === "no time left within --max-time after measuring and driving" && /not run \(no time left/.test(notRun.headline));
   const oneX = visualOf(compare(exp, base({ visual: ranVisual({ grid: "1x", colorProfile: "display_p3" }) })));
-  safe("[13] grid 1x says resampled (resampling can hide a difference — F-6: not downscaling, s < 1 upsamples); a colour profile is named", () =>
+  safe("[13] grid 1x says resampled (resampling can hide a difference: not downscaling, s < 1 upsamples); a colour profile is named", () =>
     !!oneX && /resampled to 1x \(reference 1\.4222x \(index\)\) — resampling can hide a difference/.test(oneX.headline) && /display_p3: colours not colour-managed/.test(oneX.headline));
   // malformed: readableMeasured drops it with a note; compare says malformed (never "predates the visual diff")
   const bad = { ...base(), visual: { version: 1, ran: true, differingPct: "lots" } };
@@ -339,8 +339,8 @@ console.log("[13] --compare: report.visual from measured.visual, always written:
     && reportToMarkdown(compare(exp, base({ visual: ranVisual() }), { against: { file: "p.report.json", report: readBack(prev) } })).includes("visual: 3.2 % → 0.9 %"));
 }
 
-// ---------------------------------------------------------------- 14: D4 invariance
-console.log("[14] D4 — the visual diff never reaches the fidelity verdict:");
+// ---------------------------------------------------------------- 14: the verdict is unaffected
+console.log("[14] the visual diff never reaches the fidelity verdict:");
 {
   const without = compare(exp, base());
   const loud = compare(exp, base({ visual: ranVisual({ differingPct: 40, shiftTolerantPct: 40, regionsTotal: 10, regions: Array.from({ length: 10 }, (_, i) => region(i * 100, 60000, ["90:1"], ["90:2"])) }) }));

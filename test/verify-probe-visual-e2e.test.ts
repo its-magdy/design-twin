@@ -1,4 +1,4 @@
-// End-to-end tests for group 12c's visual diff (F-89): the BUILT claude-plugin/scripts/verify-probe.js (and the built
+// End-to-end tests for the visual diff: the BUILT claude-plugin/scripts/verify-probe.js (and the built
 // verify-screen.js for --expect / --compare) in a real chromium, from TEMP consumer projects (design/export + node_modules of
 // their own — never the repo root).
 //
@@ -9,7 +9,7 @@
 // referenceOffset {-12, -12}, as bridge/src/write-out.ts writes them. The Kiln Ledger screen 90:50 (400×5000, generated here)
 // is a tall frame whose reference scale is below 1 (2048/5000).
 //
-// D3: needs the repo's devDependency playwright (+ chromium). Locally an unavailable renderer prints SKIPPED; in CI (CI=true)
+// needs the repo's devDependency playwright (+ chromium). Locally an unavailable renderer prints SKIPPED; in CI (CI=true)
 // that is a failure.  Run with:  node test/verify-probe-visual-e2e.test.ts
 import fs from "node:fs";
 import os from "node:os";
@@ -60,7 +60,7 @@ const run = (cwd: string, script: string, args: string[], killAfterMs = 0): Prom
 
 console.log("verify-probe visual e2e — the built bundles in a real chromium, from temp projects:");
 
-// ---- the references, rendered the way Figma renders them (D3: no playwright → SKIPPED locally)
+// ---- the references, rendered the way Figma renders them (no playwright → SKIPPED locally)
 let refPng: Buffer, ledgerPng: Buffer;
 try {
   const pw = await import("playwright");
@@ -82,7 +82,7 @@ try {
 } catch (e) {
   const reason = String(e instanceof Error ? e.message : e).split("\n")[0] ?? "";
   if (process.env.CI !== "true") { console.log(`SKIPPED (no playwright: ${reason})`); finish(); process.exit(0); }
-  check(`the renderer is available in CI (D3) — ${reason}`, false);
+  check(`the renderer is available in CI — ${reason}`, false);
   finish();
   report();
   process.exit(1);
@@ -91,7 +91,7 @@ const refInfo = pngInfo(refPng), ledgerInfo = pngInfo(ledgerPng);
 if (!refInfo || !ledgerInfo) { check("the in-test references are PNGs", false); finish(); report(); process.exit(1); }
 const SCALE = round4(refInfo.w / 1464), LEDGER_SCALE = round4(ledgerInfo.w / 400);
 console.log(`  (references: Firings ${refInfo.w}×${refInfo.h} → scale ${SCALE}; Kiln Ledger ${ledgerInfo.w}×${ledgerInfo.h} → scale ${LEDGER_SCALE})`);
-// a discovery thumbnail (F-08): 360 px wide
+// a discovery thumbnail: 360 px wide
 const thumbPng = encodePng(resampleBox(decodePng(refPng), 360, Math.round(refInfo.h * 360 / refInfo.w)));
 
 // ---- the temp consumer projects
@@ -119,7 +119,7 @@ const project = (name: string, o: ProjOpts): string => {
     nodes: [{ type: "FRAME", name: "Kiln Ledger", id: "90:50", box: { w: 400, h: 5000, x: 3000, y: 0 }, clip: true, fills: [{ type: "solid", color: "#f7f3ee" }], children: rows, reference: "assets/90_50_ref.png" }] };
   fs.writeFileSync(path.join(pagesDir, "Kiln_Ledger__90_50.json"), JSON.stringify(ledger, null, 1) + "\n");
   fs.writeFileSync(path.join(proj, "design", "export", "assets", "90_50_ref.png"), ledgerPng);
-  // the index rows write-out.ts writes (referenceScale / referenceOffset only when the pull had them — F-118)
+  // the index rows write-out.ts writes (referenceScale / referenceOffset only when the pull had them)
   const scaleOf = o.thumb ? round4(360 / 1464) : SCALE;
   const row = (n: string, id: string, file: string, ref: string, w: number, h: number, scale: number, offset: { x: number; y: number }): Record<string, unknown> => ({
     name: n, id, type: "FRAME", page: "Kilns", pageId: "90:0", sourceFile: "Kiln Log", file: `pages/Kilns/${file}`, reference: ref,
@@ -134,7 +134,7 @@ const pMain = project("kiln-log", { indexScale: true });
 const pOld = project("kiln-log-old", { indexScale: false });
 const pThumb = project("kiln-log-thumb", { indexScale: true, thumb: true });
 const pSwap = project("kiln-log-swap", { indexScale: true });
-// e12 (F-2): a monorepo — design/ at the repo root, the web app (with its own playwright) in app/
+// e12: a monorepo — design/ at the repo root, the web app (with its own playwright) in app/
 const pMono = project("kiln-log-mono", { indexScale: true });
 const monoApp = path.join(pMono, "app");
 fs.mkdirSync(path.join(monoApp, "node_modules"), { recursive: true });
@@ -166,7 +166,7 @@ const EXP = out("Firings") + ".expected.json";
 // e7: the same expectation without referenceImage (an expectation that predates the visual diff)
 const full = readJsonOrNull(path.join(pMain, EXP), isVerifyExpectation);
 if (full !== null) { const { referenceImage: _drop, ...old } = full; fs.writeFileSync(path.join(pMain, out("Older") + ".expected.json"), JSON.stringify(old, null, 2) + "\n"); }
-// e11 (F-1): referenceImage null (hand-edited "to turn the diff off") — once a TypeError that left chromium open forever
+// e11: referenceImage null (hand-edited "to turn the diff off") — once a TypeError that left chromium open forever
 if (full !== null) fs.writeFileSync(path.join(pMain, out("Null") + ".expected.json"), JSON.stringify({ ...full, referenceImage: null }, null, 2) + "\n");
 // e5: the reference replaced after --expect (a re-pull without re-running --expect)
 fs.writeFileSync(path.join(pSwap, "design", "export", "assets", "90_1_ref.png"), encodePng(decodePng(refPng)));
@@ -252,12 +252,12 @@ const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? 
   check("e7 nodes, notMeasured, interactions, page and navigation are identical with and without the diff", a !== null && b !== null && strip(a) === strip(b));
   check("e7 the measured artifacts are the same list shape (only the screenshot)", a !== null && b !== null && (a.artifacts ?? []).length === 1 && (b.artifacts ?? []).length === 1);
 }
-// ---- e4: a discovery thumbnail as the reference (F-08) — and the --compare verdict does not move
+// ---- e4: a discovery thumbnail as the reference — and the --compare verdict does not move
 {
   const r = await P.e4;
   const m = read(pThumb, out("Firings"));
   console.log(`    e4: exit ${r.status} — ${brief(m)}`);
-  check(`e4 a 360 px thumbnail: not run, the F-08 why (${whyOf(m)})`, r.status === 0 && /a discovery thumbnail\)/.test(whyOf(m)) && !fs.existsSync(path.join(pThumb, out("Firings") + ".diff.png")));
+  check(`e4 a 360 px thumbnail: not run, the why (${whyOf(m)})`, r.status === 0 && /a discovery thumbnail\)/.test(whyOf(m)) && !fs.existsSync(path.join(pThumb, out("Firings") + ".diff.png")));
   const c4 = await vs(pThumb, ["--compare", EXP, out("Firings") + ".measured.json", "--out", out("Firings")]);
   const c1 = await vs(pMain, ["--compare", EXP, out("Off") + ".measured.json", "--out", out("Off")]);
   const r4 = readReport(pThumb, out("Firings")), r1 = readReport(pMain, out("Off"));
@@ -271,7 +271,7 @@ const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? 
   console.log(`    e5: exit ${r.status} — ${brief(m)}`);
   check(`e5 a reference PNG replaced after --expect: not run (${whyOf(m)})`, r.status === 0 && /changed since --expect/.test(whyOf(m)));
 }
-// ---- e6: a section of the app reached by --steps (L-1 reach reused)
+// ---- e6: a section of the app reached by --steps (the reach reused)
 {
   const [r, rx] = [await P.e6, await P.e6x];
   const m = read(pMain, out("Tabs")), v = ran(m);
@@ -288,7 +288,7 @@ const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? 
   check("e8 the stale <S>.diff.png of an earlier run is removed", !fs.existsSync(path.join(pMain, out("Short") + ".diff.png")));
   check("e8 the stderr says the diff did not run", /visual not run \(no time left/.test(r.stderr));
 }
-// ---- e9: the built frame is taller than the design (D48)
+// ---- e9: the built frame is taller than the design
 {
   const r = await P.e9;
   const m = read(pMain, out("Tall")), v = ran(m);
@@ -296,28 +296,28 @@ const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? 
   check("e9 only the design window is compared, on the reference grid (no 1x fallback)", v !== null && v.grid === "reference" && v.resampled === "none" && v.capture.clip.h === 720 && v.shiftTolerantPct < 0.5);
   check("e9 a note says the built frame is taller than the design", v !== null && v.notes.some((n) => /1440×800 CSS px and the design 1440×720/.test(n)));
 }
-// ---- e10: a tall frame whose reference scale is below 1 (Chromium renders at a factor < 1: facts-12c "B verification")
+// ---- e10: a tall frame whose reference scale is below 1 (Chromium renders at a factor < 1)
 {
   const r = await P.e10;
   const m = read(pMain, out("Ledger")), v = ran(m);
   console.log(`    e10: exit ${r.status} ${Math.round(r.ms / 1000)}s — ${brief(m)}`);
   check(`e10 a 400×5000 frame at scale ${LEDGER_SCALE}: rendered at it, on the reference grid, low diff`, v !== null && v.capture.dsf === LEDGER_SCALE && LEDGER_SCALE < 1 && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.compared.h >= 2046 && v.compared.h <= 2048);
 }
-// ---- e11 (F-1): a null referenceImage — ran:false with why, exit 0, the measured file written, the process exits
+// ---- e11: a null referenceImage — ran:false with why, exit 0, the measured file written, the process exits
 {
   const r = await P.e11;
   const m = read(pMain, out("Null"));
   console.log(`    e11: exit ${r.status}${r.killed ? " (KILLED — hung)" : ""} ${Math.round(r.ms / 1000)}s — ${brief(m)}`);
   if (r.status !== 0) console.log(r.stderr.slice(0, 1000));
-  check("[F-1] e11 referenceImage null: the probe exits 0 on its own and writes measured.json", !r.killed && r.status === 0 && m !== null);
-  check(`[F-1] e11 …visual ran:false 'malformed — re-run --expect' (${whyOf(m)})`, /referenceImage is malformed — re-run --expect/.test(whyOf(m)) && /visual not run \(the expectation's referenceImage is malformed/.test(r.stderr));
+  check("e11 referenceImage null: the probe exits 0 on its own and writes measured.json", !r.killed && r.status === 0 && m !== null);
+  check(`e11 …visual ran:false 'malformed — re-run --expect' (${whyOf(m)})`, /referenceImage is malformed — re-run --expect/.test(whyOf(m)) && /visual not run \(the expectation's referenceImage is malformed/.test(r.stderr));
 }
-// ---- e12 (F-2): the monorepo — the probe in app/ (--project app), the expectation in the root's design/verify
+// ---- e12: the monorepo — the probe in app/ (--project app), the expectation in the root's design/verify
 {
   const r = await P.e12;
   const m = read(pMono, out("Mono")), v = ran(m);
   console.log(`    e12: exit ${r.status}${r.killed ? " (KILLED)" : ""} — ${brief(m)}`);
-  check(`[F-2] e12 a monorepo (design/ at the root, --project app): the reference is found and diffed (${whyOf(m)})`, r.status === 0 && v !== null && v.grid === "reference" && v.shiftTolerantPct < 0.5);
+  check(`e12 a monorepo (design/ at the root, --project app): the reference is found and diffed (${whyOf(m)})`, r.status === 0 && v !== null && v.grid === "reference" && v.shiftTolerantPct < 0.5);
 }
 
 finish();

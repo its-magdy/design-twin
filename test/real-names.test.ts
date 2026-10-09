@@ -1,4 +1,4 @@
-// The real-name guard (group 16, H-2 / K-8, D105): no real field-test file, company, layer, person or place name may
+// The real-name guard: no real field-test file, company, layer, person or place name may
 // reach a tracked file or path. The field tests ran against a client's real Figma files; their pruned exports became
 // fixtures and their screen names leaked into tests, comments and docs (keep-docs-generic). They were replaced with
 // invented names of the same shape; this suite keeps them out.
@@ -7,7 +7,7 @@
 // The list is NOT in the repo in plain text — only `sha256("dt-banned:" + phrase).slice(0, 16)` of each banned 1-3 word
 // phrase (and of its joined form, e.g. a camel/lowercase identifier). That keeps plain names out of the TREE; it is not
 // secrecy: the salt is public and sha256 is fast, so a dictionary run recovers short or common phrases in seconds
-// (D109), and the branch history already holds the old names. Each file is tokenized (camelCase / PascalCase /
+//, and the branch history already holds the old names. Each file is tokenized (camelCase / PascalCase /
 // letter-digit boundaries split, lower-cased, split on anything that is not a letter or digit — so `fooBar`,
 // `foo_bar`, `foo-bar`, `foo bar`, a path and a comment wrapped onto the next line all yield "foo bar") and every 1-,
 // 2- and 3-gram is hashed; a lockfile's `sha512-…` integrity hashes are dropped first (random base64: ~1 in 1,000
@@ -104,28 +104,28 @@ const keep = (f: string, trackedSet: ReadonlySet<string>): boolean => f !== "" &
 
 // ---- self-test: an invented, salted two-word token (never a real name) proves the tokenizer
 console.log("real-names — the guard itself:");
-check("[H-2] BANNED holds ≥ 50 entries, every one a 16-hex-char salted hash, no duplicates",
+check("BANNED holds ≥ 50 entries, every one a 16-hex-char salted hash, no duplicates",
   BANNED.length >= 50 && BANNED.every((h) => /^[0-9a-f]{16}$/.test(h)) && new Set(BANNED).size === BANNED.length);
 {
   const a = "qx" + hash("probe-a").slice(0, 6).replace(/[0-9]/g, "q"), b = "zv" + hash("probe-b").slice(0, 6).replace(/[0-9]/g, "z");
   const probe = indexOf([hash(`${a} ${b}`), hash(`${a}${b}`)]);
   const found = (s: string): boolean => scan(s, probe, new Map()).length > 0;
   const cap = (w: string): string => w.charAt(0).toUpperCase() + w.slice(1);
-  check("[H-2] tokenizer: a spaced Title-case phrase is found", found(`see the ${cap(a)} ${cap(b)} screen`));
-  check("[H-2] tokenizer: a PascalCase identifier is split (camel boundary)", found(`const x = ${cap(a)}${cap(b)}Screen;`));
-  check("[H-2] tokenizer: snake_case, kebab-case and UPPER forms are found",
+  check("tokenizer: a spaced Title-case phrase is found", found(`see the ${cap(a)} ${cap(b)} screen`));
+  check("tokenizer: a PascalCase identifier is split (camel boundary)", found(`const x = ${cap(a)}${cap(b)}Screen;`));
+  check("tokenizer: snake_case, kebab-case and UPPER forms are found",
     found(`${a}_${b}__1_2.json`) && found(`--out ${a}-${b}`) && found(`${a.toUpperCase()}_${b.toUpperCase()}`));
-  check("[H-2] tokenizer: a path segment and a comment wrapped onto the next line are found",
+  check("tokenizer: a path segment and a comment wrapped onto the next line are found",
     found(`test/fixtures/x/__${cap(a)}_${b}_/index.json`) && found(`// the ${cap(a)}\n  // ${cap(b)} row`));
-  check("[H-2] tokenizer: the joined lowercase form is found", found(`components/{ui,${a}${b}}`));
-  check("[H-2] a near miss is not flagged (other word, word inside a longer token, a JSON key after a value)",
+  check("tokenizer: the joined lowercase form is found", found(`components/{ui,${a}${b}}`));
+  check("a near miss is not flagged (other word, word inside a longer token, a JSON key after a value)",
     !found(`${a} other ${b}`) && !found(`${a}x ${b}`) && !found(`x${a} ${b}`) && !found(`{"name":"x/${a}","${b}":"y"}`));
   // an 88-char sha512 value that happens to hold the phrase (random base64 does, ~1 in 1,000 in a lockfile)
   const sri = ("Q0" + a + "/" + b + "0K").padEnd(86, "A") + "==";
-  check("[D109] a lockfile `sha512-…` integrity hash is not scanned (the same run without the prefix is found)",
+  check("a lockfile `sha512-…` integrity hash is not scanned (the same run without the prefix is found)",
     !found(`"integrity": "sha512-${sri}",`) && found(`"value": "${sri}",`));
 }
-check("[D109] the owner's handoff docs and .claude/ are skipped only while untracked — committed, they are scanned",
+check("the owner's handoff docs and .claude/ are skipped only while untracked — committed, they are scanned",
   !keep("docs/field-test-handoff.md", new Set()) && !keep(".claude/x.ts", new Set())
   && keep("docs/field-test-handoff.md", new Set(["docs/field-test-handoff.md"])) && keep(".claude/x.ts", new Set([".claude/x.ts"]))
   && keep("docs/other.md", new Set()));
@@ -170,7 +170,7 @@ for (const f of files) {
   }
 }
 if (printed > MAX_PRINT) console.log(`    … ${printed - MAX_PRINT} more`);
-check(`[H-2] the scan saw the repo (${scanned} text files; > 200 expected)`, scanned > 200);
-check(`[H-2] no tracked or new file PATH carries a banned name (${new Set(pathHits).size} paths)`, pathHits.length === 0);
-check(`[H-2] no tracked or new file's CONTENT carries a banned name (${contentHits} hits in ${hitFiles.size} files)`, contentHits === 0);
+check(`the scan saw the repo (${scanned} text files; > 200 expected)`, scanned > 200);
+check(`no tracked or new file PATH carries a banned name (${new Set(pathHits).size} paths)`, pathHits.length === 0);
+check(`no tracked or new file's CONTENT carries a banned name (${contentHits} hits in ${hitFiles.size} files)`, contentHits === 0);
 report();

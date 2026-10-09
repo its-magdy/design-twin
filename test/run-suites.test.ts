@@ -1,6 +1,6 @@
-// The test runner's own self-test (group 16, H-1a / D103): it keeps going after a failure, ends with a summary, treats a
+// The test runner's own self-test: it keeps going after a failure, ends with a summary, treats a
 // suite that exits 0 without its checks line as failed, warns on SKIPPED locally and fails on it under CI=true, forwards
-// every suite's output, runs one suite at a time, kills a hung suite, and refuses an unlisted test file. D109: a
+// every suite's output, runs one suite at a time, kills a hung suite, and refuses an unlisted test file. A
 // SIGTERM/SIGHUP to the runner kills the running suite, a suite is done when it exits (a lingering grandchild cannot
 // hold the run), a slow reader still gets the SUMMARY, `0/0` fails, the Windows lint command, verify-values' skip.
 //   node test/run-suites.test.ts
@@ -38,7 +38,7 @@ const suite = {
   skipped: fake("skipped", traced("skipped", `console.log("SKIPPED (no playwright: fake)"); process.exit(0);`)),
   after: fake("after", traced("after", `console.log("AFTER-SUITE-RAN"); console.log("\\n1/1 checks passed");`)),
   hang: fake("hang", `console.log("HANG-STARTED"); setInterval(() => {}, 1000);`),
-  // D109 fakes: a hung suite that leaves its pid; one whose grandchild inherits its stdout and outlives it; one that
+  // Fakes: a hung suite that leaves its pid; one whose grandchild inherits its stdout and outlives it; one that
   // prints far more than a pipe holds; one that asserts nothing
   hangpid: fake("hangpid", `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(path.join(tmp, "hang.pid"))}, String(process.pid)); setInterval(() => {}, 1000);`),
   lingers: fake("lingers", `import fs from "node:fs"; import { spawn } from "node:child_process";
@@ -73,45 +73,45 @@ try {
   fs.rmSync(LOG, { force: true });
   const mixed = runner([], { DT_RUN_SUITES_LIST: list(["pass", "failing", "nosummary", "partial", "skipped", "after"]) });
   const sum = summaryOf(mixed.out);
-  check("[H-1] the suite after a failing one still runs (its output is in the log)", /AFTER-SUITE-RAN/.test(mixed.out) && /=== after /.test(mixed.out));
-  check("[H-1] …and so does every suite after the no-summary and the partial one (all six started)", ["pass", "failing", "nosummary", "partial", "skipped", "after"].every((n) => new RegExp(`^start ${n}$`, "m").test(read(LOG))));
-  check("[H-1] exit 1 when any suite failed", mixed.status === 1);
-  check("[H-1] a SUMMARY block closes the run, one row per suite, with p/t and a time", /SUMMARY/.test(sum) && ["pass", "failing", "nosummary", "partial", "skipped", "after"].every((n) => lines(sum).some((l) => l.startsWith(n + " ")))
+  check("the suite after a failing one still runs (its output is in the log)", /AFTER-SUITE-RAN/.test(mixed.out) && /=== after /.test(mixed.out));
+  check("…and so does every suite after the no-summary and the partial one (all six started)", ["pass", "failing", "nosummary", "partial", "skipped", "after"].every((n) => new RegExp(`^start ${n}$`, "m").test(read(LOG))));
+  check("exit 1 when any suite failed", mixed.status === 1);
+  check("a SUMMARY block closes the run, one row per suite, with p/t and a time", /SUMMARY/.test(sum) && ["pass", "failing", "nosummary", "partial", "skipped", "after"].every((n) => lines(sum).some((l) => l.startsWith(n + " ")))
     && lines(sum).some((l) => /^pass\s+pass\s+2\/2\s+\d+\.\ds/.test(l)) && lines(sum).some((l) => /^failing\s+FAIL\s+1\/2\s+\d+\.\ds/.test(l)));
-  check("[H-1] the counts line: 6 suites: 2 passed, 3 FAILED, 1 skipped", /6 suites: 2 passed, 3 FAILED, 1 skipped — total \d/.test(sum));
+  check("the counts line: 6 suites: 2 passed, 3 FAILED, 1 skipped", /6 suites: 2 passed, 3 FAILED, 1 skipped — total \d/.test(sum));
   const failedLine = lines(sum).find((l) => l.startsWith("FAILED:")) ?? "";
-  check("[H-1] FAILED names the failing suite, the one that exited 0 without its checks line, and the p<t one — not the pass/after/skipped",
+  check("FAILED names the failing suite, the one that exited 0 without its checks line, and the p<t one — not the pass/after/skipped",
     /\bfailing\b/.test(failedLine) && /\bnosummary\b/.test(failedLine) && /\bpartial\b/.test(failedLine) && !/\b(pass|after|skipped)\b/.test(failedLine));
-  check("[H-1] a suite that exits 0 without its `N/N checks passed` line says why", /nosummary\s+FAIL\s+-\s+.*ended without its `N\/N checks passed` line/.test(sum));
-  check("[H-1] a suite that exits 0 with p < t is failed (1/2 checks passed)", /partial\s+FAIL\s+1\/2\s+.*1\/2 checks passed/.test(sum));
-  check("[H-1] the failed suites carry a rerun hint", /rerun: node /.test(sum));
-  check("[D103] the SKIPPED suite is listed as skipped with the CI warning", /^SKIPPED \(no playwright\): skipped$/m.test(sum) && /CI runs these/.test(sum) && /^skipped\s+skipped\s/m.test(sum));
-  check("[H-1] each suite's own output (its check lines and `N/N checks passed`) is forwarded live, before the summary",
+  check("a suite that exits 0 without its `N/N checks passed` line says why", /nosummary\s+FAIL\s+-\s+.*ended without its `N\/N checks passed` line/.test(sum));
+  check("a suite that exits 0 with p < t is failed (1/2 checks passed)", /partial\s+FAIL\s+1\/2\s+.*1\/2 checks passed/.test(sum));
+  check("the failed suites carry a rerun hint", /rerun: node /.test(sum));
+  check("the SKIPPED suite is listed as skipped with the CI warning", /^SKIPPED \(no playwright\): skipped$/m.test(sum) && /CI runs these/.test(sum) && /^skipped\s+skipped\s/m.test(sum));
+  check("each suite's own output (its check lines and `N/N checks passed`) is forwarded live, before the summary",
     /✓ pass-check-a/.test(mixed.out.slice(0, mixed.out.lastIndexOf("SUMMARY"))) && /✗ FAIL failing-check-b/.test(mixed.out) && (mixed.out.match(/^2\/2 checks passed$/gm) ?? []).length >= 1);
   const log = lines(read(LOG)).filter(Boolean);
-  check("[H-1] strictly serial: every `start X` is followed by its own `end X` before the next start", log.length === 12 && log.every((l, i) => (i % 2 === 0 ? l.startsWith("start ") : l === "end " + (log[i - 1] ?? "").slice(6))));
+  check("strictly serial: every `start X` is followed by its own `end X` before the next start", log.length === 12 && log.every((l, i) => (i % 2 === 0 ? l.startsWith("start ") : l === "end " + (log[i - 1] ?? "").slice(6))));
 
   // ---- SKIPPED: warning locally, failure under CI=true
-  console.log("\nrun-suites — SKIPPED (D103):");
+  console.log("\nrun-suites — SKIPPED:");
   const okList = list(["pass", "skipped"]);
   const local = runner([], { DT_RUN_SUITES_LIST: okList });
-  check("[D103] only pass + skipped, no CI: exit 0 and the warning", local.status === 0 && /warning: CI runs these/.test(local.out) && /2 suites: 1 passed, 0 FAILED, 1 skipped/.test(local.out));
+  check("only pass + skipped, no CI: exit 0 and the warning", local.status === 0 && /warning: CI runs these/.test(local.out) && /2 suites: 1 passed, 0 FAILED, 1 skipped/.test(local.out));
   const ci = runner([], { DT_RUN_SUITES_LIST: okList, CI: "true" });
-  check("[D103] the same under CI=true: exit 1, the skipped suite is FAILED with the reason", ci.status === 1 && /^FAILED: skipped$/m.test(ci.out) && /SKIPPED under CI \(/.test(ci.out));
+  check("the same under CI=true: exit 1, the skipped suite is FAILED with the reason", ci.status === 1 && /^FAILED: skipped$/m.test(ci.out) && /SKIPPED under CI \(/.test(ci.out));
   const ci1 = runner([], { DT_RUN_SUITES_LIST: okList, CI: "1" });
-  check("[D103] CI=1 (other runners) counts as CI too: exit 1", ci1.status === 1 && /^FAILED: skipped$/m.test(ci1.out));
-  check("[D103] CI unset or other than \"true\" does not fail it (CI=false: exit 0)", runner([], { DT_RUN_SUITES_LIST: okList, CI: "false" }).status === 0);
+  check("CI=1 (other runners) counts as CI too: exit 1", ci1.status === 1 && /^FAILED: skipped$/m.test(ci1.out));
+  check("CI unset or other than \"true\" does not fail it (CI=false: exit 0)", runner([], { DT_RUN_SUITES_LIST: okList, CI: "false" }).status === 0);
   const allPass = runner([], { DT_RUN_SUITES_LIST: list(["pass", "after"]) });
-  check("[H-1] all suites pass: exit 0, `2 suites: 2 passed, 0 FAILED, 0 skipped`, no FAILED/SKIPPED line", allPass.status === 0 && /2 suites: 2 passed, 0 FAILED, 0 skipped/.test(allPass.out) && !/^FAILED:/m.test(allPass.out) && !/^SKIPPED/m.test(allPass.out));
+  check("all suites pass: exit 0, `2 suites: 2 passed, 0 FAILED, 0 skipped`, no FAILED/SKIPPED line", allPass.status === 0 && /2 suites: 2 passed, 0 FAILED, 0 skipped/.test(allPass.out) && !/^FAILED:/m.test(allPass.out) && !/^SKIPPED/m.test(allPass.out));
 
   // ---- the cap
   console.log("\nrun-suites — per-suite cap:");
   const t0 = Date.now();
   const hung = runner([], { DT_RUN_SUITES_LIST: list(["hang", "after"]), DT_SUITE_TIMEOUT_MS: "500", DT_KILL_GRACE_MS: "300" });
-  check("[H-1] a hung suite is killed at the cap, reported `timed out`, and the next suite still runs", hung.status === 1 && /hang\s+FAIL\s+.*timed out after/.test(hung.out) && /AFTER-SUITE-RAN/.test(hung.out) && Date.now() - t0 < 30_000);
+  check("a hung suite is killed at the cap, reported `timed out`, and the next suite still runs", hung.status === 1 && /hang\s+FAIL\s+.*timed out after/.test(hung.out) && /AFTER-SUITE-RAN/.test(hung.out) && Date.now() - t0 < 30_000);
 
-  // ---- D109: a signal to the runner reaches the running suite (its own process group), and the summary still prints
-  console.log("\nrun-suites — SIGTERM / SIGHUP (D109):");
+  // ---- a signal to the runner reaches the running suite (its own process group), and the summary still prints
+  console.log("\nrun-suites — SIGTERM / SIGHUP:");
   for (const sig of ["SIGTERM", "SIGHUP"] as const) {
     const pidFile = path.join(tmp, "hang.pid");
     fs.rmSync(pidFile, { force: true });
@@ -128,19 +128,19 @@ try {
     const gone = await until(() => suitePid > 0 && !alive(suitePid), 3_000);
     if (suitePid > 0 && alive(suitePid)) try { process.kill(suitePid, "SIGKILL"); } catch { /* gone */ }
     if (code === -1) child.kill("SIGKILL");
-    check(`[D109] ${sig} to the runner kills the running suite (no orphan), skips the rest, prints the summary, exits 130`,
+    check(`${sig} to the runner kills the running suite (no orphan), skips the rest, prints the summary, exits 130`,
       suitePid > 0 && gone && code === 130 && /SUMMARY/.test(out) && /hangpid\s+FAIL\s.*interrupted/.test(out) && /after\s+not run/.test(out));
   }
 
-  // ---- D109: the verdict is the suite's exit, not its pipes closing (a lingering grandchild holds them)
-  console.log("\nrun-suites — exit vs close, piped stdout, 0/0 (D109):");
+  // ---- the verdict is the suite's exit, not its pipes closing (a lingering grandchild holds them)
+  console.log("\nrun-suites — exit vs close, piped stdout, 0/0:");
   {
     const t1 = Date.now();
     const lingering = runner([], { DT_RUN_SUITES_LIST: list(["lingers"]) });
     const ms = Date.now() - t1;
     const gp = pidIn(path.join(tmp, "linger.pid"));
     if (gp > 0 && alive(gp)) try { process.kill(gp, "SIGKILL"); } catch { /* gone */ }
-    check(`[D109] a suite whose grandchild keeps its stdout open is done when it EXITS (+ the drain cap), not 25 s later (${ms} ms)`,
+    check(`a suite whose grandchild keeps its stdout open is done when it EXITS (+ the drain cap), not 25 s later (${ms} ms)`,
       lingering.status === 0 && /lingers\s+pass\s+1\/1/.test(lingering.out) && ms < 10_000);
   }
   {
@@ -148,16 +148,16 @@ try {
     const e: Record<string, string | undefined> = { ...process.env, DT_RUN_SUITES_LIST: list(["big"]) };
     delete e.CI;
     const r = spawnSync("sh", ["-c", `"${process.execPath}" "${RUNNER}" | (sleep 2; cat)`], { encoding: "utf8", timeout: 60_000, env: e });
-    check("[D109] with a slow reader on a piped stdout the runner's output is complete: the suite's 400 KB, then the SUMMARY",
+    check("with a slow reader on a piped stdout the runner's output is complete: the suite's 400 KB, then the SUMMARY",
       (r.stdout.match(/^x{99}$/gm) ?? []).length === 4000 && /SUMMARY/.test(r.stdout) && /1 suites: 1 passed, 0 FAILED/.test(r.stdout));
   }
   {
     const zero = runner([], { DT_RUN_SUITES_LIST: list(["zero", "after"]) });
-    check("[D109] a suite that prints `0/0 checks passed` asserted nothing: FAIL", zero.status === 1 && /zero\s+FAIL\s.*0\/0 checks/.test(zero.out) && /^FAILED: zero$/m.test(zero.out));
+    check("a suite that prints `0/0 checks passed` asserted nothing: FAIL", zero.status === 1 && /zero\s+FAIL\s.*0\/0 checks/.test(zero.out) && /^FAILED: zero$/m.test(zero.out));
   }
 
-  // ---- D109: the lint command on Windows goes through cmd.exe (spawning npm.cmd without a shell throws EINVAL)
-  console.log("\nrun-suites — the lint command per platform (D109):");
+  // ---- the lint command on Windows goes through cmd.exe (spawning npm.cmd without a shell throws EINVAL)
+  console.log("\nrun-suites — the lint command per platform:");
   {
     const empty = path.join(tmp, "list-empty.json");
     fs.writeFileSync(empty, "[]");
@@ -174,17 +174,17 @@ console.log("CMD " + JSON.stringify({
     interface Cmd { cmd: string; args: string[]; detached: boolean; windowsVerbatimArguments?: boolean }
     let c: { win?: Cmd; winJs?: Cmd; winNode?: Cmd; posix?: Cmd } = {};
     try { c = JSON.parse(line.slice(4) || "{}") as typeof c; } catch { /* ✗ below */ }
-    check("[D109] win32 without npm_execpath: cmd.exe /d /s /c \"npm run -s lint:any\" (verbatim), not detached",
+    check("win32 without npm_execpath: cmd.exe /d /s /c \"npm run -s lint:any\" (verbatim), not detached",
       c.win?.cmd === "C:\\Windows\\cmd.exe" && c.win.args.join(" ") === `/d /s /c "npm run -s lint:any"` && c.win.windowsVerbatimArguments === true && c.win.detached === false);
-    check("[D109] win32 with an npm-cli.js execpath: node runs it directly; a node suite is not detached on win32; posix: npm, detached",
+    check("win32 with an npm-cli.js execpath: node runs it directly; a node suite is not detached on win32; posix: npm, detached",
       c.winJs?.cmd === process.execPath && c.winJs.args[0] === "C:\\npm\\bin\\npm-cli.js" && c.winNode?.detached === false
       && c.posix?.cmd === "npm" && c.posix.args.join(" ") === "run -s lint:any" && c.posix.detached === true);
   }
 
-  // ---- D109: verify-values' own local chromium skip is reported `skipped`, not a plain pass
+  // ---- verify-values' own local chromium skip is reported `skipped`, not a plain pass
   {
     const vv = runner(["verify-values"], { PLAYWRIGHT_BROWSERS_PATH: path.join(tmp, "no-browsers") });
-    check("[D109] verify-values with no browser, locally: the runner lists it as skipped (the SKIPPED marker), exit 0",
+    check("verify-values with no browser, locally: the runner lists it as skipped (the SKIPPED marker), exit 0",
       vv.status === 0 && /^verify-values\s+skipped\s/m.test(vv.out) && /^SKIPPED \(no playwright\): verify-values$/m.test(vv.out));
   }
 
@@ -192,9 +192,9 @@ console.log("CMD " + JSON.stringify({
   console.log("\nrun-suites — filters and --list:");
   fs.rmSync(LOG, { force: true });
   const filtered = runner(["after", "pass"], { DT_RUN_SUITES_LIST: list(["pass", "failing", "after"]) });
-  check("[H-1] positional names run only those suites, in list order (pass then after; failing not started)", filtered.status === 0 && /^start pass$/m.test(read(LOG)) && /^start after$/m.test(read(LOG)) && !/start failing/.test(read(LOG)) && /2 suites: 2 passed/.test(filtered.out));
+  check("positional names run only those suites, in list order (pass then after; failing not started)", filtered.status === 0 && /^start pass$/m.test(read(LOG)) && /^start after$/m.test(read(LOG)) && !/start failing/.test(read(LOG)) && /2 suites: 2 passed/.test(filtered.out));
   const unknown = runner(["no-such-suite"], { DT_RUN_SUITES_LIST: list(["pass"]) });
-  check("[H-1] an unknown name is a usage error (exit 2, names it)", unknown.status === 2 && /no suite matches "no-such-suite"/.test(unknown.err));
+  check("an unknown name is a usage error (exit 2, names it)", unknown.status === 2 && /no suite matches "no-such-suite"/.test(unknown.err));
 
   // ---- the compile cache the runner hands its suites (a user's own setting wins; NODE_DISABLE_COMPILE_CACHE is Node's to honour)
   console.log("\nrun-suites — NODE_COMPILE_CACHE for the suites:");
@@ -218,12 +218,12 @@ console.log("CMD " + JSON.stringify({
   const onDisk = fs.readdirSync(testDir).filter((f) => f.endsWith(".test.ts") || f === "harness.ts");
   const real = runner(["--list"], {});
   const realLines = lines(real.out);
-  check("[H-1] the real `--list` exits 0 and names every test/*.test.ts and harness.ts on disk", real.status === 0 && onDisk.length > 30 && onDisk.every((f) => real.out.includes("test/" + f)));
-  check("[H-1] …the two lints come first (lint:any, lint:types), then the real-name guard, then harness, then bridge — the old chain's order", /^lint:any/.test(realLines[0] ?? "") && /^lint:types/.test(realLines[1] ?? "") && /^real-names /.test(realLines[2] ?? "") && /^harness /.test(realLines[3] ?? "") && /^bridge /.test(realLines[4] ?? ""));
-  check("[H-1] …the browser suites keep their place (verify-probe-e2e after verify-probe, verify-own-pixels after verify-probe-drive-e2e)",
+  check("the real `--list` exits 0 and names every test/*.test.ts and harness.ts on disk", real.status === 0 && onDisk.length > 30 && onDisk.every((f) => real.out.includes("test/" + f)));
+  check("…the two lints come first (lint:any, lint:types), then the real-name guard, then harness, then bridge — the old chain's order", /^lint:any/.test(realLines[0] ?? "") && /^lint:types/.test(realLines[1] ?? "") && /^real-names /.test(realLines[2] ?? "") && /^harness /.test(realLines[3] ?? "") && /^bridge /.test(realLines[4] ?? ""));
+  check("…the browser suites keep their place (verify-probe-e2e after verify-probe, verify-own-pixels after verify-probe-drive-e2e)",
     real.out.indexOf("verify-probe-e2e ") > real.out.indexOf("verify-probe ") && real.out.indexOf("verify-own-pixels") > real.out.indexOf("verify-probe-drive-e2e"));
   const pkg = JSON.parse(read(path.join(testDir, "..", "package.json")) || "{}") as { scripts?: Record<string, string> };
-  check("[H-1] `npm test` is the runner (package.json scripts.test === \"node test/run-suites.ts\"); the lints stay scripts", pkg.scripts?.test === "node test/run-suites.ts" && typeof pkg.scripts.typecheck === "string" && typeof pkg.scripts["lint:any"] === "string" && typeof pkg.scripts["lint:types"] === "string");
+  check("`npm test` is the runner (package.json scripts.test === \"node test/run-suites.ts\"); the lints stay scripts", pkg.scripts?.test === "node test/run-suites.ts" && typeof pkg.scripts.typecheck === "string" && typeof pkg.scripts["lint:any"] === "string" && typeof pkg.scripts["lint:types"] === "string");
 
   // ---- --fast: skips exactly the three probe e2e suites, `not run` in the summary, exit unaffected, never looks like a full pass
   console.log("\nrun-suites — --fast:");
@@ -287,16 +287,16 @@ console.log("CMD " + JSON.stringify({
   fs.mkdirSync(mirror);
   for (const f of onDisk) fs.writeFileSync(path.join(mirror, f), "");
   const guardEnv = { DT_RUN_SUITES_DIR: mirror };
-  check("[H-1] control: a directory holding exactly the listed files passes the guard", runner(["--list"], guardEnv).status === 0);
+  check("control: a directory holding exactly the listed files passes the guard", runner(["--list"], guardEnv).status === 0);
   fs.writeFileSync(path.join(mirror, "zz-forgotten.test.ts"), "");
   const stray = runner(["--list"], guardEnv);
-  check("[H-1] a test/*.test.ts that is not in SUITES fails the runner (exit 1) and is named", stray.status === 1 && /zz-forgotten\.test\.ts exists but is not in SUITES/.test(stray.err));
+  check("a test/*.test.ts that is not in SUITES fails the runner (exit 1) and is named", stray.status === 1 && /zz-forgotten\.test\.ts exists but is not in SUITES/.test(stray.err));
   fs.rmSync(path.join(mirror, "zz-forgotten.test.ts"));
   fs.rmSync(path.join(mirror, "mcp-smoke.test.ts"));
   const missing = runner(["--list"], guardEnv);
-  check("[H-1] a SUITES file that does not exist fails the runner (exit 1) and is named", missing.status === 1 && /lists mcp-smoke\.test\.ts but .* does not exist/.test(missing.err));
+  check("a SUITES file that does not exist fails the runner (exit 1) and is named", missing.status === 1 && /lists mcp-smoke\.test\.ts but .* does not exist/.test(missing.err));
   const guardNoRun = runner(["zz-nothing"], guardEnv);
-  check("[H-1] the guard also stops a real run (not only --list): exit 1 before any suite starts", guardNoRun.status === 1 && !/^=== /m.test(guardNoRun.out));
+  check("the guard also stops a real run (not only --list): exit 1 before any suite starts", guardNoRun.status === 1 && !/^=== /m.test(guardNoRun.out));
 
   // ---- test/pool.ts: limit() and poolSize() (each async check is raced against 2 s so a regression fails instead of hanging)
   console.log("\nrun-suites — test/pool.ts:");

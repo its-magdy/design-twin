@@ -72,21 +72,21 @@ check("reordered children and a variant swap are both caught", (() => {
   const d = diffScreens(screen(), b);
   return d.reordered.length === 1 && d.reordered[0]?.after[0] === "Button" && d.changed.some((c) => c.id === "1:5" && c.categories.includes("component"));
 })());
-check("[DT-72] a sourceTransform change on an asset leaf is a `shape` change", (() => {
+check("a sourceTransform change on an asset leaf is a `shape` change", (() => {
   const a = screen(), b = screen();
   must(a.tree.children[1], "a card").children = [{ id: "1:6", name: "chevron", type: "VECTOR", asset: "assets/chevron.svg", sourceTransform: { rotation: 90 }, box: { w: 18, h: 10 } }] as FxNode[];
   must(b.tree.children[1], "b card").children = [{ id: "1:6", name: "chevron", type: "VECTOR", asset: "assets/chevron.svg", sourceTransform: { rotation: 90, flipped: true }, box: { w: 18, h: 10 } }] as FxNode[];
   const f = diffScreens(a, b).changed.flatMap((c) => c.fields);
   return f.length === 1 && f[0]?.field === "sourceTransform.flipped" && f[0]?.category === "shape";
 })());
-check("[DT-72] assetFrom (a hidden node reusing a visible twin's file) is an `asset` change", (() => {
+check("assetFrom (a hidden node reusing a visible twin's file) is an `asset` change", (() => {
   const a = screen(), b = screen();
   must(a.tree.children[1], "a card").children = [{ id: "1:6", name: "chevron", type: "VECTOR", assetSkipped: "hidden", box: { w: 18, h: 10 } }] as FxNode[];
   must(b.tree.children[1], "b card").children = [{ id: "1:6", name: "chevron", type: "VECTOR", assetSkipped: "hidden", asset: "assets/twin.svg", assetFrom: "1:9", box: { w: 18, h: 10 } }] as FxNode[];
   const f = diffScreens(a, b).changed.flatMap((c) => c.fields);
   return f.some((x) => x.field === "assetFrom" && x.category === "asset") && f.every((x) => x.category === "asset");
 })());
-check("[X02-2] a node-level `scroll` change is a `layout` change (not `other`)", (() => {
+check("a node-level `scroll` change is a `layout` change (not `other`)", (() => {
   const b = screen(); must(b.tree.children[1], "b card").scroll = "vertical";
   const d = diffScreens(screen(), b);
   const f = d.changed.flatMap((c) => c.fields);
@@ -95,7 +95,7 @@ check("[X02-2] a node-level `scroll` change is a `layout` change (not `other`)",
 check("a {nodes:[…]} multi-root document is walked too", diffScreens({ nodes: [screen().tree] }, { nodes: [Object.assign(screen().tree, { opacity: 0.5 })] }).changed[0]?.fields[0]?.field === "opacity");
 check("markdown: says so when nothing changed; lists fields when something did", /Nothing changed/.test(markdown(diffScreens(screen(), screen()), "x")) && (() => { const b = screen(); must(b.tree.children[0], "b.tree.children[0]").text = "Hi"; return /`text`: Welcome → Hi/.test(markdown(diffScreens(screen(), b), "x")); })());
 
-console.log("screen diff — the exporter's format (an older plugin's noise, G21):");
+console.log("screen diff — the exporter's format (an older plugin's noise):");
 {
   // The same screen exported by an older plugin (-1 grid anchors on every node, `layout` on text/shape/asset
   // leaves) and by a newer one (none of them). Plus one asset leaf that carries a layout only in the old export.
@@ -113,80 +113,80 @@ console.log("screen diff — the exporter's format (an older plugin's noise, G21
     return s;
   };
   const d = diffScreens(oldFormat(), withAsset());
-  check("[G21-N] old-format export vs the same screen from a newer plugin: nothing changed, every node counted formatOnly",
+  check("old-format export vs the same screen from a newer plugin: nothing changed, every node counted formatOnly",
     d.changed.length === 0 && d.summary.changed === 0 && d.summary.formatOnly === 6 && d.summary.positionOnly === 0);
-  check("[G21-N] the warning names the exporter's format and the one-time reopen", d.warnings.length === 1 && /6 node\(s\) differ only by the exporter's format/.test(d.warnings[0] ?? "") && /re-run verify-screen --expect and --compare/.test(d.warnings[0] ?? ""));
-  check("[G21-N] markdown: \"Nothing changed (… exporter's format …)\"", /Nothing changed \(6 node\(s\) differ only by the exporter's format\)\./.test(markdown(d, "x")));
-  check("[G21-N] the other direction (new -> old) is format-only too", diffScreens(withAsset(), oldFormat()).summary.formatOnly === 6);
-  check("[G21-N] two old-format exports of one unchanged screen: not format-only (nothing differs at all)", (() => { const r = diffScreens(oldFormat(), oldFormat()); return r.summary.formatOnly === 0 && r.changed.length === 0 && r.warnings.length === 0; })());
-  check("[G21-N] a real text change under the noise is still exactly one change, and the rest stay format-only", (() => {
+  check("the warning names the exporter's format and the one-time reopen", d.warnings.length === 1 && /6 node\(s\) differ only by the exporter's format/.test(d.warnings[0] ?? "") && /re-run verify-screen --expect and --compare/.test(d.warnings[0] ?? ""));
+  check("markdown: \"Nothing changed (… exporter's format …)\"", /Nothing changed \(6 node\(s\) differ only by the exporter's format\)\./.test(markdown(d, "x")));
+  check("the other direction (new -> old) is format-only too", diffScreens(withAsset(), oldFormat()).summary.formatOnly === 6);
+  check("two old-format exports of one unchanged screen: not format-only (nothing differs at all)", (() => { const r = diffScreens(oldFormat(), oldFormat()); return r.summary.formatOnly === 0 && r.changed.length === 0 && r.warnings.length === 0; })());
+  check("a real text change under the noise is still exactly one change, and the rest stay format-only", (() => {
     const b = withAsset(); must(b.tree.children[0], "b.tree.children[0]").text = "Welcome back";
     const r = diffScreens(oldFormat(), b);
     return r.changed.length === 1 && r.changed[0]?.id === "1:2" && r.changed[0].fields.length === 1 && r.changed[0].fields[0]?.field === "text" && r.summary.formatOnly === 5;
   })());
-  check("[G21-N] a grid child's anchor 1 -> 2 is a change (only -1 is noise)", (() => {
+  check("a grid child's anchor 1 -> 2 is a change (only -1 is noise)", (() => {
     const a = inGrid(withAsset()), b = inGrid(withAsset());
     must(a.tree.children[1], "a.tree.children[1]").gridColumnStart = 1;
     must(b.tree.children[1], "b.tree.children[1]").gridColumnStart = 2;
     const r = diffScreens(a, b);
     return r.changed.length === 1 && r.changed[0]?.id === "1:3" && r.changed[0].fields[0]?.field === "gridColumnStart" && r.changed[0].fields[0].before === "1" && r.changed[0].fields[0].after === "2";
   })());
-  check("[G21-N] a container's real layout change still compares (only absolute-on-a-childless-type and asset-leaf layouts are noise)", (() => {
+  check("a container's real layout change still compares (only absolute-on-a-childless-type and asset-leaf layouts are noise)", (() => {
     const b = withAsset(); must(b.tree, "b.tree").layout = { display: "flex", gap: 24 };
     const r = diffScreens(withAsset(), b);
     return r.changed.length === 1 && r.changed[0]?.id === "1:1" && r.changed[0].fields[0]?.field === "layout.gap";
   })());
-  check("[G21-N] a TEXT whose layout is not the bare absolute record keeps it as a difference", (() => {
+  check("a TEXT whose layout is not the bare absolute record keeps it as a difference", (() => {
     const a = withAsset(), b = withAsset();
     must(a.tree.children[0], "a.tree.children[0]").layout = { mode: "absolute", width: 120, height: 32 };
     must(b.tree.children[0], "b.tree.children[0]").layout = { display: "flex", gap: 4 };
     return diffScreens(a, b).changed.length === 1;
   })());
-  // HIGH-1 (review 1): the normaliser decides as the plugin does — by the PARENT. Grid-child fields belong only to an
+  // the normaliser decides as the plugin does — by the PARENT. Grid-child fields belong only to an
   // in-flow child of a grid; `layout` only to a container type (an allow-list: SLICE, STICKY, … are leaves).
   const gridKids = (s: FxScreen, extra: (n: FxNode) => void): FxScreen => { for (const k of s.tree.children) extra(k); return s; };
-  check("[G21-N] an older plugin's gridAlignSelf/gridJustifySelf \"start\" (and spans) off a grid are format noise", (() => {
+  check("an older plugin's gridAlignSelf/gridJustifySelf \"start\" (and spans) off a grid are format noise", (() => {
     const old = gridKids(screen(), (n) => { n.gridAlignSelf = "start"; n.gridJustifySelf = "start"; n.gridColumnSpan = 2; n.gridRowSpan = 2; });
     const r = diffScreens(old, screen());
     return r.changed.length === 0 && r.summary.formatOnly === 3 && r.warnings.length === 1;
   })());
-  check("[G21-N] on an in-flow grid child the self-align and span still compare (absent -> set is a change)", (() => {
+  check("on an in-flow grid child the self-align and span still compare (absent -> set is a change)", (() => {
     const r = diffScreens(inGrid(screen()), inGrid(gridKids(screen(), (n) => { n.gridAlignSelf = "end"; n.gridColumnSpan = 2; })));
     return r.changed.length === 3 && r.changed.every((c) => c.fields.map((f) => f.field).join() === "gridAlignSelf,gridColumnSpan") && r.summary.formatOnly === 0;
   })());
-  check("[G21-N] an in-flow grid child's -1 anchor is noise; its real anchor stays", (() => {
+  check("an in-flow grid child's -1 anchor is noise; its real anchor stays", (() => {
     const a = inGrid(gridKids(screen(), (n) => { n.gridColumnStart = -1; n.gridRowStart = 0; })), b = inGrid(gridKids(screen(), (n) => { n.gridRowStart = 0; }));
     const r = diffScreens(a, b), r2 = diffScreens(b, inGrid(gridKids(screen(), (n) => { n.gridRowStart = 1; })));
     return r.changed.length === 0 && r.summary.formatOnly === 3 && r2.changed.length === 3 && r2.changed[0]?.fields[0]?.field === "gridRowStart";
   })());
-  check("[G21-N] an ABSOLUTE child of a grid is not a grid item: its anchors are noise", (() => {
+  check("an ABSOLUTE child of a grid is not a grid item: its anchors are noise", (() => {
     const a = inGrid(screen()), b = inGrid(screen());
     Object.assign(must(a.tree.children[1], "a card"), { absolute: true, gridColumnStart: 0, gridRowStart: 1, gridAlignSelf: "start" });
     must(b.tree.children[1], "b card").absolute = true;
     const r = diffScreens(a, b);
     return r.changed.length === 0 && r.summary.formatOnly === 1;
   })());
-  check("[G21-N] a ROOT's grid fields are noise (its parent is not exported; an older plugin wrote a --node grid item's anchors)",
+  check("a ROOT's grid fields are noise (its parent is not exported; an older plugin wrote a --node grid item's anchors)",
     (() => { const a = screen(); Object.assign(a.tree, { gridColumnStart: 2, gridRowStart: 0, gridColumnSpan: 2 }); const r = diffScreens(a, screen()); return r.changed.length === 0 && r.summary.formatOnly === 1; })());
-  check("[G21-N] `layout` {mode:\"absolute\"} on STICKY / SLICE (no children in Figma) is noise; on a node WITH children it compares", (() => {
+  check("`layout` {mode:\"absolute\"} on STICKY / SLICE (no children in Figma) is noise; on a node WITH children it compares", (() => {
     const leaf = (type: string, w: number, lay: boolean): FxNode => ({ id: "9:" + type, name: type, type, box: { w, h: 40, x: 0, y: 0 }, ...(lay ? { layout: { mode: "absolute", width: w, height: 40 } } : {}) });
     const host = (lay: boolean, w: number): FxScreen => { const s = screen(); s.tree.children.push(leaf("STICKY", 240, lay), leaf("SLICE", 100, lay),
       { ...leaf("FUTURE_HOLDER", w, true), widthMode: "hug", children: [leaf("TEXT", 10, false)] }); return s; };
     const r = diffScreens(host(true, 50), host(false, 50)), r2 = diffScreens(host(false, 50), host(false, 80));
     return r.changed.length === 0 && r.summary.formatOnly === 2 && r2.changed.length === 1 && r2.changed[0]?.id === "9:FUTURE_HOLDER" && r2.changed[0].fields[0]?.field === "layout.width";
   })());
-  check("[G21-N] a leaf's layout with more than the bare absolute record still compares", (() => {
+  check("a leaf's layout with more than the bare absolute record still compares", (() => {
     const a = screen(), b = screen();
     must(a.tree.children[0], "a title").layout = { mode: "absolute", width: 120, height: 32, inferred: true };
     return diffScreens(a, b).changed.length === 1;
   })());
-  check("[G21-N] two OLD exports (noise on both sides) whose only raw difference sits in the noise: not formatOnly, no plugin warning", (() => {
+  check("two OLD exports (noise on both sides) whose only raw difference sits in the noise: not formatOnly, no plugin warning", (() => {
     const hug = (w: number): FxScreen => { const s = screen(); s.tree.gridColumnStart = -1; s.tree.gridRowStart = -1;
       Object.assign(must(s.tree.children[0], "title"), { gridColumnStart: -1, gridRowStart: -1, box: { w, h: 32, x: 24, y: 80 }, layout: { mode: "absolute", width: w, height: 32 } }); return s; };
     const r = diffScreens(hug(80), hug(120));
     return r.summary.formatOnly === 0 && r.warnings.length === 0 && r.changed.length === 0 && r.summary.positionOnly === 1;
   })());
-  check("[G21-N] --json carries summary.formatOnly", (() => { const r = diffScreens(oldFormat(), withAsset()); return JSON.stringify(r.summary).includes('"formatOnly":6'); })());
+  check("--json carries summary.formatOnly", (() => { const r = diffScreens(oldFormat(), withAsset()); return JSON.stringify(r.summary).includes('"formatOnly":6'); })());
 }
 
 console.log("token diff:");
@@ -215,11 +215,11 @@ check("snapshot → overwrite → diff finds the change; no snapshot and no git 
     && snapshotPath(rel, root).endsWith("pages__home__login.json") && d.status === 0 && parseAs(d.stdout, isDiffResult, "design-diff --json").summary.changed === 1;
 })());
 
-// Finding 205: `--snapshot` used to be an unconditional fs.copyFileSync — running step 2 of the
+// `--snapshot` used to be an unconditional fs.copyFileSync — running step 2 of the
 // sync-design skill twice (once before each of two later re-pulls) silently replaced the FIRST
 // baseline with whatever was on disk by the second call, which by then could already be a post-re-pull
 // export. Non-destructive by default; --force is required to replace a baseline that would actually change.
-console.log("CLI — --snapshot is non-destructive (finding 205):");
+console.log("CLI — --snapshot is non-destructive:");
 check("a second --snapshot of DIFFERENT content is refused without --force, and the first baseline survives", (() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-force-"));
   const rel = path.join("design", "export", "design-system", "tokens.json");
@@ -237,7 +237,7 @@ check("a second --snapshot of DIFFERENT content is refused without --force, and 
   const forced = run("--snapshot", rel, "--force");
   const nowChanged = fs.readFileSync(snapFile, "utf8") !== firstBytes;
   const prevKept = fs.existsSync(snapFile + ".prev") && fs.readFileSync(snapFile + ".prev", "utf8") === firstBytes;
-  // Finding 322: a refusal exits 1 — a script driving `--snapshot` (sync-design step 2) must be able
+  // a refusal exits 1 — a script driving `--snapshot` (sync-design step 2) must be able
   // to see that it didn't get the baseline it asked for, not just a human reading stderr. It still
   // does not hard-fail the WHOLE `--snapshot a b c` batch just because one of several files needed
   // --force — every file is still attempted, and this is a single-file batch either way.
@@ -254,13 +254,13 @@ check("re-running --snapshot with UNCHANGED content is a silent no-op, not an er
   return first.status === 0 && second.status === 0 && /unchanged/.test(second.stdout);
 })());
 
-// Finding 206: a snapshot of ONE file is not a copy of the export it belongs to. --snapshot now also
+// a snapshot of ONE file is not a copy of the export it belongs to. --snapshot now also
 // copies the sibling set: a design-system file's other 8 siblings (bridge/design-system-layout.js is
 // the one definition of that 9-file set), and a screen's .vars.json/.assets.json plus the shared
 // pages/index.json it is indexed under.
-console.log("CLI — --snapshot copies the sibling set (finding 206):");
+console.log("CLI — --snapshot copies the sibling set:");
 check("snapshotting ONE design-system file also snapshots its 8 siblings", (() => {
-  // Finding 320: the MANIFEST (design-system.json) lives at the export ROOT, one level ABOVE the
+  // the MANIFEST (design-system.json) lives at the export ROOT, one level ABOVE the
   // design-system/ subdirectory that holds the other 8 files (bridge/design-system-layout.js's own
   // header comment) — not flat alongside them, which is what this fixture used to (wrongly) assume.
   const names = Object.values<string>(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
@@ -401,13 +401,13 @@ check("a re-drawn icon (same node id, same path, different bytes) is a change", 
 check("an unknown flag is an error, not a silently different command", (() => { const root = project(); put(root, "v1", "2026-01-01T00:00:00Z"); const r = cli(root, "design/login.json", "--agains", "x.json"); return r.status === 2 && /unknown flag --agains/.test(r.stderr); })());
 check("a file of an unknown kind exits 2 with the reason", (() => { const root = project(); fs.writeFileSync(path.join(root, "a.json"), "{}"); fs.writeFileSync(path.join(root, "b.json"), "{}"); const r = cli(root, "a.json", "--against", "b.json"); return r.status === 2 && /nothing here can be diffed/.test(r.stderr); })());
 
-// ---------------------------------------------------------------- P5 round 4: style + hygiene diffs (finding 312)
+// ---------------------------------------------------------------- style + hygiene diffs
 // sync-design step 4 lists a diff command for EVERY design-system file a --design-system pull writes,
 // including the four styles.*.json and hygiene.json — and all five used to exit 2 with "nothing here
 // can be diffed", so a typography-only or effect-only design-system change (or a new/resolved hygiene
 // warning) was exactly as undetectable as the skill warns it would be without them. Fixtures are the
-// REAL design-system files from the livetest-4 export (test/fixtures/livetest4/design-system/).
-console.log("style + hygiene diffs (finding 312, real design-system fixtures):");
+// REAL design-system files from a real export (test/fixtures/livetest4/design-system/).
+console.log("style + hygiene diffs (real design-system fixtures):");
 const FIX_DS = path.join(import.meta.dirname, "fixtures", "livetest4", "design-system");
 // Real design-system files this repo's exporter wrote — checked against the guard for their kind.
 const readFix = <T,>(n: string, guard: DocGuard<T>): T => readFixture(path.join(FIX_DS, n), guard);
@@ -467,12 +467,12 @@ check("markdown renders styles/hygiene kinds without throwing, and names the rig
   const md2 = markdown(diffHygiene(h, hb), "hygiene.json");
   return /Styles changed/.test(md1) && /New warning/.test(md2);
 })());
-check("CLI end to end: ALL NINE of sync-design step 4's design-system diff commands succeed on the real fixtures (finding 312, incl. the manifest addendum)", (() => {
+check("CLI end to end: ALL NINE of sync-design step 4's design-system diff commands succeed on the real fixtures (incl. the manifest)", (() => {
   const root = project();
   const dsDir = path.join(root, "design", "export", "design-system");
   fs.mkdirSync(dsDir, { recursive: true });
   // The 8 files that live INSIDE design-system/ (bridge/design-system-layout.js's DESIGN_SYSTEM_FILES,
-  // minus the manifest, which lives one level up — finding 320). tokens.json/components.*.json aren't
+  // minus the manifest, which lives one level up). tokens.json/components.*.json aren't
   // in the trimmed real-fixture set (tokens.json is already covered by the tokens tests above,
   // components.*.json by the catalog tests) — minimal stand-ins are enough here, since this check is
   // about ALL NINE names resolving and diffing, not re-proving each format's own logic again.
@@ -483,7 +483,7 @@ check("CLI end to end: ALL NINE of sync-design step 4's design-system diff comma
   for (const f of ["styles.text.json", "styles.paint.json", "styles.effect.json", "styles.grid.json", "hygiene.json"]) {
     fs.writeFileSync(path.join(dsDir, f), fs.readFileSync(path.join(FIX_DS, f)));
   }
-  // The manifest (design-system.json) at the export ROOT — real fixture, from the same livetest-4 export.
+  // The manifest (design-system.json) at the export ROOT — real fixture, from the same export.
   fs.writeFileSync(path.join(root, "design", "export", "design-system.json"), fs.readFileSync(path.join(import.meta.dirname, "fixtures", "livetest4", "design-system.json")));
   const allNine = [...inDsDir.map((f) => path.join("design", "export", "design-system", f)), path.join("design", "export", "design-system.json")];
 
@@ -492,9 +492,9 @@ check("CLI end to end: ALL NINE of sync-design step 4's design-system diff comma
     const r = cli(root, rel);
     if (r.status !== 0 && !(r.status === 2 && /no snapshot/.test(r.stderr))) allOk = false; // first run has no baseline yet — that's a separate, already-tested exit 2
   }
-  // Snapshot ONLY the manifest (mirrors the addendum's own repro: "on a copy of the livetest-4 export,
+  // Snapshot ONLY the manifest (mirrors a real repro: "on a copy of a real export,
   // after --snapshot of all nine files") — siblingFilesOf() must pull in the other 8 on its own, and
-  // (finding 320) must never print a spurious "not found" for any of them, since every one of them is
+  // must never print a spurious "not found" for any of them, since every one of them is
   // right there on disk.
   const snap = cli(root, "--snapshot", path.join("design", "export", "design-system.json"));
   const spuriousNotFound = /not found — nothing to snapshot/.test(snap.stderr);

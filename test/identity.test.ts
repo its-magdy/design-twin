@@ -2,9 +2,8 @@
 // a live-test export, names replaced — pruned to the Spacing/Border Radius collections and to the
 // instance skeleton of three screens, every other value copied, nothing hand-written).
 //
-// The defect (livetest-3 findings 21, 31, 35, 40, 44, 94, 95, 96, 106, 137, 183, 211, 226): the
-// pipeline identified a Figma variable — and a component — by NAME, while the export is keyed on the
-// Figma KEY. Names are not unique: that export holds two `Spacing / Space 4` (24 and 16) and two
+// The defect under test: a pipeline that identifies a Figma variable — and a component — by NAME, while the
+// export is keyed on the Figma KEY. Names are not unique: that export holds two `Spacing / Space 4` (24 and 16) and two
 // `Spacing / Space 2`, and its screens' component keys were all re-minted by a file duplication.
 //
 // Run with:  node test/identity.test.ts
@@ -58,19 +57,19 @@ console.log("tokens.js on the merged variables.json:");
   // tokens.dtcg.json read at the two top-level leaves this check names (their group key has no "/" in it).
   const dtcg = fs.existsSync(path.join(out, "tokens.dtcg.json")) ? JSON.parse(fs.readFileSync(path.join(out, "tokens.dtcg.json"), "utf8")) as Record<string, DtcgLeaf> : {};
   const warnings = r.stderr || "";
-  ok("[44] BOTH Space 4 variables reach theme.css — 24 and 16, each under its own name, neither silently dropped",
+  ok("BOTH Space 4 variables reach theme.css — 24 and 16, each under its own name, neither silently dropped",
     /--spacing-figma-space-4-e26d506e: 24px;/.test(theme) && /--spacing-figma-space-4-64928e3a: 16px;/.test(theme));
-  ok("[44] and no bare name is left to mean whichever came last", !/--spacing(-figma)?-space-4: /.test(theme));
-  ok("[44] the warning names BOTH keys, BOTH values and the screen each came from — not 'later definition wins'",
+  ok("and no bare name is left to mean whichever came last", !/--spacing(-figma)?-space-4: /.test(theme));
+  ok("the warning names BOTH keys, BOTH values and the screen each came from — not 'later definition wins'",
     /e26d506e/.test(warnings) && /64928e3a/.test(warnings) && /"Mode 1":24/.test(warnings) && /"Desktop":16/.test(warnings)
       && /positions___7314_87192/.test(warnings) && /Create_Assembly_Type__18411_84111/.test(warnings) && !/later definition wins/.test(warnings));
-  ok("[44] tokens.css and tokens.dtcg.json keep both too, and the DTCG leaf carries its Figma key",
+  ok("tokens.css and tokens.dtcg.json keep both too, and the DTCG leaf carries its Figma key",
     /--Space-4-e26d506e: 24px;/.test(css) && /--Space-4-64928e3a: 16px;/.test(css)
       && !!dtcg["Space-4-e26d506e"] && dtcg["Space-4-e26d506e"].$extensions?.["figma.com"].key === K24);
-  ok("[94] `Space 3` (16) and `(Space 3)` (12) are two reachable properties in theme.css, not one",
+  ok("`Space 3` (16) and `(Space 3)` (12) are two reachable properties in theme.css, not one",
     /--spacing-figma-space-3: 16px;/.test(theme) && /--spacing-figma-space-3-a96c665b: 12px;/.test(theme));
-  ok("[94] and the run WARNS about that pair (it used to fold them silently)", /'Space 3', '\(Space 3\)'/.test(warnings) && /a96c665b/.test(warnings));
-  ok("[21/95] identical twins (the two `Space 2`, 8 everywhere) are emitted once and SAID to be two variables",
+  ok("and the run WARNS about that pair (they are not folded silently)", /'Space 3', '\(Space 3\)'/.test(warnings) && /a96c665b/.test(warnings));
+  ok("identical twins (the two `Space 2`, 8 everywhere) are emitted once and SAID to be two variables",
     (theme.match(/--spacing-figma-space-2(-[a-z0-9]+)?: /g) || []).length === 1 && /share the name 'Space 2'.*resolve identically/.test(warnings));
 
   // Order must not decide anything: the old emitters kept "the later one".
@@ -79,15 +78,15 @@ console.log("tokens.js on the merged variables.json:");
   node("tokens.ts", [path.join(revDir, "v.json"), revDir, "--web", "tailwind", "--also-generic"]);
   const decls = (t: string) => new Set((t.match(/^ {2}--[^\n]+$/gm) || []));
   const a = decls(theme), b = decls(fs.existsSync(path.join(revDir, "theme.css")) ? fs.readFileSync(path.join(revDir, "theme.css"), "utf8") : "");
-  ok("[44] reversing the input rows changes no name→value pair in theme.css", a.size > 0 && a.size === b.size && [...a].every((x) => b.has(x)));
+  ok("reversing the input rows changes no name→value pair in theme.css", a.size > 0 && a.size === b.size && [...a].every((x) => b.has(x)));
 }
 {
   const out = tmp();
   const r = node("tokens.ts", [path.join(FX, POS + ".vars.json"), out, "--web", "tailwind", "--also-generic"]);
   const theme = fs.existsSync(path.join(out, "theme.css")) ? fs.readFileSync(path.join(out, "theme.css"), "utf8") : "";
-  ok("[95] a screen's OWN .vars.json (Jet Roles: one Space 4) gets the plain name, at the value its Figma binds: 24",
+  ok("a screen's OWN .vars.json (Jet Roles: one Space 4) gets the plain name, at the value its Figma binds: 24",
     r.status === 0 && /--spacing-figma-space-4: 24px;/.test(theme));
-  ok("[137] and even there `Space 3` keeps 16 — the screen's own slice no longer collapses it onto `(Space 3)`'s 12",
+  ok("and even there `Space 3` keeps 16 — the screen's own slice does not collapse it onto `(Space 3)`'s 12",
     /--spacing-figma-space-3: 16px;/.test(theme) && /--spacing-figma-space-3-a96c665b: 12px;/.test(theme));
 }
 {
@@ -95,14 +94,14 @@ console.log("tokens.js on the merged variables.json:");
   const r = node("tokens.ts", [path.join(FX, "design-system/tokens.json"), out, "--web", "tailwind", "--also-generic"]);
   const theme = fs.existsSync(path.join(out, "theme.css")) ? fs.readFileSync(path.join(out, "theme.css"), "utf8") : "";
   const css = fs.existsSync(path.join(out, "tokens.css")) ? fs.readFileSync(path.join(out, "tokens.css"), "utf8") : "";
-  ok("[183] no generated @theme variable redefines Tailwind's own scale: 0 lines of `--radius-xl:` (rounded-xl stays 12px)",
+  ok("no generated @theme variable redefines Tailwind's own scale: 0 lines of `--radius-xl:` (rounded-xl stays 12px)",
     r.status === 0 && (theme.match(/^ {2}--radius-xl:/gm) || []).length === 0 && !/^ {2}--radius-(l|s|m|full):/m.test(theme));
-  ok("[183] Figma's XL radius is still there, under its own namespace", /--radius-figma-xl: 16px;/.test(theme));
-  ok("[96] the 1e9 'fully rounded' sentinel never reaches CSS — 9999px instead", !/1000000000/.test(theme + css) && /--radius-figma-full: 9999px;/.test(theme) && /--Full: 9999px;/.test(css));
+  ok("Figma's XL radius is still there, under its own namespace", /--radius-figma-xl: 16px;/.test(theme));
+  ok("the 1e9 'fully rounded' sentinel never reaches CSS — 9999px instead", !/1000000000/.test(theme + css) && /--radius-figma-full: 9999px;/.test(theme) && /--Full: 9999px;/.test(css));
   const sw = tmp();
   node("tokens.ts", [path.join(FX, "design-system/tokens.json"), sw, "--native", "swiftui"]);
   const swift = fs.existsSync(path.join(sw, "DesignTokens.swift")) ? fs.readFileSync(path.join(sw, "DesignTokens.swift"), "utf8") : "";
-  ok("[96] …and SwiftUI gets `.infinity`, not 1000000000", /full: CGFloat = \.infinity/.test(swift) && !/1000000000/.test(swift));
+  ok("…and SwiftUI gets `.infinity`, not 1000000000", /full: CGFloat = \.infinity/.test(swift) && !/1000000000/.test(swift));
 }
 
 // ------------------------------------------------------------------ design-diff.ts
@@ -112,14 +111,14 @@ console.log("design-diff.js — tokens are keyed by Figma key:");
   const base = read<VariablesDoc>("variables.json");
   const bump = (key: string, f: (v: Variable) => void) => { const d = clone(base); for (const v of must(d.variables, "d.variables")) if (v.key === key) f(v); return d; };
   const d1 = dd && dd.diffTokens(base, bump(K24, (v) => { v.values = { "Mode 1": 25 }; }));
-  ok("[211] changing ONLY the 24-valued Space 4 reports exactly one change, named with its key", (() => {
+  ok("changing ONLY the 24-valued Space 4 reports exactly one change, named with its key", (() => {
     if (!d1 || d1.changed.length !== 1) return false;
     const c0 = must(d1.changed[0], "d1.changed[0]");
     const m0 = must(c0.modes[0], "d1.changed[0].modes[0]");
     return /e26d506e/.test(c0.name) && m0.before === "24" && m0.after === "25";
   })());
   const d2 = dd && dd.diffTokens(base, bump(K16, (v) => { v.values = Object.assign({}, v.values, { Desktop: 17 }); }));
-  ok("[211] a change to the OTHER Space 4 is seen too (it used to be shadowed)", (() => {
+  ok("a change to the OTHER Space 4 is seen too (it is not shadowed)", (() => {
     if (!d2 || d2.changed.length !== 1) return false;
     const c0 = must(d2.changed[0], "d2.changed[0]");
     const m0 = must(c0.modes[0], "d2.changed[0].modes[0]");
@@ -127,7 +126,7 @@ console.log("design-diff.js — tokens are keyed by Figma key:");
   })());
   const rev = clone(base); must(rev.variables, "rev.variables").reverse();
   const d3 = dd && dd.diffTokens(base, rev);
-  ok("[211] re-ordering the rows reports NOTHING (it used to report a false 24 → 16)", !!d3 && d3.summary.added + d3.summary.removed + d3.summary.changed === 0);
+  ok("re-ordering the rows reports NOTHING (no false 24 → 16)", !!d3 && d3.summary.added + d3.summary.removed + d3.summary.changed === 0);
 }
 
 // ------------------------------------------------------------------ variables-merge.ts
@@ -142,16 +141,16 @@ console.log("variables-merge.js — same name, different key, is a conflict:");
   // a same-name conflict by name (a value-only conflict of that name is not the record these checks want)
   const sameName = (c: VariableConflict | undefined) => (c && c.kind === "same-name" ? c : undefined);
   const space4 = sameName((doc._conflicts || []).find((c) => c.name === "Space 4"));
-  ok("[21] replaying the five real pulls still ACCUMULATES (finding 20 must not regress)", doc.variables.length === merged.variables.length);
-  ok("[21] `_conflicts` is no longer empty: the two `Space 4` are recorded, both keys, both values",
+  ok("replaying the five real pulls still ACCUMULATES", doc.variables.length === merged.variables.length);
+  ok("`_conflicts` is not empty: the two `Space 4` are recorded, both keys, both values",
     !!space4 && space4.kind === "same-name" && space4.sameValue === false && space4.variants.map((v) => v.key).sort().join() === [K16, K24].sort().join());
-  ok("[21] …with the screens each came from (64928e3a only from the two Create Assembly Type pulls)",
+  ok("…with the screens each came from (64928e3a only from the two Create Assembly Type pulls)",
     !!space4 && space4.variants.find((v) => v.key === K16)?.screens.join() === "Create_Assembly_Type__18411_84111,Create_Assembly_Type__18411_84502"
       && (space4.variants.find((v) => v.key === K24)?.screens.includes("positions___7314_87192") ?? false));
-  ok("[21] and mirrored into `hygiene`, the other place both skills say to read",
+  ok("and mirrored into `hygiene`, the other place both skills say to read",
     doc.hygiene.some((h) => /CONFLICT/.test(h) && /'Space 4'/.test(h) && /e26d506e/.test(h) && /64928e3a/.test(h)));
   const space2 = sameName((doc._conflicts || []).find((c) => c.name === "Space 2"));
-  ok("[21] the two `Space 2` (8 under Desktop/Tablet/Mobile, 8 under Mode 1) are recorded as the same VALUE", !!space2 && space2.sameValue === true);
+  ok("the two `Space 2` (8 under Desktop/Tablet/Mobile, 8 under Mode 1) are recorded as the same VALUE", !!space2 && space2.sameValue === true);
 }
 
 // ------------------------------------------------------------------ cross-check.ts
@@ -167,13 +166,13 @@ const cc = (screenRel: string, extra?: string[]): CcResult => {
 const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?: string) => res.findings.some((f) => f.severity === "blocker" && f.code === code && (!token || f.token === token));
 {
   const pos = cc(POS), cat = cc(CAT);
-  ok("[40/106] Jet Roles' own slice has ONE Space 4 (24, as the design system) — no token-name-collision blocker for it",
+  ok("Jet Roles' own slice has ONE Space 4 (24, as the design system) — no token-name-collision blocker for it",
     Array.isArray(pos.findings) && pos.findings.length > 0 && !blockerOn(pos, "token-name-collision", "Space 4"));
-  ok("[40] the union's ambiguity is still said, once, as a note naming the screen it belongs to",
+  ok("the union's ambiguity is still said, once, as a note naming the screen it belongs to",
     pos.findings.some((f) => f.code === "token-name-collision-elsewhere" && f.severity === "info" && /Create_Assembly_Type__18411_84111/.test(f.message)));
-  ok("[40] Create Assembly Type's slice really carries both — there it IS a blocker, naming the 16-valued key",
+  ok("Create Assembly Type's slice really carries both — there it IS a blocker, naming the 16-valued key",
     cat.findings.some((f) => f.severity === "blocker" && f.code === "token-name-collision" && f.token === "Space 4" && f.key === K16));
-  ok("[137] Guided Policies: no Space 4 blocker either", !blockerOn(cc(GP), "token-name-collision", "Space 4"));
+  ok("Guided Policies: no Space 4 blocker either", !blockerOn(cc(GP), "token-name-collision", "Space 4"));
 }
 {
   const ref = read<MappingReference>("mapping.reference.json");
@@ -184,24 +183,24 @@ const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?
     const refRows = refEntry.names;
     const refMatched = Object.entries(refRows).filter(([, r]) => r.match);
     const refResidual = Object.entries(refRows).filter(([, r]) => !r.match);
-    // D1 (field tests): catalog-rekeyed is a warning with a confirm question now, no longer a blocker.
-    ok(`[226/D1] ${k}: reports the copy/re-key case as its own finding (catalog-rekeyed, a warning to confirm), not catalog-covers-nothing`,
+    // catalog-rekeyed is a warning with a confirm question, not a blocker.
+    ok(`${k}: reports the copy/re-key case as its own finding (catalog-rekeyed, a warning to confirm), not catalog-covers-nothing`,
       res.findings.some((f) => f.code === "catalog-rekeyed" && f.severity === "warning" && !!f.confirm) && !res.findings.some((f) => f.code === "catalog-covers-nothing"));
-    ok(`[226] ${k}: proposes ≥ 20 name+prop-signature matches (reference: ${min}) — ${props.length}`, props.length >= 20 && props.length === refMatched.length);
-    ok(`[226] ${k}: name-for-name AND id-for-id the same as scripts-test/map-components.mjs`,
+    ok(`${k}: proposes ≥ 20 name+prop-signature matches (reference: ${min}) — ${props.length}`, props.length >= 20 && props.length === refMatched.length);
+    ok(`${k}: name-for-name AND id-for-id the same as scripts-test/map-components.mjs`,
       refMatched.every(([n, r]) => props.some((p) => p.name === n && p.catalog?.id === r.match)) && props.every((p) => { const row = refRows[p.name]; return row && row.match === p.catalog?.id; }));
-    ok(`[226] ${k}: the same ${refResidual.length}-name residual, with the same first reason`,
+    ok(`${k}: the same ${refResidual.length}-name residual, with the same first reason`,
       (res.componentResidual || []).length === refResidual.length &&
         refResidual.every(([n, r]) => (res.componentResidual || []).some((x) => x.name === n && x.reasons[0] === r.firstReason)));
-    ok(`[226] ${k}: every proposal waits for a person — none is pre-confirmed`, props.length > 0 && props.every((p) => p.confirmed === false));
-    ok(`[226] ${k}: counts are over VISIBLE instances (${refEntry.instances}), like the build`, !!(res.coverage && res.coverage.instances === refEntry.instances));
+    ok(`${k}: every proposal waits for a person — none is pre-confirmed`, props.length > 0 && props.every((p) => p.confirmed === false));
+    ok(`${k}: counts are over VISIBLE instances (${refEntry.instances}), like the build`, !!(res.coverage && res.coverage.instances === refEntry.instances));
   }
   // Tie-breaks the reference needed, checked individually.
   const byName = (res: CcResult) => new Map<string, ComponentProposal>((res.componentProposals || []).map((p) => [p.name, p]));
   const jr = byName(cc(POS));
-  ok("[226] tie-breaks: filter button → 326:2869, Header → 842:3470, Component 1 → 842:4815",
+  ok("tie-breaks: filter button → 326:2869, Header → 842:3470, Component 1 → 842:4815",
     jr.get("filter button")?.catalog?.id === "326:2869" && jr.get("Header")?.catalog?.id === "842:3470" && jr.get("Component 1")?.catalog?.id === "842:4815");
-  ok("[226] duplicated definitions (Button 1:1056 / 191:2702) are a harmless tie, not a failure",
+  ok("duplicated definitions (Button 1:1056 / 191:2702) are a harmless tie, not a failure",
     jr.get("Button")?.catalog?.id === "1:1056" && jr.get("Button")?.tie === "duplicate-definitions");
 }
 {
@@ -219,7 +218,7 @@ const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?
   fs.writeFileSync(path.join(ds, "components.local.json"), JSON.stringify(cat));
   const r = node("cross-check.ts", [path.join(FX, POS + ".json"), "--design-system", ds, "--json"]);
   let res: Partial<CrossCheckReport> = {}; try { res = JSON.parse(r.stdout) as CrossCheckReport; } catch (e) { /* stays empty */ }
-  ok("[226] an unrelated catalog (same names, different prop signatures) still reports catalog-covers-nothing, with no proposals",
+  ok("an unrelated catalog (same names, different prop signatures) still reports catalog-covers-nothing, with no proposals",
     Array.isArray(res.findings) && res.findings.some((f) => f.code === "catalog-covers-nothing") && !res.findings.some((f) => f.code === "catalog-rekeyed") && !(res.componentProposals || []).length);
 
   // And the ordinary case: keys NOT re-minted → resolved by key, no re-key finding at all.
@@ -232,7 +231,7 @@ const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?
   fs.writeFileSync(path.join(ds, "components.local.json"), JSON.stringify(same));
   const r2 = node("cross-check.ts", [path.join(FX, POS + ".json"), "--design-system", ds, "--json"]);
   let res2: Partial<CrossCheckReport> = {}; try { res2 = JSON.parse(r2.stdout) as CrossCheckReport; } catch (e) { /* stays empty */ }
-  ok("[226] control: when the keys DO match, it is key coverage, not a re-key proposal",
+  ok("control: when the keys DO match, it is key coverage, not a re-key proposal",
     Array.isArray(res2.findings) && !res2.findings.some((f) => f.code === "catalog-rekeyed" || f.code === "catalog-covers-nothing") && (res2.coverage?.matchedByLocalKey ?? 0) > 0);
 }
 
@@ -244,7 +243,7 @@ console.log("map-bootstrap.js --from-proposals / drift-lint.js:");
   fs.writeFileSync(report0, JSON.stringify(cc(POS)));
   const map = path.join(dir, "codeconnect.local.json");
   const none = node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map, "--from-proposals", report0]);
-  ok("[226] nothing confirmed → nothing written, exit 1 (proposals are never accepted automatically)", none.status === 1 && !fs.existsSync(map));
+  ok("nothing confirmed → nothing written, exit 1 (proposals are never accepted automatically)", none.status === 1 && !fs.existsSync(map));
   const rep = JSON.parse(fs.readFileSync(report0, "utf8")) as CrossCheckReport;
   const accept = new Set(["Button", "Header", "Pagination"]);
   for (const p of rep.componentProposals || []) if (accept.has(p.name)) p.confirmed = true;
@@ -253,23 +252,23 @@ console.log("map-bootstrap.js --from-proposals / drift-lint.js:");
   const m: Pick<CodeConnectMap, "components"> = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) as CodeConnectMap : { components: {} };
   const btn: Pick<ComponentProposal, "instanceKeys" | "catalog"> = (rep.componentProposals || []).find((p) => p.name === "Button") || { instanceKeys: [], catalog: null };
   const btnKey0 = must(btn.instanceKeys[0], "btn.instanceKeys[0]");
-  ok("[226] stubs ONLY the 3 confirmed, filed under the screen's own instance key, pointing at the catalog key",
+  ok("stubs ONLY the 3 confirmed, filed under the screen's own instance key, pointing at the catalog key",
     yes.status === 0 && Object.keys(m.components).length === 3 && !!m.components[btnKey0] && must(m.components[btnKey0], "m.components[btnKey0]").figma.key === btn.catalog?.key);
-  ok("[226] the stub map is schema-valid", node("map-validate.ts", [map]).status === 0);
+  ok("the stub map is schema-valid", node("map-validate.ts", [map]).status === 0);
   node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map]);
   const m2: Pick<CodeConnectMap, "components"> = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) as CodeConnectMap : { components: {} };
   // The catalog key must exist for the second half to test anything (a `?? ""` fallback would pass on any map).
   const btnCatalogKey = btn.catalog?.key;
-  ok("[226] a later plain map-bootstrap keeps the confirmed entry under the instance key (it would otherwise unmap the screen again)",
+  ok("a later plain map-bootstrap keeps the confirmed entry under the instance key (it would otherwise unmap the screen again)",
     btnCatalogKey !== undefined && !!m2.components[btnKey0] && !m2.components[btnCatalogKey]);
   const dl = node("drift-lint.ts", [map, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
-  ok("[226] drift-lint now resolves those instances through the map (screen coverage > 0)", /SCREEN COVERAGE: [1-9]\d*\//.test(dl.stderr));
+  ok("drift-lint now resolves those instances through the map (screen coverage > 0)", /SCREEN COVERAGE: [1-9]\d*\//.test(dl.stderr));
 
   const fresh = path.join(dir, "fresh.json");
   node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", fresh]);
   const dl0 = node("drift-lint.ts", [fresh, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
-  // D13 (field tests): catalog-rekeyed is a warning with a question to confirm — exit 0, no longer 1.
-  ok("[226/D13] with a catalog-only map, drift-lint names the re-key case (a warning to confirm, exit 0) instead of 'not the library this screen is built from'",
+  // catalog-rekeyed is a warning with a question to confirm — exit 0, not 1.
+  ok("with a catalog-only map, drift-lint names the re-key case (a warning to confirm, exit 0) instead of 'not the library this screen is built from'",
     dl0.status === 0 && /^warn {3}\[catalog-rekeyed\]/m.test(dl0.stderr) && /Confirm: /.test(dl0.stderr) && !/not the library this screen is built from/.test(dl0.stderr));
 }
 

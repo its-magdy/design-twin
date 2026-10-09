@@ -127,36 +127,36 @@ check("only ONE reconnect is ever pending, however many closes arrive", (() => {
   return w.timers.filter((t) => t.fn).length === 1;
 })());
 
-console.log("liveness frames relayed to the bridge (group 14):");
+console.log("liveness frames relayed to the bridge:");
 // The bridge's stall check reads any frame as life. A bridge run's run-begin used to stay inside the
 // window, so a cold export was silent on the socket until its first asset tick.
 const progressFrames = (s: FakeSocket) => s.sent.filter((d) => (JSON.parse(d) as { type?: string }).type === "progress");
-check("[LIVE-3] run-begin of a BRIDGE run → the socket gets {type:\"progress\",phase:\"start\"} at once", (() => {
+check("run-begin of a BRIDGE run → the socket gets {type:\"progress\",phase:\"start\"} at once", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
   w.msg({ type: "run-begin", source: "bridge", label: "exportNode" });
   return progressFrames(s).join("|") === '{"type":"progress","phase":"start"}';
 })());
-check("[LIVE-3] run-begin of a UI run → nothing on the socket", (() => {
+check("run-begin of a UI run → nothing on the socket", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
   w.msg({ type: "run-begin", source: "ui", label: "current selection" });
   return progressFrames(s).length === 0 && w.el("run-full").disabled === true; // …while the window's own chrome still opens
 })());
-check("[LIVE-4] a `queued` frame is relayed over the socket but does NOT open the run chrome (the run has not begun)", (() => {
+check("a `queued` frame is relayed over the socket but does NOT open the run chrome (the run has not begun)", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
   const statusBefore = w.el("status").textContent;
   w.msg({ type: "progress", phase: "queued", source: "bridge", label: "exportNode" });
   const relayed = progressFrames(s).map((d) => (JSON.parse(d) as { phase?: string }).phase).join(",");
   return relayed === "queued" && w.el("run-full").disabled === false && w.el("cancel").textContent === "" && w.el("status").textContent === statusBefore;
 })());
-check("[LIVE-4] …and during a UI run a `queued` frame leaves that run's status line alone", (() => {
+check("…and during a UI run a `queued` frame leaves that run's status line alone", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); openIt(w.last());
   w.msg({ type: "run-begin", source: "ui", label: "current selection" });
   const during = w.el("status").textContent;
   w.msg({ type: "progress", phase: "queued", source: "bridge", label: "exportNode" });
   return w.el("status").textContent === during && /Exporting/.test(during);
 })());
-// Review 1 L-8: the frames name their run's request, so the bridge delivers them to that request only.
-check("[L-8] run-begin of a bridge run with a requestId → the `start` frame carries it; a `queued` frame keeps its requestId", (() => {
+// the frames name their run's request, so the bridge delivers them to that request only.
+check("run-begin of a bridge run with a requestId → the `start` frame carries it; a `queued` frame keeps its requestId", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
   w.msg({ type: "progress", phase: "queued", source: "bridge", label: "exportNode", requestId: "rB-2" });
   w.msg({ type: "run-begin", source: "bridge", label: "exportNode", requestId: "rA-1" });

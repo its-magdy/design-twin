@@ -1,4 +1,4 @@
-// The CLI against a FAKE plugin (group 14: F-51 timing line, DT-06 screenshot size, DT-03 whoami addressing).
+// The CLI against a FAKE plugin (timing line, screenshot size, whoami addressing).
 //   node test/cli-pull.test.ts
 // The real `dtwin` process is spawned (it opens its own bridge on FIGMA_BRIDGE_PORT=8789, like a user's
 // direct pull with no daemon running); the plugin side is a plain `ws` client that dials in, says hello and
@@ -82,23 +82,23 @@ const whoamiReply = (instanceId: string, file: string, fileKey: string) => ({ in
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cli-pull-"));
 try {
-  // [TIME-1] a direct pull ends with where the time went.
-  console.log("\ncli pull — the `done in …` timing line (F-51):");
+  // a direct pull ends with where the time went.
+  console.log("\ncli pull — the `done in …` timing line:");
   {
     const dir = path.join(tmp, "time");
     fs.mkdirSync(dir);
     const plugin = fakePlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { exportNode: () => nodeReply() }, { startAfterMs: 400 });
     const r = await dtwin(dir, ["pull", "out", "--node", "1:2", "--timeout", "30"]);
     plugin.stop();
-    check("[TIME-1] the pull succeeds against the fake plugin and writes the screen", r.code === 0 && fs.existsSync(path.join(dir, "out", "pages", "index.json")));
+    check("the pull succeeds against the fake plugin and writes the screen", r.code === 0 && fs.existsSync(path.join(dir, "out", "pages", "index.json")));
     const m = /\[dtwin\] done in (\d+\.\d)s — waited (\d+\.\d)s for the plugin to connect · export (\d+\.\d)s · write (\d+\.\d)s/.exec(r.stderr);
-    check("[TIME-1] stderr has `done in … waited … for the plugin to connect · export … · write …`", m !== null);
-    check("[TIME-1] the connect wait is real (the plugin dialled in ~0.4 s late) and total >= connect", m !== null && Number(m[2]) >= 0.3 && Number(m[1]) >= Number(m[2]));
-    check("[TIME-1] a short wait does not print the reconnect hint", !/plugin reconnecting/.test(r.stderr));
-    check("[TIME-1] the bare `done.` line is gone", !/\[dtwin\] done\.\s*$/m.test(r.stderr));
+    check("stderr has `done in … waited … for the plugin to connect · export … · write …`", m !== null);
+    check("the connect wait is real (the plugin dialled in ~0.4 s late) and total >= connect", m !== null && Number(m[2]) >= 0.3 && Number(m[1]) >= Number(m[2]));
+    check("a short wait does not print the reconnect hint", !/plugin reconnecting/.test(r.stderr));
+    check("the bare `done.` line is gone", !/\[dtwin\] done\.\s*$/m.test(r.stderr));
   }
-  // [QUEUED-1] a `queued` frame (the plugin's run waits behind another in that file) is said once; `start` never is.
-  console.log("\ncli pull — queued behind another run (F-51):");
+  // a `queued` frame (the plugin's run waits behind another in that file) is said once; `start` never is.
+  console.log("\ncli pull — queued behind another run:");
   {
     const dir = path.join(tmp, "queued");
     fs.mkdirSync(dir);
@@ -113,31 +113,31 @@ try {
     const r = await dtwin(dir, ["pull", "out", "--node", "1:2", "--timeout", "30"]);
     plugin.stop();
     const said = r.stderr.split("\n").filter((l) => /queued behind another export in that file/.test(l));
-    check("[QUEUED-1] the pull still succeeds", r.code === 0);
-    check("[QUEUED-1] stderr has the queued line exactly once (two frames sent)", said.length === 1 && /^\[dtwin\] queued behind another export in that file — waiting \(up to --timeout\)/.test(said[0] ?? ""));
+    check("the pull still succeeds", r.code === 0);
+    check("stderr has the queued line exactly once (two frames sent)", said.length === 1 && /^\[dtwin\] queued behind another export in that file — waiting \(up to --timeout\)/.test(said[0] ?? ""));
     const dir2 = path.join(tmp, "started");
     fs.mkdirSync(dir2);
     const p2 = fakePlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { exportNode: (_a, emit) => { emit({ type: "progress", phase: "start" }); return nodeReply(); } });
     const r2 = await dtwin(dir2, ["pull", "out", "--node", "1:2", "--timeout", "30"]);
     p2.stop();
-    check("[QUEUED-1] a `start` frame alone prints no queued line", r2.code === 0 && !/queued/.test(r2.stderr));
+    check("a `start` frame alone prints no queued line", r2.code === 0 && !/queued/.test(r2.stderr));
   }
   // The pure formatter: the daemon variant, and the hint at >= 5 s of connect wait.
   {
     const own = formatDone({ totalMs: 27200, connectMs: 24100, exportMs: 2800, writeMs: 300, viaDaemon: false });
-    check("[TIME-1] formatDone: a 24 s connect wait prints the line and the reconnect hint naming `dtwin serve`",
+    check("formatDone: a 24 s connect wait prints the line and the reconnect hint naming `dtwin serve`",
       own[0] === "done in 27.2s — waited 24.1s for the plugin to connect · export 2.8s · write 0.3s" && own.length === 2 && /reconnecting/.test(own[1] ?? "") && /dtwin serve/.test(own[1] ?? ""));
-    check("[TIME-1] formatDone: 4.9 s of wait → no hint; 5.0 s → hint",
+    check("formatDone: 4.9 s of wait → no hint; 5.0 s → hint",
       formatDone({ totalMs: 6000, connectMs: 4900, exportMs: 1000, writeMs: 0, viaDaemon: false }).length === 1 && formatDone({ totalMs: 6000, connectMs: 5000, exportMs: 1000, writeMs: 0, viaDaemon: false }).length === 2);
     const via = formatDone({ totalMs: 3100, connectMs: 0, exportMs: 2800, writeMs: 300, viaDaemon: true });
-    check("[TIME-1] formatDone: via the daemon there is no connect-wait claim and no hint", via.length === 1 && /via the running daemon/.test(via[0] ?? "") && !/waited/.test(via[0] ?? "") && /2\.8s · write 0\.3s/.test(via[0] ?? ""));
-    // Review 1 L-9: the daemon waits for its plugin inside the request, so "no reconnect" can be false.
-    check("[L-9] formatDone: via the daemon, no '(no reconnect)' claim; the export figure says it includes any plugin wait",
+    check("formatDone: via the daemon there is no connect-wait claim and no hint", via.length === 1 && /via the running daemon/.test(via[0] ?? "") && !/waited/.test(via[0] ?? "") && /2\.8s · write 0\.3s/.test(via[0] ?? ""));
+    // the daemon waits for its plugin inside the request, so "no reconnect" can be false.
+    check("formatDone: via the daemon, no '(no reconnect)' claim; the export figure says it includes any plugin wait",
       via[0] === "done in 3.1s — via the running daemon · export (incl. any wait for the plugin) 2.8s · write 0.3s");
   }
 
-  // [SHOT-2] the screenshot JSON carries the node size, the scale and the PNG's own size.
-  console.log("\ncli pull — screenshot size (DT-06):");
+  // the screenshot JSON carries the node size, the scale and the PNG's own size.
+  console.log("\ncli pull — screenshot size:");
   {
     const dir = path.join(tmp, "shot");
     fs.mkdirSync(dir);
@@ -145,11 +145,11 @@ try {
     const r = await dtwin(dir, ["screenshot", "1:2", "shots", "--timeout", "30"]);
     plugin.stop();
     const j = json(r.stdout);
-    check("[SHOT-2] the command succeeds and writes the PNG", r.code === 0 && fs.existsSync(path.join(dir, "shots", "assets", "1_2_ref.png")));
-    check("[SHOT-2] stdout JSON has w, h, scale from the plugin", !!j && j.w === 1440 && j.h === 1236 && j.scale === 1.4222);
-    check("[SHOT-2] …and png:{w:4,h:3} read from the bytes", !!j && JSON.stringify(j.png) === JSON.stringify({ w: 4, h: 3 }));
-    check("[SHOT-2] …plus the existing id/name/type/reference", !!j && j.id === "1:2" && j.name === "Sample Frame" && j.type === "FRAME" && j.reference === "assets/1_2_ref.png");
-    check("[SHOT-2] the screenshot run also ends with the timing line", /\[dtwin\] done in \d+\.\ds — waited/.test(r.stderr));
+    check("the command succeeds and writes the PNG", r.code === 0 && fs.existsSync(path.join(dir, "shots", "assets", "1_2_ref.png")));
+    check("stdout JSON has w, h, scale from the plugin", !!j && j.w === 1440 && j.h === 1236 && j.scale === 1.4222);
+    check("…and png:{w:4,h:3} read from the bytes", !!j && JSON.stringify(j.png) === JSON.stringify({ w: 4, h: 3 }));
+    check("…plus the existing id/name/type/reference", !!j && j.id === "1:2" && j.name === "Sample Frame" && j.type === "FRAME" && j.reference === "assets/1_2_ref.png");
+    check("the screenshot run also ends with the timing line", /\[dtwin\] done in \d+\.\ds — waited/.test(r.stderr));
   }
   {
     // An older plugin sends no w/h/scale: the keys are omitted (never null), png still comes from the bytes.
@@ -159,11 +159,11 @@ try {
     const r = await dtwin(dir, ["screenshot", "1:2", "shots", "--timeout", "30"]);
     plugin.stop();
     const j = json(r.stdout);
-    check("[SHOT-2] an older plugin (no w/h/scale): those keys are absent, png is still there", !!j && !("w" in j) && !("h" in j) && !("scale" in j) && JSON.stringify(j.png) === JSON.stringify({ w: 4, h: 3 }));
+    check("an older plugin (no w/h/scale): those keys are absent, png is still there", !!j && !("w" in j) && !("h" in j) && !("scale" in j) && JSON.stringify(j.png) === JSON.stringify({ w: 4, h: 3 }));
   }
 
-  // [WHO-3] whoami describes the ADDRESSED file's socket.
-  console.log("\ncli pull — whoami addresses the right connection (DT-03):");
+  // whoami describes the ADDRESSED file's socket.
+  console.log("\ncli pull — whoami addresses the right connection:");
   {
     const dir = path.join(tmp, "who");
     fs.mkdirSync(dir);
@@ -178,9 +178,9 @@ try {
     const j = json(r.stdout);
     const conn = j && j.connection && typeof j.connection === "object" ? Object.fromEntries(Object.entries(j.connection)) : null;
     const plug = j && j.plugin && typeof j.plugin === "object" ? Object.fromEntries(Object.entries(j.plugin)) : null;
-    check("[WHO-3] the command succeeds and addresses the second file's plugin", r.code === 0 && !!plug && plug.instanceId === "fig-b");
-    check("[WHO-3] `--client <c2's name>` → connection.connId is c2, not the first client's c1", !!conn && conn.connId === "c2");
-    check("[WHO-3] the socket line on stderr names c2", /\[dtwin\] socket c2 up /.test(r.stderr));
+    check("the command succeeds and addresses the second file's plugin", r.code === 0 && !!plug && plug.instanceId === "fig-b");
+    check("`--client <c2's name>` → connection.connId is c2, not the first client's c1", !!conn && conn.connId === "c2");
+    check("the socket line on stderr names c2", /\[dtwin\] socket c2 up /.test(r.stderr));
   }
   // The same through a running daemon (`dtwin serve`): the connection comes from the daemon's status, narrowed
   // to the addressed file by connectionFor; the timing line says it went via the daemon.
@@ -194,7 +194,7 @@ try {
     try {
       let up = false;
       for (let i = 0; i < 60 && !up; i++) { await sleep(250); up = /"pid"/.test((await dtwin(dir, ["status"])).stdout); }
-      check("[WHO-3] the daemon came up on 8789", up);
+      check("the daemon came up on 8789", up);
       const a = fakePlugin({ instanceId: "fig-a", file: "App Alpha", fileKey: "KEYA" }, { whoami: () => whoamiReply("fig-a", "App Alpha", "KEYA"), exportNode: (_a, emit) => { emit({ type: "progress", phase: "queued", source: "bridge", label: "exportNode" }); return nodeReply(); } });
       await a.opened;
       const b = fakePlugin({ instanceId: "fig-b", file: "App Bravo", fileKey: "KEYB" }, { whoami: () => whoamiReply("fig-b", "App Bravo", "KEYB") });
@@ -203,12 +203,12 @@ try {
       const r = await dtwin(dir, ["whoami", "--client", "Bravo", "--timeout", "30"]);
       const j = json(r.stdout);
       const conn = j && j.connection && typeof j.connection === "object" ? Object.fromEntries(Object.entries(j.connection)) : null;
-      check("[WHO-3] through the daemon, `--client Bravo` → connection.connId is c2", r.code === 0 && !!conn && conn.connId === "c2" && /the daemon/.test(String(j?.connectionFrom)));
+      check("through the daemon, `--client Bravo` → connection.connId is c2", r.code === 0 && !!conn && conn.connId === "c2" && /the daemon/.test(String(j?.connectionFrom)));
       const p = await dtwin(dir, ["pull", "out", "--node", "1:2", "--client", "Alpha", "--timeout", "30"]);
-      // Review 1 L-9: the daemon waits for a not-yet-connected plugin inside the request, so the line claims no
+      // the daemon waits for a not-yet-connected plugin inside the request, so the line claims no
       // "no reconnect" and labels the export figure as including any such wait.
-      check("[TIME-1] through the daemon the done line says so, with no connect-wait claim", p.code === 0 && /\[dtwin\] done in \d+\.\ds — via the running daemon · export \(incl\. any wait for the plugin\) \d+\.\ds · write \d+\.\ds/.test(p.stderr) && !/waited/.test(p.stderr) && !/no reconnect\)/.test(p.stderr));
-      check("[QUEUED-1] through the daemon the queued line is also printed once", (p.stderr.match(/queued behind another export in that file/g) ?? []).length === 1);
+      check("through the daemon the done line says so, with no connect-wait claim", p.code === 0 && /\[dtwin\] done in \d+\.\ds — via the running daemon · export \(incl\. any wait for the plugin\) \d+\.\ds · write \d+\.\ds/.test(p.stderr) && !/waited/.test(p.stderr) && !/no reconnect\)/.test(p.stderr));
+      check("through the daemon the queued line is also printed once", (p.stderr.match(/queued behind another export in that file/g) ?? []).length === 1);
       a.stop(); b.stop();
     } finally {
       await dtwin(dir, ["stop"]);
