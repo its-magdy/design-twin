@@ -442,8 +442,8 @@ interface MeasuredIndex {
   viaSharedPath: (id: string) => string | null; probeWhy: Map<string, string>;
 }
 /** compare()'s state: the inputs, the measurement index, and what the spec walk collects. The walk's counters are the
- *  only fields written after compareCtx() (`cx.fieldsChecked++`); every collection is filled in place. inputNotes,
- *  reopened and unused start empty here and are filled by the passes after the walk. */
+ *  only fields written after compareCtx() (`cx.fieldsChecked++`); every collection is filled in place. inputNotes
+ *  starts as a copy of the caller's notes, reopened and unused start empty; the passes after the walk add to them. */
 interface CompareCtx extends MeasuredIndex {
   expectation: Expectation; measured: VerifyMeasured; opts: CompareOptions; hiddenSet: Set<string>; legacy: boolean; specs: VerifySpec[];
   frameOf: (spec: VerifySpec) => Partial<VerifyRootFrame>;
