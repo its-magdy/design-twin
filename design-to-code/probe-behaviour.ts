@@ -1752,106 +1752,142 @@ export async function runBehaviour(browser: Browser, o: BehaviourOptions): Promi
   }
 }
 const WRITE_BLOCK_SETUP_MS = 5_000;
-async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<ReturnType<typeof openWriteBlock>>, t0: number): Promise<BehaviourResult> {
-  const end = t0 + o.budgetMs;
-  const checks: BehaviourCheck[] = [];
-  let cut = false;
-  let landmarks: BehaviourLandmark[] | null = null;
-  let axe: BehaviourAxe = "why" in o.axe ? { ran: false, why: o.axe.why } : { ran: false, why: "axe did not run (the a11y unit was not reached)" };
-  const widths: BehaviourWidth[] = [];
-  let forced: Buffer | null = null;
+type WriteBlock = Awaited<ReturnType<typeof openWriteBlock>>;
+/** What the units of one runBehaviour share: the run's handles and budget (fixed for the run), what the units report (the
+ *  checks and the run's landmarks / axe / widths / forced-colours shot, plus `cut`), and what a battery row's R-key unit tells
+ *  its R-scroll unit. A unit reads it when it runs, so a later unit sees what an earlier one wrote. */
+interface UnitCtx {
+  readonly browser: Browser;
+  readonly o: BehaviourOptions;
+  readonly block: WriteBlock;
+  /** the behaviour budget's end (t0 + budgetMs) */
+  readonly end: number;
+  readonly checks: BehaviourCheck[];
+  cut: boolean;
+  landmarks: BehaviourLandmark[] | null;
+  axe: BehaviourAxe;
+  readonly widths: BehaviourWidth[];
+  forced: Buffer | null;
   /** keyboard.activation per battery row (R-scroll opens by keyboard only when it passed) */
-  const keyOpens = new Map<string, "Enter" | " " | null>();
+  readonly keyOpens: Map<string, "Enter" | " " | null>;
   /** rows whose opened element R-key found not modal: R-scroll does not run on them */
-  const nonModal = new Set<string>();
+  readonly nonModal: Set<string>;
   /** battery units not yet run (each gets unitCap of what is left) */
-  let batteryLeft = 0;
-
-  const runUnit = async (unit: Unit): Promise<void> => {
-    const tu = Date.now();
-    try { await runUnitInner(unit); } finally { if (process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name} ${Date.now() - tu}ms`); }
+  batteryLeft: number;
+}
+async function runUnits(browser: Browser, o: BehaviourOptions, block: WriteBlock, t0: number): Promise<BehaviourResult> {
+  const ctx: UnitCtx = {
+    browser, o, block, end: t0 + o.budgetMs, checks: [], cut: false, landmarks: null,
+    axe: "why" in o.axe ? { ran: false, why: o.axe.why } : { ran: false, why: "axe did not run (the a11y unit was not reached)" },
+    widths: [], forced: null, keyOpens: new Map(), nonModal: new Set(), batteryLeft: 0,
   };
-  const runUnitInner = async (unit: Unit): Promise<void> => {
-    const produced: BehaviourCheck[] = [];
-    const budgetLeft = end - Date.now();
-    const left = unit.battery ? unitCap(budgetLeft, batteryLeft) : budgetLeft;
-    if (unit.battery) batteryLeft--;
-    if (left <= 0) { cut = true; fill(checks, [], unit.declared, "time budget"); return; }
-    const unitEnd = Date.now() + left;
-    let closed = false;
-    const held: Held = {};
-    let loadsAt = 0;
-    let loadsNow: () => number = () => 0;
-    // what the unit did, and the writes the block stopped (charged to checks once the unit is over)
-    const trace: UnitTrace = { phases: [{ seq: 0, keys: ["reach|"] }], actions: [] };
-    const tried: TriedLog = { list: [], more: 0 };
-    const net: UnitNet = { armed: false, write: (method, url) => {
-      const kept = logTried(tried, method, url);
-      if (kept && process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name}: blocked ${method} ${url} (in ${trace.phases.at(-1)?.keys.join(" ") ?? "?"})`);
-      return kept;
-    } };
-    const api = (page: Page): UnitApi => ({
-      page,
-      add: (c) => { if (!closed) produced.push(c); },
-      phase: (...keys) => { trace.phases.push({ seq: trace.phases.length, keys: keys.map((k) => (k.includes("|") ? k : `${k}|`)) }); },
-      act: () => { net.armed = true; trace.actions.push({ at: Date.now(), seq: trace.phases.length - 1 }); },
-      guard: () => { if (loadsNow() !== loadsAt) throw new UnitNavigated("the page loaded a new document"); },
-    });
-    const blocked = (): BlockedWrite[] => blockedOf(tried, taintedPhases(trace));
-    block.unit(net);
-    const work = (async (): Promise<string | null> => {
-      let reached: Awaited<ReturnType<typeof openUnitPage>>;
-      try {
-        reached = await openUnitPage(browser, o, holdContext(held), net);
-      } catch (e) {
-        return e instanceof StepError ? `the steps failed — ${e.message}` : `could not reach the screen — ${firstLine(e)}`;
-      }
-      try {
-        loadsAt = reached.loads(); loadsNow = reached.loads;
-        // the screen this unit reached must be the measured one — never judge an error / empty state instead
-        if (o.measuredTags && o.measuredTags.length) {
-          const diff = fingerprintDiff(o.measuredTags, await reached.page.evaluate(visibleTags, null), unit.uses);
-          if (diff !== null) throw new BatteryStop(`the page reached for this check differs from the measured page (${diff}${reached.failed.length ? `; failed while loading: ${reached.failed.slice(0, 3).join(", ")}` : ""})`);
-        }
-        // what is on screen before the unit's first action — a tooltip shown before it is not the control's
-        await reached.page.evaluate(tipPreMark, null).catch(() => false);
-        await unit.run(api(reached.page));
-        return null;
-      } finally {
-        // a write deferred a little after the unit's last action (an undo window) is still seen and charged — bounded by
-        // the unit's own time
-        const last = trace.actions.at(-1);
-        const wait = last ? Math.min(WRITE_SETTLE_MS - (Date.now() - last.at), unitEnd - Date.now()) : 0;
-        if (wait > 0) await sleep(wait, undefined, { ref: false });
-        await reached.context.close().catch(() => undefined);
-      }
-    })().catch((e: unknown): string => {
-      if (e instanceof UnitNavigated || NAVIGATED.test(errMsg(e))) return "the page loaded a new document";
-      if (e instanceof BatteryStop) return e.message;
-      return `the check could not run — ${firstLine(e)}`;
-    });
-    // the context exists from before the screen was reached: closing it ends whatever the unit waits on — ≤ 5 s in all
-    const raced = await raceBudget(work, left, held, () => { closed = true; cut = true; });
-    if (raced.cut) {
-      block.unit(null);
-      checks.push(...judgeWrites(produced, blocked()));
-      fill(checks, produced, unit.declared, left < budgetLeft ? `time budget (this unit's share: ${Math.round(left / 1000)} s)` : "time budget");
-      return;
+
+  // ---- P1: landmarks, axe, the Tab walk
+  await runUnit(ctx, a11yUnit(ctx));
+
+  // ---- P2: forced colours, then the widths (live viewport changes)
+  await runUnit(ctx, renderUnit(ctx));
+
+  // ---- the battery: overlay rows opened as a modal by a real click in the drive
+  await runBattery(ctx);
+
+  return {
+    behaviour: {
+      version: 1, ran: true, browser: { name: o.browserName ?? "chromium", version: browser.version() }, namesComputedBy: NAMES_COMPUTED_BY,
+      budgetMs: o.budgetMs, elapsedMs: Date.now() - t0, cut: ctx.cut, checks: ctx.checks, landmarks: ctx.landmarks, axe: ctx.axe, widths: ctx.widths, artifacts: ctx.forced ? [o.forcedPng] : [], writeBlock: WRITE_BLOCK_SCOPE,
+    },
+    forcedPng: ctx.forced,
+  };
+}
+/** One unit on its own page, its own context and its share of the budget; what it produced (or the reason it did not) goes
+ *  to ctx.checks, a cut sets ctx.cut. */
+async function runUnit(ctx: UnitCtx, unit: Unit): Promise<void> {
+  const tu = Date.now();
+  try { await runUnitInner(ctx, unit); } finally { if (process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name} ${Date.now() - tu}ms`); }
+}
+async function runUnitInner(ctx: UnitCtx, unit: Unit): Promise<void> {
+  const { browser, o, block, end, checks } = ctx;
+  const produced: BehaviourCheck[] = [];
+  const budgetLeft = end - Date.now();
+  const left = unit.battery ? unitCap(budgetLeft, ctx.batteryLeft) : budgetLeft;
+  if (unit.battery) ctx.batteryLeft--;
+  if (left <= 0) { ctx.cut = true; fill(checks, [], unit.declared, "time budget"); return; }
+  const unitEnd = Date.now() + left;
+  let closed = false;
+  const held: Held = {};
+  let loadsAt = 0;
+  let loadsNow: () => number = () => 0;
+  // what the unit did, and the writes the block stopped (charged to checks once the unit is over)
+  const trace: UnitTrace = { phases: [{ seq: 0, keys: ["reach|"] }], actions: [] };
+  const tried: TriedLog = { list: [], more: 0 };
+  const net: UnitNet = { armed: false, write: (method, url) => {
+    const kept = logTried(tried, method, url);
+    if (kept && process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name}: blocked ${method} ${url} (in ${trace.phases.at(-1)?.keys.join(" ") ?? "?"})`);
+    return kept;
+  } };
+  const api = (page: Page): UnitApi => ({
+    page,
+    add: (c) => { if (!closed) produced.push(c); },
+    phase: (...keys) => { trace.phases.push({ seq: trace.phases.length, keys: keys.map((k) => (k.includes("|") ? k : `${k}|`)) }); },
+    act: () => { net.armed = true; trace.actions.push({ at: Date.now(), seq: trace.phases.length - 1 }); },
+    guard: () => { if (loadsNow() !== loadsAt) throw new UnitNavigated("the page loaded a new document"); },
+  });
+  const blocked = (): BlockedWrite[] => blockedOf(tried, taintedPhases(trace));
+  block.unit(net);
+  const work = (async (): Promise<string | null> => {
+    let reached: Awaited<ReturnType<typeof openUnitPage>>;
+    try {
+      reached = await openUnitPage(browser, o, holdContext(held), net);
+    } catch (e) {
+      return e instanceof StepError ? `the steps failed — ${e.message}` : `could not reach the screen — ${firstLine(e)}`;
     }
-    const r = raced.value;
+    try {
+      loadsAt = reached.loads(); loadsNow = reached.loads;
+      // the screen this unit reached must be the measured one — never judge an error / empty state instead
+      if (o.measuredTags && o.measuredTags.length) {
+        const diff = fingerprintDiff(o.measuredTags, await reached.page.evaluate(visibleTags, null), unit.uses);
+        if (diff !== null) throw new BatteryStop(`the page reached for this check differs from the measured page (${diff}${reached.failed.length ? `; failed while loading: ${reached.failed.slice(0, 3).join(", ")}` : ""})`);
+      }
+      // what is on screen before the unit's first action — a tooltip shown before it is not the control's
+      await reached.page.evaluate(tipPreMark, null).catch(() => false);
+      await unit.run(api(reached.page));
+      return null;
+    } finally {
+      // a write deferred a little after the unit's last action (an undo window) is still seen and charged — bounded by
+      // the unit's own time
+      const last = trace.actions.at(-1);
+      const wait = last ? Math.min(WRITE_SETTLE_MS - (Date.now() - last.at), unitEnd - Date.now()) : 0;
+      if (wait > 0) await sleep(wait, undefined, { ref: false });
+      await reached.context.close().catch(() => undefined);
+    }
+  })().catch((e: unknown): string => {
+    if (e instanceof UnitNavigated || NAVIGATED.test(errMsg(e))) return "the page loaded a new document";
+    if (e instanceof BatteryStop) return e.message;
+    return `the check could not run — ${firstLine(e)}`;
+  });
+  // the context exists from before the screen was reached: closing it ends whatever the unit waits on — ≤ 5 s in all
+  const raced = await raceBudget(work, left, held, () => { closed = true; ctx.cut = true; });
+  if (raced.cut) {
     block.unit(null);
-    closed = true;
     checks.push(...judgeWrites(produced, blocked()));
-    if (r !== null) fill(checks, produced, unit.declared, r);
-    else fill(checks, produced, unit.declared, "the unit ended before this check");
-  };
+    fill(checks, produced, unit.declared, left < budgetLeft ? `time budget (this unit's share: ${Math.round(left / 1000)} s)` : "time budget");
+    return;
+  }
+  const r = raced.value;
+  block.unit(null);
+  closed = true;
+  checks.push(...judgeWrites(produced, blocked()));
+  if (r !== null) fill(checks, produced, unit.declared, r);
+  else fill(checks, produced, unit.declared, "the unit ended before this check");
+}
 
+/** P1 (a11y): landmarks, axe, the Tab walk. */
+function a11yUnit(ctx: UnitCtx): Unit {
+  const { o, end } = ctx;
   const exp = o.expectation;
   const hidden = new Set((exp.hidden && exp.hidden.ids) || []);
   const subjectIds = [...new Set((exp.interactions || []).filter((r) => !hidden.has(r.nodeId) && /^on_(click|press)$/i.test(String(r.trigger))).map((r) => r.nodeId))];
-
-  // ---- P1: landmarks, axe, the Tab walk
-  await runUnit({
+  return {
     name: "a11y",
     declared: [{ id: "a11y.landmarks" }, { id: "a11y.axe" }, { id: "keyboard.reachable" }, { id: "keyboard.focus-visible" }, { id: "a11y.name" }],
     run: async (u) => {
@@ -1861,7 +1897,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       let yaml: string | null = null;
       try { yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(o.timeout, 10_000) }); } catch (e) { if (NAVIGATED.test(errMsg(e))) throw e; }
       const tree = yaml === null ? null : parseAriaLandmarkTree(yaml);
-      landmarks = tree ? tree.landmarks : null;
+      ctx.landmarks = tree ? tree.landmarks : null;
       for (const c of landmarkFindings(tree, tree ? await page.evaluate(unnamedRegions, null) : [])) u.add(c);
       u.guard();
       // axe
@@ -1876,7 +1912,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
             sleep(axeCap, AXE_TIMED_OUT, { ref: false })]);
           if (res === AXE_TIMED_OUT) throw new AxeTimeout(`axe timed out after ${Math.round(axeCap / 1000)} s`);
           const parsed = readAxeResult(res, o.axe.version);
-          axe = parsed;
+          ctx.axe = parsed;
           if (parsed.ran) {
             const st = axeStatus(parsed.violations);
             const list = parsed.violations.map((v) => `${v.id} (${v.impact ?? "?"}, ${v.nodes} node${v.nodes === 1 ? "" : "s"})`).join(", ");
@@ -1884,8 +1920,8 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
           }
         } catch (e) {
           if (NAVIGATED.test(errMsg(e))) throw e;
-          axe = { ran: false, why: e instanceof AxeTimeout ? e.message : `axe-core ${o.axe.version} failed in the page: ${firstLine(e)}` };
-          u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${axe.why}` });
+          ctx.axe = { ran: false, why: e instanceof AxeTimeout ? e.message : `axe-core ${o.axe.version} failed in the page: ${firstLine(e)}` };
+          u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${ctx.axe.why}` });
         }
       }
       u.guard();
@@ -1993,12 +2029,15 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       for (const c of perElement("a11y.name", nameRows, nameOk, info.length, `Tab stop(s) have a role and an accessible name (${NAMES_COMPUTED_BY})`)) u.add(c);
       if (info.length === 0) u.add({ id: "a11y.name", status: "not-run", detail: "not-run: Tab reached no focusable element" });
     },
-  });
+  };
+}
 
-  // ---- P2: forced colours, then the widths (live viewport changes)
+/** P2 (render): forced colours, then the widths (live viewport changes). */
+function renderUnit(ctx: UnitCtx): Unit {
+  const { o, widths } = ctx;
   const designW = o.viewport.w, designH = o.viewport.h;
   const mid = designW >= 1280, narrow = designW > 320;
-  await runUnit({
+  return {
     name: "render",
     declared: [{ id: "forced-colors.visible" }, { id: "layout.subpixel", variant: "design" }, ...(mid ? [{ id: "overflow.mid" as const }, { id: "layout.subpixel" as const, variant: `1024x${designH}` }] : []),
       ...(narrow ? [{ id: "overflow.narrow" as const }, { id: "layout.subpixel" as const, variant: `320x${designH}` }] : [])],
@@ -2031,7 +2070,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
         await page.emulateMedia({ forcedColors: "active" });
         await page.evaluate(scrollToY, { y: 0 });
         await raf2(page);
-        forced = await page.screenshot({ animations: "disabled", caret: "hide" });
+        ctx.forced = await page.screenshot({ animations: "disabled", caret: "hide" });
         const rows: BehaviourCheck[] = [];
         let okN = 0, total = 0;
         for (let i = 0; i < cands.length; i++) {
@@ -2106,397 +2145,410 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: Awaited<Re
       if (!mid) u.add({ id: "overflow.mid", status: "not-run", detail: `not-run: the design is ${designW}px wide (the 1024px check runs for designs ≥ 1280px)` });
       if (!narrow) u.add({ id: "overflow.narrow", status: "not-run", detail: `not-run: the design is ${designW}px wide (not wider than 320px)` });
     },
-  });
+  };
+}
 
-  // ---- the battery: overlay rows opened as a modal by a real click in the drive
+/** One battery row as its two units see it: `key` (nodeId|trigger) names it in keyOpens / nonModal, `base` is what each of
+ *  its checks carries, `contract` the detector's dialog selectors, `uses` the tags it acts on. */
+interface BatteryRow { row: VerifyInteraction; key: string; base: { nodeId: string; trigger: string }; destId: string | null; contract: string[]; uses: string[] }
+/** The battery: per overlay row opened as a modal by a real click in the drive, R-key then R-scroll (each its own share of
+ *  the budget). */
+async function runBattery(ctx: UnitCtx): Promise<void> {
+  const { o, checks, keyOpens } = ctx;
+  const exp = o.expectation;
   const { battery, skipped } = batteryRows(exp, o.driven);
   for (const { row, why } of skipped) for (const id of DIALOG_IDS) checks.push({ id, status: "not-run", nodeId: row.nodeId, trigger: row.trigger, detail: `not-run: ${why}` });
-  batteryLeft = battery.length * 2;
+  ctx.batteryLeft = battery.length * 2;
   for (const row of battery) {
     const key = `${row.nodeId}|${row.trigger}`;
     const base = { nodeId: row.nodeId, trigger: row.trigger };
     const destId = row.destinationId ?? null;
     const contract = [...DIALOG_CONTRACT];
     const uses = destId === null ? [row.nodeId] : [row.nodeId, destId];
-    await runUnit({
-      name: `keyboard ${key}`, battery: true, uses,
-      declared: [{ id: "keyboard.activation", ...base }, { id: "dialog.focus-on-open", ...base }, { id: "dialog.focus-trap", ...base }, { id: "dialog.escape-closes", ...base },
-        { id: "dialog.focus-return", ...base, variant: "escape" }, { id: "dialog.focus-return", ...base, variant: "close" }, { id: "dialog.nested-escape", ...base }],
-      run: async (u) => {
-        const { page } = u;
-        const add = (c: Omit<BehaviourCheck, "nodeId" | "trigger">): void => u.add({ ...c, ...base });
-        await park(page);
-        const detect = async (): Promise<DetectorRead["opened"]> => {
-          const t = Date.now();
-          for (;;) {
-            const r = await page.evaluate(pollDetector, { destId, contract });
-            if (r.lost) throw new UnitNavigated("the page loaded a new document");
-            if (r.opened && (destId === null || (r.dest !== null && r.dest.inside) || Date.now() - t >= 500)) return r.opened;
-            if (Date.now() - t >= 2000) return r.opened;
-            await sleep(100);
-          }
-        };
-        /** null opened + blocked: the key was never pressed */
-        const keyOpen = async (key: "Enter" | " "): Promise<{ opened: DetectorRead["opened"]; blocked: string | null }> => {
-          await page.evaluate(armDetector, { destId, contract });
-          const blocked = await pressOnOpener(page, key, u.act);
-          return blocked !== null ? { opened: null, blocked } : { opened: await detect(), blocked: null };
-        };
-        /** the drive's mouse path: reveal a hover-hidden opener (pointer parked, hover its nearest visible ancestor), real click */
-        const mouseOpen = async (): Promise<{ opened: DetectorRead["opened"]; why?: string }> => {
-          let st = await page.evaluate(openerState, { id: row.nodeId });
-          if (st.count !== 1 || st.path === null) return { opened: null, why: `the opener matched ${st.count} element(s)` };
-          if (st.disabled) return { opened: null, why: "the opener is disabled" };
-          if (!st.visible && st.hoverPath !== null) {
-            await page.mouse.move(0, 0);
-            u.act();
-            await page.locator(st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
-            await raf2(page);
-            st = await page.evaluate(openerState, { id: row.nodeId });
-          }
-          if (!st.visible || st.path === null) return { opened: null, why: "the opener is not visible even on hover" };
-          const loc = page.locator(st.path).first();
-          if ((await loc.evaluate(submitGuard)) !== null) return { opened: null, why: "the opener would submit a form" };
-          await markOpenerSeen(page, row.nodeId, u.act);
-          await page.evaluate(armDetector, { destId, contract });
-          u.act();
-          await loc.click({ timeout: 2000 });
-          return { opened: await detect() };
-        };
-        // keyboard.activation: Tab from a sentinel to the opener, Enter (then Space)
-        u.phase("keyboard.activation");
-        const marked = await markOpenerSeen(page, row.nodeId, u.act);
-        await page.evaluate(sentinelInsert, null);
-        let reachedOpener = false;
-        let ancestorStop: string | null = null, insideStop: string | null = null;
-        for (let i = 0; i < WALK_CAP; i++) {
-          u.act();
-          await page.keyboard.press("Tab");
-          const s = await page.evaluate(walkStep, { record: true });
-          if (s.opener) { reachedOpener = true; break; }
-          if (s.ancestor !== null && ancestorStop === null) ancestorStop = s.ancestor;
-          if (s.inside !== null && insideStop === null) insideStop = s.inside;
-          if (s.end !== null) break;
-        }
-        // gone before anything opens: the detector's paths are the page's own (focus stays where the walk left it)
-        await page.evaluate(sentinelRemove, null);
-        u.guard();
-        let opened: DetectorRead["opened"] = null;
-        let via: "Enter" | " " | null = null;
-        const notSelf = (what: string): string => `not-run: the Tab stop at the opener is not the opener itself (${what}) — no key is pressed there`;
-        if (!reachedOpener) add({ id: "keyboard.activation", status: "not-run", detail: insideStop !== null ? notSelf(`the opener is a container; its focusable child ${insideStop} is not pressed${marked.why !== null ? ` — ${marked.why}` : ""}`)
-          : ancestorStop !== null ? notSelf(`${ancestorStop}, an ancestor of it`) : "not-run: Tab never reaches the opener (keyboard.reachable reports it)" });
-        else {
-          const e1 = await keyOpen("Enter");
-          if (e1.blocked !== null) add({ id: "keyboard.activation", status: "not-run", detail: notSelf(e1.blocked) });
-          else {
-            opened = e1.opened;
-            let spaceBlocked: string | null = null;
-            if (opened) via = "Enter";
-            else {
-              u.guard();
-              // nothing opened (detect waited 2 s): Space only on the opener again (keyTarget re-checks where focus is)
-              const e2 = await keyOpen(" ");
-              spaceBlocked = e2.blocked;
-              opened = e2.opened;
-              if (opened) via = " ";
-            }
-            add(via === "Enter" ? { id: "keyboard.activation", status: "pass", detail: "Tab reaches the opener and Enter opens the dialog" }
-              : via === " " ? { id: "keyboard.activation", status: "warn", detail: "only Space opens it, Enter does not — a button opens on both (a <button> does this by itself)" }
-              : { id: "keyboard.activation", status: "fail", detail: `Tab reaches the opener but ${spaceBlocked === null ? "neither Enter nor Space opens" : `Enter does not open (Space not pressed: ${spaceBlocked})`} the dialog — a div with only onclick? use <button> (or handle Enter and Space)` });
-          }
-        }
-        keyOpens.set(key, via);
-        u.guard();
-        const open = async (): Promise<{ opened: DetectorRead["opened"]; why?: string }> => {
-          if (via !== null) {
-            await markOpenerSeen(page, row.nodeId, u.act);
-            await page.evaluate(focusOpener, { preventScroll: false });
-            const r = await keyOpen(via);
-            if (r.blocked === null) return { opened: r.opened };
-          }
-          return mouseOpen();
-        };
-        if (!opened) {
-          u.phase("dialog.focus-on-open");
-          const m = await mouseOpen();
-          opened = m.opened;
-          if (!opened) throw new BatteryStop(`the dialog did not open in the battery's page (${m.why ?? "nothing opened within 2 s"})`);
-        }
-        const kind = await page.evaluate(markDialog, { path: opened.selector });
-        if (!kind.found) throw new BatteryStop("the opened element could not be found again");
-        if (!(kind.modal || kind.dialogOpen || kind.ariaModal)) { nonModal.add(key); throw new BatteryStop(`the opened element is not a modal dialog — ${NOT_MODAL}`); }
-        const modal = kind.modal || kind.ariaModal;
-        // dialog.focus-on-open
-        u.phase("dialog.focus-on-open");
-        await park(page);
-        const f0 = await page.evaluate(focusVsDialog, { destId });
-        add(f0.inside ? { id: "dialog.focus-on-open", status: "pass", detail: `focus moved into the dialog (initial target ${f0.desc}; recorded, not graded)`, evidence: { initial: f0.desc } }
-          : { id: "dialog.focus-on-open", status: "fail", detail: `focus stayed ${f0.body ? "on <body>" : `on ${f0.desc}, outside the dialog`} when it opened — move focus into the dialog (its first control or its heading)`, evidence: { active: f0.desc } });
-        u.guard();
-        // dialog.focus-trap (modal only)
-        u.phase("dialog.focus-trap");
-        if (!modal) add({ id: "dialog.focus-trap", status: "not-run", detail: "not-run: a non-modal dialog[open] (show()) does not trap focus" });
-        else {
-          const n = await page.evaluate(dialogTabbables, null);
-          if (n > 30) add({ id: "dialog.focus-trap", status: "not-run", detail: "not-run: too many tabbables to prove a trap (more than 30 in the dialog)" });
-          let escaped: string | null = n > 30 ? "" : null;
-          for (const k of ["Tab", "Shift+Tab"]) {
-            for (let i = 0; i < n + 2 && escaped === null; i++) {
-              u.act();
-              await page.keyboard.press(k);
-              const f = await page.evaluate(focusVsDialog, { destId });
-              if (!f.inside && !f.body) escaped = `${k} ×${i + 1} moved focus to ${f.desc}`;
-            }
-          }
-          if (n <= 30) add(escaped === null ? { id: "dialog.focus-trap", status: "pass", detail: `Tab and Shift+Tab ×${n + 2} each stay inside the dialog (${n} tabbable element(s))` }
-            : { id: "dialog.focus-trap", status: "fail", detail: `focus left the modal dialog: ${escaped} — trap Tab inside a modal (showModal() does, a div needs a focus trap)` });
-        }
-        u.guard();
-        // dialog.escape-closes + dialog.focus-return (escape): one Escape on this open
-        u.phase("dialog.escape-closes", "dialog.focus-return|escape");
-        u.act();
-        await page.keyboard.press("Escape");
-        const closedAfter = async (): Promise<boolean> => {
-          const t = Date.now();
-          for (;;) {
-            await raf2(page);
-            if (!(await page.evaluate(dialogOpenNow, null))) return true;
-            if (Date.now() - t >= 1000) return false;
-            await sleep(100);
-          }
-        };
-        const escClosed = await closedAfter();
-        add(escClosed ? { id: "dialog.escape-closes", status: "pass", detail: "Escape closes the dialog" }
-          : { id: "dialog.escape-closes", status: modal ? "fail" : "warn", detail: `Escape left the ${modal ? "modal " : ""}dialog open — close it on Escape (showModal() does; a div dialog needs a keydown handler)` });
-        let closedBy = "";
-        const focusReturn = async (variant: "escape" | "close"): Promise<void> => {
-          await park(page);
-          const r = await page.evaluate(focusReturnRead, null);
-          const s = focusReturnStatus(r);
-          add({ id: "dialog.focus-return", status: s.status, variant, detail: `after ${variant === "escape" ? "Escape" : `the close control "${closedBy}"`}: ${s.detail}`,
-            evidence: { active: r.activeDesc, openerVisible: r.openerVisible, opacity0: r.opacity0, connected: r.connected, ...(variant === "close" ? { closedBy } : {}) } });
-        };
-        const safeClose = async (): Promise<{ closed: boolean; why: string }> => {
-          const r = await safeCloseOn(page, closedAfter, u.act);
-          closedBy = r.name;
-          return r;
-        };
-        let closeDone = false;
-        if (escClosed) await focusReturn("escape");
-        else {
-          add({ id: "dialog.focus-return", status: "not-run", variant: "escape", detail: "not-run: Escape did not close the dialog" });
-          u.phase("dialog.focus-return|close");
-          const c = await safeClose();
-          if (!c.closed) {
-            add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: ${c.why ?? "the dialog stayed open"}` });
-            throw new BatteryStop(`the dialog could not be closed for a fresh open (${c.why ?? "?"})`);
-          }
-          await focusReturn("close");
-          closeDone = true;
-        }
-        u.guard();
-        // dialog.nested-escape on its own open
-        u.phase("dialog.nested-escape");
-        const o2 = await open();
-        if (!o2.opened) throw new BatteryStop(`the dialog did not open again (${o2.why ?? "nothing opened within 2 s"})`);
-        await page.evaluate(markDialog, { path: o2.opened.selector });
-        const x = await page.evaluate(expanderFind, null);
-        let stillOpen = true;
-        if (x.path === null) {
-          add(x.nativePicker ? { id: "dialog.nested-escape", status: "not-run", synthetic: true, detail: "not-run: native picker: synthetic (headless), not a real-browser observation — the dialog holds only a native <select>/date control, whose popup headless Chromium does not open" }
-            : { id: "dialog.nested-escape", status: "not-run", detail: "not-run: no expandable control ([aria-expanded]) in the dialog" });
-        } else {
-          const loc = page.locator(x.path).first();
-          if ((await loc.evaluate(submitGuard)) !== null) add({ id: "dialog.nested-escape", status: "not-run", detail: "not-run: the expandable control would submit a form" });
-          else {
-            u.act();
-            await loc.click({ timeout: 2000 });
-            let expanded = false;
-            const t = Date.now();
-            while (Date.now() - t < 1000) { if ((await page.evaluate(expanderState, null)) === "true") { expanded = true; break; } await sleep(100); }
-            if (!expanded) add({ id: "dialog.nested-escape", status: "not-run", detail: `not-run: ${x.desc} never reported aria-expanded="true" within 1 s of a click` });
-            else {
-              u.act();
-              await page.keyboard.press("Escape");
-              await raf2(page);
-              await sleep(150);
-              await raf2(page);
-              const dlgOpen = await page.evaluate(dialogOpenNow, null);
-              const ctl = await page.evaluate(expanderState, null);
-              stillOpen = dlgOpen;
-              add(!dlgOpen ? { id: "dialog.nested-escape", status: "fail", detail: `Escape on the open ${x.desc} closed the whole dialog — the inner control must handle Escape (collapse it, preventDefault + stopPropagation) so the dialog stays open` }
-                : ctl === "true" ? { id: "dialog.nested-escape", status: "warn", detail: `Escape left ${x.desc} expanded (the dialog stayed open) — Escape should collapse it first` }
-                : { id: "dialog.nested-escape", status: "pass", detail: `Escape collapsed ${x.desc} and the dialog stayed open` });
-            }
-          }
-        }
-        u.guard();
-        if (closeDone) return;
-        // dialog.focus-return (close): the open dialog (or a fresh open), its safe close control
-        u.phase("dialog.focus-return|close");
-        if (!stillOpen || !(await page.evaluate(dialogOpenNow, null))) {
-          const o3 = await open();
-          if (!o3.opened) { add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: the dialog did not open again (${o3.why ?? "nothing opened"})` }); return; }
-          await page.evaluate(markDialog, { path: o3.opened.selector });
-        }
-        const c = await safeClose();
-        if (!c.closed) { add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: ${c.why ?? "the dialog stayed open"}` }); return; }
-        await focusReturn("close");
-      },
-    });
+    const b: BatteryRow = { row, key, base, destId, contract, uses };
+    await runUnit(ctx, keyUnit(ctx, b));
     // a key that opened the dialog but was charged with a write is not pressed again to open it without scrolling
     if (keyOpens.get(key) !== null && checks.some((c) => c.id === "keyboard.activation" && c.nodeId === row.nodeId && c.trigger === row.trigger && c.status === "not-run")) keyOpens.set(key, null);
-    await runUnit({
-      name: `scroll ${key}`, battery: true, uses,
-      declared: [{ id: "dialog.scroll-open", ...base }, { id: "dialog.scrim", ...base }, { id: "dialog.click-outside", ...base }],
-      run: async (u) => {
-        if (nonModal.has(key)) throw new BatteryStop(`the opened element is not a modal dialog — ${NOT_MODAL}`);
-        const { page } = u;
-        const add = (c: Omit<BehaviourCheck, "nodeId" | "trigger">): void => u.add({ ...c, ...base });
-        const ov = row.overlay;
-        const centre = overlayCentred(ov);
-        const keyVia = keyOpens.get(key) ?? null;
-        await park(page);
-        const detect = async (): Promise<DetectorRead["opened"]> => {
-          const t = Date.now();
-          for (;;) {
-            const r = await page.evaluate(pollDetector, { destId, contract });
-            if (r.lost) throw new UnitNavigated("the page loaded a new document");
-            if (r.opened && (destId === null || (r.dest !== null && r.dest.inside) || Date.now() - t >= 500)) return r.opened;
-            if (Date.now() - t >= 2000) return r.opened;
-            await sleep(100);
-          }
-        };
-        /** open WITHOUT scrolling: a mouse click at the opener's on-screen point (a hover-hidden one revealed by moving the
-         *  pointer to its ancestor's point — never locator.hover, which scrolls), else focus({preventScroll})+the key that
-         *  opened it in keyboard.activation */
-        const openStill = async (): Promise<{ opened: DetectorRead["opened"]; how: string } | { why: string }> => {
-          await page.mouse.move(0, 0);
-          let p = await markOpenerSeen(page, row.nodeId, u.act);
-          if (!p.found) return { why: "the opener is not on the page" };
-          if (!p.visible && p.hover && p.hover.inViewport) {
-            u.act();
-            await page.mouse.move(p.hover.x, p.hover.y);
-            await raf2(page);
-            p = await markOpenerSeen(page, row.nodeId, u.act);
-          }
-          if (p.visible && p.inViewport && p.hits) {
-            await page.evaluate(armDetector, { destId, contract });
-            u.act();
-            await page.mouse.click(p.x, p.y);
-            return { opened: await detect(), how: "a mouse click at its on-screen point" };
-          }
-          if (keyVia !== null) {
-            await page.evaluate(focusOpener, { preventScroll: true });
-            await page.evaluate(armDetector, { destId, contract });
-            const blocked = await pressOnOpener(page, keyVia, u.act);
-            if (blocked !== null) return { why: `the opener is off screen at this scroll and the key is not pressed there (${blocked})` };
-            return { opened: await detect(), how: `focus({preventScroll}) + ${keyVia === " " ? "Space" : "Enter"}` };
-          }
-          return { why: "the opener is off screen at this scroll and opens only by mouse (keyboard.activation did not pass)" };
-        };
-        const closedAfter = async (): Promise<boolean> => {
-          const t = Date.now();
-          for (;;) {
-            await raf2(page);
-            if (!(await page.evaluate(dialogOpenNow, null))) return true;
-            if (Date.now() - t >= 1000) return false;
-            await sleep(100);
-          }
-        };
-        const closeAny = async (): Promise<boolean> => (await safeCloseOn(page, closedAfter, u.act)).closed;
-        // dialog.scroll-open
-        const size = await page.evaluate(docSize, null);
-        const max = Math.max(0, size.sh - size.vh);
-        const ys: Array<{ y: number; variant: string }> = max > 1 ? (max > 150 ? [{ y: 150, variant: "y=150" }, { y: max, variant: "y=max" }] : [{ y: max, variant: "y=max" }]) : [{ y: 0, variant: "y=0" }];
-        let stuck = false;
-        for (const { y, variant } of ys) {
-          u.phase(`dialog.scroll-open|${variant}`);
-          u.guard();
-          if (stuck) { add({ id: "dialog.scroll-open", status: "not-run", variant, detail: "not-run: the dialog did not close after the previous scroll position" }); continue; }
-          u.act();
-          await page.evaluate(scrollToY, { y });
-          await raf2(page);
-          const y0 = await page.evaluate(effScroll, null);
-          const op = await openStill();
-          if ("why" in op) { add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: ${op.why}` }); continue; }
-          if (!op.opened) { add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: nothing opened after ${op.how}` }); continue; }
-          const k = await page.evaluate(markDialog, { path: op.opened.selector });
-          if (k.found && !(k.modal || k.dialogOpen || k.ariaModal)) throw new BatteryStop(`the opened element is not a modal dialog — ${NOT_MODAL}`);
-          // an entrance animation (Web Animations run under the probe's CSS animation:none) ends before the rect is read
-          const settled = await page.evaluate(settleDialog, null);
-          const g = await page.evaluate(dialogGeometry, { destId });
-          const problems: string[] = [];
-          if (Math.abs(g.scrollY - y0) > 1) problems.push(`opening it scrolled the page from y=${Math.round(y0)} to y=${Math.round(g.scrollY)}`);
-          const rect = { x: Math.round(g.rect.x), y: Math.round(g.rect.y), w: Math.round(g.rect.w), h: Math.round(g.rect.h) };
-          if (centre) {
-            const c = centredIn(g.rect, { w: g.vw, h: g.vh });
-            if (!c.centred) problems.push(`it is not centred in the viewport (${g.via} at ${rect.x},${rect.y} ${rect.w}×${rect.h} in ${g.vw}×${g.vh}; position ${g.position || "?"}) — the design centres it (overlay ${ov?.from === "default" ? "default = center" : "position center"}); a fixed / top-layer dialog stays centred at any scroll`);
-          } else if (g.rect.x < -1 || g.rect.y < -1 || g.rect.x + g.rect.w > g.vw + 1 || g.rect.y + g.rect.h > g.vh + 1) problems.push(`it leaves the viewport (${g.via} at ${rect.x},${rect.y} ${rect.w}×${rect.h} in ${g.vw}×${g.vh})`);
-          u.act();
-          await page.keyboard.press("Escape");
-          const closed = await closedAfter();
-          await raf2(page);
-          const after = await page.evaluate(effScroll, null);
-          if (closed && Math.abs(after - y0) > 1) problems.push(`closing it scrolled the page from y=${Math.round(y0)} to y=${Math.round(after)}`);
-          if (!closed && !(await closeAny())) stuck = true;
-          const evidence: JsonObject = { y: Math.round(y0), afterOpen: Math.round(g.scrollY), afterClose: closed ? Math.round(after) : null, rect, viewport: { w: g.vw, h: g.vh }, position: g.position, openedBy: op.how,
-            animations: settled.animations, stable: settled.stable };
-          add(problems.length ? { id: "dialog.scroll-open", status: "fail", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op.how}: ${problems.join("; ")}`, evidence }
-            : { id: "dialog.scroll-open", status: "pass", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op.how}: the page did not move${centre ? ", the dialog is centred" : ", the dialog is inside the viewport"}`, evidence });
-        }
-        u.guard();
-        // dialog.scrim + dialog.click-outside, at y=0
-        u.phase("dialog.scrim", "dialog.click-outside");
-        if (!ov) {
-          add({ id: "dialog.scrim", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row (a plan row, or the destination was not exported)" });
-          add({ id: "dialog.click-outside", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row" });
-          return;
-        }
-        if (stuck) { for (const id of ["dialog.scrim", "dialog.click-outside"] as const) add({ id, status: "not-run", detail: "not-run: the dialog could not be closed for a fresh open" }); return; }
-        u.act();
-        await page.evaluate(scrollToY, { y: 0 });
-        await raf2(page);
-        const op = await openStill();
-        if ("why" in op || !op.opened) { for (const id of ["dialog.scrim", "dialog.click-outside"] as const) add({ id, status: "not-run", detail: `not-run: ${"why" in op ? op.why : "nothing opened"}` }); return; }
-        const kd = await page.evaluate(markDialog, { path: op.opened.selector });
-        await page.evaluate(settleDialog, null);
-        const sr = await page.evaluate(scrimRead, null);
-        const built = sr.backdrop ?? sr.cover;
-        const want = ov.background;
-        // a colour the probe cannot read (a colour space it does not convert) is not-run, never a false warn
-        const unread = sr.backdrop === null && sr.unreadable !== null ? sr.unreadable : built !== null && parseCssColor(built) === null ? built : want !== null && parseCssColor(want) === null ? want : null;
-        if (unread !== null) {
-          add({ id: "dialog.scrim", status: "not-run", detail: `not-run: the scrim colour ${unread} is in a colour space the probe does not read`, evidence: { built, designed: want } });
-        } else {
-          const match = scrimMatches(want, built);
-          add({ id: "dialog.scrim", status: match ? "pass" : "warn", detail: match ? `the scrim matches the design (${want ?? "no scrim"} vs ${built ?? "none"})` : `the scrim is ${built ?? "none"}${sr.backdrop !== null ? " (::backdrop)" : ""}, the design's overlay background is ${want ?? "none (no scrim)"}${ov.from === "default" ? " (Figma's default)" : ""}`, evidence: { built: built ?? null, designed: want, via: sr.backdrop !== null ? "::backdrop" : sr.cover !== null ? "fixed cover" : "none" } });
-        }
-        const pt = sr.point;
-        // only the backdrop itself is clicked — the native dialog's ::backdrop, or a scrim with no control under the point
-        if (pt === null) add({ id: "dialog.click-outside", status: "not-run", detail: sr.unreadable !== null ? `not-run: a layer over the page has a colour the probe does not read (${sr.unreadable}) — no point is known to be the backdrop`
-          : `not-run: no backdrop to click — nothing covers the page outside the dialog (the furthest point hits ${sr.hitDesc}); a click there would land on the page` });
-        else {
-          u.phase("dialog.click-outside");
-          u.act();
-          await page.mouse.click(pt.x, pt.y);
-          const closed = await closedAfter();
-          const want2 = ov.closeOnClickOutside;
-          const hint = closed ? "" : kd.native ? " (a native <dialog>: close it on a click whose event.target is the dialog)" : " (close it from the scrim's click)";
-          add(closed === want2 ? { id: "dialog.click-outside", status: "pass", detail: `a click on the backdrop (${pt.x},${pt.y}) ${closed ? "closed" : "did not close"} it, as designed (closeOnClickOutside ${String(want2)})` }
-            : { id: "dialog.click-outside", status: "warn", detail: `a click on the backdrop (${pt.x},${pt.y}) ${closed ? "closed" : "did not close"} it — the design says closeOnClickOutside ${String(want2)}${ov.from === "default" ? " (Figma's default)" : ""}${hint}`, evidence: { x: pt.x, y: pt.y, closed, designed: want2 } });
-        }
-      },
-    });
+    await runUnit(ctx, scrollUnit(ctx, b));
   }
-
+}
+/** R-key: keyboard activation, focus on open, focus trap, Escape closes, focus return, nested Escape. */
+function keyUnit(ctx: UnitCtx, b: BatteryRow): Unit {
+  const { keyOpens, nonModal } = ctx;
+  const { row, key, base, destId, contract, uses } = b;
   return {
-    behaviour: {
-      version: 1, ran: true, browser: { name: o.browserName ?? "chromium", version: browser.version() }, namesComputedBy: NAMES_COMPUTED_BY,
-      budgetMs: o.budgetMs, elapsedMs: Date.now() - t0, cut, checks, landmarks, axe, widths, artifacts: forced ? [o.forcedPng] : [], writeBlock: WRITE_BLOCK_SCOPE,
+    name: `keyboard ${key}`, battery: true, uses,
+    declared: [{ id: "keyboard.activation", ...base }, { id: "dialog.focus-on-open", ...base }, { id: "dialog.focus-trap", ...base }, { id: "dialog.escape-closes", ...base },
+      { id: "dialog.focus-return", ...base, variant: "escape" }, { id: "dialog.focus-return", ...base, variant: "close" }, { id: "dialog.nested-escape", ...base }],
+    run: async (u) => {
+      const { page } = u;
+      const add = (c: Omit<BehaviourCheck, "nodeId" | "trigger">): void => u.add({ ...c, ...base });
+      await park(page);
+      const detect = async (): Promise<DetectorRead["opened"]> => {
+        const t = Date.now();
+        for (;;) {
+          const r = await page.evaluate(pollDetector, { destId, contract });
+          if (r.lost) throw new UnitNavigated("the page loaded a new document");
+          if (r.opened && (destId === null || (r.dest !== null && r.dest.inside) || Date.now() - t >= 500)) return r.opened;
+          if (Date.now() - t >= 2000) return r.opened;
+          await sleep(100);
+        }
+      };
+      /** null opened + blocked: the key was never pressed */
+      const keyOpen = async (key: "Enter" | " "): Promise<{ opened: DetectorRead["opened"]; blocked: string | null }> => {
+        await page.evaluate(armDetector, { destId, contract });
+        const blocked = await pressOnOpener(page, key, u.act);
+        return blocked !== null ? { opened: null, blocked } : { opened: await detect(), blocked: null };
+      };
+      /** the drive's mouse path: reveal a hover-hidden opener (pointer parked, hover its nearest visible ancestor), real click */
+      const mouseOpen = async (): Promise<{ opened: DetectorRead["opened"]; why?: string }> => {
+        let st = await page.evaluate(openerState, { id: row.nodeId });
+        if (st.count !== 1 || st.path === null) return { opened: null, why: `the opener matched ${st.count} element(s)` };
+        if (st.disabled) return { opened: null, why: "the opener is disabled" };
+        if (!st.visible && st.hoverPath !== null) {
+          await page.mouse.move(0, 0);
+          u.act();
+          await page.locator(st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
+          await raf2(page);
+          st = await page.evaluate(openerState, { id: row.nodeId });
+        }
+        if (!st.visible || st.path === null) return { opened: null, why: "the opener is not visible even on hover" };
+        const loc = page.locator(st.path).first();
+        if ((await loc.evaluate(submitGuard)) !== null) return { opened: null, why: "the opener would submit a form" };
+        await markOpenerSeen(page, row.nodeId, u.act);
+        await page.evaluate(armDetector, { destId, contract });
+        u.act();
+        await loc.click({ timeout: 2000 });
+        return { opened: await detect() };
+      };
+      // keyboard.activation: Tab from a sentinel to the opener, Enter (then Space)
+      u.phase("keyboard.activation");
+      const marked = await markOpenerSeen(page, row.nodeId, u.act);
+      await page.evaluate(sentinelInsert, null);
+      let reachedOpener = false;
+      let ancestorStop: string | null = null, insideStop: string | null = null;
+      for (let i = 0; i < WALK_CAP; i++) {
+        u.act();
+        await page.keyboard.press("Tab");
+        const s = await page.evaluate(walkStep, { record: true });
+        if (s.opener) { reachedOpener = true; break; }
+        if (s.ancestor !== null && ancestorStop === null) ancestorStop = s.ancestor;
+        if (s.inside !== null && insideStop === null) insideStop = s.inside;
+        if (s.end !== null) break;
+      }
+      // gone before anything opens: the detector's paths are the page's own (focus stays where the walk left it)
+      await page.evaluate(sentinelRemove, null);
+      u.guard();
+      let opened: DetectorRead["opened"] = null;
+      let via: "Enter" | " " | null = null;
+      const notSelf = (what: string): string => `not-run: the Tab stop at the opener is not the opener itself (${what}) — no key is pressed there`;
+      if (!reachedOpener) add({ id: "keyboard.activation", status: "not-run", detail: insideStop !== null ? notSelf(`the opener is a container; its focusable child ${insideStop} is not pressed${marked.why !== null ? ` — ${marked.why}` : ""}`)
+        : ancestorStop !== null ? notSelf(`${ancestorStop}, an ancestor of it`) : "not-run: Tab never reaches the opener (keyboard.reachable reports it)" });
+      else {
+        const e1 = await keyOpen("Enter");
+        if (e1.blocked !== null) add({ id: "keyboard.activation", status: "not-run", detail: notSelf(e1.blocked) });
+        else {
+          opened = e1.opened;
+          let spaceBlocked: string | null = null;
+          if (opened) via = "Enter";
+          else {
+            u.guard();
+            // nothing opened (detect waited 2 s): Space only on the opener again (keyTarget re-checks where focus is)
+            const e2 = await keyOpen(" ");
+            spaceBlocked = e2.blocked;
+            opened = e2.opened;
+            if (opened) via = " ";
+          }
+          add(via === "Enter" ? { id: "keyboard.activation", status: "pass", detail: "Tab reaches the opener and Enter opens the dialog" }
+            : via === " " ? { id: "keyboard.activation", status: "warn", detail: "only Space opens it, Enter does not — a button opens on both (a <button> does this by itself)" }
+            : { id: "keyboard.activation", status: "fail", detail: `Tab reaches the opener but ${spaceBlocked === null ? "neither Enter nor Space opens" : `Enter does not open (Space not pressed: ${spaceBlocked})`} the dialog — a div with only onclick? use <button> (or handle Enter and Space)` });
+        }
+      }
+      keyOpens.set(key, via);
+      u.guard();
+      const open = async (): Promise<{ opened: DetectorRead["opened"]; why?: string }> => {
+        if (via !== null) {
+          await markOpenerSeen(page, row.nodeId, u.act);
+          await page.evaluate(focusOpener, { preventScroll: false });
+          const r = await keyOpen(via);
+          if (r.blocked === null) return { opened: r.opened };
+        }
+        return mouseOpen();
+      };
+      if (!opened) {
+        u.phase("dialog.focus-on-open");
+        const m = await mouseOpen();
+        opened = m.opened;
+        if (!opened) throw new BatteryStop(`the dialog did not open in the battery's page (${m.why ?? "nothing opened within 2 s"})`);
+      }
+      const kind = await page.evaluate(markDialog, { path: opened.selector });
+      if (!kind.found) throw new BatteryStop("the opened element could not be found again");
+      if (!(kind.modal || kind.dialogOpen || kind.ariaModal)) { nonModal.add(key); throw new BatteryStop(`the opened element is not a modal dialog — ${NOT_MODAL}`); }
+      const modal = kind.modal || kind.ariaModal;
+      // dialog.focus-on-open
+      u.phase("dialog.focus-on-open");
+      await park(page);
+      const f0 = await page.evaluate(focusVsDialog, { destId });
+      add(f0.inside ? { id: "dialog.focus-on-open", status: "pass", detail: `focus moved into the dialog (initial target ${f0.desc}; recorded, not graded)`, evidence: { initial: f0.desc } }
+        : { id: "dialog.focus-on-open", status: "fail", detail: `focus stayed ${f0.body ? "on <body>" : `on ${f0.desc}, outside the dialog`} when it opened — move focus into the dialog (its first control or its heading)`, evidence: { active: f0.desc } });
+      u.guard();
+      // dialog.focus-trap (modal only)
+      u.phase("dialog.focus-trap");
+      if (!modal) add({ id: "dialog.focus-trap", status: "not-run", detail: "not-run: a non-modal dialog[open] (show()) does not trap focus" });
+      else {
+        const n = await page.evaluate(dialogTabbables, null);
+        if (n > 30) add({ id: "dialog.focus-trap", status: "not-run", detail: "not-run: too many tabbables to prove a trap (more than 30 in the dialog)" });
+        let escaped: string | null = n > 30 ? "" : null;
+        for (const k of ["Tab", "Shift+Tab"]) {
+          for (let i = 0; i < n + 2 && escaped === null; i++) {
+            u.act();
+            await page.keyboard.press(k);
+            const f = await page.evaluate(focusVsDialog, { destId });
+            if (!f.inside && !f.body) escaped = `${k} ×${i + 1} moved focus to ${f.desc}`;
+          }
+        }
+        if (n <= 30) add(escaped === null ? { id: "dialog.focus-trap", status: "pass", detail: `Tab and Shift+Tab ×${n + 2} each stay inside the dialog (${n} tabbable element(s))` }
+          : { id: "dialog.focus-trap", status: "fail", detail: `focus left the modal dialog: ${escaped} — trap Tab inside a modal (showModal() does, a div needs a focus trap)` });
+      }
+      u.guard();
+      // dialog.escape-closes + dialog.focus-return (escape): one Escape on this open
+      u.phase("dialog.escape-closes", "dialog.focus-return|escape");
+      u.act();
+      await page.keyboard.press("Escape");
+      const closedAfter = async (): Promise<boolean> => {
+        const t = Date.now();
+        for (;;) {
+          await raf2(page);
+          if (!(await page.evaluate(dialogOpenNow, null))) return true;
+          if (Date.now() - t >= 1000) return false;
+          await sleep(100);
+        }
+      };
+      const escClosed = await closedAfter();
+      add(escClosed ? { id: "dialog.escape-closes", status: "pass", detail: "Escape closes the dialog" }
+        : { id: "dialog.escape-closes", status: modal ? "fail" : "warn", detail: `Escape left the ${modal ? "modal " : ""}dialog open — close it on Escape (showModal() does; a div dialog needs a keydown handler)` });
+      let closedBy = "";
+      const focusReturn = async (variant: "escape" | "close"): Promise<void> => {
+        await park(page);
+        const r = await page.evaluate(focusReturnRead, null);
+        const s = focusReturnStatus(r);
+        add({ id: "dialog.focus-return", status: s.status, variant, detail: `after ${variant === "escape" ? "Escape" : `the close control "${closedBy}"`}: ${s.detail}`,
+          evidence: { active: r.activeDesc, openerVisible: r.openerVisible, opacity0: r.opacity0, connected: r.connected, ...(variant === "close" ? { closedBy } : {}) } });
+      };
+      const safeClose = async (): Promise<{ closed: boolean; why: string }> => {
+        const r = await safeCloseOn(page, closedAfter, u.act);
+        closedBy = r.name;
+        return r;
+      };
+      let closeDone = false;
+      if (escClosed) await focusReturn("escape");
+      else {
+        add({ id: "dialog.focus-return", status: "not-run", variant: "escape", detail: "not-run: Escape did not close the dialog" });
+        u.phase("dialog.focus-return|close");
+        const c = await safeClose();
+        if (!c.closed) {
+          add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: ${c.why ?? "the dialog stayed open"}` });
+          throw new BatteryStop(`the dialog could not be closed for a fresh open (${c.why ?? "?"})`);
+        }
+        await focusReturn("close");
+        closeDone = true;
+      }
+      u.guard();
+      // dialog.nested-escape on its own open
+      u.phase("dialog.nested-escape");
+      const o2 = await open();
+      if (!o2.opened) throw new BatteryStop(`the dialog did not open again (${o2.why ?? "nothing opened within 2 s"})`);
+      await page.evaluate(markDialog, { path: o2.opened.selector });
+      const x = await page.evaluate(expanderFind, null);
+      let stillOpen = true;
+      if (x.path === null) {
+        add(x.nativePicker ? { id: "dialog.nested-escape", status: "not-run", synthetic: true, detail: "not-run: native picker: synthetic (headless), not a real-browser observation — the dialog holds only a native <select>/date control, whose popup headless Chromium does not open" }
+          : { id: "dialog.nested-escape", status: "not-run", detail: "not-run: no expandable control ([aria-expanded]) in the dialog" });
+      } else {
+        const loc = page.locator(x.path).first();
+        if ((await loc.evaluate(submitGuard)) !== null) add({ id: "dialog.nested-escape", status: "not-run", detail: "not-run: the expandable control would submit a form" });
+        else {
+          u.act();
+          await loc.click({ timeout: 2000 });
+          let expanded = false;
+          const t = Date.now();
+          while (Date.now() - t < 1000) { if ((await page.evaluate(expanderState, null)) === "true") { expanded = true; break; } await sleep(100); }
+          if (!expanded) add({ id: "dialog.nested-escape", status: "not-run", detail: `not-run: ${x.desc} never reported aria-expanded="true" within 1 s of a click` });
+          else {
+            u.act();
+            await page.keyboard.press("Escape");
+            await raf2(page);
+            await sleep(150);
+            await raf2(page);
+            const dlgOpen = await page.evaluate(dialogOpenNow, null);
+            const ctl = await page.evaluate(expanderState, null);
+            stillOpen = dlgOpen;
+            add(!dlgOpen ? { id: "dialog.nested-escape", status: "fail", detail: `Escape on the open ${x.desc} closed the whole dialog — the inner control must handle Escape (collapse it, preventDefault + stopPropagation) so the dialog stays open` }
+              : ctl === "true" ? { id: "dialog.nested-escape", status: "warn", detail: `Escape left ${x.desc} expanded (the dialog stayed open) — Escape should collapse it first` }
+              : { id: "dialog.nested-escape", status: "pass", detail: `Escape collapsed ${x.desc} and the dialog stayed open` });
+          }
+        }
+      }
+      u.guard();
+      if (closeDone) return;
+      // dialog.focus-return (close): the open dialog (or a fresh open), its safe close control
+      u.phase("dialog.focus-return|close");
+      if (!stillOpen || !(await page.evaluate(dialogOpenNow, null))) {
+        const o3 = await open();
+        if (!o3.opened) { add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: the dialog did not open again (${o3.why ?? "nothing opened"})` }); return; }
+        await page.evaluate(markDialog, { path: o3.opened.selector });
+      }
+      const c = await safeClose();
+      if (!c.closed) { add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: ${c.why ?? "the dialog stayed open"}` }); return; }
+      await focusReturn("close");
     },
-    forcedPng: forced,
+  };
+}
+/** R-scroll: scroll-open (y = 0 / 150 / max), scrim, click-outside. */
+function scrollUnit(ctx: UnitCtx, b: BatteryRow): Unit {
+  const { keyOpens, nonModal } = ctx;
+  const { row, key, base, destId, contract, uses } = b;
+  return {
+    name: `scroll ${key}`, battery: true, uses,
+    declared: [{ id: "dialog.scroll-open", ...base }, { id: "dialog.scrim", ...base }, { id: "dialog.click-outside", ...base }],
+    run: async (u) => {
+      if (nonModal.has(key)) throw new BatteryStop(`the opened element is not a modal dialog — ${NOT_MODAL}`);
+      const { page } = u;
+      const add = (c: Omit<BehaviourCheck, "nodeId" | "trigger">): void => u.add({ ...c, ...base });
+      const ov = row.overlay;
+      const centre = overlayCentred(ov);
+      const keyVia = keyOpens.get(key) ?? null;
+      await park(page);
+      const detect = async (): Promise<DetectorRead["opened"]> => {
+        const t = Date.now();
+        for (;;) {
+          const r = await page.evaluate(pollDetector, { destId, contract });
+          if (r.lost) throw new UnitNavigated("the page loaded a new document");
+          if (r.opened && (destId === null || (r.dest !== null && r.dest.inside) || Date.now() - t >= 500)) return r.opened;
+          if (Date.now() - t >= 2000) return r.opened;
+          await sleep(100);
+        }
+      };
+      /** open WITHOUT scrolling: a mouse click at the opener's on-screen point (a hover-hidden one revealed by moving the
+       *  pointer to its ancestor's point — never locator.hover, which scrolls), else focus({preventScroll})+the key that
+       *  opened it in keyboard.activation */
+      const openStill = async (): Promise<{ opened: DetectorRead["opened"]; how: string } | { why: string }> => {
+        await page.mouse.move(0, 0);
+        let p = await markOpenerSeen(page, row.nodeId, u.act);
+        if (!p.found) return { why: "the opener is not on the page" };
+        if (!p.visible && p.hover && p.hover.inViewport) {
+          u.act();
+          await page.mouse.move(p.hover.x, p.hover.y);
+          await raf2(page);
+          p = await markOpenerSeen(page, row.nodeId, u.act);
+        }
+        if (p.visible && p.inViewport && p.hits) {
+          await page.evaluate(armDetector, { destId, contract });
+          u.act();
+          await page.mouse.click(p.x, p.y);
+          return { opened: await detect(), how: "a mouse click at its on-screen point" };
+        }
+        if (keyVia !== null) {
+          await page.evaluate(focusOpener, { preventScroll: true });
+          await page.evaluate(armDetector, { destId, contract });
+          const blocked = await pressOnOpener(page, keyVia, u.act);
+          if (blocked !== null) return { why: `the opener is off screen at this scroll and the key is not pressed there (${blocked})` };
+          return { opened: await detect(), how: `focus({preventScroll}) + ${keyVia === " " ? "Space" : "Enter"}` };
+        }
+        return { why: "the opener is off screen at this scroll and opens only by mouse (keyboard.activation did not pass)" };
+      };
+      const closedAfter = async (): Promise<boolean> => {
+        const t = Date.now();
+        for (;;) {
+          await raf2(page);
+          if (!(await page.evaluate(dialogOpenNow, null))) return true;
+          if (Date.now() - t >= 1000) return false;
+          await sleep(100);
+        }
+      };
+      const closeAny = async (): Promise<boolean> => (await safeCloseOn(page, closedAfter, u.act)).closed;
+      // dialog.scroll-open
+      const size = await page.evaluate(docSize, null);
+      const max = Math.max(0, size.sh - size.vh);
+      const ys: Array<{ y: number; variant: string }> = max > 1 ? (max > 150 ? [{ y: 150, variant: "y=150" }, { y: max, variant: "y=max" }] : [{ y: max, variant: "y=max" }]) : [{ y: 0, variant: "y=0" }];
+      let stuck = false;
+      for (const { y, variant } of ys) {
+        u.phase(`dialog.scroll-open|${variant}`);
+        u.guard();
+        if (stuck) { add({ id: "dialog.scroll-open", status: "not-run", variant, detail: "not-run: the dialog did not close after the previous scroll position" }); continue; }
+        u.act();
+        await page.evaluate(scrollToY, { y });
+        await raf2(page);
+        const y0 = await page.evaluate(effScroll, null);
+        const op = await openStill();
+        if ("why" in op) { add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: ${op.why}` }); continue; }
+        if (!op.opened) { add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: nothing opened after ${op.how}` }); continue; }
+        const k = await page.evaluate(markDialog, { path: op.opened.selector });
+        if (k.found && !(k.modal || k.dialogOpen || k.ariaModal)) throw new BatteryStop(`the opened element is not a modal dialog — ${NOT_MODAL}`);
+        // an entrance animation (Web Animations run under the probe's CSS animation:none) ends before the rect is read
+        const settled = await page.evaluate(settleDialog, null);
+        const g = await page.evaluate(dialogGeometry, { destId });
+        const problems: string[] = [];
+        if (Math.abs(g.scrollY - y0) > 1) problems.push(`opening it scrolled the page from y=${Math.round(y0)} to y=${Math.round(g.scrollY)}`);
+        const rect = { x: Math.round(g.rect.x), y: Math.round(g.rect.y), w: Math.round(g.rect.w), h: Math.round(g.rect.h) };
+        if (centre) {
+          const c = centredIn(g.rect, { w: g.vw, h: g.vh });
+          if (!c.centred) problems.push(`it is not centred in the viewport (${g.via} at ${rect.x},${rect.y} ${rect.w}×${rect.h} in ${g.vw}×${g.vh}; position ${g.position || "?"}) — the design centres it (overlay ${ov?.from === "default" ? "default = center" : "position center"}); a fixed / top-layer dialog stays centred at any scroll`);
+        } else if (g.rect.x < -1 || g.rect.y < -1 || g.rect.x + g.rect.w > g.vw + 1 || g.rect.y + g.rect.h > g.vh + 1) problems.push(`it leaves the viewport (${g.via} at ${rect.x},${rect.y} ${rect.w}×${rect.h} in ${g.vw}×${g.vh})`);
+        u.act();
+        await page.keyboard.press("Escape");
+        const closed = await closedAfter();
+        await raf2(page);
+        const after = await page.evaluate(effScroll, null);
+        if (closed && Math.abs(after - y0) > 1) problems.push(`closing it scrolled the page from y=${Math.round(y0)} to y=${Math.round(after)}`);
+        if (!closed && !(await closeAny())) stuck = true;
+        const evidence: JsonObject = { y: Math.round(y0), afterOpen: Math.round(g.scrollY), afterClose: closed ? Math.round(after) : null, rect, viewport: { w: g.vw, h: g.vh }, position: g.position, openedBy: op.how,
+          animations: settled.animations, stable: settled.stable };
+        add(problems.length ? { id: "dialog.scroll-open", status: "fail", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op.how}: ${problems.join("; ")}`, evidence }
+          : { id: "dialog.scroll-open", status: "pass", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op.how}: the page did not move${centre ? ", the dialog is centred" : ", the dialog is inside the viewport"}`, evidence });
+      }
+      u.guard();
+      // dialog.scrim + dialog.click-outside, at y=0
+      u.phase("dialog.scrim", "dialog.click-outside");
+      if (!ov) {
+        add({ id: "dialog.scrim", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row (a plan row, or the destination was not exported)" });
+        add({ id: "dialog.click-outside", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row" });
+        return;
+      }
+      if (stuck) { for (const id of ["dialog.scrim", "dialog.click-outside"] as const) add({ id, status: "not-run", detail: "not-run: the dialog could not be closed for a fresh open" }); return; }
+      u.act();
+      await page.evaluate(scrollToY, { y: 0 });
+      await raf2(page);
+      const op = await openStill();
+      if ("why" in op || !op.opened) { for (const id of ["dialog.scrim", "dialog.click-outside"] as const) add({ id, status: "not-run", detail: `not-run: ${"why" in op ? op.why : "nothing opened"}` }); return; }
+      const kd = await page.evaluate(markDialog, { path: op.opened.selector });
+      await page.evaluate(settleDialog, null);
+      const sr = await page.evaluate(scrimRead, null);
+      const built = sr.backdrop ?? sr.cover;
+      const want = ov.background;
+      // a colour the probe cannot read (a colour space it does not convert) is not-run, never a false warn
+      const unread = sr.backdrop === null && sr.unreadable !== null ? sr.unreadable : built !== null && parseCssColor(built) === null ? built : want !== null && parseCssColor(want) === null ? want : null;
+      if (unread !== null) {
+        add({ id: "dialog.scrim", status: "not-run", detail: `not-run: the scrim colour ${unread} is in a colour space the probe does not read`, evidence: { built, designed: want } });
+      } else {
+        const match = scrimMatches(want, built);
+        add({ id: "dialog.scrim", status: match ? "pass" : "warn", detail: match ? `the scrim matches the design (${want ?? "no scrim"} vs ${built ?? "none"})` : `the scrim is ${built ?? "none"}${sr.backdrop !== null ? " (::backdrop)" : ""}, the design's overlay background is ${want ?? "none (no scrim)"}${ov.from === "default" ? " (Figma's default)" : ""}`, evidence: { built: built ?? null, designed: want, via: sr.backdrop !== null ? "::backdrop" : sr.cover !== null ? "fixed cover" : "none" } });
+      }
+      const pt = sr.point;
+      // only the backdrop itself is clicked — the native dialog's ::backdrop, or a scrim with no control under the point
+      if (pt === null) add({ id: "dialog.click-outside", status: "not-run", detail: sr.unreadable !== null ? `not-run: a layer over the page has a colour the probe does not read (${sr.unreadable}) — no point is known to be the backdrop`
+        : `not-run: no backdrop to click — nothing covers the page outside the dialog (the furthest point hits ${sr.hitDesc}); a click there would land on the page` });
+      else {
+        u.phase("dialog.click-outside");
+        u.act();
+        await page.mouse.click(pt.x, pt.y);
+        const closed = await closedAfter();
+        const want2 = ov.closeOnClickOutside;
+        const hint = closed ? "" : kd.native ? " (a native <dialog>: close it on a click whose event.target is the dialog)" : " (close it from the scrim's click)";
+        add(closed === want2 ? { id: "dialog.click-outside", status: "pass", detail: `a click on the backdrop (${pt.x},${pt.y}) ${closed ? "closed" : "did not close"} it, as designed (closeOnClickOutside ${String(want2)})` }
+          : { id: "dialog.click-outside", status: "warn", detail: `a click on the backdrop (${pt.x},${pt.y}) ${closed ? "closed" : "did not close"} it — the design says closeOnClickOutside ${String(want2)}${ov.from === "default" ? " (Figma's default)" : ""}${hint}`, evidence: { x: pt.x, y: pt.y, closed, designed: want2 } });
+      }
+    },
   };
 }
 /** Type the axe result the page returned (lint:any: nothing untyped crosses back). */
