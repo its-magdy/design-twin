@@ -2,7 +2,7 @@
 
 
 // design-to-code/verify-screen.ts
-import fs9 from "node:fs";
+import fs10 from "node:fs";
 import path9 from "node:path";
 
 // bridge/src/hash.ts
@@ -614,54 +614,6 @@ function planInteractionsSha256(plan) {
   return sha256Hex(canonical(rows));
 }
 
-// design-to-code/probe-steps.ts
-var STEP_KINDS = ["click", "waitFor", "goto"];
-var isStepKind = (k) => STEP_KINDS.includes(k);
-var REFUSED = {
-  fill: "a typed value may submit a form when the steps are replayed",
-  type: "a typed value may submit a form when the steps are replayed",
-  press: "a key press may submit a form when the steps are replayed",
-  hover: "a hover is not a navigation (hover-revealed openers are revealed by the probe itself)",
-  check: "a checked box is state, not navigation",
-  select: "a selected option is state, not navigation"
-};
-function isSameOriginPath(v) {
-  return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
-}
-function parseSteps(x) {
-  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
-  if (!Array.isArray(list)) {
-    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
-  }
-  const steps = [];
-  for (const [i, raw] of list.entries()) {
-    const at = `step ${i + 1}`;
-    if (!isJsonObject(raw)) return { error: `${at} is not an object like {"click": "<selector>"}` };
-    const keys = Object.keys(raw);
-    const k = keys[0];
-    if (keys.length !== 1 || k === void 0) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} \u2014 exactly one of ${STEP_KINDS.join(" / ")}` };
-    const v = raw[k];
-    if (!isStepKind(k)) {
-      const lk = k.toLowerCase();
-      const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : void 0;
-      return { error: `${at} {${k}: \u2026} is not a step \u2014 the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
-    }
-    if (typeof v !== "string" || v.trim() === "") return { error: `${at} {${k}: \u2026} needs a non-empty string` };
-    if (k === "goto" && !isSameOriginPath(v)) return { error: `${at} {goto: ${JSON.stringify(v)}} must be a same-origin path starting with "/" (e.g. "/orders?tab=open") \u2014 never "//" or "/\\", and no backslash, whitespace or control character` };
-    steps.push(k === "click" ? { click: v } : k === "waitFor" ? { waitFor: v } : { goto: v });
-  }
-  return { steps };
-}
-function stepsSha256(steps) {
-  return sha256Hex(canonical(steps));
-}
-function isPlanExpect(x) {
-  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
-}
-function actionForExpect(expect) {
-  return expect === "dialog" ? "overlay" : expect === "url" ? "navigate" : "other";
-}
-
 // design-to-code/verify-run.ts
 import fs7 from "node:fs";
 import os from "node:os";
@@ -1234,6 +1186,31 @@ function screenExportOf(doc) {
   return isScreenExport(doc) ? doc : null;
 }
 
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
+// bridge/src/is-main.ts
+import fs8 from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs8.realpathSync(argv1) === fs8.realpathSync(fileURLToPath2(metaUrl));
+  } catch {
+    return false;
+  }
+}
+
+// design-to-code/verify-shared.ts
+import path7 from "node:path";
+
 // bridge/src/hex-color.ts
 function formatHex(c) {
   const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
@@ -1315,39 +1292,7 @@ function parseCssColor(v) {
   return null;
 }
 
-// design-to-code/probe-match.ts
-var CANONICAL_MATCHED_BY = ["tag", "tag-shared-path", "tag-alias", "text", "text-ordinal", "position", "frame"];
-var normText = (s) => s.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-var idSuffix = (id) => {
-  const i = id.indexOf(";");
-  return i === -1 ? null : id.slice(i + 1);
-};
-var PAINT_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
-
-// design-to-code/map-util.ts
-function getOrInit(m, k, init) {
-  const have = m.get(k);
-  if (have !== void 0) return have;
-  const made = init();
-  m.set(k, made);
-  return made;
-}
-
-// bridge/src/is-main.ts
-import fs8 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs8.realpathSync(argv1) === fs8.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
-}
-
 // design-to-code/verify-shared.ts
-import path7 from "node:path";
 var TOLERANCE = {
   fontSize: 0.5,
   // a browser rounds; a different token does not
@@ -1575,6 +1520,63 @@ function pngInfo(b) {
 }
 var MAX_DECODE_SIDE = 4096;
 var MAX_DECODE_PIXELS = MAX_DECODE_SIDE * MAX_DECODE_SIDE;
+
+// design-to-code/probe-steps.ts
+var STEP_KINDS = ["click", "waitFor", "goto"];
+var isStepKind = (k) => STEP_KINDS.includes(k);
+var REFUSED = {
+  fill: "a typed value may submit a form when the steps are replayed",
+  type: "a typed value may submit a form when the steps are replayed",
+  press: "a key press may submit a form when the steps are replayed",
+  hover: "a hover is not a navigation (hover-revealed openers are revealed by the probe itself)",
+  check: "a checked box is state, not navigation",
+  select: "a selected option is state, not navigation"
+};
+function isSameOriginPath(v) {
+  return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
+}
+function parseSteps(x) {
+  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
+  if (!Array.isArray(list)) {
+    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
+  }
+  const steps = [];
+  for (const [i, raw] of list.entries()) {
+    const at = `step ${i + 1}`;
+    if (!isJsonObject(raw)) return { error: `${at} is not an object like {"click": "<selector>"}` };
+    const keys = Object.keys(raw);
+    const k = keys[0];
+    if (keys.length !== 1 || k === void 0) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} \u2014 exactly one of ${STEP_KINDS.join(" / ")}` };
+    const v = raw[k];
+    if (!isStepKind(k)) {
+      const lk = k.toLowerCase();
+      const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : void 0;
+      return { error: `${at} {${k}: \u2026} is not a step \u2014 the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
+    }
+    if (typeof v !== "string" || v.trim() === "") return { error: `${at} {${k}: \u2026} needs a non-empty string` };
+    if (k === "goto" && !isSameOriginPath(v)) return { error: `${at} {goto: ${JSON.stringify(v)}} must be a same-origin path starting with "/" (e.g. "/orders?tab=open") \u2014 never "//" or "/\\", and no backslash, whitespace or control character` };
+    steps.push(k === "click" ? { click: v } : k === "waitFor" ? { waitFor: v } : { goto: v });
+  }
+  return { steps };
+}
+function stepsSha256(steps) {
+  return sha256Hex(canonical(steps));
+}
+function isPlanExpect(x) {
+  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
+}
+function actionForExpect(expect) {
+  return expect === "dialog" ? "overlay" : expect === "url" ? "navigate" : "other";
+}
+
+// design-to-code/probe-match.ts
+var CANONICAL_MATCHED_BY = ["tag", "tag-shared-path", "tag-alias", "text", "text-ordinal", "position", "frame"];
+var normText = (s) => s.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+var idSuffix = (id) => {
+  const i = id.indexOf(";");
+  return i === -1 ? null : id.slice(i + 1);
+};
+var PAINT_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
 
 // design-to-code/verify-expect.ts
 var firstSolid = (fills) => (fills || []).find((f) => !!f && f.type === "solid" && f.visible !== false);
@@ -2263,7 +2265,8 @@ function referenceImageFor(o) {
   };
 }
 
-// design-to-code/verify-screen.ts
+// design-to-code/verify-compare.ts
+import fs9 from "node:fs";
 var KNOWN_NODE_KEYS = /* @__PURE__ */ new Set([
   "nodeId",
   "styles",
@@ -3801,17 +3804,6 @@ function compare(expectation, measured, opts) {
     limits: LIMITS
   };
 }
-function matchedLine(census) {
-  const c = census || {};
-  const always = ["tag", "text", "textOrdinal", "position"];
-  const keys = [...always, ...MATCH_BUCKETS.filter((b) => !always.includes(b) && (c[b] ?? 0) > 0)];
-  return keys.map((k) => `${MATCH_LABEL[k] ?? k} ${c[k] ?? 0}`).join(" \xB7 ");
-}
-function probeLine(r) {
-  const p = r.inputs && r.inputs.probe;
-  const who = p && p !== "unknown" ? `probe ${p.name} ${p.version ?? "(no version)"} (sha ${p.sha256.slice(0, 12)}\u2026) \xB7 ${p.playwright.package} ${p.playwright.version} \xB7 ${p.browser.name} ${p.browser.version}` : "probe unknown (hand-written \u2014 not comparable round to round)";
-  return `${who} \xB7 matched: ${matchedLine(r.coverage && r.coverage.matchedBy)}`;
-}
 var VISUAL_NO_BLOCK = "the measured file carries no visual diff (hand-written, or a probe that predates the visual diff)";
 var VISUAL_NOT_APPLICABLE = "not applicable (no web probe)";
 var VISUAL_MALFORMED = "the measured file's visual block is malformed \u2014 ignored (see the input notes)";
@@ -3871,34 +3863,6 @@ function visualReport(v, malformed = false, o) {
   };
   return { ...r, headline: visualHeadline(r, num(sp) ? sp : void 0, notCompared ? notCompared.pct : void 0) };
 }
-var VISUAL_MD_ROWS = 10;
-function visualMarkdown(v) {
-  const L = ["## Visual diff \u2014 informational, not part of the verdict", ""];
-  L.push("*The pixel diff never changes the fidelity verdict above. Font rasterisation alone differs 1\u20133% on text-heavy screens (Figma's renderer vs Chromium), so read the regions, not the percentage.*", "");
-  if (!v.ran) {
-    L.push(v.why === VISUAL_NOT_APPLICABLE ? "Not applicable (no web probe)." : `Not run (${mdText(v.why) || "no reason recorded"}).`, "");
-    return L;
-  }
-  L.push(`${pctText(v.shiftTolerantPct ?? 0)}% of the compared pixels differ after the shift tolerance (${pctText(v.differingPct ?? 0)}% before it; anti-aliased edge pixels excluded) \xB7 ${v.regionsTotal ?? v.regions.length} hot region(s).`, "");
-  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale ?? "?"}x (geometry from the ${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
-  if (v.grid === "1x") L.push("Grid: **resampled to 1x** \u2014 the capture and the reference crop differ by more than 2 px, so both were resampled to the design size (up or down); resampling can hide a difference.", "");
-  else if (v.grid) L.push("Grid: the reference's own pixel grid (the build rendered at the reference's scale).", "");
-  if (v.reference && v.reference.colorProfile) L.push(`Colour profile: ${mdText(v.reference.colorProfile)} \u2014 colours are compared without colour management, so colour differences are unreliable.`, "");
-  if (v.regions.length) {
-    L.push("| Region (x, y) | Size | Differ | Built nodes | Designed nodes |", "|---|---|---|---|---|");
-    for (const g of v.regions.slice(0, VISUAL_MD_ROWS)) {
-      L.push(`| ${Math.round(g.rect.x)}, ${Math.round(g.rect.y)} | ${Math.round(g.rect.w)}\xD7${Math.round(g.rect.h)} | ${pctText(g.pct)}% (${g.pixels} px) | ${g.built.map(mdText).join(", ")} | ${g.designed.map(mdText).join(", ")} |`);
-    }
-    const total = v.regionsTotal ?? v.regions.length;
-    if (total > Math.min(v.regions.length, VISUAL_MD_ROWS)) L.push(`| \u2026and ${total - Math.min(v.regions.length, VISUAL_MD_ROWS)} more (the largest are listed) | | | | |`);
-    L.push("");
-  }
-  if (v.diff) L.push(`Diff image: ${mdText(v.diff.path)}${v.diff.exists ? "" : " (missing on disk)"}`, "");
-  if (v.against) L.push(`Against the previous round (${mdText(v.against.report)}): visual: ${pctText(v.against.before)} % \u2192 ${pctText(v.against.after)} % (same reference, same grid; never the verdict).`, "");
-  for (const n of v.notes) L.push(`- ${mdText(n)}`);
-  if (v.notes.length) L.push("");
-  return L;
-}
 var BEHAVIOUR_ORDER = { fail: 0, warn: 1, "not-run": 2, unsupported: 3, pass: 4 };
 var BEHAVIOUR_NO_BLOCK = "the measured file carries no behaviour checks (hand-written, or a probe that predates the behaviour checks)";
 var BEHAVIOUR_MALFORMED = "the measured file's behaviour block is malformed \u2014 ignored (see the input notes)";
@@ -3956,6 +3920,47 @@ function behaviourReport(b, malformed = false) {
     ...arts.length ? { artifacts: arts } : {},
     ...ifDefined("writeBlock", typeof block === "string" ? block : void 0)
   };
+}
+
+// design-to-code/verify-screen.ts
+function matchedLine(census) {
+  const c = census || {};
+  const always = ["tag", "text", "textOrdinal", "position"];
+  const keys = [...always, ...MATCH_BUCKETS.filter((b) => !always.includes(b) && (c[b] ?? 0) > 0)];
+  return keys.map((k) => `${MATCH_LABEL[k] ?? k} ${c[k] ?? 0}`).join(" \xB7 ");
+}
+function probeLine(r) {
+  const p = r.inputs && r.inputs.probe;
+  const who = p && p !== "unknown" ? `probe ${p.name} ${p.version ?? "(no version)"} (sha ${p.sha256.slice(0, 12)}\u2026) \xB7 ${p.playwright.package} ${p.playwright.version} \xB7 ${p.browser.name} ${p.browser.version}` : "probe unknown (hand-written \u2014 not comparable round to round)";
+  return `${who} \xB7 matched: ${matchedLine(r.coverage && r.coverage.matchedBy)}`;
+}
+var VISUAL_MD_ROWS = 10;
+function visualMarkdown(v) {
+  const L = ["## Visual diff \u2014 informational, not part of the verdict", ""];
+  L.push("*The pixel diff never changes the fidelity verdict above. Font rasterisation alone differs 1\u20133% on text-heavy screens (Figma's renderer vs Chromium), so read the regions, not the percentage.*", "");
+  if (!v.ran) {
+    L.push(v.why === VISUAL_NOT_APPLICABLE ? "Not applicable (no web probe)." : `Not run (${mdText(v.why) || "no reason recorded"}).`, "");
+    return L;
+  }
+  L.push(`${pctText(v.shiftTolerantPct ?? 0)}% of the compared pixels differ after the shift tolerance (${pctText(v.differingPct ?? 0)}% before it; anti-aliased edge pixels excluded) \xB7 ${v.regionsTotal ?? v.regions.length} hot region(s).`, "");
+  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale ?? "?"}x (geometry from the ${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
+  if (v.grid === "1x") L.push("Grid: **resampled to 1x** \u2014 the capture and the reference crop differ by more than 2 px, so both were resampled to the design size (up or down); resampling can hide a difference.", "");
+  else if (v.grid) L.push("Grid: the reference's own pixel grid (the build rendered at the reference's scale).", "");
+  if (v.reference && v.reference.colorProfile) L.push(`Colour profile: ${mdText(v.reference.colorProfile)} \u2014 colours are compared without colour management, so colour differences are unreliable.`, "");
+  if (v.regions.length) {
+    L.push("| Region (x, y) | Size | Differ | Built nodes | Designed nodes |", "|---|---|---|---|---|");
+    for (const g of v.regions.slice(0, VISUAL_MD_ROWS)) {
+      L.push(`| ${Math.round(g.rect.x)}, ${Math.round(g.rect.y)} | ${Math.round(g.rect.w)}\xD7${Math.round(g.rect.h)} | ${pctText(g.pct)}% (${g.pixels} px) | ${g.built.map(mdText).join(", ")} | ${g.designed.map(mdText).join(", ")} |`);
+    }
+    const total = v.regionsTotal ?? v.regions.length;
+    if (total > Math.min(v.regions.length, VISUAL_MD_ROWS)) L.push(`| \u2026and ${total - Math.min(v.regions.length, VISUAL_MD_ROWS)} more (the largest are listed) | | | | |`);
+    L.push("");
+  }
+  if (v.diff) L.push(`Diff image: ${mdText(v.diff.path)}${v.diff.exists ? "" : " (missing on disk)"}`, "");
+  if (v.against) L.push(`Against the previous round (${mdText(v.against.report)}): visual: ${pctText(v.against.before)} % \u2192 ${pctText(v.against.after)} % (same reference, same grid; never the verdict).`, "");
+  for (const n of v.notes) L.push(`- ${mdText(n)}`);
+  if (v.notes.length) L.push("");
+  return L;
 }
 var mdText = (x) => (x ?? "").replace(/\r?\n|\r/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\|/g, "\\|").replace(/`/g, "\\`");
 var behaviourWhere = (c) => [c.nodeId ? mdText(c.nodeId) : "", c.trigger ? `(${mdText(c.trigger)})` : "", c.target ? mdText(c.target) : ""].filter(Boolean).join(" ");
@@ -4197,8 +4202,8 @@ function runStatusNote(base, now = Date.now()) {
 }
 var PREV_EXPECTED_SUFFIX = ".expected.prev.json";
 function findExistingExpectedFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs9.existsSync(dir)) return null;
-  for (const f of fs9.readdirSync(dir)) {
+  if (!nodeId || !fs10.existsSync(dir)) return null;
+  for (const f of fs10.readdirSync(dir)) {
     if (!f.endsWith(".expected.json")) continue;
     const full = path9.join(dir, f);
     if (path9.resolve(full) === path9.resolve(ownTarget)) continue;
@@ -4245,7 +4250,7 @@ function selectForAccept(rep, sel) {
   return { error: `no delta in the report for ${id}${sel.field !== void 0 ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
 }
 function main(argv) {
-  const sha = (file) => sha256Hex(fs9.readFileSync(file));
+  const sha = (file) => sha256Hex(fs10.readFileSync(file));
   const USAGE = `usage:
   ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force] [--plan <plan.json>]
       writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
@@ -4412,7 +4417,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     const pageRows = [];
     let dirs = [];
     try {
-      dirs = fs9.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+      dirs = fs10.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     } catch {
     }
     for (const d of dirs) {
@@ -4444,7 +4449,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       const file = resolveInside(exportRoot, pointer);
       if (file === null) return null;
       try {
-        return fs9.readFileSync(file);
+        return fs10.readFileSync(file);
       } catch {
         return null;
       }
@@ -4464,7 +4469,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     if (dup && !force) {
       const oldBase = dup.slice(0, -".expected.json".length);
       const dir = path9.dirname(dup), stemOld = path9.basename(oldBase);
-      const oldFiles = fs9.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path9.join(dir, f));
+      const oldFiles = fs10.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path9.join(dir, f));
       const canonical3 = path9.join(path9.dirname(target), path9.basename(firstFile, ".json"));
       const oldStatus = runStatusNote(oldBase);
       if (oldStatus) console.error(`note  ${oldStatus}`);
@@ -4484,7 +4489,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       return 1;
     }
     const next = JSON.stringify(exp, null, 2) + "\n";
-    const prev = fs9.existsSync(target) ? fs9.readFileSync(target, "utf8") : null;
+    const prev = fs10.existsSync(target) ? fs10.readFileSync(target, "utf8") : null;
     const h = sha256Hex(next);
     let prevContent = null;
     try {
@@ -4506,7 +4511,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     } else if (prev !== null) {
       const why = typeof prevContent === "string" && prevContent === exp.exportContentSha256 ? "same export content \u2014 the expectation generator changed (verify-screen upgrade)" : typeof prevContent === "string" ? `the export changed (content sha ${prevContent.slice(0, 12)}\u2026 \u2192 ${exp.exportContentSha256.slice(0, 12)}\u2026)` : `the expectation recorded no export hash (exportContentSha256) \u2014 cannot tell whether the export or the expectation generator changed`;
       console.error(`note  REPLACED an existing ${target} that differed (sha256 ${sha256Hex(prev).slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026): ${why}; the previous one is kept as ${prevFile}`);
-      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs9.existsSync(f));
+      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs10.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
     const hc = exp.counts.hidden;
@@ -4554,7 +4559,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
   const artifacts = measured.artifacts || [];
   const artifactCheck = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
-    const exists2 = !!p && fs9.existsSync(p);
+    const exists2 = !!p && fs10.existsSync(p);
     return { ...ifDefined("path", p), exists: exists2, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists2 ? sha(p) : void 0) };
   });
   let code;
@@ -4634,7 +4639,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
   let visualDiff = null;
   if (typeof vd === "string" && vd) {
     const beside = path9.join(path9.dirname(measuredFile), path9.basename(vd));
-    visualDiff = fs9.existsSync(vd) ? { path: vd, exists: true } : fs9.existsSync(beside) ? { path: beside.split(path9.sep).join("/"), exists: true } : { path: vd, exists: false };
+    visualDiff = fs10.existsSync(vd) ? { path: vd, exists: true } : fs10.existsSync(beside) ? { path: beside.split(path9.sep).join("/"), exists: true } : { path: vd, exists: false };
   }
   const rep = compare(expectation, measured, { ...statusOpt, ...readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}, ...readable.dropped.includes("visual") ? { visualMalformed: true } : {}, ...visualDiff ? { visualDiff } : {}, ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}, ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...extraInferred !== void 0 ? { inferred: extraInferred } : {}, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...planHit ? { plan: planHit } : {} });
   const md = reportToMarkdown(rep);
@@ -4650,7 +4655,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
   if (recordPlanFlag && planHit) {
     const realOf = (p) => {
       try {
-        return fs9.realpathSync(p);
+        return fs10.realpathSync(p);
       } catch {
         return p;
       }
@@ -4709,7 +4714,7 @@ function acceptMain(files, flags, USAGE) {
   }
   const stem = path9.basename(reportFile, ".json").replace(/\.report$/, "");
   const recorded = report.inputs && report.inputs.waivers && report.inputs.waivers.plan || report.inputs && report.inputs.code && report.inputs.code.plan || void 0;
-  let planFile = flags.plan ?? (recorded && fs9.existsSync(recorded) ? recorded : void 0);
+  let planFile = flags.plan ?? (recorded && fs10.existsSync(recorded) ? recorded : void 0);
   if (!planFile) {
     const hits = plansFor(report.nodeId, stem);
     const only = hits.length === 1 ? hits[0] : void 0;
@@ -4753,25 +4758,9 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   });
 }
 export {
-  BEHAVIOUR_MALFORMED,
-  BEHAVIOUR_NO_BLOCK,
-  INTERACTION_OUTCOMES,
-  NAMES_LABEL,
-  OUTCOMES_FOR_ACTION,
-  VISUAL_MALFORMED,
-  VISUAL_NOT_APPLICABLE,
-  VISUAL_NO_BLOCK,
-  behaviourHeadline,
-  behaviourReport,
-  behaviourSummary,
-  compare,
   findExistingExpectedFor,
   mdText,
   probeLine,
-  radiusCorners,
   reportToMarkdown,
-  selectForAccept,
-  tokenFor,
-  visualHeadline,
-  visualReport
+  selectForAccept
 };

@@ -10,10 +10,11 @@ import path from "node:path";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { compare, reportToMarkdown, probeLine } from "../design-to-code/verify-screen.ts";
+import { reportToMarkdown, probeLine } from "../design-to-code/verify-screen.ts";
+import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS, resolveInside } from "../design-to-code/verify-shared.ts";
-import * as verifyScreen from "../design-to-code/verify-screen.ts";
+import * as verifyCompare from "../design-to-code/verify-compare.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
 import * as guards from "../design-to-code/doc-guards.ts";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "../design-to-code/doc-guards.ts";
@@ -25,7 +26,7 @@ import { check, report } from "./assert.ts";
 
 const safe = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch (e) { console.log(`    (threw: ${e instanceof Error ? e.message : String(e)})`); } return check(name, r); };
 // (namespace lookups: this file runs — and fails cleanly — against a verify-screen that predates the reference-image checks)
-const ns: Record<string, unknown> = { ...verifyScreen, ...guards };
+const ns: Record<string, unknown> = { ...verifyCompare, ...guards };
 const has = (name: string): boolean => typeof ns[name] === "function";
 
 // ---------------------------------------------------------------- PNGs in the export reference's real shape

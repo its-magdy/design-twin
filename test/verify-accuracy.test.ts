@@ -6,7 +6,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { compare, reportToMarkdown } from "../design-to-code/verify-screen.ts";
+import { reportToMarkdown } from "../design-to-code/verify-screen.ts";
+import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { publishStaged } from "../design-to-code/verify-run.ts";
 import { isVerifyReport } from "../design-to-code/doc-guards.ts";
