@@ -34,7 +34,7 @@ import type { Rgba } from "./png.ts";
 import { attribute, crop, diffOptionsFor, diffPixels, planGrid, referenceCrop, renderDiff, resampleBox } from "./visual-diff.ts";
 import type { MeasuredVisual, ProbeFrame, Rect4, VerifyExpectation, VerifyReferenceImage } from "./types.ts";
 import { isVerifyReferenceImage } from "./doc-guards.ts";
-import { pctText, resolveInside } from "./verify-screen.ts";
+import { pctText, resolveInside } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 

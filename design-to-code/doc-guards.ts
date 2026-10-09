@@ -17,7 +17,7 @@ import type {
   AuditOverridesDoc, VariableAlias, AuditReport, BehaviourCheck, BehaviourStatus, BuildIdentity, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
   PageOverflow, PlanDescope, PlanWaiver, ProbeFrame, ProbeReach, ProbeIdentity, MeasuredBehaviour, MeasuredVisual, Rect4, ReportBehaviour, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReferenceImage, VerifyReferenceUnusable, VerifyReport, VisualRegion,
 } from "./types.ts";
-import type { Expectation } from "./verify-screen.ts";
+import type { Expectation } from "./verify-shared.ts";
 
 /** A type guard that can say, in words, what it expects (read-json.ts prints it on a mismatch). */
 export type DocGuard<T> = ((x: unknown) => x is T) & { expected?: string };
