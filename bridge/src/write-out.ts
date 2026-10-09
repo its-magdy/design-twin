@@ -12,7 +12,6 @@
 // because snapshot-meta.ts and design-to-code/drift-lint.ts both read that stamp back off disk.
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { writeFileAtomic } from "./atomic-write.ts";
 import { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts } from "./pages-layout.ts";
 import type { ScreenPaths, ScreenIndexRow } from "./pages-layout.ts";
@@ -26,6 +25,7 @@ import { collectGraphics, reuseHiddenAssets, usesByPointer } from "./asset-owner
 import type { AssetContext, AssetOwner, Graphic, ReuseResult } from "./asset-owners.ts";
 import { EXPORT_DIR as DEFAULT_OUT_DIR } from "./project-layout.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
+import { errMsg, errCode } from "./errmsg.ts";
 import { QUICK_KEYS, SCHEMA_DOC_NAME, SCHEMA_MARKER } from "./quick-keys.ts";
 import type { Asset, DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, VariablesDoc, LibraryCounts } from "./doc-types.ts";
 import type { DesignSystemReply, ExportReply, FullExportReply, ScreenReply, ScreenshotReply } from "./commands.ts";
@@ -139,7 +139,7 @@ function writeSchemaDoc(dir: string, log?: Log): void {
   const file = path.join(dir, SCHEMA_DOC_NAME);
   try {
     let prev: string | null = null;
-    try { prev = fs.readFileSync(file, "utf8"); } catch (e) { if (!(e instanceof Error && "code" in e && e.code === "ENOENT")) throw e; }
+    try { prev = fs.readFileSync(file, "utf8"); } catch (e) { if (errCode(e) !== "ENOENT") throw e; }
     if (prev !== null) {
       if (!prev.startsWith(SCHEMA_MARKER)) {
         if (log) log(`warn  ${SCHEMA_DOC_NAME} is not dtwin's (no generated marker on its first line) — the scripting quick keys were not written`);
@@ -150,7 +150,7 @@ function writeSchemaDoc(dir: string, log?: Log): void {
     writeFileAtomic(file, SCHEMA_DOC_TEXT);
     if (log && prev !== null) log(`info  updated ${SCHEMA_DOC_NAME} (scripting quick keys)`);
   } catch (e) {
-    if (log) log(`warn  could not write ${SCHEMA_DOC_NAME}: ${e instanceof Error ? e.message : String(e)}`);
+    if (log) log(`warn  could not write ${SCHEMA_DOC_NAME}: ${errMsg(e)}`);
   }
 }
 
@@ -312,7 +312,7 @@ function shortHashOf(a: Asset, bytes: Buffer): string {
   // Prefer the plugin's own contentHash (already normalised for SVG-export noise); fall back to a
   // fresh sha1 of the bytes for an asset that somehow has no `.hash` (manifest-only / older plugin).
   if (typeof a.hash === "string" && a.hash) return a.hash.replace(/[^a-z0-9]/gi, "").slice(0, 6);
-  return crypto.createHash("sha1").update(bytes).digest("hex").slice(0, 6);
+  return sha1Hex(bytes).slice(0, 6);
 }
 
 // Reuse `existingName`'s bytes for `a`: point `a.file` at it, and replace `a.text`/`a.base64` with the
