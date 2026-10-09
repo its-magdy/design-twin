@@ -102,7 +102,7 @@ interface Push {
 }
 
 // Visible layers only: a token bound on a layer the designer switched off is not built, so it is not
-// a token the build has to resolve (the same rule as audit.ts and verify-screen.ts).
+// a token the build has to resolve (the same rule as audit.ts and verify-expect.ts).
 function walk(node: IrNode | null | undefined, fn: (n: IrNode) => void): void {
   if (!node || typeof node !== "object") return;
   if (hiddenSelf(node)) return;

@@ -46,7 +46,7 @@ export interface ResolvedFrame extends ProbeFrame { path: string; note?: string 
 export const normText = (s: string): string => s.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 /** `[data-dt-node="<id>"]` with the attribute value quoted for CSS. */
 export const attrSelector = (id: string): string => `[data-dt-node="${id.replace(/["\\]/g, "\\$&")}"]`;
-/** The component-internal part of an instance-scoped id (`I1:2;3:4;5:6` → `3:4;5:6`), as verify-screen.ts reads it. */
+/** The component-internal part of an instance-scoped id (`I1:2;3:4;5:6` → `3:4;5:6`), as verify-expect.ts and verify-compare.ts read it. */
 export const idSuffix = (id: string): string | null => { const i = id.indexOf(";"); return i === -1 ? null : id.slice(i + 1); };
 
 /** The text a spec is found by: its characters, or an input placeholder's. */
@@ -55,9 +55,9 @@ export function specText(spec: VerifySpec): { text: string; placeholder: boolean
   if (typeof spec.text === "string" && normText(spec.text)) return { text: normText(spec.text), placeholder: false };
   return null;
 }
-/** The node types whose colour is an SVG-style paint, not a CSS background. verify-screen.ts reads it for the same test. */
+/** The node types whose colour is an SVG-style paint, not a CSS background. verify-expect.ts reads it for the same test. */
 export const PAINT_TYPES = new Set<string>(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
-/** A spec whose colour is an SVG-style paint (verify-screen.ts writes `fill` only for those). */
+/** A spec whose colour is an SVG-style paint (verify-expect.ts writes `fill` only for those). */
 export const isPaintSpec = (spec: VerifySpec): boolean => spec.fill !== undefined || PAINT_TYPES.has(spec.type);
 
 // ---------------------------------------------------------------- the frame root

@@ -618,7 +618,7 @@ export interface Plan {
    *  navigation-only vocabulary (probe-steps.ts parseSteps); rows are validated where used, not by the plan guard. */
   navigate?: Array<ProbeStep | JsonValue>;
   /** interactions the export does not carry (no prototype reaction) — merged at --expect when valid
-   *  (probe-steps.ts / verify-screen.ts); only this list's hash binds the expectation (planInteractions.sha256). */
+   *  (probe-steps.ts / verify-expect.ts); only this list's hash binds the expectation (planInteractions.sha256). */
   interactions?: Array<PlanInteraction | JsonValue>;
   // A filled plan often carries more (layout, states, assets, openQuestions, componentCatalog, …): no
   // reader looks at those, and merge() / the hook's rewrite carry them through untouched.
@@ -713,7 +713,7 @@ export interface VerifyInteraction { nodeId: string; name: string; trigger: stri
 /** serialize.ts emits a destination root's overlay block only when it differs from the default. */
 export interface VerifyOverlay { position: string; closeOnClickOutside: boolean; background: string | null; from: "export" | "default" }
 export interface NotComparable { nodeId: string; name: string; field: string; value: JsonValue; why: string }
-/** <Screen>.expected.json (verify-screen.ts buildExpectation) */
+/** <Screen>.expected.json (verify-expect.ts buildExpectation) */
 export interface VerifyExpectation {
   schema: "designtwin/verify-expectation@2" | (string & {});
   screen?: string;
@@ -1086,7 +1086,7 @@ export interface VerifyWaiverResult {
   /** waivers (and descopes) that match nothing this round (fixed? drop them) */
   unused: Array<{ nodeId: string; field: string; why?: string }>;
 }
-/** <Screen>.report.json (verify-screen.ts compare(), schema @2). An @1 report carries only screen/exportedAt/
+/** <Screen>.report.json (verify-compare.ts compare(), schema @2). An @1 report carries only screen/exportedAt/
  *  measuredAt/renderer/viewport/artifacts/verdict/why/coverage/summary/deltas/missingComponents/interactions/notMeasured. */
 export interface VerifyReport {
   schema?: "designtwin/verify-report@2" | "designtwin/verify-report@1" | (string & {});
@@ -1210,7 +1210,7 @@ export interface VerifyCoverageV2 extends VerifyCoverage {
   matchedBy: Record<string, number>;
 }
 /**
- * What verify-screen.ts compare() returns (schema @2): every @2 field present. `artifacts` is the CLI's
+ * What verify-compare.ts compare() returns (schema @2): every @2 field present. `artifacts` is the CLI's
  * on-disk check when it ran, else the probe's own list passed through as-is (the one field wider than VerifyReport's).
  */
 export interface VerifyReportV2 extends Omit<VerifyReport, "artifacts"> {

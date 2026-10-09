@@ -176,7 +176,7 @@ export function isPageOverflow(x: unknown): x is PageOverflow {
 }
 // measured.behaviour — lenient (it never reaches the verdict, so a reader keeps what it can show): version 1 and a
 // boolean `ran`; ran:false names why; ran:true has checks[] rows {id, status, detail} — an id this reader does not know is
-// kept (an older or newer probe). Everything else in the block is read field by field by verify-screen (behaviourReport).
+// kept (an older or newer probe). Everything else in the block is read field by field by verify-compare.ts (behaviourReport).
 const BEHAVIOUR_STATUSES: readonly BehaviourStatus[] = ["pass", "fail", "warn", "not-run", "unsupported"];
 export const isBehaviourStatus = (x: unknown): x is BehaviourStatus => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
 export function isBehaviourCheck(x: unknown): x is BehaviourCheck {
@@ -189,7 +189,7 @@ export function isMeasuredBehaviour(x: unknown): x is MeasuredBehaviour {
 }
 // The visual diff. measured.visual is lenient like measured.behaviour (it never reaches the verdict): version 1
 // and a boolean `ran`; ran:false names why; ran:true carries the two percentages and a regions list. Every other field is
-// read one by one by verify-screen (visualReport), so an older/newer probe still reports what it can.
+// read one by one by verify-compare.ts (visualReport), so an older/newer probe still reports what it can.
 const isRect4 = (x: unknown): x is Rect4 => isObj(x) && isNum(x.x) && isNum(x.y) && isNum(x.w) && isNum(x.h);
 /** measured.visual: {version: 1, ran: false, why} or {version: 1, ran: true, differingPct, shiftTolerantPct, regions: […], …}. */
 export function isMeasuredVisual(x: unknown): x is MeasuredVisual {
