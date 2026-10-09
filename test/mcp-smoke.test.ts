@@ -119,7 +119,7 @@ void (async () => {
     const invalid = await client.callTool({ name: "design_drift_lint", arguments: { map: "bad-map.json" } });
     ok("design_drift_lint rejects an invalid map as a tool error mentioning map-invalid", invalid.isError === true && /\[map-invalid\]/.test(firstText(invalid)) && /not a valid component map/.test(firstText(invalid)));
 
-    // DT-26 on the MCP path: the same catalog set as the CLI — components.library.json beside the named
+    // On the MCP path: the same catalog set as the CLI — components.library.json beside the named
     // catalog and every pulled library — so an entry for a library component is not orphaned; a broken
     // components.library.json is skipped, never an exit of the server process.
     {
@@ -138,15 +138,15 @@ void (async () => {
         return { isError: r.isError === true, text: firstText(r) };
       };
       const both = await lint();
-      ok("[DT-26] design_drift_lint resolves entries against components.library.json and libraries/<dir>/components.json (no orphans)",
+      ok("design_drift_lint resolves entries against components.library.json and libraries/<dir>/components.json (no orphans)",
         !both.isError && !/orphaned-entry/.test(both.text) && /"ok":\s*true/.test(both.text) && /acme-kit/.test(both.text) && /components\.library\.json/.test(both.text));
       fs.writeFileSync(path.join(ex, "design-system", "components.library.json"), "{ not json");
       const broken = await lint();
-      ok("[DT-26] design_drift_lint skips a broken components.library.json (the entry is orphaned) and the server stays up",
+      ok("design_drift_lint skips a broken components.library.json (the entry is orphaned) and the server stays up",
         !broken.isError && /orphaned-entry/.test(broken.text) && /k-sample/.test(broken.text) && !/k-lib'/.test(broken.text));
     }
 
-    // [M4] design_drift_lint with NO arguments on a `dtwin init` project: the map defaults to the project
+    // design_drift_lint with NO arguments on a `dtwin init` project: the map defaults to the project
     // layout's design/codeconnect.local.json and the export to design/export (like the CLI), not to a root
     // codeconnect.local.json and a bare design/. Its own server, started in that project.
     {
@@ -171,11 +171,11 @@ void (async () => {
         await cl.connect(tl);
         const r = await cl.callTool({ name: "design_drift_lint", arguments: {} });
         const text = firstText(r);
-        ok("[M4] no-argument design_drift_lint on a design/export + design/codeconnect.local.json project → ok", r.isError !== true && /"ok":\s*true/.test(text));
+        ok("no-argument design_drift_lint on a design/export + design/codeconnect.local.json project → ok", r.isError !== true && /"ok":\s*true/.test(text));
         fs.rmSync(mapFile);
         const miss = await cl.callTool({ name: "design_drift_lint", arguments: {} });
         const missText = firstText(miss);
-        ok("[M4] …and with no map, the error and its scaffold hint name design/codeconnect.local.json",
+        ok("…and with no map, the error and its scaffold hint name design/codeconnect.local.json",
           miss.isError === true && /map-bootstrap\.ts <componentsLocal> > design[/\\]codeconnect\.local\.json/.test(missText));
       } finally {
         await cl.close().catch(() => {});
@@ -239,8 +239,8 @@ void (async () => {
     ok("an export past the client's output cap is written to disk on its own, and the result says why", !big.isError && firstText(big).length < 8000 && /WITHOUT being asked/.test(idx.note) && /k tokens/.test(idx.note) && fs.existsSync(path.join(CWD, "design")));
     const refused = await client.callTool({ name: "figma_export_selection", arguments: { writeToDisk: false } });
     ok("…and an explicit writeToDisk:false is an error with the size, never a truncated result", refused.isError === true && /writeToDisk:false was passed/.test(firstText(refused)));
-    // Review 1 L-2: the limit is already at the 48,000-char cap, so the hint must not say the variable raises it.
-    ok("[L-2] the size message says MAX_MCP_OUTPUT_TOKENS can only lower the limit (it never raises it past the cap)",
+    // the limit is already at the 48,000-char cap, so the hint must not say the variable raises it.
+    ok("the size message says MAX_MCP_OUTPUT_TOKENS can only lower the limit (it never raises it past the cap)",
       /MAX_MCP_OUTPUT_TOKENS can only lower this/.test(firstText(refused)) && !/raises it/.test(firstText(refused)) && !/raises it/.test(idx.note));
 
     // MCP progress: a call that carries a progressToken (the SDK client adds one for `onprogress`) gets
@@ -345,7 +345,7 @@ void (async () => {
     plugin.close();
     await new Promise((r) => setTimeout(r, 200)); // both sockets gone: the bridge has NO client now
 
-    // LIVE 2026-09-25 (§5.2c): with NOTHING connected — every window mid-redial right after a bridge
+    // LIVE 2026-09-25: with NOTHING connected — every window mid-redial right after a bridge
     // restart — `figma_status {client:"<name>"}` answered `connected:false` in 10 ms: its zero-clients
     // early return skipped the named wait that bridge.request() gives every other tool. Now the ping
     // (and its wait) comes first. The old code fails the first check (no pong, connected:false) and the
@@ -372,9 +372,9 @@ void (async () => {
     ok("figma_status with a bare connId and nothing connected is refused at once like every other tool (no wait, not connected:false)",
       bare0.isError === true && Date.now() - t3 < 2000);
 
-    // ---- group 14 (CLI/MCP parity). Two fake plugins that identify themselves: "Sample App" answers the
-    // exports, "Acme Kit" only whoami. Every check reads the result defensively, so a server from before
-    // these fixes fails them with ✗ instead of throwing.
+    // ---- CLI/MCP parity. Two fake plugins that identify themselves: "Sample App" answers the
+    // exports, "Acme Kit" only whoami. Every check reads the result defensively, so a server missing
+    // a feature fails the check with ✗ instead of throwing.
     {
       const rec = (x: unknown): Record<string, unknown> => (x && typeof x === "object" && !Array.isArray(x) ? { ...x } : {});
       const parse = (r: JsonRpcReply): Record<string, unknown> => { try { return rec(JSON.parse(firstText(r)) as unknown); } catch { return {}; } };
@@ -418,63 +418,63 @@ void (async () => {
       const c2 = rosterRows.find((c) => c.file === "Acme Kit")?.connId;
       const c1 = rosterRows.find((c) => c.file === "Sample App")?.connId;
 
-      // [WHO-2] DT-03/F-01: whoami's `connection` is the socket that answered, not the first one connected.
+      // whoami's `connection` is the socket that answered, not the first one connected.
       const who = parse(await client.callTool({ name: "figma_whoami", arguments: { client: String(c2) } }));
-      ok("[WHO-2] figma_whoami {client: c2} → connection.connId is c2 (not the first connected file)",
+      ok("figma_whoami {client: c2} → connection.connId is c2 (not the first connected file)",
         typeof c2 === "string" && c1 !== c2 && rec(who.plugin).file === "Acme Kit" && rec(who.connection).connId === c2);
 
-      // [L5-1] written export carries sourceFile (screen JSON + pages/index.json row); [F27-1] durationMs.
+      // written export carries sourceFile (screen JSON + pages/index.json row); durationMs.
       const exportDir = path.join(CWD, "design", "export");
       const wrote = parse(await client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App", writeToDisk: true } }));
       const screenFile = String(rec(wrote.wrote).screen ?? "");
       const readJ = (f: string): Record<string, unknown> => { try { return rec(JSON.parse(fs.readFileSync(f, "utf8")) as unknown); } catch { return {}; } };
       const rootRows = (): Array<Record<string, unknown>> => { const l = readJ(path.join(exportDir, "pages", "index.json")).layers; return Array.isArray(l) ? l.map(rec) : []; };
-      ok("[L5-1] an MCP-written screen export carries sourceFile (the screen JSON and its pages/index.json row)",
+      ok("an MCP-written screen export carries sourceFile (the screen JSON and its pages/index.json row)",
         screenFile.endsWith("Sample__9_1.json") && readJ(screenFile).sourceFile === "Sample App" && rootRows().some((r) => r.id === "9:1" && r.sourceFile === "Sample App"));
       const dur = (x: Record<string, unknown>) => rec(x.durationMs);
       const wd = dur(wrote);
-      ok("[F27-1] a written export result carries durationMs {total ≥ request ≥ 0, write ≥ 0}",
+      ok("a written export result carries durationMs {total ≥ request ≥ 0, write ≥ 0}",
         typeof wd.total === "number" && typeof wd.request === "number" && typeof wd.write === "number" && wd.total >= wd.request && wd.request >= 0 && wd.write >= 0);
-      // [L5-2] + [F27-1] inline.
+      // + inline.
       const inline = parse(await client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }));
       const id2 = dur(inline);
-      ok("[L5-2] an INLINE export result carries sourceFile too", rec(inline.screen).screen === "Sample" && inline.sourceFile === "Sample App");
-      ok("[F27-1] …and durationMs at its top level", typeof id2.total === "number" && typeof id2.request === "number" && id2.total >= id2.request && id2.request >= 0);
+      ok("an INLINE export result carries sourceFile too", rec(inline.screen).screen === "Sample" && inline.sourceFile === "Sample App");
+      ok("…and durationMs at its top level", typeof id2.total === "number" && typeof id2.request === "number" && id2.total >= id2.request && id2.request >= 0);
 
-      // [F06-1] an IMPLICIT spill over a differing screen keeps <screen>.json.prev and names it.
+      // an IMPLICIT spill over a differing screen keeps <screen>.json.prev and names it.
       fs.writeFileSync(screenFile, JSON.stringify({ marker: "hand-edited", nodes: [] }));
       rows = 1500;
       const spill = parse(await client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }));
       const prevFile = screenFile + ".prev";
-      ok("[F06-1] an implicit spill keeps the replaced screen as <screen>.json.prev, and the note names both",
+      ok("an implicit spill keeps the replaced screen as <screen>.json.prev, and the note names both",
         /WITHOUT being asked/.test(String(spill.note)) && fs.existsSync(prevFile) && /hand-edited/.test(fs.readFileSync(prevFile, "utf8")) &&
         String(spill.note).includes(prevFile) && String(spill.note).includes(screenFile) && rec(spill.wrote).prev === prevFile);
-      ok("[F27-1] …and the spilled result carries durationMs too", typeof dur(spill).write === "number");
-      // [F07-1] figma_status: lastWrite (this session) + lastScreenExport (disk).
+      ok("…and the spilled result carries durationMs too", typeof dur(spill).write === "number");
+      // figma_status: lastWrite (this session) + lastScreenExport (disk).
       const st = parse(await client.callTool({ name: "figma_status", arguments: { client: "Sample App" } }));
       const lw = rec(st.lastWrite), lse = rec(st.lastScreenExport);
-      ok("[F07-1] figma_status reports lastWrite {tool, implicit:true, file, prev} for that spill",
+      ok("figma_status reports lastWrite {tool, implicit:true, file, prev} for that spill",
         lw.tool === "figma_export_url" && lw.implicit === true && lw.file === screenFile && lw.prev === prevFile && typeof lw.at === "string");
-      ok("[F07-1] …and lastScreenExport from pages/index.json (id 9:1, its sourceFile)", lse.id === "9:1" && lse.sourceFile === "Sample App" && typeof lse.ageMs === "number");
-      // [L-4] re-spilling the SAME design keeps no new .prev, but the note and lastWrite still name the one from before.
+      ok("…and lastScreenExport from pages/index.json (id 9:1, its sourceFile)", lse.id === "9:1" && lse.sourceFile === "Sample App" && typeof lse.ageMs === "number");
+      // re-spilling the SAME design keeps no new .prev, but the note and lastWrite still name the one from before.
       const respill = parse(await client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }));
       const lw2 = rec(rec(parse(await client.callTool({ name: "figma_status", arguments: { client: "Sample App" } }))).lastWrite);
-      ok("[L4-1] a re-spill of an unchanged design leaves the original .prev alone and the note names it",
+      ok("a re-spill of an unchanged design leaves the original .prev alone and the note names it",
         /hand-edited/.test(((): string => { try { return fs.readFileSync(prevFile, "utf8"); } catch { return ""; } })()) && rec(respill.wrote).prev === undefined && String(respill.note).includes(`An earlier version is still at ${prevFile}`));
-      ok("[L4-1] …and lastWrite.prev names it", lw2.implicit === true && lw2.prev === prevFile);
-      // [F06-2] an EXPLICIT pull over the same file keeps nothing (by design).
+      ok("…and lastWrite.prev names it", lw2.implicit === true && lw2.prev === prevFile);
+      // an EXPLICIT pull over the same file keeps nothing (by design).
       fs.rmSync(prevFile, { force: true });
       fs.writeFileSync(screenFile, JSON.stringify({ marker: "hand-edited-2", nodes: [] }));
       const explicit = parse(await client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App", writeToDisk: true } }));
-      ok("[F06-2] an explicit writeToDisk:true overwrite keeps no .prev", rec(explicit.wrote).screen === screenFile && !fs.existsSync(prevFile) && !/kept at/.test(String(explicit.note)));
+      ok("an explicit writeToDisk:true overwrite keeps no .prev", rec(explicit.wrote).screen === screenFile && !fs.existsSync(prevFile) && !/kept at/.test(String(explicit.note)));
       rows = 3;
 
-      // [SHOT-3] DT-06: the written screenshot result carries the node size, render scale and PNG size.
+      // the written screenshot result carries the node size, render scale and PNG size.
       const shot = parse(await client.callTool({ name: "figma_screenshot", arguments: { nodeId: "9:1", client: "Sample App", writeToDisk: true } }));
-      ok("[SHOT-3] figma_screenshot writeToDisk → w/h/scale from the plugin and png:{w,h} from the bytes",
+      ok("figma_screenshot writeToDisk → w/h/scale from the plugin and png:{w,h} from the bytes",
         shot.w === 1440 && shot.h === 1236 && shot.scale === 1.4222 && rec(shot.png).w === 4 && rec(shot.png).h === 3);
 
-      // [D87] tolerant arrays: `page` as a JSON-encoded string or a bare string reaches the plugin as an array;
+      // tolerant arrays: `page` as a JSON-encoded string or a bare string reaches the plugin as an array;
       // the advertised schema stays type:array.
       const pageArgs = async (page: unknown): Promise<unknown> => {
         const n = frames.length;
@@ -484,20 +484,20 @@ void (async () => {
       };
       const asJson = await pageArgs('["0:1","0:2"]');
       const bareStr = await pageArgs("0:1");
-      ok("[D87] page as a JSON-encoded array string reaches the plugin as that array", JSON.stringify(asJson) === '["0:1","0:2"]');
-      ok("[D87] page as a bare string reaches the plugin as a one-element array", JSON.stringify(bareStr) === '["0:1"]');
-      // Review 1 L-1: a bare page name that starts with "[" but is not a JSON array is still one name.
+      ok("page as a JSON-encoded array string reaches the plugin as that array", JSON.stringify(asJson) === '["0:1","0:2"]');
+      ok("page as a bare string reaches the plugin as a one-element array", JSON.stringify(bareStr) === '["0:1"]');
+      // a bare page name that starts with "[" but is not a JSON array is still one name.
       const bracketed = await pageArgs("[WIP] Screens");
       const bracketedObj = await pageArgs('["unclosed"');
-      ok(`[L-1] a bare page name starting with "[" ("[WIP] Screens") reaches the plugin as a one-element array (got ${JSON.stringify(bracketed)})`,
+      ok(`a bare page name starting with "[" ("[WIP] Screens") reaches the plugin as a one-element array (got ${JSON.stringify(bracketed)})`,
         JSON.stringify(bracketed) === '["[WIP] Screens"]' && JSON.stringify(bracketedObj) === '["[\\"unclosed\\""]');
       const { tools: tools2 } = await client.listTools();
       const prop = (tool: string, key: string): Record<string, unknown> => rec(rec(tools2.find((t) => t.name === tool)?.inputSchema.properties)[key]);
-      ok("[D87] listTools still advertises page and screens as type:array of strings",
+      ok("listTools still advertises page and screens as type:array of strings",
         prop("figma_export_full", "page").type === "array" && rec(prop("figma_export_full", "page").items).type === "string" &&
         prop("design_drift_lint", "screens").type === "array" && rec(prop("design_drift_lint", "screens").items).type === "string");
 
-      // [F30-1] design_drift_lint `screens` = the CLI's --screen: 2 instances, one mapped → 1/2, 50%.
+      // design_drift_lint `screens` = the CLI's --screen: 2 instances, one mapped → 1/2, 50%.
       fs.writeFileSync(path.join(CWD, "ddl", "s.json"), JSON.stringify({ nodes: [{ id: "5:1", type: "FRAME", name: "S", children: [
         { id: "5:2", type: "INSTANCE", name: "Row", mainComponent: { key: "k-local", name: "Row" } },
         { id: "5:3", type: "INSTANCE", name: "Other", mainComponent: { key: "k-other", name: "Other" } },
@@ -505,13 +505,13 @@ void (async () => {
       fs.writeFileSync(path.join(CWD, "ddl", "not-a-screen.json"), JSON.stringify({ hello: 1 }));
       const lintS = async (screens: unknown) => client.callTool({ name: "design_drift_lint", arguments: { map: "lib-map.json", exportDir: "ddl", screens } });
       const cov = rec(parse(await lintS(["ddl/s.json"])).screenCoverage);
-      ok("[F30-1] design_drift_lint screens:[…] → screenCoverage inMap 1 / distinct 2 / mapPct 50, with the unmapped warning",
+      ok("design_drift_lint screens:[…] → screenCoverage inMap 1 / distinct 2 / mapPct 50, with the unmapped warning",
         cov.inMap === 1 && cov.distinct === 2 && cov.mapPct === 50 && Array.isArray(cov.warnings) && cov.warnings.some((w) => rec(w).code === "screen-coverage" && /'Other' \(1x\)/.test(String(rec(w).message))));
-      ok("[F30-1] …the same through a JSON-encoded string (D87)", rec(parse(await lintS('["ddl/s.json"]')).screenCoverage).mapPct === 50);
+      ok("…the same through a JSON-encoded string", rec(parse(await lintS('["ddl/s.json"]')).screenCoverage).mapPct === 50);
       const notScreen = await lintS(["ddl/not-a-screen.json"]);
-      ok("[F30-1] a non-screen file is a tool error naming it (the server stays up)", notScreen.isError === true && /not-a-screen\.json is not a screen export/.test(firstText(notScreen)));
+      ok("a non-screen file is a tool error naming it (the server stays up)", notScreen.isError === true && /not-a-screen\.json is not a screen export/.test(firstText(notScreen)));
 
-      // [CANCEL-1] D82: a cancelled tool call cancels the plugin's request (notifications/cancelled →
+      // a cancelled tool call cancels the plugin's request (notifications/cancelled →
       // extra.signal → server-core's cancel frame).
       hang = true;
       const ac = new AbortController();
@@ -522,10 +522,10 @@ void (async () => {
       ac.abort();
       await cancelled;
       await new Promise((r) => setTimeout(r, 300));
-      ok("[CANCEL-1] an aborted figma_export_url → the plugin receives {type:\"cancel\"} for that request",
+      ok("an aborted figma_export_url → the plugin receives {type:\"cancel\"} for that request",
         typeof sentId === "string" && frames.slice(n0).some((f) => f.m.type === "cancel" && f.m.id === sentId));
 
-      // [CANCEL-3] D82 via a daemon: a second MCP server shares this one's bridge through the daemon socket;
+      // Via a daemon: a second MCP server shares this one's bridge through the daemon socket;
       // its cancelled call closes that socket, the daemon abandons the request, and the plugin is told.
       {
         const transport3 = new StdioClientTransport({
@@ -548,14 +548,14 @@ void (async () => {
           await viaCall;
           const until2 = Date.now() + 1500;
           while (Date.now() < until2 && !frames.slice(n3).some((f) => f.m.type === "cancel" && f.m.id === sentId3)) await new Promise((r) => setTimeout(r, 50));
-          ok("[CANCEL-3] an aborted call on a DAEMON-ROUTED session → the plugin receives {type:\"cancel\"} for that request",
+          ok("an aborted call on a DAEMON-ROUTED session → the plugin receives {type:\"cancel\"} for that request",
             typeof sentId3 === "string" && frames.slice(n3).some((f) => f.m.type === "cancel" && f.m.id === sentId3));
         } finally {
           await client3.close().catch(() => {});
         }
       }
 
-      // [CANCEL-2] D82 amendment: the client going away (stdin end) aborts the in-flight request too — the
+      // The client going away (stdin end) aborts the in-flight request too — the
       // SDK's stdio transport does not notice stdin ending. client.close() ends stdin and waits 2 s before
       // SIGTERM, so a cancel frame inside that window can only come from the stdin watch.
       const n1 = frames.length;
@@ -566,7 +566,7 @@ void (async () => {
       const closing = client.close().catch(() => {});
       const deadline = Date.now() + 1500;
       while (Date.now() < deadline && !frames.slice(n1).some((f) => f.m.type === "cancel" && f.m.id === sentId2)) await new Promise((r) => setTimeout(r, 50));
-      ok("[CANCEL-2] stdin closing (the client exited) → the plugin receives {type:\"cancel\"} for the in-flight request (within " + (Date.now() - tClose) + " ms)",
+      ok("stdin closing (the client exited) → the plugin receives {type:\"cancel\"} for the in-flight request (within " + (Date.now() - tClose) + " ms)",
         typeof sentId2 === "string" && frames.slice(n1).some((f) => f.m.type === "cancel" && f.m.id === sentId2));
       await closing;
       p1.close();

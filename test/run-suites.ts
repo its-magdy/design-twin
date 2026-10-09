@@ -1,4 +1,4 @@
-// The test runner behind `npm test` (group 16, H-1a / D103).
+// The test runner behind `npm test`.
 //   node test/run-suites.ts                run both lints, then every suite, in order
 //   node test/run-suites.ts bridge verify-probe-e2e    only the named suites (exact name, else substring), in order
 //   node test/run-suites.ts --list         print the order and exit (the coverage guard still runs)
@@ -22,7 +22,7 @@
 // (DT_SUITE_TIMEOUT_MS, default 30 min — the slowest suite, the drive e2e, takes ~12), exits 0 WITHOUT a checks
 // line (it ended before its summary) or with `0/0` (it asserted nothing). It is never re-run: the only retry is for a spawn that never ran
 // (EAGAIN/ENOMEM), once, after DT_SPAWN_RETRY_MS (default 5 s). A suite that prints `SKIPPED (no playwright…)`
-// and exits 0 is `skipped`: a warning locally, a FAILURE under CI (any CI value but "", "0" or "false"; D103 — the browser suites already exit
+// and exits 0 is `skipped`: a warning locally, a FAILURE under CI (any CI value but "", "0" or "false"; the browser suites already exit
 // non-zero in CI; this is belt and braces over their own rule).
 //
 // SIGINT / SIGTERM / SIGHUP to the runner stop the running suite's process group (TERM, then KILL after the grace)
@@ -65,7 +65,7 @@ const SUITE_ENV: NodeJS.ProcessEnv = process.env.NODE_COMPILE_CACHE === undefine
 
 // The exact order the old `npm test` chain ran in (the lints first, then the plugin extractor, the bridge, the rest).
 const NODE_SUITES: readonly string[] = [
-  // group 16: the real-name guard, right after the lints (fast, repo-wide)
+  // the real-name guard, right after the lints (fast, repo-wide)
   "real-names.test.ts",
   "harness.ts", "bridge.test.ts", "daemon-framing.test.ts", "cli-help.test.ts", "cli-pull.test.ts", "asset-compare.test.ts", "asset-index.test.ts", "asset-key-cache.test.ts", "quick-keys.test.ts", "design-to-code.test.ts", "tokens-cli.test.ts", "g14-step0.test.ts", "cli-exit.test.ts", "atomic-write.test.ts",
   "audit.test.ts", "build-screen-docs.test.ts", "verify-build.test.ts", "plan-record.test.ts", "verify-screen.test.ts", "verify-accuracy.test.ts", "verify-values.test.ts",
@@ -75,7 +75,7 @@ const NODE_SUITES: readonly string[] = [
   "visual-diff.test.ts", "verify-visual.test.ts", "verify-probe-visual-e2e.test.ts", "cross-check.test.ts",
   "design-diff.test.ts", "identity.test.ts", "plan-skeleton.test.ts", "resolve-screen.test.ts", "ui.test.ts",
   "daemon-sock.test.ts", "mcp-share.test.ts", "mcp-smoke.test.ts", "mcp-lifecycle.test.ts", "json-size.test.ts",
-  // group 16: this runner's own self-test (fast, so early)
+  // this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];
 // The slow browser suites `--fast` leaves out (~17 of the ~19 min); everything else is quick.
@@ -241,7 +241,7 @@ function summary(results: readonly Result[], t0: number, fast: boolean): number 
   }
   if (skipped.length) {
     console.log(`SKIPPED (no playwright): ${skipped.map((r) => r.name).join(", ")}`);
-    console.log("  warning: CI runs these (D3) — install a browser to run them here: npx playwright install chromium");
+    console.log("  warning: CI runs these — install a browser to run them here: npx playwright install chromium");
   }
   if (fast) console.log(`\n--fast: skipped ${fastSkipped.length} of the probe e2e suites (${fastSkipped.map((r) => r.name).join(", ") || "none picked"}) — this is NOT the full suite: run \`npm test\` before committing; CI's other matrix legs run them`);
   return failed.length || interruptedNotRun.length ? 1 : 0;

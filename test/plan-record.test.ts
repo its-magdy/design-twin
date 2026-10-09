@@ -1,6 +1,6 @@
-// Offline tests for design-to-code/plan-record.ts (F-100, D115: `verify-screen --compare --record-plan` writes the
-// tool-owned keys of plan.verification) and the verify-build side of it: planHash no longer covers `verification`
-// (the pre-F-100 formula is still accepted), and the recorded-report sha warning.
+// Offline tests for design-to-code/plan-record.ts (`verify-screen --compare --record-plan` writes the
+// tool-owned keys of plan.verification) and the verify-build side of it: planHash does not cover `verification`
+// (the legacy formula is still accepted), and the recorded-report sha warning.
 //   node test/plan-record.test.ts
 import fs from "node:fs";
 import os from "node:os";
@@ -79,7 +79,7 @@ const planOf = (root: string): Plan => readFixture(path.join(root, REL), isPlan)
 const statusOf = (root: string) => computeStatus(planOf(root), { cwd: root, planFile: path.join(root, REL) });
 const openOf = (root: string): boolean => isOpen({ file: path.join(root, REL), plan: planOf(root) }, root);
 
-console.log("recordPlan (F-100, D115):");
+console.log("recordPlan:");
 {
   const root = project();
   runHook(root); // the Stop hook closes the plan …
@@ -91,7 +91,7 @@ console.log("recordPlan (F-100, D115):");
   const text = fs.readFileSync(path.join(root, REL), "utf8");
   const after = planOf(root);
   const v = must(after.verification, "verification");
-  check(`written: true, one note — the hand row it replaced in verification.deltas (M1, s19) (got ${JSON.stringify(r)})`,
+  check(`written: true, one note — the hand row it replaced in verification.deltas (got ${JSON.stringify(r)})`,
     r.written && r.notes.length === 1 && /^1 row\(s\) in verification\.deltas were not written by --record-plan/.test(r.notes[0] ?? ""));
   check("mode \"rendered\", renderer = report.renderer", v.mode === "rendered" && v.renderer === "playwright-chromium");
   check(`artifacts = the report .json + .md + the report's artifact that exists (the missing one is dropped) (got ${JSON.stringify(v.artifacts)})`,
@@ -114,7 +114,7 @@ console.log("recordPlan (F-100, D115):");
     /^\{\n {4}"status": "pending",\n {4}"screenName"/.test(text) && JSON.stringify(Object.keys(after)) === JSON.stringify(Object.keys(before))
     && JSON.stringify(Object.keys(v)) === JSON.stringify(["mode", "coverage", "deltas", "hook", "renderer", "artifacts", "a11y", "recorded"]) && text.endsWith("}\n"));
   check("everything outside verification is byte-identical", JSON.stringify({ ...after, verification: null }) === JSON.stringify({ ...before, verification: null }));
-  // the core of F-100: recording must not send a closed plan back to pending (mutation: keep verification in planHash)
+  // the core: recording must not send a closed plan back to pending (mutation: keep verification in planHash)
   const st = statusOf(root);
   check(`verify-build --status after the record: NOT "the plan changed after the hook's last check", the plan stays closed (got ${st.status}: ${st.reasons.join(" | ").slice(0, 160)})`,
     !st.reasons.some((x) => /plan changed after the hook/.test(x)) && !openOf(root));
@@ -155,48 +155,48 @@ console.log("recordPlan (F-100, D115):");
     && verificationContradictions({ verification: { mode: "rendered", deltas: [] } }, [refRow]).length === 1);
 }
 
-console.log("review 18 (s19): a hand row in deltas, a static-only run, one format-preserving plan writer:");
+console.log("a hand row in deltas, a static-only run, one format-preserving plan writer:");
 {
-  // M1: verification.deltas is the report's (D115) — a builder's residual there is replaced, never silently
+  // verification.deltas is the report's — a builder's residual there is replaced, never silently
   const root = project();
   const p = planOf(root);
   fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: [{ nodeId: "80:2", field: "boxShadow", note: "platform shadow approximation" }] } }, null, 2) + "\n");
   const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
-  check(`[M1] replacing a hand row in verification.deltas says so, names it and points at deviations[] (got ${JSON.stringify(r.notes)})`,
+  check(`replacing a hand row in verification.deltas says so, names it and points at deviations[] (got ${JSON.stringify(r.notes)})`,
     r.notes.some((n) => /^1 row\(s\) in verification\.deltas .*not written by --record-plan.*\(80:2 boxShadow\).*deviations\[\]/.test(n)));
   const again = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
-  check(`[M1] …re-recording over its own rows adds no note (got ${JSON.stringify(again.notes)})`, !again.written && again.notes.length === 0);
+  check(`…re-recording over its own rows adds no note (got ${JSON.stringify(again.notes)})`, !again.written && again.notes.length === 0);
 }
 {
-  // F1: a hand-written NON-array verification.deltas (counts copied from a report) is replaced with a note too
+  // a hand-written NON-array verification.deltas (counts copied from a report) is replaced with a note too
   const root = project();
   const p = planOf(root);
   fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: { high: 4, medium: 9, interactions: "1 pass, 2 fail of 3" } } }, null, 2) + "\n");
   const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
-  check(`[F1] a hand-written object in verification.deltas → replaced by the report's array, with a note naming its type (got ${JSON.stringify(r.notes)})`,
+  check(`a hand-written object in verification.deltas → replaced by the report's array, with a note naming its type (got ${JSON.stringify(r.notes)})`,
     Array.isArray(planOf(root).verification?.deltas) && r.notes.some((n) => /^verification\.deltas was a hand-written object \(\{"high":4,.*replaced by the report's open deltas/.test(n)));
 }
 {
-  // F2: hand-written headline / verdict keys that disagree with the record stay, named as stale; agreeing ones add no note
+  // hand-written headline / verdict keys that disagree with the record stay, named as stale; agreeing ones add no note
   const root = project();
   const p = planOf(root);
   fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: [], headline: "4 high, 9 medium (round 2)", verdict: "pass" } }, null, 2) + "\n");
   const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
   const v = planOf(root).verification;
   const vh: unknown = v && "headline" in v ? v.headline : undefined;
-  check(`[F2] stale hand headline + verdict → one note naming both as stale beside verification.recorded (got ${JSON.stringify(r.notes)})`,
+  check(`stale hand headline + verdict → one note naming both as stale beside verification.recorded (got ${JSON.stringify(r.notes)})`,
     r.notes.some((n) => n.startsWith("verification.headline (\"4 high, 9 medium (round 2)\") and verification.verdict (\"pass\") — hand-written") && /stale beside verification\.recorded/.test(n)));
-  check("[F2] …the hand keys are left as they were", vh === "4 high, 9 medium (round 2)" && v?.verdict === "pass");
+  check("…the hand keys are left as they were", vh === "4 high, 9 medium (round 2)" && v?.verdict === "pass");
   const root2 = project();
   const p2 = planOf(root2);
   fs.writeFileSync(path.join(root2, REL), JSON.stringify({ ...p2, verification: { ...p2.verification, deltas: [], headline: rep.headline, verdict: rep.verdict.toUpperCase() } }, null, 2) + "\n");
   const r2 = recordPlan(REL, rep, REPORT, { cwd: root2, now: NOW });
-  check(`[F2] control: hand headline/verdict that agree with the report → no stale note (got ${JSON.stringify(r2.notes)})`, !r2.notes.some((n) => /stale/.test(n)));
+  check(`control: hand headline/verdict that agree with the report → no stale note (got ${JSON.stringify(r2.notes)})`, !r2.notes.some((n) => /stale/.test(n)));
 }
 {
-  // M2: a static-only measured file → the report says so, and the plan records static-only + the why, no renderer
+  // a static-only measured file → the report says so, and the plan records static-only + the why, no renderer
   const so: VerifyReportV2 = compare(exp, { mode: "static-only", reason: "no dev server, no Playwright", nodes: [] }, {});
-  check(`[M2] compare() of a static-only measured file: report.mode "static-only" + its reason (got ${JSON.stringify({ mode: so.mode, reason: so.reason })}); a rendered one carries no mode`,
+  check(`compare() of a static-only measured file: report.mode "static-only" + its reason (got ${JSON.stringify({ mode: so.mode, reason: so.reason })}); a rendered one carries no mode`,
     so.mode === "static-only" && so.reason === "no dev server, no Playwright" && rep.mode === undefined && !("reason" in rep));
   const root = project();
   const p = planOf(root);
@@ -204,32 +204,32 @@ console.log("review 18 (s19): a hand row in deltas, a static-only run, one forma
   fs.writeFileSync(path.join(root, REPORT), JSON.stringify(so, null, 2) + "\n");
   recordPlan(REL, so, REPORT, { cwd: root, now: NOW });
   const v = must(planOf(root).verification, "verification");
-  check(`[M2] --record-plan of it: mode "static-only" + the report's reason, no renderer (got ${JSON.stringify({ mode: v.mode, reason: v.reason, renderer: v.renderer })})`,
+  check(`--record-plan of it: mode "static-only" + the report's reason, no renderer (got ${JSON.stringify({ mode: v.mode, reason: v.reason, renderer: v.renderer })})`,
     v.mode === "static-only" && v.reason === "no dev server, no Playwright" && v.renderer === undefined);
   fs.writeFileSync(path.join(root, REPORT), JSON.stringify(rep, null, 2) + "\n");
   recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
   const v2 = must(planOf(root).verification, "verification");
-  check(`[M2] …a later rendered record: mode "rendered" + renderer, the static-only reason gone (got ${JSON.stringify({ mode: v2.mode, reason: v2.reason, renderer: v2.renderer })})`,
+  check(`…a later rendered record: mode "rendered" + renderer, the static-only reason gone (got ${JSON.stringify({ mode: v2.mode, reason: v2.reason, renderer: v2.renderer })})`,
     v2.mode === "rendered" && v2.renderer === "playwright-chromium" && v2.reason === undefined);
 }
 {
-  // L5: --accept and the verify-build hook write the plan as --record-plan does — BOM, indentation and CRLF kept
+  // --accept and the verify-build hook write the plan as --record-plan does — BOM, indentation and CRLF kept
   const crlf4 = (root: string): void => { const f = path.join(root, REL); fs.writeFileSync(f, "\ufeff" + JSON.stringify(readFixture(f, isPlan), null, 4).split("\n").join("\r\n") + "\r\n"); };
   const sameFormat = (t: string): boolean => t.startsWith("\ufeff{\r\n    \"status\"") && t.endsWith("}\r\n") && !/[^\r]\n/.test(t);
   const root = project();
   crlf4(root);
   const a = spawnSync(process.execPath, [VS, "--accept", REPORT, "--node", "80:2", "--field", "background", "--reason", "brand red agreed", "--by", "Sam Doe", "--plan", REL], { cwd: root, encoding: "utf8" });
   const text = fs.readFileSync(path.join(root, REL), "utf8");
-  check(`[L5] --accept on a BOM + CRLF + 4-space plan: the waiver is written and the file keeps its format (exit ${a.status}; starts ${JSON.stringify(text.slice(0, 16))})`,
+  check(`--accept on a BOM + CRLF + 4-space plan: the waiver is written and the file keeps its format (exit ${a.status}; starts ${JSON.stringify(text.slice(0, 16))})`,
     a.status === 0 && sameFormat(text) && (planOf(root).waivers ?? []).some((w) => isJsonObject(w) && w.nodeId === "80:2" && w.reason === "brand red agreed")
     && !fs.readdirSync(path.join(root, "design/plan")).some((f) => /\.tmp/.test(f)));
   const h = runHook(root);
   const hooked = fs.readFileSync(path.join(root, REL), "utf8");
-  check(`[L5] …the verify-build hook's record keeps it too (exit ${h.status}; starts ${JSON.stringify(hooked.slice(0, 16))})`,
+  check(`…the verify-build hook's record keeps it too (exit ${h.status}; starts ${JSON.stringify(hooked.slice(0, 16))})`,
     h.status === 0 && planOf(root).verification?.hook?.result !== undefined && hooked !== text && sameFormat(hooked));
 }
 
-console.log("planHash: verification left out, the pre-F-100 formula still accepted (D115):");
+console.log("planHash: verification left out, the legacy formula still accepted:");
 {
   const root = project();
   runHook(root);
@@ -258,9 +258,9 @@ console.log("planHash: verification left out, the pre-F-100 formula still accept
   check("the hook records exactly these files (planCodeFiles)", JSON.stringify(c.verification?.hook?.files) === JSON.stringify(fileHashes(planCodeFiles(c), root)));
 }
 
-console.log("fix pass 1 — recording a plan the old hook closed (M1), project-relative paths only (L7):");
+console.log("recording a plan the old hook closed, project-relative paths only:");
 {
-  // M1: the hook closed this plan under the pre-F-100 formula (it covered verification); the first --record-plan after the
+  // the hook closed this plan under the legacy formula (it covered verification); the first --record-plan after the
   // upgrade rewrites verification — the record re-stamps the hook's hash in the same write, so the plan stays closed
   const root = project();
   runHook(root);
@@ -272,45 +272,45 @@ console.log("fix pass 1 — recording a plan the old hook closed (M1), project-r
   const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
   const after = planOf(root);
   const st = statusOf(root);
-  check(`[M1] after the first --record-plan: still closed, not pending (got ${st.status}: ${st.reasons.join(" | ").slice(0, 160)})`,
+  check(`after the first --record-plan: still closed, not pending (got ${st.status}: ${st.reasons.join(" | ").slice(0, 160)})`,
     r.written && !openOf(root) && !st.reasons.some((x) => /plan changed after the hook/.test(x)));
-  check("[M1] …the hook's planHash is now the current formula's, the rest of the hook record is untouched, and a note says so",
+  check("…the hook's planHash is now the current formula's, the rest of the hook record is untouched, and a note says so",
     after.verification?.hook?.planHash === verifyBuild.planHash(after) && after.verification.hook.result === "pass"
     && JSON.stringify(after.verification.hook.files) === JSON.stringify(hook.files) && r.notes.some((n) => /an older plan hash that also covered verification/.test(n) && /re-stamped/.test(n)));
   const quiet = spawnSync(process.execPath, [HOOK], { cwd: root, input: JSON.stringify({ cwd: root }), encoding: "utf8" });
-  check("[M1] …and the Stop hook's fast path stays silent on it", quiet.status === 0 && quiet.stderr === "");
+  check("…and the Stop hook's fast path stays silent on it", quiet.status === 0 && quiet.stderr === "");
   // a hash that matches NEITHER formula (the plan changed after the hook) is never re-stamped: the plan stays pending
   const q = planOf(root);
   must(q.verification?.hook, "hook").planHash = "0000000000000000";
   fs.writeFileSync(path.join(root, REL), JSON.stringify(q, null, 2) + "\n");
   const r2 = recordPlan(REL, { ...rep, headline: rep.headline + " (again)" }, REPORT, { cwd: root, now: NOW });
-  check("[M1] control: a hook hash matching neither formula is left alone (still pending, no re-stamp note)",
+  check("control: a hook hash matching neither formula is left alone (still pending, no re-stamp note)",
     planOf(root).verification?.hook?.planHash === "0000000000000000" && openOf(root) && !r2.notes.some((n) => /re-stamped/.test(n)));
 }
 {
-  // L7: a report or artifact outside the project — the plan records project-relative paths only
+  // a report or artifact outside the project — the plan records project-relative paths only
   const root = project();
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-outside-"));
   const before = fs.readFileSync(path.join(root, REL), "utf8");
   let threw = "";
   try { recordPlan(REL, rep, path.join(outside, "Crates.report.json"), { cwd: root, now: NOW }); } catch (e) { threw = e instanceof Error ? e.message : String(e); }
-  check(`[L7] a report outside the project → refused (throws), the plan is unchanged (got ${JSON.stringify(threw.slice(0, 120))})`,
+  check(`a report outside the project → refused (throws), the plan is unchanged (got ${JSON.stringify(threw.slice(0, 120))})`,
     /is outside the project/.test(threw) && /project-relative paths only/.test(threw) && fs.readFileSync(path.join(root, REL), "utf8") === before);
   fs.writeFileSync(path.join(outside, "shot.png"), "png");
   const withOutside: VerifyReportV2 = { ...rep, artifacts: [...rep.artifacts, path.join(outside, "shot.png"), "../" + path.basename(outside) + "/shot.png"] };
   const r = recordPlan(REL, withOutside, "./design/verify/../verify/Crates.report.json", { cwd: root, now: NOW });
   const v = planOf(root).verification;
-  check(`[L7] an artifact outside the project (absolute or ../) → left out with ONE note; the report path is normalised (got ${JSON.stringify(v?.artifacts)}; ${JSON.stringify(r.notes)})`,
+  check(`an artifact outside the project (absolute or ../) → left out with ONE note; the report path is normalised (got ${JSON.stringify(v?.artifacts)}; ${JSON.stringify(r.notes)})`,
     JSON.stringify(v?.artifacts) === JSON.stringify([REPORT, "design/verify/Crates.report.md", "design/verify/Crates.png"]) && v?.recorded?.report === REPORT && v.a11y?.report === REPORT
     && r.notes.filter((n) => /artifact\(s\) outside the project not recorded/.test(n)).length === 1 && !JSON.stringify(v).includes(outside));
   fs.rmSync(outside, { recursive: true, force: true });
 }
 
-console.log("the CLI (verify-screen --compare --record-plan, wired by slice A1):");
+console.log("the CLI (verify-screen --compare --record-plan, flag-gated):");
 {
   const usage = spawnSync(process.execPath, [VS, "--help"], { encoding: "utf8" });
   if (!/--record-plan/.test(usage.stdout + usage.stderr)) {
-    console.log("  - SKIPPED: verify-screen has no --record-plan flag yet (slice A1 wires it) — the CLI cases (no plan → exit 2, no report written) are not run");
+    console.log("  - SKIPPED: verify-screen has no --record-plan flag yet — the CLI cases (no plan → exit 2, no report written) are not run");
   } else {
     const root = project();
     fs.rmSync(path.join(root, "design", "plan"), { recursive: true });
@@ -330,22 +330,22 @@ console.log("the CLI (verify-screen --compare --record-plan, wired by slice A1):
   }
 }
 
-console.log("review 2 (D129): dotted import names resolve; a report reached through a symlink is inside the project:");
+console.log("dotted import names resolve; a report reached through a symlink is inside the project:");
 {
   const root = project();
   fs.mkdirSync(path.join(root, "src/shell"), { recursive: true });
   fs.writeFileSync(path.join(root, "src/shell/app.component.tsx"), "export const Shell = () => null;\n");
   const dotted = { files: ["src/Crates.tsx"], anchors: { "1:1": { mapModule: "src/shell/app.component" }, "1:2": { mapModule: "src/shell/gone.tsx" } } };
-  check("[D129 M1] 'src/shell/app.component' (a dot in the last part, no extension) resolves to the .tsx and is hashed",
+  check("'src/shell/app.component' (a dot in the last part, no extension) resolves to the .tsx and is hashed",
     planCodeFiles(dotted, root).includes("src/shell/app.component.tsx") && !planCodeFiles(dotted, root).includes("src/shell/app.component"));
-  check("[D129 M1] a mapped path that names no file (a typo / a deleted file) is still hashed as written AND named by the skipped note",
+  check("a mapped path that names no file (a typo / a deleted file) is still hashed as written AND named by the skipped note",
     planCodeFiles(dotted, root).includes("src/shell/gone.tsx") && JSON.stringify(planCodeSkipped(dotted, root)) === JSON.stringify(["src/shell/gone.tsx"]));
   const link = path.join(os.tmpdir(), `dtwin-record-link-${process.pid}`);
   try {
     fs.symlinkSync(root, link);
     let written = false;
     try { written = recordPlan(REL, rep, path.join(link, REPORT), { cwd: fs.realpathSync(root), now: NOW }).written; } catch { /* refused: fails below */ }
-    check("[D129 L1] a report path through a symlink to the project is inside it (recorded project-relative)",
+    check("a report path through a symlink to the project is inside it (recorded project-relative)",
       written && planOf(root).verification?.recorded?.report === REPORT);
   } finally { try { fs.unlinkSync(link); } catch { /* never created */ } }
 }

@@ -57,7 +57,7 @@ console.log("verify-screen — the spec as data:");
   const exp = buildExpectation([
     doc([
       textNode("2:1", "Title", "Nothing here yet.", { family: "Poppins", size: 18, weight: "Medium", lineHeight: { value: 22, unit: "px" }, color: "#ffffff" }),
-      // gap is only a gap between two laid-out children (finding 194 — see the slack rules below)
+      // gap is only a gap between two laid-out children (see the slack rules below)
       // the legacy per-side padding keys (paddingTop…) an older export wrote — read beside padding[]
       malformed<NodeInput>({ type: "FRAME", id: "2:2", name: "Card", fills: [{ type: "solid", color: "#121319" }], radius: 20, layout: { gap: 16, paddingTop: 32, paddingRight: 32, paddingBottom: 32, paddingLeft: 32 }, box: { w: 400, h: 200 },
         children: [{ type: "FRAME", id: "2:21", name: "a" }, { type: "FRAME", id: "2:22", name: "b" }] }),
@@ -96,7 +96,7 @@ console.log("verify-screen — the spec as data:");
     !("gap" in aroundRow) && aroundExp.notComparable.some((n) => n.nodeId === "3:2" && n.field === "gap"));
 }
 {
-  // DT-50 (old exports): an asset leaf carried an inferred `layout` whose padding/gap is the inset already baked into the
+  // an asset leaf carried an inferred `layout` whose padding/gap is the inset already baked into the
   // exported file — never a spec to compare. Real shapes: asset = "assets/<name>", layout.padding = [t,r,b,l].
   const BAKED = "inset baked into the exported asset";
   const leaf = (id: string, extra: Record<string, unknown>): NodeInput => malformed<NodeInput>({ type: "FRAME", id, name: "Mark", box: { w: 24, h: 24 }, layout: { display: "flex", padding: [3.33, 3.33, 3.33, 3.33], gap: 2 }, ...extra });
@@ -109,16 +109,16 @@ console.log("verify-screen — the spec as data:");
   ])]);
   for (const id of ["4:1", "4:2", "4:3", "4:4"]) {
     const row = exp.nodes.find((r) => r.nodeId === id);
-    ok(`[DT-50] ${id}: an asset leaf's inferred padding/gap is not a spec`, !row || (row.padding === undefined && row.gap === undefined && row.paddingSkip === undefined));
-    ok(`[DT-50] ${id}: …it is a notComparable row for padding (value kept) and for gap, with the baked-inset reason`,
+    ok(`${id}: an asset leaf's inferred padding/gap is not a spec`, !row || (row.padding === undefined && row.gap === undefined && row.paddingSkip === undefined));
+    ok(`${id}: …it is a notComparable row for padding (value kept) and for gap, with the baked-inset reason`,
       exp.notComparable.some((r) => r.nodeId === id && r.field === "padding" && r.why === BAKED && JSON.stringify(r.value) === "[3.33,3.33,3.33,3.33]")
       && exp.notComparable.some((r) => r.nodeId === id && r.field === "gap" && r.why === BAKED && r.value === 2));
   }
-  ok("[DT-50] a non-leaf frame keeps its padding spec", JSON.stringify(exp.nodes.find((r) => r.nodeId === "4:5")?.padding) === "[4,4,4,4]" && !exp.notComparable.some((r) => r.nodeId === "4:5"));
+  ok("a non-leaf frame keeps its padding spec", JSON.stringify(exp.nodes.find((r) => r.nodeId === "4:5")?.padding) === "[4,4,4,4]" && !exp.notComparable.some((r) => r.nodeId === "4:5"));
 }
 {
   // Hidden nodes are not rendered, so measuring them is a false failure waiting to happen. The export
-  // marks them `hidden: true` — NOT `visible: false` (finding 34), and a hidden parent hides its subtree.
+  // marks them `hidden: true` — NOT `visible: false`, and a hidden parent hides its subtree.
   const exp = buildExpectation([doc([
     { type: "TEXT", id: "2:9", hidden: true, text: "hidden", font: { family: "Poppins", size: 12 } },
     { type: "FRAME", id: "2:10", name: "Breadcrumb", hidden: true, children: [textNode("2:11", "crumb", "Home", { family: "Poppins", size: 12 })] },
@@ -127,7 +127,7 @@ console.log("verify-screen — the spec as data:");
   ok("[expect] …and the skipped layers are counted and listed, not silently dropped",
     exp.counts.hidden.layers === 2 && exp.counts.hidden.nodes === 3 && exp.hidden.ids.join(",") === "2:9,2:10,2:11");
   // `visible` in this export is a component-property REFERENCE (`propRefs.visible: "Show Breadcrumb"`),
-  // not a visibility flag; filtering on it gives a confidently wrong answer (finding 34).
+  // not a visibility flag; filtering on it gives a confidently wrong answer.
   const exp2 = buildExpectation([doc([Object.assign(textNode("2:12", "Back", "Back", { family: "Poppins", size: 12 }), { propRefs: { visible: "Show back link" }, visible: false })])]);
   ok("[expect] a `visible` key is NOT the hidden flag — the predicate reads `hidden` only", exp2.nodes.length === 1);
 }
@@ -168,7 +168,7 @@ console.log("verify-screen — the mismatches three 'pass' verdicts let through:
   // Everything correct, within tolerance. Line-height rounding by a pixel or two is a real browser
   // behaviour and must NOT be reported, or the signal drowns.
   const exp = buildExpectation([doc([textNode("2:1", "T", "Hi", { family: "Poppins", size: 14, weight: "Regular", lineHeight: { value: 21, unit: "px" }, color: "#ffffff" })])]);
-  // (opacity: every node that carries copy states opacity 1 since group 11, DT-74 — a full probe reports it)
+  // (opacity: every node that carries copy states opacity 1 — a full probe reports it)
   const rep = compare(exp, measured([{ nodeId: "2:1", styles: { fontFamily: '"Poppins", sans-serif', fontSize: 14, fontWeight: 400, lineHeight: 22, color: "#fff", text: "Hi", opacity: 1 } }]));
   ok("[diff] a 1px line-height difference is within tolerance and is not reported", rep.deltas.length === 0);
   ok("[diff] with nothing wrong and nothing unchecked, the verdict is pass", rep.verdict === "pass");
@@ -217,7 +217,7 @@ console.log("verify-screen — a screen can match every pixel and still be a dea
   ok("[cover] and each one says how many instances it stands for", must(rep.untaggedInstanceSets[0], "rep.untaggedInstanceSets[0]").instances === 1);
   ok("[cover] a designed interaction nobody exercised is 'not-probed', never silently passed",
     rep.interactions.length === 1 && must(rep.interactions[0], "rep.interactions[0]").result === "not-probed");
-  ok("[cover] missing tags alone do not FAIL a screen (a .map() row and a shared shell leave gaps by design — 107/139/169)",
+  ok("[cover] missing tags alone do not FAIL a screen (a .map() row and a shared shell leave gaps by design)",
     rep.verdict === "incomplete" && rep.summary.componentsAbsent === 0);
   ok("[cover] a component the probe reports ABSENT (present:false) does fail it",
     (() => {
@@ -255,8 +255,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     /^# Verify/m.test(reportToMarkdown(rep)) && /What was actually checked/.test(reportToMarkdown(rep)));
 }
 
-// ---------- CLI: --out defaults to the input file's own basename (P3 #152) ----------------------
-// Live-run finding 152: `--expect` run once by base name and once by a nickname for the SAME screen
+// ---------- CLI: --out defaults to the input file's own basename ----------------------
+// `--expect` run once by base name and once by a nickname for the SAME screen
 // wrote two byte-identical files under two names in design/verify/. Defaulting `--out` to the input
 // file's own basename (already `<LayerName>__<node-id>` by construction) means two runs against the
 // same export always land on the same artefact.
@@ -278,20 +278,19 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[cli-out] --compare defaults to the .expected.json's own basename, not a new name",
     fs.existsSync(path.join(cwd, "design", "verify", "positions___7314_87192.report.json")));
 
-  // P3 round 3, finding 315: an explicit --out under a NICKNAME for a screen already indexed under
-  // its default name still wrote a second complete artefact set with no warning. Refuse instead,
-  // naming the existing file; --force overrides.
+  // an explicit --out under a NICKNAME for a screen already indexed under its default name would write
+  // a second complete artefact set with no warning. Refuse instead, naming the existing file; --force overrides.
   const nicknameOut = path.join(cwd, "design", "verify", "JetRoles");
   const r2 = spawnSync(process.execPath, [scriptPath, "--expect", screenFile, "--out", nicknameOut], { encoding: "utf8", cwd });
-  ok("[315] --expect --out <nickname> for a node that already has an expectation elsewhere is refused",
+  ok("[nickname] --expect --out <nickname> for a node that already has an expectation elsewhere is refused",
     r2.status === 1 && /already has an expectation/.test(r2.stderr) && /positions___7314_87192\.expected\.json/.test(r2.stderr) &&
       !fs.existsSync(nicknameOut + ".expected.json"));
   const r3 = spawnSync(process.execPath, [scriptPath, "--expect", screenFile, "--out", nicknameOut, "--force"], { encoding: "utf8", cwd });
-  ok("[315] --force overrides the refusal and writes the second name anyway",
+  ok("[nickname] --force overrides the refusal and writes the second name anyway",
     r3.status === 0 && fs.existsSync(nicknameOut + ".expected.json"));
 })();
 
-// ---------- DT-34: the guard names the canonical <Layer>__<id>, the old files and the .retired way out ----------
+// ---------- the guard names the canonical <Layer>__<id>, the old files and the .retired way out ----------
 (() => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-dt34-"));
   const screenFile = path.join(cwd, "Screen__5_6.json");
@@ -307,25 +306,25 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   fs.writeFileSync(path.join(vdir, "NickOther.png"), "x"); // another screen's file: not part of the Nick set
   const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const r = spawnSync(process.execPath, [scriptPath, "--expect", screenFile], { encoding: "utf8", cwd });
-  ok("[DT34-1] the guard refuses (exit 1) and writes nothing", r.status === 1 && !fs.existsSync(path.join(vdir, "Screen__5_6.expected.json")));
-  ok("[DT34-1] the message names the canonical <Layer>__<id> basename", /canonical name[^\n]*'Screen__5_6'/.test(r.stderr));
-  ok("[DT34-1] the message lists the old set (expectation + state PNG), not another screen's file",
+  ok("the guard refuses (exit 1) and writes nothing", r.status === 1 && !fs.existsSync(path.join(vdir, "Screen__5_6.expected.json")));
+  ok("the message names the canonical <Layer>__<id> basename", /canonical name[^\n]*'Screen__5_6'/.test(r.stderr));
+  ok("the message lists the old set (expectation + state PNG), not another screen's file",
     /Nick\.expected\.json/.test(r.stderr) && /Nick-dialog\.png/.test(r.stderr) && !/NickOther/.test(r.stderr));
-  ok("[DT34-1] the message gives the .retired step with the real path and the old-name way out",
+  ok("the message gives the .retired step with the real path and the old-name way out",
     /mv [^\n]*Nick\.expected\.json[^\n]* [^\n]*Nick\.expected\.json\.retired/.test(r.stderr) && /--out [^\n]*Nick/.test(r.stderr));
   // an explicit nickname for the new run: the canonical hint carries --out <canonical>
   const rNick = spawnSync(process.execPath, [scriptPath, "--expect", screenFile, "--out", path.join(vdir, "Other")], { encoding: "utf8", cwd });
-  ok("[DT34-1] a third name is told to re-run with --out <canonical>", rNick.status === 1 && /with --out [^\n]*Screen__5_6/.test(rNick.stderr));
+  ok("a third name is told to re-run with --out <canonical>", rNick.status === 1 && /with --out [^\n]*Screen__5_6/.test(rNick.stderr));
   // the migration step: retire the old expectation -> the canonical name is written
   fs.renameSync(path.join(vdir, "Nick.expected.json"), path.join(vdir, "Nick.expected.json.retired"));
   const r2 = spawnSync(process.execPath, [scriptPath, "--expect", screenFile], { encoding: "utf8", cwd });
-  ok("[DT34-1] after the .retired step the canonical name is written (exit 0)",
+  ok("after the .retired step the canonical name is written (exit 0)",
     r2.status === 0 && fs.existsSync(path.join(vdir, "Screen__5_6.expected.json")) && fs.existsSync(path.join(vdir, "Nick-dialog.png")));
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
-// ================================================================= livetest-3 regressions (P2a)
-// Every fixture below is the REAL export / probe output of the livetest-3 run, pruned from a
+// ================================================================= regressions from a recorded run
+// Every fixture below is the REAL export / probe output of a recorded run, pruned from a
 // live-test export, names replaced (the pruned exports gave byte-identical expectations and
 // audits to the full ones). The "before" numbers in the comments are what the
 // pre-fix verify-screen.js printed on these exact files.
@@ -347,58 +346,58 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const jrHidden = hiddenOf(jrDoc), gpHidden = hiddenOf(gpDoc);
   const hiddenIn = (arr: Array<{ nodeId: string }>, H: Set<string | undefined>) => arr.filter((x) => H.has(x.nodeId)).length;
 
-  console.log("verify-screen — livetest-3: hidden layers are never specified (97/126/157/181):");
+  console.log("verify-screen — hidden layers are never specified:");
   // before: specs 272 hidden 83 · instances 112 hidden 61 · interactions 28 hidden 22
-  ok("[lt3-hidden] Jet Roles: 0 specs, 0 instances, 0 interactions on hidden layers (were 83/272, 61/112, 22/28)",
+  ok("[hidden] Jet Roles: 0 specs, 0 instances, 0 interactions on hidden layers (were 83/272, 61/112, 22/28)",
     () => hiddenIn(jrExp.nodes, jrHidden) === 0 && hiddenIn(jrExp.instances, jrHidden) === 0 && hiddenIn(jrExp.interactions, jrHidden) === 0);
   // before: 75 of 233, 45 of 87, 11 of 12
-  ok("[lt3-hidden] Guided Policies: 0 / 0 / 0 on hidden layers (were 75/233, 45/87, 11/12)",
+  ok("[hidden] Guided Policies: 0 / 0 / 0 on hidden layers (were 75/233, 45/87, 11/12)",
     () => hiddenIn(gpExp.nodes, gpHidden) === 0 && hiddenIn(gpExp.instances, gpHidden) === 0 && hiddenIn(gpExp.interactions, gpHidden) === 0);
-  ok("[lt3-hidden] what was skipped is counted: 61+45 instances and 22+11 interactions — the numbers the finding reported",
+  ok("[hidden] what was skipped is counted: 61+45 instances and 22+11 interactions — the numbers originally reported",
     () => jrExp.counts.hidden.instancesSkipped === 61 && jrExp.counts.hidden.interactionsSkipped === 22 &&
     gpExp.counts.hidden.instancesSkipped === 45 && gpExp.counts.hidden.interactionsSkipped === 11);
-  ok("[lt3-hidden] the visible instance list is exactly the frame's visible instances (51 on Jet Roles, 42 on Guided Policies)",
+  ok("[hidden] the visible instance list is exactly the frame's visible instances (51 on Jet Roles, 42 on Guided Policies)",
     () => jrExp.instances.length === 51 && gpExp.instances.length === 42);
-  ok("[lt3-hidden] the expectation lists the hidden ids so --compare can refuse credit for them", () => jrExp.hidden.ids.length === jrHidden.size && gpExp.hidden.ids.length === gpHidden.size);
-  ok("[lt3-determinism] --expect stays byte-deterministic on the real export (finding 154)",
+  ok("[hidden] the expectation lists the hidden ids so --compare can refuse credit for them", () => jrExp.hidden.ids.length === jrHidden.size && gpExp.hidden.ids.length === gpHidden.size);
+  ok("[determinism] --expect stays byte-deterministic on the real export",
     () => JSON.stringify(buildExpectation([{ doc: jrDoc, label: "positions___7314_87192" }])) === JSON.stringify(jrExp) && !/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?!\.000Z)/.test(JSON.stringify(jrExp).replace(must(jrDoc.exportedAt, "jrDoc.exportedAt"), "")));
 
-  console.log("verify-screen — livetest-3: --compare filters hidden layers too (157/187/188):");
+  console.log("verify-screen — --compare filters hidden layers too:");
   const gpRep = compare(gpExp, gpMeasured);
   // The real GP probe drove 4 hidden hovers (4×30 s timeouts → 'fail') and credited 2 hidden popup rows
   // with hovers performed on other controls ('pass').
-  ok("[lt3-hidden] evidence for hidden layers is ignored and counted, never graded (11 rows on GP)",
+  ok("[hidden] evidence for hidden layers is ignored and counted, never graded (11 rows on GP)",
     () => gpRep.probe.interactionEvidenceOnHiddenLayers === 11 && gpRep.interactions.length === 1 && gpRep.coverage.interactionsFailed === 0);
-  ok("[lt3-hidden] a legacy @1 expectation (hidden rows baked in) is refused as evidence, not silently graded",
+  ok("[hidden] a legacy @1 expectation (hidden rows baked in) is refused as evidence, not silently graded",
     () => (() => { const legacy = Object.assign(clone(gpExp), { schema: "designtwin/verify-expectation@1" }); const r = compare(legacy, gpMeasured); return r.verdict !== "pass" && r.why.some((w) => /predates hidden-layer filtering/.test(w)); })());
 
-  console.log("verify-screen — livetest-3: a field the probe names differently is LOUD (162/182/195):");
+  console.log("verify-screen — a field the probe names differently is LOUD:");
   const jrRep = compare(jrExp, jrMeasured);
   // before: the JR report had 0 border-radius deltas and nothing said radius was never checked.
-  ok("[lt3-radius] the real Jet Roles probe wrote `radius`: the HEADLINE says borderRadius was present on 0 of the nodes that state it",
+  ok("[radius] the real Jet Roles probe wrote `radius`: the HEADLINE says borderRadius was present on 0 of the nodes that state it",
     /'borderRadius' present on 0 of \d+ nodes that state it \(probe sent 'radius'\)/.test(jrRep.headline) && jrRep.coverage.fieldsNeverMeasured.some((f) => f.field === "borderRadius" && f.measuredOn === 0));
-  ok("[lt3-radius] …and the unknown key is named with its canonical spelling, not accepted", () => jrRep.probe.unknownKeys.some((k) => k.key === "radius" && k.canonical === "borderRadius"));
-  ok("[lt3-radius] …and that alone keeps the verdict from passing", () => jrRep.why.some((w) => /field 'borderRadius' was present on 0 of the \d+ measured node/.test(w)));
+  ok("[radius] …and the unknown key is named with its canonical spelling, not accepted", () => jrRep.probe.unknownKeys.some((k) => k.key === "radius" && k.canonical === "borderRadius"));
+  ok("[radius] …and that alone keeps the verdict from passing", () => jrRep.why.some((w) => /field 'borderRadius' was present on 0 of the \d+ measured node/.test(w)));
   const renamed = clone(jrMeasured);
   const asRadius = (r: unknown): MeasuredStyles["borderRadius"] => (typeof r === "number" || typeof r === "string" ? r : Array.isArray(r) && r.every((x) => typeof x === "number") ? r.map(Number) : undefined);
   for (const n of renamed.nodes || []) { if ("radius" in n) { const br = asRadius(n.radius); if (br === undefined) delete n.borderRadius; else n.borderRadius = br; delete n.radius; } }
   const jrRad = compare(jrExp, renamed);
   const rd = (id: string, corner: string) => jrRad.deltas.find((d) => d.nodeId === id && d.field === `border-radius (${corner})`); // callers guard with rd(…) && first, then read via ?.
-  ok("[lt3-radius] with the canonical key, the four dropped Jet Roles radii are deltas: 20173:142077 tl/tr and 20173:142137 bl/br, 12 → 0",
+  ok("[radius] with the canonical key, the four dropped Jet Roles radii are deltas: 20173:142077 tl/tr and 20173:142137 bl/br, 12 → 0",
     () => ["top-left", "top-right"].every((c) => rd("20173:142077", c) && rd("20173:142077", c)?.expected === 12 && rd("20173:142077", c)?.actual === 0) &&
     ["bottom-left", "bottom-right"].every((c) => rd("20173:142137", c) && rd("20173:142137", c)?.expected === 12 && rd("20173:142137", c)?.actual === 0));
-  ok("[lt3-radius] a bottom-only radius ({bl,br}) is specified at all — the old code read radius.tl only",
+  ok("[radius] a bottom-only radius ({bl,br}) is specified at all — the old code read radius.tl only",
     () => JSON.stringify(jrExp.nodes.find((n) => n.nodeId === "20173:142137")?.radiusCorners) === JSON.stringify({ tl: 0, tr: 0, br: 12, bl: 12 }));
-  ok("[lt3-radius] the Guided Policies card that ships 16 where the design says 12 is caught (finding 183)",
+  ok("[radius] the Guided Policies card that ships 16 where the design says 12 is caught",
     () => gpRep.deltas.some((d) => d.nodeId === "18580:60755" && d.field === "border-radius" && d.expected === 12 && d.actual === 16));
 
-  console.log("verify-screen — livetest-3: positions are compared, frame-relative (164/192):");
+  console.log("verify-screen — positions are compared, frame-relative:");
   // Each row carries the numbers its own case needs (y/height for the pagination bar, textBoxX for the header).
   type Positions = Record<string, { y?: number; height?: number; textBoxX?: number }>;
   const optNum = (v: unknown): boolean => v === undefined || typeof v === "number";
   const pos = load("prefix-positions.json", (x: unknown): x is Positions => isJsonObject(x) && Object.values(x).every((p) => isJsonObject(p) && optNum(p.y) && optNum(p.height) && optNum(p.textBoxX)));
-  ok("[lt3-xy] FIELDS carries x and y", () => FIELDS.some((f) => f.key === "x") && FIELDS.some((f) => f.key === "y"));
-  ok("[lt3-xy] the expectation states its coordinate convention", () => /FRAME-RELATIVE/.test(must(jrExp.coordinates, "jrExp.coordinates")) && jrExp.frame.w === 1440 && jrExp.frame.h === 1236);
+  ok("[xy] FIELDS carries x and y", () => FIELDS.some((f) => f.key === "x") && FIELDS.some((f) => f.key === "y"));
+  ok("[xy] the expectation states its coordinate convention", () => /FRAME-RELATIVE/.test(must(jrExp.coordinates, "jrExp.coordinates")) && jrExp.frame.w === 1440 && jrExp.frame.h === 1236);
   {
     const m = clone(jrMeasured);
     const pg = m.nodes?.find((n) => n.nodeId === "20173:142142");
@@ -406,9 +405,9 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     Object.assign(must(pg, "pg node 20173:142142"), { y: posPg.y, height: posPg.height });
     const r = compare(jrExp, m);
     const place = r.deltas.find((d) => d.nodeId === "20173:142142" && d.field === "placement");
-    ok("[lt3-xy] Jet Roles pre-fix: the pagination bar is reported OUTSIDE the frame, high severity (bottom edge 1366 > 1236)",
+    ok("[xy] Jet Roles pre-fix: the pagination bar is reported OUTSIDE the frame, high severity (bottom edge 1366 > 1236)",
       () => !!place && place.severity === "high" && /y=1366 in a 1236-high frame/.test(String(place.actual)));
-    ok("[lt3-xy] …and its y is a delta against the design's own position (864)", () => r.deltas.some((d) => d.nodeId === "20173:142142" && d.field === "y (frame-relative)" && d.expected === 864 && d.actual === 1342));
+    ok("[xy] …and its y is a delta against the design's own position (864)", () => r.deltas.some((d) => d.nodeId === "20173:142142" && d.field === "y (frame-relative)" && d.expected === 864 && d.actual === 1342));
   }
   {
     const m = clone(gpMeasured);
@@ -417,24 +416,24 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     must(stNode.styles, "st.styles").textBox = { ...ifDefined("x", must(pos["18580:60861"], "pos['18580:60861']").textBoxX) };
     const r = compare(gpExp, m);
     const d = r.deltas.find((x) => x.nodeId === "18580:60861" && x.field === "x (frame-relative)");
-    // (F-80, group 11: a hug TEXT's x is its box's left edge — 1296, what a Range reports — not the ink start 1296.81)
-    ok("[lt3-xy] Guided Policies pre-fix: the Status header is +19.75px right of the design (1296 → 1315.75)",
+    // (a hug TEXT's x is its box's left edge — 1296, what a Range reports — not the ink start 1296.81)
+    ok("[xy] Guided Policies pre-fix: the Status header is +19.75px right of the design (1296 → 1315.75)",
       () => !!d && d.expected === 1296 && d.actual === 1315.75 && d.delta === 19.75);
   }
 
-  console.log("verify-screen — livetest-3: the coverage line closes (165/184):");
+  console.log("verify-screen — the coverage line closes:");
   for (const [name, rep, m] of [["Jet Roles", jrRep, jrMeasured], ["Guided Policies", gpRep, gpMeasured]] as const) {
     const ids = new Set(m.nodes?.map((n) => String(n.nodeId)));
-    ok(`[lt3-cover] ${name}: nodesExpected − nodesMeasured == notMeasured.length, one row per node`,
+    ok(`[cover] ${name}: nodesExpected − nodesMeasured == notMeasured.length, one row per node`,
       () => rep.coverage.nodesExpected - rep.coverage.nodesMeasured === rep.notMeasured.length && new Set(rep.notMeasured.map((n) => n.nodeId)).size === rep.notMeasured.length);
-    ok(`[lt3-cover] ${name}: no id is both 'never measured' and in measured.nodes (6 were on GP before)`, () => rep.notMeasured.every((n) => !ids.has(String(n.nodeId))));
-    ok(`[lt3-cover] ${name}: the headline leads with nodes measured N/M`, () => rep.headline.includes(`nodes measured ${rep.coverage.nodesMeasured}/${rep.coverage.nodesExpected}`));
-    ok(`[lt3-cover] ${name}: unmeasured nodes still block the pass`, () => rep.verdict !== "pass" && rep.why.some((w) => /never measured/.test(w)));
+    ok(`[cover] ${name}: no id is both 'never measured' and in measured.nodes (6 were on GP before)`, () => rep.notMeasured.every((n) => !ids.has(String(n.nodeId))));
+    ok(`[cover] ${name}: the headline leads with nodes measured N/M`, () => rep.headline.includes(`nodes measured ${rep.coverage.nodesMeasured}/${rep.coverage.nodesExpected}`));
+    ok(`[cover] ${name}: unmeasured nodes still block the pass`, () => rep.verdict !== "pass" && rep.why.some((w) => /never measured/.test(w)));
   }
 
-  console.log("verify-screen — livetest-3: the token on a delta is the token for THAT field (98/160):");
+  console.log("verify-screen — the token on a delta is the token for THAT field:");
   const hoverRow = jrExp.nodes.find((n) => n.nodeId === "20173:142096");
-  ok("[lt3-token] the drawn-hover row's background token is Backgrounds/Row Hover, its padding token Space 3 / Space 4",
+  ok("[token] the drawn-hover row's background token is Backgrounds/Row Hover, its padding token Space 3 / Space 4",
     () => tokenFor(hoverRow, "backgroundColor") === "Backgrounds/Row Hover" && tokenFor(hoverRow, "padding") === "Space 3 / Space 4");
   {
     // The row measured hovered but NOT repainting (#121319 still): a real background delta, and its
@@ -442,30 +441,30 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     const m = clone(jrMeasured);
     must(must(m.nodes, "m.nodes").find((n) => n.nodeId === "20173:142096"), "m.nodes '20173:142096'").states = { hover: { backgroundColor: "#121319ff" } };
     const d = compare(jrExp, m).deltas.find((x) => x.nodeId === "20173:142096" && x.field === "background");
-    ok("[lt3-token] a background delta on 20173:142096 carries token 'Backgrounds/Row Hover', not 'Space 4'", () => !!d && d.token === "Backgrounds/Row Hover" && d.measuredIn === "hover");
+    ok("[token] a background delta on 20173:142096 carries token 'Backgrounds/Row Hover', not 'Space 4'", () => !!d && d.token === "Backgrounds/Row Hover" && d.measuredIn === "hover");
   }
-  ok("[lt3-token] the filter button's gap delta names Rows Spacing", () => jrRep.deltas.some((d) => d.nodeId === "I20173:142047;885:2723" && d.field === "gap" && d.token === "Rows Spacing"));
+  ok("[token] the filter button's gap delta names Rows Spacing", () => jrRep.deltas.some((d) => d.nodeId === "I20173:142047;885:2723" && d.field === "gap" && d.token === "Rows Spacing"));
 
-  console.log("verify-screen — livetest-3: 'not probed' is a third state (158/175):");
+  console.log("verify-screen — 'not probed' is a third state:");
   const addBtnHover = jrRep.interactions.find((i) => i.nodeId === "I20173:137670;72:3440" && i.trigger === "on_hover");
-  ok("[lt3-int] the real `ok:null, \"not measured — … not probed\"` row is not-probed, not fail", addBtnHover && addBtnHover.result === "not-probed");
-  ok("[lt3-int] not-probed rows do not count toward 'designed interaction(s) failed'",
+  ok("[interaction] the real `ok:null, \"not measured — … not probed\"` row is not-probed, not fail", addBtnHover && addBtnHover.result === "not-probed");
+  ok("[interaction] not-probed rows do not count toward 'designed interaction(s) failed'",
     () => jrRep.coverage.interactionsFailed === jrRep.interactions.filter((i) => i.result === "fail").length && !jrRep.interactions.some((i) => i.result === "fail" && /not probed|not measured/i.test(i.detail || "")));
-  // finding 175: the two genuinely unimplemented interactions must STILL fail.
-  ok("[lt3-int] the two genuinely unimplemented interactions still FAIL (import overlay; row → Jet Role Details)",
+  // the two genuinely unimplemented interactions must STILL fail.
+  ok("[interaction] the two genuinely unimplemented interactions still FAIL (import overlay; row → Jet Role Details)",
     () => jrRep.interactions.some((i) => i.nodeId === "I20173:137670;2006:22479" && i.result === "fail") &&
     ["20173:142081", "20173:142086", "20173:142091"].every((id) => jrRep.interactions.some((i) => i.nodeId === id && i.result === "fail")) && jrRep.verdict === "fail");
-  ok("[lt3-int] ok:true with no selector is not a pass (finding 187's evidence rule)",
+  ok("[interaction] ok:true with no selector is not a pass (the evidence rule)",
     () => { const gp0 = must(gpRep.interactions[0], "gpRep.interactions[0]"); return gp0.nodeId === "18580:60879" && gp0.result === "not-probed" && /without evidence/.test(must(gp0.detail, "gpRep.interactions[0].detail")); });
-  ok("[lt3-int] ok:true naming the selector it drove, a match count of 1, an outcome and no navigation is a pass (D24)",
+  ok("[interaction] ok:true naming the selector it drove, a match count of 1, an outcome and no navigation is a pass",
     () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, detail: "dialog open=1", outcome: "dialog-opened", navEvents: 0 }] }); const r0 = must(r.interactions[0], "r.interactions[0]"); return r0.result === "pass" && r0.selector && r.coverage.interactionsPassed === 1; })());
-  ok("[lt3-int] a selector that matched 0 elements is not a pass",
+  ok("[interaction] a selector that matched 0 elements is not a pass",
     () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="1359:21364"]', selectorCount: 0 }] }); return must(r.interactions[0], "r.interactions[0]").result === "not-probed"; })());
 
-  console.log("verify-screen — livetest-3: none of the eight false-positive families is a high delta (128/161/194):");
+  console.log("verify-screen — none of the eight false-positive families is a high delta:");
   // Before: 4 of 4 highs on the real GP probe were wrong, and 2 of 2 on JR.
-  ok("[lt3-fp] the real Guided Policies probe output now yields 0 high deltas (was 4)", () => gpRep.summary.high === 0);
-  ok("[lt3-fp] the real Jet Roles probe output now yields 0 high deltas (was 2)", () => jrRep.summary.high === 0);
+  ok("[fp] the real Guided Policies probe output now yields 0 high deltas (was 4)", () => gpRep.summary.high === 0);
+  ok("[fp] the real Jet Roles probe output now yields 0 high deltas (was 2)", () => jrRep.summary.high === 0);
   // The same probe fed the REAL DOM evidence from the independent Playwright pass.
   // GuidedPolicies.dom.json — the independent Playwright pass's evidence (only the fields read here).
   interface DomBox { tag: string; width: number; height: number; x: number; y: number; backgroundColor: string; color: string; radius: number[]; padding: number[]; svgFill?: string }
@@ -491,85 +490,85 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   Object.assign(stylesOf("18580:60861"), { tag: chk("18580:60861", "th[").tag });
   const domRep = compare(gpExp, gpDom);
   const on = (id: string, re: RegExp) => domRep.deltas.filter((d) => d.nodeId === id && re.test(d.field));
-  ok("[lt3-fp] 1 drawn-hovered row: no delta when measured hovered (#46464f)", () => on("18580:60874", /background/).length === 0 && gpRep.fieldsNotMeasured.some((f) => f.nodeId === "18580:60874" && /hover/.test(f.why)));
-  ok("[lt3-fp] 2 inline SVG: compared as `fill`, never against background-color", on("20024:144120", /background|fill/).length === 0 && gpExp.nodes.find((n) => n.nodeId === "20024:144120")?.fill === "#d4d4d4ff");
-  ok("[lt3-fp] 3 ::placeholder: text and colour compared as placeholder, not as textContent/color",
+  ok("[fp] 1 drawn-hovered row: no delta when measured hovered (#46464f)", () => on("18580:60874", /background/).length === 0 && gpRep.fieldsNotMeasured.some((f) => f.nodeId === "18580:60874" && /hover/.test(f.why)));
+  ok("[fp] 2 inline SVG: compared as `fill`, never against background-color", on("20024:144120", /background|fill/).length === 0 && gpExp.nodes.find((n) => n.nodeId === "20024:144120")?.fill === "#d4d4d4ff");
+  ok("[fp] 3 ::placeholder: text and colour compared as placeholder, not as textContent/color",
     () => on("I20024:134073;885:2724;880:3726", /text|colou?r/).length === 0 &&
     !domRep.fieldsNotMeasured.some((f) => f.nodeId === "I20024:134073;885:2724;880:3726" && /placeholder/.test(f.field)) &&
     !domRep.unverifiable.some((f) => f.nodeId === "I20024:134073;885:2724;880:3726") &&
     !gpExp.nodes.find((n) => n.nodeId === "I20024:134073;885:2724;880:3726")?.color);
-  ok("[lt3-fp] 4 hover-only control at rest: 0×0 is 'measure it hovered', not a size delta; hovered it matches",
+  ok("[fp] 4 hover-only control at rest: 0×0 is 'measure it hovered', not a size delta; hovered it matches",
     () => gpRep.deltas.filter((d) => d.nodeId === "18580:60880").length === 0 && on("18580:60880", /./).length === 0);
-  ok("[lt3-fp] 5 auto-layout slack (gap 200 / 146 / 160) is excluded by method, with the reason",
+  ok("[fp] 5 auto-layout slack (gap 200 / 146 / 160) is excluded by method, with the reason",
     () => ["18580:60762", "18580:60859", "18580:60863"].every((id) => gpExp.notComparable.some((n) => n.nodeId === id && n.field === "gap")) && on("18580:60762", /gap/).length === 0);
-  ok("[lt3-fp] 6 table border-spacing: the rendered row gap (8) is compared, not CSS gap (4)", () => on("18580:60858", /gap/).length === 0);
-  ok("[lt3-fp] 7 radius 500 on a 36px box vs rounded-full (33554400): both are circles — no delta", () => ["18580:60760", "18580:60767", "18580:60774"].every((id) => on(id, /radius/).length === 0));
-  ok("[lt3-fp] 8 TEXT node id on its <th>: the th's box is not graded as the text's", () => on("18580:60861", /width|height/).length === 0 && gpRep.deltas.filter((d) => d.nodeId === "18580:60861").length === 0);
-  ok("[lt3-fp] with the real DOM evidence, still no high delta anywhere", () => domRep.summary.high === 0);
-  // True positives that must survive (171/183/193) — leniency is not the fix.
-  ok("[lt3-tp] 171: the Jet Roles filter button's Rows Spacing gap 8 → 12 and width 110 → 115.83 are still reported",
+  ok("[fp] 6 table border-spacing: the rendered row gap (8) is compared, not CSS gap (4)", () => on("18580:60858", /gap/).length === 0);
+  ok("[fp] 7 radius 500 on a 36px box vs rounded-full (33554400): both are circles — no delta", () => ["18580:60760", "18580:60767", "18580:60774"].every((id) => on(id, /radius/).length === 0));
+  ok("[fp] 8 TEXT node id on its <th>: the th's box is not graded as the text's", () => on("18580:60861", /width|height/).length === 0 && gpRep.deltas.filter((d) => d.nodeId === "18580:60861").length === 0);
+  ok("[fp] with the real DOM evidence, still no high delta anywhere", () => domRep.summary.high === 0);
+  // True positives that must survive — leniency is not the fix.
+  ok("[tolerance] the Jet Roles filter button's Rows Spacing gap 8 → 12 and width 110 → 115.83 are still reported",
     () => jrRep.deltas.some((d) => d.nodeId === "I20173:142047;885:2723" && d.field === "gap" && d.expected === 8 && d.actual === 12) &&
     jrRep.deltas.some((d) => d.nodeId === "I20173:142047;885:2723" && d.field === "width" && d.actual === 115.83));
-  ok("[lt3-tp] 193: 111.83×38 against 110×36 is reported now (size tolerance 1, was an inclusive 2)",
+  ok("[tolerance] 111.83×38 against 110×36 is reported now (size tolerance 1, was an inclusive 2)",
     () => gpRep.deltas.some((d) => d.nodeId === "I20024:134073;885:2723" && d.field === "height" && d.expected === 36 && d.actual === 38) &&
     gpRep.deltas.some((d) => d.nodeId === "I20024:134073;885:2723" && d.field === "width" && d.actual === 111.83));
-  ok("[lt3-tp] 193: the content column's extra 24px bottom padding is reported (padding was never read from layout.padding)",
+  ok("[tolerance] the content column's extra 24px bottom padding is reported (padding was never read from layout.padding)",
     () => gpRep.deltas.some((d) => d.nodeId === "18580:60747" && d.field === "padding"));
-  // P6 verify-only pins (findings 171/174/172/168 — no plugin change beyond audit.js's 172 finding).
-  ok("[P6-174] every sidebar nav item (I10970:111588;1910:23337) is still reported 220 → 224",
+  // verify-only pins (no plugin change beyond audit.js).
+  ok("every sidebar nav item (I10970:111588;1910:23337) is still reported 220 → 224",
     () => jrRep.deltas.some((d) => d.nodeId === "I10970:111588;1910:23337" && d.field === "width" && d.expected === 220 && d.actual === 224));
-  // DT-13 (field tests): the row half was a false positive — the row's 24px child is hidden, and its
+  // the row half was a false positive — the row's 24px child is hidden, and its
   // visible content (16+16+16) is exactly the declared 48. Only the header's contradiction is real.
-  ok("[P6-172/DT-13] the table header's contradiction (box.h vs padding+children) is reported by audit.js's self-inconsistent-geometry; the row (hidden 24px child) is not",
+  ok("the table header's contradiction (box.h vs padding+children) is reported by audit.js's self-inconsistent-geometry; the row (hidden 24px child) is not",
     () => {
       const ares = audit([{ doc: jrDoc, label: "positions___7314_87192" }], { platform: "web" });
       return ares.findings.some((f) => f.code === "self-inconsistent-geometry" && f.nodeId === "20173:142077")
         && !ares.findings.some((f) => f.code === "self-inconsistent-geometry" && f.nodeId === "20173:142081");
     });
 
-  console.log("verify-screen — livetest-3: 'components never built' is gone; tag coverage is named as such (129/159/169/185):");
+  console.log("verify-screen — 'components never built' is gone; tag coverage is named as such:");
   for (const [name, rep] of [["Jet Roles", jrRep], ["Guided Policies", gpRep]] as const) {
-    ok(`[lt3-comp] ${name}: 0 components reported absent (was ${name === "Jet Roles" ? 31 : 52} 'never built'), and no 'never built' reason`,
+    ok(`[components] ${name}: 0 components reported absent (was ${name === "Jet Roles" ? 31 : 52} 'never built'), and no 'never built' reason`,
       rep.summary.componentsAbsent === 0 && rep.missingComponents === undefined && !rep.why.some((w) => /never built/.test(w)));
-    ok(`[lt3-comp] ${name}: the metric is named tag coverage, not presence, and counts visible sets only`,
+    ok(`[components] ${name}: the metric is named tag coverage, not presence, and counts visible sets only`,
       () => /tag coverage, not presence/.test(rep.headline) && rep.untaggedInstanceSets.every((s) => s.nodeIds.every((id) => !(name === "Jet Roles" ? jrHidden : gpHidden).has(id))));
   }
   {
-    // A shared AppShell tagged with the OTHER frame's instance ids (finding 185): the real Jet Roles
+    // A shared AppShell tagged with the OTHER frame's instance ids: the real Jet Roles
     // measurement of the sidebar item, fed to Guided Policies.
     const jrItem = jrMeasured.nodes?.find((n) => n.nodeId === "I10970:111588;1910:23337");
     const m = clone(gpMeasured); m.nodes?.push(clone(must(jrItem, "jrItem (I10970:111588;1910:23337)")));
     const r = compare(gpExp, m);
-    ok("[lt3-comp] one implementation, two frames: I10970:111588;1910:23337 counts for I10970:109860;1910:23337 via the component path",
+    ok("[components] one implementation, two frames: I10970:111588;1910:23337 counts for I10970:109860;1910:23337 via the component path",
       () => r.coverage.nodesMatchedByComponentPath >= 1 && r.coverage.instanceSetsWithEvidence > gpRep.coverage.instanceSetsWithEvidence);
   }
 
   {
-    // finding 170: the search field's id spread onto the inner <input> (330x20) instead of the <label>
+    // the search field's id spread onto the inner <input> (330x20) instead of the <label>
     // that draws the 380x36 field. The real input measurement, attached to the Text Input frame's id.
     const m = clone(jrMeasured);
     const input = m.nodes?.find((n) => n.nodeId === "I20173:142047;885:2724");
     m.nodes?.push(Object.assign(clone(must(input, "input (I20173:142047;885:2724)")), { nodeId: "I20173:142047;885:2724;880:3724", tag: "input" }));
     const r = compare(jrExp, m);
-    ok("[lt3-leaf] 170: a FRAME's id on a leaf <input> is not graded as the frame (no size/fill/radius/padding deltas), and says why", () =>
+    ok("[leaf] a FRAME's id on a leaf <input> is not graded as the frame (no size/fill/radius/padding deltas), and says why", () =>
       r.deltas.filter((d) => d.nodeId === "I20173:142047;885:2724;880:3724").length === 0 &&
       r.fieldsNotMeasured.some((f) => f.nodeId === "I20173:142047;885:2724;880:3724" && /leaf <input>/.test(f.why)));
   }
 
-  console.log("verify-screen — livetest-3: text and pseudo-elements (163/177):");
+  console.log("verify-screen — text and pseudo-elements:");
   {
     const m = clone(jrMeasured);
     const th = must(m.nodes?.find((n) => n.nodeId === "20173:142078"), "m.nodes '20173:142078'");
     th.text = "Jet Role▲";
     const d = compare(jrExp, m).deltas.find((x) => x.nodeId === "20173:142078" && x.field === "text");
-    ok("[lt3-text] 'Jet Role▲' (a th with a sort caret) is compared — low, naming the extra glyph, not a copy change", () => !!d && d.severity === "low" && /▲/.test(must(d.note, "d.note")));
+    ok("[text] 'Jet Role▲' (a th with a sort caret) is compared — low, naming the extra glyph, not a copy change", () => !!d && d.severity === "low" && /▲/.test(must(d.note, "d.note")));
     th.text = null;
-    ok("[lt3-text] text: null from a probe that skips elements with children is a named gap", () => compare(jrExp, m).fieldsNotMeasured.some((f) => f.nodeId === "20173:142078" && /text: null/.test(f.why)));
+    ok("[text] text: null from a probe that skips elements with children is a named gap", () => compare(jrExp, m).fieldsNotMeasured.some((f) => f.nodeId === "20173:142078" && /text: null/.test(f.why)));
   }
-  ok("[lt3-limits] ::placeholder colour with no probe value is 'unverifiable', listed, not a delta", () => gpRep.unverifiable.some((u) => u.nodeId === "I20024:134073;885:2724;880:3726"));
-  ok("[lt3-limits] the report states the pseudo-element hole and the rotate/transform trap", () => gpRep.limits.some((l) => /::before\/::after/.test(l)) && gpRep.limits.some((l) => /rotate/.test(l)));
+  ok("[limits] ::placeholder colour with no probe value is 'unverifiable', listed, not a delta", () => gpRep.unverifiable.some((u) => u.nodeId === "I20024:134073;885:2724;880:3726"));
+  ok("[limits] the report states the pseudo-element hole and the rotate/transform trap", () => gpRep.limits.some((l) => /::before\/::after/.test(l)) && gpRep.limits.some((l) => /rotate/.test(l)));
 
-  console.log("verify-screen — livetest-3: evidence is tied to its inputs (153/166/181/190), CLI:");
+  console.log("verify-screen — evidence is tied to its inputs, CLI:");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "p2a-verify-"));
   const script = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const run = (...a: string[]) => spawnSync(process.execPath, [script, ...a], { encoding: "utf8", cwd });
@@ -578,30 +577,30 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const expFile = path.join(cwd, "design/verify/GuidedPolicies.expected.json");
   const bytes1 = fs.readFileSync(expFile);
   const r2 = run("--expect", src, "--out", "design/verify/GuidedPolicies");
-  ok("[lt3-cli] --expect prints what it skipped as hidden (45 instances, 11 interactions)", () => /skipped 23 hidden layer\(s\) \(\d+ spec\(s\), 45 instance\(s\), 11 interaction\(s\)\)/.test(r1.stderr));
-  ok("[lt3-cli] a second identical --expect is byte-identical and says 'unchanged'", () => r2.status === 0 && Buffer.compare(bytes1, fs.readFileSync(expFile)) === 0 && /byte-identical to the expectation on disk \(same export inputs.*says nothing about the build/.test(r2.stderr));
+  ok("[cli] --expect prints what it skipped as hidden (45 instances, 11 interactions)", () => /skipped 23 hidden layer\(s\) \(\d+ spec\(s\), 45 instance\(s\), 11 interaction\(s\)\)/.test(r1.stderr));
+  ok("[cli] a second identical --expect is byte-identical and says 'unchanged'", () => r2.status === 0 && Buffer.compare(bytes1, fs.readFileSync(expFile)) === 0 && /byte-identical to the expectation on disk \(same export inputs.*says nothing about the build/.test(r2.stderr));
   fs.writeFileSync(path.join(cwd, "design/verify/GuidedPolicies.measured.json"), JSON.stringify(Object.assign(clone(gpMeasured), { expectationSha256: "0".repeat(64) })));
   const c1 = run("--compare", expFile, "design/verify/GuidedPolicies.measured.json");
   // The CLI always runs the on-disk artifact check, so its report's artifacts are ArtifactCheck rows.
   const rep1 = readFixture(path.join(cwd, "design/verify/GuidedPolicies.report.json"), isVerifyReport);
-  ok("[lt3-cli] the report records the sha256 of the expectation it was computed on", () => rep1.inputs?.expectationSha256 === crypto.createHash("sha256").update(bytes1).digest("hex"));
-  ok("[lt3-cli] a measurement taken against a different expectation is called stale", () => (rep1.why || []).some((w) => /DIFFERENT expectation/.test(w)));
+  ok("[cli] the report records the sha256 of the expectation it was computed on", () => rep1.inputs?.expectationSha256 === crypto.createHash("sha256").update(bytes1).digest("hex"));
+  ok("[cli] a measurement taken against a different expectation is called stale", () => (rep1.why || []).some((w) => /DIFFERENT expectation/.test(w)));
   // The CLI always runs the on-disk artifact check, so every artifact row is an ArtifactCheck.
-  ok("[lt3-cli] artifacts that do not exist on disk are flagged: no screenshot, no pass (166/190)", () => (rep1.why || []).some((w) => /no screenshot/.test(w)) && (rep1.artifacts || []).every((a) => typeof a === "object" && a.exists === false));
-  ok("[lt3-cli] the stdout headline is the coverage line", () => c1.status === 1 && /^INCOMPLETE — .*nodes measured \d+\/\d+/m.test(c1.stderr));
+  ok("[cli] artifacts that do not exist on disk are flagged: no screenshot, no pass", () => (rep1.why || []).some((w) => /no screenshot/.test(w)) && (rep1.artifacts || []).every((a) => typeof a === "object" && a.exists === false));
+  ok("[cli] the stdout headline is the coverage line", () => c1.status === 1 && /^INCOMPLETE — .*nodes measured \d+\/\d+/m.test(c1.stderr));
   const edited = clone(gpDoc); must(edited.nodes[0], "edited.nodes[0]").children = (must(edited.nodes[0], "edited.nodes[0]").children || []).slice(0, 2);
   fs.writeFileSync(path.join(cwd, "edited.json"), JSON.stringify(edited));
   const r3 = run("--expect", "edited.json", "--out", "design/verify/GuidedPolicies");
-  ok("[lt3-cli] re-running --expect over a different export says REPLACED and names the now-stale report/measurement",
+  ok("[cli] re-running --expect over a different export says REPLACED and names the now-stale report/measurement",
     () => /REPLACED an existing/.test(r3.stderr) && /GuidedPolicies\.report\.json/.test(r3.stderr) && /PREVIOUS expectation/.test(r3.stderr));
-  ok("[DT-45] …it says the EXPORT changed and keeps the previous bytes as .expected.prev.json", () =>
+  ok("…it says the EXPORT changed and keeps the previous bytes as .expected.prev.json", () =>
     /: the export changed \(content sha [0-9a-f]{12}… → [0-9a-f]{12}…\)/.test(r3.stderr) && Buffer.compare(bytes1, fs.readFileSync(path.join(cwd, "design/verify/GuidedPolicies.expected.prev.json"))) === 0);
   fs.writeFileSync(path.join(cwd, "ints.json"), JSON.stringify([{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, outcome: "dialog-opened", navEvents: 0 }]));
   run("--expect", src, "--out", "design/verify/GuidedPolicies");
   run("--compare", expFile, "design/verify/GuidedPolicies.measured.json", "--interactions", "ints.json");
-  ok("[lt3-cli] --interactions <file> is the input channel for interaction evidence (127)",
+  ok("[cli] --interactions <file> is the input channel for interaction evidence",
     () => readFixture(path.join(cwd, "design/verify/GuidedPolicies.report.json"), isVerifyReport).coverage?.interactionsPassed === 1);
-  ok("[lt3-cli] --help says there is no browser in --compare", () => /NO browser/.test(run("--help").stdout));
+  ok("[cli] --help says there is no browser in --compare", () => /NO browser/.test(run("--help").stdout));
 })();
 
 
@@ -628,7 +627,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     (() => { const r = run("--expect", put("s.json", { nodes: [{ id: "1:1", type: "FRAME", name: "S" }] }), "--out", "--force"); return r.status === 2 && /verify-screen: --out needs a value/.test(r.stderr); })());
 })();
 
-// ---------- DT-45 (D102, D112): --expect says what state the old artefacts are in; a replaced expectation is kept ----------
+// ---------- --expect says what state the old artefacts are in; a replaced expectation is kept ----------
 (() => {
   const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-dt45-"));
@@ -643,55 +642,55 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     fs.writeFileSync(path.join(vdir, base + ".status.json"), JSON.stringify({ schema: "designtwin/verify-status@2", screen: base, runId: "r-7f3a", rev: 4, phase, detail: "", at: new Date().toISOString(), by: "verify-probe", ...extra }));
   const r0 = run("--expect", screenFile);
   const bytes0 = fs.readFileSync(target);
-  okOuter("[DT-45] first --expect: no .prev, no status note", r0.status === 0 && !fs.existsSync(prevFile) && !/note {2}the last run/.test(r0.stderr));
+  okOuter("first --expect: no .prev, no status note", r0.status === 0 && !fs.existsSync(prevFile) && !/note {2}the last run/.test(r0.stderr));
   // the last run failed: its measured/report files are partial
   statusAt("Orders__5_6", "failed", { detail: "the probe could not reach the page" });
   const r1 = run("--expect", screenFile);
-  okOuter("[DT-45] a failed last run → the note names the run, the phase and its detail",
+  okOuter("a failed last run → the note names the run, the phase and its detail",
     /note {2}the last run of Orders__5_6 \(run r-7f3a\) ended at phase failed \(the probe could not reach the page\) — its measured\/report files are partial/.test(r1.stderr));
-  okOuter("[DT-45] identical bytes → 'byte-identical … says nothing about the build', and no .prev written",
+  okOuter("identical bytes → 'byte-identical … says nothing about the build', and no .prev written",
     /byte-identical to the expectation on disk \(same export inputs/.test(r1.stderr) && /re-measure to check the code/.test(r1.stderr) && !fs.existsSync(prevFile));
   statusAt("Orders__5_6", "measuring", { at: new Date(Date.now() - 3_600_000).toISOString() });
-  okOuter("[DT-45] a non-terminal phase older than the stall (300 s) → 'never finished'", /the last run of Orders__5_6 \(run r-7f3a\) never finished — still at phase measuring/.test(run("--expect", screenFile).stderr));
+  okOuter("a non-terminal phase older than the stall (300 s) → 'never finished'", /the last run of Orders__5_6 \(run r-7f3a\) never finished — still at phase measuring/.test(run("--expect", screenFile).stderr));
   fs.writeFileSync(path.join(vdir, "Orders__5_6.status.json"), JSON.stringify({ phase: "done" }));
-  okOuter("[DT-45] a v1 (hand-written) status → 'hand-written status … not checked'", /Orders__5_6\.status\.json is a hand-written status \(no run id\) — not checked/.test(run("--expect", screenFile).stderr));
+  okOuter("a v1 (hand-written) status → 'hand-written status … not checked'", /Orders__5_6\.status\.json is a hand-written status \(no run id\) — not checked/.test(run("--expect", screenFile).stderr));
   statusAt("Orders__5_6", "done");
-  okOuter("[DT-45] a done run → no status note", !/note {2}(the last run|a run of)/.test(run("--expect", screenFile).stderr));
+  okOuter("a done run → no status note", !/note {2}(the last run|a run of)/.test(run("--expect", screenFile).stderr));
   // same export content, different bytes → the generator changed; the old bytes are kept, one generation
   const edited: unknown = JSON.parse(bytes0.toString("utf8"));
   if (isJsonObject(edited)) edited.note = "written by an older verify-screen";
   const olderBytes = JSON.stringify(edited, null, 2) + "\n";
   fs.writeFileSync(target, olderBytes);
   const r2 = run("--expect", screenFile);
-  okOuter("[DT-45] same export content → REPLACED … 'the expectation generator changed (verify-screen upgrade)'",
+  okOuter("same export content → REPLACED … 'the expectation generator changed (verify-screen upgrade)'",
     r2.status === 0 && /REPLACED an existing [^\n]*: same export content — the expectation generator changed \(verify-screen upgrade\); the previous one is kept as [^\n]*Orders__5_6\.expected\.prev\.json/.test(r2.stderr));
-  okOuter("[DT-45] .expected.prev.json holds exactly the replaced bytes", fs.readFileSync(prevFile, "utf8") === olderBytes);
+  okOuter(".expected.prev.json holds exactly the replaced bytes", fs.readFileSync(prevFile, "utf8") === olderBytes);
   fs.writeFileSync(screenFile, JSON.stringify(screen("#f0f0f0")));
   const r3 = run("--expect", screenFile);
-  okOuter("[DT-45] another export → 'the export changed (content sha a… → b…)'; .prev overwritten (one generation) with the last bytes",
+  okOuter("another export → 'the export changed (content sha a… → b…)'; .prev overwritten (one generation) with the last bytes",
     /: the export changed \(content sha [0-9a-f]{12}… → [0-9a-f]{12}…\)/.test(r3.stderr) && Buffer.compare(fs.readFileSync(prevFile), bytes0) === 0);
-  // L6 (fix pass 1): the replaced expectation recorded no export hash (written before exportContentSha256) — say so; never
+  // the replaced expectation recorded no export hash (written before exportContentSha256) — say so; never
   // claim "the export changed"
   const noSha: unknown = JSON.parse(fs.readFileSync(target, "utf8"));
   if (isJsonObject(noSha)) { delete noSha.exportContentSha256; noSha.note = "written before the export hash"; }
   fs.writeFileSync(target, JSON.stringify(noSha, null, 2) + "\n");
   const r4 = run("--expect", screenFile);
-  okOuter("[L6] the replaced expectation recorded no export hash → 'the expectation recorded no export hash … cannot tell whether the export or the expectation generator changed', not 'the export changed'",
+  okOuter("the replaced expectation recorded no export hash → 'the expectation recorded no export hash … cannot tell whether the export or the expectation generator changed', not 'the export changed'",
     /REPLACED an existing [^\n]*: the expectation recorded no export hash \(exportContentSha256\) — cannot tell whether the export or the expectation generator changed; the previous one is kept/.test(r4.stderr) && !/the export changed/.test(r4.stderr));
   // .prev is never taken for a live expectation
   fs.rmSync(target);
-  okOuter("[DT-45] findExistingExpectedFor never matches a .expected.prev.json", findExistingExpectedFor(vdir, "5:6", path.join(vdir, "Other.expected.json")) === null);
+  okOuter("findExistingExpectedFor never matches a .expected.prev.json", findExistingExpectedFor(vdir, "5:6", path.join(vdir, "Other.expected.json")) === null);
   const rOther = run("--expect", screenFile, "--out", path.join(vdir, "Other"));
-  okOuter("[DT-45] …so --expect under another name is not refused because of a .prev", rOther.status === 0 && fs.existsSync(path.join(vdir, "Other.expected.json")));
+  okOuter("…so --expect under another name is not refused because of a .prev", rOther.status === 0 && fs.existsSync(path.join(vdir, "Other.expected.json")));
   // the dup refusal names the OLD set's last run
   statusAt("Other", "blocked", { detail: "no dev server" });
   const rDup = run("--expect", screenFile);
-  okOuter("[DT-45] the nickname refusal names the old set's status (blocked, detail)",
+  okOuter("the nickname refusal names the old set's status (blocked, detail)",
     rDup.status === 1 && /already has an expectation/.test(rDup.stderr) && /the last run of Other \(run r-7f3a\) ended at phase blocked \(no dev server\)/.test(rDup.stderr));
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
-// ---------- F-100 (D115): --compare --record-plan — the plan is the one compare chose; none / several → exit 2 first ----------
+// ---------- --compare --record-plan — the plan is the one compare chose; none / several → exit 2 first ----------
 (() => {
   const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-record-"));
@@ -701,32 +700,32 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const meas = put("design/verify/Orders__5_6.measured.json", measured([{ nodeId: "2:1", styles: { fontSize: 14, fontFamily: "Inter", text: "Orders" } }]));
   const report = path.join(cwd, "design/verify/Orders__5_6.report.json");
   const none = run("--compare", exp, meas, "--record-plan");
-  okOuter("[F-100] --record-plan with no plan for the frame → exit 2, says so, NO report written",
+  okOuter("--record-plan with no plan for the frame → exit 2, says so, NO report written",
     none.status === 2 && /--record-plan: no plan in design\/plan\/ describes this frame/.test(none.stderr) && !fs.existsSync(report));
   put("src/Orders.tsx", "export {}\n");
   const planA = { nodeId: "1:1", files: ["src/Orders.tsx"], verification: { coverage: "hand-written" } };
   put("design/plan/Orders__1_1.json", planA);
   put("design/plan/Orders.json", { nodeId: "1:1", files: ["src/Orders.tsx"] });
   const amb = run("--compare", exp, meas, "--record-plan");
-  okOuter("[F-100] two plans describe the frame, no --plan → exit 2 naming both, NO report written",
+  okOuter("two plans describe the frame, no --plan → exit 2 naming both, NO report written",
     amb.status === 2 && /--record-plan: 2 plans in design\/plan\/ describe this frame/.test(amb.stderr) && /pass --plan/.test(amb.stderr) && !fs.existsSync(report));
-  okOuter("[F-100] --record-plan outside --compare → exit 2", run("--expect", "x.json", "--record-plan").status === 2);
+  okOuter("--record-plan outside --compare → exit 2", run("--expect", "x.json", "--record-plan").status === 2);
   fs.rmSync(path.join(cwd, "design/plan/Orders.json"));
   const rec = run("--compare", exp, meas, "--record-plan");
   const rep = fs.existsSync(report) ? readFixture(report, isVerifyReport) : null;
-  // slice B's recordPlan: until it lands the step-0 stub throws — the report is still written and the error is named
-  okOuter("[F-100] the one plan: report written, then recordPlan is called (recorded, or the stub's error with exit 1)",
+  // recordPlan: until it lands the step-0 stub throws — the report is still written and the error is named
+  okOuter("the one plan: report written, then recordPlan is called (recorded, or the stub's error with exit 1)",
     !!rep && (/recorded design\/verify\/Orders__5_6\.report\.json in design\/plan\/Orders__1_1\.json/.test(rec.stderr)
       || (rec.status === 1 && /error {2}--record-plan: .* — design\/verify\/Orders__5_6\.report\.json is written; design\/plan\/Orders__1_1\.json was not updated/.test(rec.stderr))));
-  okOuter("[FU-shared-shell] the report hashes planCodeFiles(plan) (files[] + mapped modules)",
+  okOuter("[shared-shell] the report hashes planCodeFiles(plan) (files[] + mapped modules)",
     !!rep && JSON.stringify(Object.keys(rep.inputs?.code?.files ?? {})) === JSON.stringify(planCodeFiles(planA)));
-  okOuter("[L12] a plan whose mapModules are all project files → no 'not hashed' input note", !!rep && !(rep.probe?.inputNotes || []).some((n) => /mapModule path\(s\) not hashed/.test(n)));
-  // L12 (D119 addendum): an alias / package mapModule is named once in the report's input notes (beside the code hashes)
+  okOuter("a plan whose mapModules are all project files → no 'not hashed' input note", !!rep && !(rep.probe?.inputNotes || []).some((n) => /mapModule path\(s\) not hashed/.test(n)));
+  // an alias / package mapModule is named once in the report's input notes (beside the code hashes)
   put("design/plan/Orders__1_1.json", { ...planA, anchors: { "1:2": { mapModule: "@/components/Shell" } }, components: [{ name: "Badge", mapModule: "@acme/ui" }] });
   run("--compare", exp, meas);
   const rep2 = fs.existsSync(report) ? readFixture(report, isVerifyReport) : null;
   const hits = (rep2?.probe?.inputNotes || []).filter((n) => /^design\/plan\/Orders__1_1\.json: mapModule path\(s\) not hashed with this plan's code: @\/components\/Shell, @acme\/ui — /.test(n));
-  okOuter(`[L12] an alias/package mapModule → ONE input note in the report naming them (got ${hits.length})`, hits.length === 1);
+  okOuter(`an alias/package mapModule → ONE input note in the report naming them (got ${hits.length})`, hits.length === 1);
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 

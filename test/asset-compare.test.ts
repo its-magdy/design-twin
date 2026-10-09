@@ -1,5 +1,5 @@
 // Offline tests for the bridge's "same SVG" fingerprint (bridge/src/svg-normalize.ts svgFingerprint/sameSvg)
-// and the content index built on it (bridge/src/asset-compare.ts ContentIndex) — DT-18, D61.
+// and the content index built on it (bridge/src/asset-compare.ts ContentIndex).
 // The pairs in test/fixtures/g13/svg/ are real Figma exports, renamed generically:
 //   disc-a/-b     one icon reached through two instances: only the def ids differ (clip0_<node id>)
 //   badge-a/-b    one icon re-exported: values 0.002 apart that straddle a 0.1 rounding boundary
@@ -23,7 +23,7 @@ const t = (name: string, cond: () => boolean): void => {
   ok(name, v);
 };
 
-console.log("svg-normalize.ts — fingerprint on real drift pairs (DT-18):");
+console.log("svg-normalize.ts — fingerprint on real drift pairs:");
 for (const [pair, why] of [["disc", "def ids only"], ["badge", "a 0.1 rounding-boundary straddle"], ["cross", "an integer vs 11.9999"]] as const) {
   const a = read(pair + "-a.svg"), b = read(pair + "-b.svg");
   ok(`[svg-fp] the ${pair} pair (${why}) has different v1 normalised text — why v1 kept them apart`, norm.normalizeSvgText(a) !== norm.normalizeSvgText(b));
@@ -112,30 +112,30 @@ t("[index] a group's hash is stable whichever member it was built from", () => {
   const ha = a.groups()[0]?.hash, hb = b.groups()[0]?.hash;
   return typeof ha === "string" && ha.length === 40 && ha === hb;
 });
-console.log("\nfix 1 — the tolerance at its edge (L-1) and in objectBoundingBox space (M-5):");
+console.log("\nthe tolerance at its edge and in objectBoundingBox space:");
 {
   const op = (o: string): string => `<svg width="16" height="16"><path d="M0 0H16V16H0Z" fill="#000" fill-opacity="${o}"/></svg>`;
-  // pre-fix: 0.5/0.51 and 0.3/0.31 split while 0.11/0.12 merged — the float difference lands on either side of 0.01.
-  t("[L-1] numbers exactly 0.01 apart are within the tolerance, whatever the float rounding (0.5/0.51, 0.3/0.31, 0.11/0.12)",
+  // The float difference of 0.5/0.51, 0.3/0.31 and 0.11/0.12 lands on either side of 0.01; all three must merge.
+  t("numbers exactly 0.01 apart are within the tolerance, whatever the float rounding (0.5/0.51, 0.3/0.31, 0.11/0.12)",
     () => norm.sameSvg(op("0.5"), op("0.51")) && norm.sameSvg(op("0.3"), op("0.31")) && norm.sameSvg(op("0.11"), op("0.12")));
-  t("[L-1] …and 0.011 apart is not", () => !norm.sameSvg(op("0.5"), op("0.511")));
+  t("…and 0.011 apart is not", () => !norm.sameSvg(op("0.5"), op("0.511")));
   const shell = (m: string): string => `<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><rect width="40" height="40" fill="url(#pattern0_1_2)"/><defs><pattern id="pattern0_1_2" patternContentUnits="objectBoundingBox" width="1" height="1"><use xlink:href="#image0_1_2" transform="${m}"/></pattern><image id="image0_1_2" width="512" height="512" xlink:href="data:image/png;base64,iVBORw0KGgo="/></defs></svg>`;
-  // pre-fix: merged — every number of the 4.5x zoom is within 0.01 absolute.
-  t("[M-5] one photo at 1x vs 4.5x zoom (pattern scale 1/512 vs 1/113) is NOT the same SVG",
+  // Every number of the 4.5x zoom is within 0.01 absolute, yet the pair must stay apart.
+  t("one photo at 1x vs 4.5x zoom (pattern scale 1/512 vs 1/113) is NOT the same SVG",
     () => !norm.sameSvg(shell("matrix(0.00195312 0 0 0.00195312 0 0)"), shell("matrix(0.00884956 0 0 0.00884956 -0.006 -0.006)")));
-  t("[M-5] …a 0.1 % re-export drift of that scale still is", () => norm.sameSvg(shell("matrix(0.00195312 0 0 0.00195312 0 0)"), shell("matrix(0.00195507 0 0 0.00195507 0 0)")));
-  t("[M-5] the transform's numbers are compared relatively (`%` in the skeleton, `rel` in the fingerprint)", () => {
+  t("…a 0.1 % re-export drift of that scale still is", () => norm.sameSvg(shell("matrix(0.00195312 0 0 0.00195312 0 0)"), shell("matrix(0.00195507 0 0 0.00195507 0 0)")));
+  t("the transform's numbers are compared relatively (`%` in the skeleton, `rel` in the fingerprint)", () => {
     const f = norm.svgFingerprint(shell("matrix(0.00195312 0 0 0.00195312 0 0)"));
-    // 8 = the <pattern>'s width="1" height="1" (R2-4), then the six matrix numbers.
+    // 8 = the <pattern>'s width="1" height="1", then the six matrix numbers.
     return f.rel.length === 8 && f.rel[0] === 1 && f.rel[1] === 1 && f.rel[2] === 0.00195312 && f.skeleton.includes('transform="matrix(% % % % % %)"') && !f.skeleton.includes("0.00195312");
   });
-  t("[M-5] a big number in a <use> transform keeps the absolute rule (12 vs 12.005 same; 12 vs 12.02 not)",
+  t("a big number in a <use> transform keeps the absolute rule (12 vs 12.005 same; 12 vs 12.02 not)",
     () => norm.sameSvg(shell("translate(12 0)"), shell("translate(12.005 0)")) && !norm.sameSvg(shell("translate(12 0)"), shell("translate(12.02 0)")));
   const chev = (y: string): string => `<svg width="18" height="10"><path d="M0 ${y}L9 9L18 0" stroke="#111"/></svg>`;
-  t("[M-5] near-zero path drift (2.09808e-05 vs -0.000406265 in d=) stays the same SVG", () => norm.sameSvg(chev("2.09808e-05"), chev("-0.000406265")));
-  t("[M-5] a transform on a non-<use>/<image> element keeps the absolute rule",
+  t("near-zero path drift (2.09808e-05 vs -0.000406265 in d=) stays the same SVG", () => norm.sameSvg(chev("2.09808e-05"), chev("-0.000406265")));
+  t("a transform on a non-<use>/<image> element keeps the absolute rule",
     () => norm.sameSvg('<svg><g transform="matrix(0.002 0 0 0.002 0 0)"><path d="M0 0h1"/></g></svg>', '<svg><g transform="matrix(0.009 0 0 0.009 0 0)"><path d="M0 0h1"/></g></svg>'));
-  t("[M-5] the index keeps the two zooms apart: two groups, two hashes", () => {
+  t("the index keeps the two zooms apart: two groups, two hashes", () => {
     const ix = new cmp.ContentIndex();
     ix.add("avatar.svg", shell("matrix(0.00195312 0 0 0.00195312 0 0)"));
     ix.add("avatar-111111.svg", shell("matrix(0.00195507 0 0 0.00195507 0 0)"));
@@ -144,17 +144,17 @@ console.log("\nfix 1 — the tolerance at its edge (L-1) and in objectBoundingBo
     return g.length === 2 && g[0]?.files.join(",") === "avatar.svg,avatar-111111.svg" && g[1]?.files.join(",") === "avatar-222222.svg" && g[0].hash !== g[1].hash
       && ix.find("q.svg", shell("matrix(0.00884956 0 0 0.00884956 -0.006 -0.006)")) === "avatar-222222.svg";
   });
-  // R2-4: a <pattern>'s own x/y/width/height are fractions of the filled box (patternUnits defaults to
+  // a <pattern>'s own x/y/width/height are fractions of the filled box (patternUnits defaults to
   // objectBoundingBox) — a TILE image fill's tile size.
   const tile = (w: string, units = ""): string => `<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><rect width="200" height="200" fill="url(#pattern0_1_2)"/><defs><pattern id="pattern0_1_2"${units} patternContentUnits="objectBoundingBox" width="${w}" height="${w}"><use xlink:href="#image0_1_2" transform="scale(0.000976562)"/></pattern><image id="image0_1_2" width="256" height="256" xlink:href="data:image/png;base64,iVBORw0KGgo="/></defs></svg>`;
-  // pre-fix: merged — 0.05 vs 0.0588 is within 0.01 absolute.
-  t("[R2-4] a tile fill of 0.05 vs 0.0588 (20 vs 17 tiles across) is NOT the same SVG", () => !norm.sameSvg(tile("0.05"), tile("0.0588")));
-  t("[R2-4] …a 0.1 % drift of the tile size still is", () => norm.sameSvg(tile("0.05"), tile("0.05005")));
-  t("[R2-4] the pattern's width/height are `%` in the skeleton", () => norm.svgFingerprint(tile("0.05")).skeleton.includes('width="%" height="%"'));
-  t("[R2-4] with patternUnits=\"userSpaceOnUse\" they are user units: the absolute rule (0.05 vs 0.0588 same)",
+  // 0.05 vs 0.0588 is within 0.01 absolute, yet the pair must stay apart.
+  t("a tile fill of 0.05 vs 0.0588 (20 vs 17 tiles across) is NOT the same SVG", () => !norm.sameSvg(tile("0.05"), tile("0.0588")));
+  t("…a 0.1 % drift of the tile size still is", () => norm.sameSvg(tile("0.05"), tile("0.05005")));
+  t("the pattern's width/height are `%` in the skeleton", () => norm.svgFingerprint(tile("0.05")).skeleton.includes('width="%" height="%"'));
+  t("with patternUnits=\"userSpaceOnUse\" they are user units: the absolute rule (0.05 vs 0.0588 same)",
     () => norm.sameSvg(tile("0.05", ' patternUnits="userSpaceOnUse"'), tile("0.0588", ' patternUnits="userSpaceOnUse"')));
-  // L-7: one raster-shell rule for the pull and the audit.
-  t("[L-7] isRasterShell: an <image> and under 50 paths; none without an <image>, none at 50+ paths",
+  // one raster-shell rule for the pull and the audit.
+  t("isRasterShell: an <image> and under 50 paths; none without an <image>, none at 50+ paths",
     () => norm.isRasterShell(1, 2) && norm.isRasterShell(1, undefined) && !norm.isRasterShell(0, 2) && !norm.isRasterShell(undefined, 2) && !norm.isRasterShell(1, 50) && !norm.isRasterShell(1, 2000));
 }
 t("[index] the v1 compare (design-diff's) is unchanged: the disc pair is still different under sameAsset",

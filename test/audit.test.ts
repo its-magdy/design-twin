@@ -158,7 +158,7 @@ check("CLI rejects an unknown --platform with exit 2", badExit === 2);
   })());
 }
 
-// ---------- the platform is a GUESS unless it was given (live run #10) -------------------------
+// ---------- the platform is a GUESS unless it was given -------------------------
 // Touch-target minimums, shadow spread, blur and blend-mode support are all platform-dependent, so
 // a wrong guess silently mis-audits the whole screen. The guess still happens — refusing to run is
 // worse — but it must be visible, and it used to surface only as one designer question among 13.
@@ -178,7 +178,7 @@ check("CLI rejects an unknown --platform with exit 2", badExit === 2);
   check("[platform-assumed] a given platform gets no banner", !/ASSUMED/.test(toMarkdown(given)));
 })();
 
-// ---------- "not found" is scoped to what was audited (live run #9) ---------------------------
+// ---------- "not found" is scoped to what was audited ---------------------------
 (() => {
   const one = audit([{ doc: screen, label: "login" }]);
   check("[states-scope] a single-frame audit says so in the result, not only in prose",
@@ -199,8 +199,8 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   return !/snap to the nearest/.test(msgs) && !/map raw values to the nearest/.test(msgs);
 })());
 
-// ---------- CLI: --out defaults to the INPUT file's own basename (P3 #72 #73) ------------------
-// Live-run findings 72/73: the SAME node audited twice under two names the skill invented on the
+// ---------- CLI: --out defaults to the INPUT file's own basename ------------------
+// The SAME node audited twice under two names the skill invented on the
 // spot (`positions.md` vs `jet-roles.md`, `guided-policies.md` vs `Studio_Configurations.md`) wrote
 // byte-identical reports under two filenames in design/audit/. The export file is already named
 // `<LayerName>__<node-id>.json` (write-out.js/pages-layout.js) — the one artefact-naming rule — so
@@ -225,7 +225,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   const dir = fs.readdirSync(path.join(cwd, "design", "audit"));
   check("[cli-out] re-auditing the SAME screen never produces a second name for it",
     dir.filter((f) => f.startsWith("positions")).length === 2); // .md + .json, no duplicate under another name
-  check("[cli-out] an explicit --out under a NEW name for the SAME already-audited node is refused (finding 315's sibling), naming the existing file", (() => {
+  check("[cli-out] an explicit --out under a NEW name for the SAME already-audited node is refused (a sibling of the existing refusal), naming the existing file", (() => {
     const r2 = spawnSync(process.execPath, [scriptPath, screenFile, "--out", path.join(cwd, "design", "audit", "custom-name")], { encoding: "utf8", cwd });
     return r2.status === 1 && /already has an audit report/.test(r2.stderr) && /positions___7314_87192/.test(r2.stderr) &&
       !fs.existsSync(path.join(cwd, "design", "audit", "custom-name.md"));
@@ -236,8 +236,8 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   })());
 })();
 
-// ---------- livetest-3 finding 74: no finding may cite a layer the designer switched off ----------
-// Real exports (test/fixtures/livetest3/verify/, built from the livetest-3 run and proven to audit
+// ---------- no finding may cite a layer the designer switched off ----------
+// Real exports (test/fixtures/livetest3/verify/, built from a field run and proven to audit
 // byte-identically to the full files). Before: 44 of Jet Roles' 119 findings (and 40 of Guided
 // Policies' 105) cited hidden nodes, including I7314:87216;6:87 "_selected icon" with the instruction
 // "the build uses these values EXACTLY".
@@ -250,26 +250,26 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     (function w(n: { id?: string; hidden?: boolean; children?: IrNode[] }, h: boolean) { h = h || !!n.hidden; if (h && n.id) hidden.add(n.id); for (const c of n.children || []) w(c, h); })({ children: doc.nodes }, false);
     const res = audit([{ doc, label: file.replace(/\.json$/, "") }], { platform: "web" });
     const cited = res.findings.filter((f) => f.nodeId && hidden.has(f.nodeId));
-    check(`[74] ${label}: no finding cites a hidden node (${cited.length} do)`, cited.length === 0);
-    check(`[74] ${label}: the skipped layers are counted in the result (${res.hiddenLayers && res.hiddenLayers.nodesSkipped} of ${hidden.size})`, !!res.hiddenLayers && res.hiddenLayers.nodesSkipped === hidden.size);
-    check(`[74] ${label}: the markdown says hidden layers were skipped`, /hidden layers \(switched off in Figma\) were skipped/.test(toMarkdown(res)));
+    check(`${label}: no finding cites a hidden node (${cited.length} do)`, cited.length === 0);
+    check(`${label}: the skipped layers are counted in the result (${res.hiddenLayers && res.hiddenLayers.nodesSkipped} of ${hidden.size})`, !!res.hiddenLayers && res.hiddenLayers.nodesSkipped === hidden.size);
+    check(`${label}: the markdown says hidden layers were skipped`, /hidden layers \(switched off in Figma\) were skipped/.test(toMarkdown(res)));
     if (label === "Jet Roles") {
-      check("[74] I7314:87216;6:87 ('_selected icon', hidden) is not cited at all", !res.findings.some((f) => f.nodeId === "I7314:87216;6:87"));
-      check("[74] …while visible off-grid spacing is still reported (the audit did not go quiet)", res.findings.some((f) => f.code === "off-grid-spacing" && !hidden.has(f.nodeId)));
+      check("I7314:87216;6:87 ('_selected icon', hidden) is not cited at all", !res.findings.some((f) => f.nodeId === "I7314:87216;6:87"));
+      check("…while visible off-grid spacing is still reported (the audit did not go quiet)", res.findings.some((f) => f.code === "off-grid-spacing" && !hidden.has(f.nodeId)));
     }
   }
 })();
 
-// ---------- finding 172: self-inconsistent-geometry (round 2: FIXED-overflow / HUG-mismatch only) ----------
+// ---------- self-inconsistent-geometry (FIXED-overflow / HUG-mismatch only) ----------
 // Real Jet Roles table: header 20173:142077 (heightMode absent="fixed", padding [16,32,16,32], tallest
 // child box.h=24, declared box.h=44 — content computes 56, OVERFLOWING a fixed box) and every table row
 // 20173:142081/086/091/.../137 (heightMode:"hug", padding [16,24,16,24], declared box.h=48, content
 // computes 56 — a hug box's declared size must equal its content, in EITHER direction).
-// DT-13 correction (field tests): the rows' 24-high child is a menu instance with `hidden: true`; the
-// visible content is 16+14…16+16 = 48, exactly as declared, so the rows were a false positive and no
-// longer fire. The header stays: its only FLOW child is 24 high (the other four are `absolute`).
+// The rows' 24-high child is a menu instance with `hidden: true`; the
+// visible content is 16+14…16+16 = 48, exactly as declared, so the rows do not fire.
+// The header stays: its only FLOW child is 24 high (the other four are `absolute`).
 //
-// Round-2 correction: the first cut also fired on ordinary auto-layout — a FIXED-height sidebar row
+// Ordinary auto-layout must not fire: a FIXED-height sidebar row
 // (I10970:111588;1910:23337 'Component 2', box.h=40, padding [0,4,0,12]) whose tallest child is a
 // 24-high icon centred in it. Content SHORTER than a fixed box is normal, not a contradiction; the
 // rule must only fire when content OVERFLOWS a fixed/fill box, or a hug box's declared size does not
@@ -281,11 +281,11 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   const res = audit([{ doc, label: "positions___7314_87192" }], { platform: "web" });
   const hits = res.findings.filter((f) => f.code === "self-inconsistent-geometry");
   const rowIds = ["20173:142081", "20173:142086", "20173:142091", "20173:142096", "20173:142102", "20173:142107", "20173:142112", "20173:142117", "20173:142122", "20173:142127", "20173:142132", "20173:142137"];
-  check("[172] table header (20173:142077, fixed, overflow 56>44) fires", hits.some((f) => f.nodeId === "20173:142077"));
-  check("[172/DT-13] no table row fires — their 24px child is hidden, the visible content is the declared 48", rowIds.every((id) => !hits.some((f) => f.nodeId === id)));
-  check("[172] the message names the stated box.h, heightMode and the resulting mismatch", hits.some((f) => f.nodeId === "20173:142077" && /box\.h=44/.test(f.message) && /heightMode:"fixed"/.test(f.message) && /= 56/.test(f.message)));
-  check("[172] round-2: the sidebar's FIXED 40-high row (I10970:111588;1910:23337, 24-high icon centred, content fits) does NOT fire", !hits.some((f) => f.nodeId === "I10970:111588;1910:23337"));
-  check("[172] round-2: its siblings Component 5 / Leisure Health Check (same shape) do NOT fire either", !hits.some((f) => /Component 5|Leisure Health Check/.test(f.nodeName || "")));
+  check("table header (20173:142077, fixed, overflow 56>44) fires", hits.some((f) => f.nodeId === "20173:142077"));
+  check("no table row fires — their 24px child is hidden, the visible content is the declared 48", rowIds.every((id) => !hits.some((f) => f.nodeId === id)));
+  check("the message names the stated box.h, heightMode and the resulting mismatch", hits.some((f) => f.nodeId === "20173:142077" && /box\.h=44/.test(f.message) && /heightMode:"fixed"/.test(f.message) && /= 56/.test(f.message)));
+  check("the sidebar's FIXED 40-high row (I10970:111588;1910:23337, 24-high icon centred, content fits) does NOT fire", !hits.some((f) => f.nodeId === "I10970:111588;1910:23337"));
+  check("its siblings Component 5 / Leisure Health Check (same shape) do NOT fire either", !hits.some((f) => /Component 5|Leisure Health Check/.test(f.nodeName || "")));
 
   // A consistent FIXED node (padding + tallest child fits inside the declared box) must NOT fire.
   const consistentFixed = node({
@@ -294,7 +294,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
       children: [{ id: "c1a", name: "Icon", type: "FRAME", box: { w: 24, h: 24 } }] }], // 8+24+8=40 == declared 40: exact fit
   });
   const resFixed = audit([{ doc: screenExport([consistentFixed]), label: "consistent-fixed" }], { platform: "web" }); // ts-port: hand-built fixture
-  check("[172] a FIXED box with children fitting exactly (8+24+8=40, declared 40) does not fire", !resFixed.findings.some((f) => f.code === "self-inconsistent-geometry"));
+  check("a FIXED box with children fitting exactly (8+24+8=40, declared 40) does not fire", !resFixed.findings.some((f) => f.code === "self-inconsistent-geometry"));
 
   // A FIXED box with children SHORTER than the box (the sidebar-row shape) must NOT fire.
   const shorterFixed = node({
@@ -303,7 +303,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
       children: [{ id: "c1a", name: "Icon", type: "FRAME", box: { w: 24, h: 24 } }] }], // 0+24+0=24 < declared 40: content fits with room to spare
   });
   const resShorter = audit([{ doc: screenExport([shorterFixed]), label: "shorter-fixed" }], { platform: "web" }); // ts-port: hand-built fixture
-  check("[172] a FIXED box whose content is SHORTER than the declared box (normal centred auto-layout) does not fire", !resShorter.findings.some((f) => f.code === "self-inconsistent-geometry"));
+  check("a FIXED box whose content is SHORTER than the declared box (normal centred auto-layout) does not fire", !resShorter.findings.some((f) => f.code === "self-inconsistent-geometry"));
 
   // A HUG box whose declared size DOES equal its content must NOT fire.
   const consistentHug = node({
@@ -312,7 +312,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
       children: [{ id: "c1a", name: "Label", type: "TEXT", box: { w: 60, h: 24 } }] }],
   });
   const resHug = audit([{ doc: screenExport([consistentHug]), label: "consistent-hug" }], { platform: "web" }); // ts-port: hand-built fixture
-  check("[172] a HUG box whose declared size equals its content (16+24+16=56, declared 56) does not fire", !resHug.findings.some((f) => f.code === "self-inconsistent-geometry"));
+  check("a HUG box whose declared size equals its content (16+24+16=56, declared 56) does not fire", !resHug.findings.some((f) => f.code === "self-inconsistent-geometry"));
 
   // A HUG box whose declared size is SMALLER than its content must fire (a hug mismatch, not just overflow).
   const shortHug = node({
@@ -321,12 +321,12 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
       children: [{ id: "c1a", name: "Label", type: "TEXT", box: { w: 60, h: 24 } }] }], // 16+24+16=56 != declared 40
   });
   const resShortHug = audit([{ doc: screenExport([shortHug]), label: "short-hug" }], { platform: "web" }); // ts-port: hand-built fixture
-  check("[172] a HUG box whose declared size is smaller than its content (40 vs computed 56) DOES fire", resShortHug.findings.some((f) => f.code === "self-inconsistent-geometry"));
+  check("a HUG box whose declared size is smaller than its content (40 vs computed 56) DOES fire", resShortHug.findings.some((f) => f.code === "self-inconsistent-geometry"));
 })();
 
-// ---------- --grid default is echoed, and flagged when the design system's own scale disagrees (P4 #43) ----------
+// ---------- --grid default is echoed, and flagged when the design system's own scale disagrees ----------
 {
-  // The REAL tokens.json shape (F-16): a flat variables[] naming its collection. The legacy
+  // The REAL tokens.json shape: a flat variables[] naming its collection. The legacy
   // {collections[].variables[].valuesByMode} shape this test used to feed exists in no export.
   const step = (name: string, v: number) => ({ name, type: "FLOAT" as const, collection: "Spacing", tier: "primitive" as const, values: { "Mode 1": v } });
   const dsTokens: TokensDoc = { collections: [{ name: "Spacing", modes: ["Mode 1"], theming: false }], variables: [step("Space 1", 8), step("Space 2", 16), step("Space 3", 24)] };
@@ -340,10 +340,10 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   check("[grid] the markdown headline carries no '(default'/'ASSUMED' grid note when --grid was given", !/grid 8px \*/.test(must(toMarkdown(withExplicit).split("\n")[2], "markdown headline line")));
 }
 
-// ---------- livetest-3 #311: the audit's gate judges token collisions on the screen's OWN slice ----------
-// audit.js embeds cross-check but used to feed it only the merged variables.json, so its --gate raised
-// Create Assembly Type's `Space 4` (key 64928e3a…, 16) against Jet Roles, whose own .vars.json carries
-// only the design system's 24 — 5 blockers where cross-check said 3. Real export: test/fixtures/livetest3/.
+// ---------- the audit's gate judges token collisions on the screen's OWN slice ----------
+// audit.js embeds cross-check and feeds it the screen's own slice, not only the merged variables.json: the
+// merged file would raise Create Assembly Type's `Space 4` (key 64928e3a…, 16) against Jet Roles, whose own
+// .vars.json carries only the design system's 24 — 5 blockers where cross-check says 3. Real export: test/fixtures/livetest3/.
 {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3");
   const D2C = path.join(import.meta.dirname, "..", "design-to-code");
@@ -364,16 +364,16 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   const blockerSet = (findings: AuditFinding[]) => findings.filter((f) => f.severity === "blocker" && (f.crossFile === undefined || f.crossFile)).map((f) => `${f.code}|${String(f.token || "")}|${String(f.key || "")}`).sort();
   const pos = runAudit(POS, "pos"), posCross = runCross(POS);
   const collision = (res: { findings: AuditFinding[] }, token: string) => res.findings.filter((f) => f.severity === "blocker" && f.code === "token-name-collision" && f.token === token);
-  check("[311] Jet Roles: the audit gate raises NO Space 4 collision blocker (its own slice has only the 24-valued key)",
+  check("Jet Roles: the audit gate raises NO Space 4 collision blocker (its own slice has only the 24-valued key)",
     pos.json.findings.length > 0 && collision(pos.json, "Space 4").length === 0);
-  check("[311] Jet Roles: the audit's cross-file blockers are exactly cross-check's, same code/token/key",
+  check("Jet Roles: the audit's cross-file blockers are exactly cross-check's, same code/token/key",
     blockerSet(pos.json.findings.filter((f) => f.crossFile)).join() === blockerSet(posCross.findings).join() && blockerSet(posCross.findings).length > 0);
-  check("[311] and it no longer claims the screen's .vars.json 'was not available' while it sits beside the screen",
+  check("and it no longer claims the screen's .vars.json 'was not available' while it sits beside the screen",
     !pos.json.findings.some((f) => /was not available/.test(f.message)));
-  check("[311] the union's Space 4 ambiguity stays visible as the -elsewhere NOTE, naming the screen it belongs to",
+  check("the union's Space 4 ambiguity stays visible as the -elsewhere NOTE, naming the screen it belongs to",
     /token-name-collision-elsewhere/.test(pos.md) && (pos.json.crossFile.findings || []).some((f) => f.code === "token-name-collision-elsewhere" && f.severity === "info" && /Create_Assembly_Type__18411_84111/.test(f.message)));
   const cat = runAudit(CAT, "cat");
-  check("[311] Create Assembly Type still gets its REAL Space 4 blocker — on key 64928e3a…, the 16-valued one its own slice carries",
+  check("Create Assembly Type still gets its REAL Space 4 blocker — on key 64928e3a…, the 16-valued one its own slice carries",
     collision(cat.json, "Space 4").some((f) => f.key === "64928e3a5f094c0d9a2c916f50b98ff37c789882") && cat.r.status === 1);
 }
 
@@ -416,13 +416,13 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     g.auditFile === "design/audit/Home__1_1.json" && g.unreadable === true && g.blockers.length === 0);
 })();
 
-// ================================================================ field tests, group 4 (audit correctness)
+// ================================================================ audit correctness
 // Shapes below are the plugin's real ones (serialize.ts / write-out.ts / library-layout.ts) as seen in
 // the field-test exports; names are invented.
-console.log("field-test group 4:");
+console.log("audit correctness:");
 const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): AuditInput => ({ doc: screenExport(nodes, { screen: screenName }), label: screenName });
 
-// ---- DT-13 / DT-17 / F-14: hidden and absolute children take no part in the flow height
+// ---- hidden and absolute children take no part in the flow height
 {
   const res = audit(g4([{ id: "1:1", type: "FRAME", name: "Items", box: { w: 800, h: 600 }, children: [
     // hug row, padding 16/16, one visible 16px label and a HIDDEN 24px menu → 16+16+16 = 48 as declared
@@ -441,13 +441,13 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
       { id: "1:10", type: "TEXT", name: "Label", text: "Label", autoResize: "width_and_height", box: { w: 100, h: 24 } },
     ] },
   ] }]), { platform: "web" });
-  check("[DT-13] a hidden child does not count toward a hug row's height (was: 56 ≠ 48)", !onNode(res, "self-inconsistent-geometry", "1:2"));
-  check("[DT-17] an absolute child and its gap do not count toward a column's height (was: 318 ≠ 270)", !onNode(res, "self-inconsistent-geometry", "1:5"));
-  check("[DT-13] a real hug mismatch is still reported (16+24+16 = 56 ≠ 40)", codes(res, "self-inconsistent-geometry").some((f) => f.nodeId === "1:9" && f.expectedH === 56));
-  check("[172] the hug row's message says a hug box's height IS the content height", codes(res, "self-inconsistent-geometry").some((f) => f.nodeId === "1:9" && /heightMode:"hug"/.test(f.message) && /IS the content height/.test(f.message)));
+  check("a hidden child does not count toward a hug row's height (was: 56 ≠ 48)", !onNode(res, "self-inconsistent-geometry", "1:2"));
+  check("an absolute child and its gap do not count toward a column's height (was: 318 ≠ 270)", !onNode(res, "self-inconsistent-geometry", "1:5"));
+  check("a real hug mismatch is still reported (16+24+16 = 56 ≠ 40)", codes(res, "self-inconsistent-geometry").some((f) => f.nodeId === "1:9" && f.expectedH === 56));
+  check("the hug row's message says a hug box's height IS the content height", codes(res, "self-inconsistent-geometry").some((f) => f.nodeId === "1:9" && /heightMode:"hug"/.test(f.message) && /IS the content height/.test(f.message)));
 }
 
-// ---- F-15 / DT-14(1): TEXT siblings' glyph fills are not a backdrop; a disjoint sibling is not either
+// ---- TEXT siblings' glyph fills are not a backdrop; a disjoint sibling is not either
 {
   const white = [{ type: "solid" as const, color: "#ffffff" }];
   const res = audit(g4([{ id: "2:1", type: "FRAME", name: "Items", fills: [{ type: "solid", color: "#ffffff" }], box: { w: 1112, h: 600, x: 0, y: 0 }, children: [
@@ -464,33 +464,33 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
       { id: "2:10", type: "TEXT", name: "Caption", text: "Caption", autoResize: "width_and_height", fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 80, h: 20, x: 150, y: 150 } },
     ] },
   ] }]), { platform: "web" });
-  check("[F-15] white absolute header labels after a white TEXT sibling are not 1:1 (was: low-contrast on both)", !onNode(res, "low-contrast", "2:4") && !onNode(res, "low-contrast", "2:5"));
-  check("[F-15] white text over an overlapping pale chip IS low contrast", onNode(res, "low-contrast", "2:8"));
-  check("[F-15] a sibling that does not overlap the text is not its backdrop", !onNode(res, "low-contrast", "2:10"));
+  check("white absolute header labels after a white TEXT sibling are not 1:1 (was: low-contrast on both)", !onNode(res, "low-contrast", "2:4") && !onNode(res, "low-contrast", "2:5"));
+  check("white text over an overlapping pale chip IS low contrast", onNode(res, "low-contrast", "2:8"));
+  check("a sibling that does not overlap the text is not its backdrop", !onNode(res, "low-contrast", "2:10"));
   const lc = codes(res, "low-contrast").find((f) => f.nodeId === "2:8");
-  check("[DT-14(2)/F-25] a contrast finding quotes the layer's text beside its name", !!lc && /'Option 1' \("Pick a category for this entry"\)/.test(lc.message) && lc.text === "Pick a category for this entry");
+  check("a contrast finding quotes the layer's text beside its name", !!lc && /'Option 1' \("Pick a category for this entry"\)/.test(lc.message) && lc.text === "Pick a category for this entry");
 }
 
-// ---- F-23 / DT-14(3,4): empty-state copy at any depth; dialogs; validation
+// ---- empty-state copy at any depth; dialogs; validation
 {
   const deep = (depth: number, leaf: Parameters<typeof node>[0]): Parameters<typeof node>[0] => depth ? { id: `3:d${depth}`, type: "FRAME", name: `Level ${depth}`, children: [deep(depth - 1, leaf)] } : leaf;
   const res = audit(g4([{ id: "3:1", type: "FRAME", name: "Items", children: [deep(8, { id: "3:2", type: "TEXT", name: "Main Text", text: "No items added yet.", autoResize: "height" })] }]), { platform: "web" });
-  check("[F-23] 'No items added yet.' 8 levels down (with a non-breaking space) → empty: designed", res.screenStates.empty === "designed" && !res.questions.some((q) => /No empty state/.test(q)));
+  check("'No items added yet.' 8 levels down (with a non-breaking space) → empty: designed", res.screenStates.empty === "designed" && !res.questions.some((q) => /No empty state/.test(q)));
   const neg = audit(g4([{ id: "3:3", type: "FRAME", name: "Items", children: [{ id: "3:4", type: "TEXT", name: "Answer", text: "No, keep editing", autoResize: "height" }] }]), { platform: "web" });
-  check("[F-23] ordinary 'No, …' copy is not an empty state", neg.screenStates.empty === "not-found");
-  check("[DT-14(4)] a page with no inputs has no validation state at all", !("validation" in res.screenStates));
+  check("ordinary 'No, …' copy is not an empty state", neg.screenStates.empty === "not-found");
+  check("a page with no inputs has no validation state at all", !("validation" in res.screenStates));
   const field = (id: string, variant: string): Parameters<typeof node>[0] => ({ id, type: "INSTANCE", name: "Name Field", mainComponent: { name: variant, setName: "input Field", key: `k-${id}`, setKey: "k-field", remote: true }, box: { w: 300, h: 48 } });
   const dialog = audit(g4([{ id: "3:5", type: "FRAME", name: "Popup", children: [field("3:6", "Status=Default")] }], "Popup"), { platform: "web" });
-  check("[DT-14(4)] a dialog's empty state is not-applicable and not asked", dialog.screenStates.empty === "not-applicable" && !dialog.questions.some((q) => /No empty state/.test(q)));
-  check("[DT-14(4)] a dialog with an input asks about validation", dialog.screenStates.validation === "not-found" && dialog.questions.some((q) => /validation state/.test(q)));
-  check("[DT-14(4)] a dialog's loading question is about its action, not data", dialog.questions.some((q) => /No loading state.*action runs/.test(q)));
+  check("a dialog's empty state is not-applicable and not asked", dialog.screenStates.empty === "not-applicable" && !dialog.questions.some((q) => /No empty state/.test(q)));
+  check("a dialog with an input asks about validation", dialog.screenStates.validation === "not-found" && dialog.questions.some((q) => /validation state/.test(q)));
+  check("a dialog's loading question is about its action, not data", dialog.questions.some((q) => /No loading state.*action runs/.test(q)));
   const withError = audit(g4([{ id: "3:7", type: "FRAME", name: "Popup", children: [field("3:8", "Status=Default"), field("3:9", "Status=Error")] }], "Popup"), { platform: "web" });
-  check("[DT-14(4)] an input drawn in its Error variant → validation: designed", withError.screenStates.validation === "designed");
+  check("an input drawn in its Error variant → validation: designed", withError.screenStates.validation === "designed");
   const md4 = toMarkdown(dialog);
-  check("[DT-14(4)] markdown says not-applicable in words", /- empty: not applicable/.test(md4) && /- validation: \*\*not in this frame — ask\*\*/.test(md4));
+  check("markdown says not-applicable in words", /- empty: not applicable/.test(md4) && /- validation: \*\*not in this frame — ask\*\*/.test(md4));
 }
 
-// ---- F-25 / DT-14(5): heavy assets from <Screen>.assets.json; prototype links
+// ---- heavy assets from <Screen>.assets.json; prototype links
 {
   const assets: ScreenAssetsDoc = {
     heavy: [{ file: "assets/Illustration.svg", bytes: 2465864, paths: 1523 }, { file: "assets/Hidden_Art.svg", bytes: 900000, paths: 800 }],
@@ -506,14 +506,14 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
     { id: "4:8", type: "INSTANCE", name: "Menu Item", reactions: [{ trigger: "on_hover", actions: [{ type: "node", destinationId: "9:2", destination: "state=hover", navigation: "change_to" }] }] },
   ] }]), assets }, { platform: "web" });
   const heavy = codes(res, "heavy-asset");
-  check("[F-25] a heavy asset in <Screen>.assets.json is an info finding on its node", heavy.length === 1 && heavy[0]?.nodeId === "4:3" && heavy[0]?.severity === "info" && heavy[0]?.bytes === 2465864 && /2\.35 MB \/ 1523 <path>/.test(heavy[0]?.message ?? ""));
-  check("[F-25] a hidden layer's heavy asset is not reported", !heavy.some((f) => f.file === "assets/Hidden_Art.svg"));
+  check("a heavy asset in <Screen>.assets.json is an info finding on its node", heavy.length === 1 && heavy[0]?.nodeId === "4:3" && heavy[0]?.severity === "info" && heavy[0]?.bytes === 2465864 && /2\.35 MB \/ 1523 <path>/.test(heavy[0]?.message ?? ""));
+  check("a hidden layer's heavy asset is not reported", !heavy.some((f) => f.file === "assets/Hidden_Art.svg"));
   const nav = codes(res, "prototype-navigation");
-  check("[DT-14(5)] prototype links: one info per destination, counted", nav.length === 2 && nav.some((f) => f.destination === "Item Details" && f.sources === 2) && nav.some((f) => f.destination === "Add Item" && f.navigation === "overlay"));
-  check("[DT-14(5)] a hover variant swap (change_to) is not a link", !nav.some((f) => f.destination === "state=hover"));
+  check("prototype links: one info per destination, counted", nav.length === 2 && nav.some((f) => f.destination === "Item Details" && f.sources === 2) && nav.some((f) => f.destination === "Add Item" && f.navigation === "overlay"));
+  check("a hover variant swap (change_to) is not a link", !nav.some((f) => f.destination === "state=hover"));
 }
 
-// ---- DT-50 (old exports) / DT-09: asset-leaf spacing is the inset baked into the file; a raster in an SVG shell
+// ---- asset-leaf spacing is the inset baked into the file; a raster in an SVG shell
 {
   const pad = (v: number): { display: "flex"; padding: number[]; gap: number } => ({ display: "flex", padding: [v, v, v, v], gap: 5 });
   const res = audit(g4([{ id: "5:1", type: "FRAME", name: "Items", layout: { display: "flex", padding: [13, 13, 13, 13] }, children: [
@@ -523,30 +523,30 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
     { id: "5:5", type: "VECTOR", name: "mark four", assetSkipped: true, layout: pad(5.0001) },
   ] }]), { platform: "web" });
   const og = codes(res, "off-grid-spacing");
-  check("[DT-50] off-grid inferred padding/gap on asset leaves (asset, geometry, assetSkipped true and \"hidden\") is not reported", !og.some((f) => ["5:2", "5:3", "5:4", "5:5"].includes(String(f.nodeId))));
-  check("[DT-50] …while a real frame's off-grid padding still is", og.some((f) => f.nodeId === "5:1" && /paddingTop=13/.test(f.message)));
+  check("off-grid inferred padding/gap on asset leaves (asset, geometry, assetSkipped true and \"hidden\") is not reported", !og.some((f) => ["5:2", "5:3", "5:4", "5:5"].includes(String(f.nodeId))));
+  check("…while a real frame's off-grid padding still is", og.some((f) => f.nodeId === "5:1" && /paddingTop=13/.test(f.message)));
   const tally = (r: typeof res) => JSON.stringify(r.tokenBinding.spacing);
   const plain = audit(g4([{ id: "5:1", type: "FRAME", name: "Items", layout: { display: "flex", padding: [13, 13, 13, 13] }, children: [] }]), { platform: "web" });
-  check("[DT-50] …and the spacing tally counts only the real frame (the asset leaves add nothing)", tally(res) === tally(plain));
+  check("…and the spacing tally counts only the real frame (the asset leaves add nothing)", tally(res) === tally(plain));
 
-  check("[DT-09] the .assets.json guard accepts heavy[].embeddedRaster and extra files[] fields, and rejects a non-number embeddedRaster",
+  check("the .assets.json guard accepts heavy[].embeddedRaster and extra files[] fields, and rejects a non-number embeddedRaster",
     isScreenAssetsDoc({ heavy: [{ file: "assets/a.svg", bytes: 9, paths: 2, embeddedRaster: 1 }], files: [{ file: "assets/a.svg", node: "1:1", owner: "x", reuseKey: "k" }] })
     && isScreenAssetsDoc({ heavy: [{ file: "assets/a.svg", bytes: 9 }] })
     && !isScreenAssetsDoc({ heavy: [{ file: "assets/a.svg", bytes: 9, embeddedRaster: "1" }] }));
   const mk = (h: { file: string; bytes: number; paths?: number; embeddedRaster?: number }) => audit({ ...g4([{ id: "5:6", type: "FRAME", name: "Avatar", asset: h.file }]), assets: { heavy: [h], files: [{ file: h.file, node: "5:6" }] } }, { platform: "web" });
   const raster = codes(mk({ file: "assets/avatar-raster.svg", bytes: 1980000, paths: 2, embeddedRaster: 1 }), "heavy-asset");
-  check("[DT-09] a heavy row with embeddedRaster uses the raster wording, not 'too heavy to inline'",
+  check("a heavy row with embeddedRaster uses the raster wording, not 'too heavy to inline'",
     raster.length === 1 && /1\.89 MB — a raster image embedded in an SVG shell; use it as an image/.test(raster[0]?.message ?? "") && /PNG\/JPG export/.test(raster[0]?.message ?? "") && !/<path>|too heavy/.test(raster[0]?.message ?? "") && raster[0]?.embeddedRaster === 1);
   const paths = codes(mk({ file: "assets/big.svg", bytes: 2465864, paths: 1523 }), "heavy-asset");
-  // L-7: the pull's rule — an <image> in an illustration of 2000 paths is still "too many paths", not a shell.
+  // the pull's rule — an <image> in an illustration of 2000 paths is still "too many paths", not a shell.
   // pre-fix: the raster wording (the audit read embeddedRaster alone).
   const busy = codes(mk({ file: "assets/illustration.svg", bytes: 2400000, paths: 2000, embeddedRaster: 1 }), "heavy-asset");
-  check("[L-7] embeddedRaster with 2000 paths keeps the paths wording (the bridge's raster-shell rule: under 50 paths)",
+  check("embeddedRaster with 2000 paths keeps the paths wording (the bridge's raster-shell rule: under 50 paths)",
     busy.length === 1 && /2\.29 MB \/ 2000 <path> elements — too heavy to inline/.test(busy[0]?.message ?? "") && !/SVG shell/.test(busy[0]?.message ?? "") && busy[0]?.embeddedRaster === 1);
-  check("[DT-09] without embeddedRaster the paths wording stays (default)", paths.length === 1 && /2\.35 MB \/ 1523 <path> elements — too heavy to inline/.test(paths[0]?.message ?? "") && paths[0]?.embeddedRaster === undefined);
+  check("without embeddedRaster the paths wording stays (default)", paths.length === 1 && /2\.35 MB \/ 1523 <path> elements — too heavy to inline/.test(paths[0]?.message ?? "") && paths[0]?.embeddedRaster === undefined);
 }
 
-// ---- DT-80 / DT-11: state coverage reads every catalog, and says so when it cannot run
+// ---- state coverage reads every catalog, and says so when it cannot run
 {
   const button = (key: string): Parameters<typeof node>[0] => ({ id: `5:${key}`, type: "INSTANCE", name: "Button", mainComponent: { name: "Type=Primary, Status=Default", setName: "Button", key: `v-${key}`, setKey: key, remote: true }, box: { w: 120, h: 40 } });
   const buttonSet = (key: string): CatalogComponent => ({ name: "Button", id: "1:10", type: "COMPONENT_SET", key, props: {
@@ -558,26 +558,26 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
   const screen5 = g4([{ id: "5:1", type: "FRAME", name: "Items", children: [button("k-set"), { id: "5:9", type: "INSTANCE", name: "icons/line/magnifier-search", component: "icons/line/magnifier-search", asset: "assets/magnifier-search.svg", mainComponent: { name: "icons/line/magnifier-search", id: "18:31", key: "k-icon", remote: true } }] }]);
   const dsOnly = audit(screen5, { platform: "web", designSystem: { components: cat([buttonSet("k-set")]) } });
   const b = codes(dsOnly, "missing-component-states")[0];
-  check("[DT-80] --design-system alone checks states (was: nothing, no finding)", !!b && b.severity === "warning" && JSON.stringify(b.missing) === JSON.stringify(["pressed", "focus"]));
-  check("[DT-80] the row says which catalog and how it matched", dsOnly.components.some((c) => c.name === "Button" && c.known && c.matchedBy === "key" && c.catalog === "the design system"));
-  check("[DT-80] an icon instance (exported as an asset) is not a control to check", !dsOnly.components.some((c) => /search/.test(c.name)) && !codes(dsOnly, "component-states-unchecked").length);
+  check("--design-system alone checks states (was: nothing, no finding)", !!b && b.severity === "warning" && JSON.stringify(b.missing) === JSON.stringify(["pressed", "focus"]));
+  check("the row says which catalog and how it matched", dsOnly.components.some((c) => c.name === "Button" && c.known && c.matchedBy === "key" && c.catalog === "the design system"));
+  check("an icon instance (exported as an asset) is not a control to check", !dsOnly.components.some((c) => /search/.test(c.name)) && !codes(dsOnly, "component-states-unchecked").length);
   const none = audit(screen5, { platform: "web" });
   const u = codes(none, "component-states-unchecked")[0];
-  check("[DT-80] no catalog → a warning that states could not be checked, plus a question", !!u && u.severity === "warning" && JSON.stringify(u.controls) === JSON.stringify(["Button"]) && none.questions.some((q) => /could not be checked/.test(q)));
+  check("no catalog → a warning that states could not be checked, plus a question", !!u && u.severity === "warning" && JSON.stringify(u.controls) === JSON.stringify(["Button"]) && none.questions.some((q) => /could not be checked/.test(q)));
   // A library export's FULL definitions, found under libraries/: matched by name (the screen's copy is re-keyed); a warning, not "sampled".
   const lib = audit(screen5, { platform: "web", designSystem: { components: cat([]) }, designSystemDir: "design/export/design-system", libraries: [{ rel: "design/export/libraries/shared-kit-ab12cd34", name: "Shared Kit", collectionKeys: ["c-1", "c-2"], components: cat([buttonSet("k-lib")]) }] });
-  check("[DT-11] a --as-library export's components.json feeds the state check (by name, a warning — full definitions)", lib.components.some((c) => c.name === "Button" && c.catalog === "design/export/libraries/shared-kit-ab12cd34" && c.matchedBy === "name" && c.sampled === false) && codes(lib, "missing-component-states")[0]?.severity === "warning");
-  check("[DT-11] the report names the library export and the command to check against it", lib.crossFile?.notChecked.some((n) => /libraries\/shared-kit-ab12cd34 \('Shared Kit'\).*--design-system design\/export\/libraries\/shared-kit-ab12cd34/.test(n)) === true);
+  check("a --as-library export's components.json feeds the state check (by name, a warning — full definitions)", lib.components.some((c) => c.name === "Button" && c.catalog === "design/export/libraries/shared-kit-ab12cd34" && c.matchedBy === "name" && c.sampled === false) && codes(lib, "missing-component-states")[0]?.severity === "warning");
+  check("the report names the library export and the command to check against it", lib.crossFile?.notChecked.some((n) => /libraries\/shared-kit-ab12cd34 \('Shared Kit'\).*--design-system design\/export\/libraries\/shared-kit-ab12cd34/.test(n)) === true);
   const self = audit(screen5, { platform: "web", designSystem: { components: cat([buttonSet("k-lib")]) }, designSystemDir: "design/export/libraries/shared-kit-ab12cd34", libraries: [{ rel: "design/export/libraries/shared-kit-ab12cd34", name: "Shared Kit", collectionKeys: [], components: cat([buttonSet("k-lib")]) }] });
-  check("[DT-11] no hint when the audit already runs against that library", !self.crossFile?.notChecked.some((n) => /library export/.test(n)));
+  check("no hint when the audit already runs against that library", !self.crossFile?.notChecked.some((n) => /library export/.test(n)));
   // components.library.json: one sampled row per variant in use, values under `observed` → info, present from what was seen
   const sampledRow = (variant: string, status: string): CatalogComponent => ({ name: "Button", key: `v-${status}`, type: "COMPONENT", remote: true, source: "unknown-library", uses: 8, variant, props: { Status: { key: "Status", type: "VARIANT", observed: [status] } }, derivedFrom: "instances" });
   const sampled = audit(screen5, { platform: "web", designSystem: { componentsLibrary: cat([sampledRow("Type=Primary, Status=Default", "Default"), sampledRow("Type=Primary, Status=Hover", "Hover")]) } });
   const sRow = sampled.components.find((c) => c.name === "Button");
-  check("[DT-80] a sampled library catalog: every row of the set is read, severity info", !!sRow && sRow.sampled === true && sRow.present.includes("hover") && codes(sampled, "missing-component-states")[0]?.severity === "info");
+  check("a sampled library catalog: every row of the set is read, severity info", !!sRow && sRow.sampled === true && sRow.present.includes("hover") && codes(sampled, "missing-component-states")[0]?.severity === "info");
 }
 
-// ---- F-16: the spacing step comes from the REAL tokens.json shape, and a given --grid is checked too
+// ---- the spacing step comes from the REAL tokens.json shape, and a given --grid is checked too
 {
   const space = (name: string, v: number) => ({ name, type: "FLOAT" as const, collection: "Spacing", tier: "primitive" as const, values: { "Mode 1": v }, scopes: ["WIDTH_HEIGHT", "GAP"], key: `s-${v}` });
   const tokens: TokensDoc = { collections: [{ name: "Spacing", modes: ["Mode 1"], default: "Mode 1", theming: false, key: "c-1" }], variables: [
@@ -587,13 +587,13 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
   ] };
   const s6 = g4([{ id: "6:1", type: "FRAME", name: "Items" }]);
   const given8 = audit(s6, { platform: "web", grid: 8, designSystem: { tokens } });
-  check("[F-16] --grid 8 on a 4-step spacing scale → gridMismatch 4 (was: never, the reader looked for collections[].variables)", given8.gridMismatch === 4 && /as given; this system's own spacing tokens step by 4px, not 8px/.test(toMarkdown(given8)));
-  check("[F-16] the default 4 on a 4-step scale → no mismatch", audit(s6, { platform: "web", designSystem: { tokens } }).gridMismatch === null);
+  check("--grid 8 on a 4-step spacing scale → gridMismatch 4 (was: never, the reader looked for collections[].variables)", given8.gridMismatch === 4 && /as given; this system's own spacing tokens step by 4px, not 8px/.test(toMarkdown(given8)));
+  check("the default 4 on a 4-step scale → no mismatch", audit(s6, { platform: "web", designSystem: { tokens } }).gridMismatch === null);
   const eight: TokensDoc = { variables: [space("S1", 8), space("S2", 16), space("S3", 24)] };
-  check("[F-16] an 8-step scale with the default grid → gridMismatch 8", audit(s6, { platform: "web", designSystem: { tokens: eight } }).gridMismatch === 8);
+  check("an 8-step scale with the default grid → gridMismatch 8", audit(s6, { platform: "web", designSystem: { tokens: eight } }).gridMismatch === 8);
 }
 
-// ---- DT-11 end to end: the CLI reads a library dir's components.json and finds libraries/ beside the export
+// ---- end to end: the CLI reads a library dir's components.json and finds libraries/ beside the export
 {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "audit-lib-"));
   const put = (rel: string, doc: unknown): string => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
@@ -607,18 +607,18 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
   put("design/export/pages/Main/Items__1_1.vars.json", { collections: [{ name: "Spacing", modes: ["Mode 1"], key: "c-1" }, { name: "Local", modes: ["Mode 1"], key: "c-local" }], variables: [] });
   const runAudit = (ds: string) => parseAs(execFileSync(process.execPath, [cli, path.relative(root, screenFile), "--platform", "web", "--design-system", ds, "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isAuditReport, "audit --json");
   const viaDs = runAudit("design/export/design-system");
-  check("[DT-11 CLI] with design-system/, the library beside it still defines the Button's states", viaDs.components.some((c) => c.name === "Button" && c.known && c.catalog === libDir));
-  check("[DT-11 CLI] …and the report names it, with its by-key share of the screen's collections", viaDs.crossFile?.notChecked.some((n) => n.includes(`--design-system ${libDir}`) && /binds 1 of its 2 variable collection/.test(n)) === true);
+  check("[CLI] with design-system/, the library beside it still defines the Button's states", viaDs.components.some((c) => c.name === "Button" && c.known && c.catalog === libDir));
+  check("[CLI] …and the report names it, with its by-key share of the screen's collections", viaDs.crossFile?.notChecked.some((n) => n.includes(`--design-system ${libDir}`) && /binds 1 of its 2 variable collection/.test(n)) === true);
   const viaLib = runAudit(libDir);
-  check("[DT-11 CLI] --design-system <library dir> reads its components.json (was: silently none)", viaLib.crossFile?.inputs.components === true && viaLib.components.some((c) => c.name === "Button" && c.catalog === libDir) && !viaLib.crossFile?.notChecked.some((n) => /library export/.test(n)));
+  check("[CLI] --design-system <library dir> reads its components.json (was: silently none)", viaLib.crossFile?.inputs.components === true && viaLib.components.some((c) => c.name === "Button" && c.catalog === libDir) && !viaLib.crossFile?.notChecked.some((n) => /library export/.test(n)));
   const cc = parseAs(execFileSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"), path.relative(root, screenFile), "--design-system", libDir, "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isCrossCheckOut, "cross-check --json");
-  check("[DT-11 CLI] cross-check reads a library dir's components.json too", !cc.findings.some((f) => /no components\.local\.json/.test(f.message)) && (cc as { inputs?: { components?: boolean } }).inputs?.components === true);
+  check("[CLI] cross-check reads a library dir's components.json too", !cc.findings.some((f) => /no components\.local\.json/.test(f.message)) && (cc as { inputs?: { components?: boolean } }).inputs?.components === true);
 }
 
-// ---- review round 1 of group 4
+// ---- surfaces versus ink: avatar discs and photo rectangles
 {
   const white = [{ type: "solid" as const, color: "#ffffff" }];
-  // H1: an ELLIPSE avatar disc and a photo RECTANGLE are exported as assets but ARE surfaces; a VECTOR icon is ink
+  // an ELLIPSE avatar disc and a photo RECTANGLE are exported as assets but ARE surfaces; a VECTOR icon is ink
   const res = audit(g4([{ id: "7:1", type: "FRAME", name: "Items", fills: [{ type: "solid", color: "#ffffff" }], box: { w: 600, h: 400, x: 0, y: 0 }, children: [
     { id: "7:2", type: "FRAME", name: "Avatar", box: { w: 40, h: 40, x: 10, y: 10 }, children: [
       { id: "7:3", type: "ELLIPSE", name: "Disc", asset: "assets/Disc.svg", fills: [{ type: "solid", color: "#1d4ed8" }], box: { w: 40, h: 40, x: 10, y: 10 } },
@@ -637,13 +637,13 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
       { id: "7:10", type: "TEXT", name: "Count", text: "3", autoResize: "width_and_height", fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 10, h: 16, x: 465, y: 22 } },
     ] },
   ] }]), { platform: "web" });
-  check("[review H1] white initials on a blue ELLIPSE asset disc are not 1:1", !onNode(res, "low-contrast", "7:4"));
-  check("[review H1] a caption on a photo RECTANGLE asset → manual check, not 1:1", onNode(res, "contrast-manual", "7:7") && !onNode(res, "low-contrast", "7:7"));
-  check("[review H1] a VECTOR icon's ink is still not a backdrop", !onNode(res, "low-contrast", "7:10"));
-  check("[re-review L1] an image-filled FRAME asset leaf is a surface (manual check), not ink", onNode(res, "contrast-manual", "7:13") && !onNode(res, "low-contrast", "7:13"));
+  check("white initials on a blue ELLIPSE asset disc are not 1:1", !onNode(res, "low-contrast", "7:4"));
+  check("a caption on a photo RECTANGLE asset → manual check, not 1:1", onNode(res, "contrast-manual", "7:7") && !onNode(res, "low-contrast", "7:7"));
+  check("a VECTOR icon's ink is still not a backdrop", !onNode(res, "low-contrast", "7:10"));
+  check("an image-filled FRAME asset leaf is a surface (manual check), not ink", onNode(res, "contrast-manual", "7:13") && !onNode(res, "low-contrast", "7:13"));
 }
 {
-  // H2: key matches (sampled included) beat name matches; an unrelated library is not name-matched; same-name rows read together
+  // key matches (sampled included) beat name matches; an unrelated library is not name-matched; same-name rows read together
   const btn: Parameters<typeof node>[0] = { id: "8:2", type: "INSTANCE", name: "Button", mainComponent: { name: "Status=Default", setName: "Button", key: "v-default", setKey: "set-remote", remote: true }, box: { w: 120, h: 40 } };
   const sampledRow = (status: string): CatalogComponent => ({ name: "Button", key: status === "Default" ? "v-default" : `v-${status}`, type: "COMPONENT", remote: true, source: "unknown-library", uses: 3, variant: `Status=${status}`, props: { Status: { key: "Status", type: "VARIANT", observed: [status] } }, derivedFrom: "instances" });
   const unrelated: CatalogComponent = { name: "Button", id: "1:1", type: "COMPONENT_SET", key: "k-other", props: { Size: { key: "Size", type: "VARIANT", options: ["Small", "Large"] } } };
@@ -653,71 +653,71 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
     libraries: [{ rel: "design/export/libraries/other-kit-00000000", name: "Other Kit", collectionKeys: ["c-other"], components: { components: [unrelated] } }] });
   const row = res.components.find((c) => c.name === "Button");
   const noSample = audit(input, { platform: "web", libraries: [{ rel: "design/export/libraries/other-kit-00000000", name: "Other Kit", collectionKeys: ["c-other"], components: { components: [unrelated] } }] });
-  check("[review H2] a library sharing no variable collection with the screen is not name-matched", codes(noSample, "component-states-unchecked").length === 1 && !codes(noSample, "missing-component-states").length);
+  check("a library sharing no variable collection with the screen is not name-matched", codes(noSample, "component-states-unchecked").length === 1 && !codes(noSample, "missing-component-states").length);
   const related = audit(input, { platform: "web", libraries: [{ rel: "design/export/libraries/brand-kit-22222222", name: "Brand Kit", collectionKeys: ["c-brand"], components: { components: [unrelated] } }] });
-  check("[review H2] …one that does share a collection is", related.components.some((c) => c.name === "Button" && c.matchedBy === "name" && c.catalog === "design/export/libraries/brand-kit-22222222"));
+  check("…one that does share a collection is", related.components.some((c) => c.name === "Button" && c.matchedBy === "name" && c.catalog === "design/export/libraries/brand-kit-22222222"));
   const defined: CatalogComponent = { name: "Button", id: "1:2", type: "COMPONENT_SET", key: "k-brand", props: { Status: { key: "Status", type: "VARIANT", options: ["Default", "Hover", "Disabled"] } } };
   const both = audit(input, { platform: "web", designSystem: { componentsLibrary: { components: ["Default", "Pressed"].map(sampledRow) } },
     libraries: [{ rel: "design/export/libraries/brand-kit-22222222", name: "Brand Kit", collectionKeys: ["c-brand"], components: { components: [defined] } }] });
   const bothRow = both.components.find((c) => c.name === "Button");
-  check("[review H2] a related library's definition gives the list, states seen in use are added: only focus missing, a warning", !!bothRow && bothRow.sampled === false && JSON.stringify(bothRow.missing) === JSON.stringify(["focus"]) && codes(both, "missing-component-states")[0]?.severity === "warning");
+  check("a related library's definition gives the list, states seen in use are added: only focus missing, a warning", !!bothRow && bothRow.sampled === false && JSON.stringify(bothRow.missing) === JSON.stringify(["focus"]) && codes(both, "missing-component-states")[0]?.severity === "warning");
   const unknownLib = audit(input, { platform: "web", designSystem: { componentsLibrary: { components: ["Default"].map(sampledRow) } },
     libraries: [{ rel: "design/export/libraries/old-kit-33333333", name: "Old Kit", collectionKeys: [], components: { components: [unrelated] } }] });
-  check("[re-review M1] a library related only because its keys are unknown does not outrank a sampled key match", unknownLib.components.find((c) => c.name === "Button")?.catalog === "components.library.json" && codes(unknownLib, "missing-component-states")[0]?.severity === "info");
-  check("[review H2] a sampled KEY match wins over a same-named row in an unrelated library", !!row && row.matchedBy === "key" && row.catalog === "components.library.json" && row.missing.length === 0);
+  check("a library related only because its keys are unknown does not outrank a sampled key match", unknownLib.components.find((c) => c.name === "Button")?.catalog === "components.library.json" && codes(unknownLib, "missing-component-states")[0]?.severity === "info");
+  check("a sampled KEY match wins over a same-named row in an unrelated library", !!row && row.matchedBy === "key" && row.catalog === "components.library.json" && row.missing.length === 0);
   const toggleUse: Parameters<typeof node>[0] = { id: "8:4", type: "INSTANCE", name: "Toggle", mainComponent: { name: "Status=Checked", setName: "Toggle", key: "v-t", setKey: "set-copy", remote: true }, box: { w: 40, h: 24 } };
   const toggleLib = { components: [
     { name: "Toggle", id: "2:1", type: "COMPONENT" as const, key: "k-bare" },
     { name: "Toggle", id: "2:2", type: "COMPONENT_SET" as const, key: "k-set-a", props: { Status: { key: "Status", type: "VARIANT" as const, options: ["Checked", "Unchecked", "Disabled"] } } },
   ] };
   const t = audit(g4([{ id: "8:3", type: "FRAME", name: "Items", children: [toggleUse] }]), { platform: "web", libraries: [{ rel: "design/export/libraries/kit-copy-11111111", name: "Kit Copy", collectionKeys: [], components: toggleLib }] });
-  check("[review H2] a bare COMPONENT sharing the name does not hide the set's states (was: toggle has no selected/disabled)", !codes(t, "missing-component-states").length && t.components.some((c) => c.name === "Toggle" && c.present.includes("selected") && c.present.includes("disabled")));
+  check("a bare COMPONENT sharing the name does not hide the set's states (was: toggle has no selected/disabled)", !codes(t, "missing-component-states").length && t.components.some((c) => c.name === "Toggle" && c.present.includes("selected") && c.present.includes("disabled")));
 }
 {
   const inst = (id: string, name: string, extra: Partial<IrNode> = {}): Parameters<typeof node>[0] => ({ id, type: "INSTANCE", name, mainComponent: { name: "Status=Default", setName: name, key: `v-${id}`, setKey: `s-${id}`, remote: true }, box: { w: 200, h: 40 }, ...extra });
   const list = audit(g4([{ id: "9:1", type: "FRAME", name: "Items", children: [inst("9:2", "search bar"), inst("9:3", "filter button")] }]), { platform: "web" });
-  check("[review M1] a list page whose only input is a search bar is not asked about validation", !("validation" in list.screenStates));
+  check("a list page whose only input is a search bar is not asked about validation", !("validation" in list.screenStates));
   const iconBtn = audit(g4([{ id: "9:4", type: "FRAME", name: "Items", children: [inst("9:5", "Icon Button", { asset: "assets/Icon_Button.svg" })] }]), { platform: "web" });
-  check("[review M3] an Icon Button exported as an asset is still a control (row + unchecked warning)", iconBtn.components.some((c) => c.name === "Icon Button") && codes(iconBtn, "component-states-unchecked").length === 1);
+  check("an Icon Button exported as an asset is still a control (row + unchecked warning)", iconBtn.components.some((c) => c.name === "Icon Button") && codes(iconBtn, "component-states-unchecked").length === 1);
   const skipped = audit(g4([{ id: "9:10", type: "FRAME", name: "Items", children: [inst("9:11", "icons/line/magnifier-search", { assetSkipped: true })] }]), { platform: "web" });
-  check("[re-review L2] an icon whose asset was skipped (--no-assets) is still an icon, not an input", !skipped.components.length && !("validation" in skipped.screenStates));
+  check("an icon whose asset was skipped (--no-assets) is still an icon, not an input", !skipped.components.length && !("validation" in skipped.screenStates));
   const sheet = audit(g4([{ id: "9:6", type: "FRAME", name: "Time Sheet" }], "Time Sheet"), { platform: "web" });
-  check("[review L1] a page named '… Sheet' is not a dialog", sheet.screenStates.empty === "not-found");
+  check("a page named '… Sheet' is not a dialog", sheet.screenStates.empty === "not-found");
   const two = audit(g4([{ id: "9:7", type: "FRAME", name: "Items", children: [
     { id: "9:8", type: "INSTANCE", name: "Row", reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: "20:1", destination: "Details", navigation: "navigate" }] }] },
     { id: "9:9", type: "INSTANCE", name: "Row", reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: "30:1", destination: "Details", navigation: "navigate" }] }] },
   ] }]), { platform: "web" });
-  check("[review L3] two different frames that share a name are two destinations, told apart by id", codes(two, "prototype-navigation").length === 2 && codes(two, "prototype-navigation").some((f) => f.destinationId === "30:1" && /\(30:1\)/.test(f.message)));
+  check("two different frames that share a name are two destinations, told apart by id", codes(two, "prototype-navigation").length === 2 && codes(two, "prototype-navigation").some((f) => f.destinationId === "30:1" && /\(30:1\)/.test(f.message)));
 }
 
-// ================================================================ field tests, group 5 (audit skill + severity model, D1/D11/D12)
-console.log("field-test group 5:");
+// ================================================================ audit skill + severity model
+console.log("audit skill + severity model:");
 const repoRoot = path.join(import.meta.dirname, "..");
 const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, rel), "utf8");
 {
-  // D1/D11 doc-guard: the SKILL's blocker list IS the code's, and no emit site can raise any other code as a blocker.
+  // Doc-guard: the SKILL's blocker list IS the code's, and no emit site can raise any other code as a blocker.
   const skill = readRepo("claude-plugin/skills/audit-design/SKILL.md");
   const line = /Blocker codes: ([^\n]*)/.exec(skill)?.[1] ?? "";
   const listed = [...line.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).sort();
-  check("[D1 doc-guard] SKILL.md's 'Blocker codes:' list equals BLOCKER_CODES", JSON.stringify(listed) === JSON.stringify([...BLOCKER_CODES].sort()));
+  check("[doc-guard] SKILL.md's 'Blocker codes:' list equals BLOCKER_CODES", JSON.stringify(listed) === JSON.stringify([...BLOCKER_CODES].sort()));
   const emitted = new Set<string>();
   for (const f of ["design-to-code/audit.ts", "design-to-code/cross-check.ts"]) {
     for (const m of readRepo(f).matchAll(/"blocker"(?:\s*:\s*"(?:warning|info)")?,\s*"([a-z]+(?:-[a-z]+)+)"/g)) if (m[1]) emitted.add(m[1]);
   }
-  check("[D1 doc-guard] every code emitted as \"blocker\" in audit.ts/cross-check.ts is in BLOCKER_CODES (and the scan found some)",
+  check("[doc-guard] every code emitted as \"blocker\" in audit.ts/cross-check.ts is in BLOCKER_CODES (and the scan found some)",
     emitted.size >= 3 && [...emitted].every((c) => (BLOCKER_CODES as readonly string[]).includes(c)));
-  check("[D1 doc-guard] the scan also sees the conditional token-name-collision emit", emitted.has("token-name-collision"));
+  check("[doc-guard] the scan also sees the conditional token-name-collision emit", emitted.has("token-name-collision"));
 }
 {
-  // D1: cross-file warnings carry a confirm question, and the audit asks it with the others.
+  // cross-file warnings carry a confirm question, and the audit asks it with the others.
   const doc = screenExport([{ id: "1:1", type: "FRAME", name: "Items", children: [{ id: "1:2", type: "INSTANCE", name: "Widget", mainComponent: { name: "Widget", key: "k-w-v", setKey: "k-w", setName: "Widget" } }] }], { screen: "Items" });
   const res = audit({ doc, label: "Items" }, { platform: "web", designSystem: { components: { components: [{ name: "Other", type: "COMPONENT_SET", key: "k-o" }] } } });
   const f = res.findings.find((x) => x.code === "catalog-covers-nothing");
-  check("[D1] catalog-covers-nothing reaches the audit as a warning, and its confirm question is asked", f?.severity === "warning" && res.questions.some((q) => /^Confirm \(catalog-covers-nothing\): /.test(q)));
-  check("[D1] …so the gate has no blocker for it", res.summary.blockers === 0);
+  check("catalog-covers-nothing reaches the audit as a warning, and its confirm question is asked", f?.severity === "warning" && res.questions.some((q) => /^Confirm \(catalog-covers-nothing\): /.test(q)));
+  check("…so the gate has no blocker for it", res.summary.blockers === 0);
 }
 {
-  // DT-21 / F-10: overrides re-render BOTH files; the gate reads the same severity as the .md.
+  // overrides re-render BOTH files; the gate reads the same severity as the .md.
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "audit-overrides-"));
   const screenFile = path.join(cwd, "design", "export", "pages", "Main", "Login__1_1.json");
   fs.mkdirSync(path.dirname(screenFile), { recursive: true });
@@ -735,23 +735,23 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   const json = parseAs(fs.readFileSync(path.join(cwd, "design", "audit", "Login__1_1.json"), "utf8"), isAuditReport, "audit report");
   const md = fs.readFileSync(path.join(cwd, "design", "audit", "Login__1_1.md"), "utf8");
   const font = json.findings.find((f) => f.code === "missing-font");
-  check("[DT-21] before: missing-font is a blocker the gate sees", before.status === 0 && beforeGate.blockers.includes("missing-font@1:11"));
-  check("[DT-21] an override downgrades it in the .json (summary + finding, with from/reason/decidedBy)",
+  check("before: missing-font is a blocker the gate sees", before.status === 0 && beforeGate.blockers.includes("missing-font@1:11"));
+  check("an override downgrades it in the .json (summary + finding, with from/reason/decidedBy)",
     after.status === 0 && json.summary.blockers === 0 && font?.severity === "warning" && font.overridden?.from === "blocker" && font.overridden.decidedBy === "user");
-  check("[DT-21] …and in the .md, marked with the old severity and the reason", /`missing-font` .*\*\(was blocker: the font files are licensed and in the repo\)\*/.test(md) && /\*\*0 blocker\(s\)\*\*/.test(md));
-  check("[F-10] the gate reads the same decision: no blockers left", auditGateStatus(cwd, screenFile, "Login").blockers.length === 0);
-  check("[DT-21] an override that matches nothing is reported (JSON, .md, stderr), not dropped",
+  check("…and in the .md, marked with the old severity and the reason", /`missing-font` .*\*\(was blocker: the font files are licensed and in the repo\)\*/.test(md) && /\*\*0 blocker\(s\)\*\*/.test(md));
+  check("the gate reads the same decision: no blockers left", auditGateStatus(cwd, screenFile, "Login").blockers.length === 0);
+  check("an override that matches nothing is reported (JSON, .md, stderr), not dropped",
     json.overridesUnmatched?.length === 1 && json.overridesUnmatched[0]?.code === "export-truncated" && /matched no finding/.test(md) && /override for export-truncated NOT applied: matched no finding/.test(after.stderr));
   fs.writeFileSync(ovFile, JSON.stringify({ overrides: [{ code: "missing-font", severity: "warning", reason: "" }] }));
   const bad = run();
-  check("[DT-21] an override with no reason is refused (exit 2, one line) — a silent non-decision would re-open the blocker", bad.status === 2 && /audit overrides: .* is not an audit overrides file/.test(bad.stderr));
+  check("an override with no reason is refused (exit 2, one line) — a silent non-decision would re-open the blocker", bad.status === 2 && /audit overrides: .* is not an audit overrides file/.test(bad.stderr));
   // The gate's name lookup must never take a sidecar (.overrides/.cross) for the report.
   fs.writeFileSync(ovFile, JSON.stringify({ overrides: [] }));
   fs.writeFileSync(path.join(cwd, "design", "audit", "Login__1_1.cross.json"), JSON.stringify({ findings: [{ severity: "blocker", code: "catalog-rekeyed", message: "x" }], summary: {} }));
   check("[gate] name lookup skips <screen>.cross.json / .overrides.json and finds the report itself", locateAuditFile(cwd, null, "Login") === "design/audit/Login__1_1.json");
 }
 {
-  // DT-22 / F-18: a same-page frame whose copy reads like the missing state is named; orphan screenshots are listed.
+  // a same-page frame whose copy reads like the missing state is named; orphan screenshots are listed.
   const layers = [
     { id: "5:1", name: "Items", page: "Main", pageId: "0:1", file: "pages/Main/Items__5_1.json", title: "Items", texts: ["Items", "Add item"] },
     { id: "5:2", name: "Items", page: "Main", pageId: "0:1", file: "pages/Main/Items__5_2.json", title: "Items", texts: ["Items", "No items added yet.", "Add item"] },
@@ -760,11 +760,11 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   ];
   const res = audit(g4([{ id: "5:1", type: "FRAME", name: "Items" }]), { platform: "web", neighbours: { layers, unexportedShots: ["7:1", "7:2"] } });
   const sib = res.findings.find((f) => f.code === "state-in-sibling");
-  check("[DT-22] a same-page frame reading 'No items added yet.' is named as the likely empty state", sib?.state === "empty" && sib.candidates?.[0]?.id === "5:2" && res.questions.some((q) => /No empty state in this frame — is 'Items' \(5:2: "No items added yet\."\)/.test(q)));
-  check("[DT-22] an unrelated frame on the same page ('No projects yet.') is not offered as THIS screen's empty state", !(sib?.candidates || []).some((c) => c.id === "5:3"));
-  check("[DT-22] a frame on ANOTHER page is not a candidate (its 'Something went wrong' is someone else's error)", !res.findings.some((f) => f.code === "state-in-sibling" && f.state === "error"));
-  check("[DT-22] the state itself stays not-found — a text match is a lead, not proof", res.screenStates.empty === "not-found");
-  check("[DT-22] frames screenshotted but never exported are listed", res.findings.some((f) => f.code === "unexported-frames" && JSON.stringify(f.ids) === JSON.stringify(["7:1", "7:2"])));
+  check("a same-page frame reading 'No items added yet.' is named as the likely empty state", sib?.state === "empty" && sib.candidates?.[0]?.id === "5:2" && res.questions.some((q) => /No empty state in this frame — is 'Items' \(5:2: "No items added yet\."\)/.test(q)));
+  check("an unrelated frame on the same page ('No projects yet.') is not offered as THIS screen's empty state", !(sib?.candidates || []).some((c) => c.id === "5:3"));
+  check("a frame on ANOTHER page is not a candidate (its 'Something went wrong' is someone else's error)", !res.findings.some((f) => f.code === "state-in-sibling" && f.state === "error"));
+  check("the state itself stays not-found — a text match is a lead, not proof", res.screenStates.empty === "not-found");
+  check("frames screenshotted but never exported are listed", res.findings.some((f) => f.code === "unexported-frames" && JSON.stringify(f.ids) === JSON.stringify(["7:1", "7:2"])));
   // End to end: the CLI reads pages/index.json and assets/ beside the screen.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "audit-neighbours-"));
   const put = (rel: string, body: string | object): void => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, typeof body === "string" ? body : JSON.stringify(body)); };
@@ -776,67 +776,67 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   put("design/export/pages/Main/Items__5_1.json", screenExport([{ id: "5:1", type: "FRAME", name: "Items" }], { screen: "Items" }));
   put("design/export/assets/5_1_ref.png", "png"); put("design/export/assets/7_1_ref.png", "png"); put("design/export/assets/7_2_shot@0.25x.png", "png");
   const out = parseAs(execFileSync(process.execPath, [cli, "design/export/pages/Main/Items__5_1.json", "--platform", "web", "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isAuditReport, "audit --json");
-  check("[DT-22 CLI] the sibling sweep and orphan screenshots come from disk (the audited frame's own ref is not an orphan)",
+  check("[CLI] the sibling sweep and orphan screenshots come from disk (the audited frame's own ref is not an orphan)",
     out.findings.some((f) => f.code === "state-in-sibling" && f.candidates?.[0]?.id === "5:2") && JSON.stringify(out.findings.find((f) => f.code === "unexported-frames")?.ids) === JSON.stringify(["7:1", "7:2"]));
 }
 {
-  // D12 doc-guards: the skill still forks, is disk-only by default, calls Figma only in paragraphs about `live`, and reports its commands.
+  // Doc-guards: the skill still forks, is disk-only by default, calls Figma only in paragraphs about `live`, and reports its commands.
   const skill = readRepo("claude-plugin/skills/audit-design/SKILL.md");
-  check("[D12] audit-design keeps context: fork and takes a `--live` flag", /\ncontext: fork\n/.test(skill) && /argument-hint: .*\[--live\]/.test(skill));
-  check("[D12/DT-19] the disk-only rule is stated, keyed on the flag (not a word a screen name can contain)", /\*\*Disk-only unless told otherwise\.\*\*/.test(skill) && /ends with the flag `--live`/.test(skill) && !/contains the word `live`/.test(skill));
+  check("audit-design keeps context: fork and takes a `--live` flag", /\ncontext: fork\n/.test(skill) && /argument-hint: .*\[--live\]/.test(skill));
+  check("the disk-only rule is stated, keyed on the flag (not a word a screen name can contain)", /\*\*Disk-only unless told otherwise\.\*\*/.test(skill) && /ends with the flag `--live`/.test(skill) && !/contains the word `live`/.test(skill));
   // Any `dtwin <command>` or `figma_*` named in a paragraph — except the one sentence saying what --as-library WRITES.
   const callParas = skill.split(/\n\s*\n/).filter((p) => /`dtwin (?!pull --as-library)[a-z-]+|`figma_[a-z_]+`/.test(p));
-  check("[D12/DT-16] every paragraph that names a Figma-reaching call is about `--live` (or is printed output)", callParas.length > 0 && callParas.every((p) => /`--live`|\*\*Live only\*\*|prints/.test(p))); // not "the live run" — the FLAG
-  check("[D12/F-21] the hand-back lists every command run", /list \*\*every command you ran\*\*/.test(skill));
-  check("[DT-21] the skill says to record severity changes in the overrides file, not the .md", /Never change a severity by editing the `\.md`/.test(skill) && /\.overrides\.json/.test(skill));
+  check("every paragraph that names a Figma-reaching call is about `--live` (or is printed output)", callParas.length > 0 && callParas.every((p) => /`--live`|\*\*Live only\*\*|prints/.test(p))); // not "the live run" — the FLAG
+  check("the hand-back lists every command run", /list \*\*every command you ran\*\*/.test(skill));
+  check("the skill says to record severity changes in the overrides file, not the .md", /Never change a severity by editing the `\.md`/.test(skill) && /\.overrides\.json/.test(skill));
 }
 {
-  // F-19: every CLI remediation hint in finding text names its MCP twin, or says it has none.
+  // every CLI remediation hint in finding text names its MCP twin, or says it has none.
   const lines = ["design-to-code/cross-check.ts", "design-to-code/drift-lint.ts"].flatMap((f) => readRepo(f).split("\n")).filter((l) => !/^\s*\/\//.test(l));
   const asLib = lines.filter((l) => /dtwin pull --as-library/.test(l));
   const listLib = lines.filter((l) => /dtwin list libraries/.test(l));
-  check("[F-19] every `dtwin pull --as-library` hint says it is CLI only", asLib.length >= 2 && asLib.every((l) => /CLI only/.test(l)));
-  check("[F-19] every `dtwin list libraries` hint names figma_list_libraries", listLib.length >= 1 && listLib.every((l) => /figma_list_libraries/.test(l)));
+  check("every `dtwin pull --as-library` hint says it is CLI only", asLib.length >= 2 && asLib.every((l) => /CLI only/.test(l)));
+  check("every `dtwin list libraries` hint names figma_list_libraries", listLib.length >= 1 && listLib.every((l) => /figma_list_libraries/.test(l)));
 }
 
-// ---- review round 1 of group 5
+// ---- override reaches the cross-file section
 {
-  // H1: an override reaches the cross-file section too — .md, crossFile.findings and crossFile.summary agree.
+  // an override reaches the cross-file section too — .md, crossFile.findings and crossFile.summary agree.
   const vars: TokensDoc = { collections: [{ name: "Spacing", modes: ["Desktop"], default: "Desktop", theming: false, key: "screen-space" }],
     variables: [{ name: "(Space 3)", collection: "Spacing", tier: "primitive", key: "screen-k2", type: "FLOAT", values: { Desktop: 12 } }] };
   const dsTokens: TokensDoc = { collections: [{ name: "Spacing", modes: ["Mode 1"], default: "Mode 1", theming: false, key: "ds-space" }],
     variables: [{ name: "Space 3", collection: "Spacing", tier: "primitive", key: "ds-k2", type: "FLOAT", values: { "Mode 1": 16 } }] };
   const input: AuditInput = { doc: screenExport([{ id: "10:1", type: "FRAME", name: "Items", children: [{ id: "10:2", type: "FRAME", name: "Row", tokens: { itemSpacing: "(Space 3)" } }] }], { screen: "Items" }), label: "Items", vars };
   const base = audit(input, { platform: "web", designSystem: { tokens: dsTokens }, variables: vars });
-  check("[review H1] setup: a used name clash is a blocker in both places", base.summary.blockers === 1 && base.crossFile?.summary.blockers === 1);
+  check("setup: a used name clash is a blocker in both places", base.summary.blockers === 1 && base.crossFile?.summary.blockers === 1);
   const decided = audit(input, { platform: "web", designSystem: { tokens: dsTokens }, variables: vars,
     overrides: [{ code: "token-name-collision", token: "(Space 3)", severity: "warning", reason: "the screen's value is the intended one", decidedBy: "user" }] });
   const md = toMarkdown(decided);
   const crossBlock = md.slice(md.indexOf("## Does this screen come from"), md.indexOf("## Token binding"));
-  check("[review H1] after a downgrade, crossFile.findings and crossFile.summary say warning too", decided.summary.blockers === 0 && decided.crossFile?.summary.blockers === 0 && decided.crossFile.findings.find((f) => f.code === "token-name-collision")?.severity === "warning");
-  check("[review H1] …and so does the .md's cross-file section, with the decision", !/\*\*blocker\*\*/.test(crossBlock) && /\*\*warning\*\* `token-name-collision`.*\(was blocker: the screen's value is the intended one\)/.test(crossBlock));
+  check("after a downgrade, crossFile.findings and crossFile.summary say warning too", decided.summary.blockers === 0 && decided.crossFile?.summary.blockers === 0 && decided.crossFile.findings.find((f) => f.code === "token-name-collision")?.severity === "warning");
+  check("…and so does the .md's cross-file section, with the decision", !/\*\*blocker\*\*/.test(crossBlock) && /\*\*warning\*\* `token-name-collision`.*\(was blocker: the screen's value is the intended one\)/.test(crossBlock));
 }
 {
-  // M4: override rules.
+  // override rules.
   const login = readFixture(path.join(import.meta.dirname, "fixtures", "audit", "flawed-login.json"), isScreenExport);
   const run = (overrides: NonNullable<AuditOptions["overrides"]>) => audit({ doc: login, label: "Login" }, { platform: "ios", overrides });
   const broad = run([{ code: "missing-font", severity: "warning", reason: "fonts are licensed", decidedBy: "user" }]);
-  check("[review M4a] an entry without nodeId for a node-level code is too broad — not applied", broad.summary.blockers === 1 && /too broad/.test(broad.overridesUnmatched?.[0]?.why ?? ""));
+  check("an entry without nodeId for a node-level code is too broad — not applied", broad.summary.blockers === 1 && /too broad/.test(broad.overridesUnmatched?.[0]?.why ?? ""));
   const raise = run([{ code: "low-contrast", nodeId: "1:4", severity: "blocker", reason: "brand rule", decidedBy: "user" }]);
-  check("[review M4b] a non-blocker code cannot be raised to a blocker", raise.summary.blockers === 1 && /can be blockers/.test(raise.overridesUnmatched?.[0]?.why ?? ""));
+  check("a non-blocker code cannot be raised to a blocker", raise.summary.blockers === 1 && /can be blockers/.test(raise.overridesUnmatched?.[0]?.why ?? ""));
   const nobody = run([{ code: "missing-font", nodeId: "1:11", severity: "warning", reason: "fonts are licensed" }]);
-  check("[review M4e] downgrading a blocker without decidedBy is refused", nobody.summary.blockers === 1 && /needs decidedBy/.test(nobody.overridesUnmatched?.[0]?.why ?? ""));
+  check("[review] downgrading a blocker without decidedBy is refused", nobody.summary.blockers === 1 && /needs decidedBy/.test(nobody.overridesUnmatched?.[0]?.why ?? ""));
   const twice = run([{ code: "missing-font", nodeId: "1:11", severity: "warning", reason: "a", decidedBy: "user" }, { code: "missing-font", nodeId: "1:11", severity: "info", reason: "b", decidedBy: "user" }]);
-  check("[review M4c] a second entry on an already-decided finding is not reported as stale (first wins)", twice.summary.blockers === 0 && !twice.overridesUnmatched && twice.findings.find((f) => f.code === "missing-font")?.severity === "warning");
-  // M4d: a decided cross-file warning's confirm question is not asked again.
+  check("a second entry on an already-decided finding is not reported as stale (first wins)", twice.summary.blockers === 0 && !twice.overridesUnmatched && twice.findings.find((f) => f.code === "missing-font")?.severity === "warning");
+  // a decided cross-file warning's confirm question is not asked again.
   const doc = screenExport([{ id: "1:1", type: "FRAME", name: "Items", children: [{ id: "1:2", type: "INSTANCE", name: "Widget", mainComponent: { name: "Widget", key: "k-w-v", setKey: "k-w", setName: "Widget" } }] }], { screen: "Items" });
   const ds = { components: { components: [{ name: "Other", type: "COMPONENT_SET" as const, key: "k-o" }] } };
   const asked = audit({ doc, label: "Items" }, { platform: "web", designSystem: ds });
   const answered = audit({ doc, label: "Items" }, { platform: "web", designSystem: ds, overrides: [{ code: "catalog-covers-nothing", severity: "info", reason: "confirmed: every instance is new work", decidedBy: "user" }] });
-  check("[review M4d] once decided, the confirm question is not asked again", asked.questions.some((q) => /^Confirm \(catalog-covers-nothing\)/.test(q)) && !answered.questions.some((q) => /^Confirm \(catalog-covers-nothing\)/.test(q)));
+  check("once decided, the confirm question is not asked again", asked.questions.some((q) => /^Confirm \(catalog-covers-nothing\)/.test(q)) && !answered.questions.some((q) => /^Confirm \(catalog-covers-nothing\)/.test(q)));
 }
 {
-  // M3: frames sharing a generic name ("Popup" ×3) are not related through the name; titles decide.
+  // frames sharing a generic name ("Popup" ×3) are not related through the name; titles decide.
   const layers = [
     { id: "11:1", name: "Popup", page: "Main", pageId: "0:1", file: "pages/Main/Popup__11_1.json", title: "Add Item", texts: ["Add Item"] },
     { id: "11:2", name: "Popup", page: "Main", pageId: "0:1", file: "pages/Main/Popup__11_2.json", title: "Export Report", texts: ["Export Report", "Loading…", "Something went wrong"] },
@@ -844,10 +844,10 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   ];
   const res = audit(g4([{ id: "11:1", type: "FRAME", name: "Popup" }], "Popup"), { platform: "web", neighbours: { layers, unexportedShots: [] } });
   const err = res.findings.find((f) => f.code === "state-in-sibling" && f.state === "error");
-  check("[review M3] a same-named frame with a DIFFERENT title is not offered; one with the same title is", !!err && JSON.stringify(err.candidates?.map((c) => c.id)) === JSON.stringify(["11:3"]) && !res.findings.some((f) => f.code === "state-in-sibling" && f.state === "loading"));
+  check("a same-named frame with a DIFFERENT title is not offered; one with the same title is", !!err && JSON.stringify(err.candidates?.map((c) => c.id)) === JSON.stringify(["11:3"]) && !res.findings.some((f) => f.code === "state-in-sibling" && f.state === "loading"));
 }
 {
-  // M7: a sidecar report (<screen>.library.json) is not "an existing report for this node" — the documented re-run works.
+  // a sidecar report (<screen>.library.json) is not "an existing report for this node" — the documented re-run works.
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "audit-sidecar-"));
   const screenFile = path.join(cwd, "design", "export", "pages", "Main", "Login__1_1.json");
   fs.mkdirSync(path.dirname(screenFile), { recursive: true });
@@ -855,35 +855,35 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   const run = (args: string[]) => spawnSync(process.execPath, [cli, path.relative(cwd, screenFile), "--platform", "ios", ...args], { encoding: "utf8", cwd });
   const first = run([]);
   const lib = run(["--out", "design/audit/Login__1_1.library"]);
-  check("[review M7] `--out design/audit/<screen>.library` beside the main report is not refused as a duplicate", first.status === 0 && lib.status === 0 && fs.existsSync(path.join(cwd, "design", "audit", "Login__1_1.library.json")));
+  check("`--out design/audit/<screen>.library` beside the main report is not refused as a duplicate", first.status === 0 && lib.status === 0 && fs.existsSync(path.join(cwd, "design", "audit", "Login__1_1.library.json")));
 }
 
-// ---- review round 2 of group 5
+// ---- narrowing codes that repeat per collection / mode / state
 {
-  // M1: codes that repeat per collection / mode / state are narrowed by that key; a bare entry is too broad.
+  // codes that repeat per collection / mode / state are narrowed by that key; a bare entry is too broad.
   const layers = [
     { id: "12:1", name: "Items", page: "Main", pageId: "0:1", file: "pages/Main/Items__12_1.json", title: "Items", texts: ["Items"] },
     { id: "12:2", name: "Items", page: "Main", pageId: "0:1", file: "pages/Main/Items__12_2.json", title: "Items", texts: ["No items added yet.", "Something went wrong"] },
   ];
   const run = (overrides: NonNullable<AuditOptions["overrides"]>) => audit(g4([{ id: "12:1", type: "FRAME", name: "Items" }]), { platform: "web", neighbours: { layers, unexportedShots: [] }, overrides });
   const bare = run([{ code: "state-in-sibling", severity: "warning", reason: "track it" }]);
-  check("[re-review M1] a bare entry on a code found twice (empty + error) is too broad", /too broad — name the finding \(.*state/.test(bare.overridesUnmatched?.[0]?.why ?? "") && bare.findings.every((f) => f.code !== "state-in-sibling" || f.severity === "info"));
+  check("a bare entry on a code found twice (empty + error) is too broad", /too broad — name the finding \(.*state/.test(bare.overridesUnmatched?.[0]?.why ?? "") && bare.findings.every((f) => f.code !== "state-in-sibling" || f.severity === "info"));
   const one = run([{ code: "state-in-sibling", state: "empty", severity: "warning", reason: "track it" }]);
-  check("[re-review M1] naming `state` decides exactly that finding", one.findings.filter((f) => f.code === "state-in-sibling" && f.severity === "warning").map((f) => f.state).join() === "empty" && !one.overridesUnmatched);
+  check("naming `state` decides exactly that finding", one.findings.filter((f) => f.code === "state-in-sibling" && f.severity === "warning").map((f) => f.state).join() === "empty" && !one.overridesUnmatched);
 }
 {
-  // M2 (test gaps): each M3 guard on its own.
+  // each guard on its own.
   const mk = (rows: Array<{ id: string; name: string; title?: string; texts: string[] }>) => rows.map((r) => ({ ...r, page: "Main", pageId: "0:1", file: `pages/Main/x__${r.id.replace(":", "_")}.json` }));
   const cand = (layers: ReturnType<typeof mk>) => audit(g4([{ id: "13:1", type: "FRAME", name: "Popup" }], "Popup"), { platform: "web", neighbours: { layers, unexportedShots: [] } }).findings.find((f) => f.code === "state-in-sibling")?.candidates?.map((c) => c.id) ?? [];
-  check("[re-review M2] a name used 3 times on the page, no titles anywhere → not related by name",
+  check("a name used 3 times on the page, no titles anywhere → not related by name",
     cand(mk([{ id: "13:1", name: "Popup", texts: [] }, { id: "13:2", name: "Popup", texts: ["Something went wrong"] }, { id: "13:3", name: "Popup", texts: [] }])).length === 0);
-  check("[re-review M2] a name used twice but the titles disagree → not related",
+  check("a name used twice but the titles disagree → not related",
     cand(mk([{ id: "13:1", name: "Popup", title: "Add Item", texts: [] }, { id: "13:2", name: "Popup", title: "Export Report", texts: ["Something went wrong"] }])).length === 0);
-  check("[re-review M2] a name used twice, no titles → related",
+  check("a name used twice, no titles → related",
     JSON.stringify(cand(mk([{ id: "13:1", name: "Popup", texts: [] }, { id: "13:2", name: "Popup", texts: ["Something went wrong"] }]))) === JSON.stringify(["13:2"]));
 }
 {
-  // M2 (test gaps): hashed reference names count as screenshots; a sidecar of ANOTHER report never blocks a write;
+  // hashed reference names count as screenshots; a sidecar of ANOTHER report never blocks a write;
   // LOW: a sidecar run reads its report's overrides file.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "audit-hash-"));
   const put = (rel: string, body: string | object): string => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, typeof body === "string" ? body : JSON.stringify(body)); return f; };
@@ -897,38 +897,38 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   const r = spawnSync(process.execPath, [cli, screenRel, "--platform", "ios"], { encoding: "utf8", cwd: root });
   const repFile = path.join(root, "design/audit/Login__1_1.json");
   const rep = fs.existsSync(repFile) ? parseAs(fs.readFileSync(repFile, "utf8"), isAuditReport, "report") : { findings: [] as AuditFinding[] };
-  check("[re-review M2] another report's sidecar that covers the node does not refuse the write", r.status === 0);
-  check("[re-review M2] hashed reference names (_ref-<hash>.png, _ref-<hash>_N.png) are screenshots too", JSON.stringify(rep.findings.find((f) => f.code === "unexported-frames")?.ids) === JSON.stringify(["7:3", "7:4"]));
+  check("another report's sidecar that covers the node does not refuse the write", r.status === 0);
+  check("hashed reference names (_ref-<hash>.png, _ref-<hash>_N.png) are screenshots too", JSON.stringify(rep.findings.find((f) => f.code === "unexported-frames")?.ids) === JSON.stringify(["7:3", "7:4"]));
   put("design/audit/Login__1_1.overrides.json", { overrides: [{ code: "missing-font", nodeId: "1:11", severity: "warning", reason: "licensed", decidedBy: "user" }] });
   const lib = spawnSync(process.execPath, [cli, screenRel, "--platform", "ios", "--out", "design/audit/Login__1_1.library"], { encoding: "utf8", cwd: root });
   const libRep = parseAs(fs.readFileSync(path.join(root, "design/audit/Login__1_1.library.json"), "utf8"), isAuditReport, "library report");
-  check("[re-review LOW] a `<report>.library` run applies the report's own overrides file", lib.status === 0 && libRep.summary.blockers === 0 && /overrides: design\/audit\/Login__1_1\.overrides\.json/.test(lib.stderr));
+  check("a `<report>.library` run applies the report's own overrides file", lib.status === 0 && libRep.summary.blockers === 0 && /overrides: design\/audit\/Login__1_1\.overrides\.json/.test(lib.stderr));
 }
 
 {
-  // F-44: finding ids are `code` / `code@nodeId` (+ `~n`), on every finding — so a blocker added EARLIER in
+  // finding ids are `code` / `code@nodeId` (+ `~n`), on every finding — so a blocker added EARLIER in
   // the report leaves the others' ids alone. Before: `<code>#<i>` by position among blockers (#0/#1 → #1/#2).
   const text = (id: string, name: string): NodeInput => ({ id, type: "TEXT", name, text: name, missingFont: true, font: { family: "Acme Sans", size: 14 } });
   const run = (nodes: NodeInput[]) => audit({ doc: screenExport([{ id: "1:0", type: "FRAME", name: "Sample App", children: nodes }], { screen: "Sample App" }), label: "Sample App" }, { platform: "web" });
   const two = run([text("1:1", "A"), text("1:2", "B")]);
   const three = run([text("1:5", "First"), text("1:1", "A"), text("1:2", "B")]);
   const ids2 = blockerIds(two), ids3 = blockerIds(three);
-  check(`[F44-1] two missing-font blockers get node ids (got ${JSON.stringify(ids2)})`, JSON.stringify(ids2) === JSON.stringify(["missing-font@1:1", "missing-font@1:2"]));
-  check(`[F44-1] a blocker inserted before them leaves both ids unchanged (got ${JSON.stringify(ids3)})`, ids3.includes("missing-font@1:1") && ids3.includes("missing-font@1:2") && ids3.length === 3);
-  check("[F44-1] every finding of the report carries its id (the JSON a plan copies from)",
+  check(`two missing-font blockers get node ids (got ${JSON.stringify(ids2)})`, JSON.stringify(ids2) === JSON.stringify(["missing-font@1:1", "missing-font@1:2"]));
+  check(`a blocker inserted before them leaves both ids unchanged (got ${JSON.stringify(ids3)})`, ids3.includes("missing-font@1:1") && ids3.includes("missing-font@1:2") && ids3.length === 3);
+  check("every finding of the report carries its id (the JSON a plan copies from)",
     three.findings.length > 3 && three.findings.every((f) => typeof f.id === "string" && f.id.startsWith(f.code)) && new Set(three.findings.map((f) => f.id)).size === three.findings.length);
-  const old = { findings: two.findings.map(({ id: _id, ...f }) => f) }; // a report written before F-44 has no ids
-  check("[F44-1] a pre-F-44 report (no ids) gets the same ids, computed from code + node", JSON.stringify(blockerIds(old)) === JSON.stringify(ids2));
+  const old = { findings: two.findings.map(({ id: _id, ...f }) => f) }; // a report written before finding ids existed has no ids
+  check("a report from before finding ids (no ids) gets the same ids, computed from code + node", JSON.stringify(blockerIds(old)) === JSON.stringify(ids2));
   const doc = screenExport([{ id: "1:1", type: "FRAME", name: "Items", children: [{ id: "1:2", type: "INSTANCE", name: "Widget", mainComponent: { name: "Widget", key: "k-w-v", setKey: "k-w", setName: "Widget" } }] }], { screen: "Items" });
   const res = audit({ doc, label: "Items" }, { platform: "web", designSystem: { components: { components: [{ name: "Other", type: "COMPONENT_SET", key: "k-o" }] } } });
   const merged = res.findings.find((x) => x.code === "catalog-covers-nothing");
   const own = res.crossFile?.findings.find((x) => x.code === "catalog-covers-nothing");
-  check("[F44-1] a cross-file finding has the same id in the audit's findings and in its crossFile section", !!merged?.id && merged.id === own?.id);
+  check("a cross-file finding has the same id in the audit's findings and in its crossFile section", !!merged?.id && merged.id === own?.id);
 }
 
 {
-  // F-47 through audit: the embedded cross-check gets the same default map + export siblings as a cross-check
-  // run, so crossFile.componentProposals carry alreadyMapped / sharedWith. Before: no labels in the audit.
+  // The embedded cross-check gets the same default map + export siblings as a cross-check
+  // run, so crossFile.componentProposals carry alreadyMapped / sharedWith.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "audit-f47-"));
   const put = (rel: string, doc: unknown): string => { const f = path.join(tmp, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
   const sidebar = (id: string): NodeInput => ({ type: "INSTANCE", id, name: "Sidebar", component: "State=Open", props: { State: "Open" }, mainComponent: { name: "State=Open", key: "s-sidebar-open", setKey: "s-sidebar", setName: "Sidebar" } });
@@ -947,14 +947,14 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   let props: Array<{ name: string; alreadyMapped?: true; sharedWith?: number }> = [];
   try { props = parseAs(r.stdout, isAuditReport, "audit --json").crossFile?.componentProposals || []; } catch { props = []; }
   const p = (n: string) => props.find((x) => x.name === n);
-  check(`[F47 audit] the audit's cross-file proposals are labelled: Sidebar alreadyMapped + shared with 1, Card shared with 1, Tile screen-only (got ${JSON.stringify(props.map((x) => [x.name, x.alreadyMapped, x.sharedWith]))})`,
+  check(`[audit] the audit's cross-file proposals are labelled: Sidebar alreadyMapped + shared with 1, Card shared with 1, Tile screen-only (got ${JSON.stringify(props.map((x) => [x.name, x.alreadyMapped, x.sharedWith]))})`,
     r.status === 0 && p("Sidebar")?.alreadyMapped === true && p("Sidebar")?.sharedWith === 1 && p("Card")?.sharedWith === 1 && p("Tile")?.sharedWith === 0 && p("Tile")?.alreadyMapped === undefined);
 }
 
-// ================================================================ field tests, group 18 (G18-A: audit design-data checks)
-console.log("field-test group 18:");
+// ================================================================ audit design-data checks
+console.log("audit design-data checks:");
 {
-  // T1 DT-37: one component's text layer — its own copy on one instance, the component's default on another.
+  // one component's text layer — its own copy on one instance, the component's default on another.
   const mc = { name: "Type=Default", key: "k-card-v", setKey: "k-card", setName: "Field Card" };
   const card = (id: string, text: string, extra: Partial<NodeInput> = {}, textExtra: Partial<NodeInput> = {}): NodeInput =>
     ({ id, type: "INSTANCE", name: "Field Card", mainComponent: mc, component: "Type=Default", ...extra, children: [{ id: `I${id};9:2`, type: "TEXT", name: "Label", text, autoResize: "height", ...textExtra }] });
@@ -962,22 +962,22 @@ console.log("field-test group 18:");
   const run = (nodes: NodeInput[]) => audit(g4([{ id: "31:1", type: "FRAME", name: "Details", children: nodes }], "Details"), { platform: "web" });
   const res = run([card("31:2", "Sizes", own), card("31:3", "Summary")]);
   const f = codes(res, "default-copy-in-instance");
-  check("[T1 DT-37] an instance still showing the default copy beside one with its own → ONE info naming both copies",
+  check("an instance still showing the default copy beside one with its own → ONE info naming both copies",
     f.length === 1 && f[0]?.severity === "info" && f[0].nodeId === "I31:3;9:2" && JSON.stringify(f[0].nodeIds) === JSON.stringify(["I31:3;9:2"])
     && f[0].copies?.default === "Summary" && JSON.stringify(f[0].copies.overridden) === JSON.stringify(["Sizes"]) && /'Field Card' > 'Label'/.test(f[0].message));
-  check("[T1 DT-37] …and asks the designer", res.questions.some((q) => /still says "Summary" \(the component's default\)/.test(q)));
-  check("[T1 DT-37] negative: no instance overrides the layer → nothing to compare against", codes(run([card("31:3", "Summary"), card("31:4", "Summary")]), "default-copy-in-instance").length === 0);
+  check("…and asks the designer", res.questions.some((q) => /still says "Summary" \(the component's default\)/.test(q)));
+  check("negative: no instance overrides the layer → nothing to compare against", codes(run([card("31:3", "Summary"), card("31:4", "Summary")]), "default-copy-in-instance").length === 0);
   const prop = { propRefs: { characters: "Label#1:0" } };
-  check("[T1 DT-37] negative: a text a TEXT property drives (propRefs.characters) is not judged by overrides",
+  check("negative: a text a TEXT property drives (propRefs.characters) is not judged by overrides",
     codes(run([card("31:2", "Sizes", own, prop), card("31:3", "Summary", {}, prop)]), "default-copy-in-instance").length === 0);
   const capped = { overrides: [{ id: "I31:2;9:2", fields: ["characters"] }, ...Array.from({ length: 99 }, (_, i) => ({ id: `I31:2;8:${i}`, fields: ["fills"] }))] };
-  check("[T1 DT-37] negative: an instance whose override list hit the plugin's 100-entry cap is not judged",
+  check("negative: an instance whose override list hit the plugin's 100-entry cap is not judged",
     codes(run([card("31:2", "Sizes", capped), card("31:3", "Summary")]), "default-copy-in-instance").length === 0);
-  check("[T1 DT-37] negative: a default copy equal to an overridden one is a real value",
+  check("negative: a default copy equal to an overridden one is a real value",
     codes(run([card("31:2", "Sizes", own), card("31:3", "Sizes")]), "default-copy-in-instance").length === 0);
 }
 {
-  // T2 F-55: a prototype target that was never exported.
+  // a prototype target that was never exported.
   const opener = (dest: string, navigation: string, extra: Partial<NodeInput> = {}): NodeInput => ({ id: "40:2", type: "FRAME", name: "Export button", ...extra,
     reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: dest, destination: "Export Dialog", navigation }] }] });
   const neighbours = (ids: string[], shots: string[] = []) => ({ layers: [{ id: "40:1", name: "Reports", file: "pages/Main/Reports__40_1.json" }], unexportedShots: shots, exportedIds: new Set(ids) });
@@ -985,18 +985,18 @@ console.log("field-test group 18:");
   const overlay = run([opener("9:9", "overlay")], neighbours(["40:1"]));
   const w = codes(overlay, "prototype-target-not-exported");
   const row = codes(overlay, "prototype-navigation")[0];
-  check("[T2 F-55] an overlay target in no index → ONE warning naming it and the opener", w.length === 1 && w[0]?.severity === "warning" && /'Export Dialog' \(9:9\) opened by 'Export button'/.test(w[0].message) && JSON.stringify(w[0].ids) === JSON.stringify(["9:9"]));
-  check("[T2 F-55] …and its prototype-navigation row says NOT exported (exported:false)", row?.exported === false && / — NOT exported$/.test(row.message));
+  check("an overlay target in no index → ONE warning naming it and the opener", w.length === 1 && w[0]?.severity === "warning" && /'Export Dialog' \(9:9\) opened by 'Export button'/.test(w[0].message) && JSON.stringify(w[0].ids) === JSON.stringify(["9:9"]));
+  check("…and its prototype-navigation row says NOT exported (exported:false)", row?.exported === false && / — NOT exported$/.test(row.message));
   const nav = run([opener("9:9", "navigate")], neighbours(["40:1"]));
-  check("[T2 F-55] a navigate-only target: no warning, the row is annotated", codes(nav, "prototype-target-not-exported").length === 0 && codes(nav, "prototype-navigation")[0]?.exported === false);
+  check("a navigate-only target: no warning, the row is annotated", codes(nav, "prototype-target-not-exported").length === 0 && codes(nav, "prototype-navigation")[0]?.exported === false);
   const listed = run([opener("9:9", "overlay")], neighbours(["40:1", "9:9"]));
-  check("[T2 F-55] a target some index lists → nothing", codes(listed, "prototype-target-not-exported").length === 0 && codes(listed, "prototype-navigation")[0]?.exported === undefined);
+  check("a target some index lists → nothing", codes(listed, "prototype-target-not-exported").length === 0 && codes(listed, "prototype-navigation")[0]?.exported === undefined);
   const drawn = run([opener("40:5", "overlay"), { id: "40:5", type: "FRAME", name: "Export Dialog", hidden: true }], neighbours(["40:1"]));
-  check("[T2 F-55] a target drawn inside this tree (even hidden) → nothing", codes(drawn, "prototype-target-not-exported").length === 0);
+  check("a target drawn inside this tree (even hidden) → nothing", codes(drawn, "prototype-target-not-exported").length === 0);
   const shot = run([opener("9:9", "swap")], neighbours(["40:1"], ["9:9"]));
-  check("[T2 F-55] a swap target screenshotted but not exported → the warning says so", /screenshotted only \(assets\/9_9_ref\.png\)/.test(codes(shot, "prototype-target-not-exported")[0]?.message ?? ""));
+  check("a swap target screenshotted but not exported → the warning says so", /screenshotted only \(assets\/9_9_ref\.png\)/.test(codes(shot, "prototype-target-not-exported")[0]?.message ?? ""));
   const none = run([opener("9:9", "overlay")], null);
-  check("[T2 F-55] no index beside the screen → no claim either way", codes(none, "prototype-target-not-exported").length === 0 && codes(none, "prototype-navigation")[0]?.exported === undefined);
+  check("no index beside the screen → no claim either way", codes(none, "prototype-target-not-exported").length === 0 && codes(none, "prototype-navigation")[0]?.exported === undefined);
   // End to end: the page index (pages/<dir>/index.json) lists the dialog the root index does not.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "audit-f55-"));
   const put = (rel: string, body: object): void => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(body)); };
@@ -1004,13 +1004,13 @@ console.log("field-test group 18:");
   put("design/export/pages/Main/index.json", { page: "Main", layers: [{ id: "40:1", name: "Reports", file: "pages/Main/Reports__40_1.json" }, { id: "9:9", name: "Export Dialog", file: "pages/Main/Export_Dialog__9_9.json" }] });
   put("design/export/pages/Main/Reports__40_1.json", screenExport([{ id: "40:1", type: "FRAME", name: "Reports", children: [opener("9:9", "overlay"), opener("9:8", "overlay", { id: "40:3", name: "Share button" })] }], { screen: "Reports" }));
   const nb = findExportNeighbours(path.join(root, "design/export/pages/Main/Reports__40_1.json"));
-  check("[T2 F-55] findExportNeighbours: exportedIds = the root index's rows ∪ every page index's; layers stay the root's", !!nb?.exportedIds?.has("9:9") && nb.layers.length === 1);
+  check("findExportNeighbours: exportedIds = the root index's rows ∪ every page index's; layers stay the root's", !!nb?.exportedIds?.has("9:9") && nb.layers.length === 1);
   const cliOut = parseAs(execFileSync(process.execPath, [cli, "design/export/pages/Main/Reports__40_1.json", "--platform", "web", "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isAuditReport, "audit --json");
   const cw = codes(cliOut, "prototype-target-not-exported");
-  check("[T2 F-55 CLI] a target only the page index lists is exported; the other is the one warned about", cw.length === 1 && JSON.stringify(cw[0]?.ids) === JSON.stringify(["9:8"]));
+  check("[CLI] a target only the page index lists is exported; the other is the one warned about", cw.length === 1 && JSON.stringify(cw[0]?.ids) === JSON.stringify(["9:8"]));
 }
 {
-  // T3 DT-63: a control's border against the colour AROUND it (WCAG 1.4.11), one finding per stroke/backdrop pair.
+  // a control's border against the colour AROUND it (WCAG 1.4.11), one finding per stroke/backdrop pair.
   const field = (id: string, opts: { fill?: string; stroke?: string; variant?: string; text?: string } = {}): NodeInput => ({
     id, type: "INSTANCE", name: "input Field", component: opts.variant ?? "Status=Default",
     mainComponent: { name: opts.variant ?? "Status=Default", key: "k-in-v", setKey: "k-in", setName: "input Field" },
@@ -1024,25 +1024,25 @@ console.log("field-test group 18:");
   const one = page([field("41:2")]);
   const f = codes(one, "non-text-contrast");
   const want = contrastRatio(must(parseHex("#46464f"), "stroke"), must(parseHex("#121319"), "page"));
-  check(`[T3 DT-63] #46464f border on a #121319 page (fill #292931 does not rescue it) → one warning ≈${want.toFixed(2)}:1, required 3, tokens named`,
+  check(`#46464f border on a #121319 page (fill #292931 does not rescue it) → one warning ≈${want.toFixed(2)}:1, required 3, tokens named`,
     f.length === 1 && f[0]?.severity === "warning" && f[0].nodeId === "I41:2;63:14" && Math.abs((f[0].ratio ?? 0) - want) < 0.01 && f[0].required === 3
     && f[0].stroke === "#46464f" && f[0].backdrop === "#121319" && f[0].strokeToken === "border/default" && f[0].backdropToken === "surface/page" && /1\.4\.11/.test(f[0].message));
-  check("[T3 DT-63] visible text inside the field does not exempt it (the finding above has a placeholder)", f.length === 1);
+  check("visible text inside the field does not exempt it (the finding above has a placeholder)", f.length === 1);
   const two = codes(page([field("41:2"), field("41:3")]), "non-text-contrast");
-  check("[T3 DT-63] two fields with the same pair → ONE finding listing both", two.length === 1 && JSON.stringify(two[0]?.nodeIds) === JSON.stringify(["I41:2;63:14", "I41:3;63:14"]));
-  check("[T3 DT-63] a fill that reaches 3:1 against the page marks the boundary → nothing", codes(page([field("41:2", { fill: "#ffffff" })]), "non-text-contrast").length === 0);
-  check("[T3 DT-63] a disabled variant is exempt (inactive components)", codes(page([field("41:2", { variant: "Status=Disabled" })]), "non-text-contrast").length === 0);
+  check("two fields with the same pair → ONE finding listing both", two.length === 1 && JSON.stringify(two[0]?.nodeIds) === JSON.stringify(["I41:2;63:14", "I41:3;63:14"]));
+  check("a fill that reaches 3:1 against the page marks the boundary → nothing", codes(page([field("41:2", { fill: "#ffffff" })]), "non-text-contrast").length === 0);
+  check("a disabled variant is exempt (inactive components)", codes(page([field("41:2", { variant: "Status=Disabled" })]), "non-text-contrast").length === 0);
   const assumed = codes(page([field("41:2", { stroke: "#d4d4d8", fill: "#fafafa" })], null), "non-text-contrast");
-  check("[T3 DT-63] nothing painted behind → measured on an assumed white page, info", assumed.length === 1 && assumed[0]?.severity === "info" && /assumed white page/.test(assumed[0].message));
-  check("[T3 DT-63] a stroked layer that is no control (a card) is not judged",
+  check("nothing painted behind → measured on an assumed white page, info", assumed.length === 1 && assumed[0]?.severity === "info" && /assumed white page/.test(assumed[0].message));
+  check("a stroked layer that is no control (a card) is not judged",
     codes(page([{ id: "41:9", type: "FRAME", name: "Summary Card", strokes: { colors: ["#46464f"], weight: 1 }, fills: [{ type: "solid", color: "#292931" }] }]), "non-text-contrast").length === 0);
   // The backdrop refactor keeps text contrast as it was: the placeholder's low-contrast is still measured on the composited fill.
   const lc = codes(page([field("41:2", { text: "Enter a name" })], "#121319"), "low-contrast");
-  check("[T3 DT-63] text contrast still composites the same backdrop (#d4d4d4 on #292931 passes — no low-contrast)", lc.length === 0);
+  check("text contrast still composites the same backdrop (#d4d4d4 on #292931 passes — no low-contrast)", lc.length === 0);
 }
 {
-  // T4 F-48: selects.
-  check("[T4 F-48] controlKind: Dropdown / Select / Date Picker / Combo box are selects; Text Field stays an input",
+  // selects.
+  check("controlKind: Dropdown / Select / Date Picker / Combo box are selects; Text Field stays an input",
     controlKind("Dropdown") === "select" && controlKind("Select Field") === "select" && controlKind("Date Picker") === "select" && controlKind("Combo box") === "select" && controlKind("Text Field") === "input" && controlKind("Search") === "input");
   const input = (id: string, kids: NodeInput[]): NodeInput => ({ id, type: "INSTANCE", name: "input Field", component: "Status=Default",
     mainComponent: { name: "Status=Default", key: "k-in-v", setKey: "k-in", setName: "input Field" }, children: [{ id: `I${id};1`, type: "FRAME", name: "Text Input", children: kids }] });
@@ -1050,58 +1050,58 @@ console.log("field-test group 18:");
   const run = (kids: NodeInput[], cat?: ComponentsCatalog) => audit(g4([{ id: "42:1", type: "FRAME", name: "Add Item Dialog", children: kids }], "Add Item"), { platform: "web", ...(cat ? { designSystem: { components: cat } } : {}) });
   const res = run([input("42:2", [prompt("42:3", "Select a size")])]);
   const f = codes(res, "undesigned-open-state");
-  check("[T4 F-48] a generic input showing \"Select a size\" → info + one question", f.length === 1 && f[0]?.severity === "info" && f[0].nodeId === "42:2" && /\("Select a size"\) reads like a select\/picker/.test(f[0].message)
+  check("a generic input showing \"Select a size\" → info + one question", f.length === 1 && f[0]?.severity === "info" && f[0].nodeId === "42:2" && /\("Select a size"\) reads like a select\/picker/.test(f[0].message)
     && res.questions.some((q) => /'input Field' 42:2 \("Select a size"\) reads like a select\/picker/.test(q)));
   const chevron = run([input("42:2", [prompt("42:3", "Sizes"), { id: "42:4", type: "INSTANCE", name: "chevron-down", mainComponent: { name: "chevron-down", key: "k-chev" }, asset: "assets/chev.svg" }])]);
-  check("[T4 F-48] …or one with a visible chevron layer", codes(chevron, "undesigned-open-state").length === 1);
+  check("…or one with a visible chevron layer", codes(chevron, "undesigned-open-state").length === 1);
   const hiddenChevron = run([input("42:2", [prompt("42:3", "Sizes"), { id: "42:4", type: "INSTANCE", name: "chevron-down", hidden: true }])]);
-  check("[T4 F-48] a hidden chevron and a plain prompt → nothing", codes(hiddenChevron, "undesigned-open-state").length === 0);
+  check("a hidden chevron and a plain prompt → nothing", codes(hiddenChevron, "undesigned-open-state").length === 0);
   const withOpen = catalog1([{ name: "input Field", type: "COMPONENT_SET", key: "k-in", props: { Status: { type: "VARIANT", options: ["Default", "Focus", "Error", "Disabled", "Open"] } } }]);
-  check("[T4 F-48] the component's variants already draw it open (Status=Open) → nothing", codes(run([input("42:2", [prompt("42:3", "Select a size")])], withOpen), "undesigned-open-state").length === 0);
+  check("the component's variants already draw it open (Status=Open) → nothing", codes(run([input("42:2", [prompt("42:3", "Select a size")])], withOpen), "undesigned-open-state").length === 0);
   const dd = run([{ id: "42:5", type: "INSTANCE", name: "Dropdown", mainComponent: { name: "State=Default", key: "k-dd-v", setKey: "k-dd", setName: "Dropdown" } }],
     catalog1([{ name: "Dropdown", type: "COMPONENT_SET", key: "k-dd", props: { State: { type: "VARIANT", options: ["Default", "Hover", "Focus", "Disabled"] } } }]));
-  check("[T4 F-48 / L-3] a catalog Dropdown with no open or error variant → missing-component-states lists `error` and `open` (a select in a form validates)",
+  check("a catalog Dropdown with no open or error variant → missing-component-states lists `error` and `open` (a select in a form validates)",
     dd.components.find((c) => c.name === "Dropdown")?.kind === "select" && JSON.stringify(codes(dd, "missing-component-states")[0]?.missing) === JSON.stringify(["error", "open"]));
 }
 {
-  // T5 F-83: an unbound colour a hair off a token.
+  // an unbound colour a hair off a token.
   const vars = tokens({ collections: [{ name: "Colors", modes: ["Dark"], default: "Dark", key: "c-col" }],
     variables: [{ name: "gray/900", collection: "Colors", key: "v-g900", type: "COLOR", values: { Dark: "#121319" } }] });
   const run = (hex: string) => audit(g4([{ id: "43:1", type: "FRAME", name: "Footer page", children: [{ id: "43:2", type: "FRAME", name: "Footer", fills: [{ type: "solid", color: hex }] }] }], "Footer page"), { platform: "web", variables: vars });
   const near = codes(run("#121318"), "near-token-color");
-  check("[T5 F-83] raw #121318 beside token #121319 → info naming the token", near.length === 1 && near[0]?.severity === "info" && near[0].token === "gray/900" && near[0].nodeId === "43:2" && /ΔE 0\.\d+ from token 'gray\/900' \(#121319\)/.test(near[0].message));
-  check("[T5 F-83] a raw colour EQUAL to a token value is not this finding", codes(run("#121319"), "near-token-color").length === 0);
+  check("raw #121318 beside token #121319 → info naming the token", near.length === 1 && near[0]?.severity === "info" && near[0].token === "gray/900" && near[0].nodeId === "43:2" && /ΔE 0\.\d+ from token 'gray\/900' \(#121319\)/.test(near[0].message));
+  check("a raw colour EQUAL to a token value is not this finding", codes(run("#121319"), "near-token-color").length === 0);
   const mid = "#16171d", d = deltaE(must(parseHex(mid), "mid"), must(parseHex("#121319"), "token"));
-  check(`[T5 F-83] ΔE ${d.toFixed(2)} (between 1 and 3) is a different colour → nothing`, d >= 1 && d < 3 && codes(run(mid), "near-token-color").length === 0);
+  check(`ΔE ${d.toFixed(2)} (between 1 and 3) is a different colour → nothing`, d >= 1 && d < 3 && codes(run(mid), "near-token-color").length === 0);
 }
 {
-  // T6 DT-58: the markdown names where a finding sits — the last three layers of its path.
+  // the markdown names where a finding sits — the last three layers of its path.
   const res = audit(g4([{ id: "44:1", type: "FRAME", name: "A", children: [{ id: "44:2", type: "FRAME", name: "B", children: [{ id: "44:3", type: "FRAME", name: "C", children: [
     { id: "44:4", type: "TEXT", name: "D", text: "Deep" }] }] }, { id: "44:5", type: "TEXT", name: "E", text: "Shallow" }] }], "A"), { platform: "web" });
   const md = toMarkdown(res).split("\n");
   const deep = md.find((l) => l.includes("`fixed-size-text`") && l.includes("`44:4`")) ?? "";
   const shallow = md.find((l) => l.includes("`fixed-size-text`") && l.includes("`44:5`")) ?? "";
-  check(`[T6 DT-58] a deep finding's line ends with the path tail (got ${JSON.stringify(deep.slice(-40))})`, deep.endsWith(" in A (… > B > C > D)"));
-  check("[T6 DT-58] a short path is printed whole", shallow.endsWith(" in A (A > E)"));
+  check(`a deep finding's line ends with the path tail (got ${JSON.stringify(deep.slice(-40))})`, deep.endsWith(" in A (… > B > C > D)"));
+  check("a short path is printed whole", shallow.endsWith(" in A (A > E)"));
   const bareMd = toMarkdown({ ...res, findings: [{ severity: "info", code: "near-duplicate-colors", id: "near-duplicate-colors", message: "m", nodeId: "44:9", screen: "A" }] });
-  check("[T6 DT-58] a finding with no path gains nothing", bareMd.split("\n").includes("- `near-duplicate-colors` m — node `44:9` in A"));
-  check("[T6 DT-58] the JSON keeps the full path", codes(res, "fixed-size-text").find((f) => f.nodeId === "44:4")?.path === "A > B > C > D");
+  check("a finding with no path gains nothing", bareMd.split("\n").includes("- `near-duplicate-colors` m — node `44:9` in A"));
+  check("the JSON keeps the full path", codes(res, "fixed-size-text").find((f) => f.nodeId === "44:4")?.path === "A > B > C > D");
 }
 {
-  // T7 F-87: a stray absolute copy laid over the frame.
+  // a stray absolute copy laid over the frame.
   const footer = (id: string, extra: Partial<NodeInput> = {}, w = 1160): NodeInput => ({ id, type: "FRAME", name: "Footer", box: { w, h: 60 }, ...extra,
     children: [{ id: `${id}t`, type: "TEXT", name: "Copyright", text: "© 2026 Sample App", autoResize: "width_and_height" }] });
   const run = (kids: NodeInput[]) => audit(g4([{ id: "45:1", type: "FRAME", name: "Settings", box: { x: 100, y: 0, w: 1440, h: 1300 }, layout: { display: "flex", flexDirection: "column" }, children: [
     { id: "45:2", type: "FRAME", name: "Main", box: { w: 1160, h: 1240 }, children: [footer("45:3")] }, ...kids] }], "Settings"), { platform: "web" });
   const stray = codes(run([footer("45:9", { absolute: true, box: { x: 380, y: 1182, w: 1160, h: 60 } })]), "duplicate-root-subtree");
-  check("[T7 F-87] an absolute root child with the same texts and size as an in-flow node → warning with twinId and position",
+  check("an absolute root child with the same texts and size as an in-flow node → warning with twinId and position",
     stray.length === 1 && stray[0]?.severity === "warning" && stray[0].nodeId === "45:9" && stray[0].twinId === "45:3" && /at 280,1182 duplicates 'Footer' \(45:3\)/.test(stray[0].message));
-  check("[T7 F-87] a hidden copy → nothing", codes(run([footer("45:9", { absolute: true, hidden: true, box: { x: 380, y: 1182, w: 1160, h: 60 } })]), "duplicate-root-subtree").length === 0);
-  check("[T7 F-87] an in-flow copy (not absolute) → nothing", codes(run([footer("45:9")]), "duplicate-root-subtree").length === 0);
-  check("[T7 F-87] an absolute copy of another size → nothing", codes(run([footer("45:9", { absolute: true, box: { x: 380, y: 1182, w: 900, h: 60 } }, 900)]), "duplicate-root-subtree").length === 0);
+  check("a hidden copy → nothing", codes(run([footer("45:9", { absolute: true, hidden: true, box: { x: 380, y: 1182, w: 1160, h: 60 } })]), "duplicate-root-subtree").length === 0);
+  check("an in-flow copy (not absolute) → nothing", codes(run([footer("45:9")]), "duplicate-root-subtree").length === 0);
+  check("an absolute copy of another size → nothing", codes(run([footer("45:9", { absolute: true, box: { x: 380, y: 1182, w: 900, h: 60 } }, 900)]), "duplicate-root-subtree").length === 0);
 }
-// ================================================================ review 1 of groups 18+19, fix pass 1 (D127)
-console.log("field-test group 18 — fix pass 1:");
+// ================================================================ input fields: border on an inner frame
+console.log("input fields: border on an inner frame:");
 {
   // Fixtures: an input instance (its fill on the instance, or none) holding an inner frame that carries the border.
   const field = (id: string, o: { instFill?: string; innerFill?: string; stroke?: string[]; variant?: string; props?: Record<string, string | boolean>; inner?: Partial<NodeInput> } = {}): NodeInput => ({
@@ -1114,96 +1114,96 @@ console.log("field-test group 18 — fix pass 1:");
   const page = (kids: NodeInput[], fill = "#121212", extra: Partial<NodeInput> = {}) => audit(g4([{ id: "50:1", type: "FRAME", name: "Profile", fills: [{ type: "solid", color: fill, tokens: { color: "surface/page" } }], ...extra, children: kids }], "Profile"), { platform: "web" });
   const ntc = (kids: NodeInput[], fill?: string) => codes(page(kids, fill), "non-text-contrast");
 
-  // M-2: the stroke is measured against the colour OUTSIDE the control, also when fill and border sit on different layers.
+  // the stroke is measured against the colour OUTSIDE the control, also when fill and border sit on different layers.
   const split = ntc([field("50:2", { instFill: "#2a2a2a", stroke: ["#6b6b6b"] })], "#ffffff");
-  check("[M-2] fill on the instance, border on an inner frame: #6b6b6b passes 5.3:1 against the white page around the control → nothing (never measured against the control's own #2a2a2a)", split.length === 0);
+  check("fill on the instance, border on an inner frame: #6b6b6b passes 5.3:1 against the white page around the control → nothing (never measured against the control's own #2a2a2a)", split.length === 0);
   const splitFail = ntc([field("50:2", { instFill: "#2a2a2a", stroke: ["#3a3a3a"] })]);
-  check("[M-2] …and a border that fails is measured against the page (#121212, 1.65:1), not the instance's fill (#2a2a2a)",
+  check("…and a border that fails is measured against the page (#121212, 1.65:1), not the instance's fill (#2a2a2a)",
     splitFail.length === 1 && splitFail[0]?.backdrop === "#121212" && Math.abs((splitFail[0].ratio ?? 0) - 1.65) < 0.01 && splitFail[0].backdropToken === "surface/page");
-  check("[M-2] a faint #f0f0f0 border (1.1:1 on the white page) around an instance filled #1f1f1f: the instance's fill draws the boundary (the rescue reads the control's layers down to the border)",
+  check("a faint #f0f0f0 border (1.1:1 on the white page) around an instance filled #1f1f1f: the instance's fill draws the boundary (the rescue reads the control's layers down to the border)",
     ntc([field("50:2", { instFill: "#1f1f1f", stroke: ["#f0f0f0"] })], "#ffffff").length === 0);
-  check("[M-2] same colours on one layer → same verdict; with no fill at all → a finding",
+  check("same colours on one layer → same verdict; with no fill at all → a finding",
     ntc([field("50:2", { innerFill: "#1f1f1f", stroke: ["#f0f0f0"] })], "#ffffff").length === 0 && ntc([field("50:2", { stroke: ["#f0f0f0"] })], "#ffffff").length === 1);
 
-  // M-5: a disabled variant modelled as a True/False property is exempt, like State=Disabled.
-  check("[M-5] 'Size=M, Disabled=True' is a disabled variant → exempt", ntc([field("50:2", { variant: "Size=M, Disabled=True", props: { Size: "M", Disabled: "True" } })]).length === 0);
-  check("[M-5] a BOOLEAN prop `Disabled: true` → exempt", ntc([field("50:2", { variant: "Size=M", props: { Size: "M", Disabled: true } })]).length === 0);
-  check("[M-5] negative: 'Disabled=False', and a TEXT prop whose copy says \"Inactive\", are not disabled",
+  // a disabled variant modelled as a True/False property is exempt, like State=Disabled.
+  check("'Size=M, Disabled=True' is a disabled variant → exempt", ntc([field("50:2", { variant: "Size=M, Disabled=True", props: { Size: "M", Disabled: "True" } })]).length === 0);
+  check("a BOOLEAN prop `Disabled: true` → exempt", ntc([field("50:2", { variant: "Size=M", props: { Size: "M", Disabled: true } })]).length === 0);
+  check("negative: 'Disabled=False', and a TEXT prop whose copy says \"Inactive\", are not disabled",
     ntc([field("50:2", { variant: "Size=M, Disabled=False", props: { Label: "Inactive" } })]).length === 1);
-  check("[M-5] isDisabledLayer: one rule for audit and cross-check",
+  check("isDisabledLayer: one rule for audit and cross-check",
     isDisabledLayer({ mainComponent: { name: "State=Disabled" } }) && isDisabledLayer({ mainComponent: { name: "Disabled=Yes, Size=S" } }) && isDisabledLayer({ props: { "Is Disabled": "on" } })
     && !isDisabledLayer({ mainComponent: { name: "Disabled=Off" } }) && !isDisabledLayer({ props: { Status: "Inactive" } }));
 
-  // L-2: a fully transparent stroke paints no border.
-  check("[L-2] a 0-opacity stroke (#46464f00) is not reported as a 1:1 border", ntc([field("50:2", { stroke: ["#46464f00"] })]).length === 0);
+  // a fully transparent stroke paints no border.
+  check("a 0-opacity stroke (#46464f00) is not reported as a 1:1 border", ntc([field("50:2", { stroke: ["#46464f00"] })]).length === 0);
   const second = ntc([field("50:2", { stroke: ["#46464f00", "#3a3a3a"] })]);
-  check("[L-2] …the first VISIBLE stroke colour is the one measured", second.length === 1 && second[0]?.stroke === "#3a3a3a");
+  check("…the first VISIBLE stroke colour is the one measured", second.length === 1 && second[0]?.stroke === "#3a3a3a");
 
-  // L-6: a LINE is a divider, never a control's boundary (as in cross-check).
-  check("[L-6] a LINE inside an input is not measured", ntc([field("50:2", { inner: { type: "LINE", name: "Divider" } })]).length === 0);
+  // a LINE is a divider, never a control's boundary (as in cross-check).
+  check("a LINE inside an input is not measured", ntc([field("50:2", { inner: { type: "LINE", name: "Divider" } })]).length === 0);
 
-  // L-1 / M14: a translucent layer over the page names no backdrop token (the composite is no token's value).
+  // a translucent layer over the page names no backdrop token (the composite is no token's value).
   const scrim = ntc([{ id: "50:5", type: "FRAME", name: "Scrim", fills: [{ type: "solid", color: "#ffffff1a", tokens: { color: "overlay/scrim" } }], children: [field("50:2")] }]);
-  check("[L-1 M14] under a translucent token-bound scrim the finding names no backdropToken",
+  check("under a translucent token-bound scrim the finding names no backdropToken",
     scrim.length === 1 && scrim[0]?.backdropToken === undefined && !/overlay\/scrim/.test(scrim[0]?.message ?? ""));
 
-  // L-4: toggle words win over select; "Select All" is no select.
-  check("[L-4] controlKind: 'Select All Checkbox' / 'Dropdown Switch' are toggles; 'Select All' is no select; 'Select Field' still is",
+  // toggle words win over select; "Select All" is no select.
+  check("controlKind: 'Select All Checkbox' / 'Dropdown Switch' are toggles; 'Select All' is no select; 'Select Field' still is",
     controlKind("Select All Checkbox") === "toggle" && controlKind("Dropdown Switch") === "toggle" && controlKind("Select All") === null && controlKind("Select Field") === "select");
 
-  // L-1 / M15 + M16: the picker heuristic dedupes nested pickers and skips search fields.
+  // the picker heuristic dedupes nested pickers and skips search fields.
   const inputInst = (id: string, setName: string, kids: NodeInput[]): NodeInput => ({ id, type: "INSTANCE", name: setName, mainComponent: { name: "State=Default", key: `k-${id}`, setKey: `k-${setName}-${id}`, setName }, children: kids });
   const prompt = (id: string): NodeInput => ({ id, type: "TEXT", name: "Value", text: "Select a size", autoResize: "height" });
   const pick = (kids: NodeInput[]) => codes(audit(g4([{ id: "51:1", type: "FRAME", name: "Add Item Dialog", children: kids }], "Add Item"), { platform: "web" }), "undesigned-open-state");
   const nested = pick([inputInst("51:2", "input Field", [inputInst("51:3", "Text Field", [prompt("51:4")])])]);
-  check("[L-1 M15] an input instance nested in another that reads like a picker is ONE finding (the outer one)", nested.length === 1 && JSON.stringify(nested[0]?.nodeIds) === JSON.stringify(["51:2"]));
-  check("[L-1 M16] a Search field with a chevron / a \"Select …\" prompt is no picker",
+  check("an input instance nested in another that reads like a picker is ONE finding (the outer one)", nested.length === 1 && JSON.stringify(nested[0]?.nodeIds) === JSON.stringify(["51:2"]));
+  check("a Search field with a chevron / a \"Select …\" prompt is no picker",
     pick([inputInst("51:2", "Search Field", [prompt("51:4"), { id: "51:5", type: "INSTANCE", name: "chevron-down", mainComponent: { name: "chevron-down", key: "k-chev" } }])]).length === 0);
 
-  // M-4: a stray copy is sizeable and has an in-flow twin.
+  // a stray copy is sizeable and has an in-flow twin.
   const btn = (id: string, extra: Partial<NodeInput> = {}, texts = ["Save"]): NodeInput => ({ id, type: "INSTANCE", name: "Button", mainComponent: { name: "Type=Primary", key: "kb", setKey: "kbs", setName: "Button" }, box: { w: 120, h: 40 }, ...extra,
     children: texts.map((t, i) => ({ id: `${id}t${i}`, type: "TEXT" as const, name: "Label", text: t, autoResize: "width_and_height" as const })) });
   const dup = (kids: NodeInput[]) => codes(audit(g4([{ id: "52:1", type: "FRAME", name: "Edit", box: { x: 0, y: 0, w: 390, h: 1600 }, layout: { display: "flex", flexDirection: "column" }, children: kids }], "Edit"), { platform: "web" }), "duplicate-root-subtree");
-  check("[M-4] a small pinned 'Save' button (one text, under half the root's width) beside the form's own is no stray copy",
+  check("a small pinned 'Save' button (one text, under half the root's width) beside the form's own is no stray copy",
     dup([{ id: "52:2", type: "FRAME", name: "Form", box: { w: 390, h: 1500 }, children: [btn("52:3")] }, btn("52:9", { absolute: true, box: { x: 250, y: 1540, w: 120, h: 40 } })]).length === 0);
   const badge = (id: string, y: number, w = 60): NodeInput => ({ id, type: "FRAME", name: "Badge", absolute: true, box: { x: 10, y, w, h: 24 }, children: [{ id: id + "t", type: "TEXT", name: "t", text: "Beta" }, { id: id + "u", type: "TEXT", name: "u", text: "New" }] });
-  check("[M-4] two identical absolute badges are not each other's in-flow twin", dup([badge("52:4", 10), badge("52:5", 300)]).length === 0);
+  check("two identical absolute badges are not each other's in-flow twin", dup([badge("52:4", 10), badge("52:5", 300)]).length === 0);
   const two = dup([{ id: "52:2", type: "FRAME", name: "Form", box: { w: 390, h: 1500 }, children: [btn("52:3", {}, ["Save", "Draft"])] }, btn("52:9", { absolute: true, box: { x: 250, y: 1540, w: 120, h: 40 } }, ["Save", "Draft"])]);
-  check("[M-4] a small copy with two texts or more is still one (the in-flow twin named)", two.length === 1 && two[0]?.twinId === "52:3");
+  check("a small copy with two texts or more is still one (the in-flow twin named)", two.length === 1 && two[0]?.twinId === "52:3");
 }
 {
-  // L-8: an unindexed target may be nested in a SECTION — the warning says where to look before pulling.
+  // an unindexed target may be nested in a SECTION — the warning says where to look before pulling.
   const res = audit(g4([{ id: "53:1", type: "FRAME", name: "Reports", children: [{ id: "53:2", type: "FRAME", name: "Export button",
     reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: "9:9", destination: "Export Dialog", navigation: "overlay" }] }] }] }], "Reports"),
   { platform: "web", neighbours: { layers: [{ id: "53:1", name: "Reports", file: "pages/Main/Reports__53_1.json" }], unexportedShots: [], exportedIds: new Set(["53:1"]) } });
-  check("[L-8] prototype-target-not-exported says 'in no index' and that a SECTION-nested frame has no index row",
+  check("prototype-target-not-exported says 'in no index' and that a SECTION-nested frame has no index row",
     /are in no index of the export/.test(codes(res, "prototype-target-not-exported")[0]?.message ?? "") && /nested in a SECTION or another frame has no index row/.test(codes(res, "prototype-target-not-exported")[0]?.message ?? ""));
-  // L-5 / L-6 / L-8 docs
+  // audit-design docs
   const skill = readRepo("claude-plugin/skills/audit-design/SKILL.md"), cl = readRepo("claude-plugin/skills/audit-design/references/checklist.md");
-  check("[L-5] audit-design: the loop skips page indexes, and the cross-check run is a runnable command over the screen files only",
+  check("audit-design: the loop skips page indexes, and the cross-check run is a runnable command over the screen files only",
     /case "\$f" in \*\.vars\.json\|\*\.assets\.json\|\*\/index\.json\) continue;; esac/.test(skill)
     && /find design\/export\/pages -name '\*\.json' ! -name '\*\.vars\.json' ! -name '\*\.assets\.json' ! -name index\.json -print0 \| \\\n\s+xargs -0 node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/cross-check\.js"/.test(skill) && !/<every screen json>/.test(skill));
-  check("[L-6] checklist: the TEXT-property sentence is an instruction (the audit does not judge it); dividers are LINE layers",
+  check("checklist: the TEXT-property sentence is an instruction (the audit does not judge it); dividers are LINE layers",
     /The audit does not judge a text\s+driven by a TEXT property/.test(cl) && !/is judged by its `props` value/.test(cl) && /Dividers \(LINE layers\)/.test(cl));
-  check("[L-8] audit-design + checklist: a SECTION-nested target has no index row — search design/export/pages first",
+  check("audit-design + checklist: a SECTION-nested target has no index row — search design/export/pages first",
     /SECTION or in another frame has no index row of its own/.test(skill) && /nested in a SECTION or another frame has no index row/.test(cl));
 }
 {
-  // T8: the skill names the new cross-file codes it merges / reads.
+  // the skill names the new cross-file codes it merges / reads.
   const skill = readRepo("claude-plugin/skills/audit-design/SKILL.md");
-  check("[T8 G18 docs] audit-design names `mixed-mode-bindings` (merged) and the cross-check's `token-pair-contrast` table", /`mixed-mode-bindings`/.test(skill) && /`token-pair-contrast`/.test(skill));
+  check("[docs] audit-design names `mixed-mode-bindings` (merged) and the cross-check's `token-pair-contrast` table", /`mixed-mode-bindings`/.test(skill) && /`token-pair-contrast`/.test(skill));
   const qs = readRepo("claude-plugin/skills/audit-design/references/questions.md");
-  check("[T8 G18 docs] questions.md covers the new designer questions (default copy, open state, near-token colour, stray copy, non-text contrast)",
+  check("[docs] questions.md covers the new designer questions (default copy, open state, near-token colour, stray copy, non-text contrast)",
     ["default-copy-in-instance", "undesigned-open-state", "near-token-color", "duplicate-root-subtree", "non-text-contrast"].every((c) => qs.includes(`\`${c}\``)));
-  // review 2 (D128): a TEXT property's copy never makes a control disabled; a wrapper named like a control is not it
-  check("[D128 M-1] a radio button whose TEXT property reads \"Disabled\" is not a disabled variant; State=Disabled still is",
+  // a TEXT property's copy never makes a control disabled; a wrapper named like a control is not it
+  check("a radio button whose TEXT property reads \"Disabled\" is not a disabled variant; State=Disabled still is",
     !isDisabledLayer({ mainComponent: { name: "State=Default, Checked=False" }, props: { Text: "Disabled" } })
     && isDisabledLayer({ mainComponent: { name: "State=Disabled, Checked=False" }, props: { Text: "Label" } })
     && isDisabledLayer({ props: { State: "Disabled" } }));
-  check("[D128 M-2] the nearest INSTANCE named a control is the control, not a farther wrapper named like one",
+  check("the nearest INSTANCE named a control is the control, not a farther wrapper named like one",
     outermostControl([{ name: "Border", type: "FRAME" }, { name: "Input Field", type: "INSTANCE" }, { name: "Search Panel", type: "FRAME" }]) === 1
     && outermostControl([{ name: "Border", type: "FRAME" }, { name: "Input Field", type: "FRAME" }, { name: "Search Panel", type: "FRAME" }]) === 2);
-  check("[T8 G18 docs] extract says an audit names the overlays to pull too", /`prototype-target-not-exported`/.test(readRepo("claude-plugin/skills/extract/SKILL.md")));
+  check("[docs] extract says an audit names the overlays to pull too", /`prototype-target-not-exported`/.test(readRepo("claude-plugin/skills/extract/SKILL.md")));
 }
 
 report();

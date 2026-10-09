@@ -1,6 +1,6 @@
 // The assertion runner shared by all three suites (harness.ts, bridge.test.ts, design-to-code.test.ts).
-// Each used to carry its own collector + report loop, which differed only cosmetically — three exit
-// conventions and three output formats for counts the project's docs quote as if they were one thing.
+// One collector + report loop for all of them, instead of three that differ in exit convention and
+// output format for counts the project's docs quote as if they were one thing.
 //
 //   import { ok, report } from "./assert.ts";
 //   ok("name", cond);

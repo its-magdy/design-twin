@@ -1,4 +1,4 @@
-// Group 10 — what --compare trusts (F-102/D24, DT-29, F-92, DT-81, F-72/D26). Expectations come from the real
+// what --compare trusts. Expectations come from the real
 // `buildExpectation` over a plugin-shaped screen export (test/fixtures.ts, invented names); measured files and
 // interaction evidence have the shapes the shipped probe and the verifier write (design-to-code/types.ts). The
 // last block runs the CLI's --compare in a temp project with a status file beside the measured one.
@@ -47,7 +47,7 @@ function echo(spec: VerifySpec): MeasuredNode {
   return { nodeId: spec.nodeId, styles, matchedBy: "tag" };
 }
 type Over = Record<string, MeasuredStyles | null>;
-// A full evidence row (D24): one element driven, the outcome the action produces, no navigation during it.
+// A full evidence row: one element driven, the outcome the action produces, no navigation during it.
 const ev = (nodeId: string, outcome: string, extra: Partial<InteractionEvidence> = {}): InteractionEvidence =>
   ({ nodeId, trigger: "on_click", ok: true, selector: `[data-dt-node="${nodeId}"]`, selectorCount: 1, outcome, navEvents: 0, detail: "driven", ...extra });
 const GOOD = [ev("2:4", "dialog-opened"), ev("2:5", "url-changed", { navEvents: 1 }), ev("3:2", "state-changed"), ev("2:6", "url-changed", { navEvents: 1 }), ev("2:7", "url-changed", { navEvents: 1 }), ev("2:8", "state-changed")];
@@ -69,8 +69,8 @@ console.log("baseline:");
 const base = run(measure());
 safe("the echo build with full evidence passes (six interactions pass)", () => base.verdict === "pass" && base.coverage.interactionsPassed === 6);
 
-// ---------------------------------------------------------------- F-102 / D24
-console.log("F-102 / D24 — ok:true is a claim; the evidence is one element, an outcome the action produces, no reload:");
+// ---------------------------------------------------------------- ok:true needs evidence
+console.log("ok:true is a claim; the evidence is one element, an outcome the action produces, no reload:");
 {
   const r = run(withEvidence([ev("2:4", "none", { navEvents: 1 })]));
   const row = ia(r, "2:4");
@@ -90,23 +90,23 @@ safe("older evidence with no outcome and no navEvents → not-probed 'no outcome
 });
 safe("an outcome in free text ('opened fine') is not an outcome → not-probed", () => ia(run(withEvidence([ev("2:4", "opened fine")])), "2:4")?.result === "not-probed");
 safe("change_to + state-changed → pass; change_to + none → not-probed", () => ia(run(withEvidence([ev("3:2", "state-changed")])), "3:2")?.result === "pass" && ia(run(withEvidence([ev("3:2", "none")])), "3:2")?.result === "not-probed");
-safe("ok:false is still a fail (D24 changes only what a pass needs)", () => ia(run(withEvidence([{ ...ev("2:4", "none"), ok: false }])), "2:4")?.result === "fail");
-// M1: navEvents counts DOCUMENTS LOADED — a full navigation is the outcome only for navigate / back / url
-safe("[M1] back + url-changed with navEvents 1 → pass (a multi-page back link loads the previous document)", () => ia(run(withEvidence([ev("2:6", "url-changed", { navEvents: 1 })])), "2:6")?.result === "pass");
-safe("[M1] url + url-changed with navEvents 1 → pass", () => ia(run(withEvidence([ev("2:7", "url-changed", { navEvents: 1 })])), "2:7")?.result === "pass");
-safe("[M1] navigate + url-changed with navEvents 0 (an SPA pushState — no document loaded) → pass", () => ia(run(withEvidence([ev("2:5", "url-changed", { navEvents: 0 })])), "2:5")?.result === "pass");
-safe("[M1] close + url-changed with navEvents 0 (an in-page URL change) → pass; with navEvents 1 (a document loaded) → not-probed naming the rule", () => {
+safe("ok:false is still a fail (only a pass needs evidence)", () => ia(run(withEvidence([{ ...ev("2:4", "none"), ok: false }])), "2:4")?.result === "fail");
+// navEvents counts DOCUMENTS LOADED — a full navigation is the outcome only for navigate / back / url
+safe("back + url-changed with navEvents 1 → pass (a multi-page back link loads the previous document)", () => ia(run(withEvidence([ev("2:6", "url-changed", { navEvents: 1 })])), "2:6")?.result === "pass");
+safe("url + url-changed with navEvents 1 → pass", () => ia(run(withEvidence([ev("2:7", "url-changed", { navEvents: 1 })])), "2:7")?.result === "pass");
+safe("navigate + url-changed with navEvents 0 (an SPA pushState — no document loaded) → pass", () => ia(run(withEvidence([ev("2:5", "url-changed", { navEvents: 0 })])), "2:5")?.result === "pass");
+safe("close + url-changed with navEvents 0 (an in-page URL change) → pass; with navEvents 1 (a document loaded) → not-probed naming the rule", () => {
   const inPage = ia(run(withEvidence([ev("2:8", "url-changed", { navEvents: 0 })])), "2:8"), loaded = ia(run(withEvidence([ev("2:8", "url-changed", { navEvents: 1 })])), "2:8");
   return inPage?.result === "pass" && loaded?.result === "not-probed" && /only a navigate, back or url action may load a document/.test(loaded.detail || "");
 });
-safe("[M1] an overlay opened as a route records what appeared: selector-appeared → pass; a tab kept in the query (change_to) + selector-appeared → pass", () =>
+safe("an overlay opened as a route records what appeared: selector-appeared → pass; a tab kept in the query (change_to) + selector-appeared → pass", () =>
   ia(run(withEvidence([ev("2:4", "selector-appeared")])), "2:4")?.result === "pass" && ia(run(withEvidence([ev("3:2", "selector-appeared")])), "3:2")?.result === "pass");
 safe("OUTCOMES_FOR_ACTION / INTERACTION_OUTCOMES are exported with the interface's values", () =>
   JSON.stringify(VS.OUTCOMES_FOR_ACTION.navigate) === JSON.stringify(["url-changed", "selector-appeared"]) && JSON.stringify(VS.OUTCOMES_FOR_ACTION.overlay) === JSON.stringify(["dialog-opened", "selector-appeared"])
   && VS.OUTCOMES_FOR_ACTION.other.length === 4 && !VS.OUTCOMES_FOR_ACTION.other.includes("none") && VS.INTERACTION_OUTCOMES.length === 5);
 
-// ---------------------------------------------------------------- DT-29
-console.log("DT-29 — a probe result filed under no designed interaction is named, with a hint:");
+// ---------------------------------------------------------------- unfiled probe results
+console.log("a probe result filed under no designed interaction is named, with a hint:");
 {
   const m = withEvidence([]);
   m.interactions = [...(m.interactions || []), ev("2:4", "dialog-opened", { trigger: "on_click(name link)" })];
@@ -126,16 +126,16 @@ console.log("DT-29 — a probe result filed under no designed interaction is nam
   safe("the right node, another trigger → hint names the node's designed trigger", () => /designed trigger is `on_click`/.test(u.find((x) => x.nodeId === "2:5")?.hint || ""));
 }
 
-// ---------------------------------------------------------------- F-92
-console.log("F-92 — a previous delta gone only because it was not measured is LOST COVERAGE, not a fix:");
+// ---------------------------------------------------------------- lost coverage
+console.log("a previous delta gone only because it was not measured is LOST COVERAGE, not a fix:");
 // (a report round-trips through JSON on disk)
 const prevReport = (r: VerifyReportV2): VerifyReport => { const v: unknown = JSON.parse(JSON.stringify(r)); if (!isVerifyReport(v)) throw new Error("not a report"); return v; };
 {
   const before = run(measure({ "3:3": { color: "#ff0000" }, "2:1": { fontSize: 24 } }));
-  safe("round 1: two deltas (3:3 color, 2:1 font-size)", () => before.deltas.length === 2);
+  safe("two deltas (3:3 color, 2:1 font-size)", () => before.deltas.length === 2);
   const now = run(measure({ "3:3": { color: null }, "2:1": { fontSize: 24 } }), { against: { file: "prev.report.json", report: prevReport(before) } });
   const d = now.against?.deltas;
-  safe("round 2: 3:3 color now null → lostCoverage 1 {nodeId, field, was}, 2:1 unchanged", () => d?.lostCoverage.length === 1 && d.lostCoverage[0]?.nodeId === "3:3" && d.lostCoverage[0].field === "color" && d.lostCoverage[0].was === "#ff0000ff" && d.unchanged === 1 && d.fixed === 0);
+  safe("3:3 color now null → lostCoverage 1 {nodeId, field, was}, 2:1 unchanged", () => d?.lostCoverage.length === 1 && d.lostCoverage[0]?.nodeId === "3:3" && d.lostCoverage[0].field === "color" && d.lostCoverage[0].was === "#ff0000ff" && d.unchanged === 1 && d.fixed === 0);
   safe("…headline 'LOST COVERAGE on 1 earlier delta(s)'", () => /LOST COVERAGE on 1 earlier delta\(s\)/.test(now.headline));
   safe("…md lists it under '## Lost coverage (1)'", () => /## Lost coverage \(1\)/.test(reportToMarkdown(now)));
   const plain = run(measure({ "3:3": { color: null }, "2:1": { fontSize: 24 } }));
@@ -148,8 +148,8 @@ const prevReport = (r: VerifyReportV2): VerifyReport => { const v: unknown = JSO
   const fresh = run(measure({ "2:1": { fontSize: 24 }, "3:1": { backgroundColor: "#000000" } }), { against: { file: "prev.report.json", report: prevReport(before) } });
   safe("a delta the previous round did not have → new 1", () => fresh.against?.deltas?.new === 1);
 }
-// H2: a delta can only be LOST when this round's measurement lacks the value — never because the compare changed
-console.log("H2 — LOST COVERAGE and 'fixed' only when the measurement changed:");
+// a delta can only be LOST when this round's measurement lacks the value — never because the compare changed
+console.log("LOST COVERAGE and 'fixed' only when the measurement changed:");
 {
   const M1 = "a".repeat(64), M2 = "b".repeat(64);
   const before = run(measure({ "3:3": { color: "#ff0000" }, "2:1": { fontSize: 24 } }), { measuredSha256: M1 });
@@ -165,7 +165,7 @@ console.log("H2 — LOST COVERAGE and 'fixed' only when the measurement changed:
   safe("a different measured sha, the value now null → still LOST COVERAGE (1)", () => other.against?.deltas?.lostCoverage.length === 1 && /LOST COVERAGE on 1/.test(other.headline));
   // an icon whose fill was a delta last round is now drawn by an <img>: the value is there, the method cannot read it
   const icon = run(measure({ "3:4": { fill: "#ff0000" } }), { measuredSha256: M1 });
-  safe("round 1: the icon's fill is a delta", () => icon.deltas.some((x) => x.nodeId === "3:4" && x.field === "fill (SVG paint)"));
+  safe("the icon's fill is a delta", () => icon.deltas.some((x) => x.nodeId === "3:4" && x.field === "fill (SVG paint)"));
   const img = measure({ "3:4": { fill: "#ff0000" } });
   img.nodes = (img.nodes || []).map((n) => (n.nodeId === "3:4" ? { ...n, styles: { ...n.styles, tag: "img" } } : n));
   const nowImg = run(img, { measuredSha256: M2, against: { file: "prev.report.json", report: prevReport(icon) } });
@@ -173,35 +173,35 @@ console.log("H2 — LOST COVERAGE and 'fixed' only when the measurement changed:
   safe("the <img> fill now unverifiable → 0 lost, 0 fixed; listed under nowUnverifiable (method)", () => di !== undefined && di.lostCoverage.length === 0 && di.fixed === 0 && di.nowUnverifiable?.length === 1 && di.nowUnverifiable[0]?.nodeId === "3:4" && !/LOST COVERAGE/.test(nowImg.headline));
   const neg = run(measure({ "3:1": { padding: [-4, 0, 0, 0] } }), { measuredSha256: M2, against: { file: "prev.report.json", report: prevReport(run(measure({ "3:1": { padding: [9, 0, 0, 0] } }), { measuredSha256: M1 })) } });
   safe("a measured value the compare now drops as impossible (negative padding) → nowUnverifiable, not lost", () => neg.against?.deltas?.lostCoverage.length === 0 && neg.against.deltas.nowUnverifiable?.length === 1);
-  // L-3: placement is DERIVED from the box — gone because an input (x/y/width/height) was not reported is lost, not fixed
+  // placement is DERIVED from the box — gone because an input (x/y/width/height) was not reported is lost, not fixed
   const below = run(measure({ "3:3": { x: 10, y: 900, width: 80, height: 20 } }), { measuredSha256: M1 });
-  safe("[L-3] round 1: 3:3 rendered below the 800-high frame → a placement delta", () => below.deltas.some((x) => x.nodeId === "3:3" && x.field === "placement"));
+  safe("3:3 rendered below the 800-high frame → a placement delta", () => below.deltas.some((x) => x.nodeId === "3:3" && x.field === "placement"));
   const noY = run(measure({ "3:3": { x: 10, width: 80, height: 20 } }), { measuredSha256: M2, against: { file: "prev.report.json", report: prevReport(below) } });
-  safe("[L-3] y no longer reported → placement is LOST COVERAGE (naming y), not fixed", () => noY.against?.deltas?.fixed === 0 && noY.against.deltas.lostCoverage.length === 1
+  safe("y no longer reported → placement is LOST COVERAGE (naming y), not fixed", () => noY.against?.deltas?.fixed === 0 && noY.against.deltas.lostCoverage.length === 1
     && noY.against.deltas.lostCoverage[0]?.field === "placement" && /y/.test(noY.against.deltas.lostCoverage[0].why));
   const nullY = run(measure({ "3:3": { x: 10, y: null, width: 80, height: 20 } }), { measuredSha256: M2, against: { file: "prev.report.json", report: prevReport(below) } });
-  safe("[L-3] y reported null → placement LOST COVERAGE, not fixed", () => nullY.against?.deltas?.fixed === 0 && nullY.against.deltas.lostCoverage.length === 1);
+  safe("y reported null → placement LOST COVERAGE, not fixed", () => nullY.against?.deltas?.fixed === 0 && nullY.against.deltas.lostCoverage.length === 1);
   const inside = run(measure({ "3:3": { x: 10, y: 100, width: 80, height: 20 } }), { measuredSha256: M2, against: { file: "prev.report.json", report: prevReport(below) } });
-  safe("[L-3] the whole box measured and inside the frame → fixed 1 (the real fix still counts)", () => inside.against?.deltas?.fixed === 1 && inside.against.deltas.lostCoverage.length === 0);
+  safe("the whole box measured and inside the frame → fixed 1 (the real fix still counts)", () => inside.against?.deltas?.fixed === 1 && inside.against.deltas.lostCoverage.length === 0);
   // L-a: the box IS reported but placement cannot be judged from it — the delta is nowUnverifiable, never fixed
   const abc = measure({ "3:3": { x: 10, width: 80, height: 20 } });
   const abcNode = (abc.nodes || []).find((n) => n.nodeId === "3:3");
   if (abcNode?.styles) Reflect.set(abcNode.styles, "y", "abc"); // what a hand-written probe sends; the type says number
   const unreadY = run(abc, { measuredSha256: M2, against: { file: "prev.report.json", report: prevReport(below) } });
   const du = unreadY.against?.deltas;
-  safe("[L-a] y reported as 'abc' (not a px number) → placement nowUnverifiable, not fixed, not lost", () => du !== undefined && du.fixed === 0 && du.lostCoverage.length === 0
+  safe("y reported as 'abc' (not a px number) → placement nowUnverifiable, not fixed, not lost", () => du !== undefined && du.fixed === 0 && du.lostCoverage.length === 0
     && du.nowUnverifiable?.length === 1 && du.nowUnverifiable[0]?.field === "placement" && /could not read y/.test(du.nowUnverifiable[0].why));
   // a layer the designer drew hovered, measured at rest where it renders 0×0 (a hover-only control)
   const hoverExp = structuredClone(exp);
   for (const n of hoverExp.nodes) if (n.nodeId === "3:3") { n.drawnState = "hover"; n.drawnStateWhy = "its variant is named Hover"; n.drawnStateOwn = true; }
   const hidden = compare(hoverExp, measure({ "3:3": { x: 10, y: 900, width: 0, height: 0 } }), { measuredSha256: M2, against: { file: "prev.report.json", report: prevReport(below) } });
   const dh = hidden.against?.deltas;
-  safe("[L-a] the node now 0×0 at rest (hover-only) → placement nowUnverifiable ('renders 0×0 at rest'), not fixed", () => dh !== undefined && dh.fixed === 0 && dh.lostCoverage.length === 0
+  safe("the node now 0×0 at rest (hover-only) → placement nowUnverifiable ('renders 0×0 at rest'), not fixed", () => dh !== undefined && dh.fixed === 0 && dh.lostCoverage.length === 0
     && (dh.nowUnverifiable || []).some((x) => x.nodeId === "3:3" && x.field === "placement" && /renders 0×0 at rest/.test(x.why)));
 }
 
-// ---------------------------------------------------------------- DT-81
-console.log("DT-81 — the build that was served:");
+// ---------------------------------------------------------------- the served build
+console.log("the build that was served:");
 const build = (sha: string): BuildIdentity => ({ url: "http://127.0.0.1:4173/", mode: "static", assets: 3, assetsSha256: sha, gitHead: "a".repeat(40), gitDirty: false });
 const code = (h: string): CodeInputs => ({ plan: "design/plan/garden.json", files: { "src/GardenPlots.tsx": h }, gitHead: "a".repeat(40) });
 {
@@ -216,12 +216,12 @@ const code = (h: string): CodeInputs => ({ plan: "design/plan/garden.json", file
   safe("same build, same code → no warning", () => same.against?.sameBuild === true && !/SAME BUILD/.test(same.headline));
   const rebuilt = run(measure({}, { build: build("b2") }), { code: code("h2"), against: { file: "prev.report.json", report: prevReport(prev) } });
   safe("a new build for new code → sameBuild false, no warning", () => rebuilt.against?.sameBuild === false && !/SAME BUILD/.test(rebuilt.headline));
-  // fix 4 LOW a: a partial hash on either side (bodies left out of assetsSha256) → sameBuild unknown, never SAME BUILD SERVED
+  // A partial hash on either side (bodies left out of assetsSha256) → sameBuild unknown, never SAME BUILD SERVED
   const partialPrev = run(measure({}, { build: { ...build("b1"), unhashed: 2 } }), { code: code("h1") });
   const afterPartial = run(measure({}, { build: build("b1") }), { code: code("h2"), against: { file: "prev.report.json", report: prevReport(partialPrev) } });
-  safe("[fix4 LOW a] the earlier round's build hash was partial (unhashed 2) → sameBuild null, no SAME BUILD SERVED", () => afterPartial.against?.sameBuild === null && !/SAME BUILD/.test(afterPartial.headline));
+  safe("the earlier round's build hash was partial (unhashed 2) → sameBuild null, no SAME BUILD SERVED", () => afterPartial.against?.sameBuild === null && !/SAME BUILD/.test(afterPartial.headline));
   const partialNow = run(measure({}, { build: { ...build("b1"), unhashed: 1 } }), { code: code("h2"), against: { file: "prev.report.json", report: prevReport(prev) } });
-  safe("[fix4 LOW a] this round's build hash is partial (unhashed 1) → sameBuild null, no SAME BUILD SERVED; the md says partial", () => partialNow.against?.sameBuild === null && !/SAME BUILD/.test(partialNow.headline)
+  safe("this round's build hash is partial (unhashed 1) → sameBuild null, no SAME BUILD SERVED; the md says partial", () => partialNow.against?.sameBuild === null && !/SAME BUILD/.test(partialNow.headline)
     && /partial: 1 body\(ies\) not hashed/.test(reportToMarkdown(partialNow)));
   const bad: JsonObject = { measuredAt: "2026-09-30T01:00:00Z", nodes: [], build: { url: 1 } };
   const rd = readableMeasured(bad);
@@ -237,8 +237,8 @@ const code = (h: string): CodeInputs => ({ plan: "design/plan/garden.json", file
   safe("runId and build are known top-level keys (not listed as unknown)", () => r !== null && !(r.probe.unknownTopLevelKeys || []).some((k) => k.key === "runId" || k.key === "build") && r.inputs?.runId === "r1");
 }
 
-// ---------------------------------------------------------------- F-72 / D26
-console.log("F-72 / D26 — integrity failures make the verdict incomplete; the report is still written:");
+// ---------------------------------------------------------------- integrity failures
+console.log("integrity failures make the verdict incomplete; the report is still written:");
 const SHA_E = "e".repeat(64), SHA_M = "m".repeat(64);
 const status = (phase: "measuring" | "measured" | "done", measuredSha256?: string) => ({ file: "Garden.status.json", status: { schema: "designtwin/verify-status@2" as const, screen: "Garden", runId: "run-7", rev: 3, phase, detail: "", at: "2026-09-30T01:00:00Z", by: "agent" as const, ...(measuredSha256 ? { measuredSha256 } : {}) } });
 safe("a measured file with no expectationSha256 → incomplete 'measured file names no expectation (expectationSha256)'", () => {
@@ -253,12 +253,12 @@ safe("a status 'done' of the measured file's own run naming another measured sha
   const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-7" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
   return r.verdict === "incomplete" && r.why.some((w) => /names a different measured file \(sha ffffffffffff…/.test(w));
 });
-// L-6: an integrity reason outranks the grades — a high mismatch in an unverified run is incomplete, never fail
-safe("[L-6] a high mismatch + a run still at 'measuring' → incomplete (not fail); the integrity reason is listed first, the high still listed", () => {
+// an integrity reason outranks the grades — a high mismatch in an unverified run is incomplete, never fail
+safe("a high mismatch + a run still at 'measuring' → incomplete (not fail); the integrity reason is listed first, the high still listed", () => {
   const r = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
   return r.verdict === "incomplete" && /the verifier had not finished/.test(r.why[0] || "") && r.why.some((w) => /high-severity value mismatch/.test(w));
 });
-safe("[L-6] a high mismatch + a measured file naming no expectation → incomplete; the same high with a clean run → fail", () => {
+safe("a high mismatch + a measured file naming no expectation → incomplete; the same high with a clean run → fail", () => {
   const unsure = run(measure({ "2:1": { fontSize: 30 } }), { expectationSha256: SHA_E, measuredSha256: SHA_M });
   const clean = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
   return unsure.verdict === "incomplete" && clean.verdict === "fail";
@@ -273,18 +273,18 @@ const acceptSel = (r: VerifyReportV2, node: string, field: string): ReturnType<t
   const onDisk: unknown = JSON.parse(JSON.stringify(r));
   return isVerifyReport(onDisk) ? VS.selectForAccept(onDisk, { node, field }) : { error: "not a report" };
 };
-safe("[L-c] --accept on a report whose run had not finished (a high delta listed) → refused, naming the integrity reason", () => {
+safe("--accept on a report whose run had not finished (a high delta listed) → refused, naming the integrity reason", () => {
   const r = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
   const sel = acceptSel(r, "2:1", "font-size");
   return r.deltas.some((d) => d.nodeId === "2:1") && "error" in sel && /the report's run is unverified/.test(sel.error) && /the verifier had not finished/.test(sel.error);
 });
-safe("[L-c] …a report whose measured file names no expectation, or a status naming another measured file → refused too", () => {
+safe("…a report whose measured file names no expectation, or a status naming another measured file → refused too", () => {
   const noExp = run(measure({ "2:1": { fontSize: 30 } }), { expectationSha256: SHA_E, measuredSha256: SHA_M });
   const other = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E, runId: "run-7" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
   const otherExp = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: "d".repeat(64) }), { expectationSha256: SHA_E, measuredSha256: SHA_M });
   return [noExp, other, otherExp].every((r) => { const sel = acceptSel(r, "2:1", "font-size"); return "error" in sel && /the report's run is unverified/.test(sel.error); });
 });
-safe("[L-c] …the same delta in a clean run is selectable", () => {
+safe("…the same delta in a clean run is selectable", () => {
   const clean = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
   const sel = acceptSel(clean, "2:1", "font-size");
   return "deltas" in sel && sel.deltas.length === 1;
@@ -294,95 +294,95 @@ safe("an older v1 status is never trusted nor judged: pass, with a note", () => 
   return r.verdict === "pass" && (r.probe.inputNotes || []).some((n) => /older hand-written status/.test(n));
 });
 
-// H1 (s19): a measured file that names NO run (build-screen's probe without --run), measured AFTER an ENDED run's status
+// a measured file that names NO run (build-screen's probe without --run), measured AFTER an ENDED run's status
 const statusEnded = (phase: "done" | "failed" | "blocked") => ({ file: "Garden.status.json", status: { ...status("done", "f".repeat(64)).status, phase } });
 const LATER = { expectationSha256: SHA_E, measuredAt: "2026-09-30T02:00:00Z" }; // the status above is at 01:00
-safe("[H1] an unbound measured file taken after an earlier run's done (another measured sha) → pass, with a note naming the run", () => {
+safe("an unbound measured file taken after an earlier run's done (another measured sha) → pass, with a note naming the run", () => {
   const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
   return r.verdict === "pass" && !(r.integrity || []).length && (r.probe.inputNotes || []).some((n) => /is run run-7 \(done\); this measured file names no run/.test(n));
 });
-safe("[F3] …that report names no run of its own (inputs.runId unset, no '· run' in the md header; the note keeps the run); a bound one still names its run", () => {
+safe("…that report names no run of its own (inputs.runId unset, no '· run' in the md header; the note keeps the run); a bound one still names its run", () => {
   const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
   const bound = run(measure({}, { expectationSha256: SHA_E, runId: "run-7" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
   return r.inputs?.runId === undefined && !/· run run-7/.test(reportToMarkdown(r)) && (r.probe.inputNotes || []).some((n) => /is run run-7 \(done\)/.test(n))
     && bound.inputs?.runId === "run-7" && /· run run-7/.test(reportToMarkdown(bound));
 });
-safe("[H1] …taken after an ended run at failed or blocked → pass (an ended run is not 'unfinished')", () =>
+safe("…taken after an ended run at failed or blocked → pass (an ended run is not 'unfinished')", () =>
   (["failed", "blocked"] as const).every((p) => run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) }).verdict === "pass"));
-safe("[H1] …an unbound file NOT newer than the ended run (a stale file left behind, or no measuredAt) is still judged by that run → incomplete", () => {
+safe("…an unbound file NOT newer than the ended run (a stale file left behind, or no measuredAt) is still judged by that run → incomplete", () => {
   const stale = (["done", "failed", "blocked"] as const).every((p) => run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) }).verdict === "incomplete");
   const untimed = measure({}, LATER);
   delete untimed.measuredAt;
   const noTime = run(untimed, { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded("failed") }).verdict === "incomplete";
   return stale && noTime;
 });
-safe("[r2] …a stale unbound file beside a run that ended failed/blocked: 'measured before that run ended — measure again', never the end-it hint (the run is over)", () =>
+safe("…a stale unbound file beside a run that ended failed/blocked: 'measured before that run ended — measure again', never the end-it hint (the run is over)", () =>
   (["failed", "blocked"] as const).every((p) => {
     const r = run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) });
     return r.verdict === "incomplete" && r.why.some((w) => new RegExp(`names no run and was measured before that run ended \\(Garden\\.status\\.json: run run-7 ${p} at .*\\) — measure again`).test(w)) && !r.why.some((w) => /end it:|had not finished/.test(w));
   }));
-safe("[H1] …beside a run still in flight (measuring) → still incomplete, and the reason says how to end it", () => {
+safe("…beside a run still in flight (measuring) → still incomplete, and the reason says how to end it", () => {
   const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
   return r.verdict === "incomplete" && r.why.some((w) => /the verifier had not finished.*--status Garden --phase failed --run run-7/.test(w));
 });
-safe("[H1] …beside a run at measured (another sha, not yet done) → incomplete, with the same end-it hint", () => {
+safe("…beside a run at measured (another sha, not yet done) → incomplete, with the same end-it hint", () => {
   const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measured", "f".repeat(64)) });
   return r.verdict === "incomplete" && r.why.some((w) => /measured again outside run run-7\? — wait for it, or if nobody is running it any more, end it: --status Garden --phase failed --run run-7/.test(w));
 });
-safe("[H1] …a high mismatch in an unbound measurement taken after an ended run is a plain fail (graded, not hidden as incomplete)", () =>
+safe("…a high mismatch in an unbound measurement taken after an ended run is a plain fail (graded, not hidden as incomplete)", () =>
   run(measure({ "2:1": { fontSize: 30 } }, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) }).verdict === "fail");
 
-// F8: an undesigned row quotes its evidence under the evidence's provenance — never "probe said" for agent evidence
+// an undesigned row quotes its evidence under the evidence's provenance — never "probe said" for agent evidence
 {
   const expU = { ...exp, interactions: exp.interactions.map((i) => i.nodeId === "2:4" ? { ...i, destinationExported: false } : i) };
   const miss = ev("2:4", "none", { ok: false, detail: "no dialog appeared" });
   const agent = compare(expU, withEvidence([miss]), { expectationSha256: SHA_E, measuredSha256: SHA_M });
-  safe("[F8] undesigned, evidence not run-bound (agent evidence) → the detail says 'agent evidence said: …', never 'probe said'", () =>
+  safe("undesigned, evidence not run-bound (agent evidence) → the detail says 'agent evidence said: …', never 'probe said'", () =>
     ia(agent, "2:4")?.result === "undesigned" && /; agent evidence said: no dialog appeared$/.test(ia(agent, "2:4")?.detail ?? "") && !/probe said/.test(ia(agent, "2:4")?.detail ?? ""));
   const bare = compare(exp, withEvidence([{ nodeId: "2:5", trigger: "on_click", ok: true, detail: "clicked it" }]), {});
-  safe("[F8] …and an agent's ok without evidence → 'reported ok without evidence — …; agent evidence said: …'", () =>
+  safe("…and an agent's ok without evidence → 'reported ok without evidence — …; agent evidence said: …'", () =>
     ia(bare, "2:5")?.result === "not-probed" && /^reported ok without evidence — .*; agent evidence said: clicked it$/.test(ia(bare, "2:5")?.detail ?? ""));
   const IDENT = { name: "verify-probe", version: "1.0.0", sha256: "a".repeat(64), playwright: { package: "playwright", version: "1.50.0" }, browser: { name: "chromium", version: "130" } };
   const bound = compare(expU, { ...withEvidence([miss]), expectationSha256: SHA_E, runId: "run-7", probe: IDENT }, { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
-  safe("[F8] control: the same row from a run-bound probe → 'probe said: …'", () =>
+  safe("control: the same row from a run-bound probe → 'probe said: …'", () =>
     ia(bound, "2:4")?.result === "undesigned" && /; probe said: no dialog appeared$/.test(ia(bound, "2:4")?.detail ?? ""));
 }
 
-// M-1: a measured file that names its run, with no status of that run beside it — nothing recorded it as that run's
-safe("[M-1] measured.runId set, compare looked for a status and found none → incomplete 'no status of that run records it'", () => {
+// a measured file that names its run, with no status of that run beside it — nothing recorded it as that run's
+safe("measured.runId set, compare looked for a status and found none → incomplete 'no status of that run records it'", () => {
   const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-9" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: null });
   return r.verdict === "incomplete" && r.why.some((w) => /taken in run run-9, but no status file was found — no status of that run records it/.test(w));
 });
-safe("[M-1] …a status of ANOTHER run → incomplete, naming both runs", () => {
+safe("…a status of ANOTHER run → incomplete, naming both runs", () => {
   const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-9" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
   return r.verdict === "incomplete" && r.why.some((w) => /taken in run run-9, but Garden\.status\.json is run run-7 — no status of that run records it/.test(w));
 });
-safe("[M-1] …another run's status: the hint says re-measure in the current run, never 'record run-9' over it", () => {
+safe("…another run's status: the hint says re-measure in the current run, never 'record run-9' over it", () => {
   const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-9" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring", SHA_M) });
   const w = r.why.find((x) => /taken in run run-9/.test(x)) || "";
   return /run run-7 is the current run — re-measure in it/.test(w) && !/--phase measured --run run-9/.test(w);
 });
-safe("[M-1] an in-process caller that passes no status option is not judged: measured.runId alone → pass", () => {
+safe("an in-process caller that passes no status option is not judged: measured.runId alone → pass", () => {
   const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-9" }), { expectationSha256: SHA_E, measuredSha256: SHA_M });
   return r.verdict === "pass" && !r.why.some((w) => /no status of that run records it/.test(w));
 });
-safe("[M-1] …its own run's done naming this file → pass; no runId in the measured file and no status → pass (hand-run probe)", () => {
+safe("…its own run's done naming this file → pass; no runId in the measured file and no status → pass (hand-run probe)", () => {
   const own = run(measure({}, { expectationSha256: SHA_E, runId: "run-7" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
   const bare = run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: null });
   return own.verdict === "pass" && bare.verdict === "pass";
 });
-// L-1: the integrity reasons are recorded as report.integrity; --accept reads that field first
-safe("[L-1] report.integrity holds exactly the integrity reasons (the unfinished run), [] for a clean run", () => {
+// the integrity reasons are recorded as report.integrity; --accept reads that field first
+safe("report.integrity holds exactly the integrity reasons (the unfinished run), [] for a clean run", () => {
   const r = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
   const clean = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
   return r.integrity.length === 1 && /the verifier had not finished/.test(r.integrity[0] || "") && clean.integrity.length === 0 && clean.why.length > 0;
 });
-safe("[L-1] --accept refuses on report.integrity even when no why[] entry carries a known phrase (reworded / a newer reason)", () => {
+safe("--accept refuses on report.integrity even when no why[] entry carries a known phrase (reworded / a newer reason)", () => {
   const clean = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
   const sel = acceptSel({ ...clean, integrity: ["the run was measured by a probe this version does not know"] }, "2:1", "font-size");
   return "error" in sel && /the report's run is unverified \(the run was measured by a probe this version does not know\)/.test(sel.error);
 });
-safe("[L-1] …an older report (no integrity field) still refused by why[] wording; integrity [] trusts the field", () => {
+safe("…an older report (no integrity field) still refused by why[] wording; integrity [] trusts the field", () => {
   const r = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
   const { integrity: _i, ...older } = r;
   const onDisk: unknown = JSON.parse(JSON.stringify(older));
@@ -406,7 +406,7 @@ console.log("CLI --compare with the run status beside the measured file:");
   fs.writeFileSync(path.join(dir, "Garden.png"), "png");
   fs.writeFileSync(path.join(dir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, artifacts: ["design/verify/Garden.png"] })));
   const st = cli("--status", "Garden", "--phase", "measuring", "--new-run");
-  safe("[H1] the measuring status is live (run cache), not in design/verify", () => st.status === 0 && !fs.existsSync(path.join(dir, "Garden.status.json")));
+  safe("the measuring status is live (run cache), not in design/verify", () => st.status === 0 && !fs.existsSync(path.join(dir, "Garden.status.json")));
   const c1 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
   const rep1 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
   safe("status at 'measuring' → exit 1, the report IS written, verdict incomplete with the status reason", () => st.status === 0 && c1.status === 1 && rep1?.verdict === "incomplete" && (rep1.why || []).some((w) => /is at phase measuring/.test(w)));
@@ -415,11 +415,11 @@ console.log("CLI --compare with the run status beside the measured file:");
   const rep2 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
   safe("after --status done (same run) → exit 0, pass, inputs.runId recorded; done published design/verify/Garden.status.json", () => done.status === 0 && fs.existsSync(path.join(dir, "Garden.status.json")) && c2.status === 0 && rep2?.verdict === "pass" && typeof rep2.inputs?.runId === "string" && rep2.inputs.runId.length > 0);
   safe("no tmp files are left beside the report (atomic writes)", () => !fs.readdirSync(dir).some((f) => f.includes(".tmp-")));
-  // M-1: a measured file naming a run no status records (the probe's status write was refused) → incomplete
+  // a measured file naming a run no status records (the probe's status write was refused) → incomplete
   fs.writeFileSync(path.join(dir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, artifacts: ["design/verify/Garden.png"], runId: "run-unrecorded" })));
   const c3 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
   const rep3 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
-  safe("[M-1] CLI: measured.runId names a run the status (another run's done) does not → exit 1, incomplete, report.integrity lists it", () =>
+  safe("CLI: measured.runId names a run the status (another run's done) does not → exit 1, incomplete, report.integrity lists it", () =>
     c3.status === 1 && rep3?.verdict === "incomplete" && (rep3.integrity || []).some((w) => /taken in run run-unrecorded/.test(w)));
   // the probe wrote into a stage dir (--out elsewhere): its status is keyed by the EXPECTATION's dir — found there
   const rec = cli("--status", "Garden", "--phase", "measuring", "--run", "run-staged");
@@ -428,9 +428,9 @@ console.log("CLI --compare with the run status beside the measured file:");
   fs.writeFileSync(path.join(stageDir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, runId: "run-staged" })));
   const c4 = cli("--compare", "design/verify/Garden.expected.json", "stage-elsewhere/Garden.measured.json", "--out", "stage-elsewhere/Garden");
   const rep4 = readJsonOrNull(path.join(stageDir, "Garden.report.json"), isVerifyReport);
-  safe("[M-1] CLI: a staged measured file naming its run finds the run's status by the expectation's dir (at measuring → 'had not finished', not 'unrecorded')", () =>
+  safe("CLI: a staged measured file naming its run finds the run's status by the expectation's dir (at measuring → 'had not finished', not 'unrecorded')", () =>
     rec.status === 0 && c4.status === 1 && (rep4?.why || []).some((w) => /is at phase measuring/.test(w)) && !(rep4?.why || []).some((w) => /no status of that run records it/.test(w)));
-  // H1 (s19): build-screen's recipe — probe without --run — after an earlier run ended: a fresh unbound measured file
+  // build-screen's recipe — probe without --run — after an earlier run ended: a fresh unbound measured file
   cli("--status", "Garden", "--phase", "failed", "--run", "run-staged"); // end the in-flight run above
   const st5 = cli("--status", "Garden", "--phase", "starting", "--new-run");
   const run5 = st5.stdout.trim().split(" ")[1] ?? "";
@@ -439,7 +439,7 @@ console.log("CLI --compare with the run status beside the measured file:");
   fs.writeFileSync(path.join(dir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, measuredAt: new Date(Date.now() + 1000).toISOString(), artifacts: ["design/verify/Garden.png"] })));
   const c5 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
   const rep5 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
-  safe("[H1] CLI: a fresh measured file with no runId after an earlier run's done → exit 0, pass (not 'names a different measured file')", () =>
+  safe("CLI: a fresh measured file with no runId after an earlier run's done → exit 0, pass (not 'names a different measured file')", () =>
     done5.status === 0 && c5.status === 0 && rep5?.verdict === "pass" && !(rep5.integrity || []).length);
   fs.rmSync(path.dirname(liveStatusFile(path.join(dir, "Garden"))), { recursive: true, force: true }); // the run cache (OS temp dir: no node_modules here)
   fs.rmSync(cwd, { recursive: true, force: true });

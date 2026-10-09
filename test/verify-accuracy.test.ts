@@ -1,6 +1,5 @@
-// Group 17 slice A1 — verify accuracy: what the compare judges and what it only lists (F-69, F-119, F-67, F-74, F-121,
-// DT-55; decisions D111–D116). Expectations come from the real `buildExpectation` over plugin-shaped screen exports
-// (test/fixtures.ts, invented names): font.case lower-case ("title", "upper", "small_caps"), lineHeight {value, unit},
+// Verify accuracy: what the compare judges and what it only lists. Expectations come from the real `buildExpectation`
+// over plugin-shaped screen exports (test/fixtures.ts, invented names): font.case lower-case ("title", "upper", "small_caps"), lineHeight {value, unit},
 // autoResize lower-case, fills bound to a state token, reactions[].actions[]. Measurements are the probe's shape
 // ({nodeId, styles, states.<s>.styles, matchedBy}); paintedBy / textTransform are the shipped probe's optional keys.
 // Run with:  node test/verify-accuracy.test.ts
@@ -30,8 +29,8 @@ const notes = (r: VerifyReportV2): string[] => r.probe.inputNotes || [];
 const TXT: FontSpec = { family: "Inter", size: 14, color: "#333333", align: "left" };
 const text = (id: string, name: string, t: string, font: FontSpec, extra: Partial<NodeInput> = {}): NodeInput => ({ type: "TEXT", id, name, text: t, font, ...extra });
 
-// ---------------------------------------------------------------- 1. F-69 (D114): the RENDERED strings
-console.log("F-69 — Figma's text case and CSS text-transform: compare what each side renders:");
+// ---------------------------------------------------------------- 1. the RENDERED strings
+console.log("Figma's text case and CSS text-transform: compare what each side renders:");
 {
   const e = expect1([
     text("2:1", "Notes", "shipping notes", { ...TXT, case: "title" }),
@@ -39,7 +38,7 @@ console.log("F-69 — Figma's text case and CSS text-transform: compare what eac
     text("2:3", "Save", "save", { ...TXT, case: "upper" }),
     text("2:4", "Badge", "new", { ...TXT, case: "small_caps" }),
     text("2:5", "Plain", "Order Total", TXT),
-    // a fixed-width text (DT-75 width gate): ink width compared only once the copy matches
+    // a fixed-width text (the width gate): ink width compared only once the copy matches
     text("2:6", "Label", "delivery date", { ...TXT, case: "title" }, { autoResize: "height", box: { w: 200, h: 20 }, renderBox: { x: 116, y: 74, w: 88, h: 11 } }),
   ]);
   safe("[1] expect: the stored string stays in `text`, the case travels as textCase (title / upper)", () =>
@@ -74,14 +73,14 @@ console.log("F-69 — Figma's text case and CSS text-transform: compare what eac
     const d = run("2:5", { text: "ORDER TOTAL" });
     return d.length === 1 && d[0]?.severity === "low" && /^differs only in case — check for a text-transform/.test(d[0].note ?? "");
   });
-  safe("[1] DT-75 agrees: the rendered copy matches → the ink width is compared (no 'text differs' gap, no width delta)", () => {
+  safe("[1] width agrees: the rendered copy matches → the ink width is compared (no 'text differs' gap, no width delta)", () => {
     const r = compare(e, measured([node("2:6", { text: "Delivery Date", textBox: { x: 16, w: 88.5 } })]));
     return !r.fieldsNotMeasured.some((g) => g.nodeId === "2:6" && /text differs/.test(g.why)) && deltasOn(r, "2:6", /width|text/).length === 0;
   });
 }
 
-// ---------------------------------------------------------------- 2. F-119 (D112): line box taller than the text box
-console.log("F-119 — a line box taller than its fixed text box:");
+// ---------------------------------------------------------------- 2. line box taller than the text box
+console.log("a line box taller than its fixed text box:");
 {
   const lh = (v: number): FontSpec => ({ ...TXT, lineHeight: { value: v, unit: "px" } });
   const e = expect1([
@@ -100,15 +99,15 @@ console.log("F-119 — a line box taller than its fixed text box:");
   });
 }
 
-// ---------------------------------------------------------------- 3. F-67 (D112): misplaced / unused states
-console.log("F-67 — states beside styles, and states on a node whose design draws none:");
+// ---------------------------------------------------------------- 3. misplaced / unused states
+console.log("states beside styles, and states on a node whose design draws none:");
 {
   const e = expect1([
     { type: "FRAME", id: "4:1", name: "Row", fills: [{ type: "solid", color: "#46464f", tokens: { color: "Backgrounds/Row Hover" } }], box: { x: 100, y: 100, w: 600, h: 48 } },
     { type: "INSTANCE", id: "4:2", name: "Header Button", fills: [{ type: "solid", color: "#121319" }], box: { x: 100, y: 60, w: 120, h: 36 } },
   ]);
   safe("[3] expect: the row is drawn hovered (own), the button is not", () => spec(e, "4:1")?.drawnState === "hover" && spec(e, "4:2")?.drawnState === undefined);
-  // the hover block INSIDE styles (the F-67 shape) — never read
+  // the hover block INSIDE styles (the misplaced-state shape) — never read
   const misplaced = node("4:1", { backgroundColor: "rgb(18, 19, 25)", width: 600, height: 48, x: 0, y: 50 });
   const styles = misplaced.styles;
   if (styles) styles.states = { hover: { styles: { backgroundColor: "rgb(70, 70, 79)" } } };
@@ -130,8 +129,8 @@ console.log("F-67 — states beside styles, and states on a node whose design dr
     (r2.inferred || []).length === 1 && r2.inferred?.[0]?.kind === "undrawn-state" && r2.inferred[0].nodeId === "4:2" && r2.inferred[0].state === "hover");
 }
 
-// ---------------------------------------------------------------- 4. F-74 (D111) compare: who paints the background
-console.log("F-74 — a transparent element whose background another element paints:");
+// ---------------------------------------------------------------- 4. compare: who paints the background
+console.log("a transparent element whose background another element paints:");
 {
   const e = expect1([{ type: "FRAME", id: "5:1", name: "Cell", fills: [{ type: "solid", color: "#46464f", tokens: { color: "Backgrounds/Row Hover" } }], box: { x: 100, y: 100, w: 200, h: 48 } }]);
   const hovered = (styles: MeasuredStyles): MeasuredNode => node("5:1", { backgroundColor: "rgb(18, 19, 25)", width: 200, height: 48, x: 0, y: 50 }, { states: { hover: { styles } } });
@@ -152,11 +151,11 @@ console.log("F-74 — a transparent element whose background another element pai
     const m = node("5:1", { backgroundColor: TRANSPARENT, paintedBy: { backgroundColor: "rgb(70, 70, 79)", via: "ancestor", tag: "tr", depth: 1 } }, { states: { hover: { styles: { backgroundColor: TRANSPARENT } } } });
     return deltasOn(compare(e, measured([m])), "5:1", /^background$/).length === 1;
   });
-  safe("[4] DT-48: a same-box child that paints → no delta", () => bg({ backgroundColor: TRANSPARENT, paintedBy: { backgroundColor: "#46464f", via: "child", tag: "div", depth: 1 } }).length === 0);
+  safe("[4] a same-box child that paints → no delta", () => bg({ backgroundColor: TRANSPARENT, paintedBy: { backgroundColor: "#46464f", via: "child", tag: "div", depth: 1 } }).length === 0);
 }
 
-// ---------------------------------------------------------------- 5. F-74 (D111) expect: whose drawn state
-console.log("F-74 — the expectation records the OWNER of an inherited drawn state:");
+// ---------------------------------------------------------------- 5. expect: whose drawn state
+console.log("the expectation records the OWNER of an inherited drawn state:");
 {
   const e = expect1([{ type: "FRAME", id: "6:1", name: "Row", fills: [{ type: "solid", color: "#46464f", tokens: { color: "Backgrounds/Row Hover" } }], box: { x: 100, y: 100, w: 600, h: 48 },
     children: [
@@ -170,8 +169,8 @@ console.log("F-74 — the expectation records the OWNER of an inherited drawn st
   safe("[5] the why still names the owner by name", () => /inside 'Row'/.test(spec(e, "6:3")?.drawnStateWhy ?? ""));
 }
 
-// ---------------------------------------------------------------- 8. F-121 (D113): Inferred, not designed
-console.log("F-121 — what the build does that the design never drew, listed and never graded:");
+// ---------------------------------------------------------------- 8. Inferred, not designed
+console.log("what the build does that the design never drew, listed and never graded:");
 {
   const INDEX: { layers: IndexRow[] } = { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" }] };
   const plan: Plan = { nodeId: "1:1", interactions: [{ nodeId: "7:2", trigger: "on_click", expect: "url" }] };
@@ -190,8 +189,8 @@ console.log("F-121 — what the build does that the design never drew, listed an
   safe("[8] report.inferred: plan-declared + undesigned + agent row = 3", () =>
     inf.length === 3 && inf.some((x) => x.kind === "plan-interaction" && x.nodeId === "7:2") && inf.some((x) => x.kind === "undesigned-interaction" && x.nodeId === "7:1" && /9:9/.test(x.why))
     && inf.some((x) => x.kind === "agent" && x.state === "error" && x.name === "Help Link"));
-  // L11 (fix pass 1): the undesigned interaction is already in the headline's "1 undesigned" — counted once
-  safe("[8][L11] summary.inferred 3 (rows); the headline counts each thing once: '1 undesigned' + '· 2 inferred (not designed; the 1 undesigned … counted above)'", () =>
+  // the undesigned interaction is already in the headline's "1 undesigned" — counted once
+  safe("[8] summary.inferred 3 (rows); the headline counts each thing once: '1 undesigned' + '· 2 inferred (not designed; the 1 undesigned … counted above)'", () =>
     withRows.summary.inferred === 3 && /, 1 undesigned of 2 · /.test(withRows.headline)
     && / · 2 inferred \(not designed; the 1 undesigned interaction\(s\) are counted above\)/.test(withRows.headline) && !/ · 3 inferred/.test(withRows.headline));
   safe("[8] markdown: '## Inferred, not designed (3)' with the best-practice line, after 'Interactions not graded'", () => {
@@ -217,8 +216,8 @@ console.log("F-121 — what the build does that the design never drew, listed an
   safe("[8] measured.inferred is a known top-level key (not listed as unknown)", () => !(withRows.probe.unknownTopLevelKeys || []).some((k) => k.key === "inferred"));
 }
 
-// ---------------------------------------------------------------- 12. DT-55 (D116): the reference is illustrative
-console.log("DT-55 — a plan deviation that marks the reference PNG illustrative:");
+// ---------------------------------------------------------------- 12. the reference is illustrative
+console.log("a plan deviation that marks the reference PNG illustrative:");
 {
   const e = expect1([{ type: "FRAME", id: "8:1", name: "Chart", fills: [{ type: "solid", color: "#121319" }], box: { x: 100, y: 100, w: 400, h: 200 } }]);
   const m = measured([node("8:1", { backgroundColor: "#ffffff" })]);
@@ -233,10 +232,10 @@ console.log("DT-55 — a plan deviation that marks the reference PNG illustrativ
     JSON.stringify(withDev.summary) === JSON.stringify(plain.summary) && withDev.verdict === plain.verdict && withDev.deltas.length === plain.deltas.length && withDev.deltas.every((d) => !d.accepted));
 }
 
-// ---------------------------------------------------------------- fix pass 1 (D119)
-console.log("fix pass 1 — the same build served, publish, limits:");
+// ---------------------------------------------------------------- the same build served
+console.log("the same build served, publish, limits:");
 {
-  // M3: the first --compare after the D117 upgrade — the new report also hashes a mapped module the previous one never
+  // the first --compare after the upgrade — the new report also hashes a mapped module the previous one never
   // recorded. Only the files BOTH hashed say whether the code changed.
   const e = expect1([{ type: "FRAME", id: "9:1", name: "Panel", fills: [{ type: "solid", color: "#121319" }], box: { x: 100, y: 100, w: 400, h: 200 } }]);
   const build: BuildIdentity = { url: "http://127.0.0.1:4173/", mode: "static", assets: 3, assetsSha256: "b1", gitHead: "a".repeat(40), gitDirty: false };
@@ -245,19 +244,19 @@ console.log("fix pass 1 — the same build served, publish, limits:");
   const asPrev = (r: VerifyReportV2): VerifyReport => { const v: unknown = JSON.parse(JSON.stringify(r)); if (!isVerifyReport(v)) throw new Error("not a report"); return v; };
   const prev = asPrev(compare(e, m, { code: code({ "src/Orders.tsx": "h1" }) }));
   const upgraded = compare(e, m, { code: code({ "src/Orders.tsx": "h1", "src/shell/Shell.tsx": "s1" }), against: { file: "prev.report.json", report: prev } });
-  safe("[M3] same build, the same hash for every file both reports recorded, plus a newly hashed mapped module → no 'SAME BUILD SERVED'", () =>
+  safe("same build, the same hash for every file both reports recorded, plus a newly hashed mapped module → no 'SAME BUILD SERVED'", () =>
     upgraded.against?.sameBuild === true && !/SAME BUILD SERVED/.test(upgraded.headline));
   const edited = compare(e, m, { code: code({ "src/Orders.tsx": "h2", "src/shell/Shell.tsx": "s1" }), against: { file: "prev.report.json", report: prev } });
-  safe("[M3] control: a file both recorded changed while the build is the same → 'SAME BUILD SERVED … although the code changed'", () =>
+  safe("control: a file both recorded changed while the build is the same → 'SAME BUILD SERVED … although the code changed'", () =>
     /SAME BUILD SERVED as prev\.report\.json although the code changed/.test(edited.headline));
   const dropped = compare(e, m, { code: code({ "src/Other.tsx": "o1" }), against: { file: "prev.report.json", report: prev } });
-  safe("[M3] no file in common → the git commits decide (same commit: no warning)", () => !/SAME BUILD SERVED/.test(dropped.headline));
+  safe("no file in common → the git commits decide (same commit: no warning)", () => !/SAME BUILD SERVED/.test(dropped.headline));
 
-  // L4: the overlay known miss is stated in the report's limits
-  safe("[L4] report.limits names paintedBy's overlay miss ('may PASS') and the children-paint case", () =>
+  // the overlay known miss is stated in the report's limits
+  safe("report.limits names paintedBy's overlay miss ('may PASS') and the children-paint case", () =>
     prev.limits !== undefined && prev.limits.some((l) => /paintedBy/.test(l) && /overlay/.test(l) && /may PASS/.test(l) && /children paint all of it gets no painter/.test(l)));
 
-  // L13: --expect keeps <S>.expected.prev.json — a staged copy of one must never be published over it
+  // --expect keeps <S>.expected.prev.json — a staged copy of one must never be published over it
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-acc-"));
   const stage = path.join(tmp, "stage"), dest = path.join(tmp, "design", "verify");
   fs.mkdirSync(stage, { recursive: true }); fs.mkdirSync(dest, { recursive: true });
@@ -265,7 +264,7 @@ console.log("fix pass 1 — the same build served, publish, limits:");
   fs.writeFileSync(path.join(stage, "Orders.expected.prev.json"), "{\"staged\": true}");
   fs.writeFileSync(path.join(dest, "Orders.expected.prev.json"), "{\"kept\": true}");
   const pub = publishStaged(stage, dest);
-  safe("[L13] a stage dir holding a .prev.json → refused (tool-written), nothing copied", () =>
+  safe("a stage dir holding a .prev.json → refused (tool-written), nothing copied", () =>
     "error" in pub && /Orders\.expected\.prev\.json/.test(pub.error) && fs.readFileSync(path.join(dest, "Orders.expected.prev.json"), "utf8") === "{\"kept\": true}" && !fs.existsSync(path.join(dest, "Orders.evidence.json")));
   fs.rmSync(tmp, { recursive: true, force: true });
 }

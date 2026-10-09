@@ -1,5 +1,5 @@
-// test/g14-step0.test.ts — group 14's shared helpers, pure: finding ids (F-44), the one component name
-// rule (DT-27), whoami's addressed connection (DT-03) and the source stamp (L-5).
+// test/g14-step0.test.ts — shared helpers, pure: finding ids, the one component name
+// rule, whoami's addressed connection and the source stamp.
 import { check, report } from "./assert.ts";
 import { catalog } from "./fixtures.ts";
 import { findingIds, legacyBlockerIds } from "../design-to-code/finding-id.ts";
@@ -9,7 +9,7 @@ import { connectionFor } from "../bridge/src/server-core.ts";
 import type { ClientRow, ConnectionInfo } from "../bridge/src/server-core.ts";
 import { stampSource } from "../bridge/src/source-stamp.ts";
 
-console.log("finding-id (F-44):");
+console.log("finding-id:");
 {
   const two = [
     { severity: "blocker", code: "missing-font", nodeId: "1:1" },
@@ -28,7 +28,7 @@ console.log("finding-id (F-44):");
   check("legacy ids: <code>#<i> by position among blockers only", JSON.stringify(legacy) === JSON.stringify(["contrast#0", "missing-font#1", "missing-font#2", "blocker#3"]));
 }
 
-console.log("nameVerdict (DT-27):");
+console.log("nameVerdict:");
 {
   const inst = (name: string, nodeId: string, variant: Record<string, string> | null, props: Record<string, string | boolean> = {}): MatchInstance =>
     ({ nodeId, layer: name, name, key: "remote-" + nodeId, remote: false, variant, props });
@@ -66,7 +66,7 @@ console.log("nameVerdict (DT-27):");
   check("every verdict carries a reason", !!hdr && nameVerdict(hdr).reason.length > 0);
 }
 
-console.log("connectionFor (DT-03):");
+console.log("connectionFor:");
 {
   const client = (connId: string, connectedAt: number): ClientRow => ({
     connId, file: "Sample App " + connId, fileKey: null, page: null, instanceId: null, connectedAt, uptimeMs: 1000 - connectedAt, identified: true, pluginVersion: null, pluginStale: null,
@@ -82,7 +82,7 @@ console.log("connectionFor (DT-03):");
   check("pure: the input is not mutated", info.connId === "c1" && info.connectedAt === 10);
 }
 
-console.log("stampSource (L-5):");
+console.log("stampSource:");
 {
   const a = stampSource({ reply: { x: 1 }, client: { file: "Sample App", fileKey: "abc" } });
   check("file + fileKey stamped", a.sourceFile === "Sample App" && a.sourceFileKey === "abc" && a.x === 1);

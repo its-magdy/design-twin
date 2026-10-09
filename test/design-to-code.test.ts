@@ -1,6 +1,5 @@
 // Offline tests for the design-to-code/ layer. No Figma, no dependencies:  node test/design-to-code.test.ts
-// Hardened after an adversarial review — assertions pin VALUES (not just presence) and every
-// confirmed finding has a regression test. Tags: [Fn]/[An]/[Mn]/[Bn] map to review finding ids.
+// Assertions pin VALUES (not just presence) and every confirmed bug has a regression test.
 import { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName, toNative, platformOf } from "../design-to-code/tokens.ts";
 import { isCodeConnectMap, validateMap } from "../design-to-code/map-validate.ts";
 import { driftLint, checkFreshness, DEFAULT_MAX_AGE_MS } from "../design-to-code/drift-lint.ts";
@@ -67,7 +66,7 @@ const dsCat = catalog([
 console.log("tokens — DTCG:");
 const dtcg = toDTCG(ds);
 const c600 = asColor(leafAt(dtcg, "blue.600").$value).components;
-check("[M2] primitive color RGB channels correct", near(c600[0], 0.1451) && near(c600[1], 0.3882) && near(c600[2], 0.9216) && asColor(leafAt(dtcg, "blue.600").$value).hex === "#2563eb");
+check("primitive color RGB channels correct", near(c600[0], 0.1451) && near(c600[1], 0.3882) && near(c600[2], 0.9216) && asColor(leafAt(dtcg, "blue.600").$value).hex === "#2563eb");
 check("alias PRESERVED as reference", leafAt(dtcg, "color.primary").$value === "{blue.600}");
 check("per-mode values under $extensions (figma.com)", modesOf(leafAt(dtcg, "color.primary")).Dark === "{blue.300}");
 check("scopes + codeSyntax in $extensions (figma.com)", figmaExt(leafAt(dtcg, "color.primary")).scopes?.[0] === "FRAME_FILL" && figmaExt(leafAt(dtcg, "color.primary")).codeSyntax?.WEB === "var(--color-primary)");
@@ -99,8 +98,8 @@ check("[fixtures-null] asColor(null) throws a FixtureError ('not a DTCG colour�
 
 // ---------- tokens: color hardening ----------
 console.log("tokens — color:");
-check("[H2] shorthand #fff -> full color object", (() => { const v = must(hexToColorValue("#fff"), "hexToColorValue('#fff')"); return v.hex === "#ffffff" && near(v.components[0], 1) && near(v.components[2], 1); })());
-check("[H4] alpha in `alpha` field, hex fallback stays 6-digit (DTCG 2025.10)", (() => { const v = must(hexToColorValue("#00000080"), "hexToColorValue('#00000080')"); return v.hex === "#000000" && near(v.alpha, 0.502); })());
+check("shorthand #fff -> full color object", (() => { const v = must(hexToColorValue("#fff"), "hexToColorValue('#fff')"); return v.hex === "#ffffff" && near(v.components[0], 1) && near(v.components[2], 1); })());
+check("alpha in `alpha` field, hex fallback stays 6-digit (DTCG 2025.10)", (() => { const v = must(hexToColorValue("#00000080"), "hexToColorValue('#00000080')"); return v.hex === "#000000" && near(v.alpha, 0.502); })());
 check("malformed hex -> null (caller can guard)", hexToColorValue("#12345") === null);
 check("P3 profile -> display-p3", hexToColorValue("#2563eb", "display-p3")?.colorSpace === "display-p3");
 
@@ -108,12 +107,12 @@ check("P3 profile -> display-p3", hexToColorValue("#2563eb", "display-p3")?.colo
 console.log("tokens — CSS:");
 const css = toCSS(ds);
 check("semantic -> var chain", css.includes("--color-primary: var(--blue-600);"));
-check("[B4] primitive hex emitted EXACTLY once", (css.match(/--blue-600: #2563eb;/g) || []).length === 1);
-check("[H5] FLOAT emitted with px unit", css.includes("--space-md: 16px;"));
-check("[H6] cssVarName preserves case (custom props are case-sensitive)", cssVarName("color/Text Primary") === "--color-Text-Primary");
+check("primitive hex emitted EXACTLY once", (css.match(/--blue-600: #2563eb;/g) || []).length === 1);
+check("FLOAT emitted with px unit", css.includes("--space-md: 16px;"));
+check("cssVarName preserves case (custom props are case-sensitive)", cssVarName("color/Text Primary") === "--color-Text-Primary");
 const darkBlock = (css.match(/\[data-theme="Dark"\]\s*\{([^}]*)\}/) || [])[1] || "";
 check("dark block overrides differing token", darkBlock.includes("--color-primary: var(--blue-300);"));
-check("[M1] per-mode dedup: equal-to-default token has NO override", !darkBlock.includes("color-muted"));
+check("per-mode dedup: equal-to-default token has NO override", !darkBlock.includes("color-muted"));
 
 // ---------- tokens: DTCG Resolver Module 2025.10 ----------
 // Spec: designtokens.org/tr/2025.10/resolver/ — `version` (MUST be "2025.10") and `resolutionOrder`
@@ -122,41 +121,41 @@ check("[M1] per-mode dedup: equal-to-default token has NO override", !darkBlock.
 console.log("tokens — resolver:");
 const rw: string[] = [];
 const { resolver: rz, files: rzFiles } = toResolver(ds, rw);
-check("[R1] required root shape: version '2025.10' + resolutionOrder array", rz.version === "2025.10" && Array.isArray(rz.resolutionOrder) && rz.$schema === "https://www.designtokens.org/schemas/2025.10/resolver.json");
-check("[R2] every set has a `sources` array of reference objects that name an emitted file", Object.keys(rz.sets).length === 2 && Object.values(rz.sets).every((s) => Array.isArray(s.sources) && s.sources.every((src) => typeof src.$ref === "string" && fileAt(rzFiles, src.$ref))));
-check("[R3] multi-mode collection -> modifier with both contexts + spec-valid default", (() => {
+check("required root shape: version '2025.10' + resolutionOrder array", rz.version === "2025.10" && Array.isArray(rz.resolutionOrder) && rz.$schema === "https://www.designtokens.org/schemas/2025.10/resolver.json");
+check("every set has a `sources` array of reference objects that name an emitted file", Object.keys(rz.sets).length === 2 && Object.values(rz.sets).every((s) => Array.isArray(s.sources) && s.sources.every((src) => typeof src.$ref === "string" && fileAt(rzFiles, src.$ref))));
+check("multi-mode collection -> modifier with both contexts + spec-valid default", (() => {
   const m = modifierOf(rz, "Semantic");
   return Object.keys(m.contexts).sort().join(",") === "Dark,Light" && m.default === "Light" && Object.keys(m.contexts).includes(m.default);
 })());
-check("[R4] single-mode collection contributes a set but NO modifier", rz.sets.Primitives !== undefined && (rz.modifiers || {}).Primitives === undefined);
+check("single-mode collection contributes a set but NO modifier", rz.sets.Primitives !== undefined && (rz.modifiers || {}).Primitives === undefined);
 const semanticMod = modifierOf(rz, "Semantic");
 const semanticLightCtx = must(semanticMod.contexts.Light, "Semantic modifier Light context");
 const semanticDarkCtx = must(semanticMod.contexts.Dark, "Semantic modifier Dark context");
-check("[R5] default-mode context is the empty array (nothing differs), no file written", Array.isArray(semanticLightCtx) && semanticLightCtx.length === 0);
+check("default-mode context is the empty array (nothing differs), no file written", Array.isArray(semanticLightCtx) && semanticLightCtx.length === 0);
 const darkSet = fileAt(rzFiles, must(semanticDarkCtx[0], "Semantic Dark context[0]").$ref);
-check("[R6] context set holds ONLY the differing token (same dedup as toCSS)", nodeAt(darkSet, "color.primary") !== undefined && nodeAt(darkSet, "color.muted") === undefined);
+check("context set holds ONLY the differing token (same dedup as toCSS)", nodeAt(darkSet, "color.primary") !== undefined && nodeAt(darkSet, "color.muted") === undefined);
 const primitivesSet = must(rz.sets.Primitives, "resolver set 'Primitives'");
 const semanticSet = must(rz.sets.Semantic, "resolver set 'Semantic'");
-check("[R7] aliases preserved as {a.b} references in set files (resolved only at resolution time)", leafAt(darkSet, "color.primary").$value === "{blue.300}" && leafAt(fileAt(rzFiles, must(semanticSet.sources[0], "Semantic set sources[0]").$ref), "color.primary").$value === "{blue.600}");
-check("[R8] dimensions keep the 2025.10 object form inside set files", (() => { const base = fileAt(rzFiles, must(primitivesSet.sources[0], "Primitives set sources[0]").$ref); return leafAt(base, "space.md").$type === "dimension" && asDimension(leafAt(base, "space.md").$value).value === 16 && asDimension(leafAt(base, "space.md").$value).unit === "px"; })());
-check("[R9] set files carry no $extensions.modes (the resolver IS the mode mechanism)", leafAt(fileAt(rzFiles, must(semanticSet.sources[0], "Semantic set sources[0]").$ref), "color.primary").$extensions === undefined);
-check("[R10] resolutionOrder refs resolve in-document, sets before modifiers", (() => {
+check("aliases preserved as {a.b} references in set files (resolved only at resolution time)", leafAt(darkSet, "color.primary").$value === "{blue.300}" && leafAt(fileAt(rzFiles, must(semanticSet.sources[0], "Semantic set sources[0]").$ref), "color.primary").$value === "{blue.600}");
+check("dimensions keep the 2025.10 object form inside set files", (() => { const base = fileAt(rzFiles, must(primitivesSet.sources[0], "Primitives set sources[0]").$ref); return leafAt(base, "space.md").$type === "dimension" && asDimension(leafAt(base, "space.md").$value).value === 16 && asDimension(leafAt(base, "space.md").$value).unit === "px"; })());
+check("set files carry no $extensions.modes (the resolver IS the mode mechanism)", leafAt(fileAt(rzFiles, must(semanticSet.sources[0], "Semantic set sources[0]").$ref), "color.primary").$extensions === undefined);
+check("resolutionOrder refs resolve in-document, sets before modifiers", (() => {
   const ptrs = rz.resolutionOrder.map((r) => r.$ref);
   const idx = ptrs.findIndex((p) => p.startsWith("#/modifiers/"));
   // JSON-pointer walk: an object is stepped into; a falsy value stays as-is; a truthy scalar has no such member.
   const resolve = (p: string) => p.split("/").slice(1).reduce<unknown>((o, k) => (o && typeof o === "object" ? bag(o)[k.replace(/~1/g, "/").replace(/~0/g, "~")] : o ? undefined : o), rz);
   return ptrs.length === 3 && ptrs.every((p) => resolve(p) !== undefined) && idx === 2;
 })());
-check("[R11] emitTokens/CLI surface: resolver + files alongside the UNCHANGED dtcg/css outputs", (() => {
+check("emitTokens/CLI surface: resolver + files alongside the UNCHANGED dtcg/css outputs", (() => {
   const e = emitTokens(ds);
   return e.resolver.version === "2025.10" && Object.keys(e.resolverFiles).every((k) => k.startsWith("tokens/") && k.endsWith(".json"))
     && JSON.stringify(e.dtcg) === JSON.stringify(toDTCG(ds)) && modesOf(leafAt(e.dtcg, "color.primary")).Dark === "{blue.300}";
 })());
-check("[R12] single-mode-only design system -> valid resolver with NO modifiers key", (() => {
+check("single-mode-only design system -> valid resolver with NO modifiers key", (() => {
   const r = toResolver(tokens({ collections: [{ name: "P", modes: ["Value"], default: "Value" }], variables: [{ name: "a/b", type: "COLOR", collection: "P", values: { Value: "#000000" } }] })).resolver;
   return r.modifiers === undefined && r.version === "2025.10" && r.resolutionOrder.length === 1;
 })());
-check("[R13] filename collision after sanitizing -> warned + disambiguated, never overwritten", (() => {
+check("filename collision after sanitizing -> warned + disambiguated, never overwritten", (() => {
   const w: string[] = [];
   const r = toResolver(tokens({ collections: [{ name: "C", modes: ["Light", "light", "LIGHT"], default: "Light" }], variables: [
     { name: "bg", type: "COLOR", collection: "C", values: { Light: "#111111", light: "#222222", LIGHT: "#333333" } }] }), w);
@@ -165,7 +164,7 @@ check("[R13] filename collision after sanitizing -> warned + disambiguated, neve
     && asColor(leafAt(fileAt(r.files, refs[0]), "bg").$value).hex === "#222222" && asColor(leafAt(fileAt(r.files, refs[1]), "bg").$value).hex === "#333333"
     && w.some((m) => /collides/.test(m));
 })());
-check("[R14] `__proto__` mode name neither pollutes nor vanishes", (() => {
+check("`__proto__` mode name neither pollutes nor vanishes", (() => {
   // Parsed, not built: JSON.parse is what creates a REAL own "__proto__" key (an object literal would set the prototype).
   const parsed: unknown = JSON.parse('{"collections":[{"name":"C","modes":["Light","__proto__"],"default":"Light","theming":true}],"variables":[{"name":"bg","type":"COLOR","collection":"C","tier":"primitive","values":{"Light":"#111111","__proto__":"#222222"}}]}');
   if (!isTokensDoc(parsed)) return false;
@@ -177,7 +176,7 @@ check("[R14] `__proto__` mode name neither pollutes nor vanishes", (() => {
     && isJsonObject(reparsed) && isJsonObject(reparsed.modifiers) && isJsonObject(reparsed.modifiers.C) && isJsonObject(reparsed.modifiers.C.contexts)
     && Object.prototype.hasOwnProperty.call(reparsed.modifiers.C.contexts, "__proto__");
 })());
-check("[R15] round-trip: base + context in resolutionOrder reproduces $extensions.modes exactly", (() => {
+check("round-trip: base + context in resolutionOrder reproduces $extensions.modes exactly", (() => {
   const d = toDTCG(ds);
   const flat = (tree: DtcgGroup, prefix: string, out: Record<string, unknown>): Record<string, unknown> => { for (const k of Object.keys(tree)) { const n = must(tree[k], `DTCG node '${k}'`); const p = prefix ? prefix + "." + k : k; if ("$value" in n) out[p] = n.$value; else flat(n, p, out); } return out; };
   const modes = ["Light", "Dark"];
@@ -197,18 +196,18 @@ check("[R15] round-trip: base + context in resolutionOrder reproduces $extension
     return Object.keys(merged).length === Object.keys(expected).length;
   });
 })());
-check("[R16] resolver emits no NEW warnings on a clean design system", rw.length === 0 && lintTokens(ds).length === 0);
+check("resolver emits no NEW warnings on a clean design system", rw.length === 0 && lintTokens(ds).length === 0);
 
-// ---------- tokens: never-silent lint (H1/H3/H7/H8) ----------
+// ---------- tokens: never-silent lint ----------
 console.log("tokens — lint:");
-check("[H1] group/leaf collision reported (no silent loss)", lintTokens(tokens({ variables: [{ name: "color", type: "COLOR", values: { v: "#111111" } }, { name: "color/primary", type: "COLOR", values: { v: "#2563eb" } }] })).some((w) => /collide/.test(w)));
-check("[H1] collision does not produce an illegal both-$value-and-child node", (() => { const d = toDTCG(tokens({ variables: [{ name: "color", type: "COLOR", values: { v: "#111111" } }, { name: "color/primary", type: "COLOR", values: { v: "#2563eb" } }] })); const c = nodeAt(d, "color"); return !(c !== undefined && "$value" in c && "primary" in c); })());
-check("[H3] no-value-in-any-mode reported + skipped", (() => { const w: string[] = []; const d = toDTCG(tokens({ variables: [{ name: "x", type: "COLOR", values: {} }] }), w); return w.some((m) => /no value/.test(m)) && nodeAt(d, "x") === undefined; })());
-check("[H3] toCSS never emits `undefined`", !toCSS(tokens({ collections: [{ name: "C", modes: ["Light", "Dark"], default: "Light" }], variables: [{ name: "bg", type: "COLOR", collection: "C", values: { Dark: "#000000" } }] })).includes("undefined"));
-check("[H7] dangling alias reported", lintTokens(tokens({ variables: [{ name: "a", type: "COLOR", values: { v: { aliasOf: "does/not/exist" } } }] })).some((w) => /undefined token/.test(w)));
-check("[H8] empty-name skipped in CSS (no `--:`)", !toCSS(tokens({ variables: [{ name: "", type: "COLOR", values: { v: "#abcdef" } }] })).includes("--:"));
-check("[H6b] var-name collision from distinct names reported", lintTokens(tokens({ variables: [{ name: "spacing/4", type: "FLOAT", values: { v: 16 } }, { name: "spacing-4", type: "FLOAT", values: { v: 99 } }] })).some((w) => /fold onto one identifier and resolve DIFFERENTLY/.test(w)));
-check("[H6b] and BOTH are emitted — nothing overwritten", (() => {
+check("group/leaf collision reported (no silent loss)", lintTokens(tokens({ variables: [{ name: "color", type: "COLOR", values: { v: "#111111" } }, { name: "color/primary", type: "COLOR", values: { v: "#2563eb" } }] })).some((w) => /collide/.test(w)));
+check("collision does not produce an illegal both-$value-and-child node", (() => { const d = toDTCG(tokens({ variables: [{ name: "color", type: "COLOR", values: { v: "#111111" } }, { name: "color/primary", type: "COLOR", values: { v: "#2563eb" } }] })); const c = nodeAt(d, "color"); return !(c !== undefined && "$value" in c && "primary" in c); })());
+check("no-value-in-any-mode reported + skipped", (() => { const w: string[] = []; const d = toDTCG(tokens({ variables: [{ name: "x", type: "COLOR", values: {} }] }), w); return w.some((m) => /no value/.test(m)) && nodeAt(d, "x") === undefined; })());
+check("toCSS never emits `undefined`", !toCSS(tokens({ collections: [{ name: "C", modes: ["Light", "Dark"], default: "Light" }], variables: [{ name: "bg", type: "COLOR", collection: "C", values: { Dark: "#000000" } }] })).includes("undefined"));
+check("dangling alias reported", lintTokens(tokens({ variables: [{ name: "a", type: "COLOR", values: { v: { aliasOf: "does/not/exist" } } }] })).some((w) => /undefined token/.test(w)));
+check("empty-name skipped in CSS (no `--:`)", !toCSS(tokens({ variables: [{ name: "", type: "COLOR", values: { v: "#abcdef" } }] })).includes("--:"));
+check("var-name collision from distinct names reported", lintTokens(tokens({ variables: [{ name: "spacing/4", type: "FLOAT", values: { v: 16 } }, { name: "spacing-4", type: "FLOAT", values: { v: 99 } }] })).some((w) => /fold onto one identifier and resolve DIFFERENTLY/.test(w)));
+check("and BOTH are emitted — nothing overwritten", (() => {
   const css = toCSS(tokens({ variables: [{ name: "spacing/4", type: "FLOAT", values: { v: 16 } }, { name: "spacing-4", type: "FLOAT", values: { v: 99 } }] }));
   return /: 16px;/.test(css) && /: 99px;/.test(css);
 })());
@@ -220,48 +219,48 @@ const okEntry = { figma: { name: "B" }, code: { module: "m", export: "E" } };
 check("valid minimal passes", ok({ version: 1, components: { K: okEntry } }));
 check("missing code.export fails", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m" } } } }));
 check("bad prop kind fails", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "weird", codeProp: "p" } } } } }));
-check("[B2] unknown key on entry rejected (additionalProperties)", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, bogus: 1 } } }));
-check("[B2] typo'd figma key rejected", !ok({ version: 1, components: { K: { figma: { name: "B", naem: "x" }, code: { module: "m", export: "E" } } } }));
-check("[B2] extra top-level key rejected", !ok({ version: 1, components: {}, junk: 1 }));
-check("[B2] enum prop carrying `slot` rejected (per-kind oneOf)", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "enum", codeProp: "p", slot: "x" } } } } }));
-check("[B2] string prop carrying `values` rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "string", codeProp: "p", values: { a: "b" } } } } } }));
-check("[B2] instance `slot` as number rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "instance", slot: 5 } } } } }));
-check("[B2] enum default as object rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "enum", codeProp: "p", default: { x: 1 } } } } } }));
-check("[B2] boolean default as string rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "boolean", codeProp: "p", default: "yes" } } } } }));
-check("[B2] variantOverrides.when non-string value rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, variantOverrides: [{ when: { size: 5 }, code: { module: "m", export: "E" } }] } } }));
-check("[B2] childrenByLayer junk key rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, childrenByLayer: { layerNamePattern: "*", nope: 1 } } } }));
+check("unknown key on entry rejected (additionalProperties)", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, bogus: 1 } } }));
+check("typo'd figma key rejected", !ok({ version: 1, components: { K: { figma: { name: "B", naem: "x" }, code: { module: "m", export: "E" } } } }));
+check("extra top-level key rejected", !ok({ version: 1, components: {}, junk: 1 }));
+check("enum prop carrying `slot` rejected (per-kind oneOf)", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "enum", codeProp: "p", slot: "x" } } } } }));
+check("string prop carrying `values` rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "string", codeProp: "p", values: { a: "b" } } } } } }));
+check("instance `slot` as number rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "instance", slot: 5 } } } } }));
+check("enum default as object rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "enum", codeProp: "p", default: { x: 1 } } } } } }));
+check("boolean default as string rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "boolean", codeProp: "p", default: "yes" } } } } }));
+check("variantOverrides.when non-string value rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, variantOverrides: [{ when: { size: 5 }, code: { module: "m", export: "E" } }] } } }));
+check("childrenByLayer junk key rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, childrenByLayer: { layerNamePattern: "*", nope: 1 } } } }));
 check("valid full entry (targets/variantOverrides/childrenByLayer/instance) passes", ok({ version: 1, components: { K: { figma: { name: "B", key: "k" }, code: { module: "m", export: "E", targets: { web: { module: "w", export: "W" } } }, props: { I: { kind: "instance", slot: "icon" } }, variantOverrides: [{ when: { Type: "Danger" }, code: { module: "d", export: "D" } }], childrenByLayer: { slot: "children" } } } }));
 check("null map fails gracefully", validateMap(null).ok === false);
-// F-32 / DT-26: an entry may carry a free-text `note` (build-screen leaves one); it must be a string.
-check("[F-32] an entry with note:\"…\" validates", ok({ version: 1, components: { K: { ...okEntry, status: "active", note: "props mapped by hand" } } }));
-check("[F-32] note: 3 fails with 'must be a string' at components.K.note", (() => {
+// an entry may carry a free-text `note` (build-screen leaves one); it must be a string.
+check("an entry with note:\"…\" validates", ok({ version: 1, components: { K: { ...okEntry, status: "active", note: "props mapped by hand" } } }));
+check("note: 3 fails with 'must be a string' at components.K.note", (() => {
   const r = validateMap({ version: 1, components: { K: { ...okEntry, note: 3 } } });
   return !r.ok && r.errors.length === 1 && r.errors[0]?.path === "components.K.note" && r.errors[0]?.message === "must be a string";
 })());
 
-// ---------- drift lint (F1..F8) ----------
+// ---------- drift lint ----------
 console.log("drift — lint:");
 const single = (props?: Record<string, PropDefInput>) => catalog([{ key: "K", name: "Btn", type: "COMPONENT", props: props || {} }]);
-// [F1] deleted mapped component is ORPHANED, not silently rebound by name.
+// deleted mapped component is ORPHANED, not silently rebound by name.
 const f1 = driftLint(codeMap({ K_DELETED: { figma: { key: "K_DELETED", name: "Button", id: "9:9" } } }), catalog([{ key: "K_LIVE", id: "1:1", name: "Button", type: "COMPONENT" }]));
-check("[F1] deleted key -> orphaned error (not name-rebind)", f1.errors.some((e) => e.code === "orphaned-entry" && e.suggestedKey === "K_LIVE"));
-// [F3] unpublished component keyed by node id matches.
-check("[F3] unpublished component keyed by id matches (no false error)", driftLint(codeMap({ "3:3": { figma: { name: "Card", id: "3:3" }, code: { module: "m", export: "E" } } }), catalog([{ id: "3:3", name: "Card", type: "COMPONENT" }])).errors.length === 0);
-// [F5] figma.key wins over an incidental map-key collision.
+check("deleted key -> orphaned error (not name-rebind)", f1.errors.some((e) => e.code === "orphaned-entry" && e.suggestedKey === "K_LIVE"));
+// unpublished component keyed by node id matches.
+check("unpublished component keyed by id matches (no false error)", driftLint(codeMap({ "3:3": { figma: { name: "Card", id: "3:3" }, code: { module: "m", export: "E" } } }), catalog([{ id: "3:3", name: "Card", type: "COMPONENT" }])).errors.length === 0);
+// figma.key wins over an incidental map-key collision.
 const f5 = driftLint(codeMap({ Primary: { figma: { key: "REAL", name: "Primary" } } }), catalog([{ key: "Primary", id: "1:1", name: "Danger", type: "COMPONENT" }, { key: "REAL", id: "2:2", name: "Primary", type: "COMPONENT" }]));
-check("[F5] figma.key outranks map-key collision (no fabricated rename)", !f5.errors.length && !f5.warnings.some((w) => w.code === "stale-name") && f5.warnings.some((w) => w.code === "unmapped-component" && w.name === "Danger"));
-// [F6] #uid prop suffix normalized on both sides.
-check("[F6] #uid prop suffix does not cause false stale-prop", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { "Size#12:3": { kind: "enum", codeProp: "size", values: { sm: "s", lg: "l" } } } } }), single({ "Size": { type: "VARIANT", options: ["sm", "lg"] } })).errors.length === 0);
-// [F7] VARIANT with no options -> warn, not false error.
+check("figma.key outranks map-key collision (no fabricated rename)", !f5.errors.length && !f5.warnings.some((w) => w.code === "stale-name") && f5.warnings.some((w) => w.code === "unmapped-component" && w.name === "Danger"));
+// #uid prop suffix normalized on both sides.
+check("#uid prop suffix does not cause false stale-prop", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { "Size#12:3": { kind: "enum", codeProp: "size", values: { sm: "s", lg: "l" } } } } }), single({ "Size": { type: "VARIANT", options: ["sm", "lg"] } })).errors.length === 0);
+// VARIANT with no options -> warn, not false error.
 const f7 = driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { Size: { kind: "enum", codeProp: "s", values: { bogus: "x" } } } } }), single({ Size: { type: "VARIANT" } }));
-check("[F7] VARIANT missing options -> warning, no false error", f7.warnings.some((w) => w.code === "no-variant-options") && !f7.errors.length);
-// [F8] double-map detected.
-check("[F8] two entries -> one component reported", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" } }, K2: { figma: { key: "K", name: "Btn" } } }), single()).errors.some((e) => e.code === "double-mapped"));
-// [F4] duplicate catalog key -> warn, shadowed twin NOT falsely unmapped.
+check("VARIANT missing options -> warning, no false error", f7.warnings.some((w) => w.code === "no-variant-options") && !f7.errors.length);
+// double-map detected.
+check("two entries -> one component reported", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" } }, K2: { figma: { key: "K", name: "Btn" } } }), single()).errors.some((e) => e.code === "double-mapped"));
+// duplicate catalog key -> warn, shadowed twin NOT falsely unmapped.
 const f4 = driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" } } }), catalog([{ key: "K", id: "1:1", name: "A", type: "COMPONENT" }, { key: "K", id: "2:2", name: "B", type: "COMPONENT" }]));
-check("[F4] duplicate catalog key warned, no spurious unmapped", f4.warnings.some((w) => w.code === "duplicate-key") && !f4.warnings.some((w) => w.code === "unmapped-component"));
-// [M5] unknown variant value -> error.
-check("[M5] mapping a non-existent variant option -> error", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { Size: { kind: "enum", codeProp: "s", values: { nope: "x" } } } } }), single({ Size: { type: "VARIANT", options: ["sm"] } })).errors.some((e) => e.code === "unknown-variant-value"));
+check("duplicate catalog key warned, no spurious unmapped", f4.warnings.some((w) => w.code === "duplicate-key") && !f4.warnings.some((w) => w.code === "unmapped-component"));
+// unknown variant value -> error.
+check("mapping a non-existent variant option -> error", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { Size: { kind: "enum", codeProp: "s", values: { nope: "x" } } } } }), single({ Size: { type: "VARIANT", options: ["sm"] } })).errors.some((e) => e.code === "unknown-variant-value"));
 // still-caught basics + a genuinely clean map is warning-clean too.
 check("kind mismatch caught", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { Size: { kind: "boolean", codeProp: "s" } } } }), single({ Size: { type: "VARIANT", options: ["a"] } })).errors.some((e) => e.code === "kind-mismatch"));
 check("stale prop caught", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { Ghost: { kind: "boolean", codeProp: "g" } } } }), single()).errors.some((e) => e.code === "stale-prop"));
@@ -269,26 +268,26 @@ const clean = driftLint(codeMap({
   KEY_BTN: { figma: { key: "KEY_BTN", name: "Button" }, code: { module: "m", export: "E" }, props: { Variant: { kind: "enum", codeProp: "v", values: { Primary: "primary", Secondary: "secondary" } }, Disabled: { kind: "boolean", codeProp: "d" }, Label: { kind: "string", codeProp: "children" }, Icon: { kind: "instance", slot: "icon" } } },
   KEY_CARD: { figma: { key: "KEY_CARD", name: "Card" }, code: { module: "m", export: "C" } },
 }), dsCat);
-check("[B4] complete map is error- AND warning-clean", clean.errors.length === 0 && clean.warnings.length === 0);
+check("complete map is error- AND warning-clean", clean.errors.length === 0 && clean.warnings.length === 0);
 
 console.log("drift — staleness:");
 const emptyMap = codeMap({});
-check("[stale-1] missing exportedAt -> unknown-freshness warning", driftLint(emptyMap, catalog([])).warnings.some((w) => w.code === "unknown-freshness"));
-check("[stale-2] unparseable exportedAt -> unknown-freshness warning", driftLint(emptyMap, { exportedAt: "not-a-date", components: [] }).warnings.some((w) => w.code === "unknown-freshness"));
-check("[stale-3] fresh export (1h old, default 24h max) -> no staleness warning at all", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 3600000).toISOString(), components: [] }).warnings.every((w) => w.code !== "stale-snapshot" && w.code !== "unknown-freshness"));
-check("[stale-4] export older than default 24h max-age -> stale-snapshot warning", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 30 * 3600000).toISOString(), components: [] }).warnings.some((w) => w.code === "stale-snapshot"));
-check("[stale-5] stale-snapshot message names the file and is unmistakably prominent", (() => {
+check("missing exportedAt -> unknown-freshness warning", driftLint(emptyMap, catalog([])).warnings.some((w) => w.code === "unknown-freshness"));
+check("unparseable exportedAt -> unknown-freshness warning", driftLint(emptyMap, { exportedAt: "not-a-date", components: [] }).warnings.some((w) => w.code === "unknown-freshness"));
+check("fresh export (1h old, default 24h max) -> no staleness warning at all", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 3600000).toISOString(), components: [] }).warnings.every((w) => w.code !== "stale-snapshot" && w.code !== "unknown-freshness"));
+check("export older than default 24h max-age -> stale-snapshot warning", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 30 * 3600000).toISOString(), components: [] }).warnings.some((w) => w.code === "stale-snapshot"));
+check("stale-snapshot message names the file and is unmistakably prominent", (() => {
   const w = driftLint(emptyMap, { exportedAt: new Date(Date.now() - 30 * 3600000).toISOString(), file: "My File", components: [] }).warnings.find((w) => w.code === "stale-snapshot");
   return w !== undefined && /^STALE SNAPSHOT/.test(w.message) && w.message.includes("My File");
 })());
-check("[stale-6] never silently passes: EVERY driftLint result carries a freshness verdict (warning or explicit pass)", (() => {
+check("never silently passes: EVERY driftLint result carries a freshness verdict (warning or explicit pass)", (() => {
   const fresh = driftLint(emptyMap, { exportedAt: new Date().toISOString(), components: [] });
   return fresh.freshness === undefined && fresh.warnings.every((w) => w.code !== "stale-snapshot" && w.code !== "unknown-freshness");
 })());
-check("[stale-7] --max-age override via opts.maxAgeMs: a 30h-old export is fine at 48h max", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 30 * 3600000).toISOString(), components: [] }, { maxAgeMs: 48 * 3600000 }).warnings.every((w) => w.code !== "stale-snapshot"));
-check("[stale-8] --max-age override makes a normally-fresh export stale at a tight threshold", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 3600000).toISOString(), components: [] }, { maxAgeMs: 1800000 }).warnings.some((w) => w.code === "stale-snapshot"));
-check("[stale-9] checkFreshness default max-age constant is 24h", DEFAULT_MAX_AGE_MS === 24 * 3600000);
-check("[stale-10] checkFreshness's returned warning matches what it pushed into the array", (() => {
+check("--max-age override via opts.maxAgeMs: a 30h-old export is fine at 48h max", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 30 * 3600000).toISOString(), components: [] }, { maxAgeMs: 48 * 3600000 }).warnings.every((w) => w.code !== "stale-snapshot"));
+check("--max-age override makes a normally-fresh export stale at a tight threshold", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 3600000).toISOString(), components: [] }, { maxAgeMs: 1800000 }).warnings.some((w) => w.code === "stale-snapshot"));
+check("checkFreshness default max-age constant is 24h", DEFAULT_MAX_AGE_MS === 24 * 3600000);
+check("checkFreshness's returned warning matches what it pushed into the array", (() => {
   const warnings: DriftFinding[] = [];
   const push: Parameters<typeof checkFreshness>[1] = (arr, code, message, extra) => arr.push(Object.assign({ code, message }, extra || {}));
   const w = checkFreshness({ exportedAt: new Date(Date.now() - 30 * 3600000).toISOString() }, push, warnings, {});
@@ -296,69 +295,69 @@ check("[stale-10] checkFreshness's returned warning matches what it pushed into 
   return w !== undefined && w.code === "stale-snapshot" && warnings.length === 1 && w0 !== undefined && w0.code === w.code && w0.message === w.message;
 })());
 
-// ---------- bootstrap (A1..A7, M3, M4) ----------
+// ---------- bootstrap ----------
 console.log("bootstrap:");
 const boot = bootstrap(dsCat);
 check("component keyed by publish key + needs-review", !!boot.components.KEY_BTN && boot.components.KEY_BTN.status === "needs-review");
-check("[M4] export PascalCased from multi-word name", must(bootstrap(catalog([{ key: "K", name: "Icon Button", type: "COMPONENT" }])).components.K, "component 'K'").code.export === "IconButton");
-check("[A7] slash-namespaced name keeps namespace in export", must(bootstrap(catalog([{ key: "K", name: "Button/Primary/Danger", type: "COMPONENT" }])).components.K, "component 'K'").code.export === "ButtonPrimaryDanger");
+check("export PascalCased from multi-word name", must(bootstrap(catalog([{ key: "K", name: "Icon Button", type: "COMPONENT" }])).components.K, "component 'K'").code.export === "IconButton");
+check("slash-namespaced name keeps namespace in export", must(bootstrap(catalog([{ key: "K", name: "Button/Primary/Danger", type: "COMPONENT" }])).components.K, "component 'K'").code.export === "ButtonPrimaryDanger");
 check("VARIANT -> enum identity + default/omitDefault", anyProp(boot, "KEY_BTN", "Variant").kind === "enum" && enumProp(boot, "KEY_BTN", "Variant").values?.Primary === "Primary" && enumProp(boot, "KEY_BTN", "Variant").default === "Primary" && enumProp(boot, "KEY_BTN", "Variant").omitDefault === true);
-check("[M3] BOOLEAN -> boolean prop with default+omitDefault", anyProp(boot, "KEY_BTN", "Disabled").kind === "boolean" && anyProp(boot, "KEY_BTN", "Disabled").codeProp === "disabled" && boolProp(boot, "KEY_BTN", "Disabled").default === false && boolProp(boot, "KEY_BTN", "Disabled").omitDefault === true);
+check("BOOLEAN -> boolean prop with default+omitDefault", anyProp(boot, "KEY_BTN", "Disabled").kind === "boolean" && anyProp(boot, "KEY_BTN", "Disabled").codeProp === "disabled" && boolProp(boot, "KEY_BTN", "Disabled").default === false && boolProp(boot, "KEY_BTN", "Disabled").omitDefault === true);
 check("TEXT named Label -> children", anyProp(boot, "KEY_BTN", "Label").codeProp === "children");
 check("INSTANCE_SWAP -> instance slot", anyProp(boot, "KEY_BTN", "Icon").kind === "instance" && instanceProp(boot, "KEY_BTN", "Icon").slot === "icon");
 check("bootstrap output passes validation", validateMap(boot).ok);
-// [A3] catalog component with no name -> still valid output.
+// catalog component with no name -> still valid output.
 const a3 = bootstrap(malformed<ComponentsCatalog>({ components: [{ key: "K1", type: "COMPONENT" }] })); // no name, on purpose
-check("[A3] missing component name -> figma.name is a string, output valid", typeof must(a3.components.K1, "component 'K1'").figma.name === "string" && validateMap(a3).ok);
-// [A1] confirmed entry whose component is absent from catalog is PRESERVED, not dropped.
-check("[A1] confirmed entry absent from catalog is preserved", "GONE" in bootstrap(dsCat, codeMap({ GONE: { figma: { key: "GONE", name: "Gone" }, code: { module: "@/hand", export: "Hand" }, status: "active" } })).components);
-// [A2] re-run does NOT clobber in-progress needs-review edits; DOES add new props.
+check("missing component name -> figma.name is a string, output valid", typeof must(a3.components.K1, "component 'K1'").figma.name === "string" && validateMap(a3).ok);
+// confirmed entry whose component is absent from catalog is PRESERVED, not dropped.
+check("confirmed entry absent from catalog is preserved", "GONE" in bootstrap(dsCat, codeMap({ GONE: { figma: { key: "GONE", name: "Gone" }, code: { module: "@/hand", export: "Hand" }, status: "active" } })).components);
+// re-run does NOT clobber in-progress needs-review edits; DOES add new props.
 const a2existing = codeMap({ KEY_BTN: { figma: { key: "KEY_BTN", name: "Button" }, code: { module: "@/half/Done", export: "MyButton" }, status: "needs-review", props: { Variant: { kind: "enum", codeProp: "kind", values: { Primary: "solid" } } } } });
 const a2 = bootstrap(dsCat, a2existing);
 const a2KeyBtn = must(a2.components.KEY_BTN, "component 'KEY_BTN'");
-check("[A2] needs-review human edits preserved (module/export/prop)", a2KeyBtn.code.module === "@/half/Done" && a2KeyBtn.code.export === "MyButton" && anyProp(a2, "KEY_BTN", "Variant").codeProp === "kind" && enumProp(a2, "KEY_BTN", "Variant").values?.Primary === "solid");
-check("[A2] re-run adds newly-appeared props", a2KeyBtn.props?.Disabled !== undefined && a2KeyBtn.props?.Icon !== undefined);
-// [A5] existing argument not mutated.
+check("needs-review human edits preserved (module/export/prop)", a2KeyBtn.code.module === "@/half/Done" && a2KeyBtn.code.export === "MyButton" && anyProp(a2, "KEY_BTN", "Variant").codeProp === "kind" && enumProp(a2, "KEY_BTN", "Variant").values?.Primary === "solid");
+check("re-run adds newly-appeared props", a2KeyBtn.props?.Disabled !== undefined && a2KeyBtn.props?.Icon !== undefined);
+// existing argument not mutated.
 const a5existing = codeMap({ KEEP: { figma: { key: "KEEP", name: "Old" }, code: { module: "@/x", export: "X" }, status: "active" } });
 const a5 = bootstrap(catalog([{ key: "KEEP", name: "New", id: "9:9", type: "COMPONENT" }]), a5existing);
 const a5existingKeep = must(a5existing.components.KEEP, "component 'KEEP'");
 const a5Keep = must(a5.components.KEEP, "component 'KEEP'");
-check("[A5] existing arg not mutated; output refreshes metadata + keeps code", a5existingKeep.figma.name === "Old" && a5Keep.figma.name === "New" && a5Keep.code.export === "X");
+check("existing arg not mutated; output refreshes metadata + keeps code", a5existingKeep.figma.name === "Old" && a5Keep.figma.name === "New" && a5Keep.code.export === "X");
 
-// ================= SECOND-ROUND: regressions from the fix pass + closed test gaps =================
-console.log("tokens — 2nd round:");
-check("[R1] OPACITY-scoped FLOAT emits a percentage (Figma's 0–100 scale), never px", toCSS(tokens({ variables: [{ name: "opacity/disabled", type: "FLOAT", scopes: ["OPACITY"], values: { v: 50 } }] })).includes("--opacity-disabled: 50%;"));
-check("[R1] dimension FLOAT still gets px", toCSS(tokens({ variables: [{ name: "gap/lg", type: "FLOAT", values: { v: 24 } }] })).includes("--gap-lg: 24px;"));
-check("[R1b] zero FLOAT stays unitless 0", toCSS(tokens({ variables: [{ name: "gap/none", type: "FLOAT", values: { v: 0 } }] })).includes("--gap-none: 0;"));
-check("[R2] undefined-default value -> dedup vs emitted base (no duplicate override)", (toCSS(malformed<TokensDoc>({ collections: [{ name: "C", modes: ["Light", "Dark"], default: "Light", theming: true }], variables: [{ name: "bg", type: "COLOR", collection: "C", tier: "primitive", values: { Light: undefined, Dark: "#000000" } }] })).match(/#000000/g) || []).length === 1);
-check("[H1-rev] reverse-order group/leaf collision reported", lintTokens(tokens({ variables: [{ name: "color/primary", type: "COLOR", values: { v: "#2563eb" } }, { name: "color", type: "COLOR", values: { v: "#111111" } }] })).some((w) => /collide/.test(w)));
-check("[H1-rev] reverse-order produces no illegal both-$value-and-child node", (() => { const d = toDTCG(tokens({ variables: [{ name: "color/primary", type: "COLOR", values: { v: "#2563eb" } }, { name: "color", type: "COLOR", values: { v: "#111111" } }] })); const c = nodeAt(d, "color"); return !(c !== undefined && "$value" in c && "primary" in c); })());
-check("[H2b] malformed hex on COLOR reported by toDTCG", (() => { const w: string[] = []; toDTCG(tokens({ variables: [{ name: "brand", type: "COLOR", values: { v: "#12345" } }] }), w); return w.some((m) => /malformed hex/.test(m)); })());
+// ================= regressions and closed test gaps =================
+console.log("tokens — regressions:");
+check("OPACITY-scoped FLOAT emits a percentage (Figma's 0–100 scale), never px", toCSS(tokens({ variables: [{ name: "opacity/disabled", type: "FLOAT", scopes: ["OPACITY"], values: { v: 50 } }] })).includes("--opacity-disabled: 50%;"));
+check("dimension FLOAT still gets px", toCSS(tokens({ variables: [{ name: "gap/lg", type: "FLOAT", values: { v: 24 } }] })).includes("--gap-lg: 24px;"));
+check("zero FLOAT stays unitless 0", toCSS(tokens({ variables: [{ name: "gap/none", type: "FLOAT", values: { v: 0 } }] })).includes("--gap-none: 0;"));
+check("undefined-default value -> dedup vs emitted base (no duplicate override)", (toCSS(malformed<TokensDoc>({ collections: [{ name: "C", modes: ["Light", "Dark"], default: "Light", theming: true }], variables: [{ name: "bg", type: "COLOR", collection: "C", tier: "primitive", values: { Light: undefined, Dark: "#000000" } }] })).match(/#000000/g) || []).length === 1);
+check("reverse-order group/leaf collision reported", lintTokens(tokens({ variables: [{ name: "color/primary", type: "COLOR", values: { v: "#2563eb" } }, { name: "color", type: "COLOR", values: { v: "#111111" } }] })).some((w) => /collide/.test(w)));
+check("reverse-order produces no illegal both-$value-and-child node", (() => { const d = toDTCG(tokens({ variables: [{ name: "color/primary", type: "COLOR", values: { v: "#2563eb" } }, { name: "color", type: "COLOR", values: { v: "#111111" } }] })); const c = nodeAt(d, "color"); return !(c !== undefined && "$value" in c && "primary" in c); })());
+check("malformed hex on COLOR reported by toDTCG", (() => { const w: string[] = []; toDTCG(tokens({ variables: [{ name: "brand", type: "COLOR", values: { v: "#12345" } }] }), w); return w.some((m) => /malformed hex/.test(m)); })());
 
-console.log("drift — 2nd round:");
+console.log("drift — regressions:");
 const reg3 = driftLint(codeMap({ SHARED: { figma: { id: "2:2", name: "Right" } } }), catalog([{ key: "SHARED", id: "1:1", name: "Wrong", type: "COMPONENT" }, { key: "K2", id: "2:2", name: "Right", type: "COMPONENT" }]));
-check("[REG-3] explicit figma.id outranks map-key collision", !reg3.errors.length && !reg3.warnings.some((w) => w.code === "stale-name") && reg3.warnings.some((w) => w.code === "unmapped-component" && w.name === "Wrong"));
-check("[REG-1] ambiguous base-name prop surfaced (not silently shadowed)", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { "Size#1": { kind: "enum", codeProp: "s", values: {} }, "Size#2": { kind: "enum", codeProp: "s2", values: {} } } } }), single()).warnings.some((w) => w.code === "ambiguous-prop"));
-// [F2-stale] an explicitly declared figma.key that no longer resolves is ORPHANED even when the map key
+check("explicit figma.id outranks map-key collision", !reg3.errors.length && !reg3.warnings.some((w) => w.code === "stale-name") && reg3.warnings.some((w) => w.code === "unmapped-component" && w.name === "Wrong"));
+check("ambiguous base-name prop surfaced (not silently shadowed)", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { "Size#1": { kind: "enum", codeProp: "s", values: {} }, "Size#2": { kind: "enum", codeProp: "s2", values: {} } } } }), single()).warnings.some((w) => w.code === "ambiguous-prop"));
+// [stale] an explicitly declared figma.key that no longer resolves is ORPHANED even when the map key
 // coincidentally matches a DIFFERENT live component — no silent rebind (the whole point of the tool).
 const f2 = driftLint(codeMap({ LIVE: { figma: { key: "DEAD", name: "Old" }, code: { module: "m", export: "E" } } }), catalog([{ key: "LIVE", id: "1:1", name: "Other", type: "COMPONENT" }]));
-check("[F2-stale] stale figma.key -> orphaned despite map-key collision (no rebind)", f2.errors.some((e) => e.code === "orphaned-entry" && e.mapKey === "LIVE") && f2.warnings.some((w) => w.code === "unmapped-component" && w.name === "Other") && !f2.warnings.some((w) => w.code === "stale-name"));
+check("[stale] stale figma.key -> orphaned despite map-key collision (no rebind)", f2.errors.some((e) => e.code === "orphaned-entry" && e.mapKey === "LIVE") && f2.warnings.some((w) => w.code === "unmapped-component" && w.name === "Other") && !f2.warnings.some((w) => w.code === "stale-name"));
 check("stale-name FIRES on rename (positive)", driftLint(codeMap({ K: { figma: { key: "K", name: "Old" } } }), catalog([{ key: "K", name: "New", type: "COMPONENT" }])).warnings.some((w) => w.code === "stale-name"));
 check("uncovered-prop FIRES (positive)", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" } } }), single({ V: { type: "VARIANT", options: ["a"] } })).warnings.some((w) => w.code === "uncovered-prop"));
 check("unmapped-variant-value FIRES (positive)", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { V: { kind: "enum", codeProp: "v", values: { a: "A" } } } } }), single({ V: { type: "VARIANT", options: ["a", "b"] } })).warnings.some((w) => w.code === "unmapped-variant-value"));
 
-console.log("bootstrap — 2nd round:");
+console.log("bootstrap — regressions:");
 const a1ex = codeMap({ GONE: { figma: { key: "GONE", name: "Gone" }, code: { module: "@/hand", export: "Hand" }, status: "active", props: { X: { kind: "boolean", codeProp: "x" } } } });
 const a1out = bootstrap(catalog([]), a1ex);
-check("[A1] orphan preserved with FULL content (deep-equal) + valid", JSON.stringify(a1out.components.GONE) === JSON.stringify(a1ex.components.GONE) && validateMap(a1out).ok);
+check("orphan preserved with FULL content (deep-equal) + valid", JSON.stringify(a1out.components.GONE) === JSON.stringify(a1ex.components.GONE) && validateMap(a1out).ok);
 const r4out = bootstrap(catalog([{ key: "K", id: "1:1", name: "Btn", type: "COMPONENT" }]), codeMap({ "1:1": { figma: { id: "1:1", name: "Btn" }, code: { module: "@/kept", export: "Btn" }, status: "active" } }));
-check("[R4] component gaining a key does NOT duplicate + keeps human code", Object.keys(r4out.components).length === 1 && !!r4out.components.K && !r4out.components["1:1"] && r4out.components.K.code.module === "@/kept");
-check("[R1t] prop whose Figma type changed is regenerated", must(bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Size: { type: "BOOLEAN", default: false } } }]), codeMap({ K: { figma: { key: "K", name: "B" }, code: { module: "@/k", export: "B" }, status: "active", props: { Size: { kind: "enum", codeProp: "size", values: { a: "A" } } } } })).components.K, "component 'K'").props?.Size?.kind === "boolean");
-check("[NEW3] stub with human export+prop edits preserved even under TODO module (no wholesale regen)", (() => { const n = bootstrap(catalog([{ key: "K", name: "Right", type: "COMPONENT", props: { V: { type: "VARIANT", options: ["Primary", "Secondary"] } } }]), codeMap({ K: { figma: { key: "K", name: "Wrong" }, code: { module: "TODO: import path", export: "MyName" }, status: "needs-review", props: { V: { kind: "enum", codeProp: "kind", values: { Primary: "solid" } } } } })); return must(n.components.K, "component 'K'").code.export === "MyName" && anyProp(n, "K", "V").codeProp === "kind" && enumProp(n, "K", "V").values?.Primary === "solid"; })());
-check("[A2t] added prop has correct kind+codeProp (not just presence)", anyProp(a2, "KEY_BTN", "Disabled").kind === "boolean" && anyProp(a2, "KEY_BTN", "Disabled").codeProp === "disabled");
-check("[M1t] non-label TEXT -> camelCase codeProp (not children)", must(bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Placeholder: { type: "TEXT" } } }])).components.K, "component 'K'").props?.Placeholder?.codeProp === "placeholder");
+check("component gaining a key does NOT duplicate + keeps human code", Object.keys(r4out.components).length === 1 && !!r4out.components.K && !r4out.components["1:1"] && r4out.components.K.code.module === "@/kept");
+check("prop whose Figma type changed is regenerated", must(bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Size: { type: "BOOLEAN", default: false } } }]), codeMap({ K: { figma: { key: "K", name: "B" }, code: { module: "@/k", export: "B" }, status: "active", props: { Size: { kind: "enum", codeProp: "size", values: { a: "A" } } } } })).components.K, "component 'K'").props?.Size?.kind === "boolean");
+check("stub with human export+prop edits preserved even under TODO module (no wholesale regen)", (() => { const n = bootstrap(catalog([{ key: "K", name: "Right", type: "COMPONENT", props: { V: { type: "VARIANT", options: ["Primary", "Secondary"] } } }]), codeMap({ K: { figma: { key: "K", name: "Wrong" }, code: { module: "TODO: import path", export: "MyName" }, status: "needs-review", props: { V: { kind: "enum", codeProp: "kind", values: { Primary: "solid" } } } } })); return must(n.components.K, "component 'K'").code.export === "MyName" && anyProp(n, "K", "V").codeProp === "kind" && enumProp(n, "K", "V").values?.Primary === "solid"; })());
+check("added prop has correct kind+codeProp (not just presence)", anyProp(a2, "KEY_BTN", "Disabled").kind === "boolean" && anyProp(a2, "KEY_BTN", "Disabled").codeProp === "disabled");
+check("non-label TEXT -> camelCase codeProp (not children)", must(bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Placeholder: { type: "TEXT" } } }])).components.K, "component 'K'").props?.Placeholder?.codeProp === "placeholder");
 
-console.log("validator — 2nd round (negative coverage):");
+console.log("validator — negative coverage:");
 check("[V] version 2 rejected", !ok({ version: 2, components: {} }));
 check("[V] code.targets numeric module rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E", targets: { web: { module: 5 } } } } } }));
 check("[V] variantOverrides.code missing export rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, variantOverrides: [{ when: { T: "x" }, code: { module: "m" } }] } } }));
@@ -366,8 +365,8 @@ check("[V] figma.unstable non-bool rejected", !ok({ version: 1, components: { K:
 check("[V] boolean omitDefault non-bool rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "boolean", codeProp: "p", omitDefault: "no" } } } } }));
 check("[V] figmaFileKey non-string rejected", !ok({ version: 1, components: {}, figmaFileKey: 5 }));
 
-// ================= THIRD-ROUND: close proven mutation survivors from the re-review of the fixes =====
-console.log("tokens — 3rd round:");
+// ================= mutation survivors closed =====
+console.log("tokens — mutation survivors:");
 check("[T-fw] FONT_WEIGHT-scoped FLOAT is unitless", toCSS(tokens({ variables: [{ name: "weight/bold", type: "FLOAT", scopes: ["FONT_WEIGHT"], values: { v: 700 } }] })).includes("--weight-bold: 700;"));
 check("[T-ul] opts.unitless overrides px", toCSS(tokens({ variables: [{ name: "z/top", type: "FLOAT", values: { v: 100 } }] }), { unitless: new Set(["z/top"]) }).includes("--z-top: 100;"));
 check("[T-sn] string-number FLOAT gets px", toCSS(tokens({ variables: [{ name: "s/x", type: "FLOAT", values: { v: "16" } }] })).includes("--s-x: 16px;"));
@@ -451,31 +450,31 @@ check("[T-str-plain] ordinary STRING (font stack) passes through unescaped", toC
 // [T-str-lint] never-silent: the escape is also reported by lintTokens.
 check("[T-str-lint] escaped STRING reported by lintTokens", lintTokens(tokens({ variables: [{ name: "c/x", type: "STRING", values: { v: "a}b" } }] })).some((w) => /CSS-structural/.test(w)));
 
-console.log("drift — 3rd round:");
-check("[F3-clean] id-matched component NOT falsely unmapped", driftLint(codeMap({ "3:3": { figma: { name: "Card", id: "3:3" } } }), catalog([{ id: "3:3", name: "Card", type: "COMPONENT" }])).warnings.every((w) => w.code !== "unmapped-component"));
+console.log("drift — mutation survivors:");
+check("[clean] id-matched component NOT falsely unmapped", driftLint(codeMap({ "3:3": { figma: { name: "Card", id: "3:3" } } }), catalog([{ id: "3:3", name: "Card", type: "COMPONENT" }])).warnings.every((w) => w.code !== "unmapped-component"));
 check("[multi-name] multi same-name orphan gives NO suggestedKey", (() => { const r = driftLint(codeMap({ DEAD: { figma: { key: "DEAD", name: "Button" } } }), catalog([{ key: "K1", name: "Button", type: "COMPONENT" }, { key: "K2", name: "Button", type: "COMPONENT" }])); const o = r.errors.find((e) => e.code === "orphaned-entry"); return o !== undefined && o.suggestedKey === undefined; })());
 check("[kindless] map prop without kind -> no spurious kind-mismatch", driftLint(malformed<CodeConnectMap>({ version: 1, components: { K: { figma: { key: "K", name: "Btn" }, code: { module: "m", export: "E" }, props: { V: { codeProp: "v" } } } } }), single({ V: { type: "VARIANT", options: ["a"] } })).errors.every((e) => e.code !== "kind-mismatch"));
 const collMap = codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { Size: { kind: "enum", codeProp: "s", values: { a: "A" } } } } });
 const collA = catalog([{ key: "K", name: "B", type: "COMPONENT", props: { "Size": { type: "VARIANT", options: ["a"] }, "Size#2": { type: "BOOLEAN" } } }]);
 const collB = catalog([{ key: "K", name: "B", type: "COMPONENT", props: { "Size#2": { type: "BOOLEAN" }, "Size": { type: "VARIANT", options: ["a"] } } }]);
-check("[NEW1-drift] colliding catalog base -> ambiguous warn, order-independent, no kind-mismatch", driftLint(collMap, collA).errors.every((e) => e.code !== "kind-mismatch") && driftLint(collMap, collB).errors.every((e) => e.code !== "kind-mismatch") && driftLint(collMap, collA).warnings.some((w) => w.code === "ambiguous-prop"));
+check("[drift] colliding catalog base -> ambiguous warn, order-independent, no kind-mismatch", driftLint(collMap, collA).errors.every((e) => e.code !== "kind-mismatch") && driftLint(collMap, collB).errors.every((e) => e.code !== "kind-mismatch") && driftLint(collMap, collA).warnings.some((w) => w.code === "ambiguous-prop"));
 
-console.log("validator — 3rd round (uncovered rules):");
+console.log("validator — uncovered rules:");
 check("[V] invalid status rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, status: "bogus" } } }));
 check("[V] figma.key non-string rejected", !ok({ version: 1, components: { K: { figma: { name: "B", key: 5 }, code: { module: "m", export: "E" } } } }));
 check("[V] enum values object value rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "enum", codeProp: "p", values: { a: {} } } } } } }));
 
-console.log("bootstrap — 3rd round:");
+console.log("bootstrap — mutation survivors:");
 check("[boot-unstable] fresh unpublished component flagged unstable", must(bootstrap(catalog([{ id: "9:9", name: "Loose", type: "COMPONENT" }])).components["9:9"], "component '9:9'").figma.unstable === true);
 
-// ================= FOURTH-ROUND: close proven survivors + the map-side ambiguity symmetry ==========
-console.log("tokens — 4th round:");
+// ================= more survivors closed + the map-side ambiguity symmetry ==========
+console.log("tokens — more survivors:");
 check("[default-not-first] collection default drives :root even when NOT the first-listed mode", toCSS(tokens({ collections: [{ name: "C", modes: ["Dark", "Light"], default: "Light" }], variables: [{ name: "bg", type: "COLOR", collection: "C", values: { Dark: "#000000", Light: "#ffffff" } }] })).includes("--bg: #ffffff;"));
 check("[exact-channel] color channel pinned to 4dp (kills near()-masking of precision loss)", asColor(leafAt(toDTCG(tokens({ variables: [{ name: "c", type: "COLOR", values: { v: "#2563eb" } }] })), "c").$value).components[0] === 0.1451);
 
-console.log("drift — 4th round:");
+console.log("drift — map-side ambiguity:");
 const mAmbCat = catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Size: { type: "VARIANT", options: ["a"] } } }]);
-check("[NEW-mapside] colliding MAP base -> order-independent, no false kind-mismatch",
+check("[mapside] colliding MAP base -> order-independent, no false kind-mismatch",
   driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { "Size#1": { kind: "enum", codeProp: "s", values: { a: "A" } }, "Size#2": { kind: "boolean", codeProp: "s2" } } } }), mAmbCat).errors.every((e) => e.code !== "kind-mismatch") &&
   driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { "Size#2": { kind: "boolean", codeProp: "s2" }, "Size#1": { kind: "enum", codeProp: "s", values: { a: "A" } } } } }), mAmbCat).errors.every((e) => e.code !== "kind-mismatch"));
 check("[unknown-type] Figma prop type outside the 4 kinds -> no fabricated kind-mismatch", driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { N: { kind: "string", codeProp: "n" } } } }), malformed<ComponentsCatalog>({ components: [{ key: "K", name: "B", type: "COMPONENT", props: { N: { key: "N", type: "NUMBER" } } }] })).errors.every((e) => e.code !== "kind-mismatch"));
@@ -483,11 +482,11 @@ check("[empty-variant] option mapped to \"\" is NOT flagged unmapped", driftLint
 check("[nonarray-options] non-array options -> no-variant-options warning, no crash", (() => { try { return driftLint(codeMap({ K: { figma: { key: "K", name: "Btn" }, props: { V: { kind: "enum", codeProp: "v", values: { a: "A" } } } } }), malformed<ComponentsCatalog>({ components: [{ key: "K", name: "B", type: "COMPONENT", props: { V: { key: "V", type: "VARIANT", options: {} } } }] })).warnings.some((w) => w.code === "no-variant-options"); } catch (e) { return false; } })());
 check("[cset-drift] unmapped COMPONENT_SET surfaced", driftLint(codeMap({}), catalog([{ key: "SET", name: "Btn", type: "COMPONENT_SET", props: { Variant: { type: "VARIANT", options: ["a"] } } }])).warnings.some((w) => w.code === "unmapped-component"));
 
-console.log("validator — 4th round:");
+console.log("validator — array-shaped fields:");
 check("[V] components as array rejected", !ok({ version: 1, components: [] }));
 check("[V] figma as array rejected", !ok({ version: 1, components: { K: { figma: ["x"], code: { module: "m", export: "E" } } } }));
 
-console.log("bootstrap — 4th round:");
+console.log("bootstrap — more survivors:");
 check("[cset-boot] COMPONENT_SET bootstrapped as enum", (() => { const b = bootstrap(catalog([{ key: "SET", name: "Btn", type: "COMPONENT_SET", props: { Variant: { type: "VARIANT", options: ["a", "b"] } } }])); return b.components.SET !== undefined && anyProp(b, "SET", "Variant").kind === "enum"; })());
 check("[text-title] TEXT prop named Title -> children", must(bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Title: { type: "TEXT" } } }])).components.K, "component 'K'").props?.Title?.codeProp === "children");
 check("[boot-bool-coerce] non-boolean BOOLEAN default coerced to real boolean + valid", (() => { const m = bootstrap(malformed<ComponentsCatalog>({ components: [{ key: "K", name: "B", type: "COMPONENT", props: { D: { key: "D", type: "BOOLEAN", default: 1 } } }] })); return boolProp(m, "K", "D").default === true && validateMap(m).ok; })());
@@ -629,9 +628,9 @@ check("[css-legit-mode] an ordinary mode name is NOT escaped", toCSS(modeDs("Dar
 check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("Dark")).some((w) => /escaped in its tokens\.css selector/.test(w)));
 
 // ---------- duplicate names: identical twins collapse, different variables are ALL kept -------
-// Live run #16: THREE variables called "Schemes/On Primary" with distinct keys put the identical
+// THREE variables called "Schemes/On Primary" with distinct keys put the identical
 // declaration in :root three times and once more per mode block — 22 copies. Those resolve the same in
-// every mode, so they are ONE declaration. But livetest-3 #44 showed the other half: two `Space 4` with
+// every mode, so they are ONE declaration. The other half: two `Space 4` with
 // distinct keys and DIFFERENT values (24 vs 16), where "last definition wins" shipped the wrong one.
 // Those must BOTH be emitted, each under its own name, and never by input order.
 (() => {
@@ -647,21 +646,21 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   const root = (css.match(/:root \{([\s\S]*?)\}/) || ["", ""])[1] ?? "";
   check("[dup-css] three IDENTICAL variables sharing a name emit ONE :root declaration, not three",
     (root.match(/--Schemes-On-Primary/g) || []).length === 1);
-  // D15: both collections DECLARE "Dark", so its blocks are scoped per collection; the twins still fold
+  // both collections DECLARE "Dark", so its blocks are scoped per collection; the twins still fold
   // onto ONE declaration across all of them (the canonical record's collection carries it).
   const dark = [...css.matchAll(/\[data-theme[^\]]*="Dark"\] \{([\s\S]*?)\}/g)].map((m) => m[1] ?? "").join("\n");
   check("[dup-css] and one per mode block too", (dark.match(/--Schemes-On-Primary/g) || []).length === 1);
   check("[dup-css] the identical twins are reported as such (naming the keys), not silently swallowed",
     lintTokens(twins).some((w) => /share the name 'Schemes\/On Primary'.*resolve identically in every mode — emitted ONCE/.test(w) && /aaa1/.test(w) && /ccc3/.test(w)));
 
-  // The two real `Space 4` rows of livetest-3's design/export/variables.json (keys, values, scopes verbatim).
+  // The two real `Space 4` rows of a field export's design/export/variables.json (keys, values, scopes verbatim).
   const space4 = (order: boolean) => {
     const a: VariableInput = { name: "Space 4", key: "e26d506ea43ae0582896add59d9e04156fb3f6d5", type: "FLOAT", collection: "Spacing", scopes: ["WIDTH_HEIGHT", "GAP"], values: { "Mode 1": 24 } };
     const b: VariableInput = { name: "Space 4", key: "64928e3a5f094c0d9a2c916f50b98ff37c789882", type: "FLOAT", collection: "Spacing", scopes: ["GAP"], values: { Desktop: 16, Tablet: 8, Mobile: 8 } };
     return tokens({ collections: [{ name: "Spacing", modes: ["Mode 1"], default: "Mode 1" }, { name: "Spacing", modes: ["Desktop", "Tablet", "Mobile"], default: "Desktop" }], variables: order ? [a, b] : [b, a] });
   };
   const c1 = toCSS(space4(true)), c2 = toCSS(space4(false));
-  check("[dup-css] two DIFFERENT variables sharing a name are both emitted, each carrying its key (livetest-3 #44)",
+  check("[dup-css] two DIFFERENT variables sharing a name are both emitted, each carrying its key",
     /--Space-4-e26d506e: 24px;/.test(c1) && /--Space-4-64928e3a: 16px;/.test(c1) && !/--Space-4:/.test(c1));
   check("[dup-css] and input ORDER changes nothing about which name each value gets",
     /--Space-4-e26d506e: 24px;/.test(c2) && /--Space-4-64928e3a: 16px;/.test(c2));
@@ -678,7 +677,7 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
       { name: "a/two", type: "COLOR", collection: "A", values: { M: "#222" } }] })).match(/--a-/g) || []).length === 2);
 })();
 
-// ---------- --web tailwind: the web counterpart of --native (live run #18) ----------------------
+// ---------- --web tailwind: the web counterpart of --native ----------------------
 (() => {
   const twDs = tokens({
     collections: [{ name: "Theme", modes: ["Light", "Dark"], default: "Light" }],
@@ -716,10 +715,10 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
       { name: "on/primary", key: "k1", type: "COLOR", collection: "A", values: { M: "#000" } }] }));
     return (d.text.match(/--color-figma-on-primary:/g) || []).length === 1 && /#000000/.test(d.text) && !d.warnings.length;
   })());
-  // livetest-3 #94: `Space 3` (16) and `(Space 3)` (12) are different NAMES that only collide after
-  // slugging, so they got no "duplicate" warning and the theme silently kept 12. Collisions are now
+  // `Space 3` (16) and `(Space 3)` (12) are different NAMES that only collide after
+  // slugging, and the theme must not silently keep 12. Collisions are
   // detected on the EMITTED name, and the name spelled exactly as the identifier keeps it.
-  check("[tw] two names that fold onto one Tailwind name are both emitted, and the run SAYS so (livetest-3 #94)", (() => {
+  check("[tw] two names that fold onto one Tailwind name are both emitted, and the run SAYS so", (() => {
     const d = toTailwind(tokens({ collections: [{ name: "Spacing", modes: ["Mode 1"], default: "Mode 1" }], variables: [
       { name: "(Space 3)", key: "a96c665bae7a1989c41dd71440cfd9b0a0c0ba4f", type: "FLOAT", collection: "Spacing", scopes: ["GAP"], values: { "Mode 1": 12 } },
       { name: "Space 3", key: "a9aa73e78e34066545c67621b5f7aef9ab89a4f1", type: "FLOAT", collection: "Spacing", scopes: ["GAP"], values: { "Mode 1": 16 } }] }));
@@ -732,7 +731,7 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
       { name: n, key: "r" + i, type: "FLOAT", collection: "Border Radius", scopes: ["CORNER_RADIUS", "FONT_VARIATIONS"], values: { "Mode 1": must([4, 12, 16, 1000000000][i], `radius value at index ${i}`) } })) }));
     return !/^ {2}--radius-(xl|l|s|full):/m.test(d.text) && /--radius-figma-xl: 16px;/.test(d.text) && /--radius-figma-l: 12px;/.test(d.text);
   })());
-  check("[tw] Figma's 1e9 'fully rounded' sentinel is emitted as 9999px, never as 1000000000px (livetest-3 #96)", (() => {
+  check("[tw] Figma's 1e9 'fully rounded' sentinel is emitted as 9999px, never as 1000000000px", (() => {
     const ds = tokens({ collections: [{ name: "Border Radius", modes: ["Mode 1"], default: "Mode 1" }], variables: [
       { name: "Full", key: "ba82", type: "FLOAT", collection: "Border Radius", scopes: ["CORNER_RADIUS"], values: { "Mode 1": 1000000000 } }] });
     const t = toTailwind(ds).text, c = toCSS(ds), j = toDTCG(ds);
@@ -744,7 +743,7 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
       variables: [{ name: "c", type: "COLOR", collection: "A", values: { Light: "#fff", 'dark"] * { display: none } [x="': "#000" } }] })).text));
 })();
 
-// ---------- DT-24 / D15: non-default modes are scoped PER COLLECTION when a mode name is shared ----------
+// ---------- non-default modes are scoped PER COLLECTION when a mode name is shared ----------
 // Figma selects a mode per collection; one `[data-theme="Dark"]` per mode NAME flipped every collection
 // with a "Dark" at once. Real shape: collections carry name/modes/default/theming/key; two collections may
 // share a NAME (a single-mode "Spacing" and a multi-mode "Spacing" in the same export) — told apart by key.
@@ -769,34 +768,34 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   });
   const css = toCSS(clash), tw = toTailwind(clash), lint = lintTokens(clash);
   const block = (text: string, sel: string) => (text.split("\n" + sel + " {\n")[1] || "").split("\n}")[0] ?? "";
-  check("[D15] a mode only ONE collection has a block for keeps [data-theme=\"<mode>\"] (unchanged)",
+  check("a mode only ONE collection has a block for keeps [data-theme=\"<mode>\"] (unchanged)",
     /--Contrast-Ink: #000000;/.test(block(css, '[data-theme="High"]')));
-  check("[D15] 'Dark' in two collections: each gets its own [data-theme-<collection>] block, no shared [data-theme=\"Dark\"]",
+  check("'Dark' in two collections: each gets its own [data-theme-<collection>] block, no shared [data-theme=\"Dark\"]",
     /--Brand-Primary: #aabbcc;/.test(block(css, '[data-theme-brand="Dark"]')) && !/Surface/.test(block(css, '[data-theme-brand="Dark"]'))
     && /--Surface-Page: #000000;/.test(block(css, '[data-theme-surface="Dark"]')) && !css.includes('[data-theme="Dark"]'));
-  check("[D15] ONE warning per clashing mode name, naming the collections and the attributes to set",
+  check("ONE warning per clashing mode name, naming the collections and the attributes to set",
     lint.filter((w) => /^mode 'Dark' exists in 2 collections \(Brand, Surface\)/.test(w) && w.includes('data-theme-brand="Dark" / data-theme-surface="Dark"')).length === 1
     && !lint.some((w) => /^mode 'High'/.test(w)));
-  check("[D15] two collections that share a NAME are told apart by the first 8 hex of their key",
+  check("two collections that share a NAME are told apart by the first 8 hex of their key",
     /--Gap-Card: 8px;/.test(block(css, '[data-theme-spacing-aaaaaaaa="Compact"]')) && /--Gap-Page: 12px;/.test(block(css, '[data-theme-spacing-bbbbbbbb="Compact"]'))
     && /--Gap-Page: 32px;/.test(block(css, '[data-theme="Wide"]')));
   const selectors = (text: string) => text.split("\n").filter((l) => /^\[data-theme/.test(l)).join("\n");
-  check("[D15] tokens.css and theme.css use the same selectors for the same blocks", selectors(css) !== "" && selectors(css) === selectors(tw.text));
-  check("[D15] toTailwind (standalone) carries the same warning", tw.warnings.some((w) => /^mode 'Dark' exists in 2 collections/.test(w)));
+  check("tokens.css and theme.css use the same selectors for the same blocks", selectors(css) !== "" && selectors(css) === selectors(tw.text));
+  check("toTailwind (standalone) carries the same warning", tw.warnings.some((w) => /^mode 'Dark' exists in 2 collections/.test(w)));
   const hostile = tokens({ collections: [{ name: 'X"] * {} [y', modes: ["L", "D"], default: "L", key: KB }, { name: "Other", modes: ["L", "D"], default: "L", key: KS }],
     variables: [{ name: "a", type: "COLOR", collection: 'X"] * {} [y', values: { L: "#fff", D: "#000" } }, { name: "b", type: "COLOR", collection: "Other", values: { L: "#fff", D: "#000" } }] });
-  check("[D15] the attribute NAME is only [a-z0-9-] whatever the collection is called", /^\[data-theme-x-y="D"\] \{$/m.test(toCSS(hostile)) && !/\[data-theme-[^=]*[^a-z0-9=-][^=]*=/.test(toCSS(hostile)));
+  check("the attribute NAME is only [a-z0-9-] whatever the collection is called", /^\[data-theme-x-y="D"\] \{$/m.test(toCSS(hostile)) && !/\[data-theme-[^=]*[^a-z0-9=-][^=]*=/.test(toCSS(hostile)));
   const seen: string[] = [];
   toCSS(clash, { selector: (m, sc) => { seen.push(`${sc.collection}:${sc.attribute}:${m}`); return `.theme-${m}`; } });
-  check("[D15] opts.selector(mode, scope) gets the collection and the attribute it would have used",
+  check("opts.selector(mode, scope) gets the collection and the attribute it would have used",
     seen.includes("Brand:data-theme-brand:Dark") && seen.includes("Contrast:data-theme:High"));
   const noColl = tokens({ collections: [{ name: "Brand", modes: ["Light", "Dark"], default: "Light", key: KB }],
     variables: [{ name: "Loose", type: "COLOR", values: { Light: "#fff", Dark: "#000" } }, { name: "Brand/Primary", type: "COLOR", collection: "Brand", values: { Light: "#fff", Dark: "#111" } }] });
-  check("[D15] a variable with no collection is its own group (scoped when it clashes)",
+  check("a variable with no collection is its own group (scoped when it clashes)",
     /--Loose: #000000;/.test(block(toCSS(noColl), '[data-theme-no-collection="Dark"]')) && /--Brand-Primary: #111111;/.test(block(toCSS(noColl), '[data-theme-brand="Dark"]')));
 })();
 
-// ---------- review fixes: sharing is DECLARED modes; font families quoted in both files; alias chains kept ----------
+// ---------- sharing is DECLARED modes; font families quoted in both files; alias chains kept ----------
 (() => {
   const declaredOnly = tokens({
     collections: [{ name: "Brand", modes: ["Light", "Dark"], default: "Light", theming: true, key: "b1a2c3d4e5f60718293a4b5c6d7e8f9012345678" },
@@ -807,14 +806,14 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
     ],
   });
   const c = toCSS(declaredOnly);
-  check("[D15-declared] two collections DECLARE 'Dark' but only one has a differing value: still scoped per collection (stable across a value edit)",
+  check("[declared] two collections DECLARE 'Dark' but only one has a differing value: still scoped per collection (stable across a value edit)",
     c.includes('[data-theme-brand="Dark"] {') && !c.includes('[data-theme="Dark"]') && toTailwind(declaredOnly).text.includes('[data-theme-brand="Dark"] {'));
   const fonts = tokens({ collections: [{ name: "Type", modes: ["Mode 1"], default: "Mode 1" }], variables: [
     { name: "Heading", type: "STRING", collection: "Type", values: { "Mode 1": "Inter Display 2" }, scopes: ["FONT_FAMILY"] },
     { name: "Font Family/Body", type: "STRING", collection: "Type", values: { "Mode 1": "Open Sans" }, scopes: ["ALL_SCOPES"] },
     { name: "Label", type: "STRING", collection: "Type", values: { "Mode 1": "Semi Bold" }, scopes: ["ALL_SCOPES"] }] });
   const fc = toCSS(fonts), ft = toTailwind(fonts).text;
-  check("[DT-24-css] tokens.css quotes a font-family STRING like theme.css does (FONT_FAMILY scope, name fallback); other strings stay as they were",
+  check("[css] tokens.css quotes a font-family STRING like theme.css does (FONT_FAMILY scope, name fallback); other strings stay as they were",
     fc.includes('  --Heading: "Inter Display 2";') && ft.includes('  --font-figma-heading: "Inter Display 2";')
     && fc.includes('  --Font-Family-Body: "Open Sans";') && ft.includes('  --font-figma-font-family-body: "Open Sans";') && fc.includes("  --Label: Semi Bold;"));
   const chain = tokens({ collections: [{ name: "Type", modes: ["M"], default: "M" }], variables: [
@@ -822,12 +821,12 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
     { name: "Semantic/Sans", type: "STRING", collection: "Type", values: { M: { aliasOf: "Primitive/Inter" } }, scopes: ["ALL_SCOPES"] },
     { name: "Heading", type: "STRING", collection: "Type", values: { M: { aliasOf: "Semantic/Sans" } }, scopes: ["FONT_FAMILY"] }] });
   const ct = toTailwind(chain);
-  check("[DT-24-chain] the whole alias chain under a font family is kept — no var() dangles",
+  check("[chain] the whole alias chain under a font family is kept — no var() dangles",
     ct.text.includes("--font-figma-heading: var(--figma-semantic-sans);") && ct.text.includes("--figma-semantic-sans: var(--figma-primitive-inter);") && ct.text.includes("--figma-primitive-inter: Inter;")
     && !ct.warnings.some((w) => /leaves out/.test(w)));
 })();
 
-// ---------- DT-24: STRING tokens in theme.css — the scope decides a font family; other strings stay out ----------
+// ---------- STRING tokens in theme.css — the scope decides a font family; other strings stay out ----------
 (() => {
   const ds = tokens({
     collections: [{ name: "Type", modes: ["Mode 1"], default: "Mode 1", theming: false, key: "7777aaaa11112222333344445555666677778888" }],
@@ -840,23 +839,23 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
     ],
   });
   const tw = toTailwind(ds);
-  check("[DT-24] a FONT_FAMILY-scoped STRING named 'Heading' (collection 'Type') is a font family: --font-figma-heading", /--font-figma-heading: /.test(tw.text));
-  check("[DT-24] a font family with a space is a quoted font-family value; a one-word one is left bare",
+  check("a FONT_FAMILY-scoped STRING named 'Heading' (collection 'Type') is a font family: --font-figma-heading", /--font-figma-heading: /.test(tw.text));
+  check("a font family with a space is a quoted font-family value; a one-word one is left bare",
     tw.text.includes('  --font-figma-heading: "Open Sans";') && tw.text.includes("  --font-figma-body: Inter;"));
-  check("[DT-24] with ALL_SCOPES the name still decides (fallback): 'Font Family/Mono' is a font family", tw.text.includes('  --font-figma-font-family-mono: "Fira Code";'));
-  check("[DT-24] 'Semi Bold' (ALL_SCOPES) and 'Regular' (FONT_STYLE) are NOT written to theme.css", !/Semi Bold|Regular|weight/i.test(tw.text));
-  check("[DT-24] ONE warning names the left-out strings and where they are kept",
+  check("with ALL_SCOPES the name still decides (fallback): 'Font Family/Mono' is a font family", tw.text.includes('  --font-figma-font-family-mono: "Fira Code";'));
+  check("'Semi Bold' (ALL_SCOPES) and 'Regular' (FONT_STYLE) are NOT written to theme.css", !/Semi Bold|Regular|weight/i.test(tw.text));
+  check("ONE warning names the left-out strings and where they are kept",
     tw.warnings.filter((w) => /theme\.css leaves out 2 STRING token\(s\) that are not font families \('Weight\/Strong', 'Weight\/Plain'\)/.test(w) && /tokens\.dtcg\.json/.test(w) && /--also-generic/.test(w)).length === 1);
-  check("[DT-24] tokens.css still carries them as plain custom properties (unchanged)", /--Weight-Strong: Semi Bold;/.test(toCSS(ds)));
-  check("[DT-24] emitTokens passes theme.css's warnings through", emitTokens(ds, { tailwind: true }).warnings.some((w) => /theme\.css leaves out 2 STRING/.test(w)));
+  check("tokens.css still carries them as plain custom properties (unchanged)", /--Weight-Strong: Semi Bold;/.test(toCSS(ds)));
+  check("emitTokens passes theme.css's warnings through", emitTokens(ds, { tailwind: true }).warnings.some((w) => /theme\.css leaves out 2 STRING/.test(w)));
   const aliased = tokens({ collections: [{ name: "Type", modes: ["M"], default: "M" }], variables: [
     { name: "Primitive/Inter", type: "STRING", collection: "Type", values: { M: "Inter" }, scopes: ["ALL_SCOPES"] },
     { name: "Heading", type: "STRING", collection: "Type", values: { M: { aliasOf: "Primitive/Inter" } }, scopes: ["FONT_FAMILY"] }] });
   const at = toTailwind(aliased).text;
-  check("[DT-24] a STRING a font family aliases is kept, so the var() resolves", /--font-figma-heading: var\(--figma-primitive-inter\);/.test(at) && /--figma-primitive-inter: Inter;/.test(at));
+  check("a STRING a font family aliases is kept, so the var() resolves", /--font-figma-heading: var\(--figma-primitive-inter\);/.test(at) && /--figma-primitive-inter: Inter;/.test(at));
 })();
 
-// ---------- DT-24: lint warnings name the CSS file(s) actually written; DT-79: the @source not suggestion ----------
+// ---------- lint warnings name the CSS file(s) actually written; the @source not suggestion ----------
 (() => {
   const TOK = path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "tokens.js");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt24-lint-"));
@@ -866,14 +865,14 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   const run = (out: string, extra: string[]) => spawnSync(process.execPath, [TOK, input, path.join(dir, out), ...extra], { encoding: "utf8" });
   const illegal = (stderr: string) => stderr.split("\n").find((l) => /illegal in a CSS custom property/.test(l)) ?? "";
   const tw = run("tw", ["--web", "tailwind"]), gen = run("gen", []), both = run("both", ["--web", "tailwind", "--also-generic"]);
-  check("[DT-24] --web tailwind: the illegal-character warning names theme.css (what was written), not tokens.css",
+  check("--web tailwind: the illegal-character warning names theme.css (what was written), not tokens.css",
     tw.status === 0 && / in theme\.css/.test(illegal(tw.stderr)) && !/tokens\.css/.test(illegal(tw.stderr)) && illegal(tw.stderr).includes("--spacing-figma-space-3") && !fs.existsSync(path.join(dir, "tw", "tokens.css")));
-  check("[DT-24] default run: it names tokens.css", /emitted as ---Space-3- in tokens\.css$/.test(illegal(gen.stderr)) && !/theme\.css/.test(illegal(gen.stderr)));
-  check("[DT-24] --also-generic: it names both", /in tokens\.css/.test(illegal(both.stderr)) && /in theme\.css/.test(illegal(both.stderr)));
+  check("default run: it names tokens.css", /emitted as ---Space-3- in tokens\.css$/.test(illegal(gen.stderr)) && !/theme\.css/.test(illegal(gen.stderr)));
+  check("--also-generic: it names both", /in tokens\.css/.test(illegal(both.stderr)) && /in theme\.css/.test(illegal(both.stderr)));
   const note = (stderr: string) => stderr.split("\n").filter((l) => /^note {2}.*@source not "<path from that CSS file to design\/>";/.test(l) && /v4\.1\+/.test(l));
-  check("[DT-79] --web tailwind prints ONE @source not suggestion (stderr, beside the other notes) and does not write it into theme.css",
+  check("--web tailwind prints ONE @source not suggestion (stderr, beside the other notes) and does not write it into theme.css",
     note(tw.stderr).length === 1 && !/@source/.test(fs.readFileSync(path.join(dir, "tw", "theme.css"), "utf8")));
-  check("[DT-79] without --web tailwind there is no such note", note(gen.stderr).length === 0);
+  check("without --web tailwind there is no such note", note(gen.stderr).length === 0);
 })();
 
 // ---------- the design-system split: these CLIs must reject the slim manifest -----------------
@@ -892,7 +891,7 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   !isManifest(null, "variables") && !isManifest({ files: ["a"] }, "variables"));
 
 // ---------- a missing input file is a SENTENCE, not an ENOENT stack trace --------------------
-// Live-run finding #15: a --node/single-screen pull never writes design/design-system/, so every
+// a --node/single-screen pull never writes design/design-system/, so every
 // one of these CLIs is routinely pointed at a file that legitimately does not exist. Dying with a
 // raw stack whose top frame is a line number inside this repo reads like the tool broke. These run
 // as real subprocesses because the behaviour under test IS the process exit + what lands on stderr.
@@ -992,7 +991,7 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
     const r = run("drift-lint.ts", ["map.json", goodCat, "--max-age", "-5"]);
     return r.status === 2 && /--max-age expects a positive number of hours/.test(r.stderr);
   })());
-  // DT-15/F-28: the usage line is text the model copies into Bash, where ${CLAUDE_PLUGIN_ROOT} is empty — so it
+  // the usage line is text the model copies into Bash, where ${CLAUDE_PLUGIN_ROOT} is empty — so it
   // names the script by the real path it is running from (here, the source; installed, the bundle).
   check("[usage] the usage line names the script by its real path (node \"<its own folder>/<name>\"), not ${CLAUDE_PLUGIN_ROOT}",
     run("drift-lint.ts", []).stderr.includes(`usage: node "${path.join(D2C, "drift-lint.ts")}"`)
@@ -1087,8 +1086,8 @@ console.log("tokens — opacity FLOATs are percentages:");
     opKt.warnings.includes("fx/over (mode M): opacity 120 is outside Figma's 0–100 range; clamped to 100 (as Figma does) and written as 1")
     && opKt.warnings.includes("fx/under (mode M): opacity -5 is outside Figma's 0–100 range; clamped to 0 (as Figma does) and written as 0")
     && !opKt.warnings.some((m) => /fx\/half/.test(m)));
-  // The Compose "active mode" hint names the first mode whose NAME differs from the default's (review of
-  // 1a18ecf: picking by id emitted `Light2` here instead of `Dark`). doc-guards.ts accepts repeated mode
+  // The Compose "active mode" hint names the first mode whose NAME differs from the default's (picking by id
+  // would emit `Light2` here instead of `Dark`). doc-guards.ts accepts repeated mode
   // names, so a collection like ["Light", "Light", "Dark"] is a reachable input.
   const dupModes = tokens({ collections: [{ name: "Theme", modes: ["Light", "Light", "Dark"], default: "Light" }], variables: [
     { name: "fx/gap", type: "FLOAT", collection: "Theme", scopes: ["GAP"], values: { Light: 4, Dark: 8 } }] });
@@ -1225,11 +1224,11 @@ console.log("map — SLOT props:");
   check("[map-invalid] map-bootstrap refuses an existing map whose components is an array (exit 1, names the problem)",
     mb.status === 1 && /components: must be an object/.test(mb.stderr) && /refusing to rewrite/.test(mb.stderr));
   check("[map-invalid] …and leaves the file byte-for-byte untouched", fs.readFileSync(path.join(cwd, "array-map.json"), "utf8") === arrayMap);
-  // PR #1 review A9: a valid hand-edited map is merged into atomically and in its own format (pre-change: LF, 2 spaces)
+  // A valid hand-edited map is merged into atomically and in its own format (not rewritten as LF, 2 spaces)
   fs.writeFileSync(path.join(cwd, "hand-map.json"), JSON.stringify({ version: 1, components: {} }, null, 4).split("\n").join("\r\n") + "\r\n");
   const hm = run("map-bootstrap.ts", ["catalog.json", "--out", "hand-map.json"]);
   const hmText = fs.readFileSync(path.join(cwd, "hand-map.json"), "utf8");
-  check("[A9] map-bootstrap keeps a hand-edited map's own format (CRLF, 4-space indent) and leaves no temp file beside it",
+  check("map-bootstrap keeps a hand-edited map's own format (CRLF, 4-space indent) and leaves no temp file beside it",
     hm.status === 0 && hmText.includes("\r\n    \"") && !/[^\r]\n/.test(hmText) && !fs.readdirSync(cwd).some((f) => f.includes(".tmp-")));
 })();
 
@@ -1340,11 +1339,10 @@ console.log("map — SLOT props:");
   check("[native] prototype-named modes/tokens cannot break the emitter", (() => { try { toNative(tokens({ collections: [{ name: "__proto__", modes: ["__proto__", "constructor"], default: "__proto__" }], variables: [{ name: "__proto__", type: "COLOR", collection: "__proto__", values: { __proto__: "#fff", constructor: "#000" } }] }), "flutter"); return true; } catch { return false; } })());
 })();
 
-// ---------- P6-123 → D13: 0% screen coverage is a WARNING to confirm, exit 0 ----------
-// Finding 123 pinned exit 1 at 0% coverage. Owner decision D13 (field tests): 0% `screen-coverage` and
-// `catalog-rekeyed` are warnings ending in a question to confirm (as cross-check's are) — "this catalog is
-// not the library the screen uses" has a default (build every instance as new) and is the user's call.
-// Still checked against the real livetest-3 map/catalog/screens (0% by map in both).
+// ---------- 0% screen coverage is a WARNING to confirm, exit 0 ----------
+// 0% `screen-coverage` and `catalog-rekeyed` are warnings ending in a question to confirm (as cross-check's
+// are) — "this catalog is not the library the screen uses" has a default (build every instance as new) and is the user's call.
+// Still checked against the real map/catalog/screens in test/fixtures/livetest3/ (0% by map in both).
 {
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const emptyMapFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "p6-123-")), "map.json");
@@ -1357,12 +1355,12 @@ console.log("map — SLOT props:");
   ];
   for (const screen of screens) {
     const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "drift-lint.ts"), emptyMapFile, catalogFile, "--screen", screen], { encoding: "utf8" });
-    check(`[P6-123/D13] drift-lint --screen at 0% coverage: exit 0, a warn line with a Confirm question, no ERROR (${path.basename(screen)})`,
+    check(`drift-lint --screen at 0% coverage: exit 0, a warn line with a Confirm question, no ERROR (${path.basename(screen)})`,
       r.status === 0 && /^warn\s+\[(screen-coverage|catalog-rekeyed)\] NONE/m.test(r.stderr) && /Confirm: .*\?/.test(r.stderr) && !/^ERROR/m.test(r.stderr));
   }
 }
 
-// ---------- D13 + DT-26 on the SHIPPED scripts: exit codes, and the catalogs beside the named one ----------
+// ---------- 0% coverage and multi-catalog handling on the SHIPPED scripts: exit codes, and the catalogs beside the named one ----------
 // drift-lint read ONE catalog, so an entry keyed to a component of a pulled library (libraries/<dir>/
 // components.json) or of the sampled components.library.json was `orphaned-entry`, and map-bootstrap
 // --screen never stubbed a library component. Real layout: design/export/{design-system,libraries}/.
@@ -1386,54 +1384,54 @@ console.log("map — SLOT props:");
 
   const withExtra = run("drift-lint.js", [mapFile, named, "--catalog", extra]);
   const noExtraRun = () => run("drift-lint.js", [mapFile, named]); // no --catalog: runs on HEAD too (the flag is new)
-  check("[DT-26] drift-lint: an entry keyed to a components.library.json component is mapped, not orphaned", withExtra.status === 0 && !orphanOf(withExtra, "k-sample") && !orphanOf(noExtraRun(), "k-sample"));
-  check("[DT-26] drift-lint: an entry keyed to a libraries/<dir>/components.json component is mapped, not orphaned", withExtra.status === 0 && !orphanOf(withExtra, "k-lib") && !orphanOf(noExtraRun(), "k-lib"));
-  check("[DT-26] drift-lint: --catalog adds a catalog; all four entries resolve, exit 0", withExtra.status === 0 && !/orphaned-entry/.test(withExtra.stderr) && /\+3 map entries resolved in the other catalog/.test(withExtra.stderr));
-  check("[DT-26] drift-lint prints ONE line naming every catalog read",
+  check("drift-lint: an entry keyed to a components.library.json component is mapped, not orphaned", withExtra.status === 0 && !orphanOf(withExtra, "k-sample") && !orphanOf(noExtraRun(), "k-sample"));
+  check("drift-lint: an entry keyed to a libraries/<dir>/components.json component is mapped, not orphaned", withExtra.status === 0 && !orphanOf(withExtra, "k-lib") && !orphanOf(noExtraRun(), "k-lib"));
+  check("drift-lint: --catalog adds a catalog; all four entries resolve, exit 0", withExtra.status === 0 && !/orphaned-entry/.test(withExtra.stderr) && /\+3 map entries resolved in the other catalog/.test(withExtra.stderr));
+  check("drift-lint prints ONE line naming every catalog read",
     withExtra.stderr.split("\n").filter((l) => /^catalogs read \(4\): /.test(l) && l.includes("components.local.json [named") && l.includes("components.library.json [library-sample") && l.includes(path.join("acme-ui", "components.json") + " [library") && l.includes("other" + path.sep + "components.json [extra")).length === 1);
   const noExtra = run("drift-lint.js", [mapFile, named]);
-  check("[DT-26] without --catalog, the entry only that catalog holds is still orphaned (exit 1)", noExtra.status === 1 && orphanOf(noExtra, "k-extra") && !orphanOf(noExtra, "k-lib"));
+  check("without --catalog, the entry only that catalog holds is still orphaned (exit 1)", noExtra.status === 1 && orphanOf(noExtra, "k-extra") && !orphanOf(noExtra, "k-lib"));
   const twoExtra = run("drift-lint.js", [mapFile, named, "--catalog", extra, "--catalog", put(path.join(root, "other", "more.json"), { ...stamp, components: [{ name: "Surface Tag", id: "8:8", type: "COMPONENT", key: "k-more" }] })]);
-  check("[DT-26] --catalog is repeatable", /catalogs read \(5\)/.test(twoExtra.stderr) && twoExtra.status === 0);
+  check("--catalog is repeatable", /catalogs read \(5\)/.test(twoExtra.stderr) && twoExtra.status === 0);
   const absent = put(path.join(root, "absent.json"), { version: 1, components: { "k-gone": entry("k-gone", "Surface Gone") } });
   const gone = run("drift-lint.js", [absent, named, "--catalog", extra]);
-  check("[DT-26] a key in NO catalog is still orphaned-entry, exit 1", gone.status === 1 && orphanOf(gone, "k-gone"));
-  check("[DT-26] the same key in two catalogs is not a duplicate-key warning (one component seen twice)", (() => {
+  check("a key in NO catalog is still orphaned-entry, exit 1", gone.status === 1 && orphanOf(gone, "k-gone"));
+  check("the same key in two catalogs is not a duplicate-key warning (one component seen twice)", (() => {
     const dup = put(path.join(root, "other", "dup.json"), { ...stamp, components: [{ name: "Surface Avatar", id: "5:5", type: "COMPONENT", key: "k-lib" }] });
     const r = run("drift-lint.js", [mapFile, named, "--catalog", extra, "--catalog", dup]);
     return r.status === 0 && !/duplicate-key/.test(r.stderr);
   })());
 
-  // D13 on the built script: 0% by map → warn + confirm, exit 0; the same run with an orphan → exit 1.
+  // On the built script: 0% by map → warn + confirm, exit 0; the same run with an orphan → exit 1.
   const inst = (id: string, name: string, key: string) => ({ type: "INSTANCE", id, name, props: { "Label#1:0": "Hi" }, mainComponent: { name, key } });
   const screenFile = (f: string, kids: unknown[]) => put(path.join(root, f), { exportedAt: stamp.exportedAt, screen: "Home", nodes: [{ type: "FRAME", id: "1:0", name: "Home", children: kids }] });
   const foreign = screenFile("foreign.json", [inst("2:1", "Foreign Thing", "k-foreign-1"), inst("2:2", "Foreign Other", "k-foreign-2")]);
   const emptyMap = put(path.join(root, "empty.json"), { version: 1, components: {} });
   const zero = run("drift-lint.js", [emptyMap, named, "--screen", foreign]);
-  check("[D13] 0% screen coverage: exit 0 and a `warn   [screen-coverage]` line ending in a Confirm question",
+  check("0% screen coverage: exit 0 and a `warn   [screen-coverage]` line ending in a Confirm question",
     zero.status === 0 && /^warn {3}\[screen-coverage\] NONE/m.test(zero.stderr) && /Confirm: is .*the component library this screen is built from\? Until confirmed, build every instance as new\./.test(zero.stderr) && !/^ERROR/m.test(zero.stderr));
-  check("[D13] the 0% advice still says the library export is CLI-only (the MCP server has no library export — F-19's wording)",
+  check("the 0% advice still says the library export is CLI-only (the MCP server has no library export)",
     /dtwin pull --as-library "<name>"` \(CLI only — the MCP server has no library export\)/.test(zero.stderr));
   const rekeyCat = put(path.join(root, "rekey-cat.json"), { ...stamp, components: ["Brand Alpha", "Brand Beta", "Brand Gamma"].map((n, i) => ({ name: n, id: `9:${i}`, type: "COMPONENT", key: `k-old-${i}`, props: label })) });
   const rekeyScreen = screenFile("rekey.json", ["Brand Alpha", "Brand Beta", "Brand Gamma"].map((n, i) => inst(`3:${i}`, n, `k-new-${i}`)));
   const rk = run("drift-lint.js", [emptyMap, rekeyCat, "--screen", rekeyScreen]);
-  check("[D13] catalog-rekeyed: exit 0 and a `warn   [catalog-rekeyed]` line ending in a Confirm question",
+  check("catalog-rekeyed: exit 0 and a `warn   [catalog-rekeyed]` line ending in a Confirm question",
     rk.status === 0 && /^warn {3}\[catalog-rekeyed\] NONE/m.test(rk.stderr) && /Confirm: 3 component\(s\) match the catalog by name and prop signature but not by key .*\?/.test(rk.stderr) && !/^ERROR/m.test(rk.stderr));
   const orphanZero = run("drift-lint.js", [absent, named, "--screen", foreign]);
-  check("[D13] an orphaned entry still exits 1 (with the 0% warning beside it)", orphanZero.status === 1 && /^ERROR  \[orphaned-entry\]/m.test(orphanZero.stderr) && /^warn {3}\[screen-coverage\]/m.test(orphanZero.stderr));
+  check("an orphaned entry still exits 1 (with the 0% warning beside it)", orphanZero.status === 1 && /^ERROR  \[orphaned-entry\]/m.test(orphanZero.stderr) && /^warn {3}\[screen-coverage\]/m.test(orphanZero.stderr));
   const invalid = run("drift-lint.js", [put(path.join(root, "bad-map.json"), { version: 1, components: { X: { figma: {} } } }), named, "--screen", foreign]);
-  check("[D13] an invalid map still exits 1", invalid.status === 1 && /\[map-invalid\]/.test(invalid.stderr));
+  check("an invalid map still exits 1", invalid.status === 1 && /\[map-invalid\]/.test(invalid.stderr));
 
   // map-bootstrap --screen stubs the library components the screen uses (it scoped the named catalog alone).
   const libScreen = screenFile("lib-screen.json", [inst("4:1", "Surface Avatar", "k-lib"), inst("4:2", "Surface Chip", "k-sample"), inst("4:3", "Brand Button", "k-local")]);
   const boot = run("map-bootstrap.js", [named, "--screen", libScreen]);
   const booted = ((): CodeConnectMap | null => { try { const m: unknown = JSON.parse(boot.stdout); return isCodeConnectMap(m) ? m : null; } catch { return null; } })();
-  check("[DT-26] map-bootstrap --screen stubs library-only components the screen uses (components.json and components.library.json)",
+  check("map-bootstrap --screen stubs library-only components the screen uses (components.json and components.library.json)",
     boot.status === 0 && !!booted && ["k-lib", "k-sample", "k-local"].every((k) => !!booted.components[k]) && Object.keys(booted.components).length === 3 && /2 of them from a library catalog/.test(boot.stderr));
-  check("[DT-26] map-bootstrap names every catalog it read", /map-bootstrap: catalogs read \(3\)/.test(boot.stderr));
+  check("map-bootstrap names every catalog it read", /map-bootstrap: catalogs read \(3\)/.test(boot.stderr));
   const bootExtra = run("map-bootstrap.js", [named, "--screen", screenFile("extra-screen.json", [inst("5:1", "Surface Badge", "k-extra")]), "--catalog", extra]);
-  check("[DT-26] map-bootstrap --catalog (repeatable flag) adds a catalog --screen can stub from", bootExtra.status === 0 && /"k-extra"/.test(bootExtra.stdout));
-  // Review HIGH: node ids are per FILE. A library row with the same id as a deleted local component
+  check("map-bootstrap --catalog (repeatable flag) adds a catalog --screen can stub from", bootExtra.status === 0 && /"k-extra"/.test(bootExtra.stdout));
+  // Node ids are per FILE. A library row with the same id as a deleted local component
   // must not resolve the entry (by figma.id, or by an id-shaped map key).
   const idRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dt26-id-"));
   const idDs = path.join(idRoot, "design", "export", "design-system"), idLib = path.join(idRoot, "design", "export", "libraries", "acme-ui");
@@ -1444,59 +1442,59 @@ console.log("map — SLOT props:");
   const byDeclaredId = put(path.join(idRoot, "map-id.json"), { version: 1, components: { "local-switch": { figma: { id: "1:5", name: "Brand Switch" }, code: { module: "@/ui", export: "Switch" }, status: "active" } } });
   const byMapKeyId = put(path.join(idRoot, "map-key.json"), { version: 1, components: { "1:5": { figma: { name: "Brand Switch" }, code: { module: "@/ui", export: "Switch" }, status: "active" } } });
   const r1 = run("drift-lint.js", [byDeclaredId, idNamed]), r2 = run("drift-lint.js", [byMapKeyId, idNamed]);
-  check("[DT-26-id] an entry whose figma.id collides with a LIBRARY row's id is still orphaned-entry, exit 1 (ids are per file)",
+  check("[id] an entry whose figma.id collides with a LIBRARY row's id is still orphaned-entry, exit 1 (ids are per file)",
     /catalogs read \(2\)/.test(r1.stderr) && r1.status === 1 && orphanOf(r1, "local-switch"));
-  check("[DT-26-id] …and so is an id-shaped map key with no figma identity", r2.status === 1 && orphanOf(r2, "1:5"));
+  check("[id] …and so is an id-shaped map key with no figma identity", r2.status === 1 && orphanOf(r2, "1:5"));
   const idScreen = put(path.join(idRoot, "s.json"), { exportedAt: stamp.exportedAt, screen: "Home", nodes: [{ type: "FRAME", id: "1:0", name: "Home", children: [inst("2:1", "Surface Toggle", "k-toggle")] }] });
   const idBoot = run("map-bootstrap.js", [idNamed, byDeclaredId, "--screen", idScreen]);
   const idMap = ((): CodeConnectMap | null => { try { const m: unknown = JSON.parse(idBoot.stdout); return isCodeConnectMap(m) ? m : null; } catch { return null; } })();
-  check("[DT-26-id] map-bootstrap --screen: a library component is stubbed by KEY, never merged into the local entry that shares its id",
+  check("[id] map-bootstrap --screen: a library component is stubbed by KEY, never merged into the local entry that shares its id",
     !!idMap && !!idMap.components["k-toggle"] && idMap.components["k-toggle"]?.figma.id === undefined && idMap.components["local-switch"]?.figma.name === "Brand Switch" && idMap.components["local-switch"]?.figma.key === undefined);
-  // Final-review MEDIUM: re-running a bootstrap over a map that already holds a LIBRARY entry must not merge
+  // Re-running a bootstrap over a map that already holds a LIBRARY entry must not merge
   // a keyed local component into it through a shared node id (it would re-point the mapping).
   const mixedCat = put(path.join(idRoot, "mixed-local.json"), { ...stamp, components: [{ name: "Brand Widget", id: "1:5", type: "COMPONENT", key: "k-local" }] });
   const mixedMap = put(path.join(idRoot, "map-mixed.json"), { version: 1, components: { "k-toggle": { figma: { key: "k-toggle", id: "1:5", name: "Surface Toggle" }, code: { module: "@/ui/Toggle", export: "Toggle" }, status: "active" } } });
   const mixedBoot = run("map-bootstrap.js", [mixedCat, mixedMap]);
   const mixed = ((): CodeConnectMap | null => { try { const m: unknown = JSON.parse(mixedBoot.stdout); return isCodeConnectMap(m) ? m : null; } catch { return null; } })();
-  check("[DT-26-merge] a bootstrap re-run never merges a keyed component into an entry with a DIFFERENT key that shares its id",
+  check("[merge] a bootstrap re-run never merges a keyed component into an entry with a DIFFERENT key that shares its id",
     mixedBoot.status === 0 && !!mixed && mixed.components["k-toggle"]?.figma.key === "k-toggle" && mixed.components["k-toggle"]?.figma.name === "Surface Toggle"
       && mixed.components["k-toggle"]?.code.module === "@/ui/Toggle" && !!mixed.components["k-local"]);
-  // Review MEDIUM: a full bootstrap never reads the other catalogs, so a broken one does not fail it.
+  // A full bootstrap never reads the other catalogs, so a broken one does not fail it.
   const brokenDir = fs.mkdtempSync(path.join(os.tmpdir(), "dt26-broken-"));
   const brokenNamed = put(path.join(brokenDir, "components.local.json"), { ...stamp, components: [{ name: "Brand Button", id: "1:1", type: "COMPONENT", key: "k-local" }] });
   fs.writeFileSync(path.join(brokenDir, "components.library.json"), "{ not json");
   const brokenFull = run("map-bootstrap.js", [brokenNamed]);
-  check("[DT-26-full] a full bootstrap ignores a broken components.library.json beside the catalog (exit 0, as on HEAD)", brokenFull.status === 0 && /"k-local"/.test(brokenFull.stdout));
-  // Re-review LOW 1: a DISCOVERED catalog is never asked for — a broken one is a warn naming it, then skipped
+  check("[full] a full bootstrap ignores a broken components.library.json beside the catalog (exit 0, as on HEAD)", brokenFull.status === 0 && /"k-local"/.test(brokenFull.stdout));
+  // A DISCOVERED catalog is never asked for — a broken one is a warn naming it, then skipped
   // (as the MCP tool does); only a --catalog the user named fails loud.
   const brokenScreen = run("map-bootstrap.js", [brokenNamed, "--screen", idScreen]);
-  check("[DT-26-lenient] map-bootstrap --screen: a broken discovered components.library.json is a warn naming it, skipped (exit 0)",
+  check("[lenient] map-bootstrap --screen: a broken discovered components.library.json is a warn naming it, skipped (exit 0)",
     brokenScreen.status === 0 && /warn .*components\.library\.json is not a readable component catalog — skipped/.test(brokenScreen.stderr));
   const brokenMap = put(path.join(brokenDir, "map.json"), { version: 1, components: { "k-local": entry("k-local", "Brand Button") } });
   const brokenLint = run("drift-lint.js", [brokenMap, brokenNamed]);
-  check("[DT-26-lenient] drift-lint: the same broken discovered file is `warn   [catalog-unreadable] <file>` and the run goes on (exit 0, as on HEAD)",
+  check("[lenient] drift-lint: the same broken discovered file is `warn   [catalog-unreadable] <file>` and the run goes on (exit 0, as on HEAD)",
     brokenLint.status === 0 && /^warn {3}\[catalog-unreadable\] .*components\.library\.json is not a readable component catalog — skipped/m.test(brokenLint.stderr));
   fs.writeFileSync(path.join(brokenDir, "named-extra.json"), "{ not json");
-  check("[DT-26-lenient] …but a broken --catalog the user NAMED still fails loud (exit 2)", run("drift-lint.js", [brokenMap, brokenNamed, "--catalog", path.join(brokenDir, "named-extra.json")]).status === 2);
-  // Re-review LOW 5: a duplicate key inside an extra catalog names that file.
+  check("[lenient] …but a broken --catalog the user NAMED still fails loud (exit 2)", run("drift-lint.js", [brokenMap, brokenNamed, "--catalog", path.join(brokenDir, "named-extra.json")]).status === 2);
+  // A duplicate key inside an extra catalog names that file.
   const dupInside = put(path.join(root, "other", "dup-inside.json"), { ...stamp, components: [{ name: "Surface A", id: "9:1", type: "COMPONENT", key: "k-dupin" }, { name: "Surface B", id: "9:2", type: "COMPONENT", key: "k-dupin" }] });
-  check("[DT-26-dupfile] a duplicate key inside an extra catalog names that file",
+  check("[dupfile] a duplicate key inside an extra catalog names that file",
     new RegExp(`duplicate-key\\] two catalog components share key 'k-dupin' \\('Surface A' and 'Surface B'\\) in ${dupInside.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(run("drift-lint.js", [mapFile, named, "--catalog", dupInside]).stderr));
-  // Re-review HIGH: a confirmed proposal WITH a key binds by key only — never to a local component that
+  // A confirmed proposal WITH a key binds by key only — never to a local component that
   // happens to share its (other file's) node id.
   const idLocal = put(path.join(idDs, "components.local.json"), { ...stamp, components: [{ name: "Local Widget", id: "1:5", type: "COMPONENT", key: "k-local-widget" }] });
   const proposals = put(path.join(idRoot, "proposals.json"), [{ name: "Surface Toggle", instanceKeys: ["inst-1"], catalog: { key: "k-toggle", id: "1:5", name: "Surface Toggle", type: "COMPONENT" }, confirmed: true, reasons: [], alternatives: [] }]);
   const prop = run("map-bootstrap.js", [idLocal, "--from-proposals", proposals]);
   const propMap = ((): CodeConnectMap | null => { try { const m: unknown = JSON.parse(prop.stdout); return isCodeConnectMap(m) ? m : null; } catch { return null; } })();
-  check("[DT-26-prop] --from-proposals: a keyed library proposal binds to the library component by key, not to the local '1:5'",
+  check("[prop] --from-proposals: a keyed library proposal binds to the library component by key, not to the local '1:5'",
     prop.status === 0 && propMap?.components["inst-1"]?.figma.key === "k-toggle" && propMap.components["inst-1"]?.figma.name === "Surface Toggle");
   const full = run("map-bootstrap.js", [named]);
-  check("[DT-26] a full bootstrap (no --screen) still stubs the named catalog only — not every library component", (() => { try { const m: unknown = JSON.parse(full.stdout); return isCodeConnectMap(m) && Object.keys(m.components).join() === "k-local"; } catch { return false; } })());
+  check("a full bootstrap (no --screen) still stubs the named catalog only — not every library component", (() => { try { const m: unknown = JSON.parse(full.stdout); return isCodeConnectMap(m) && Object.keys(m.components).join() === "k-local"; } catch { return false; } })());
 })();
 
-// ---------- map-bootstrap.js --screen scopes the catalog to what one screen actually uses (P4 #103) ----------
-// Before the fix, a full bootstrap on a real catalog stubbed EVERY component in it (59 here, 318 on
-// the live run) regardless of the screen about to be built — a confirm list nobody can evaluate.
+// ---------- map-bootstrap.js --screen scopes the catalog to what one screen actually uses ----------
+// A full bootstrap on a real catalog would stub EVERY component in it (59 here, 318 on
+// a real file) regardless of the screen about to be built — a confirm list nobody can evaluate.
 // --screen filters that down to the keys/ids the screen's own VISIBLE instances reference.
 (() => {
   const D2C = path.join(import.meta.dirname, "..", "design-to-code");
@@ -1509,15 +1507,15 @@ console.log("map — SLOT props:");
   const scoped = asMap(scopedRun.stdout);
   const fullCount = Object.keys(full.components).length;
   const scopedCount = Object.keys(scoped.components).length;
-  // This fixture screen is the 0%-catalog-match case (finding 103's own scenario: 0 of the screen's
+  // This fixture screen is the 0%-catalog-match case (0 of the screen's
   // instance keys are in this catalog), so the scoped count is legitimately 0 — the point is that it
   // is never the full 59, i.e. it never asks the user to confirm components the screen doesn't use.
   check("[map-bootstrap --screen] scopes to fewer components than a full bootstrap", scopedCount < fullCount);
-  // DT-26: the "from" side is every catalog read (this fixture's components.library.json too), so it is >= the full bootstrap's count.
+  // the "from" side is every catalog read (this fixture's components.library.json too), so it is >= the full bootstrap's count.
   check("[map-bootstrap --screen] says on stderr how much it scoped, from -> to", Number((new RegExp(`from (\\d+) to ${scopedCount} `).exec(scopedRun.stderr) || [])[1]) >= fullCount);
 })();
 
-// ---------- finding 313: a consumer-project path that does not exist in a consumer project --------
+// ---------- a consumer-project path that does not exist in a consumer project --------
 // `design-to-code/<script>.js` is only a valid path INSIDE this repo. A consumer project has only
 // the plugin's own `${CLAUDE_PLUGIN_ROOT}/scripts/<script>.js` — a skill quoting the repo-relative
 // path hands the model a command that fails with `Cannot find module` the moment it runs. Comments
@@ -1536,11 +1534,11 @@ console.log("map — SLOT props:");
     const text = fs.readFileSync(f, "utf8");
     if (/design-to-code\//.test(text)) offenders.push(rel);
   }
-  check("[313] no skill/agent doc quotes the repo-relative design-to-code/ path — every script is ${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js" +
+  check("no skill/agent doc quotes the repo-relative design-to-code/ path — every script is ${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js" +
     (offenders.length ? " — offenders: " + offenders.join(", ") : ""), offenders.length === 0);
 })();
 
-// ---------- DT-15 / F-28: every script command resolves to a real path ------------------------------
+// ---------- every script command resolves to a real path ------------------------------
 // `${CLAUDE_PLUGIN_ROOT}` is substituted into skill/agent Markdown when Claude Code loads it, but it is not
 // an environment variable in the Bash tool, a skill preloaded into an agent kept it literal, and a
 // references/*.md opened with Read is never substituted — so commands built on it ran with an empty path in
@@ -1560,7 +1558,7 @@ console.log("map — SLOT props:");
   const isBody = (f: string) => path.basename(f) === "SKILL.md" || f.includes(`${path.sep}agents${path.sep}`);
   const lines = (f: string) => fs.readFileSync(f, "utf8").split("\n");
 
-  check("[DT-15] the plugin has no top-level bin/ (claude.ai and Cowork refuse to install such a plugin)", !fs.existsSync(path.join(PLUGIN_ROOT, "bin")));
+  check("the plugin has no top-level bin/ (claude.ai and Cowork refuse to install such a plugin)", !fs.existsSync(path.join(PLUGIN_ROOT, "bin")));
 
   const unknown: string[] = [], rootInReadFile: string[] = [], undefinedPlaceholder: string[] = [];
   for (const f of docs) {
@@ -1592,15 +1590,15 @@ console.log("map — SLOT props:");
       if (pf.plugin && !(def.includes("`<plugin>`") && def.includes("${CLAUDE_PLUGIN_ROOT}"))) undefinedPlaceholder.push(`${where} (<plugin>)`);
     }
   }
-  check("[DT-15] every script a doc names (${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js or <scripts>/<name>.js) is one the plugin ships" + (unknown.length ? " — " + unknown.join(", ") : ""), unknown.length === 0);
-  check("[DT-15] no references/ or profiles/ file relies on ${CLAUDE_PLUGIN_ROOT} (a file opened with Read is never substituted)" +
+  check("every script a doc names (${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js or <scripts>/<name>.js) is one the plugin ships" + (unknown.length ? " — " + unknown.join(", ") : ""), unknown.length === 0);
+  check("no references/ or profiles/ file relies on ${CLAUDE_PLUGIN_ROOT} (a file opened with Read is never substituted)" +
     (rootInReadFile.length ? " — " + rootInReadFile.join(", ") : ""), rootInReadFile.length === 0);
-  check("[DT-15] every SKILL.md that loads a file using <scripts>/<plugin> (its own or another skill's) defines it as the substituted plugin path" +
+  check("every SKILL.md that loads a file using <scripts>/<plugin> (its own or another skill's) defines it as the substituted plugin path" +
     (undefinedPlaceholder.length ? " — " + undefinedPlaceholder.join(", ") : ""), undefinedPlaceholder.length === 0);
-  // F-28: the agent that PRELOADS build-screen (whose body then stays literal) names the folder in its own,
+  // the agent that PRELOADS build-screen (whose body then stays literal) names the folder in its own,
   // substituted prompt.
   const builder = fs.readFileSync(path.join(PLUGIN_ROOT, "agents", "screen-builder.md"), "utf8");
-  check("[F-28] screen-builder preloads build-screen and names the scripts folder itself (${CLAUDE_PLUGIN_ROOT}/scripts/ in its own prompt)",
+  check("screen-builder preloads build-screen and names the scripts folder itself (${CLAUDE_PLUGIN_ROOT}/scripts/ in its own prompt)",
     /skills:\s*\n\s*-\s*build-screen/.test(builder) && builder.split("---").slice(2).join("---").includes("${CLAUDE_PLUGIN_ROOT}/scripts/"));
 
   // Sources: usage lines and printed hints give the real path; nothing prints the unsubstituted variable,
@@ -1620,22 +1618,22 @@ console.log("map — SLOT props:");
       if (bare.test(line.split(" // ")[0] ?? "")) hints.push(`${f}:${i + 1}`);
     });
   }
-  check("[DT-15] no design-to-code source prints ${CLAUDE_PLUGIN_ROOT}/scripts/… (usage and hints use scriptCmd → the real path)" +
+  check("no design-to-code source prints ${CLAUDE_PLUGIN_ROOT}/scripts/… (usage and hints use scriptCmd → the real path)" +
     (inSources.length ? " — " + inSources.join(", ") : ""), inSources.length === 0);
-  check("[DT-15] no script output tells the model to run a bare `<script>.js`" + (hints.length ? " — " + hints.join(", ") : ""), hints.length === 0);
+  check("no script output tells the model to run a bare `<script>.js`" + (hints.length ? " — " + hints.join(", ") : ""), hints.length === 0);
 
   // The shipped bundles print THEIR OWN folder: run from an unrelated cwd, the usage path and a sibling
   // script named in a hint both exist.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dt-paths-"));
   const help = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), "--help"], { cwd: tmp, encoding: "utf8" });
   const usagePath = /usage: node "([^"]+)"/.exec(help.stdout)?.[1];
-  check("[DT-15] the shipped tokens.js --help prints its own real path (node \"…/scripts/tokens.js\"), from any cwd",
+  check("the shipped tokens.js --help prints its own real path (node \"…/scripts/tokens.js\"), from any cwd",
     help.status === 0 && usagePath === path.join(SCRIPTS, "tokens.js") && fs.existsSync(usagePath));
   fs.writeFileSync(path.join(tmp, "map.json"), "{}");
   fs.writeFileSync(path.join(tmp, "cat.json"), JSON.stringify({ components: [] }));
   const lint = spawnSync(process.execPath, [path.join(SCRIPTS, "drift-lint.js"), "map.json", "cat.json"], { cwd: tmp, encoding: "utf8" });
   const hintPath = /node "([^"]+map-validate\.js)"/.exec(lint.stderr)?.[1];
-  check("[DT-15] a hint the shipped drift-lint.js prints names the sibling script by its real path (…/scripts/map-validate.js)",
+  check("a hint the shipped drift-lint.js prints names the sibling script by its real path (…/scripts/map-validate.js)",
     hintPath === path.join(SCRIPTS, "map-validate.js") && fs.existsSync(hintPath));
   fs.rmSync(tmp, { recursive: true, force: true });
 })();

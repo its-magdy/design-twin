@@ -41,7 +41,7 @@ import type { MergedVariablesDoc } from "../bridge/src/variables-merge.ts";
 const TOKEN = "test-token-abc123";
 process.env.FIGMA_BRIDGE_TOKEN = TOKEN;
 // A static `import` is hoisted above this env assignment, and server-core reads FIGMA_BRIDGE_TOKEN at
-// load time — so this stays a dynamic import at the exact point the env var is set (R4).
+// load time — so this stays a dynamic import at the exact point the env var is set.
 const core = await import("../bridge/src/server-core.ts");
 
 // A caught/rejected value as the Error every bridge path throws. A non-Error is wrapped rather than
@@ -49,7 +49,7 @@ const core = await import("../bridge/src/server-core.ts");
 const asErr = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 // Wait for a condition instead of sleeping a guessed time: polls every 10 ms, resolves true once it
 // holds, false at the cap — so a check that never comes true fails cleanly instead of hanging, and a
-// loaded machine only makes it slower, never wrong (group 16, H-1).
+// loaded machine only makes it slower, never wrong.
 const until = async (cond: () => boolean, capMs = 10_000): Promise<boolean> => {
   const end = Date.now() + capMs;
   while (!cond()) {
@@ -164,12 +164,12 @@ ok("[sec-seed-no-pollute] Object.prototype was not mutated",
   ({} as Record<string, unknown>).source === undefined && ({} as Record<string, unknown>).nodeId === undefined);
 ok("[seed-preserves-human-fields] hand-authored import survives the merge", widget.import === "@/ui");
 {
-  // PR #1 review A9: the hand-edited map is rewritten atomically and in its own format (pre-change: LF, 2 spaces)
+  // The hand-edited map is rewritten atomically and in its own format (not normalized to LF, 2 spaces)
   const map = path.join(tmp, "poison", "design", "components.json");
   fs.writeFileSync(map, JSON.stringify({ Widget: { component: "Widget", import: "@/ui", props: {} } }, null, 4).split("\n").join("\r\n") + "\r\n");
   execFileSync(process.execPath, [seed, path.join(tmp, "poison"), path.dirname(map)], { stdio: "pipe" });
   const text = fs.readFileSync(map, "utf8");
-  ok("[A9] seed keeps a hand-edited map's own format (CRLF, 4-space indent) and leaves no temp file beside it",
+  ok("seed keeps a hand-edited map's own format (CRLF, 4-space indent) and leaves no temp file beside it",
     text.includes("\r\n    \"") && !/[^\r]\n/.test(text) && text.endsWith("}\r\n") && !fs.readdirSync(path.dirname(map)).some((f) => f.includes(".tmp-")));
 }
 
@@ -428,8 +428,8 @@ void (async () => {
   // live client forever, so every command routed to it waited out its whole timeout. The bridge now
   // pings on an interval and terminates a client that missed the previous pong. `autoPong: false` is a
   // client whose network stack never answers. The rounds are stepped by hand (`heartbeatMs: 0` +
-  // heartbeatTick(), D108): with a real short interval, one loop stall after a ping fired the next tick
-  // before the alive client's pong was read, and terminated it (group 16, H-1b).
+  // heartbeatTick()): with a real short interval, one loop stall after a ping fired the next tick
+  // before the alive client's pong was read, and terminated it.
   {
     const port = nextPort++;
     const bridge = core.createBridge(port, { heartbeatMs: 0 });
@@ -680,10 +680,10 @@ void (async () => {
     const j = pullSrc.indexOf("} else if (asLibrary) {");
     return i !== -1 && j !== -1 && i < j && pullSrc.slice(i, j).includes("OUT.writeScreen(outDir, r, plog)");
   })());
-  // P4 round 3: `dtwin list`'s own "next step" hint used to recommend `dtwin pull design --page/--node
-  // <id>` — the finding-14/15 outDir trap, printed by the tool itself right after the command that
+  // `dtwin list`'s own "next step" hint must not recommend `dtwin pull design --page/--node
+  // <id>` — the outDir trap, printed by the tool itself right after the command that
   // discovers ids to pull. A user-facing STRING, not a doc, so the doc-only grep in the ground rules
-  // never caught it. Pin it at the source level (this hint only prints after a live plugin
+  // does not catch it. Pin it at the source level (this hint only prints after a live plugin
   // connection, which a unit test cannot fake cheaply) so it can never regress silently.
   ok("[args] the `list` next-step hint never recommends the outDir-trap form `dtwin pull design `",
     !pullSrc.split("\n").some((l) => /console\.(error|log)/.test(l) && /pull design /.test(l)));
@@ -803,20 +803,20 @@ void (async () => {
       const note = init.plan(mk({ ".gitignore": "node_modules/\ndesign/\n" }), { token: tok }).find((a) => a.kind === "note");
       return !!note && /NOT regenerable/.test(note.note) && /design\/export\//.test(note.note);
     })());
-    // DT-79 (D9: suggest only): Tailwind v4 compiles class names quoted in design/ notes unless excluded.
-    ok("[DT-79] a project whose package.json lists tailwindcss (deps or devDeps) gets ONE @source not note; others get none", (() => {
+    // Suggest only: Tailwind v4 compiles class names quoted in design/ notes unless excluded.
+    ok("a project whose package.json lists tailwindcss (deps or devDeps) gets ONE @source not note; others get none", (() => {
       const notes = (files: Record<string, string>) => init.plan(mk(files), { token: tok }).filter((a) => a.kind === "note" && /@source not "<path from that CSS file to design\/>";/.test(a.note) && /v4\.1\+/.test(a.note));
       return notes({ "package.json": '{"devDependencies":{"tailwindcss":"4"}}' }).length === 1 && notes({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' }).length === 1
         && notes({ "package.json": '{"dependencies":{"react":"19"}}' }).length === 0 && notes({}).length === 0 && notes({ "package.json": "not json" }).length === 0;
     })());
-    ok("[DT-79] no note for a Tailwind pinned to v3 (^3 / ~3 / 3.x / >=3 <4 — v3 does not auto-scan); v4 ranges and the v4-only plugins still get it", (() => {
+    ok("no note for a Tailwind pinned to v3 (^3 / ~3 / 3.x / >=3 <4 — v3 does not auto-scan); v4 ranges and the v4-only plugins still get it", (() => {
       const n = (pkg: string) => init.plan(mk({ "package.json": pkg }), { token: tok }).filter((a) => a.kind === "note" && /@source not/.test(a.note)).length;
       return ["^3.4.1", "~3.3", "3.x", ">=3 <4"].every((r) => n(`{"devDependencies":{"tailwindcss":"${r}"}}`) === 0)
         && n('{"devDependencies":{"tailwindcss":"^4.1.0"}}') === 1 && n('{"devDependencies":{"tailwindcss":"^3.0.0 || ^4.0.0"}}') === 1 && n('{"devDependencies":{"tailwindcss":"^3.0.0 || ~3.4"}}') === 0 && n('{"devDependencies":{"tailwindcss":">=3"}}') === 1 && n('{"devDependencies":{"@tailwindcss/vite":"^4"}}') === 1;
     })());
-    // F-91 (D9: suggest only): a watched write into design/ can hot-reload the page being measured.
-    // M2: proven only for vite + Tailwind v4 (its source detection is what makes Vite reload on a design/ rewrite)
-    ok("[F-91] a project listing vite AND Tailwind v4 gets ONE server.watch.ignored note naming the proven mechanism; vite alone, Tailwind v3 or no vite get none; vite.config is never written", (() => {
+    // Suggest only: a watched write into design/ can hot-reload the page being measured.
+    // proven only for vite + Tailwind v4 (its source detection is what makes Vite reload on a design/ rewrite)
+    ok("a project listing vite AND Tailwind v4 gets ONE server.watch.ignored note naming the proven mechanism; vite alone, Tailwind v3 or no vite get none; vite.config is never written", (() => {
       const notes = (files: Record<string, string>) => init.plan(mk(files), { token: tok }).filter((a) => a.kind === "note" && /server: \{ watch: \{ ignored: \['\*\*\/design\/\*\*'\] \} \}/.test(a.note));
       const n = (files: Record<string, string>) => notes(files).length;
       const d = mk({ "package.json": '{"devDependencies":{"vite":"7","tailwindcss":"^4.1.0"}}', "vite.config.ts": "export default {};\n" });
@@ -827,13 +827,13 @@ void (async () => {
         && n({ "package.json": '{"devDependencies":{"vite":"7"}}' }) === 0 && n({ "package.json": '{"devDependencies":{"vite":"7","tailwindcss":"^3.4.1"}}' }) === 0
         && n({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' }) === 0 && n({}) === 0 && fs.readFileSync(path.join(d, "vite.config.ts"), "utf8") === "export default {};\n";
     })());
-    ok("[F-91] init suggests gitignoring design/verify/ unless .gitignore already covers it", (() => {
+    ok("init suggests gitignoring design/verify/ unless .gitignore already covers it", (() => {
       const n = (files: Record<string, string>) => init.plan(mk(files), { token: tok }).filter((a) => a.kind === "note" && /consider adding `design\/verify\/` to \.gitignore/.test(a.note)).length;
       return n({}) === 1 && n({ ".gitignore": "node_modules/\n" }) === 1 && n({ ".gitignore": "design/verify/\n" }) === 0 && n({ ".gitignore": "design/\n" }) === 0
         && ["design/verify/**\n", "/design/verify\n", "/design/verify/\n", "design/verify/*\n", "design/verify\n"].every((g) => n({ ".gitignore": g }) === 0)
         && n({ ".gitignore": "design/verify-old/\n" }) === 1 && n({ ".gitignore": "design/export/\n" }) === 1;
     })());
-    ok("[DT-79] init only suggests it — nothing is written into a stylesheet", (() => {
+    ok("init only suggests it — nothing is written into a stylesheet", (() => {
       const d = mk({ "package.json": '{"devDependencies":{"tailwindcss":"4"}}', "src/app.css": '@import "tailwindcss";\n' });
       init.apply(d, init.plan(d, { token: tok }), () => {});
       return fs.readFileSync(path.join(d, "src/app.css"), "utf8") === '@import "tailwindcss";\n';
@@ -853,8 +853,8 @@ void (async () => {
       const r = fs.readFileSync(path.join(d, "design", "README.md"), "utf8");
       return /dtwin owns this/.test(r) && /you own it/.test(r) && /codeconnect\.local\.json/.test(r);
     })());
-  // target.json used to be SKIPPED when no stack was detected, making `init --help`'s own promise
-  // false and leaving every later step reading a file that was not there (findings 8/90).
+  // target.json is written even when no stack is detected; skipping it would make `init --help`'s own promise
+  // false and leave every later step reading a file that is not there.
   ok("[init] target.json is written even when no stack is detected, with profile:null",
     (() => {
       const d = mk({});
@@ -875,7 +875,7 @@ void (async () => {
       return r.status === 0 && /Import plugin from manifest/.test(r.stdout) && /would write/.test(r.stderr) && !fs.existsSync(path.join(d, "design")) && !fs.existsSync(path.join(d, ".mcp.json")) && run(["--nope"]).status === 1;
     })());
 
-    // P4 #2: `dtwin init --help` must list EXACTLY what init creates — no more, no less. Walk the real
+    // `dtwin init --help` must list EXACTLY what init creates — no more, no less. Walk the real
     // filesystem diff after a real `init` and cross-check it against the four paths named in --help.
     ok("[init] --help lists exactly what init creates — a filesystem diff after init matches the help text", (() => {
       const helpRun = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", "--help"], { encoding: "utf8", timeout: 5000 });
@@ -901,8 +901,8 @@ void (async () => {
     const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "--help"], { encoding: "utf8", timeout: 5000 });
     return r.status === 0 && /Usage:/.test(r.stdout) && /--list-libraries/.test(r.stdout) && !/listening/.test(r.stderr);
   })());
-  // P4 livetest-4 #329: `dtwin --help` never mentioned `--client` at all, even though it is the flag
-  // every plugin-reaching command needs once two Figma files are connected — it was documented only in
+  // `dtwin --help` must mention `--client`, the flag
+  // every plugin-reaching command needs once two Figma files are connected — otherwise it appears only in
   // bridge/README.md (a clone-only file) and in `list clients`' own table.
   ok("[args] --help mentions --client, pointing at `dtwin list clients`", (() => {
     const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "--help"], { encoding: "utf8", timeout: 5000 });
@@ -920,8 +920,8 @@ void (async () => {
   // process.cwd() looking for an existing flat `design/` export to stay backward-compatible with).
   // Asserting a literal "design" here silently depended on whichever directory happened to be the
   // test runner's cwd ALREADY having a legacy-flat `design/` in it — true by accident on some dev
-  // checkouts, false in a clean git worktree (round-2 orchestrator finding: these 4 checks are NOT
-  // pre-existing/environmental, they're a cwd-dependent test in this file's own column). Run `parse()`
+  // checkouts, false in a clean git worktree (these 4 checks are cwd-dependent, NOT
+  // environmental failures). Run `parse()`
   // from a fresh, empty temp cwd instead, so the default is deterministically LAYOUT.EXPORT_DIR
   // ("design/export") regardless of where the suite happens to run.
   const freshCwd = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-argparse-cwd-"));
@@ -1342,10 +1342,10 @@ void (async () => {
     rootIndex.pageDirs.every((pd) => typeof pd.index === "string" && fs.existsSync(path.join(pagesDir, pd.index))));
   ok("[wp] and the pointer is relative to outDir, like each layer's `file`",
     rootIndex.pageDirs.every((pd) => !path.isAbsolute(pd.index) && pd.index.startsWith("pages/")));
-  // P3 #16: the root index used to carry ONLY the run manifest + pageDirs counts, forcing a consumer
-  // one hop down to `pages/<Page>/index.json` to find a single screen by name/title. It now also
-  // carries the flattened per-screen rows (name/id/title/texts/file, no tree bytes) so the file every
-  // skill is told to read actually has what it promises.
+  // The root index carries the flattened per-screen rows, not only the run manifest + pageDirs counts, so a consumer
+  // need not go one hop down to `pages/<Page>/index.json` to find a single screen by name/title. The rows
+  // (name/id/title/texts/file, no tree bytes) are in the file every
+  // skill is told to read, so it has what it promises.
   ok("[wp] the root index carries the run manifest AND the flattened per-screen rows (no tree bytes)",
     rootIndex.exportedAt === "t" && Array.isArray(rootIndex.layers) && rootIndex.layers.length === 3 &&
     rootIndex.layers.map((l) => l.name).sort().join("|") === "A|B|C" &&
@@ -1474,7 +1474,7 @@ void (async () => {
   const badInfo = readSnapshotInfo(badJsonDir);
   ok("[status] unparseable design-system.json reports an error, not a crash", !!(badInfo && typeof badInfo.error === "string"));
 
-  // Live run #5: a single-screen pull writes design/<Screen>.json and NOTHING else that is stamped —
+  // A single-screen pull writes design/<Screen>.json and NOTHING else that is stamped —
   // no design-system.json, no pages/index.json. Reading only the first meant doctor told someone who
   // had just exported a screen that nothing had been exported yet.
   (() => {
@@ -1561,7 +1561,7 @@ void (async () => {
   type WriteView = Merged<WithoutWrote<WriteResult>> & { wrote: Merged<WriteResult["wrote"]> };
   const wdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-out-"));
 
-  // ---------- writeScreen: title/texts land in the index (P3 #16 #17 #70 #90 #120) ----------
+  // ---------- writeScreen: title/texts land in the index ----------
   // Real node tree from the livetest3 fixture (the `positions ` frame — layer name "positions ",
   // visible title "Jet Roles"), pruned to the fields deriveTitle/collectTexts read.
   {
@@ -1589,7 +1589,7 @@ void (async () => {
     fs.rmSync(sdir, { recursive: true, force: true });
   }
 
-  // ---------- writeScreen: sourceFile stamp lands on the screen doc AND its index row (P4 #33) ----------
+  // ---------- writeScreen: sourceFile stamp lands on the screen doc AND its index row ----------
   // figma-pull.js resolves which connected Figma file a pull actually talked to and stamps the RESULT
   // as `r.sourceFile` (see resolveSourceFile()/stampSource() there); write-out.js's job is only to
   // persist it. Before this fix, a screen JSON carried no field naming its own source at all, so
@@ -1752,7 +1752,7 @@ void (async () => {
   ok("[write-out] and a layer-file count", full.wrote.layerFiles === 1);
   // The whole point of the writeToDisk path: the RESULT is an index, not the export.
   // "no payload" means no serialized subtree (`children`) — not the absence of a layer's own
-  // name/type, which P3 #16 now deliberately puts in the index (`full.index.layers[].name/type`) so
+  // name/type, which the index deliberately carries (`full.index.layers[].name/type`) so
   // a consumer can resolve a screen from the index alone, without opening its node file.
   ok("[write-out] the returned index carries NO node payload (no serialized subtree)",
     (() => {
@@ -1804,7 +1804,7 @@ void (async () => {
   ok("[component-split] design-system.json's manifest points at the components/ dir when one was written",
     (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).files.componentsDir === "design-system/components");
   // …and OMITS the key when it was not. A pointer that resolves to nothing is worse than an absent
-  // key: a tool walking `files` verbatim got ENOENT on one entry of nine (live finding 27).
+  // key: a tool walking `files` verbatim got ENOENT on one entry of nine.
   ok("[component-split] and omits componentsDir entirely when no detail file was produced",
     (() => {
       const d2 = path.join(wdir, "nodetail");
@@ -1872,7 +1872,7 @@ void (async () => {
   ok("[write-out] writeAny dispatched on shape, not on the caller's command", !!sel.wrote.screen);
 
   // The whole point of the nested layout: ONE index a consumer opens without knowing which pull shape
-  // produced the tree, and two same-named frames that cannot overwrite each other (finding 63).
+  // produced the tree, and two same-named frames that cannot overwrite each other.
   OUT.writeAny(path.join(wdir, "sel"), screenReply({
     screenName: "Popup", page: "Flows", pageId: "0:3", nodeId: "20170:132666",
     screen: { nodes: [{ id: "20170:132666", type: "FRAME" }] }, assets: [],
@@ -1912,7 +1912,7 @@ void (async () => {
       catch (e) { return /screen 'Keyless' has no id — cannot index/.test(asErr(e).message); } })());
 
   // Per-screen asset index: which of the shared, cumulative assets/ belong to THIS screen, and which
-  // of them are byte-identical (the same icon exported once per instance path — finding 97).
+  // of them are byte-identical (the same icon exported once per instance path).
   const withAssets: WriteView = OUT.writeAny(path.join(wdir, "sel"), screenReply({
     screenName: "Icons", page: "Flows", pageId: "0:3", nodeId: "5:5",
     screen: { nodes: [{ id: "5:5", type: "FRAME" }] },
@@ -1924,9 +1924,9 @@ void (async () => {
   }));
   const aIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "Icons__5_5.assets.json"), "utf8")) as ScreenAssetsDoc;
   ok("[write-out] the asset index lists every asset this screen references", aIdx.files.length === 3);
-  // P5 round 3 (findings 24/25/27): writeAssets now dedups by CONTENT before ever writing a file, so
+  // writeAssets dedups by CONTENT before ever writing a file, so
   // two byte-identical entries under two DIFFERENT names ("I1_2_3.svg"/"I4_5_6.svg") collapse to ONE
-  // file on disk instead of two — `duplicates` is now empty because there is no longer a duplicate
+  // file on disk instead of two — `duplicates` is empty because there is no duplicate
   // FILE for it to find; both manifest rows correctly point at the one file that was actually written.
   const aFile0 = must(aIdx.files[0], "aIdx.files[0]"), aFile1 = must(aIdx.files[1], "aIdx.files[1]");
   ok("[write-out] byte-identical entries under different names are deduped at WRITE time, not just reported after the fact",
@@ -1934,7 +1934,7 @@ void (async () => {
   ok("[write-out] the returned summary agrees — no duplicate count to report", withAssets.wrote.assetIndex?.duplicates === 0);
 
   // Which icons are safe to recolour. Figma exports the frame as it LOOKS, so a Dark-mode glyph
-  // arrives with its stroke baked in and cannot serve a Light theme (finding 73) — but a red trash
+  // arrives with its stroke baked in and cannot serve a Light theme — but a red trash
   // icon carries meaning and must keep its colour. One colour throughout is the tell.
   OUT.writeAny(path.join(wdir, "sel"), screenReply({
     screenName: "Glyphs", page: "Flows", pageId: "0:3", nodeId: "6:6",
@@ -1956,7 +1956,7 @@ void (async () => {
   // ------------------------------------------------ variables.json MERGES across single-screen pulls
   // The bug this replaces: each --node pull wrote its own slice over design/variables.json, so pulling
   // screen B silently deleted screen A's tokens and A's theme stopped resolving — with no warning,
-  // because the screen JSON carries raw hex beside every binding (live-test findings 35/64).
+  // because the screen JSON carries raw hex beside every binding.
   const vdir = path.join(wdir, "vars");
   const V = (name: string, key: string, values: Record<string, string>, coll?: string) => variable({ name, key, collection: coll || "Sem", type: "COLOR", values });
   OUT.writeAny(vdir, screenReply({
@@ -1996,7 +1996,7 @@ void (async () => {
     (JSON.parse(fs.readFileSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json"), "utf8")) as TokensDoc).variables?.length === 2);
 
   // A token that resolves differently in two screens is a REAL disagreement between two libraries
-  // (finding 69) — the newest wins, but it is recorded rather than silently applied.
+  // — the newest wins, but it is recorded rather than silently applied.
   const conf: WriteView = OUT.writeAny(vdir, screenReply({
     screenName: "Popup", page: "P", pageId: "0:1", nodeId: "3:3", screen: { nodes: [] }, assets: [],
     variables: { collections: [], variables: [V("Bg/Page", "k2", { Dark: "#999" })], hygiene: [] },
@@ -2017,7 +2017,7 @@ void (async () => {
     })());
 
   // ------------------------------------------------------------- reference PNGs land in ONE place
-  // Three docs used to give three different answers and the printed path found nothing (20/31/34).
+  // The docs agree on one location, and the printed path resolves to a file.
   const shot: WriteView = OUT.writeAny(path.join(wdir, "shot"), {
     id: "7410:12299", name: "Jet Role Details", type: "FRAME",
     reference: "assets/7410_12299_ref.png", manifest: manifest(),
@@ -2198,7 +2198,7 @@ void (async () => {
   // A connect window that runs out with NOTHING connected is not the daemon's error to report: the
   // request still runs, so the bridge's own resolveClient text ("Figma plugin not connected. Open the
   // file in Figma and run the plugin.") is what every path prints — not waitForConnection's "timed out
-  // waiting for the plugin to connect" (review of 223c829: the MCP's named `client` now sends a window).
+  // waiting for the plugin to connect" (the MCP's named `client` sends a window).
   calls.length = 0;
   const wasConnected = fakeBridge.isConnected, wasWait = fakeBridge.waitForConnection;
   fakeBridge.isConnected = () => false;
@@ -2616,9 +2616,9 @@ void (async () => {
       store.write("stored-tok", path.join(d, "bridge-token"));
       return store.status().shadowed === false;
     }));
-  // P4 livetest-4 #328: a project that always exports FIGMA_BRIDGE_TOKEN set to the SAME value as the
-  // saved file (a common CI/team setup) used to be reported as "shadowed" on every single run, with
-  // nothing actually wrong — training the user to ignore the note. `shadowed` now means the values
+  // A project that always exports FIGMA_BRIDGE_TOKEN set to the SAME value as the
+  // saved file (a common CI/team setup) is not reported as "shadowed" on every single run, with
+  // nothing actually wrong — that would train the user to ignore the note. `shadowed` means the values
   // genuinely DIFFER, not merely that both a file and the env var exist.
   ok("[token] does NOT claim shadowing when the env var carries the SAME value as the saved file",
     withStore((d: string) => {
@@ -2777,11 +2777,11 @@ void (async () => {
   console.log("\nverbs — `dtwin <verb>` is a pure argv → argv translation:");
   const { translate, VerbError, VERBS, HELP } = await import("../bridge/src/verbs.ts");
   const tr = (...a: string[]) => translate(a).join(" ");
-  // s19 L9: zero scopes is a real pull (the current page) — the help page said "Exactly one scope" and left out --all-pages.
+  // Zero scopes is a real pull (the current page): the help page does not say "Exactly one scope" and lists --all-pages.
   ok("[verbs] `dtwin pull --help`: at most one scope, none = the current page, --all-pages listed, default design/export",
     !/Exactly one scope/.test(HELP.pull ?? "") && /with none it pulls the CURRENT page/.test(HELP.pull ?? "") && /--all-pages/.test(HELP.pull ?? "") && /default design\/export/.test(HELP.pull ?? ""));
-  // s19 L9: the design-to-code scripts an agent probes answer --help with their usage and exit 0 (map-bootstrap said
-  // "unknown option --help" and exited 1).
+  // The design-to-code scripts an agent probes answer --help with their usage and exit 0 (not
+  // "unknown option --help" with exit 1).
   for (const script of ["map-bootstrap", "resolve-screen", "get-component"]) {
     const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", script + ".ts"), "--help"], { encoding: "utf8", timeout: 5000 });
     ok(`[help] ${script} --help prints its usage to stdout and exits 0`, r.status === 0 && /^usage: /.test(r.stdout) && r.stdout.includes(script));
@@ -2921,9 +2921,9 @@ void (async () => {
   ok("[doctor] token: none saved is a note pointing at init", doctor.checkToken({ ...tokS, stored: false, activeSource: "ephemeral", fingerprint: null }).status === "warn");
   ok("[doctor] token: env shadowing a saved token is named", /OVERRIDES/.test(doctor.checkToken({ ...tokS, envSet: true, activeSource: "env", shadowed: true }).detail));
   ok("[doctor] token: loose permissions get the chmod", /chmod 600/.test(doctor.checkToken({ ...tokS, loosePerms: true }).next ?? ""));
-  // P4 livetest-4 #328: the shadowed-token note used to fire on EVERY run the env var happened to be
-  // set on (even one carrying the SAME value as the saved file) and said only "make sure", never
-  // whether anything was actually wrong. token-store.js now only reports `shadowed` when the values
+  // The shadowed-token note does not fire on EVERY run the env var happens to be
+  // set on (even one carrying the SAME value as the saved file) and does not say only "make sure" without
+  // whether anything is actually wrong. token-store.js only reports `shadowed` when the values
   // genuinely differ (asserted in the token-cli suite below); doctor's job is to say what a plugin
   // connection actually proved about that mismatch, once one is known.
   {
@@ -2937,9 +2937,9 @@ void (async () => {
     ok("[doctor] token: shadowed + no plugin reachable at all is 'could not be checked', not a false 'make sure'",
       (() => { const c = doctor.checkToken(shadowedS, { id: "plugin", title: "Figma plugin", status: "warn", detail: "not checked — no token yet" }, false); return c.status === "warn" && /could not be checked/.test(c.detail); })());
   }
-  // Finding 204: a missing daemon used to report `ok` for "none running", which undersold the real
+  // a missing daemon does not report `ok` for "none running", which would undersell the real
   // cost — every pull without one starts its own bridge and waits out the plugin's full reconnect
-  // window (findings 202/213/220). Never a `fail` (no daemon really is the normal, unconfigured
+  // window. Never a `fail` (no daemon really is the normal, unconfigured
   // state), but a `warn` that names `dtwin serve` as the fix.
   ok("[doctor] daemon: none running is a warn naming `dtwin serve`, not a plain ok",
     doctor.checkDaemon(null, 8787).status === "warn" && /dtwin serve/.test(doctor.checkDaemon(null, 8787).next || ""));
@@ -2957,7 +2957,7 @@ void (async () => {
   ok("[doctor] plugin: connected / nobody came / skipped",
     doctor.checkPlugin({ clients: [{ file: "F", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok" && doctor.checkPlugin({ clients: [] }, 10).status === "fail"
     && doctor.checkPlugin({ skipped: "why" }, 10).status === "warn");
-  // Live run #2: two files were connected, doctor reported a plain ✓, and the very next command
+  // With two files connected, doctor must not report a plain ✓ when the very next command
   // refused with "say which one to use". Healthy AND ambiguous is one state, not two.
   (() => {
     const one = doctor.checkPlugin({ clients: [{ file: "TideStack", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
@@ -2989,7 +2989,7 @@ void (async () => {
   fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/x/figma-mcp.mjs"] }, figma: { url: "https://mcp.figma.com/mcp" } } }));
   ok("[doctor] project: the `designtwin` key is ok, and Figma's OWN `figma` server is not mistaken for ours", byId(doctor.checkProject(projDir), "mcp").status === "ok");
 
-  // P4 #14/#33/#203: a stray `dtwin pull design ...` writes a SECOND export tree directly under
+  // A stray `dtwin pull design ...` writes a SECOND export tree directly under
   // design/ (design/pages/, design/assets/, design/variables.json, design/design-system/) beside the
   // real one at design/export/. Doctor must name which layout it reads AND warn that the other one
   // also exists, rather than silently picking the modern one and saying nothing.
@@ -3015,10 +3015,10 @@ void (async () => {
     ok("[doctor] no parallel tree, no layout warning", !doctor.checkProject(cleanDir).find((c) => c.id === "layout"));
   }
 
-  // P4 #33: doctor's export line, built from exportSourceCounts(), on a livetest3-shaped copy — 5
-  // screens across two pages, none stamped (an older-bridge export), plus one design system. Before
-  // the fix this reported a single line naming only the design system's file for the WHOLE export
-  // ("exported 12.7h ago from 'Design System - NIMA (Copy)'"); after, it counts screens separately
+  // Doctor's export line, built from exportSourceCounts(), on a livetest3-shaped copy — 5
+  // screens across two pages, none stamped (an older-bridge export), plus one design system. It
+  // does not report a single line naming only the design system's file for the WHOLE export
+  // ("exported 12.7h ago from 'Design System - Sample (Copy)'"); it counts screens separately
   // from the design system and says plainly when a screen's source was never recorded.
   {
     const dsDir3 = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-sourcecounts-"));
@@ -3089,7 +3089,7 @@ void (async () => {
       && m2.status === "warn" && /`mcpServers` must be an object of server entries, not a string/.test(m2.detail));
   }
 
-  // P4 #203: a "not checked" warn means a check that should have run, didn't — the roll-up must be
+  // A "not checked" warn means a check that should have run, didn't — the roll-up must be
   // false, not just when something outright failed.
   {
     const okChecks = [{ id: "a", status: "ok" }, { id: "b", status: "ok" }];
@@ -3157,7 +3157,7 @@ void (async () => {
   ok("[doctor-cli] exit code is 1 only when a check failed", docJson.status === (docReport.ok ? 0 : 1));
   ok("[doctor-cli] with no token, the plugin probe is SKIPPED rather than minting one",
     byId(docReport.checks, "plugin").status === "warn" && byId(docReport.checks, "token").status === "warn");
-  ok("[doctor-cli] P4 #203: ok is false while the plugin check is a 'not checked' warn, not just on an outright fail",
+  ok("[doctor-cli] ok is false while the plugin check is a 'not checked' warn, not just on an outright fail",
     docReport.ok === false && /not checked/.test(byId(docReport.checks, "plugin").detail));
   ok("[doctor-cli] and it left no token file behind — doctor has no side effects", !fs.existsSync(path.join(docDir, "bridge-token")));
   const docHuman = runDoctor([]);
@@ -3168,13 +3168,13 @@ void (async () => {
   ok("[doctor-cli] unknown arguments are refused", runDoctor(["--nope"]).status === 1 && runDoctor(["--wait", "x"]).status === 1);
   ok("[doctor-cli] doctor --help exits 0", runDoctor(["--help"]).status === 0);
 
-  // ---------------------------------------------------------------- P5: figma-pull.js, mkdir (finding 13)
-  console.log("\nfigma-pull.js — mkdir moved after validation (finding 13):");
+  // ---------------------------------------------------------------- figma-pull.js, mkdir
+  console.log("\nfigma-pull.js — mkdir moved after validation:");
   {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mkdir-"));
     // Two clients "connected" via the daemon status file so figma-pull refuses ambiguously — before
-    // ever touching outDir — is the exact shape finding 13 reproduces (`dtwin nonexistent` with two
-    // clients connected). We don't need a real daemon: --list-clients against no bridge at all also
+    // ever touching outDir — is the exact shape of `dtwin nonexistent` with two
+    // clients connected. We don't need a real daemon: --list-clients against no bridge at all also
     // exercises the same "no mkdir before any client contact" code path, and is deterministic offline.
     // --timeout 1: with no plugin to wait for the command fails in ~1 s instead of idling until the 5 s cap kills it
     spawnSync(process.execPath, [cli, "nonexistent-outdir", "--timeout", "1"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
@@ -3182,8 +3182,8 @@ void (async () => {
       !fs.existsSync(path.join(dir, "nonexistent-outdir")));
   }
 
-  // ---------------------------------------------------------------- P4: figma-pull.js, outDir trap (findings 14/201)
-  console.log("\nfigma-pull.js — outDir-already-has-export/ warning (findings 14/201):");
+  // ---------------------------------------------------------------- figma-pull.js, outDir trap
+  console.log("\nfigma-pull.js — outDir-already-has-export/ warning:");
   {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-outdir-trap-"));
     fs.mkdirSync(path.join(dir, "design", "export"), { recursive: true });
@@ -3198,8 +3198,8 @@ void (async () => {
     ok("[outdir-trap] no warning when the outDir does not already contain export/", !/already contains/.test(r2.stderr));
   }
 
-  // ---------------------------------------------------------------- P5: server-core waitForIdentified (finding 216)
-  console.log("\nserver-core — waitForIdentified (finding 216, --client name race):");
+  // ---------------------------------------------------------------- server-core waitForIdentified
+  console.log("\nserver-core — waitForIdentified (--client name race):");
   {
     const port = nextPort++;
     const b = core.createBridge(port);
@@ -3210,7 +3210,7 @@ void (async () => {
   {
     const { bridge: b, client: ws1 } = await connectedBridge();
     // Not yet identified (no `hello` sent) — waitForIdentified must wait for it rather than return
-    // instantly, which is exactly the race finding 216 describes ("the plugin's identified message
+    // instantly, which is exactly the race ("the plugin's identified message
     // has not arrived yet").
     const before = must(b.listClients()[0], "freshly connected client row");
     ok("[identify] freshly connected client starts unidentified", before.identified === false);
@@ -3222,13 +3222,13 @@ void (async () => {
     b.close();
   }
 
-  // ---------------------------------------------------------------- P5 round 4: plugin version reporting (finding 327)
-  console.log("\nserver-core — plugin version reporting and staleness (finding 327):");
-  // P5 addendum, live-verified on this machine: a real daemon + a real Figma plugin, both still
-  // running pre-327 code, produced `pluginVersion: null, pluginStale: null` from `list clients --json`
+  // ---------------------------------------------------------------- plugin version reporting
+  console.log("\nserver-core — plugin version reporting and staleness:");
+  // Live-verified on this machine: a real daemon + a real Figma plugin, both still
+  // running older code, produced `pluginVersion: null, pluginStale: null` from `list clients --json`
   // and a plain ✓ from doctor — a MISSING version is exactly the one case guaranteed to predate this
   // feature, so it must warn, not pass silently as "nothing to compare".
-  ok("[version] pluginStalenessNote WARNS on no plugin version reported (a pre-327 bundle) — 'no version at all' is itself the stale signal, not a free pass",
+  ok("[version] pluginStalenessNote WARNS on no plugin version reported (an older bundle) — 'no version at all' is itself the stale signal, not a free pass",
     (() => { const n1 = core.pluginStalenessNote(null), n2 = core.pluginStalenessNote(undefined);
       return typeof n1 === "string" && /predates version reporting/.test(n1) && /restart `dtwin serve`/.test(n1) && n1 === n2; })());
   ok("[version] pluginStalenessNote is null for a plugin version equal to or newer than the bridge",
@@ -3254,13 +3254,13 @@ void (async () => {
     ws1.send(JSON.stringify({ type: "hello", instanceId: "noversion-1", file: "No Version File" }));
     await b.waitForIdentified(1000);
     const row = must(b.listClients()[0], "no-version client row");
-    ok("[version] a hello with no pluginVersion at all records null AND is treated as stale (this is the live bug this round fixes, not a crash)",
+    ok("[version] a hello with no pluginVersion at all records null AND is treated as stale (not a crash)",
       row.pluginVersion === null && typeof row.pluginStale === "string" && /predates version reporting/.test(row.pluginStale));
     ws1.close();
     b.close();
   }
 
-  console.log("\ndoctor — plugin staleness surfaces as a warn, distinct from the multi-client ok (finding 327):");
+  console.log("\ndoctor — plugin staleness surfaces as a warn, distinct from the multi-client ok:");
   ok("[doctor-version] one current-version client stays a plain ok",
     doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok");
   ok("[doctor-version] one STALE client is a warn, naming the reload step",
@@ -3289,12 +3289,12 @@ void (async () => {
       return stale === true;
     })());
 
-  // ---------------------------------------------------------------- P5 round 2: request() stall detector (findings 202/213)
-  console.log("\nserver-core — request() stall detector (findings 202/213, a client that never answers):");
+  // ---------------------------------------------------------------- request() stall detector
+  console.log("\nserver-core — request() stall detector (a client that never answers):");
   {
     // The fake client in this suite (per its own header comment) — connects, gets `hello`d, but never
-    // replies to a command and never sends a progress frame either. This is EXACTLY the shape
-    // findings 202/213 describe: a bridge that IS connected, sitting silent for the full timeout.
+    // replies to a command and never sends a progress frame either. This is EXACTLY the shape of a stall:
+    // a bridge that IS connected, sitting silent for the full timeout.
     const { bridge: b, client: ws1 } = await connectedBridge();
     ws1.send(JSON.stringify({ type: "hello", instanceId: "silent-1", file: "Silent File" }));
     await b.waitForIdentified(1000);
@@ -3375,7 +3375,7 @@ void (async () => {
     b.close();
   }
 
-  // ---------------------------------------------------------------- cancel frames (live finding 2026-09-25)
+  // ---------------------------------------------------------------- cancel frames
   // Whenever the bridge gives up on a request it already sent — the stall check, the per-command
   // timeout, close(), the caller's AbortSignal, or (through the daemon) the daemon's own client going
   // away — the plugin must be told with `{ type: "cancel", id }`, or it keeps walking the export for
@@ -3486,7 +3486,7 @@ void (async () => {
       // A settled request removes its abort listener (no leak on a long-lived signal), and the bridge
       // still answers the next request after the aborted ones.
       const ac3 = new AbortController();
-      // One listener while in flight (pre-change: none — the signal was never read), none once settled.
+      // One listener while in flight, none once settled.
       const pinging = b.request("ping", {}, 2000, undefined, undefined, undefined, ac3.signal);
       const listening = getEventListeners(ac3.signal, "abort").length;
       const pong = await pinging;
@@ -3558,7 +3558,7 @@ void (async () => {
         !!sent && sent.cmd === "exportFull" && cancelsFor(seen, sent.id).length === 1);
       // Queued: A in flight on one client (the fake plugin holds it), B queued behind it on another
       // that then disconnects. When A is answered, B must NOT be forwarded. Pre-change B went to the
-      // plugin as soon as A released the queue. No timer decides the order (group 16, H-1c): B's
+      // plugin as soon as A released the queue. No timer decides the order: B's
       // client ends its socket after writing the frame, so the daemon reads B, then its 'end' aborts B
       // (allowHalfOpen:false: the daemon's own FIN goes out after that listener ran) — the client's
       // 'close' therefore proves B is aborted before A is answered. A third request C is the fence:
@@ -3595,7 +3595,7 @@ void (async () => {
 
     // (f) the daemon's OWN queued-abandon check, with no server-core behind it. In (e) server-core's pre-send
     // `signal.aborted` check also stops B, so a daemon that forwarded an abandoned queued request still passed
-    // (group 16 review: daemon.ts `abandoned()` → false survived). This fake bridge ignores `signal` entirely:
+    // (a daemon.ts `abandoned()` that returns false survived). This fake bridge ignores `signal` entirely:
     // only the daemon can keep B from reaching it. A is held, B's client ends while B is queued, C is the FIFO fence.
     {
       const seenCmds: string[] = [];
@@ -3633,12 +3633,12 @@ void (async () => {
     }
   }
 
-  // ---------------------------------------------------------------- group 14: request ids, reply routing, stall wording, whoami connection
+  // ---------------------------------------------------------------- request ids, reply routing, stall wording, whoami connection
   // Live (session 14): a direct pull stalled out; the next request through a fresh daemon failed with
   // "export cancelled: … abandoned" — the plugin's late failure for the dead bridge's `r1` settled the
   // daemon's own `r1`. Ids are now unique per bridge, and a reply settles only from the socket the
   // request went to. Each check drives the REAL socket path with a fake plugin.
-  console.log("\nserver-core — per-bridge request ids, reply routing, stall wording, whoami connection (group 14):");
+  console.log("\nserver-core — per-bridge request ids, reply routing, stall wording, whoami connection:");
   {
     const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     const ABANDONED = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
@@ -3654,7 +3654,7 @@ void (async () => {
     const pingReply = (file: string) => ({ pong: true, page: "P", file });
     const settle = <T>(p: Promise<T>): Promise<{ v: T | null; err: Error | null }> => p.then((v) => ({ v, err: null }), (e: unknown) => ({ v: null, err: asErr(e) }));
 
-    // [ID-1] two bridges' first wire ids differ. Pre-change both were "r1".
+    // two bridges' first wire ids differ. Pre-change both were "r1".
     const A = await connectedBridge();
     const seenA = commandsOf(A.client);
     const aReq = settle(A.bridge.request("ping", {}, 3000));
@@ -3668,20 +3668,20 @@ void (async () => {
     const bReq = settle(B.bridge.request("ping", {}, 3000));
     await sleep(80);
     const idB = seenB[0]?.id;
-    ok("[ID-1] two bridges' first request ids differ (per-bridge nonce), and stay opaque strings starting \"r\"",
+    ok("two bridges' first request ids differ (per-bridge nonce), and stay opaque strings starting \"r\"",
       typeof idA === "string" && typeof idB === "string" && idA !== idB && /^r/.test(idA) && /^r/.test(idB));
-    // [ID-2] the plugin first posts the OLD bridge's failure (its run for idA finally threw), then answers
+    // the plugin first posts the OLD bridge's failure (its run for idA finally threw), then answers
     // the new request. Pre-change idA === idB, so the stale failure rejected the new request.
     B.client.send(JSON.stringify({ id: idA, ok: false, error: ABANDONED }));
     await sleep(50);
     B.client.send(JSON.stringify({ id: idB, ok: true, result: pingReply("for-B") }));
     const rB = await bReq;
-    ok("[ID-2] a reply carrying the previous bridge's id does not settle the new request — B resolves with its own reply",
+    ok("a reply carrying the previous bridge's id does not settle the new request — B resolves with its own reply",
       rB.err === null && rB.v?.file === "for-B");
     B.client.close();
     B.bridge.close();
 
-    // [ID-3] two clients; a reply for c1's request arriving on c2 is ignored, c1's own reply resolves it.
+    // two clients; a reply for c1's request arriving on c2 is ignored, c1's own reply resolves it.
     // Pre-change it settled from c2.
     {
       const { bridge: b, client: c1 } = await connectedBridge();
@@ -3696,25 +3696,25 @@ void (async () => {
       await sleep(80);
       c1.send(JSON.stringify({ id: sent?.id, ok: true, result: pingReply("from-c1") }));
       const r = await req;
-      ok("[ID-3] a reply for c1's request that arrives on c2 is ignored; c1's own reply resolves it",
+      ok("a reply for c1's request that arrives on c2 is ignored; c1's own reply resolves it",
         !!sent && r.err === null && r.v?.file === "from-c1");
-      // [WHO-1] the connection named by connId, not the first live one. Pre-change connectionInfo()
+      // the connection named by connId, not the first live one. Pre-change connectionInfo()
       // took no target and connectionFor did not exist.
       const rows = b.listClients();
       const row2 = rows.find((c) => c.connId === "c2");
       const viaArg = b.connectionInfo("c2");
       const pure = typeof core.connectionFor === "function" ? core.connectionFor(b.connectionInfo(), "c2") : null;
-      ok("[WHO-1] connectionFor(connectionInfo(), \"c2\") / connectionInfo(\"c2\") describe c2 (connId + its connectedAt), keeping the clients list",
+      ok("connectionFor(connectionInfo(), \"c2\") / connectionInfo(\"c2\") describe c2 (connId + its connectedAt), keeping the clients list",
         !!row2 && !!pure && pure.connId === "c2" && pure.connectedAt === row2.connectedAt && viaArg.connId === "c2" &&
         viaArg.connectedAt === row2.connectedAt && pure.clientsConnected === 2 && pure.clients.length === 2);
-      ok("[WHO-1] …no connId, or an unknown one, still describes the first connection",
+      ok("…no connId, or an unknown one, still describes the first connection",
         b.connectionInfo().connId === "c1" && b.connectionInfo("c9").connId === "c1");
       c1.close();
       c2.close();
       b.close();
     }
 
-    // [STALL-1] the stall fires only after connect + identify, so it says the plugin IS connected and
+    // the stall fires only after connect + identify, so it says the plugin IS connected and
     // busy — not that a reconnect is what takes the time. Pre-change: the "missing daemon" text.
     {
       const { bridge: b, client: ws1 } = await connectedBridge();
@@ -3723,13 +3723,13 @@ void (async () => {
       await sleep(20);
       let err: Error | undefined;
       try { await b.request("exportNode", { nodeId: "5:6" }, 10000, undefined, 300); } catch (e) { err = asErr(e); }
-      ok("[STALL-1] the stall text says the plugin is connected but sent nothing, names the node and `dtwin serve`, and does not blame a reconnect",
+      ok("the stall text says the plugin is connected but sent nothing, names the node and `dtwin serve`, and does not blame a reconnect",
         !!err && /the plugin is connected but sent nothing for 'exportNode' \(node 5:6\) in 0s/.test(err.message) &&
         /dtwin serve/.test(err.message) && !/reconnect/i.test(err.message));
       ws1.close();
       b.close();
     }
-    // [STALL-2] (control) a `start` frame — what the plugin relays at the run's run-begin — is life:
+    // (control) a `start` frame — what the plugin relays at the run's run-begin — is life:
     // the stall disarms and the reply at 600 ms resolves. Same for a `queued` frame.
     for (const phase of ["start", "queued"]) {
       const { bridge: b, client: ws1 } = await connectedBridge();
@@ -3742,13 +3742,13 @@ void (async () => {
       setTimeout(() => ws1.send(JSON.stringify({ type: "progress", phase })), 100);
       setTimeout(() => ws1.send(JSON.stringify({ id: seen[0]?.id, ok: true, result: pingReply("late") })), 600);
       const r = await req;
-      ok(`[STALL-2] a \`${phase}\` progress frame at 100 ms disarms the 300 ms stall; the reply at 600 ms resolves, and the tick reaches the listener`,
+      ok(`a \`${phase}\` progress frame at 100 ms disarms the 300 ms stall; the reply at 600 ms resolves, and the tick reaches the listener`,
         r.err === null && r.v?.file === "late" && ticks.length === 1 && ticks[0]?.phase === phase);
       ws1.close();
       b.close();
     }
 
-    // [L-8] (review 1) two requests in flight on ONE connection: the plugin executes A and queues B. A `start`
+    // two requests in flight on ONE connection: the plugin executes A and queues B. A `start`
     // / `queued` frame carrying a requestId reaches only that request (the executing A never hears it is
     // "queued"); an id-less frame (page ticks, an older plugin) still reaches both.
     {
@@ -3772,16 +3772,16 @@ void (async () => {
       await sleep(30);
       ws1.send(JSON.stringify({ id: idB, ok: true, result: pingReply("B") }));
       const [rA, rB] = [await pA, await pB];
-      ok(`[L-8] an id-carrying start/queued frame reaches only its own request; an id-less tick reaches both (A saw ${ticksA.join(",")} | B saw ${ticksB.join(",")})`,
+      ok(`an id-carrying start/queued frame reaches only its own request; an id-less tick reaches both (A saw ${ticksA.join(",")} | B saw ${ticksB.join(",")})`,
         typeof idA === "string" && typeof idB === "string" && rA.v?.file === "A" && rB.v?.file === "B" &&
         ticksA.join(",") === "start,pages" && ticksB.join(",") === "queued,pages,start");
       ws1.close();
       b.close();
     }
 
-    // [DSIG-1] the daemon client's optional trailing `signal` (slice C's MCP cancel via a daemon): an
-    // abort closes the request's socket, so the daemon abandons it on the wire. Pre-change the client
-    // had no signal: the call ran to its reply and the bridge's signal was never aborted.
+    // the daemon client's optional trailing `signal` (the MCP cancel via a daemon): an
+    // abort closes the request's socket, so the daemon abandons it on the wire. Without it, the client
+    // would let the call run to its reply and the bridge's signal would never abort.
     {
       const S_PORT = 19792; // a socket name only: the fake bridge binds no TCP port
       const row: ClientRow = { connId: "c1", file: "Sample App", fileKey: null, page: "Home", instanceId: "fig-s", connectedAt: 1, uptimeMs: 1, identified: true, pluginVersion: null, pluginStale: null };
@@ -3812,9 +3812,9 @@ void (async () => {
       const r = await pending;
       const elapsed = Date.now() - t0;
       await sleep(150); // the daemon sees the socket close and aborts the bridge request
-      ok("[DSIG-1] daemon client: aborting the signal rejects at once with \"request aborted by the caller\"",
+      ok("daemon client: aborting the signal rejects at once with \"request aborted by the caller\"",
         r.v === null && r.err?.message === "request aborted by the caller" && elapsed < 1000);
-      ok("[DSIG-1] …and the daemon abandons the in-flight bridge request (its signal is aborted: the plugin gets a cancel frame)",
+      ok("…and the daemon abandons the in-flight bridge request (its signal is aborted: the plugin gets a cancel frame)",
         bridgeSaw.join("|") === "got:ping|aborted:the daemon's client disconnected before the reply");
       // An Error reason of the caller's own is the rejection; an already-aborted signal sends nothing.
       const ac2 = new AbortController();
@@ -3827,30 +3827,30 @@ void (async () => {
       const before = bridgeSaw.length;
       const r3 = await settle(scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, pre.signal));
       await sleep(100);
-      ok("[DSIG-1] …an Error reason passes through; an already-aborted signal rejects \"request aborted before it was sent\" and forwards nothing",
+      ok("…an Error reason passes through; an already-aborted signal rejects \"request aborted before it was sent\" and forwards nothing",
         r2.err?.message === "caller went away" && r3.err?.message === "request aborted before it was sent" && bridgeSaw.length === before);
       // A request that settles normally leaves no abort listener behind on a long-lived signal.
       const ac4 = new AbortController();
       const p4 = scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, ac4.signal);
       const listening = getEventListeners(ac4.signal, "abort").length;
       const r4 = await p4;
-      ok("[DSIG-1] …a request that settles normally answers and removes its abort listener",
+      ok("…a request that settles normally answers and removes its abort listener",
         r4.file === "answered" && listening === 1 && getEventListeners(ac4.signal, "abort").length === 0);
       shutdown();
     }
   }
 
-  // ---------------------------------------------------------------- P5: write-out.js asset clobbering (findings 23/104/124/125/28/30)
-  console.log("\nwrite-out.js — asset writes are refuse-or-version, never clobber (findings 23/104/124/125):");
+  // ---------------------------------------------------------------- write-out.js asset clobbering
+  console.log("\nwrite-out.js — asset writes are refuse-or-version, never clobber:");
   const writeOut = await import("../bridge/src/write-out.ts");
   {
     // Two Figma layers named `angle-left` and `Angle-left` — different content, different screens'
     // pulls, into the SAME shared assets/ dir. On a case-insensitive filesystem (macOS default) they
     // are one path; the fix must never let the second call's fs.writeFileSync target write over the
-    // first's bytes (finding 124).
+    // first's bytes.
     // The fixtures are stored as variant-a.svg/variant-b.svg — never AS "angle-left.svg"/"Angle-left.svg"
     // on disk, because a case-insensitive filesystem (this repo's own dev machines included) collapses
-    // that pair into one file/one inode before the test even runs, which is finding 124 itself. The
+    // that pair into one file/one inode before the test even runs, which is the very collision being tested. The
     // colliding names are only ever given to write-out.js as `a.file` — as REAL Figma exports arrive,
     // never as files this test itself created.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-assets-"));
@@ -3873,16 +3873,16 @@ void (async () => {
     ok("[case-fold] an identical re-pull reuses the existing file rather than duplicating it",
       fs.readdirSync(path.join(dir, "assets")).length === 2);
   }
-  // ---------------------------------------------------------------- P5 round 3: content dedup regardless of NAME (findings 24/25/27)
-  console.log("\nwrite-out.js — writeAssets dedups by CONTENT, not just by name (P5 round 3, findings 24/25/27):");
+  // ---------------------------------------------------------------- content dedup regardless of NAME
+  console.log("\nwrite-out.js — writeAssets dedups by CONTENT, not just by name:");
   {
-    // A live three-screen pull with the round-2 fix already in place still produced 4 Ellipse_2327*
-    // files for one icon: the round-2 reuse path only checked "is anything already written under THIS
-    // exact name" — it had no way to see that a NEW name's bytes were already on disk under a
+    // A live three-screen pull produced 4 Ellipse_2327*
+    // files for one icon when the reuse path only checked "is anything already written under THIS
+    // exact name" and could not see that a NEW name's bytes were already on disk under a
     // DIFFERENT, earlier name (an earlier screen's pull, or a same-run sibling the plugin named
     // differently). This is the exact shape: write "Ellipse_2327.svg" first, then hand writeAssets the
     // SAME bytes under the name "Ellipse_2327-e9af26.svg" (what a real duplicate-content pull looks
-    // like on disk before this fix).
+    // like on disk).
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-content-dedup-"));
     const circle = '<svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="#fff"/></svg>';
     const a1 = asset({ id: "n1", file: "assets/Ellipse_2327.svg", text: circle, hash: "aaaaaaaa-1" });
@@ -3931,7 +3931,7 @@ void (async () => {
       fs.readdirSync(path.join(dir, "assets")).length === 2);
   }
   {
-    // Live evidence from a real pull (round 3): a near-zero coordinate came back as
+    // Live evidence from a real pull: a near-zero coordinate came back as
     // `2.09808e-05` in one export and `-0.000406265` in another, for what is otherwise the identical
     // path — the old regex (`-?\d+\.\d+`, no exponent) only replaced the `2.09808` mantissa, leaving a
     // corrupted `2.1e-05` fragment that could never match the plain-decimal form's normalised `0.0`.
@@ -3946,7 +3946,7 @@ void (async () => {
       fs.readdirSync(path.join(dir, "assets")).length === 1 && a2.file === a1.file);
   }
   {
-    // Finding 28: the whole-frame reference PNG must not inflate the screen's shippable asset totals.
+    // the whole-frame reference PNG must not inflate the screen's shippable asset totals.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-refasset-"));
     fs.mkdirSync(path.join(dir, "pages", "P"), { recursive: true });
     const icon = asset({ id: "i1", file: "assets/icon.svg", text: "<svg></svg>", hash: "cccccccc-1" });
@@ -3958,12 +3958,12 @@ void (async () => {
     ok("[ref-asset] the reference PNG still gets a manifest row, under `reference`", Array.isArray(doc.reference) && doc.reference.length === 1);
   }
   {
-    // Finding 30: a screen with geometry fallbacks is flagged at pull time. D63 (group 13): every fallback
+    // a screen with geometry fallbacks is flagged at pull time. Every fallback
     // left after the plugin stopped exporting hidden graphics is a real degraded vector, so ANY count warns —
     // the old 10 % threshold (and its "a low ratio produces nothing" case) is gone on purpose.
     ok("[geometry-warn] a 40% geometry-fallback ratio produces a warning",
       /^warn {2}40 of 100 node\(s\) fell back to raw geometry/.test(writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 40 }) ?? ""));
-    ok("[geometry-warn] a low ratio warns too (D63: every fallback)",
+    ok("[geometry-warn] a low ratio warns too (every fallback)",
       /^warn {2}2 of 100 node\(s\) fell back to raw geometry/.test(writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 2 }) ?? ""));
     ok("[geometry-warn] no fallback produces nothing",
       writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 0 }) === null && writeOut.assetsGeometryWarning({ nodes: 100 }) === null);
@@ -3987,8 +3987,8 @@ void (async () => {
       lines.some((l) => /assetsGeometry|fell back to raw geometry/.test(l)));
   }
 
-  // ---------------------------------------------------------------- P5: design-diff.js asset-hash tolerance (findings 25/222)
-  console.log("\ndesign-diff.js — SVG re-export noise tolerance (findings 25/222), on the REAL arrow-down*.svg fixtures:");
+  // ---------------------------------------------------------------- design-diff.js asset-hash tolerance
+  console.log("\ndesign-diff.js — SVG re-export noise tolerance, on the REAL arrow-down*.svg fixtures:");
   {
     const diffMod = await import("../design-to-code/design-diff.ts");
     const dirFix = path.join(import.meta.dirname, "fixtures", "livetest3", "arrow-down");
@@ -4016,7 +4016,7 @@ void (async () => {
       return prev;
     };
     const now3ea6be = setup(read("arrow-down-3ea6be.svg"));
-    // 3ea6be and ccfd6b are the SAME icon (finding 25's own example, ≤0.002px drift) — must NOT be
+    // 3ea6be and ccfd6b are the SAME icon (≤0.002px drift) — must NOT be
     // reported as redrawn.
     const prevSame = prevFor(read("arrow-down-ccfd6b.svg"));
     const redrawnSame = diffMod.redrawnAssets(now3ea6be.file, docFor(), prevSame, now3ea6be.root);
@@ -4035,7 +4035,7 @@ void (async () => {
     ok("[svg-tolerance] a byte-identical re-pull reports zero redrawn assets", redrawnIdentical.size === 0);
   }
 
-  // ---------- DT-25 / F-35 / F-08 / F-118: the tree names the asset files actually written ----------
+  // ---------- the tree names the asset files actually written ----------
   // writeAssets reuses a byte-identical file already on disk under another name and version-suffixes a
   // same-name (or same-name-but-case) different file. The screen JSON used to be written BEFORE that, with
   // the plugin's own names, so nodes pointed at files never written — or, on a case-insensitive disk, at a
@@ -4099,34 +4099,34 @@ void (async () => {
     const ptrs = pointers(written.nodes);
     const manifestFiles = JSON.parse(fs.readFileSync(path.join(ddir, "pages", "Page_A", "Screen_A__9_1.assets.json"), "utf8")) as { files: Array<{ file: string }>; reference?: Array<{ file: string }> };
     const listed = new Set([...manifestFiles.files, ...(manifestFiles.reference || [])].map((f) => f.file));
-    ok("[DT-25] every asset/reference pointer in the written screen JSON names a file on disk (exact case)",
+    ok("every asset/reference pointer in the written screen JSON names a file on disk (exact case)",
       ptrs.length === 3 && ptrs.every((p) => exactExists(ddir, p)));
-    ok("[DT-25] …and the same file .assets.json lists", ptrs.every((p) => listed.has(p)));
+    ok("…and the same file .assets.json lists", ptrs.every((p) => listed.has(p)));
     const kids = written.nodes[0]?.children ?? [];
-    ok("[DT-25] a content-identical asset points at the file already on disk (Dot.svg), not the plugin's suffixed name",
+    ok("a content-identical asset points at the file already on disk (Dot.svg), not the plugin's suffixed name",
       kids[1]?.asset === "assets/Dot.svg");
-    ok("[F-35] a same-name-but-case different glyph gets its own file, and the node points at IT — never at the lower-case chevron",
+    ok("a same-name-but-case different glyph gets its own file, and the node points at IT — never at the lower-case chevron",
       typeof kids[0]?.asset === "string" && kids[0].asset !== "assets/Chevron-left.svg" && kids[0].asset !== "assets/chevron-left.svg" &&
       fs.readFileSync(path.join(ddir, kids[0].asset), "utf8").includes("M10 0L0 9L10 18"));
     const rootRow = must((JSON.parse(fs.readFileSync(path.join(ddir, "pages", "index.json"), "utf8")) as PagesRootIndex).layers?.[0], "root row");
     const refFile = must(rootRow.reference, "rootRow.reference");
     const refPng = fs.readFileSync(path.join(ddir, refFile));
-    ok("[F-08] the index row's reference is the full-size render this pull wrote, not the thumbnail that held the plain name",
+    ok("the index row's reference is the full-size render this pull wrote, not the thumbnail that held the plain name",
       refFile !== "assets/9_1_ref.png" && refPng.readUInt32BE(16) === 284 && written.nodes[0]?.reference === refFile);
-    ok("[F-118] the index row records the reference's scale and its offset from the box (render bounds include the shadow)",
+    ok("the index row records the reference's scale and its offset from the box (render bounds include the shadow)",
       rootRow.referenceScale === 2 && rootRow.referenceOffset?.x === -21 && rootRow.referenceOffset?.y === -1);
-    ok("[DT-25] the pull says it rewired pointers, and reports no dangling pointer", logged.some((m) => /rewired 3 asset pointer/.test(m)) && !logged.some((m) => /not on disk/.test(m)));
+    ok("the pull says it rewired pointers, and reports no dangling pointer", logged.some((m) => /rewired 3 asset pointer/.test(m)) && !logged.some((m) => /not on disk/.test(m)));
 
     // A discovery thumbnail at an explicit scale never takes the reference slot.
     const sh = fs.mkdtempSync(path.join(os.tmpdir(), "write-shot-"));
     const shot = dt.writeScreenshot(sh, { id: "9:1", name: "Screen A", type: "FRAME", reference: "assets/9_1_ref.png", manifest: manifest({ nodes: 1 }),
       assets: [{ id: "9:1:ref", name: "Screen A (reference)", format: "png", file: "9_1_ref.png", base64: png(90, 77, 3).toString("base64"), kind: "reference" }] }, undefined, { scale: 0.25 });
-    ok("[F-08] a screenshot at an explicit --scale is written as <id>_shot@<scale>x.png and leaves <id>_ref.png free",
+    ok("a screenshot at an explicit --scale is written as <id>_shot@<scale>x.png and leaves <id>_ref.png free",
       shot.reference === "assets/9_1_shot@0.25x.png" && exactExists(sh, "assets/9_1_shot@0.25x.png") && !exactExists(sh, "assets/9_1_ref.png"));
     const sh2 = fs.mkdtempSync(path.join(os.tmpdir(), "write-shot2-"));
     const shot2 = dt.writeScreenshot(sh2, { id: "9:1", name: "Screen A", type: "FRAME", reference: "assets/9_1_ref.png", manifest: manifest({ nodes: 1 }),
       assets: [{ id: "9:1:ref", name: "Screen A (reference)", format: "png", file: "9_1_ref.png", base64: png(284, 104, 4).toString("base64"), kind: "reference" }] }, undefined);
-    ok("[F-08] a default-scale screenshot keeps the shared <id>_ref.png name (a later pull reuses the same render)", shot2.reference === "assets/9_1_ref.png");
+    ok("a default-scale screenshot keeps the shared <id>_ref.png name (a later pull reuses the same render)", shot2.reference === "assets/9_1_ref.png");
 
     // A page walk: the layer files are written after the assets, with rewired pointers too.
     const pw = fs.mkdtempSync(path.join(os.tmpdir(), "write-walk-"));
@@ -4142,7 +4142,7 @@ void (async () => {
     }, undefined);
     const walkFiles = fs.readdirSync(path.join(pw, "pages"), { recursive: true }).map(String).filter((f) => f.endsWith(".json") && !f.endsWith("index.json"));
     const walkPtrs = walkFiles.flatMap((f) => pointers(JSON.parse(fs.readFileSync(path.join(pw, "pages", f), "utf8")) as unknown));
-    ok("[DT-25] a page walk's layer files also point at the file actually on disk", walkPtrs.length === 1 && walkPtrs[0] === "assets/Dot.svg" && exactExists(pw, "assets/Dot.svg"));
+    ok("a page walk's layer files also point at the file actually on disk", walkPtrs.length === 1 && walkPtrs[0] === "assets/Dot.svg" && exactExists(pw, "assets/Dot.svg"));
     // Two frames that render identically keep their OWN reference files (the plugin never dedups a
     // reference; one `reference` naming another frame's PNG is the confusion it exists to prevent).
     const twin = fs.mkdtempSync(path.join(os.tmpdir(), "write-twin-refs-"));
@@ -4156,10 +4156,10 @@ void (async () => {
       }), undefined);
     }
     const twinRows = (JSON.parse(fs.readFileSync(path.join(twin, "pages", "index.json"), "utf8")) as PagesRootIndex).layers ?? [];
-    ok("[DT-25] two identical-looking frames keep their own <id>_ref.png — a reference is never shared across frames",
+    ok("two identical-looking frames keep their own <id>_ref.png — a reference is never shared across frames",
       twinRows.length === 2 && twinRows.some((r) => r.reference === "assets/9_5_ref.png") && twinRows.some((r) => r.reference === "assets/9_6_ref.png") &&
       exactExists(twin, "assets/9_5_ref.png") && exactExists(twin, "assets/9_6_ref.png"));
-    ok("[F-08] a default-scale screenshot followed by the pull's identical render reuses the one file (no suffixed copy)", (() => {
+    ok("a default-scale screenshot followed by the pull's identical render reuses the one file (no suffixed copy)", (() => {
       const d = fs.mkdtempSync(path.join(os.tmpdir(), "write-shot-then-pull-"));
       const bytes = png(284, 104, 9).toString("base64");
       dt.writeScreenshot(d, { id: "9:7", name: "Screen B", type: "FRAME", reference: "assets/9_7_ref.png", manifest: manifest({ nodes: 1 }),
@@ -4172,7 +4172,7 @@ void (async () => {
       return files.length === 1 && files[0] === "9_7_ref.png";
     })());
     // Re-pulls over a reference name that holds OTHER bytes (an old thumbnail): the first pull writes one
-    // suffixed copy, every later pull of the same render reuses it — never `_1`, `_2`, … (review of this fix).
+    // suffixed copy, every later pull of the same render reuses it — never `_1`, `_2`, ….
     const again = fs.mkdtempSync(path.join(os.tmpdir(), "write-repull-"));
     fs.mkdirSync(path.join(again, "assets"));
     fs.writeFileSync(path.join(again, "assets", "9_9_ref.png"), png(90, 77, 11));
@@ -4188,7 +4188,7 @@ void (async () => {
     }, undefined);
     walkOnce(); walkOnce();
     const refFiles = fs.readdirSync(path.join(again, "assets")).filter((f) => f.startsWith("9_9_ref")).sort();
-    ok("[DT-25] three pulls and two page walks of an unchanged frame over an old thumbnail leave exactly ONE extra reference file",
+    ok("three pulls and two page walks of an unchanged frame over an old thumbnail leave exactly ONE extra reference file",
       refFiles.length === 2 && refFiles.includes("9_9_ref.png") && refFiles.some((f) => /^9_9_ref-[0-9a-z]{6}\.png$/.test(f)));
     const shotsDir = fs.mkdtempSync(path.join(os.tmpdir(), "write-reshoot-"));
     fs.mkdirSync(path.join(shotsDir, "assets"));
@@ -4197,12 +4197,12 @@ void (async () => {
       assets: [{ id: "9:9:ref", name: "Screen C (reference)", format: "png" as const, file: "9_9_ref.png", base64: png(36, 13, 14).toString("base64"), kind: "reference" as const }] };
     dt.writeScreenshot(shotsDir, structuredClone(thumb), undefined, { scale: 0.25 });
     dt.writeScreenshot(shotsDir, structuredClone(thumb), undefined, { scale: 0.25 });
-    ok("[F-08] re-shooting the same thumbnail over a stale one adds one file, not one per shot",
+    ok("re-shooting the same thumbnail over a stale one adds one file, not one per shot",
       fs.readdirSync(path.join(shotsDir, "assets")).length === 2);
     for (const d of [ddir, sh, sh2, pw, twin, again, shotsDir]) fs.rmSync(d, { recursive: true, force: true });
   }
 
-  // ---------------------------------------------------------------- G20 (D132, D133): write-out
+  // ---------------------------------------------------------------- write-out
   // RP-*: assertInsideCwd accepts a path that is inside the server's cwd once symlinks are resolved (macOS
   // /tmp → /private/tmp: getcwd() is resolved, a path built from PWD or os.tmpdir() is not), and still
   // refuses one whose REAL location is outside. Each test makes its own symlink, so it fails before the fix
@@ -4225,36 +4225,36 @@ void (async () => {
       process.chdir(proj);
       let got: string | null = null;
       const err = throwsMsg(() => { got = W.assertInsideCwd(path.join(alias, "design")); });
-      ok("[G20 RP-1] an outDir reaching the cwd through a symlink is accepted (inside after realpath)", err === null);
-      ok("[G20 RP-1] and the returned path is the lexical one (no `..` steering after the link)", got === path.join(alias, "design"));
-      ok("[G20 RP-2] a nested not-yet-existing path under the alias is accepted (realpath of the existing prefix)",
+      ok("an outDir reaching the cwd through a symlink is accepted (inside after realpath)", err === null);
+      ok("and the returned path is the lexical one (no `..` steering after the link)", got === path.join(alias, "design"));
+      ok("a nested not-yet-existing path under the alias is accepted (realpath of the existing prefix)",
         throwsMsg(() => W.assertInsideCwd(path.join(alias, "a", "b", "c"))) === null && !fs.existsSync(path.join(proj, "a")));
-      ok("[G20 RP-2] `../x` is still refused", throwsMsg(() => W.assertInsideCwd("../x")) !== null);
-      ok("[G20 RP-2] `/` is still refused", throwsMsg(() => W.assertInsideCwd("/")) !== null);
+      ok("`../x` is still refused", throwsMsg(() => W.assertInsideCwd("../x")) !== null);
+      ok("`/` is still refused", throwsMsg(() => W.assertInsideCwd("/")) !== null);
       const esc = throwsMsg(() => W.assertInsideCwd(path.join(alias2, "x")));
-      ok("[G20 RP-2] a symlink to a directory OUTSIDE the cwd is refused", esc !== null);
-      ok("[G20 RP-2] and the refusal names the real path it resolved to",
+      ok("a symlink to a directory OUTSIDE the cwd is refused", esc !== null);
+      ok("and the refusal names the real path it resolved to",
         esc !== null && esc.includes("real path " + path.join(elsewhere, "x")));
-      ok("[G20 RP-2] a symlink escape with a non-existent tail is refused too",
+      ok("a symlink escape with a non-existent tail is refused too",
         throwsMsg(() => W.assertInsideCwd(path.join(alias2, "p", "q"))) !== null);
-      ok("[G20 RP-2] `<alias>/../alias2/x` is refused (resolved lexically first)",
+      ok("`<alias>/../alias2/x` is refused (resolved lexically first)",
         throwsMsg(() => W.assertInsideCwd(path.join(alias, "..", "alias2", "x"))) !== null);
-      ok("[G20 RP-2] the argument name still leads the message",
+      ok("the argument name still leads the message",
         (throwsMsg(() => W.assertInsideCwd("../x", "exportDir")) ?? "").startsWith("exportDir must stay inside"));
     } finally {
       process.chdir(was);
     }
-    // RP-3: a server started in the filesystem root (some MCP hosts launch stdio servers in `/`) accepts no
+    // a server started in the filesystem root (some MCP hosts launch stdio servers in `/`) accepts no
     // path below it — every path is lexically "inside" `/`, so the ordinary rule would accept them all.
     try {
       const fsRoot = path.parse(process.cwd()).root;
       process.chdir(fsRoot);
       const absElsewhere = throwsMsg(() => W.assertInsideCwd(path.join(elsewhere, "x")));
-      ok("[G20 RP-3] cwd = the filesystem root → an absolute outDir anywhere is refused", absElsewhere !== null);
-      ok("[G20 RP-3] …and so is a relative map path (etc/hosts)", throwsMsg(() => W.assertInsideCwd(path.join("etc", "hosts"), "map")) !== null);
-      ok("[G20 RP-3] …through a symlink too (realpath does not reopen it)", throwsMsg(() => W.assertInsideCwd(path.join(alias, "design"))) !== null);
-      ok("[G20 RP-3] …the root itself is still accepted, as it always was", throwsMsg(() => W.assertInsideCwd(fsRoot)) === null);
-      ok("[G20 RP-3] …and the refusal says to start the server in the project",
+      ok("cwd = the filesystem root → an absolute outDir anywhere is refused", absElsewhere !== null);
+      ok("…and so is a relative map path (etc/hosts)", throwsMsg(() => W.assertInsideCwd(path.join("etc", "hosts"), "map")) !== null);
+      ok("…through a symlink too (realpath does not reopen it)", throwsMsg(() => W.assertInsideCwd(path.join(alias, "design"))) !== null);
+      ok("…the root itself is still accepted, as it always was", throwsMsg(() => W.assertInsideCwd(fsRoot)) === null);
+      ok("…and the refusal says to start the server in the project",
         absElsewhere !== null && absElsewhere.includes("started in the filesystem root"));
     } finally {
       process.chdir(was);
@@ -4292,38 +4292,38 @@ void (async () => {
     const wroteOf = (r: { wrote: object }): Wrote => {
       const raw: unknown = "prevKept" in r.wrote ? r.wrote.prevKept : undefined;
       if (raw === undefined) return {};
-      if (!isStringArray(raw)) { ok(`[G20 PREV] wrote.prevKept is a string[] when present (got ${JSON.stringify(raw)})`, false); return {}; }
+      if (!isStringArray(raw)) { ok(`wrote.prevKept is a string[] when present (got ${JSON.stringify(raw)})`, false); return {}; }
       return { prevKept: raw };
     };
     const first = wroteOf(W.writeExport(out, fullReply("2026-10-01T00:00:00.000Z"), undefined, { keepPrev: true }));
-    ok("[G20 PREV-1] a first spill into an empty dir keeps nothing (no field, no .prev)", first.prevKept === undefined && prevs(out).length === 0);
+    ok("a first spill into an empty dir keeps nothing (no field, no .prev)", first.prevKept === undefined && prevs(out).length === 0);
     const layerFile = walk(path.join(out, "pages")).find((f) => f.endsWith(".json") && !f.endsWith("index.json") && fs.readFileSync(f, "utf8").includes("\"Panel\""));
     const dsFile = walk(path.join(out, "design-system")).find((f) => f.endsWith(".json") && fs.readFileSync(f, "utf8").includes("color/bg"));
-    ok("[G20 PREV-1] fixture: the layer file and a design-system file exist", !!layerFile && !!dsFile);
+    ok("fixture: the layer file and a design-system file exist", !!layerFile && !!dsFile);
     const editedLayer = '{"hand":"edited layer"}';
     const editedDs = '{"hand":"edited tokens"}';
     if (layerFile) fs.writeFileSync(layerFile, editedLayer);
     if (dsFile) fs.writeFileSync(dsFile, editedDs);
     const second = wroteOf(W.writeExport(out, fullReply("2026-10-02T00:00:00.000Z"), undefined, { keepPrev: true }));
     const want = [layerFile + ".prev", dsFile + ".prev"].sort();
-    ok("[G20 PREV-1] exactly the two changed files get a .prev, and wrote.prevKept lists them",
+    ok("exactly the two changed files get a .prev, and wrote.prevKept lists them",
       JSON.stringify(prevs(out)) === JSON.stringify(want) && JSON.stringify([...(second.prevKept ?? [])].sort()) === JSON.stringify(want));
-    ok("[G20 PREV-1] each .prev holds the text the spill replaced",
+    ok("each .prev holds the text the spill replaced",
       readOr(layerFile + ".prev") === editedLayer && readOr(dsFile + ".prev") === editedDs);
-    ok("[G20 PREV-1] prevKept paths are absolute", (second.prevKept ?? []).every((p) => path.isAbsolute(p)));
+    ok("prevKept paths are absolute", (second.prevKept ?? []).every((p) => path.isAbsolute(p)));
     const third = wroteOf(W.writeExport(out, fullReply("2026-10-03T00:00:00.000Z"), undefined, { keepPrev: true }));
-    ok("[G20 PREV-2] the same design re-spilled with a fresh exportedAt keeps nothing new",
+    ok("the same design re-spilled with a fresh exportedAt keeps nothing new",
       third.prevKept === undefined && JSON.stringify(prevs(out)) === JSON.stringify(want));
-    ok("[G20 PREV-2] and the earlier .prev files are untouched",
+    ok("and the earlier .prev files are untouched",
       readOr(layerFile + ".prev") === editedLayer && readOr(dsFile + ".prev") === editedDs);
     const anyDispatch = wroteOf(W.writeAny(out, fullReply("2026-10-04T00:00:00.000Z", "Stop"), undefined, { keepPrev: true }));
-    ok("[G20 PREV-2] writeAny forwards keepPrev to a full export (a real design change → its layer file kept)",
+    ok("writeAny forwards keepPrev to a full export (a real design change → its layer file kept)",
       (anyDispatch.prevKept ?? []).includes(layerFile + ".prev") && (readOr(layerFile + ".prev") ?? "").includes("\"Go\""));
     for (const f of prevs(out)) fs.rmSync(f);
     if (layerFile) fs.writeFileSync(layerFile, editedLayer);
     const cli = wroteOf(W.writeExport(out, fullReply("2026-10-05T00:00:00.000Z"), undefined));
     const cliAny = wroteOf(W.writeAny(out, fullReply("2026-10-06T00:00:00.000Z", "Stop"), undefined, {}));
-    ok("[G20 PREV-2] keepPrev omitted (the CLI path) keeps no .prev and reports no prevKept",
+    ok("keepPrev omitted (the CLI path) keeps no .prev and reports no prevKept",
       prevs(out).length === 0 && cli.prevKept === undefined && cliAny.prevKept === undefined);
 
     // Libraries: the root index carries a fresh generatedAt and per-row exportedAt on every write.
@@ -4338,10 +4338,10 @@ void (async () => {
     W.writeExport(lout, libReply("2026-10-01T00:00:00.000Z", "#000000"), undefined, { keepPrev: true });
     await new Promise((r) => setTimeout(r, 5)); // a different generatedAt
     const lib2 = wroteOf(W.writeExport(lout, libReply("2026-10-02T00:00:00.000Z", "#000000"), undefined, { keepPrev: true }));
-    ok("[G20 PREV-2] an unchanged library re-spilled (fresh generatedAt + row exportedAt) keeps no .prev",
+    ok("an unchanged library re-spilled (fresh generatedAt + row exportedAt) keeps no .prev",
       lib2.prevKept === undefined && prevs(lout).length === 0);
     const lib3 = wroteOf(W.writeExport(lout, libReply("2026-10-03T00:00:00.000Z", "#111111"), undefined, { keepPrev: true }));
-    ok("[G20 PREV-1] a changed library variable keeps the replaced library file(s), not the unchanged root index",
+    ok("a changed library variable keeps the replaced library file(s), not the unchanged root index",
       (lib3.prevKept ?? []).length > 0 && prevs(lout).length === (lib3.prevKept ?? []).length &&
       !prevs(lout).some((f) => f === path.join(lout, "libraries", "index.json.prev")));
     for (const d of [proj, elsewhere, links, pdir]) fs.rmSync(d, { recursive: true, force: true });
