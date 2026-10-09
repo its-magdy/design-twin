@@ -305,28 +305,71 @@ function joinNegativeValues(argv, options) {
   }
   return out;
 }
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
 function cliParse(tool, argv, options, usage, exitCode, parse) {
   const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
   try {
-    return parse(args);
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
   } catch (e) {
     const code = errCode(e);
     if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-      const unknown = [...new Set(tokens.flatMap((t) => t.kind === "option" && !(t.name in options) ? [t.rawName] : []))];
-      console.error(`${tool}: unknown flag ${unknown.join(", ")}
-${usage}`);
+      failure = unknownFlags();
     } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
       const msg = e instanceof Error ? e.message : "";
-      const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
-      console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
-${usage}`);
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
     } else {
-      console.error(`${tool}: ${errMsg(e)}
-${usage}`);
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
     }
-    process.exit(exitCode);
   }
+  console.error(failure);
+  process.exit(exitCode);
 }
 
 // design-to-code/catalog-input.ts
