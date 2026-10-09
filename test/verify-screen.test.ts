@@ -204,9 +204,8 @@ console.log("verify-screen — a screen can match every pixel and still be a dea
   const exp = buildExpectation([doc([
     { type: "INSTANCE", id: "3:1", name: "Date", mainComponent: { name: "Date range", setName: "Date range", setKey: "k1" } },
     { type: "INSTANCE", id: "3:2", name: "View", mainComponent: { name: "Segmented Control", setName: "Segmented Control", setKey: "k2" } },
-    // a legacy reaction (object trigger, singular action) — still read
-    malformed<NodeInput>({ type: "INSTANCE", id: "3:3", name: "Add", mainComponent: { name: "Button", setName: "Button", setKey: "k3" },
-      reactions: [{ trigger: { type: "on_click" }, action: { type: "navigate", navigation: "overlay", destinationId: "20170:132666" } }] }),
+    { type: "INSTANCE", id: "3:3", name: "Add", mainComponent: { name: "Button", setName: "Button", setKey: "k3" },
+      reactions: [{ trigger: "on_click", actions: [{ type: "node", navigation: "overlay", destinationId: "20170:132666" }] }] },
   ])]);
   ok("[cover] the expectation carries every instance and every designed reaction",
     exp.counts.instances === 3 && exp.counts.interactions === 1);
@@ -238,6 +237,29 @@ console.log("verify-screen — a screen can match every pixel and still be a dea
       const interaction0 = must(r.interactions[0], "r.interactions[0]");
       return r.verdict === "fail" && interaction0.result === "fail" && /opened nothing/.test(must(interaction0.detail, "r.interactions[0].detail"));
     })());
+}
+
+// ---------------------------------------------------------------- reaction rows
+console.log("verify-screen — a reaction is read as the producer writes it:");
+{
+  const exp = buildExpectation([doc([
+    malformed<NodeInput>({ type: "FRAME", id: "5:1", name: "Open", reactions: [
+      { trigger: "ON_HOVER", actions: [{ type: "node", navigation: "overlay", destinationId: "9:9" }, { type: "back" }] },
+      { actions: [{ navigation: "navigate", destinationId: "9:8" }] },
+      { trigger: "on_press", actions: [{}, { destination: "nowhere" }] },
+    ] }),
+    // the singular `action` and an object trigger are not the export's shape: no interaction
+    malformed<NodeInput>({ type: "FRAME", id: "5:2", name: "Old", reactions: [{ trigger: { type: "on_click" }, action: { type: "node", navigation: "overlay", destinationId: "9:7" } }] }),
+    malformed<NodeInput>({ type: "FRAME", id: "5:3", name: "Gone", hidden: true, reactions: [
+      { trigger: "on_click", actions: [{ type: "node", destinationId: "9:6" }, {}, { navigation: "swap" }] }, { trigger: "on_hover" }] }),
+  ])]);
+  const rows = exp.interactions.map((i) => `${i.nodeId}|${i.trigger}|${i.action}|${i.destinationId ?? ""}`);
+  ok("[reaction] one row per action that names a type or a navigation; the trigger is lowercased",
+    rows.join(" ") === "5:1|on_hover|overlay|9:9 5:1|on_hover|back| 5:1|on_click|navigate|9:8");
+  ok("[reaction] a reaction with no trigger reads as on_click", exp.interactions.some((i) => i.destinationId === "9:8" && i.trigger === "on_click"));
+  ok("[reaction] a singular `action` / object trigger gives no row", !exp.interactions.some((i) => i.nodeId === "5:2"));
+  ok("[reaction] a hidden layer's reactions are counted by the same rule (2 actions name something), never listed",
+    exp.counts.hidden.interactionsSkipped === 2 && !exp.interactions.some((i) => i.nodeId === "5:3"));
 }
 
 // ---------------------------------------------------------------- a pass must never be a silence

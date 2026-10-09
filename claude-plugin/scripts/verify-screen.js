@@ -1675,6 +1675,8 @@ function checkable(spec) {
   return ["text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderRadius", "radiusCorners", "gap", "padding", "borderColor", "x"].some((k) => spec[k] !== void 0);
 }
 var COORDINATES = "x/y are FRAME-RELATIVE: the node's page-space position minus the frame's own box.x/box.y. Measure el.getBoundingClientRect() minus the rendered frame element's rect (the viewport origin when the frame IS the page). A TEXT node's x and width are read ONLY from textBox {x,w} \u2014 a Range over its characters, never the element's box. Its width is the text box for hug text (autoResize width_and_height) and the INK width (the export's renderBox, widthFrom renderBox) for fixed- or fill-width text, whose box is wider than its words; its x is the box's left edge for hug or left-aligned text, else the ink start. TEXT nodes carry no y and no height (vertical ink and line boxes depend on font metrics). Auto-layout children carry no position (the export does not state one); their parent's is compared.";
+var actionsOf = (r) => (Array.isArray(r.actions) ? r.actions : []).filter((a) => a && (a.type || a.navigation));
+var triggerOf = (r) => String(r.trigger || "on_click").toLowerCase();
 function shellIndex(roots) {
   const out = /* @__PURE__ */ new Map();
   const index = (inst) => {
@@ -1808,8 +1810,7 @@ function buildExpectation(docs, opts) {
           if (n.id) hidden.ids.push(n.id);
           if (checkable(expectNode(n, { path: c.path }).spec)) hidden.specsSkipped++;
           if (n.type === "INSTANCE" && n.mainComponent) hidden.instancesSkipped++;
-          const reactions2 = Array.isArray(n.reactions) ? n.reactions : [];
-          for (const r of reactions2) hidden.interactionsSkipped += (Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : []).filter((a) => a && (a.type || a.navigation)).length;
+          for (const r of Array.isArray(n.reactions) ? n.reactions : []) hidden.interactionsSkipped += actionsOf(r).length;
           return;
         }
         const inherited = c.parent ? stateOf.get(c.parent) : void 0;
@@ -1851,16 +1852,13 @@ function buildExpectation(docs, opts) {
             ...ifDefined("props", n.props || void 0)
           });
         }
-        const reactions = Array.isArray(n.reactions) ? n.reactions : [];
-        for (const r of reactions) {
-          const actions = Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : [];
-          const trigger = r.trigger && (typeof r.trigger === "object" ? r.trigger.type || r.trigger : r.trigger) || r.on || "on_click";
-          for (const a of actions) {
-            if (!a || !(a.type || a.navigation)) continue;
+        for (const r of Array.isArray(n.reactions) ? n.reactions : []) {
+          const trigger = triggerOf(r);
+          for (const a of actionsOf(r)) {
             const row = {
               nodeId: n.id,
               name: n.name,
-              trigger: String(trigger).toLowerCase(),
+              trigger,
               ...ifDefined("action", a.navigation || a.type),
               ...ifDefined("destinationId", a.destinationId),
               ...ifDefined("destination", a.destination)
