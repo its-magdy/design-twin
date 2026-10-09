@@ -123,6 +123,38 @@ interface Collision {
   screen: Record<string, string>; designSystem: Record<string, string>; usedAt: UsedAt[];
 }
 
+// crossCheck() runs its passes in report order over one CrossCheckCtx: the inputs, the findings and
+// notChecked lists, and what the screens use (screenUsage). The findings are sorted and given ids at the end.
+interface CrossCheckCtx {
+  input: CrossCheckInput;
+  screens: CrossCheckScreen[];
+  variables: TokensDoc | null;
+  tokens: TokensDoc | null;
+  components: ComponentsCatalog | null;
+  componentsLibrary: ComponentsCatalog | null;
+  stylesText: TextStylesDoc | null;
+  catFile: string;
+  LIST_LIBRARIES: string;
+  EXPORT_LIBRARY: string;
+  findings: CrossCheckFinding[];
+  notChecked: string[];
+  push: Push;
+  usedTokenNames: Map<string, UsedAt[]>;
+  instances: ScreenInstance[];
+  fonts: Map<string, number>;
+  textStyles: Map<string, number>;
+  resolvedModes: Map<string, Set<string>>;
+  visible: ReturnType<typeof visibleInstances>;
+}
+type ScreenUsage = Pick<CrossCheckCtx, "usedTokenNames" | "instances" | "fonts" | "textStyles" | "resolvedModes" | "visible">;
+interface ForeignPatch { foreign: Array<{ name: string; key?: string }>; head: string; tail: string; at: number }
+interface Provenance { dsCollByKey: Map<string, VariableCollection>; screenColls: VariableCollection[]; foreignPatch: ForeignPatch | null }
+interface ScreenVars {
+  dsVarByName: Map<string, Variable>; sliceSources: SliceSources | null; varScope: string; screenVars: Variable[];
+  screenVarsByName: Map<string, [Variable, ...Variable[]]>; screenVarByName: Map<string, Variable>;
+  shortKey: (v: Variable | null | undefined) => string | null; fromWhere: (v: Variable) => string;
+}
+
 function crossCheck(input: CrossCheckInput): CrossCheckReport {
   const screens = input.screens || [];
   const variables = input.variables || null;
@@ -141,8 +173,71 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   const findings: CrossCheckFinding[] = [];
   const notChecked: string[] = [];
   const push: Push = (severity: Severity, code: CrossCheckFindingCode, message: string, extra?: PushExtra): void => { findings.push(Object.assign({ severity, code, message }, extra || {})); };
+  const usage = screenUsage(screens);
+  const cc: CrossCheckCtx = { input, screens, variables, tokens, components, componentsLibrary, stylesText, catFile, LIST_LIBRARIES, EXPORT_LIBRARY, findings, notChecked, push, ...usage };
 
-  // ---------------------------------------------------------------- what the screens actually use
+  const prov = collectionProvenance(cc);
+  const sv = screenVariables(cc);
+  foreignNameMap(cc, prov, sv);
+  nameCollisions(cc, sv);
+  danglingTokens(cc, sv);
+  const { coverage, rekey, proposals } = catalogCoverage(cc);
+  fontStrays(cc);
+  textStyleStrays(cc);
+  sentinelValues(cc);
+  singleModeExport(cc, prov.screenColls);
+
+  // ---------------------------------------------------------------- one screen, two modes
+  // Every collection in the file appears in a root's resolvedModes (Figma lists them all, each in the mode
+  // it inherits), so "the root resolves collections in different modes" is true of every real screen. The
+  // signal is narrower: the collections the screen binds a COLOUR from, sharing a mode vocabulary, resolve
+  // to different mode names — a Dark screen whose two tags bind a starter-kit collection still in Light.
+  mixedModeBindings(screens, variables, tokens, push);
+
+  // ---------------------------------------------------------------- contrast in the modes nobody drew
+  //
+  // When only the Dark frame was exported, every other mode is DERIVED from variable values and has
+  // never been seen rendered. On the live run that derivation was mechanically correct and visually
+  // broken in exactly one place: `Backgrounds/Side menu` resolves to `Indigo 400` in Light — still a
+  // dark surface — while the sidebar's own label token flips to a dark gray, so the Light sidebar's
+  // navigation labels were near-invisible. The audit asked the right question; nothing answered it.
+  //
+  // Everything needed to answer it is already on disk: each text node carries the token its colour is
+  // bound to, its ancestors carry the token their background is bound to, and the variable file gives
+  // both tokens' value in EVERY mode. So resolve the pair per mode and do the contrast arithmetic.
+  contrastPerMode(screens, variables, tokens, push, cc.resolvedModes);
+  // …and in the modes that WERE rendered, one table for the whole run (info: the per-screen audit
+  // does not merge cross-file info, so this is never doubled into each screen's own findings).
+  contrastRendered(screens, variables, tokens, push);
+
+  findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
+  // Every finding carries the id a plan's auditGate.overridden names (finding-id.ts) — the same
+  // function audit.ts uses, over the report in its final order.
+  const ids = findingIds(findings);
+  findings.forEach((f, i) => { const id = ids[i]; if (id !== undefined) f.id = id; });
+  const count = (s: Severity): number => findings.filter((f) => f.severity === s).length;
+  return {
+    summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
+    coverage,
+    // The confirmation list (catalog-rekeyed). Every entry starts unconfirmed; map-bootstrap.ts
+    // --from-proposals stubs only the ones a person set "confirmed": true on.
+    // Unconfirmed first (shared chrome before screen-only), already-mapped last.
+    componentProposals: proposals,
+    componentResidual: rekey && coverage.rekey && coverage.rekey.rekeyed ? rekey.rows.filter((r) => !r.match).map((r) => ({ name: r.name, instances: r.instances, reasons: r.reasons })) : [],
+    findings,
+    notChecked,
+    inputs: {
+      screens: screens.map((s) => s.label),
+      variables: !!variables,
+      tokens: !!tokens,
+      components: !!components,
+      stylesText: !!stylesText,
+    },
+  };
+}
+
+// ---------------------------------------------------------------- what the screens actually use
+function screenUsage(screens: CrossCheckScreen[]): ScreenUsage {
   const usedTokenNames = new Map<string, UsedAt[]>(); // name -> [{screen, nodeId, field}]
   const instances: ScreenInstance[] = []; // { screen, nodeId, name, key, setKey, setName, propNames }
   const fonts = new Map<string, number>(); // family -> count
@@ -186,8 +281,12 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       instances.push({ screen: label, nodeId: i.nodeId, name: i.layer, ...ifDefined("key", i.key), ...ifDefined("setKey", i.setKey), setName: i.name, propNames: Object.keys(i.props || {}) });
     }
   });
+  return { usedTokenNames, instances, fonts, textStyles, resolvedModes, visible };
+}
 
-  // ---------------------------------------------------------------- (a) collections from elsewhere
+// ---------------------------------------------------------------- (a) collections from elsewhere
+function collectionProvenance(cc: CrossCheckCtx): Provenance {
+  const { input, tokens, variables, findings, notChecked, push, LIST_LIBRARIES, EXPORT_LIBRARY } = cc;
   const dsCollByKey = new Map<string, VariableCollection>();
   const dsCollByName = new Map<string, VariableCollection>();
   for (const c of (tokens && tokens.collections) || []) {
@@ -195,7 +294,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     if (c.name) dsCollByName.set(alnumKey(c.name), c);
   }
   const screenColls = (variables && variables.collections) || [];
-  let foreignPatch: { foreign: Array<{ name: string; key?: string }>; head: string; tail: string; at: number } | null = null;
+  let foreignPatch: ForeignPatch | null = null;
 
   if (!tokens) {
     notChecked.push(
@@ -248,8 +347,12 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       push("info", "token-library-matches", `all ${screenColls.length} variable collection(s) the screen binds resolve to the design-system export by key.`, {});
     }
   }
+  return { dsCollByKey, screenColls, foreignPatch };
+}
 
-  // ---------------------------------------------------------------- (c) name collisions and gaps
+// ---------------------------------------------------------------- (c) name collisions and gaps
+function screenVariables(cc: CrossCheckCtx): ScreenVars {
+  const { input, screens, tokens, variables } = cc;
   const dsVarByName = new Map<string, Variable>();
   for (const v of (tokens && tokens.variables) || []) if (v.name) dsVarByName.set(v.name, v);
 
@@ -292,48 +395,52 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     const sc = v && v.key && sliceSources && sliceSources.get(v.key);
     return sc && sc.length ? ` (from ${sc.join(", ")})` : "";
   };
+  return { dsVarByName, sliceSources, varScope, screenVars, screenVarsByName, screenVarByName, shortKey, fromWhere };
+}
 
-  // What a variable resolves to, flattened to a comparable scalar per mode. Aliases compare by their
-  // TARGET name: two libraries that both alias `Primary/Primary` -> `Purple Shades/Purple 100` agree,
-  // and that is the common, safe case (seen in a live run) — it must not be reported as a conflict.
-  function flatten(v: Variable | null | undefined): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const [mode, val] of Object.entries((v && v.values) || {})) {
-      // A composed colour ({composed: {color, opacity}}) is shown as its JSON — it has no single alias to follow.
-      out[mode] = val && typeof val === "object" ? ("aliasOf" in val ? "-> " + val.aliasOf : JSON.stringify(val)) : String(val);
-    }
-    return out;
+// What a variable resolves to, flattened to a comparable scalar per mode. Aliases compare by their
+// TARGET name: two libraries that both alias `Primary/Primary` -> `Purple Shades/Purple 100` agree,
+// and that is the common, safe case (seen in a live run) — it must not be reported as a conflict.
+function flatten(v: Variable | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [mode, val] of Object.entries((v && v.values) || {})) {
+    // A composed colour ({composed: {color, opacity}}) is shown as its JSON — it has no single alias to follow.
+    out[mode] = val && typeof val === "object" ? ("aliasOf" in val ? "-> " + val.aliasOf : JSON.stringify(val)) : String(val);
   }
-  // Mode NAMES are per-collection and two libraries rarely agree on them: the live case had the screen's
-  // Spacing on Desktop/Tablet/Mobile and the design system's on a lone "Mode 1". With no shared mode,
-  // "cannot say" would leave `(Space 3)`=12 vs `Space 3`=16 unreported — the single
-  // most dangerous collision in the whole run.
-  //
-  // Aligning on each collection's `default` mode does not work either, because the thing being detected
-  // is name collision: that file has TWO collections called `Spacing`, so any map keyed on the collection
-  // NAME picks the wrong default. So compare the SET of values instead. Sets that share nothing are a
-  // real disagreement whatever the modes are called; sets that overlap at all are not provably wrong, and
-  // this reports only what it can prove.
-  function valueSet(v: Variable): Set<string> {
-    return new Set(Object.values(flatten(v)));
-  }
-  function sameResolution(a: Variable, b: Variable): boolean | null {
-    const fa = flatten(a), fb = flatten(b);
-    const shared = Object.keys(fa).filter((m) => m in fb);
-    if (shared.length) return shared.every((m) => fa[m] === fb[m]);
-    const sa = valueSet(a), sb = valueSet(b);
-    if (!sa.size || !sb.size) return null;
-    for (const x of sa) if (sb.has(x)) return null; // some overlap — not provably a disagreement
-    return false; // disjoint under every mode either side defines
-  }
+  return out;
+}
+// Mode NAMES are per-collection and two libraries rarely agree on them: the live case had the screen's
+// Spacing on Desktop/Tablet/Mobile and the design system's on a lone "Mode 1". With no shared mode,
+// "cannot say" would leave `(Space 3)`=12 vs `Space 3`=16 unreported — the single
+// most dangerous collision in the whole run.
+//
+// Aligning on each collection's `default` mode does not work either, because the thing being detected
+// is name collision: that file has TWO collections called `Spacing`, so any map keyed on the collection
+// NAME picks the wrong default. So compare the SET of values instead. Sets that share nothing are a
+// real disagreement whatever the modes are called; sets that overlap at all are not provably wrong, and
+// this reports only what it can prove.
+function valueSet(v: Variable): Set<string> {
+  return new Set(Object.values(flatten(v)));
+}
+function sameResolution(a: Variable, b: Variable): boolean | null {
+  const fa = flatten(a), fb = flatten(b);
+  const shared = Object.keys(fa).filter((m) => m in fb);
+  if (shared.length) return shared.every((m) => fa[m] === fb[m]);
+  const sa = valueSet(a), sb = valueSet(b);
+  if (!sa.size || !sb.size) return null;
+  for (const x of sa) if (sb.has(x)) return null; // some overlap — not provably a disagreement
+  return false; // disjoint under every mode either side defines
+}
 
-  // Classify the screen's variables in the flagged foreign collections against the design system BY
-  // NAME (collection-blind): agree / differ / undecidable / absent — the offline answer to "can I map by name?".
-  // Which variables are IN a foreign collection is decided by the collection's KEY when the row carries one
-  // (`collectionKey`: names repeat — two `Spacing`, one of them the design system's own). An
-  // export from before collection keys has only the collection NAME: those rows are matched by name,
-  // and counted in `ambiguous` when a non-foreign collection of the screen has that name too (the
-  // row may belong to either of them).
+// Classify the screen's variables in the flagged foreign collections against the design system BY
+// NAME (collection-blind): agree / differ / undecidable / absent — the offline answer to "can I map by name?".
+// Which variables are IN a foreign collection is decided by the collection's KEY when the row carries one
+// (`collectionKey`: names repeat — two `Spacing`, one of them the design system's own). An
+// export from before collection keys has only the collection NAME: those rows are matched by name,
+// and counted in `ambiguous` when a non-foreign collection of the screen has that name too (the
+// row may belong to either of them).
+function foreignNameMap(cc: CrossCheckCtx, { dsCollByKey, screenColls, foreignPatch }: Provenance, { screenVars, dsVarByName }: ScreenVars): void {
+  const { findings } = cc;
   if (foreignPatch) {
     const fp = foreignPatch;
     const foreignNames = new Set(fp.foreign.map((f) => f.name));
@@ -377,7 +484,11 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     const f = findings[fp.at];
     if (f) { f.message = fp.head + offline + fp.tail; f.nameMap = ambiguous ? { ...nameMap, ambiguous } : nameMap; }
   }
+}
 
+function nameCollisions(cc: CrossCheckCtx, vars: ScreenVars): void {
+  const { tokens, usedTokenNames, push } = cc;
+  const { dsVarByName, varScope, screenVarsByName, screenVarByName, shortKey, fromWhere } = vars;
   if (tokens && screenVarByName.size) {
     const collisions: Collision[] = [], missing: Array<{ name: string; near: string | null }> = [];
     for (const [name, list] of screenVarsByName) {
@@ -441,39 +552,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       if (used) push("blocker", "token-name-collision", message, extra);
       else push("warning", "token-name-collision", message, { ...extra, confirm: `'${c.name}' has different values here and in the design system, but no visible layer on this screen binds it — which one is authoritative if it is used later?` });
     }
-    // The union's own ambiguity, when it is NOT this screen's: said once, as a note naming the other
-    // screen, so nobody "fixes" this screen's correct value to match someone else's variable.
-    if (variables && varScope !== "union") {
-      const mine = new Set(screenVars.map((v) => v.key).filter(Boolean));
-      const unionByName = new Map<string, Map<string, Variable>>();
-      for (const v of (variables && variables.variables) || []) {
-        if (!v || !v.name || !v.key) continue;
-        getOrInit(unionByName, v.name, () => new Map<string, Variable>()).set(v.key, v);
-      }
-      for (const [name, byKey] of unionByName) {
-        if (byKey.size < 2) continue;
-        const all = [...byKey.values()];
-        const others = all.filter((v) => !mine.has(v.key));
-        if (!others.length) continue; // the screen carries every one of them — handled above
-        // Identical everywhere (`Space 2` = 8 under Desktop/Tablet/Mobile and 8 under Mode 1) is not a
-        // collision a builder can get wrong.
-        if (new Set(all.flatMap((v) => Object.values(flatten(v)))).size <= 1) continue;
-        if (all.every((v) => JSON.stringify(flatten(v)) === JSON.stringify(flatten(all[0])))) continue;
-        const ours = all.filter((v) => mine.has(v.key));
-        push(
-          "info",
-          "token-name-collision-elsewhere",
-          `'${name}' is ${all.length} different variables in the merged variables.json — ` +
-            all.map((v) => `key ${shortKey(v)} = ${JSON.stringify(flatten(v))}${fromWhere(v)}`).join(" vs ") + ". " +
-            (ours.length
-              // every `v` here was indexed by its (non-empty) key above, so the `v.key &&` never short-circuits
-              ? `THIS screen's own variables carry only key ${ours.map(shortKey).join(", ")}, so the ambiguity belongs to ${[...new Set(others.flatMap((v) => (sliceSources && v.key && sliceSources.get(v.key)) || []))].join(", ") || "another screen"} — do not change this screen's value to match it.`
-              : `THIS screen carries none of them.`) +
-            ` Generate this screen's theme from its own .vars.json (or design-system/tokens.json), not from the union.`,
-          { token: name, keys: all.map((v) => v.key), mine: ours.map((v) => v.key) }
-        );
-      }
-    }
+    collisionsElsewhere(cc, vars);
     if (missing.length) {
       push(
         "warning",
@@ -489,9 +568,50 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       );
     }
   }
+}
 
-  // Bound names with no definition ANYWHERE (neither library) — the screen references a variable
-  // neither export carries, which usually means an opt-in read was skipped or the slice is partial.
+// The union's own ambiguity, when it is NOT this screen's: said once, as a note naming the other
+// screen, so nobody "fixes" this screen's correct value to match someone else's variable.
+function collisionsElsewhere(cc: CrossCheckCtx, sv: ScreenVars): void {
+  const { variables, push } = cc;
+  const { sliceSources, varScope, screenVars, shortKey, fromWhere } = sv;
+  if (variables && varScope !== "union") {
+    const mine = new Set(screenVars.map((v) => v.key).filter(Boolean));
+    const unionByName = new Map<string, Map<string, Variable>>();
+    for (const v of (variables && variables.variables) || []) {
+      if (!v || !v.name || !v.key) continue;
+      getOrInit(unionByName, v.name, () => new Map<string, Variable>()).set(v.key, v);
+    }
+    for (const [name, byKey] of unionByName) {
+      if (byKey.size < 2) continue;
+      const all = [...byKey.values()];
+      const others = all.filter((v) => !mine.has(v.key));
+      if (!others.length) continue; // the screen carries every one of them — handled above
+      // Identical everywhere (`Space 2` = 8 under Desktop/Tablet/Mobile and 8 under Mode 1) is not a
+      // collision a builder can get wrong.
+      if (new Set(all.flatMap((v) => Object.values(flatten(v)))).size <= 1) continue;
+      if (all.every((v) => JSON.stringify(flatten(v)) === JSON.stringify(flatten(all[0])))) continue;
+      const ours = all.filter((v) => mine.has(v.key));
+      push(
+        "info",
+        "token-name-collision-elsewhere",
+        `'${name}' is ${all.length} different variables in the merged variables.json — ` +
+          all.map((v) => `key ${shortKey(v)} = ${JSON.stringify(flatten(v))}${fromWhere(v)}`).join(" vs ") + ". " +
+          (ours.length
+            // every `v` here was indexed by its (non-empty) key above, so the `v.key &&` never short-circuits
+            ? `THIS screen's own variables carry only key ${ours.map(shortKey).join(", ")}, so the ambiguity belongs to ${[...new Set(others.flatMap((v) => (sliceSources && v.key && sliceSources.get(v.key)) || []))].join(", ") || "another screen"} — do not change this screen's value to match it.`
+            : `THIS screen carries none of them.`) +
+          ` Generate this screen's theme from its own .vars.json (or design-system/tokens.json), not from the union.`,
+        { token: name, keys: all.map((v) => v.key), mine: ours.map((v) => v.key) }
+      );
+    }
+  }
+}
+
+// Bound names with no definition ANYWHERE (neither library) — the screen references a variable
+// neither export carries, which usually means an opt-in read was skipped or the slice is partial.
+function danglingTokens(cc: CrossCheckCtx, { dsVarByName, varScope, screenVarByName }: ScreenVars): void {
+  const { variables, usedTokenNames, push } = cc;
   if (variables || varScope === "own") {
     const dangling: string[] = [];
     for (const name of usedTokenNames.keys()) {
@@ -509,8 +629,11 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       );
     }
   }
+}
 
-  // ---------------------------------------------------------------- (b) catalog coverage
+// ---------------------------------------------------------------- (b) catalog coverage
+function catalogCoverage(cc: CrossCheckCtx): { coverage: CrossCheckCoverage; rekey: MatchResult | null; proposals: ComponentProposal[] } {
+  const { input, components, componentsLibrary, catFile, EXPORT_LIBRARY, visible, instances, notChecked, push } = cc;
   let rekey: MatchResult | null = null;
   let proposals: ComponentProposal[] = [];
   const coverage: CrossCheckCoverage = { instances: instances.length, distinct: 0, matchedByKey: 0, matchedByLocalKey: 0, matchedByName: 0, ambiguousName: 0, unmatched: 0, pct: null, localPct: null, entries: [] };
@@ -528,72 +651,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   } else if (!instances.length) {
     notChecked.push("component coverage — the screen export contains no INSTANCE nodes to compare.");
   } else {
-    const byKey = new Map<string, CatalogComponent>();
-    for (const c of catalog) if (c.key) byKey.set(c.key, c);
-    // The name stage is component-match's — the SAME rows plan-skeleton reads, judged by the same
-    // nameVerdict — so the coverage table and the plan's catalog column cannot disagree on a component.
-    // Its catalog is the LOCAL one (components.library.json only explains residuals there), so a name
-    // that exists only in the library is not a name match here (a key hit there still counts).
-    // Duplicating a Figma file re-mints every component key, so 0% by key is ALSO what a duplicated design
-    // system looks like — and there the names AND prop signatures still agree. Its matches are only ever
-    // proposals for a person to confirm.
-    rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
-    const rowByName = new Map<string, MatchRow>((rekey ? rekey.rows : []).map((r): [string, MatchRow] => [r.name, r]));
-    // Distinct on the SET key where there is one: a screen using six Button variants is one component
-    // to map, not six, and counting variants would flatter the coverage number.
-    const distinct = new Map<string, ScreenInstance & { count: number }>();
-    for (const i of instances) {
-      const id = i.setKey || i.key || "name:" + alnumKey(i.setName);
-      getOrInit(distinct, id, () => Object.assign({ count: 0 }, i)).count++;
-    }
-    coverage.distinct = distinct.size;
-    for (const i of distinct.values()) {
-      const byKeyHit = (i.setKey && byKey.get(i.setKey)) || (i.key && byKey.get(i.key));
-      if (byKeyHit) {
-        coverage.matchedByKey++;
-        const local = !!byKeyHit.key && localKeys.has(byKeyHit.key);
-        if (local) coverage.matchedByLocalKey++;
-        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
-        continue;
-      }
-      // Name fallback. Never authoritative: a name match is a CANDIDATE, carried with `verified: false`
-      // so build-screen can say "mapped by name, unverified" instead of either pretending it is a real
-      // mapping or throwing away the only lead there is. A match needs the prop SIGNATURE to agree too —
-      // that is what separates a real rename from two unrelated components both called `Header` — and a
-      // name several entries share is AMBIGUOUS (a coin flip, left unmatched) unless the signature picks
-      // one or they are duplicates of one definition (nameVerdict).
-      const row = rowByName.get(i.setName);
-      const verdict = row ? nameVerdict(row) : null;
-      const matched = row && verdict && verdict.status === "matched" ? row.match : null;
-      if (row && matched) {
-        coverage.matchedByName++;
-        // how many of the instance's prop names the matched entry declares (informational)
-        const cat = localComps.find((c) => (matched.key ? c.key === matched.key : matched.id !== undefined && c.id === matched.id));
-        const props = Object.keys((cat && cat.props) || {}).map((p) => alnumKey(String(p).split("#")[0]));
-        const hit = i.propNames.filter((p) => props.includes(alnumKey(String(p).split("#")[0]))).length;
-        coverage.entries.push({
-          setName: i.setName,
-          ...ifDefined("key", i.setKey || i.key),
-          matchedBy: "name",
-          verified: false,
-          catalogName: matched.name,
-          ...ifDefined("catalogKey", matched.key),
-          ...ifDefined("evidence", row.evidence),
-          propOverlap: `${hit}/${i.propNames.length}`,
-          instances: i.count,
-        });
-      } else if (row && verdict && verdict.status === "ambiguous") {
-        coverage.ambiguousName++;
-        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: (row.candidates || []).length, reason: verdict.reason, instances: i.count });
-      } else {
-        coverage.unmatched++;
-        coverage.entries.push({
-          setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, verified: false,
-          reason: verdict ? verdict.reason : `no ${catFile} to match names against (a components.library.json name alone is not a match)`,
-          instances: i.count,
-        });
-      }
-    }
+    rekey = coverageEntries(cc, coverage, localComps, localKeys, catalog);
     coverage.pct = Math.round((coverage.matchedByKey / coverage.distinct) * 100);
     coverage.localPct = Math.round((coverage.matchedByLocalKey / coverage.distinct) * 100);
 
@@ -621,18 +679,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     coverage.buckets = buckets; // sums to coverage.distinct, by construction
     // Components used ONLY on hidden layers: not built, so not in any bucket — but said, so the gap
     // between "instances in the file" and "components to build" is explained rather than silent.
-    const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + alnumKey(i.setName)));
-    const hiddenOnly = new Set<string>();
-    // (`walk` skips hidden layers, so this one count walks everything itself.)
-    const everyInstance = (n: IrNode | null | undefined): void => {
-      if (!n || typeof n !== "object") return;
-      if (n.type === "INSTANCE" && n.mainComponent) {
-        const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + alnumKey(mc.setName || mc.name);
-        if (!visibleSets.has(id)) hiddenOnly.add(id);
-      }
-      for (const c of n.children || []) everyInstance(c);
-    };
-    for (const s of screens) for (const root of screenRoots(s.doc)) everyInstance(root);
+    const hiddenOnly = hiddenOnlyComponents(cc);
     coverage.hiddenOnly = hiddenOnly.size;
     if (rekeyedBy) {
       const s = rekeyedBy.summary;
@@ -695,36 +742,134 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     } else {
       push("info", "catalog-covers-screen", `all ${coverage.distinct} component(s) on this screen resolve to ${catFile} by key.`, {});
     }
-    // ONE finding for the whole name-matched set. Emitting one per component produced 37 identical
-    // paragraphs on a live run — a list nobody reads is the same as no list.
-    const named = coverage.entries.filter((e) => e.matchedBy === "name" && !proposedNames.has(e.setName));
-    if (named.length) {
-      push(
-        "info",
-        "name-matched-components",
-        `${named.length} component(s) have no key in the catalog but DO have an exact name twin there whose prop signature agrees: ` +
-          named.slice(0, 10).map((e) => `'${e.setName}' (${e.evidence === "name+no-props" ? "no props to compare" : `props ${e.propOverlap}`})`).join(", ") + (named.length > 10 ? `, …` : "") +
-          `. Mapped BY NAME, UNVERIFIED — confirm one with "Go to main component" before reusing any of their code; ` +
-          `if that one instance points at the catalog's file, the rest almost certainly do too.`,
-        { components: named.map((e) => ({ setName: e.setName, ...ifDefined("catalogName", e.catalogName), ...ifDefined("catalogKey", e.catalogKey), ...ifDefined("propOverlap", e.propOverlap), verified: false })) }
-      );
+    nameMatchFindings(cc, coverage, proposedNames);
+  }
+  return { coverage, rekey, proposals };
+}
+
+// Fills coverage's counts and entries, one per distinct visible component; returns the name stage's result.
+function coverageEntries(cc: CrossCheckCtx, coverage: CrossCheckCoverage, localComps: CatalogComponent[], localKeys: Set<string>, catalog: CatalogComponent[]): MatchResult | null {
+  const { components, componentsLibrary, visible, instances, catFile } = cc;
+  const byKey = new Map<string, CatalogComponent>();
+  for (const c of catalog) if (c.key) byKey.set(c.key, c);
+  // The name stage is component-match's — the SAME rows plan-skeleton reads, judged by the same
+  // nameVerdict — so the coverage table and the plan's catalog column cannot disagree on a component.
+  // Its catalog is the LOCAL one (components.library.json only explains residuals there), so a name
+  // that exists only in the library is not a name match here (a key hit there still counts).
+  // Duplicating a Figma file re-mints every component key, so 0% by key is ALSO what a duplicated design
+  // system looks like — and there the names AND prop signatures still agree. Its matches are only ever
+  // proposals for a person to confirm.
+  const rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
+  const rowByName = new Map<string, MatchRow>((rekey ? rekey.rows : []).map((r): [string, MatchRow] => [r.name, r]));
+  // Distinct on the SET key where there is one: a screen using six Button variants is one component
+  // to map, not six, and counting variants would flatter the coverage number.
+  const distinct = new Map<string, ScreenInstance & { count: number }>();
+  for (const i of instances) {
+    const id = i.setKey || i.key || "name:" + alnumKey(i.setName);
+    getOrInit(distinct, id, () => Object.assign({ count: 0 }, i)).count++;
+  }
+  coverage.distinct = distinct.size;
+  for (const i of distinct.values()) {
+    const byKeyHit = (i.setKey && byKey.get(i.setKey)) || (i.key && byKey.get(i.key));
+    if (byKeyHit) {
+      coverage.matchedByKey++;
+      const local = !!byKeyHit.key && localKeys.has(byKeyHit.key);
+      if (local) coverage.matchedByLocalKey++;
+      coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
+      continue;
     }
-    const amb = coverage.entries.filter((e) => e.ambiguous && !proposedNames.has(e.setName));
-    const firstAmb = amb[0]; // set exactly when amb.length
-    if (firstAmb) {
-      push(
-        "warning",
-        "ambiguous-component-name",
-        `${amb.length} component(s) share their name with SEVERAL catalog entries, and no prop signature picks one of them, so they were left unmatched on purpose: ` +
-          amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", …" : "") +
-          `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed — ` +
-          `binding code to one of them by name would be a guess with a 1-in-${firstAmb.candidates} chance.`,
-        { components: amb.map((e) => ({ setName: e.setName, ...ifDefined("candidates", e.candidates) })) }
-      );
+    // Name fallback. Never authoritative: a name match is a CANDIDATE, carried with `verified: false`
+    // so build-screen can say "mapped by name, unverified" instead of either pretending it is a real
+    // mapping or throwing away the only lead there is. A match needs the prop SIGNATURE to agree too —
+    // that is what separates a real rename from two unrelated components both called `Header` — and a
+    // name several entries share is AMBIGUOUS (a coin flip, left unmatched) unless the signature picks
+    // one or they are duplicates of one definition (nameVerdict).
+    const row = rowByName.get(i.setName);
+    const verdict = row ? nameVerdict(row) : null;
+    const matched = row && verdict && verdict.status === "matched" ? row.match : null;
+    if (row && matched) {
+      coverage.matchedByName++;
+      // how many of the instance's prop names the matched entry declares (informational)
+      const cat = localComps.find((c) => (matched.key ? c.key === matched.key : matched.id !== undefined && c.id === matched.id));
+      const props = Object.keys((cat && cat.props) || {}).map((p) => alnumKey(String(p).split("#")[0]));
+      const hit = i.propNames.filter((p) => props.includes(alnumKey(String(p).split("#")[0]))).length;
+      coverage.entries.push({
+        setName: i.setName,
+        ...ifDefined("key", i.setKey || i.key),
+        matchedBy: "name",
+        verified: false,
+        catalogName: matched.name,
+        ...ifDefined("catalogKey", matched.key),
+        ...ifDefined("evidence", row.evidence),
+        propOverlap: `${hit}/${i.propNames.length}`,
+        instances: i.count,
+      });
+    } else if (row && verdict && verdict.status === "ambiguous") {
+      coverage.ambiguousName++;
+      coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: (row.candidates || []).length, reason: verdict.reason, instances: i.count });
+    } else {
+      coverage.unmatched++;
+      coverage.entries.push({
+        setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, verified: false,
+        reason: verdict ? verdict.reason : `no ${catFile} to match names against (a components.library.json name alone is not a match)`,
+        instances: i.count,
+      });
     }
   }
+  return rekey;
+}
 
-  // ---------------------------------------------------------------- font-family strays
+function hiddenOnlyComponents(cc: CrossCheckCtx): Set<string> {
+  const { screens, instances } = cc;
+  const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + alnumKey(i.setName)));
+  const hiddenOnly = new Set<string>();
+  // (`walk` skips hidden layers, so this one count walks everything itself.)
+  const everyInstance = (n: IrNode | null | undefined): void => {
+    if (!n || typeof n !== "object") return;
+    if (n.type === "INSTANCE" && n.mainComponent) {
+      const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + alnumKey(mc.setName || mc.name);
+      if (!visibleSets.has(id)) hiddenOnly.add(id);
+    }
+    for (const c of n.children || []) everyInstance(c);
+  };
+  for (const s of screens) for (const root of screenRoots(s.doc)) everyInstance(root);
+  return hiddenOnly;
+}
+
+function nameMatchFindings(cc: CrossCheckCtx, coverage: CrossCheckCoverage, proposedNames: Set<string>): void {
+  const { push } = cc;
+  // ONE finding for the whole name-matched set. Emitting one per component produced 37 identical
+  // paragraphs on a live run — a list nobody reads is the same as no list.
+  const named = coverage.entries.filter((e) => e.matchedBy === "name" && !proposedNames.has(e.setName));
+  if (named.length) {
+    push(
+      "info",
+      "name-matched-components",
+      `${named.length} component(s) have no key in the catalog but DO have an exact name twin there whose prop signature agrees: ` +
+        named.slice(0, 10).map((e) => `'${e.setName}' (${e.evidence === "name+no-props" ? "no props to compare" : `props ${e.propOverlap}`})`).join(", ") + (named.length > 10 ? `, …` : "") +
+        `. Mapped BY NAME, UNVERIFIED — confirm one with "Go to main component" before reusing any of their code; ` +
+        `if that one instance points at the catalog's file, the rest almost certainly do too.`,
+      { components: named.map((e) => ({ setName: e.setName, ...ifDefined("catalogName", e.catalogName), ...ifDefined("catalogKey", e.catalogKey), ...ifDefined("propOverlap", e.propOverlap), verified: false })) }
+    );
+  }
+  const amb = coverage.entries.filter((e) => e.ambiguous && !proposedNames.has(e.setName));
+  const firstAmb = amb[0]; // set exactly when amb.length
+  if (firstAmb) {
+    push(
+      "warning",
+      "ambiguous-component-name",
+      `${amb.length} component(s) share their name with SEVERAL catalog entries, and no prop signature picks one of them, so they were left unmatched on purpose: ` +
+        amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", …" : "") +
+        `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed — ` +
+        `binding code to one of them by name would be a guess with a 1-in-${firstAmb.candidates} chance.`,
+      { components: amb.map((e) => ({ setName: e.setName, ...ifDefined("candidates", e.candidates) })) }
+    );
+  }
+}
+
+// ---------------------------------------------------------------- font-family strays
+function fontStrays(cc: CrossCheckCtx): void {
+  const { stylesText, fonts, push } = cc;
   const sorted = [...fonts.entries()].sort((a, b) => b[1] - a[1]);
   const [main, ...strays] = sorted;
   if (fonts.size > 1 && main) {
@@ -753,8 +898,11 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       );
     }
   }
+}
 
-  // ---------------------------------------------------------------- text-style strays / near-misses
+// ---------------------------------------------------------------- text-style strays / near-misses
+function textStyleStrays(cc: CrossCheckCtx): void {
+  const { stylesText, textStyles, push } = cc;
   if (stylesText && stylesText.styles && textStyles.size) {
     const dsByName = new Map((stylesText.styles || []).map((s): [string, TextStyle] => [s.name, s]));
     const dsNorm = new Map<string, string>();
@@ -786,8 +934,11 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       );
     }
   }
+}
 
-  // ---------------------------------------------------------------- absurd token values
+// ---------------------------------------------------------------- absurd token values
+function sentinelValues(cc: CrossCheckCtx): void {
+  const { tokens, variables, push } = cc;
   const absurd: Array<{ name: string; collection: string | undefined; mode: string; value: number }> = [];
   const seenAbsurd = new Set<string>(); // the same variable appears in both the design system and the screen slice
   const allVars: Variable[] = ((tokens && tokens.variables) || []).concat((variables && variables.variables) || []);
@@ -815,10 +966,13 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       { tokens: absurd }
     );
   }
+}
 
-  // ---------------------------------------------------------------- single-mode export
-  // Deduped by collection NAME: the same collection is present in both the design system's tokens and
-  // the screen's slice, and reporting it twice was just noise.
+// ---------------------------------------------------------------- single-mode export
+// Deduped by collection NAME: the same collection is present in both the design system's tokens and
+// the screen's slice, and reporting it twice was just noise.
+function singleModeExport(cc: CrossCheckCtx, screenColls: VariableCollection[]): void {
+  const { tokens, variables, resolvedModes, push } = cc;
   const multiModeColls: VariableCollection[] = [];
   const seenColl = new Set<string>();
   const allColls: VariableCollection[] = ((tokens && tokens.collections) || []).concat(screenColls);
@@ -849,54 +1003,6 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       );
     }
   }
-
-  // ---------------------------------------------------------------- one screen, two modes
-  // Every collection in the file appears in a root's resolvedModes (Figma lists them all, each in the mode
-  // it inherits), so "the root resolves collections in different modes" is true of every real screen. The
-  // signal is narrower: the collections the screen binds a COLOUR from, sharing a mode vocabulary, resolve
-  // to different mode names — a Dark screen whose two tags bind a starter-kit collection still in Light.
-  mixedModeBindings(screens, variables, tokens, push);
-
-  // ---------------------------------------------------------------- contrast in the modes nobody drew
-  //
-  // When only the Dark frame was exported, every other mode is DERIVED from variable values and has
-  // never been seen rendered. On the live run that derivation was mechanically correct and visually
-  // broken in exactly one place: `Backgrounds/Side menu` resolves to `Indigo 400` in Light — still a
-  // dark surface — while the sidebar's own label token flips to a dark gray, so the Light sidebar's
-  // navigation labels were near-invisible. The audit asked the right question; nothing answered it.
-  //
-  // Everything needed to answer it is already on disk: each text node carries the token its colour is
-  // bound to, its ancestors carry the token their background is bound to, and the variable file gives
-  // both tokens' value in EVERY mode. So resolve the pair per mode and do the contrast arithmetic.
-  contrastPerMode(screens, variables, tokens, push, resolvedModes);
-  // …and in the modes that WERE rendered, one table for the whole run (info: the per-screen audit
-  // does not merge cross-file info, so this is never doubled into each screen's own findings).
-  contrastRendered(screens, variables, tokens, push);
-
-  findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
-  // Every finding carries the id a plan's auditGate.overridden names (finding-id.ts) — the same
-  // function audit.ts uses, over the report in its final order.
-  const ids = findingIds(findings);
-  findings.forEach((f, i) => { const id = ids[i]; if (id !== undefined) f.id = id; });
-  const count = (s: Severity): number => findings.filter((f) => f.severity === s).length;
-  return {
-    summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
-    coverage,
-    // The confirmation list (catalog-rekeyed). Every entry starts unconfirmed; map-bootstrap.ts
-    // --from-proposals stubs only the ones a person set "confirmed": true on.
-    // Unconfirmed first (shared chrome before screen-only), already-mapped last.
-    componentProposals: proposals,
-    componentResidual: rekey && coverage.rekey && coverage.rekey.rekeyed ? rekey.rows.filter((r) => !r.match).map((r) => ({ name: r.name, instances: r.instances, reasons: r.reasons })) : [],
-    findings,
-    notChecked,
-    inputs: {
-      screens: screens.map((s) => s.label),
-      variables: !!variables,
-      tokens: !!tokens,
-      components: !!components,
-      stylesText: !!stylesText,
-    },
-  };
 }
 
 
