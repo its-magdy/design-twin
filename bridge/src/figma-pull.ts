@@ -256,10 +256,12 @@ function printHygiene(r: { designSystem: { hygiene?: string[] } }): void {
   for (const h of hygiene) console.error("  - " + h);
 }
 
-// Argument parsing lives in ONE pure function so the test suite can drive it directly. It throws
-// UsageError instead of calling process.exit, which is the only difference from doing it inline —
-// the CLI entry below turns that back into the same message + exit 1. Untestable arg parsing is how
-// `--timeout` shipped silently ignoring its own flag when the value was missing.
+// Argument parsing is plain functions the test suite drives directly: readArgs reads the flags and
+// throws UsageError for a bad or missing value, validateArgs returns the outDir warning and the first
+// flag-combination refusal without printing, and parseArgs is the two in one call, throwing on a
+// refusal. None calls process.exit — the CLI entry below turns errors into the message + exit 1.
+// Untestable arg parsing is how `--timeout` shipped silently ignoring its own flag when the value was
+// missing.
 class UsageError extends Error {}
 
 // `.filter(Boolean)` over the `cond && "--flag"` lists below, typed: keeps exactly the truthy entries
@@ -267,8 +269,8 @@ class UsageError extends Error {}
 const isFlag = (x: string | number | false | null | undefined): x is string => Boolean(x);
 
 // ONE parser for every `--flag value` / `--flag=value` pair, repeatable by construction. One
-// shared rule keeps the positional [outDir] correct without each value flag remembering consumedIdx
-// (hand-rolled copies drifted into subtly different shapes, and `--timeout` once mishandled its own
+// shared rule marks every consumed index in consumedIdx, so the positional [outDir] is never a flag's
+// value (hand-rolled copies drifted into subtly different shapes, and `--timeout` once mishandled its own
 // missing value). A further value flag is one line.
 // Matching the flag EXACTLY (plus its `=` form) is part of the rule: startsWith("--timeout") would
 // also swallow a future `--timeout-ms`, reading another flag's value as this one's.
@@ -336,7 +338,7 @@ function readArgs(args: string[]) {
   // One name for the structural-index command, decided once: every message and guard below asks for
   // the flag the user actually typed, instead of re-deriving it from two booleans at each site.
   // Exact `includes` matches, so "--list-libraries" is NOT swallowed by the "--list" branch — the same
-  // prefix trap takeValues() guards against below, one line earlier.
+  // prefix trap takeValues() guards against.
   const listCmd = args.includes("--list-pages") ? "--list-pages" : args.includes("--list") ? "--list" : null;
   const listOnly = listCmd !== null;
   const listDepth: 1 | 2 = listCmd === "--list-pages" ? 1 : 2;
@@ -396,6 +398,7 @@ function readArgs(args: string[]) {
   const scaleArg = takeValues(args, "--scale", BAD_SCALE, consumedIdx)[0];
   const scale = scaleArg !== undefined ? Number(scaleArg) : undefined;
   if (scale !== undefined && !(scale > 0)) throw new UsageError(`${BAD_SCALE}, got '${scaleArg}'`);
+  // Refused here while reading, not in validateArgs: this error comes before the outDir warning.
   if (scale !== undefined && !screenshotId) {
     throw new UsageError("--scale only applies to --screenshot — pass both, or drop --scale.");
   }
@@ -1332,9 +1335,9 @@ async function cli(argv: string[]): Promise<void> {
   if (portWarning) console.error("[dtwin] warning: " + portWarning);
 
   // --token-file has to be honoured BEFORE server-core is loaded, because server-core resolves the
-  // token at module load (so the test suite can set FIGMA_BRIDGE_TOKEN and import it). parseArgs
+  // token at module load (so the test suite can set FIGMA_BRIDGE_TOKEN and import it). readArgs
   // runs after that load, so the flag is pre-scanned here and handed over as the env var
-  // server-core already reads. parseArgs still parses it properly — this scan only has to be right
+  // server-core already reads. readArgs still parses it properly — this scan only has to be right
   // about the VALUE, and it is checked against the parsed result once parsing has happened.
   {
     const i = argv.indexOf("--token-file");
