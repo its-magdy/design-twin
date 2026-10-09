@@ -804,99 +804,118 @@ function formatDone(t: { totalMs: number; connectMs: number; exportMs: number; w
   return lines;
 }
 
-async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> {
-  const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json } = parsed;
-  const { createBridge } = core;
-  // ---- token lifecycle commands. These run FIRST and return: they touch only the local token file,
-  // so unlike everything below they need no bridge, no daemon and no plugin. Running them before
-  // daemon.connect() also means they still work while a daemon holds the port.
-  if (tokenCmd === "--token-status") {
-    const st = tokenStore.status();
-    console.log(JSON.stringify(st, null, 2));
-    console.error("[dtwin] token file: " + st.path + (st.stored ? "" : " (none saved yet)"));
-    console.error("[dtwin] in use: " + (
-      st.activeSource === "env" ? "FIGMA_BRIDGE_TOKEN from the environment"
-        : st.activeSource === "token-file" ? "the file given by --token-file"
-        : st.activeSource === "file" ? "the saved token"
-        : "a per-run token (nothing saved yet — the next bridge start will save one)"
-    ) + (st.fingerprint ? ` (${st.fingerprint})` : ""));
-    // The genuinely confusing state: a saved token exists, but the env var overrides it, so editing
-    // the file changes nothing and the user has no way to see why.
-    if (st.shadowed) {
-      console.error("[dtwin] note: FIGMA_BRIDGE_TOKEN is set, so it WINS over the saved token. Unset it to use the file.");
-    }
-    if (st.loosePerms) console.error("[dtwin] warning: " + st.path + " is readable by other users — chmod 600 it.");
-    return;
-  }
-  if (tokenCmd === "--show-token") {
-    const { token, source } = tokenStore.resolve({ tokenFile, persist: false });
-    // stdout, alone, so it pipes: `dtwin --show-token | pbcopy`. Every note goes to stderr.
-    console.log(token);
-    if (source === "ephemeral") {
-      console.error("[dtwin] note: nothing is saved yet, so this token is NOT what a future run will use. Start a bridge once to save one.");
-    }
-    return;
-  }
-  if (tokenCmd === "--rotate-token") {
-    const had = tokenStore.readFrom(tokenStore.tokenPath());
-    const token = tokenStore.generate();
-    const file = tokenStore.write(token);
-    console.log(token);
-    console.error(`[dtwin] ${had ? "replaced" : "saved"} the bridge token in ${file}.`);
-    // The whole point of naming this: the plugin has the OLD token in clientStorage and will
-    // fail every handshake with a bare 401, retrying every 3s, until someone re-pastes.
-    console.error('[dtwin] re-paste it into the plugin\'s "Bridge token" field and press Save — until you do, the plugin cannot connect.');
-    if (process.env.FIGMA_BRIDGE_TOKEN) {
-      console.error("[dtwin] warning: FIGMA_BRIDGE_TOKEN is set and OVERRIDES this file, so the bridge will keep using the env value. Unset it for the rotation to take effect.");
-    }
-    return;
-  }
-  if (tokenCmd === "--forget-token") {
-    const file = tokenStore.tokenPath();
-    const removed = tokenStore.remove(file);
-    console.error("[dtwin] " + (removed ? `deleted ${file}. The next bridge start mints and saves a new token.` : `nothing to delete — no token saved at ${file}.`));
-    return;
-  }
+// ---- token lifecycle commands: they touch only the local token file (no bridge, no daemon, no plugin).
 
-  // ---- daemon lifecycle commands. Each owns the whole invocation and returns.
-  if (daemonCmd === "--stop") {
-    const stopped = await daemon.stop();
-    // Nothing at the current location: a daemon an earlier build started (before an upgrade) still
-    // listens at the old one, and is what holds the port.
-    const old = stopped ? null : await daemon.stopLegacy();
-    console.error("[dtwin] " + (stopped ? "daemon stopped." : old ? `stopped a daemon started by an earlier dtwin version (socket ${old}).` : "no daemon is running."));
-    return;
+function tokenStatus(): void {
+  const st = tokenStore.status();
+  console.log(JSON.stringify(st, null, 2));
+  console.error("[dtwin] token file: " + st.path + (st.stored ? "" : " (none saved yet)"));
+  console.error("[dtwin] in use: " + (
+    st.activeSource === "env" ? "FIGMA_BRIDGE_TOKEN from the environment"
+      : st.activeSource === "token-file" ? "the file given by --token-file"
+      : st.activeSource === "file" ? "the saved token"
+      : "a per-run token (nothing saved yet — the next bridge start will save one)"
+  ) + (st.fingerprint ? ` (${st.fingerprint})` : ""));
+  // The genuinely confusing state: a saved token exists, but the env var overrides it, so editing
+  // the file changes nothing and the user has no way to see why.
+  if (st.shadowed) {
+    console.error("[dtwin] note: FIGMA_BRIDGE_TOKEN is set, so it WINS over the saved token. Unset it to use the file.");
   }
-  if (daemonCmd === "--daemon-status") {
-    const st = await daemon.status();
-    console.log(JSON.stringify(st || { daemon: false }, null, 2));
-    // Fields an OLDER daemon may not report (daemon.ts DaemonStatusView) print as "?", never as a guess.
-    console.error("[dtwin] " + (st
-      ? `daemon up (pid ${st.pid ?? "?"}, port ${st.port ?? "?"}) — plugin ${st.pluginConnected ? "CONNECTED" : "not connected"}` +
-        (st.idleMs ? `, idle ${daemon.humanMs(st.idleForMs ?? 0)}/${daemon.humanMs(st.idleMs)} before auto-shutdown.` : ", no idle shutdown.")
-      : "no daemon is running — start one with --serve."));
-    return;
-  }
-  if (daemonCmd === "--serve") {
-    // The already-running probe FIRST: createBridge() binds the port, and with a daemon already up
-    // that is an EADDRINUSE exit naming "another dtwin bridge" — the right answer is the daemon's own
-    // refusal, which names --stop. serve() probes again right before listening (the race is handled there).
-    await daemon.assertNoDaemon();
-    const bridge = createBridge();
-    const { sock } = await daemon.serve(bridge, { log: (m) => console.error("[dtwin] " + m) });
-    console.error("[dtwin] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
-    console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects).');
-    console.error("[dtwin] The connection stays open until you run --stop (or Ctrl-C here).");
-    const idleMs = daemon.idleMsFromEnv(); // the ONE rule serve() uses (an unparsable value disables it)
-    console.error("[dtwin] " + (idleMs > 0
-      ? `It also shuts down after ${daemon.humanMs(idleMs)} idle, so an abandoned daemon can't hold port 8787 forever (FIGMA_DAEMON_IDLE_MIN=0 disables).`
-      : "Idle shutdown is DISABLED — remember to --stop it, or it holds port 8787 until you do."));
-    return; // the socket + WS server keep the event loop alive; no close() here, by design
-  }
+  if (st.loosePerms) console.error("[dtwin] warning: " + st.path + " is readable by other users — chmod 600 it.");
+}
 
-  // ---- ordinary commands. Route through a running daemon when there is one: it already holds the
-  // bridge (and port 8787), so opening our own here would hit EADDRINUSE and exit. When there is no
-  // daemon this is exactly the one-shot path it always was.
+function showToken(tokenFile: string | null): void {
+  const { token, source } = tokenStore.resolve({ tokenFile, persist: false });
+  // stdout, alone, so it pipes: `dtwin --show-token | pbcopy`. Every note goes to stderr.
+  console.log(token);
+  if (source === "ephemeral") {
+    console.error("[dtwin] note: nothing is saved yet, so this token is NOT what a future run will use. Start a bridge once to save one.");
+  }
+}
+
+function rotateToken(): void {
+  const had = tokenStore.readFrom(tokenStore.tokenPath());
+  const token = tokenStore.generate();
+  const file = tokenStore.write(token);
+  console.log(token);
+  console.error(`[dtwin] ${had ? "replaced" : "saved"} the bridge token in ${file}.`);
+  // The whole point of naming this: the plugin has the OLD token in clientStorage and will
+  // fail every handshake with a bare 401, retrying every 3s, until someone re-pastes.
+  console.error('[dtwin] re-paste it into the plugin\'s "Bridge token" field and press Save — until you do, the plugin cannot connect.');
+  if (process.env.FIGMA_BRIDGE_TOKEN) {
+    console.error("[dtwin] warning: FIGMA_BRIDGE_TOKEN is set and OVERRIDES this file, so the bridge will keep using the env value. Unset it for the rotation to take effect.");
+  }
+}
+
+function forgetToken(): void {
+  const file = tokenStore.tokenPath();
+  const removed = tokenStore.remove(file);
+  console.error("[dtwin] " + (removed ? `deleted ${file}. The next bridge start mints and saves a new token.` : `nothing to delete — no token saved at ${file}.`));
+}
+
+// ---- daemon lifecycle commands. Each owns the whole invocation.
+
+async function stopDaemon(): Promise<void> {
+  const stopped = await daemon.stop();
+  // Nothing at the current location: a daemon an earlier build started (before an upgrade) still
+  // listens at the old one, and is what holds the port.
+  const old = stopped ? null : await daemon.stopLegacy();
+  console.error("[dtwin] " + (stopped ? "daemon stopped." : old ? `stopped a daemon started by an earlier dtwin version (socket ${old}).` : "no daemon is running."));
+}
+
+async function daemonStatus(): Promise<void> {
+  const st = await daemon.status();
+  console.log(JSON.stringify(st || { daemon: false }, null, 2));
+  // Fields an OLDER daemon may not report (daemon.ts DaemonStatusView) print as "?", never as a guess.
+  console.error("[dtwin] " + (st
+    ? `daemon up (pid ${st.pid ?? "?"}, port ${st.port ?? "?"}) — plugin ${st.pluginConnected ? "CONNECTED" : "not connected"}` +
+      (st.idleMs ? `, idle ${daemon.humanMs(st.idleForMs ?? 0)}/${daemon.humanMs(st.idleMs)} before auto-shutdown.` : ", no idle shutdown.")
+    : "no daemon is running — start one with --serve."));
+}
+
+async function serveDaemon(createBridge: typeof ServerCore.createBridge): Promise<void> {
+  // The already-running probe FIRST: createBridge() binds the port, and with a daemon already up
+  // that is an EADDRINUSE exit naming "another dtwin bridge" — the right answer is the daemon's own
+  // refusal, which names --stop. serve() probes again right before listening (the race is handled there).
+  await daemon.assertNoDaemon();
+  const bridge = createBridge();
+  const { sock } = await daemon.serve(bridge, { log: (m) => console.error("[dtwin] " + m) });
+  console.error("[dtwin] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
+  console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects).');
+  console.error("[dtwin] The connection stays open until you run --stop (or Ctrl-C here).");
+  const idleMs = daemon.idleMsFromEnv(); // the ONE rule serve() uses (an unparsable value disables it)
+  console.error("[dtwin] " + (idleMs > 0
+    ? `It also shuts down after ${daemon.humanMs(idleMs)} idle, so an abandoned daemon can't hold port 8787 forever (FIGMA_DAEMON_IDLE_MIN=0 disables).`
+    : "Idle shutdown is DISABLED — remember to --stop it, or it holds port 8787 until you do."));
+  // the socket + WS server keep the event loop alive; no close() here, by design
+}
+
+// Typed per command (commands.ts). Every send also answers WHICH connected Figma file the bridge
+// routed the command to — the client resolveClient() picked for --client, described as `dtwin list
+// clients` would — so a screen export can be stamped with its real source without this
+// file re-implementing the bridge's matching rules. `client` is null only from a daemon older than
+// that field.
+type Sent<C extends Cmd> = { reply: Commands[C]["reply"]; client: ClientRow | null };
+type Send = <C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number) => Promise<Sent<C>>;
+
+// What every ordinary command runs on: where its requests go (a running daemon, or a bridge of its own),
+// and the timing and shutdown helpers the commands share.
+interface Session {
+  /** This process's own bridge; null when a daemon answers. */
+  bridge: Bridge | null;
+  send: Send;
+  /** Runs one write, adding its time to the closing `done in …` line. */
+  timedWrite: <T>(write: () => T) => T;
+  doneLine: () => string[];
+  /** Closes this process's bridge, if it has one. */
+  finish: () => void;
+}
+
+// ---- ordinary commands. Route through a running daemon when there is one: it already holds the
+// bridge (and port 8787), so opening our own here would hit EADDRINUSE and exit. When there is no
+// daemon this is exactly the one-shot path it always was.
+async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.createBridge): Promise<Session> {
+  const { listOnly, childrenId, listLibraries, whoami, listClients, client, connectWaitMs } = parsed;
   // Timing (see `doneLine` below): the clock starts before the daemon probe.
   const tStart = Date.now();
   const timing = { connectMs: 0, exportMs: 0, writeMs: 0 };
@@ -940,13 +959,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   };
 
   let bridge: Bridge | null = null;
-  // Typed per command (commands.ts). Every send also answers WHICH connected Figma file the bridge
-  // routed the command to — the client resolveClient() picked for --client, described as `dtwin list
-  // clients` would — so a screen export can be stamped with its real source without this
-  // file re-implementing the bridge's matching rules. `client` is null only from a daemon older than
-  // that field.
-  type Sent<C extends Cmd> = { reply: Commands[C]["reply"]; client: ClientRow | null };
-  let send: <C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number) => Promise<Sent<C>>;
+  let send: Send;
   if (d) {
     // waitForConnection is forwarded so the DAEMON does the waiting: the plugin may not have
     // reconnected yet after a Figma restart, and the daemon is the side holding the socket.
@@ -1007,143 +1020,148 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   // With a daemon there is no bridge of ours to close, and closing the DAEMON's would be wrong — one
   // helper so no exit path below has to know which.
   const finish = () => { if (bridge) bridge.close(); };
+  return { bridge, send, timedWrite, doneLine, finish };
+}
 
-  // The library discovery command. Same cost/budget tier as the two below (cheap relative to an
-  // export) and the same "print, never write outDir" contract — but its own branch, because it
-  // prints a TABLE rather than the JSON id-catalogue those two exist to hand you.
-  // Which Figma files are connected right now. Prints a table for a human (and for an agent skimming
-  // a terminal); the connId in the first column is what --client takes. Deliberately does NOT talk to
-  // the plugin at all — the answer lives entirely in the bridge, so this works even while every
-  // connected file is busy with a long export.
-  if (listClients) {
-    const rows = bridge ? bridge.listClients() : (await daemon.status())?.clients || [];
-    console.log(json ? JSON.stringify({ clients: rows }, null, 2) : formatClients(rows));
-    if (rows.length > 1) {
-      console.error("[dtwin] " + rows.length + " files connected — pass --client <id|fileKey|name> " +
-        "to pick one, or commands that need a target will refuse rather than guess.");
-    }
-    return finish();
+// Which Figma files are connected right now. Prints a table for a human (and for an agent skimming
+// a terminal); the connId in the first column is what --client takes. Deliberately does NOT talk to
+// the plugin at all — the answer lives entirely in the bridge, so this works even while every
+// connected file is busy with a long export.
+async function listClientsCmd({ bridge, finish }: Session, json: boolean): Promise<void> {
+  const rows = bridge ? bridge.listClients() : (await daemon.status())?.clients || [];
+  console.log(json ? JSON.stringify({ clients: rows }, null, 2) : formatClients(rows));
+  if (rows.length > 1) {
+    console.error("[dtwin] " + rows.length + " files connected — pass --client <id|fileKey|name> " +
+      "to pick one, or commands that need a target will refuse rather than guess.");
   }
+  finish();
+}
 
-  // The identity/liveness probe. Prints BOTH halves: what the plugin says it is, and what the socket
-  // did. Run it in each of two open files (a second terminal, or twice in a row after switching the
-  // focused file) and compare — the interpretation notes below are printed with the result so the
-  // reading does not depend on remembering what each field means.
-  if (whoami) {
-    const { reply: r, client: whoamiClient } = await send("whoami", {}, TIMEOUTS.command);
-    // connectionInfo lives on the bridge object; with a daemon in front, the daemon owns it and this
-    // process has no bridge of its own, so report the plugin half alone rather than inventing zeros.
-    // With a daemon in front this process owns no socket, but the DAEMON does — so ask it, rather
-    // than emitting `connection: null` under a help text that promises socket uptime and takeovers.
-    // The socket described is the ADDRESSED file's (the client send() routed to), not whichever
-    // connection happens to be first — with two files open `--client <name>` would print the other's.
-    const addressed = whoamiClient ? whoamiClient.connId : null;
-    let conn: ConnectionInfo | null = bridge ? bridge.connectionInfo(addressed ?? undefined) : null;
-    let connFrom: string | null = bridge ? "this process" : null;
-    if (!conn) {
-      const st = await daemon.status().catch(() => null);
-      if (st && st.connection) { conn = core.connectionFor(st.connection, addressed); connFrom = `the daemon (pid ${st.pid})`; }
-    }
-    console.log(JSON.stringify({ plugin: r, connection: conn, connectionFrom: connFrom || undefined }, null, 2));
-    console.error("[dtwin] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
-      ", up " + Math.round(r.uptimeMs / 1000) + "s.");
-    // Printed even when nothing is stale, so "no version at all" (an old bundle that
-    // predates this field) is visibly different from "version reported, and it's current".
-    console.error("[dtwin] plugin version: " + (r.pluginVersion || "unknown (older bundle — predates version reporting)"));
-    const stale = pluginStalenessNote(r.pluginVersion);
-    if (stale) console.error("[dtwin] ! " + stale);
-    console.error("[dtwin] fileKey: " + (r.fileKeyAvailable
-      ? r.fileKey + " (available — usable as a stable routing key)"
-      : "UNAVAILABLE (gated to private plugins; routing must use a server-minted id)"));
-    if (conn) {
-      console.error("[dtwin] socket " + conn.connId + " up " + Math.round(conn.connectionUptimeMs / 1000) +
-        "s; connections this run: " + conn.connectionsThisRun + ", takeovers: " + conn.takeovers +
-        (conn.takeovers ? " — a second plugin instance DID connect and displace an earlier one." : ".") +
-        (connFrom && connFrom !== "this process" ? " (from " + connFrom + ")" : ""));
-    } else {
-      console.error("[dtwin] socket stats unavailable — no daemon is running and this process holds no bridge of its own.");
-    }
-    console.error("[dtwin] reading it: run this from BOTH open files. Two different instanceIds => " +
-      "two instances coexist. A CHANGED instanceId on a repeat call => Figma restarted the plugin runtime. " +
-      "takeovers > 0 => the bridge's one-connection limit is what disconnected the other file, not Figma.");
-    return finish();
+// The identity/liveness probe. Prints BOTH halves: what the plugin says it is, and what the socket
+// did. Run it in each of two open files (a second terminal, or twice in a row after switching the
+// focused file) and compare — the interpretation notes below are printed with the result so the
+// reading does not depend on remembering what each field means.
+async function whoamiCmd({ bridge, send, finish }: Session, core: typeof ServerCore): Promise<void> {
+  const { reply: r, client: whoamiClient } = await send("whoami", {}, TIMEOUTS.command);
+  // connectionInfo lives on the bridge object; with a daemon in front, the daemon owns it and this
+  // process has no bridge of its own, so report the plugin half alone rather than inventing zeros.
+  // With a daemon in front this process owns no socket, but the DAEMON does — so ask it, rather
+  // than emitting `connection: null` under a help text that promises socket uptime and takeovers.
+  // The socket described is the ADDRESSED file's (the client send() routed to), not whichever
+  // connection happens to be first — with two files open `--client <name>` would print the other's.
+  const addressed = whoamiClient ? whoamiClient.connId : null;
+  let conn: ConnectionInfo | null = bridge ? bridge.connectionInfo(addressed ?? undefined) : null;
+  let connFrom: string | null = bridge ? "this process" : null;
+  if (!conn) {
+    const st = await daemon.status().catch(() => null);
+    if (st && st.connection) { conn = core.connectionFor(st.connection, addressed); connFrom = `the daemon (pid ${st.pid})`; }
   }
-
-  if (listLibraries) {
-    console.error("[dtwin] plugin connected — listing libraries…");
-    const { reply: r } = await send("listLibraries", {}, listTimeoutMs);
-    // Plugin-side warnings first, on stderr, so they survive a `| less` of stdout and can never be
-    // mistaken for part of the table.
-    for (const w of r.warnings) console.error("[dtwin] warn  " + w);
-    console.log(json ? JSON.stringify(r, null, 2) : formatLibraries(r));
-    console.error("[dtwin] next: dtwin --list   then   --page <id>   (pull only the pages you need)");
-    return finish(); // see the close()-not-exit note below
+  console.log(JSON.stringify({ plugin: r, connection: conn, connectionFrom: connFrom || undefined }, null, 2));
+  console.error("[dtwin] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
+    ", up " + Math.round(r.uptimeMs / 1000) + "s.");
+  // Printed even when nothing is stale, so "no version at all" (an old bundle that
+  // predates this field) is visibly different from "version reported, and it's current".
+  console.error("[dtwin] plugin version: " + (r.pluginVersion || "unknown (older bundle — predates version reporting)"));
+  const stale = pluginStalenessNote(r.pluginVersion);
+  if (stale) console.error("[dtwin] ! " + stale);
+  console.error("[dtwin] fileKey: " + (r.fileKeyAvailable
+    ? r.fileKey + " (available — usable as a stable routing key)"
+    : "UNAVAILABLE (gated to private plugins; routing must use a server-minted id)"));
+  if (conn) {
+    console.error("[dtwin] socket " + conn.connId + " up " + Math.round(conn.connectionUptimeMs / 1000) +
+      "s; connections this run: " + conn.connectionsThisRun + ", takeovers: " + conn.takeovers +
+      (conn.takeovers ? " — a second plugin instance DID connect and displace an earlier one." : ".") +
+      (connFrom && connFrom !== "this process" ? " (from " + connFrom + ")" : ""));
+  } else {
+    console.error("[dtwin] socket stats unavailable — no daemon is running and this process holds no bridge of its own.");
   }
+  console.error("[dtwin] reading it: run this from BOTH open files. Two different instanceIds => " +
+    "two instances coexist. A CHANGED instanceId on a repeat call => Figma restarted the plugin runtime. " +
+    "takeovers > 0 => the bridge's one-connection limit is what disconnected the other file, not Figma.");
+  finish();
+}
 
-  // The two cheap index commands. --list is the file-wide map (consult it to pick a target, THEN
-  // deep-pull just that one); --children <id> is its node-scoped twin, for peeking inside a frame
-  // --list surfaced. Both PRINT to stdout and never write outDir — a decision aid, not a build input —
-  // and both share the same warn/print/hint/shutdown tail, so only the command differs.
-  if (listOnly || childrenId) {
-    console.error("[dtwin] plugin connected — " + (childrenId ? "listing children of " + childrenId : "listing structure") + "…");
-    const r: ListPagesReply | ListChildrenReply = childrenId
-      ? (await send("listChildren", { nodeId: childrenId }, listTimeoutMs)).reply
-      : (await send("listPages", { depth: listDepth }, listTimeoutMs)).reply;
-    for (const w of r.manifest.warnings) console.error("[dtwin] warn  " + w);
-    console.log(JSON.stringify(r, null, 2));
-    // "top-level frame(s)" was a lie on every real file: the array holds SECTION, GROUP, INSTANCE,
-    // TEXT and RECTANGLE too, and on a sectioned file the actual screens are one level deeper.
-    // Say "layer", which is Figma's own word for any object, and break the count down
-    // so "deep-pull next" points somewhere real — for a children listing as much as for the page map.
-    const byType: Record<string, number> = {};
-    for (const f of topLevelLayers(r)) byType[f.type] = (byType[f.type] || 0) + 1;
-    const kinds = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`).join(", ");
-    const summary = "children" in r
-      ? `${r.children.length} direct child(ren) of "${r.name}" (${r.type})${kinds ? ` — ${kinds}` : ""}.`
-      : `${r.manifest.pages} page(s)${r.manifest.frames === undefined ? "" : `, ${r.manifest.frames} top-level layer(s)`} in "${r.file}"${kinds ? ` — ${kinds}` : ""}.`;
-    console.error("[dtwin] " + summary);
-    // A SECTION is a container, not a screen — pulling one deep-serializes every screen inside it.
-    // On the file this was found on, the sections were 8898-35975px wide.
-    if (topLevelLayers(r).some((f) => f.type === "SECTION")) {
-      console.error("[dtwin] note: some top-level layers are SECTIONs — containers, not screens. The screens are INSIDE them:");
-      console.error("[dtwin]       dtwin list children <section id>   then pull the frame you want.");
-    }
-    console.error("[dtwin] next: dtwin pull --page <id>   (repeatable; add --no-assets to skip the render pass)");
-    console.error("[dtwin]       or: dtwin pull --node <id>   (just ONE node, fully exported with its own assets)");
-    console.error("[dtwin]       unsure which of two same-named frames? dtwin screenshot <id> renders one cheaply.");
-    // The WS server keeps the event loop alive, so without an explicit shutdown these commands hung
-    // forever after printing (found live: still resident and holding port 8787 a minute later,
-    // blocking every subsequent pull). close() rather than process.exit(0) — same effect on the hang,
-    // without truncating the JSON these commands exist to print. See close() in server-core.ts.
-    return finish();
+// The library discovery command. Same cost/budget tier as the two below (cheap relative to an
+// export) and the same "print, never write outDir" contract — but its own branch, because it
+// prints a TABLE rather than the JSON id-catalogue those two exist to hand you.
+async function listLibrariesCmd({ send, finish }: Session, json: boolean, listTimeoutMs: number): Promise<void> {
+  console.error("[dtwin] plugin connected — listing libraries…");
+  const { reply: r } = await send("listLibraries", {}, listTimeoutMs);
+  // Plugin-side warnings first, on stderr, so they survive a `| less` of stdout and can never be
+  // mistaken for part of the table.
+  for (const w of r.warnings) console.error("[dtwin] warn  " + w);
+  console.log(json ? JSON.stringify(r, null, 2) : formatLibraries(r));
+  console.error("[dtwin] next: dtwin --list   then   --page <id>   (pull only the pages you need)");
+  finish(); // see the close()-not-exit note below
+}
+
+// The two cheap index commands. --list is the file-wide map (consult it to pick a target, THEN
+// deep-pull just that one); --children <id> is its node-scoped twin, for peeking inside a frame
+// --list surfaced. Both PRINT to stdout and never write outDir — a decision aid, not a build input —
+// and both share the same warn/print/hint/shutdown tail, so only the command differs.
+async function listIndexCmd({ send, finish }: Session, childrenId: string | null, listDepth: 1 | 2, listTimeoutMs: number): Promise<void> {
+  console.error("[dtwin] plugin connected — " + (childrenId ? "listing children of " + childrenId : "listing structure") + "…");
+  const r: ListPagesReply | ListChildrenReply = childrenId
+    ? (await send("listChildren", { nodeId: childrenId }, listTimeoutMs)).reply
+    : (await send("listPages", { depth: listDepth }, listTimeoutMs)).reply;
+  for (const w of r.manifest.warnings) console.error("[dtwin] warn  " + w);
+  console.log(JSON.stringify(r, null, 2));
+  // "top-level frame(s)" was a lie on every real file: the array holds SECTION, GROUP, INSTANCE,
+  // TEXT and RECTANGLE too, and on a sectioned file the actual screens are one level deeper.
+  // Say "layer", which is Figma's own word for any object, and break the count down
+  // so "deep-pull next" points somewhere real — for a children listing as much as for the page map.
+  const byType: Record<string, number> = {};
+  for (const f of topLevelLayers(r)) byType[f.type] = (byType[f.type] || 0) + 1;
+  const kinds = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`).join(", ");
+  const summary = "children" in r
+    ? `${r.children.length} direct child(ren) of "${r.name}" (${r.type})${kinds ? ` — ${kinds}` : ""}.`
+    : `${r.manifest.pages} page(s)${r.manifest.frames === undefined ? "" : `, ${r.manifest.frames} top-level layer(s)`} in "${r.file}"${kinds ? ` — ${kinds}` : ""}.`;
+  console.error("[dtwin] " + summary);
+  // A SECTION is a container, not a screen — pulling one deep-serializes every screen inside it.
+  // On the file this was found on, the sections were 8898-35975px wide.
+  if (topLevelLayers(r).some((f) => f.type === "SECTION")) {
+    console.error("[dtwin] note: some top-level layers are SECTIONs — containers, not screens. The screens are INSIDE them:");
+    console.error("[dtwin]       dtwin list children <section id>   then pull the frame you want.");
   }
+  console.error("[dtwin] next: dtwin pull --page <id>   (repeatable; add --no-assets to skip the render pass)");
+  console.error("[dtwin]       or: dtwin pull --node <id>   (just ONE node, fully exported with its own assets)");
+  console.error("[dtwin]       unsure which of two same-named frames? dtwin screenshot <id> renders one cheaply.");
+  // The WS server keeps the event loop alive, so without an explicit shutdown these commands hung
+  // forever after printing (found live: still resident and holding port 8787 a minute later,
+  // blocking every subsequent pull). close() rather than process.exit(0) — same effect on the hang,
+  // without truncating the JSON these commands exist to print. See close() in server-core.ts.
+  finish();
+}
 
-  // --screenshot: one node's reference PNG, on demand — the visual-validation counterpart to --list/
-  // --children above. Cheap next to a full export (skips serialize() and the recursive asset walk —
-  // see collectScreenshot's comment in collect.ts) but it DOES write a file, unlike the two commands
-  // it sits next to, so it gets its own branch rather than joining their print-only one.
-  if (screenshotId) {
-    console.error("[dtwin] plugin connected — rendering a reference screenshot…");
-    const { reply: r } = await send("screenshot", { nodeId: screenshotId, ...ifDefined("scale", scale) }, exportTimeoutMs);
-    for (const w of r.manifest.warnings) console.error("[dtwin] warn  " + w);
-    // Print the path writeScreenshot actually wrote, not the plugin's own relative `reference`
-    // string: those can disagree, and a printed path that
-    // finds nothing is worse than no path at all.
-    const shot = timedWrite(() => writeScreenshot(outDir, r, scale));
-    const ref = shot.reference || r.reference;
-    if (!ref) throw new Error(`the plugin rendered ${r.name} (${r.type}) but named no reference file — nothing was written`);
-    // The node's size, the render scale and the PNG's own pixel size. Each is omitted when its
-    // source did not send it (an older plugin has no w/h/scale; png needs PNG bytes).
-    console.log(JSON.stringify({
-      id: r.id, name: r.name, type: r.type,
-      ...ifDefined("w", r.w), ...ifDefined("h", r.h), ...ifDefined("scale", r.scale), ...ifDefined("png", shot.png),
-      reference: ref,
-    }, null, 2));
-    console.error(`[dtwin] wrote ${path.join(outDir, ref)} — ${r.name} (${r.type}).`);
-    for (const l of doneLine()) console.error("[dtwin] " + l);
-    return finish();
-  }
+// --screenshot: one node's reference PNG, on demand — the visual-validation counterpart to --list/
+// --children above. Cheap next to a full export (skips serialize() and the recursive asset walk —
+// see collectScreenshot's comment in collect.ts) but it DOES write a file, unlike the two commands
+// it sits next to, so it gets its own branch rather than joining their print-only one.
+async function screenshotCmd({ send, timedWrite, doneLine, finish }: Session, screenshotId: string, scale: number | undefined, outDir: string, exportTimeoutMs: number): Promise<void> {
+  console.error("[dtwin] plugin connected — rendering a reference screenshot…");
+  const { reply: r } = await send("screenshot", { nodeId: screenshotId, ...ifDefined("scale", scale) }, exportTimeoutMs);
+  for (const w of r.manifest.warnings) console.error("[dtwin] warn  " + w);
+  // Print the path writeScreenshot actually wrote, not the plugin's own relative `reference`
+  // string: those can disagree, and a printed path that
+  // finds nothing is worse than no path at all.
+  const shot = timedWrite(() => writeScreenshot(outDir, r, scale));
+  const ref = shot.reference || r.reference;
+  if (!ref) throw new Error(`the plugin rendered ${r.name} (${r.type}) but named no reference file — nothing was written`);
+  // The node's size, the render scale and the PNG's own pixel size. Each is omitted when its
+  // source did not send it (an older plugin has no w/h/scale; png needs PNG bytes).
+  console.log(JSON.stringify({
+    id: r.id, name: r.name, type: r.type,
+    ...ifDefined("w", r.w), ...ifDefined("h", r.h), ...ifDefined("scale", r.scale), ...ifDefined("png", shot.png),
+    reference: ref,
+  }, null, 2));
+  console.error(`[dtwin] wrote ${path.join(outDir, ref)} — ${r.name} (${r.type}).`);
+  for (const l of doneLine()) console.error("[dtwin] " + l);
+  finish();
+}
 
+// A pull: one node, the selection, a library catalog, the design system alone, or pages — written to outDir.
+async function exportCmd({ send, timedWrite, doneLine, finish }: Session, parsed: ParsedArgs): Promise<void> {
+  const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, pageSel, exportTimeoutMs, outDir } = parsed;
   const mode = asLibrary ? `library "${asLibrary}"` : nodeId ? `node ${nodeId}` : selection ? "selection" : designSystemOnly ? "design system only" : allPages ? "all pages" : pageSel.length ? `page(s) ${pageSel.join(", ")}` : "current page";
   // Measured: --all-pages did not finish in 15 minutes on a real 25-page/119-frame file, even with
   // --no-assets. Kept (it's slow, not unsafe — and it's fine on small files) but it should not be the
@@ -1201,6 +1219,30 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
 
   for (const l of doneLine()) console.error("[dtwin] " + l);
   finish(); // NOT process.exit — see close() in server-core.ts (a daemon-routed run has nothing to close)
+}
+
+// Routes the parsed command line to the one command it names.
+async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> {
+  const { listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, listTimeoutMs, exportTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile, json } = parsed;
+  // ---- token lifecycle commands. These run FIRST and return: they touch only the local token file,
+  // so unlike everything below they need no bridge, no daemon and no plugin. Running them before
+  // daemon.connect() also means they still work while a daemon holds the port.
+  if (tokenCmd === "--token-status") return tokenStatus();
+  if (tokenCmd === "--show-token") return showToken(tokenFile);
+  if (tokenCmd === "--rotate-token") return rotateToken();
+  if (tokenCmd === "--forget-token") return forgetToken();
+
+  if (daemonCmd === "--stop") return stopDaemon();
+  if (daemonCmd === "--daemon-status") return daemonStatus();
+  if (daemonCmd === "--serve") return serveDaemon(core.createBridge);
+
+  const session = await openSession(parsed, core.createBridge);
+  if (listClients) return listClientsCmd(session, json);
+  if (whoami) return whoamiCmd(session, core);
+  if (listLibraries) return listLibrariesCmd(session, json, listTimeoutMs);
+  if (listOnly || childrenId) return listIndexCmd(session, childrenId, listDepth, listTimeoutMs);
+  if (screenshotId) return screenshotCmd(session, screenshotId, scale, outDir, exportTimeoutMs);
+  return exportCmd(session, parsed);
 }
 
 // The CLI entry. Runs ONLY when this file is the process entry (see the guard at the bottom): routing
