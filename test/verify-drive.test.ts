@@ -78,6 +78,15 @@ safe("destination never exported (another file's id) → destinationExported fal
 });
 safe("the frame root's scroll direction travels with expectation.frame", () => buildExpectation([screen("horizontal")], OPTS).frame.scroll === "horizontal" && exp.frame.scroll === undefined);
 
+safe("a sibling export is read once per --expect, though the alias pass and the overlay pass both want it", () => {
+  const reads: Record<string, number> = {};
+  const withShell = PANTRY();
+  withShell.children = [...(withShell.children ?? []), { type: "INSTANCE", id: "2:8", name: "Nav", mainComponent: { name: "Nav", key: "k-nav", setName: "Nav" } }];
+  const doc: ExpectInput = { doc: screenExport([withShell], { exportedAt: "2026-10-01T00:00:00Z", screen: "Pantry", nodeId: "1:1", sourceFile: KIT }), label: "Pantry__1_1" };
+  const e = buildExpectation([doc], { index: { layers: LAYERS }, readSibling: (f) => { reads[f] = (reads[f] ?? 0) + 1; return SIBLINGS[f] ?? null; } });
+  return Object.keys(reads).length >= 3 && Object.values(reads).every((n) => n === 1) && ia(e.interactions, "2:2")?.overlay?.from === "export";
+});
+
 // ---------------------------------------------------------------- plan interactions merged at --expect
 console.log("plan.interactions merged at --expect:");
 {

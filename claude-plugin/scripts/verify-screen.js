@@ -1982,6 +1982,12 @@ function buildExpectation(docs, opts) {
     if (candidates && !candidates.some((l) => l.id === row.destinationId)) row.destinationExported = false;
   }
   const readSibling = opts && opts.readSibling;
+  const siblingCache = /* @__PURE__ */ new Map();
+  const sibling = (file) => {
+    if (!readSibling) return null;
+    if (!siblingCache.has(file)) siblingCache.set(file, readSibling(file) ?? null);
+    return siblingCache.get(file) ?? null;
+  };
   if (index && readSibling) {
     const ownRootIds = new Set(roots.map((r) => r.id));
     const specSuffixes = new Set(nodes.map((n) => idSuffix(n.nodeId)).filter((x) => x !== null));
@@ -1996,7 +2002,7 @@ function buildExpectation(docs, opts) {
       for (const row of cands) {
         if (ownRootIds.has(row.id) || !row.file || read.has(row.file)) continue;
         read.add(row.file);
-        const sib = readSibling(row.file);
+        const sib = sibling(row.file);
         if (!sib) continue;
         const sx = screenExportOf(sib);
         const sibFile = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : void 0;
@@ -2023,12 +2029,6 @@ function buildExpectation(docs, opts) {
       if (sp) sp.aliases = [...set].sort();
     }
   }
-  const siblingCache = /* @__PURE__ */ new Map();
-  const sibling = (file) => {
-    if (!readSibling) return null;
-    if (!siblingCache.has(file)) siblingCache.set(file, readSibling(file) ?? null);
-    return siblingCache.get(file) ?? null;
-  };
   const destinationRoot = (destId, file) => {
     const own = [...rootNodesByFile.get(file) ?? [], ...file !== "" ? rootNodesByFile.get("") ?? [] : []].find((r) => r.id === destId);
     if (own) return own;
