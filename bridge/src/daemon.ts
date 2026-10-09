@@ -20,6 +20,7 @@ import path from "node:path";
 import { errMsg, errCode } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
+import { bridgePortOrExit } from "./ports.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
 import type { ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
@@ -275,8 +276,11 @@ export function sockFileProblem(sock: string, uid: number): string | null {
   return st.uid === uid ? null : `it is owned by uid ${st.uid}, not ${uid}`;
 }
 
+// Without an explicit port, the one server-core binds: FIGMA_BRIDGE_PORT parsed the same way, so " 8788"
+// names the 8788 socket and a value no plugin can reach exits with server-core's message rather than
+// naming a socket no bridge ever serves.
 function sockName(port: number | undefined, place: SockPlace): string {
-  return `designtwin-${port || (place.env ?? process.env).FIGMA_BRIDGE_PORT || 8787}.sock`;
+  return `designtwin-${port || bridgePortOrExit((place.env ?? process.env).FIGMA_BRIDGE_PORT)}.sock`;
 }
 
 // Keyed by PORT so two bridges on different ports get two daemons rather than fighting over one socket.

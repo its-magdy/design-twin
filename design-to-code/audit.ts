@@ -69,6 +69,7 @@ import { alnumKey } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule
 import { AUDIT_DIR, findMapFile } from "../bridge/src/project-layout.ts";
+import { OVERRIDE_CAP } from "../bridge/src/instance-overrides.ts";
 
 
 
@@ -507,10 +508,10 @@ function walk(ac: AuditCtx, node: IrNode | null | undefined, ancestors: Ancestor
     validationHits.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
   }
 
-  // An instance's `overrides` name the sublayers it changed (the plugin keeps the first OVERRIDE_CAP = 100 — a
-  // full list may be cut short, so its instance's texts are not judged). Read before the hidden branch returns.
+  // An instance's `overrides` name the sublayers it changed (the plugin keeps the first OVERRIDE_CAP — a full
+  // list may be cut short, so its instance's texts are not judged). Read before the hidden branch returns.
   if (Array.isArray(node.overrides)) {
-    if (node.overrides.length >= 100) cappedInstances.add(node.id);
+    if (node.overrides.length >= OVERRIDE_CAP) cappedInstances.add(node.id);
     for (const o of node.overrides) if (Array.isArray(o.fields) && o.fields.includes("characters")) charOverridden.add(o.id);
   }
 

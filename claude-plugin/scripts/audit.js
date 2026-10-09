@@ -2075,6 +2075,9 @@ function isRasterShell(rasters, paths) {
   return (rasters ?? 0) > 0 && (paths ?? 0) < RASTER_SHELL_MAX_PATHS;
 }
 
+// bridge/src/instance-overrides.ts
+var OVERRIDE_CAP = 100;
+
 // design-to-code/audit.ts
 var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
 var PLATFORMS = Object.keys(TOUCH_MIN);
@@ -2369,7 +2372,7 @@ function walk2(ac, node, ancestors, ctx) {
     validationHits.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
   }
   if (Array.isArray(node.overrides)) {
-    if (node.overrides.length >= 100) cappedInstances.add(node.id);
+    if (node.overrides.length >= OVERRIDE_CAP) cappedInstances.add(node.id);
     for (const o of node.overrides) if (Array.isArray(o.fields) && o.fields.includes("characters")) charOverridden.add(o.id);
   }
   if (hiddenBranch) {
