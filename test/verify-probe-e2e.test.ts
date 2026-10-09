@@ -14,7 +14,7 @@ import { spawnSync } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { isVerifyMeasured } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
-import { STYLE_KEYS } from "../design-to-code/verify-screen.ts";
+import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import { liveStatusFile, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { freeHoverPoint } from "../design-to-code/probe-page.ts";

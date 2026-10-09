@@ -649,7 +649,6 @@ function parseCssColor(v) {
 }
 
 // design-to-code/probe-match.ts
-var CANONICAL_MATCHED_BY = ["tag", "tag-shared-path", "tag-alias", "text", "text-ordinal", "position", "frame"];
 var isMatch = (m) => "matchedBy" in m;
 var normText = (s) => s.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 var attrSelector = (id) => `[data-dt-node="${id.replace(/["\\]/g, "\\$&")}"]`;
@@ -905,52 +904,138 @@ function census(nodes, notMeasured) {
   return c;
 }
 
-// design-to-code/verify-screen.ts
-import path5 from "node:path";
-
-// design-to-code/content-hash.ts
-import { spawnSync } from "node:child_process";
-
-// bridge/src/json-util.ts
-function isStringArray(x) {
-  return Array.isArray(x) && x.every((v) => typeof v === "string");
-}
-
-// design-to-code/content-hash.ts
-function gitHead(cwd) {
-  try {
-    const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
-    const h = r.status === 0 && String(r.stdout || "").trim();
-    return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
-  } catch {
-    return null;
-  }
-}
-
-// bridge/src/atomic-write.ts
-import crypto2 from "node:crypto";
-import fs from "node:fs";
+// design-to-code/verify-shared.ts
 import path from "node:path";
-var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
-function writeFileAtomic(file, data, opts = {}) {
-  fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
-  const tmp = file + tmpSuffix();
-  try {
-    fs.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
-    if (opts.mode !== void 0) fs.chmodSync(tmp, opts.mode);
-    fs.renameSync(tmp, file);
-  } catch (e) {
-    try {
-      fs.rmSync(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
+var TOLERANCE = {
+  fontSize: 0.5,
+  // a browser rounds; a different token does not
+  fontWeight: 0,
+  // 500 vs 600 is a different style, never a rendering artifact
+  lineHeight: 2,
+  // normal/unitless line-heights and font-metric rounding genuinely differ
+  letterSpacing: 0.2,
+  radius: 0.5,
+  padding: 1,
+  gap: 1,
+  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
+  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
+  size: 1,
+  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
+  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
+  position: 2,
+  opacity: 0.02,
+  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
+  stroke: 0.5,
+  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
+  // in the field runs. Known miss: heavy italics/overhang can exceed it.
+  textInk: 3
+};
+function normColor(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  const key = colorKey(s);
+  if (key) return key;
+  const c = parseCssColor(s);
+  if (c === null) return s;
+  if (c.a === 0) return "transparent";
+  return colorKey(formatHex(c)) ?? s;
 }
+var WEIGHTS = {
+  thin: 100,
+  extralight: 200,
+  ultralight: 200,
+  light: 300,
+  normal: 400,
+  regular: 400,
+  book: 400,
+  medium: 500,
+  semibold: 600,
+  demibold: 600,
+  bold: 700,
+  extrabold: 800,
+  ultrabold: 800,
+  black: 900,
+  heavy: 900
+};
+function normWeight(v) {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  const s = String(v).trim();
+  if (/^\d+$/.test(s)) return Number(s);
+  const key = s.toLowerCase().replace(/[^a-z]/g, "");
+  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
+}
+function normFamily(v) {
+  if (v == null) return null;
+  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+}
+function resolveInside(base, rel, within = base) {
+  const root = path.resolve(within), file = path.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path.sep) ? file : null;
+}
+var FIELDS = [
+  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
+  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
+  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
+  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
+  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
+  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
+  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
+  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
+  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
+  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
+  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
+  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
+  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
+  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
+  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
+  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
+  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
+  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
+];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEY_SHAPE = {
+  borderRadius: "number | [tl,tr,br,bl]",
+  padding: "[t,r,b,l]",
+  fill: "an SVG's paint",
+  textBox: "{x,w} of a Range over the text",
+  placeholderText: "el.placeholder",
+  placeholderColor: "the ::placeholder colour",
+  tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display"
+};
+var MEASURED_KEYS_DOC = {
+  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
+  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
+  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
+  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
+  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
+  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
+  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
+  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
+  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
+  "nodes[].styles.tag": "the element's tagName, lower-case",
+  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
+  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
+  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
+  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
+  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
+  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
+  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
+  "expectationSha256": "sha256 of the .expected.json you measured against"
+};
+var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
 
 // design-to-code/types.ts
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// bridge/src/json-util.ts
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
 
 // design-to-code/doc-guards.ts
@@ -1145,7 +1230,7 @@ function isStringRecord(x) {
 isStringRecord.expected = "an object of strings";
 
 // design-to-code/read-json.ts
-import fs2 from "node:fs";
+import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
@@ -1164,7 +1249,7 @@ function readFailure(e) {
 function readJson(file, guard) {
   let buf;
   try {
-    buf = fs2.readFileSync(file);
+    buf = fs.readFileSync(file);
   } catch (e) {
     return readFailure(e);
   }
@@ -1188,6 +1273,98 @@ function readJsonOrNull(file, guard) {
   return "doc" in r ? r.doc : null;
 }
 
+// design-to-code/cli-args.ts
+import path2 from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
+var scriptCmd = (name) => `node ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
+  try {
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      failure = unknownFlags();
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
+    } else {
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
+    }
+  }
+  console.error(failure);
+  process.exit(exitCode);
+}
+
 // design-to-code/plan-waivers.ts
 function canonical(v) {
   if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
@@ -1197,6 +1374,55 @@ function canonical(v) {
   }
   return JSON.stringify(v ?? null);
 }
+
+// design-to-code/probe-steps.ts
+var STEP_KINDS = ["click", "waitFor", "goto"];
+var isStepKind = (k) => STEP_KINDS.includes(k);
+var REFUSED = {
+  fill: "a typed value may submit a form when the steps are replayed",
+  type: "a typed value may submit a form when the steps are replayed",
+  press: "a key press may submit a form when the steps are replayed",
+  hover: "a hover is not a navigation (hover-revealed openers are revealed by the probe itself)",
+  check: "a checked box is state, not navigation",
+  select: "a selected option is state, not navigation"
+};
+function describeStep(s, i) {
+  const [k, v] = Object.entries(s)[0] ?? ["?", ""];
+  return `step ${i + 1} {${k}: ${JSON.stringify(v)}}`;
+}
+function isSameOriginPath(v) {
+  return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
+}
+function parseSteps(x) {
+  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
+  if (!Array.isArray(list)) {
+    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
+  }
+  const steps = [];
+  for (const [i, raw] of list.entries()) {
+    const at = `step ${i + 1}`;
+    if (!isJsonObject(raw)) return { error: `${at} is not an object like {"click": "<selector>"}` };
+    const keys = Object.keys(raw);
+    const k = keys[0];
+    if (keys.length !== 1 || k === void 0) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} \u2014 exactly one of ${STEP_KINDS.join(" / ")}` };
+    const v = raw[k];
+    if (!isStepKind(k)) {
+      const lk = k.toLowerCase();
+      const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : void 0;
+      return { error: `${at} {${k}: \u2026} is not a step \u2014 the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
+    }
+    if (typeof v !== "string" || v.trim() === "") return { error: `${at} {${k}: \u2026} needs a non-empty string` };
+    if (k === "goto" && !isSameOriginPath(v)) return { error: `${at} {goto: ${JSON.stringify(v)}} must be a same-origin path starting with "/" (e.g. "/orders?tab=open") \u2014 never "//" or "/\\", and no backslash, whitespace or control character` };
+    steps.push(k === "click" ? { click: v } : k === "waitFor" ? { waitFor: v } : { goto: v });
+  }
+  return { steps };
+}
+function stepsSha256(steps) {
+  return sha256Hex(canonical(steps));
+}
+
+// design-to-code/probe-drive.ts
+import { setTimeout as sleep } from "node:timers/promises";
 
 // design-to-code/png.ts
 import { crc32, deflateSync, inflateSync } from "node:zlib";
@@ -1361,555 +1587,7 @@ function resampleBox(img, w, h) {
   return { w, h, data };
 }
 
-// design-to-code/probe-steps.ts
-var STEP_KINDS = ["click", "waitFor", "goto"];
-var isStepKind = (k) => STEP_KINDS.includes(k);
-var REFUSED = {
-  fill: "a typed value may submit a form when the steps are replayed",
-  type: "a typed value may submit a form when the steps are replayed",
-  press: "a key press may submit a form when the steps are replayed",
-  hover: "a hover is not a navigation (hover-revealed openers are revealed by the probe itself)",
-  check: "a checked box is state, not navigation",
-  select: "a selected option is state, not navigation"
-};
-function describeStep(s, i) {
-  const [k, v] = Object.entries(s)[0] ?? ["?", ""];
-  return `step ${i + 1} {${k}: ${JSON.stringify(v)}}`;
-}
-function isSameOriginPath(v) {
-  return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
-}
-function parseSteps(x) {
-  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
-  if (!Array.isArray(list)) {
-    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
-  }
-  const steps = [];
-  for (const [i, raw] of list.entries()) {
-    const at = `step ${i + 1}`;
-    if (!isJsonObject(raw)) return { error: `${at} is not an object like {"click": "<selector>"}` };
-    const keys = Object.keys(raw);
-    const k = keys[0];
-    if (keys.length !== 1 || k === void 0) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} \u2014 exactly one of ${STEP_KINDS.join(" / ")}` };
-    const v = raw[k];
-    if (!isStepKind(k)) {
-      const lk = k.toLowerCase();
-      const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : void 0;
-      return { error: `${at} {${k}: \u2026} is not a step \u2014 the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
-    }
-    if (typeof v !== "string" || v.trim() === "") return { error: `${at} {${k}: \u2026} needs a non-empty string` };
-    if (k === "goto" && !isSameOriginPath(v)) return { error: `${at} {goto: ${JSON.stringify(v)}} must be a same-origin path starting with "/" (e.g. "/orders?tab=open") \u2014 never "//" or "/\\", and no backslash, whitespace or control character` };
-    steps.push(k === "click" ? { click: v } : k === "waitFor" ? { waitFor: v } : { goto: v });
-  }
-  return { steps };
-}
-function stepsSha256(steps) {
-  return sha256Hex(canonical(steps));
-}
-
-// design-to-code/verify-run.ts
-import fs3 from "node:fs";
-import os from "node:os";
-import path4 from "node:path";
-
-// design-to-code/cli-args.ts
-import path2 from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
-var SELF = fileURLToPath(import.meta.url);
-var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `node ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
-function joinNegativeValues(argv, options) {
-  const out = [];
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i], next = argv[i + 1];
-    if (tok === void 0) continue;
-    if (tok === "--") {
-      out.push(...argv.slice(i));
-      break;
-    }
-    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
-    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
-      out.push(`${tok}=${next}`);
-      i++;
-    } else out.push(tok);
-  }
-  return out;
-}
-function badShortWords(args, options) {
-  const shorts = /* @__PURE__ */ new Map();
-  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
-  const bad = [];
-  let takesNext = false;
-  for (const a of args) {
-    if (a === "--") break;
-    if (takesNext) {
-      takesNext = false;
-      continue;
-    }
-    if (a.startsWith("--")) {
-      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
-      continue;
-    }
-    if (!/^-[^-]/.test(a)) continue;
-    let ok = true;
-    for (const [i, c] of [...a.slice(1)].entries()) {
-      const type = shorts.get(c);
-      if (type === void 0) {
-        ok = false;
-        break;
-      }
-      if (type === "string") {
-        takesNext = i === a.length - 2;
-        break;
-      }
-    }
-    if (!ok) bad.push(a);
-  }
-  return bad;
-}
-function cliParse(tool, argv, options, usage, exitCode, parse) {
-  const args = joinNegativeValues(argv, options);
-  const unknownFlags = () => {
-    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
-    const short = badShortWords(args, options);
-    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
-    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
-    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
-${usage}`;
-  };
-  let failure;
-  try {
-    const parsed = parse(args);
-    if (!badShortWords(args, options).length) return parsed;
-    failure = unknownFlags();
-  } catch (e) {
-    const code = errCode(e);
-    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      failure = unknownFlags();
-    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
-      const msg = e instanceof Error ? e.message : "";
-      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
-      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
-      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
-${usage}`;
-    } else {
-      failure = `${tool}: ${errMsg(e)}
-${usage}`;
-    }
-  }
-  console.error(failure);
-  process.exit(exitCode);
-}
-
-// bridge/src/project-layout.ts
-import path3 from "node:path";
-var DESIGN_DIR = "design";
-var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
-var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
-var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
-var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
-
-// design-to-code/verify-run.ts
-var STATUS_SCHEMA = "designtwin/verify-status@2";
-var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
-var TERMINAL_PHASES = ["done", "failed", "blocked"];
-var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
-}
-isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var statusFile = (base) => base + ".status.json";
-var CACHE_NAME = "designtwin-verify";
-var shortSha = (s) => sha256Hex(s).slice(0, 16);
-var isDir = (p) => {
-  try {
-    return fs3.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
-};
-var exists = (p) => fs3.existsSync(p);
-function realpath(p) {
-  if (typeof fs3.realpathSync.native === "function") {
-    try {
-      return fs3.realpathSync.native(p);
-    } catch {
-    }
-  }
-  return fs3.realpathSync(p);
-}
-function canonical2(p) {
-  const abs = path4.resolve(p);
-  try {
-    return realpath(abs);
-  } catch {
-    const parent = path4.dirname(abs);
-    return parent === abs ? abs : path4.join(canonical2(parent), path4.basename(abs));
-  }
-}
-var hasPnp = (d) => exists(path4.join(d, ".pnp.cjs")) || exists(path4.join(d, ".pnp.js"));
-function isWorkspaceRoot(d) {
-  if (exists(path4.join(d, "pnpm-workspace.yaml"))) return true;
-  const r = readJson(path4.join(d, "package.json"), anyJson);
-  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
-}
-function installRootOf(dir) {
-  let P = null;
-  for (let d = dir; ; d = path4.dirname(d)) {
-    if (exists(path4.join(d, "package.json"))) {
-      P = d;
-      break;
-    }
-    if (exists(path4.join(d, ".git")) || path4.dirname(d) === d) return null;
-  }
-  if (isDir(path4.join(P, "node_modules"))) return P;
-  let ws = null;
-  for (let d = P; ; d = path4.dirname(d)) {
-    if (isWorkspaceRoot(d)) {
-      ws = d;
-      break;
-    }
-    if (exists(path4.join(d, ".git")) || path4.dirname(d) === d) break;
-  }
-  if (ws !== null && isDir(path4.join(ws, "node_modules"))) return ws;
-  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
-  return P;
-}
-function runCacheOf(verifyDir) {
-  const v = canonical2(verifyDir);
-  const root = installRootOf(v);
-  if (root !== null) {
-    const cache = path4.join(root, "node_modules", ".cache", CACHE_NAME);
-    const rel = path4.relative(root, v).split(path4.sep).join("/");
-    return { dir: rel === VERIFY_DIR.split(path4.sep).join("/") ? cache : path4.join(cache, "dirs", shortSha(rel)), root };
-  }
-  return { dir: path4.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
-}
-function runCacheDir(verifyDir) {
-  return runCacheOf(verifyDir).dir;
-}
-var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
-var RunCacheUnwritable = class extends Error {
-  cacheDir;
-  root;
-  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
-   *  permission: a directory on the way was removed while the run wrote there */
-  constructor(cacheDir, root, code) {
-    super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
-    this.name = "RunCacheUnwritable";
-    this.cacheDir = cacheDir;
-    this.root = root;
-  }
-};
-function inRunCache(verifyDir, fn) {
-  try {
-    return fn();
-  } catch (e) {
-    const code = errCode(e);
-    if (code !== void 0 && UNWRITABLE_CODES.has(code)) {
-      const c = runCacheOf(verifyDir);
-      throw new RunCacheUnwritable(c.dir, c.root, code);
-    }
-    throw e;
-  }
-}
-var liveStatusFile = (base) => path4.join(runCacheDir(path4.dirname(base)), path4.basename(base) + ".status.json");
-var stageDirOf = (base, runId) => path4.join(runCacheDir(path4.dirname(base)), "stage", runId);
-function readStatusFile(file) {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return null;
-  if (isVerifyStatusV2(r.doc)) return r.doc;
-  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
-}
-function readStatusAt(base) {
-  for (const file of [liveStatusFile(base), statusFile(base)]) {
-    const status = readStatusFile(file);
-    if (status !== null) return { file, status };
-  }
-  return null;
-}
-function readStatus(base) {
-  const r = readStatusAt(base);
-  return r ? r.status : null;
-}
-var RunEnded = class extends Error {
-  constructor(runId, phase, detail) {
-    super(`run ${runId} already ended at ${phase}${detail ? ` (${detail})` : ""} \u2014 start a new run with --new-run`);
-    this.name = "RunEnded";
-  }
-};
-function writeStatus(base, p) {
-  const prev = readStatus(base);
-  const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
-  if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
-  const pick = (k) => {
-    const v = p[k] ?? (same ? same[k] : void 0);
-    return v !== void 0 ? { [k]: v } : {};
-  };
-  const published = p.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...p.published || []])].sort() : void 0;
-  const doc = {
-    schema: STATUS_SCHEMA,
-    screen: path4.basename(base),
-    runId: p.runId,
-    rev: same ? same.rev + 1 : 1,
-    phase: p.phase,
-    detail: p.detail ?? "",
-    at: (/* @__PURE__ */ new Date()).toISOString(),
-    by: p.by,
-    ...pick("expectationSha256"),
-    ...pick("measuredSha256"),
-    ...pick("evidenceSha256"),
-    ...published !== void 0 ? { published } : {}
-  };
-  const live = liveStatusFile(base);
-  inRunCache(path4.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
-  return doc;
-}
-
-// design-to-code/export-shape.ts
-function isIrNode(x) {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
-}
-function isScreenExport(x) {
-  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
-}
-function isLayerFile(x) {
-  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
-}
-function isScreenDoc(x) {
-  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
-}
-isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
-
-// bridge/src/is-main.ts
-import fs4 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs4.realpathSync(argv1) === fs4.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
-}
-
-// design-to-code/verify-screen.ts
-var TOLERANCE = {
-  fontSize: 0.5,
-  // a browser rounds; a different token does not
-  fontWeight: 0,
-  // 500 vs 600 is a different style, never a rendering artifact
-  lineHeight: 2,
-  // normal/unitless line-heights and font-metric rounding genuinely differ
-  letterSpacing: 0.2,
-  radius: 0.5,
-  padding: 1,
-  gap: 1,
-  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
-  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
-  size: 1,
-  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
-  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
-  position: 2,
-  opacity: 0.02,
-  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
-  stroke: 0.5,
-  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
-  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
-  // in the field runs. Known miss: heavy italics/overhang can exceed it.
-  textInk: 3
-};
-function normColor(v) {
-  if (v == null) return null;
-  const s = String(v).trim().toLowerCase();
-  const key = colorKey(s);
-  if (key) return key;
-  const c = parseCssColor(s);
-  if (c === null) return s;
-  if (c.a === 0) return "transparent";
-  return colorKey(formatHex(c)) ?? s;
-}
-var WEIGHTS = {
-  thin: 100,
-  extralight: 200,
-  ultralight: 200,
-  light: 300,
-  normal: 400,
-  regular: 400,
-  book: 400,
-  medium: 500,
-  semibold: 600,
-  demibold: 600,
-  bold: 700,
-  extrabold: 800,
-  ultrabold: 800,
-  black: 900,
-  heavy: 900
-};
-function normWeight(v) {
-  if (v == null) return null;
-  if (typeof v === "number") return v;
-  const s = String(v).trim();
-  if (/^\d+$/.test(s)) return Number(s);
-  const key = s.toLowerCase().replace(/[^a-z]/g, "");
-  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
-}
-function normFamily(v) {
-  if (v == null) return null;
-  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
-}
-function resolveInside(base, rel, within = base) {
-  const root = path5.resolve(within), file = path5.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path5.sep) ? file : null;
-}
-var KNOWN_NODE_KEYS = /* @__PURE__ */ new Set([
-  "nodeId",
-  "styles",
-  "states",
-  "matchedBy",
-  "note",
-  "notes",
-  "selector",
-  "selectorCount",
-  "unmeasured",
-  "textFrom",
-  "textFromMixed",
-  "fillSource"
-]);
-var KNOWN_STYLE_KEYS = /* @__PURE__ */ new Set([
-  "fontFamily",
-  "fontSize",
-  "fontWeight",
-  "lineHeight",
-  "letterSpacing",
-  "color",
-  "backgroundColor",
-  "fill",
-  "borderColor",
-  "borderWidth",
-  "borderRadius",
-  "gap",
-  "gapVisual",
-  "width",
-  "height",
-  "x",
-  "y",
-  "opacity",
-  "padding",
-  "text",
-  "placeholderText",
-  "placeholderColor",
-  "tag",
-  "textBox",
-  "display",
-  "transform",
-  "rotate",
-  "visible",
-  // where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
-  "strokeFrom",
-  "strokeAlign",
-  // a TEXT's computed text-transform; who paints a transparent element (optional keys)
-  "textTransform",
-  "paintedBy",
-  // free text, never read for a judgement — tolerated on either level
-  "note",
-  "notes"
-]);
-var KNOWN_MEASURED_KEYS = /* @__PURE__ */ new Set([...KNOWN_NODE_KEYS, ...KNOWN_STYLE_KEYS]);
-var KEY_HINTS = {
-  radius: "borderRadius",
-  borderTopLeftRadius: "borderRadius",
-  background: "backgroundColor",
-  bg: "backgroundColor",
-  w: "width",
-  h: "height",
-  svgFill: "fill",
-  placeholder: "placeholderText",
-  rowGap: "gapVisual",
-  columnGap: "gap",
-  // a node-level key written INSIDE styles is not read there (a styles.fillSource "img" would not exempt the fill)
-  ...Object.fromEntries([...KNOWN_NODE_KEYS].filter((k) => k !== "nodeId" && k !== "styles" && k !== "note" && k !== "notes").map((k) => [k, `nodes[].${k} (beside styles, not inside)`]))
-};
-var FIELDS = [
-  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
-  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
-  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
-  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
-  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
-  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
-  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
-  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
-  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
-  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
-  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
-  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
-  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
-  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
-  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
-  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
-  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
-];
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
-var STYLE_KEY_SHAPE = {
-  borderRadius: "number | [tl,tr,br,bl]",
-  padding: "[t,r,b,l]",
-  fill: "an SVG's paint",
-  textBox: "{x,w} of a Range over the text",
-  placeholderText: "el.placeholder",
-  placeholderColor: "the ::placeholder colour",
-  tag: "tagName, lower-case",
-  display: "getComputedStyle(el).display"
-};
-var MEASURED_KEYS_DOC = {
-  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
-  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
-  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
-  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
-  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
-  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
-  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
-  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
-  "nodes[].styles.tag": "the element's tagName, lower-case",
-  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
-  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
-  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
-  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
-  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
-  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
-  "expectationSha256": "sha256 of the .expected.json you measured against"
-};
-var CANONICAL_MATCH = new Set(CANONICAL_MATCHED_BY);
-var INTERACTION_OUTCOMES = ["url-changed", "dialog-opened", "selector-appeared", "state-changed", "none"];
-var ANY_BUT_NONE = INTERACTION_OUTCOMES.filter((o) => o !== "none");
-var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
-if (false) {
-  const code = main(process.argv.slice(2));
-  if (typeof code === "number") process.exitCode = code;
-  else code.then((c) => {
-    process.exitCode = c;
-  }, (e) => {
-    console.error(`verify-screen: ${errMsg(e)}`);
-    process.exitCode = 1;
-  });
-}
-
 // design-to-code/probe-drive.ts
-import { setTimeout as sleep } from "node:timers/promises";
 function readPageOverflow(_arg) {
   const de = document.documentElement, body = document.body;
   const hs = getComputedStyle(de);
@@ -5391,8 +5069,8 @@ function readAxeResult(x, fallbackVersion) {
 }
 
 // design-to-code/probe-visual.ts
-import fs5 from "node:fs";
-import path6 from "node:path";
+import fs2 from "node:fs";
+import path4 from "node:path";
 import { setTimeout as sleep3 } from "node:timers/promises";
 
 // design-to-code/visual-diff.ts
@@ -5621,6 +5299,20 @@ function renderDiff(build, d) {
   return { w, h, data: out };
 }
 
+// bridge/src/project-layout.ts
+import path3 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var VERIFY_GITIGNORE_NOTE = `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+
 // design-to-code/probe-visual.ts
 var VISUAL_CAP_MS = 3e4;
 function visualBudget(now, deadline, cap = VISUAL_CAP_MS, reserve = BEHAVIOUR_RESERVE_MS) {
@@ -5629,8 +5321,8 @@ function visualBudget(now, deadline, cap = VISUAL_CAP_MS, reserve = BEHAVIOUR_RE
 var FONTS_CAP_MS = 5e3;
 var BUILT_CAP = 2e3;
 function referenceRoot(expected, project) {
-  const dir = path6.resolve(path6.dirname(expected));
-  return dir.endsWith(path6.sep + VERIFY_DIR) ? path6.dirname(path6.dirname(dir)) : project;
+  const dir = path4.resolve(path4.dirname(expected));
+  return dir.endsWith(path4.sep + VERIFY_DIR) ? path4.dirname(path4.dirname(dir)) : project;
 }
 var REFERENCE_MALFORMED = "the expectation's referenceImage is malformed \u2014 re-run --expect";
 function prepareVisual(exp, root) {
@@ -5642,11 +5334,11 @@ function prepareVisual(exp, root) {
   if (!ri.usable) return { ok: false, why: ri.why };
   const fw = exp.frame?.w, fh = exp.frame?.h;
   if (typeof fw !== "number" || typeof fh !== "number" || fw < 1 || fh < 1) return { ok: false, why: "the expectation states no frame size" };
-  const file = resolveInside(root, ri.path, path6.join(root, EXPORT_DIR));
+  const file = resolveInside(root, ri.path, path4.join(root, EXPORT_DIR));
   if (file === null) return { ok: false, why: `the reference path ${ri.path} is outside design/export \u2014 re-run --expect` };
   let bytes;
   try {
-    bytes = fs5.readFileSync(file);
+    bytes = fs2.readFileSync(file);
   } catch {
     return { ok: false, why: `the reference PNG ${ri.path} is missing \u2014 re-pull the screen, then re-run --expect` };
   }
@@ -5818,6 +5510,215 @@ function finishVisual(o) {
 function visualLine(v) {
   if (!v.ran) return `visual not run (${v.why})`;
   return `visual (informational \u2014 never the verdict) ${pctText(v.shiftTolerantPct)}% of pixels differ (${pctText(v.differingPct)}% before ${v.shiftPx}-px shift tolerance) \xB7 ${v.regionsTotal} hot region(s) \xB7 at the reference's ${v.reference.scale}x (${v.reference.from}) \xB7 grid ${v.grid}${v.diff !== null ? ` \xB7 ${v.diff}` : ""}`;
+}
+
+// design-to-code/content-hash.ts
+import { spawnSync } from "node:child_process";
+function gitHead(cwd) {
+  try {
+    const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
+    const h = r.status === 0 && String(r.stdout || "").trim();
+    return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
+  } catch {
+    return null;
+  }
+}
+
+// design-to-code/verify-run.ts
+import fs4 from "node:fs";
+import os from "node:os";
+import path6 from "node:path";
+
+// bridge/src/atomic-write.ts
+import crypto2 from "node:crypto";
+import fs3 from "node:fs";
+import path5 from "node:path";
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
+function writeFileAtomic(file, data, opts = {}) {
+  fs3.mkdirSync(path5.dirname(path5.resolve(file)), { recursive: true });
+  const tmp = file + tmpSuffix();
+  try {
+    fs3.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.mode !== void 0) fs3.chmodSync(tmp, opts.mode);
+    fs3.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs3.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+
+// design-to-code/verify-run.ts
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var statusFile = (base) => base + ".status.json";
+var CACHE_NAME = "designtwin-verify";
+var shortSha = (s) => sha256Hex(s).slice(0, 16);
+var isDir = (p) => {
+  try {
+    return fs4.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var exists = (p) => fs4.existsSync(p);
+function realpath(p) {
+  if (typeof fs4.realpathSync.native === "function") {
+    try {
+      return fs4.realpathSync.native(p);
+    } catch {
+    }
+  }
+  return fs4.realpathSync(p);
+}
+function canonical2(p) {
+  const abs = path6.resolve(p);
+  try {
+    return realpath(abs);
+  } catch {
+    const parent = path6.dirname(abs);
+    return parent === abs ? abs : path6.join(canonical2(parent), path6.basename(abs));
+  }
+}
+var hasPnp = (d) => exists(path6.join(d, ".pnp.cjs")) || exists(path6.join(d, ".pnp.js"));
+function isWorkspaceRoot(d) {
+  if (exists(path6.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path6.join(d, "package.json"), anyJson);
+  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
+}
+function installRootOf(dir) {
+  let P = null;
+  for (let d = dir; ; d = path6.dirname(d)) {
+    if (exists(path6.join(d, "package.json"))) {
+      P = d;
+      break;
+    }
+    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) return null;
+  }
+  if (isDir(path6.join(P, "node_modules"))) return P;
+  let ws = null;
+  for (let d = P; ; d = path6.dirname(d)) {
+    if (isWorkspaceRoot(d)) {
+      ws = d;
+      break;
+    }
+    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) break;
+  }
+  if (ws !== null && isDir(path6.join(ws, "node_modules"))) return ws;
+  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
+  return P;
+}
+function runCacheOf(verifyDir) {
+  const v = canonical2(verifyDir);
+  const root = installRootOf(v);
+  if (root !== null) {
+    const cache = path6.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path6.relative(root, v).split(path6.sep).join("/");
+    return { dir: rel === VERIFY_DIR.split(path6.sep).join("/") ? cache : path6.join(cache, "dirs", shortSha(rel)), root };
+  }
+  return { dir: path6.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+}
+function runCacheDir(verifyDir) {
+  return runCacheOf(verifyDir).dir;
+}
+var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
+var RunCacheUnwritable = class extends Error {
+  cacheDir;
+  root;
+  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
+   *  permission: a directory on the way was removed while the run wrote there */
+  constructor(cacheDir, root, code) {
+    super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
+    this.name = "RunCacheUnwritable";
+    this.cacheDir = cacheDir;
+    this.root = root;
+  }
+};
+function inRunCache(verifyDir, fn) {
+  try {
+    return fn();
+  } catch (e) {
+    const code = errCode(e);
+    if (code !== void 0 && UNWRITABLE_CODES.has(code)) {
+      const c = runCacheOf(verifyDir);
+      throw new RunCacheUnwritable(c.dir, c.root, code);
+    }
+    throw e;
+  }
+}
+var liveStatusFile = (base) => path6.join(runCacheDir(path6.dirname(base)), path6.basename(base) + ".status.json");
+var stageDirOf = (base, runId) => path6.join(runCacheDir(path6.dirname(base)), "stage", runId);
+function readStatusFile(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return null;
+  if (isVerifyStatusV2(r.doc)) return r.doc;
+  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
+}
+function readStatusAt(base) {
+  for (const file of [liveStatusFile(base), statusFile(base)]) {
+    const status = readStatusFile(file);
+    if (status !== null) return { file, status };
+  }
+  return null;
+}
+function readStatus(base) {
+  const r = readStatusAt(base);
+  return r ? r.status : null;
+}
+var RunEnded = class extends Error {
+  constructor(runId, phase, detail) {
+    super(`run ${runId} already ended at ${phase}${detail ? ` (${detail})` : ""} \u2014 start a new run with --new-run`);
+    this.name = "RunEnded";
+  }
+};
+function writeStatus(base, p) {
+  const prev = readStatus(base);
+  const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+  if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
+  const pick = (k) => {
+    const v = p[k] ?? (same ? same[k] : void 0);
+    return v !== void 0 ? { [k]: v } : {};
+  };
+  const published = p.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...p.published || []])].sort() : void 0;
+  const doc = {
+    schema: STATUS_SCHEMA,
+    screen: path6.basename(base),
+    runId: p.runId,
+    rev: same ? same.rev + 1 : 1,
+    phase: p.phase,
+    detail: p.detail ?? "",
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    by: p.by,
+    ...pick("expectationSha256"),
+    ...pick("measuredSha256"),
+    ...pick("evidenceSha256"),
+    ...published !== void 0 ? { published } : {}
+  };
+  const live = liveStatusFile(base);
+  inRunCache(path6.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+  return doc;
+}
+
+// bridge/src/is-main.ts
+import fs5 from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs5.realpathSync(argv1) === fs5.realpathSync(fileURLToPath2(metaUrl));
+  } catch {
+    return false;
+  }
 }
 
 // design-to-code/verify-probe.ts

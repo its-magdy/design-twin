@@ -10,7 +10,8 @@ import path from "node:path";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { buildExpectation, compare, reportToMarkdown, probeLine, STYLE_KEYS } from "../design-to-code/verify-screen.ts";
+import { buildExpectation, compare, reportToMarkdown, probeLine } from "../design-to-code/verify-screen.ts";
+import { STYLE_KEYS, resolveInside } from "../design-to-code/verify-shared.ts";
 import * as verifyScreen from "../design-to-code/verify-screen.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-screen.ts";
 import * as guards from "../design-to-code/doc-guards.ts";
@@ -210,7 +211,7 @@ console.log("[11] --expect: width AND height of the PNG checked; the pointer con
   // a sibling directory sharing the prefix ("design/export-evil") is outside too
   const ex = path.resolve("/r", "design", "export");
   safe("resolveInside refuses a sibling sharing the prefix (design/export-evil) and accepts a file inside", () =>
-    verifyScreen.resolveInside(ex, "../export-evil/x.png") === null && verifyScreen.resolveInside(ex, "assets/x.png") === path.join(ex, "assets", "x.png"));
+    resolveInside(ex, "../export-evil/x.png") === null && resolveInside(ex, "assets/x.png") === path.join(ex, "assets", "x.png"));
 }
 
 // ---------------------------------------------------------------- 12: colour profile

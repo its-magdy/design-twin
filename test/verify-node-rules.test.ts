@@ -3,7 +3,8 @@
 // "height"), widthMode "hug"/"fill", renderBox (ink) beside box, strokes {colors, weight, align}, clip,
 // mainComponent {key, setName}, instance-sublayer ids "I<instance>;<child>". Measurements are the probe's shape.
 // Run with:  node test/verify-node-rules.test.ts
-import { buildExpectation, compare, reportToMarkdown, TOLERANCE } from "../design-to-code/verify-screen.ts";
+import { buildExpectation, compare, reportToMarkdown } from "../design-to-code/verify-screen.ts";
+import { TOLERANCE } from "../design-to-code/verify-shared.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-screen.ts";
 import type { IndexRow, JsonValue, MeasuredNode, MeasuredStyles, PlanWaiver, ScreenDoc, VerifyDelta, VerifyMeasured, VerifyReport, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";
 import { readableMeasured } from "../design-to-code/doc-guards.ts";

@@ -3,7 +3,7 @@
 
 // design-to-code/verify-screen.ts
 import fs9 from "node:fs";
-import path7 from "node:path";
+import path8 from "node:path";
 
 // bridge/src/hash.ts
 import crypto from "node:crypto";
@@ -14,12 +14,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path8, parent, depth) {
+  (function go(node, parentHidden, path9, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path8, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path9, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path8 ? path8 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path9 ? path9 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -1406,7 +1406,8 @@ function isMainFallback(metaUrl) {
   }
 }
 
-// design-to-code/verify-screen.ts
+// design-to-code/verify-shared.ts
+import path7 from "node:path";
 var TOLERANCE = {
   fontSize: 0.5,
   // a browser rounds; a different token does not
@@ -1492,7 +1493,6 @@ function lineHeightPx(lh, fontSize) {
 }
 var EXPECTATION_SCHEMA = "designtwin/verify-expectation@2";
 var REPORT_SCHEMA = "designtwin/verify-report@2";
-var firstSolid = (fills) => (fills || []).find((f) => !!f && f.type === "solid" && f.visible !== false);
 var num = (v) => typeof v === "number" && Number.isFinite(v);
 var r2 = (v) => Math.round(v * 100) / 100;
 var PX_RE = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?(?:px)?\s*$/i;
@@ -1509,6 +1509,72 @@ function fourSides(v) {
   const [p0, p1 = p0, p2 = p0, p3 = p1] = p.filter((x) => x !== null);
   return p0 === void 0 || p1 === void 0 || p2 === void 0 || p3 === void 0 ? null : [p0, p1, p2, p3];
 }
+var PAD_SIDES = ["top", "right", "bottom", "left"];
+var TEXT_BOX_HEIGHT = "text box height";
+function resolveInside(base, rel, within = base) {
+  const root = path7.resolve(within), file = path7.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path7.sep) ? file : null;
+}
+var FIELDS = [
+  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
+  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
+  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
+  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
+  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
+  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
+  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
+  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
+  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
+  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
+  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
+  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
+  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
+  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
+  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
+  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
+  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
+  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
+];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEY_SHAPE = {
+  borderRadius: "number | [tl,tr,br,bl]",
+  padding: "[t,r,b,l]",
+  fill: "an SVG's paint",
+  textBox: "{x,w} of a Range over the text",
+  placeholderText: "el.placeholder",
+  placeholderColor: "the ::placeholder colour",
+  tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display"
+};
+var MEASURED_KEYS_DOC = {
+  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
+  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
+  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
+  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
+  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
+  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
+  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
+  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
+  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
+  "nodes[].styles.tag": "the element's tagName, lower-case",
+  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
+  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
+  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
+  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
+  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
+  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
+  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
+  "expectationSha256": "sha256 of the .expected.json you measured against"
+};
+var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
+var fmt = (v) => Array.isArray(v) ? v.join("/") : String(v);
+function samePlanFile(a, b) {
+  return path7.resolve(a) === path7.resolve(b);
+}
+
+// design-to-code/verify-screen.ts
+var firstSolid = (fills) => (fills || []).find((f) => !!f && f.type === "solid" && f.visible !== false);
 var STATE_WORD = /(?:^|[^a-z])(hover(?:ed)?|pressed|focus(?:ed)?)(?:[^a-z]|$)/i;
 var normState = (w) => /^hover/i.test(w) ? "hover" : /^press/i.test(w) ? "pressed" : "focus";
 function drawnStateOf(n) {
@@ -1552,7 +1618,6 @@ var growsAlong = (c, dir) => {
   return lc.grow === 1 || lc.grow === true || (dir === "column" ? lc.heightMode === "fill" : lc.widthMode === "fill");
 };
 var PAD_KEYS = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
-var PAD_SIDES = ["top", "right", "bottom", "left"];
 function wrapLines(mainSizes, crossSizes, inner, gap, crossGap) {
   if (!num(inner) || !mainSizes.every(num) || !crossSizes.every(num)) return void 0;
   const lines = [];
@@ -1612,7 +1677,6 @@ function paddingNotShown(n, L, pad) {
   }
   return out;
 }
-var TEXT_BOX_HEIGHT = "text box height";
 var lineBoxWhy = (lh, h) => `the line box (${r2(lh)}px) is taller than the fixed text box (${r2(h)}px): Figma lets the line overflow the box \u2014 the build chooses: line-height ${r2(lh)} (the text overflows its box, as in Figma) or ${r2(h)} (the glyphs sit about ${r2((lh - h) / 2)}px higher); the TEXT height is not compared`;
 function expectNode(n, ctx = {}) {
   const spec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
@@ -2148,10 +2212,6 @@ function buildExpectation(docs, opts) {
   };
 }
 var round4 = (n) => Math.round(n * 1e4) / 1e4;
-function resolveInside(base, rel, within = base) {
-  const root = path7.resolve(within), file = path7.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path7.sep) ? file : null;
-}
 var figmaReferenceScale = (w, h) => Math.min(2, 2048 / (Math.max(w, h) || 1));
 var REFERENCE_SCALE_SLACK = 0.02;
 function referenceImageFor(o) {
@@ -2159,7 +2219,7 @@ function referenceImageFor(o) {
   const unusable = (p2, why) => ({ usable: false, path: p2, why });
   if (!reference) return unusable(null, "the export has no reference PNG for this screen \u2014 re-pull it with its reference");
   const p = "design/export/" + reference;
-  if (resolveInside(path7.resolve(EXPORT_DIR), reference) === null) return unusable(p, `the reference pointer ${reference} leads outside design/export \u2014 re-pull the screen`);
+  if (resolveInside(path8.resolve(EXPORT_DIR), reference) === null) return unusable(p, `the reference pointer ${reference} leads outside design/export \u2014 re-pull the screen`);
   if (!root || root.reference !== reference) return unusable(p, "the reference PNG belongs to another frame than the first one \u2014 only the first frame is diffed");
   const box = root.box;
   if (!box || !(num(box.w) && box.w > 0) || !(num(box.h) && box.h > 0)) return unusable(p, "the frame has no size in the export (box.w/h) \u2014 the reference cannot be placed");
@@ -2266,58 +2326,6 @@ var KEY_HINTS = {
   columnGap: "gap",
   // a node-level key written INSIDE styles is not read there (a styles.fillSource "img" would not exempt the fill)
   ...Object.fromEntries([...KNOWN_NODE_KEYS].filter((k) => k !== "nodeId" && k !== "styles" && k !== "note" && k !== "notes").map((k) => [k, `nodes[].${k} (beside styles, not inside)`]))
-};
-var FIELDS = [
-  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
-  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
-  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
-  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
-  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
-  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
-  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
-  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
-  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
-  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
-  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
-  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
-  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
-  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
-  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
-  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
-  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
-];
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
-var STYLE_KEY_SHAPE = {
-  borderRadius: "number | [tl,tr,br,bl]",
-  padding: "[t,r,b,l]",
-  fill: "an SVG's paint",
-  textBox: "{x,w} of a Range over the text",
-  placeholderText: "el.placeholder",
-  placeholderColor: "the ::placeholder colour",
-  tag: "tagName, lower-case",
-  display: "getComputedStyle(el).display"
-};
-var MEASURED_KEYS_DOC = {
-  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
-  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
-  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
-  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
-  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
-  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
-  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
-  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
-  "nodes[].styles.tag": "the element's tagName, lower-case",
-  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
-  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
-  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
-  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
-  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
-  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
-  "expectationSha256": "sha256 of the .expected.json you measured against"
 };
 var TOKEN_KEYS = {
   color: ["fills", "color"],
@@ -3803,7 +3811,6 @@ var VISUAL_NO_BLOCK = "the measured file carries no visual diff (hand-written, o
 var VISUAL_NOT_APPLICABLE = "not applicable (no web probe)";
 var VISUAL_MALFORMED = "the measured file's visual block is malformed \u2014 ignored (see the input notes)";
 var VISUAL_PREFIX = "VISUAL (informational \u2014 never the verdict) \u2014 ";
-var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
 function visualHeadline(r, shiftPx, notComparedPct) {
   if (!r.ran) return r.why === VISUAL_NOT_APPLICABLE ? VISUAL_PREFIX + VISUAL_NOT_APPLICABLE : `${VISUAL_PREFIX}not run (${r.why || "no reason recorded"})`;
   const n = r.regionsTotal ?? r.regions.length;
@@ -4166,7 +4173,6 @@ function reportToMarkdown(r) {
   for (const l of r.limits || []) L.push(`- ${l}`);
   return L.join("\n") + "\n";
 }
-var fmt = (v) => Array.isArray(v) ? v.join("/") : String(v);
 var withUnit = (v, unit) => {
   const t = fmt(v);
   return unit && !t.endsWith(unit) ? t + unit : t;
@@ -4175,7 +4181,7 @@ var STATUS_STALL_MS = 3e5;
 function runStatusNote(base, now = Date.now()) {
   const found = readStatusAt(base);
   if (!found) return null;
-  const st = found.status, name = path7.basename(base);
+  const st = found.status, name = path8.basename(base);
   if (st === "v1") return `${found.file} is a hand-written status (no run id) \u2014 not checked`;
   const detail = st.detail ? ` (${st.detail})` : "";
   if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} \u2014 its measured/report files are partial; this expectation is safe to re-measure against`;
@@ -4189,8 +4195,8 @@ function findExistingExpectedFor(dir, nodeId, ownTarget) {
   if (!nodeId || !fs9.existsSync(dir)) return null;
   for (const f of fs9.readdirSync(dir)) {
     if (!f.endsWith(".expected.json")) continue;
-    const full = path7.join(dir, f);
-    if (path7.resolve(full) === path7.resolve(ownTarget)) continue;
+    const full = path8.join(dir, f);
+    if (path8.resolve(full) === path8.resolve(ownTarget)) continue;
     const doc = readJsonOrNull(full, isJsonObject);
     if (doc && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
@@ -4199,16 +4205,13 @@ function findExistingExpectedFor(dir, nodeId, ownTarget) {
 function plansFor(frameId, stem) {
   const hits = [];
   for (const f of listPlans(PLAN_DIR)) {
-    const p = readJsonOrNull(path7.join(PLAN_DIR, f), isPlan);
+    const p = readJsonOrNull(path8.join(PLAN_DIR, f), isPlan);
     if (!p) continue;
-    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path7.basename(f, ".json")));
-    const byName = path7.basename(f, ".json") === stem || p.file && path7.basename(String(p.file), ".json") === stem;
-    if (byId || byName) hits.push({ file: path7.join(PLAN_DIR, f).split(path7.sep).join("/"), plan: p });
+    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path8.basename(f, ".json")));
+    const byName = path8.basename(f, ".json") === stem || p.file && path8.basename(String(p.file), ".json") === stem;
+    if (byId || byName) hits.push({ file: path8.join(PLAN_DIR, f).split(path8.sep).join("/"), plan: p });
   }
   return hits;
-}
-function samePlanFile(a, b) {
-  return path7.resolve(a) === path7.resolve(b);
 }
 function choosePlan(flagged, frameId, stem) {
   if (flagged) return { hit: { ...flagged, choice: "flag" }, all: [flagged] };
@@ -4396,11 +4399,11 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       console.error("--expect needs at least one screen export\n" + USAGE);
       return 2;
     }
-    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path7.basename(f, ".json") }));
-    const indexFile = path7.join(EXPORT_DIR, "pages", "index.json");
+    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path8.basename(f, ".json") }));
+    const indexFile = path8.join(EXPORT_DIR, "pages", "index.json");
     const idx = readJson(indexFile, isPagesRootIndex);
     if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} \u2014 interaction destinations are checked against the given export(s) only`);
-    const pagesDir = path7.join(EXPORT_DIR, "pages");
+    const pagesDir = path8.join(EXPORT_DIR, "pages");
     const pageRows = [];
     let dirs = [];
     try {
@@ -4408,15 +4411,15 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     } catch {
     }
     for (const d of dirs) {
-      const pi2 = readJson(path7.join(pagesDir, d, "index.json"), isPageIndex);
+      const pi2 = readJson(path8.join(pagesDir, d, "index.json"), isPageIndex);
       if ("doc" in pi2) pageRows.push(...pi2.doc.layers);
     }
     const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
     const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
     const exportRoot = EXPORT_DIR;
-    const readSibling = (file) => readJsonOrNull(path7.join(exportRoot, file), isScreenDoc);
-    const outBase0 = out || path7.join(VERIFY_DIR, path7.basename(firstFile, ".json"));
+    const readSibling = (file) => readJsonOrNull(path8.join(exportRoot, file), isScreenDoc);
+    const outBase0 = out || path8.join(VERIFY_DIR, path8.basename(firstFile, ".json"));
     let flagged2;
     if (planFlag !== void 0) {
       const r = readJson(planFlag, isPlan);
@@ -4424,10 +4427,10 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
         console.error(`--plan '${planFlag}' ${r.error}`);
         return 2;
       }
-      flagged2 = { file: planFlag.split(path7.sep).join("/"), plan: r.doc };
+      flagged2 = { file: planFlag.split(path8.sep).join("/"), plan: r.doc };
     }
     const firstRoot = docs.map((d) => screenRoots(d.doc)[0]).find((r) => r !== void 0);
-    const chosen = choosePlan(flagged2, firstRoot && firstRoot.id, path7.basename(outBase0));
+    const chosen = choosePlan(flagged2, firstRoot && firstRoot.id, path8.basename(outBase0));
     const planForExpect = chosen.hit;
     if (chosen.all.length > 1 && chosen.all.some((h2) => h2.plan.interactions !== void 0)) {
       console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another` : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
@@ -4441,7 +4444,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
         return null;
       }
     };
-    const ds = readJsonOrNull(path7.join(exportRoot, "design-system.json"), isJsonObject);
+    const ds = readJsonOrNull(path8.join(exportRoot, "design-system.json"), isJsonObject);
     const colorProfile = ds && typeof ds.colorProfile === "string" ? ds.colorProfile : null;
     const expOpts = { ..."doc" in idx || layers.length ? { index: { layers }, readSibling } : {}, ...planForExpect ? { plan: planForExpect } : {}, readReference, colorProfile };
     const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
@@ -4452,15 +4455,15 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     }
     const outBase = outBase0;
     const target = outBase + ".expected.json";
-    const dup = findExistingExpectedFor(path7.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
+    const dup = findExistingExpectedFor(path8.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
       const oldBase = dup.slice(0, -".expected.json".length);
-      const dir = path7.dirname(dup), stemOld = path7.basename(oldBase);
-      const oldFiles = fs9.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path7.join(dir, f));
-      const canonical3 = path7.join(path7.dirname(target), path7.basename(firstFile, ".json"));
+      const dir = path8.dirname(dup), stemOld = path8.basename(oldBase);
+      const oldFiles = fs9.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path8.join(dir, f));
+      const canonical3 = path8.join(path8.dirname(target), path8.basename(firstFile, ".json"));
       const oldStatus = runStatusNote(oldBase);
       if (oldStatus) console.error(`note  ${oldStatus}`);
-      if (stemOld === path7.basename(canonical3)) {
+      if (stemOld === path8.basename(canonical3)) {
         console.error(
           `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). That is the canonical name: drop --out (the default is ${shellArg(canonical3)}), or pass --force to write a second set anyway.`
         );
@@ -4469,8 +4472,8 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       console.error(
         `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set).
        existing set under '${stemOld}' (${oldFiles.length} file(s)): ${oldFiles.join(", ")}
-       the canonical name for this screen is '${path7.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
-       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path7.resolve(target) === path7.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
+       the canonical name for this screen is '${path8.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
+       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path8.resolve(target) === path8.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
        Or keep the old name: --out ${shellArg(oldBase)}. (--force writes a second, parallel set \u2014 not recommended.)`
       );
       return 1;
@@ -4560,11 +4563,11 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       console.error(`--plan '${planFlag}' ${r.error}`);
       return 2;
     }
-    flagged = { file: planFlag.split(path7.sep).join("/"), plan: r.doc };
+    flagged = { file: planFlag.split(path8.sep).join("/"), plan: r.doc };
   }
   {
     const frameId = expectation.frame && expectation.frame.nodeId;
-    const stem = path7.basename(expFile, ".json").replace(/\.expected$/, "");
+    const stem = path8.basename(expFile, ".json").replace(/\.expected$/, "");
     const chosen = choosePlan(flagged, frameId, stem);
     const all = chosen.all;
     const hits = all.filter((h) => h.plan.files);
@@ -4603,7 +4606,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     ...ifDefined("anchors", planHit.plan.anchors),
     waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) }
   } : {};
-  const compareBase = out || path7.join(VERIFY_DIR, path7.basename(expFile, ".json").replace(/\.expected$/, ""));
+  const compareBase = out || path8.join(VERIFY_DIR, path8.basename(expFile, ".json").replace(/\.expected$/, ""));
   let against;
   if (againstFile !== void 0) {
     const r = readJson(againstFile, isVerifyReport);
@@ -4619,14 +4622,14 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     else if (!r.missing) console.error(`note  ${own} ${r.error} \u2014 no coverage baseline this round (it is about to be overwritten)`);
   }
   const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
-  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path7.join(path7.dirname(expFile), path7.basename(measuredBase)) : null;
-  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path7.resolve(probeBase) !== path7.resolve(measuredBase) ? readStatusAt(probeBase) : null);
-  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path7.basename(found.file) : `${path7.basename(found.file)} (live, ${found.file})`, status: found.status } } : measuredBase !== null ? { status: null } : {};
+  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path8.join(path8.dirname(expFile), path8.basename(measuredBase)) : null;
+  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path8.resolve(probeBase) !== path8.resolve(measuredBase) ? readStatusAt(probeBase) : null);
+  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path8.basename(found.file) : `${path8.basename(found.file)} (live, ${found.file})`, status: found.status } } : measuredBase !== null ? { status: null } : {};
   const vd = measured.visual && measured.visual.ran ? measured.visual.diff : void 0;
   let visualDiff = null;
   if (typeof vd === "string" && vd) {
-    const beside = path7.join(path7.dirname(measuredFile), path7.basename(vd));
-    visualDiff = fs9.existsSync(vd) ? { path: vd, exists: true } : fs9.existsSync(beside) ? { path: beside.split(path7.sep).join("/"), exists: true } : { path: vd, exists: false };
+    const beside = path8.join(path8.dirname(measuredFile), path8.basename(vd));
+    visualDiff = fs9.existsSync(vd) ? { path: vd, exists: true } : fs9.existsSync(beside) ? { path: beside.split(path8.sep).join("/"), exists: true } : { path: vd, exists: false };
   }
   const rep = compare(expectation, measured, { ...statusOpt, ...readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}, ...readable.dropped.includes("visual") ? { visualMalformed: true } : {}, ...visualDiff ? { visualDiff } : {}, ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}, ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...extraInferred !== void 0 ? { inferred: extraInferred } : {}, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...planHit ? { plan: planHit } : {} });
   const md = reportToMarkdown(rep);
@@ -4647,7 +4650,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
         return p;
       }
     };
-    const reportRel = path7.relative(realOf(process.cwd()), realOf(path7.resolve(compareBase + ".report.json"))).split(path7.sep).join("/");
+    const reportRel = path8.relative(realOf(process.cwd()), realOf(path8.resolve(compareBase + ".report.json"))).split(path8.sep).join("/");
     try {
       const r = recordPlan(planHit.file, rep, reportRel, { cwd: process.cwd() });
       for (const n of r.notes) console.error(`note  ${n}`);
@@ -4699,7 +4702,7 @@ function acceptMain(files, flags, USAGE) {
     console.error(`refused  ${sel.error}`);
     return 1;
   }
-  const stem = path7.basename(reportFile, ".json").replace(/\.report$/, "");
+  const stem = path8.basename(reportFile, ".json").replace(/\.report$/, "");
   const recorded = report.inputs && report.inputs.waivers && report.inputs.waivers.plan || report.inputs && report.inputs.code && report.inputs.code.plan || void 0;
   let planFile = flags.plan ?? (recorded && fs9.existsSync(recorded) ? recorded : void 0);
   if (!planFile) {
@@ -4747,15 +4750,9 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
 export {
   BEHAVIOUR_MALFORMED,
   BEHAVIOUR_NO_BLOCK,
-  EXPECTATION_SCHEMA,
-  FIELDS,
   INTERACTION_OUTCOMES,
-  MEASURED_KEYS_DOC,
   NAMES_LABEL,
   OUTCOMES_FOR_ACTION,
-  REPORT_SCHEMA,
-  STYLE_KEYS,
-  TOLERANCE,
   VISUAL_MALFORMED,
   VISUAL_NOT_APPLICABLE,
   VISUAL_NO_BLOCK,
@@ -4766,17 +4763,11 @@ export {
   compare,
   figmaReferenceScale,
   findExistingExpectedFor,
-  lineHeightPx,
   mdText,
-  normColor,
-  normFamily,
-  normWeight,
-  pctText,
   probeLine,
   radiusCorners,
   referenceImageFor,
   reportToMarkdown,
-  resolveInside,
   selectForAccept,
   tokenFor,
   visualHeadline,
