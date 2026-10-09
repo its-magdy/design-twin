@@ -10,10 +10,11 @@
 // Resolution mirrors drift-lint's identity rule (key is the stable identity, then id, then name) so the
 // same handle that drift-lint or map-bootstrap printed for a component also works here.
 import path from "node:path";
+import { parseArgs } from "node:util";
 import { isComponentDetailFile, isComponentsCatalog } from "./doc-guards.ts";
 import type { DocGuard } from "./doc-guards.ts";
 import { anyJson, readJson } from "./read-json.ts";
-import { scriptCmd } from "./cli-args.ts";
+import { cliArity, cliParse, scriptCmd } from "./cli-args.ts";
 import { assertNotManifest } from "./catalog-input.ts";
 import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./types.ts";
@@ -86,7 +87,10 @@ export { getComponent, findComponent, resolveVariantsFile };
 function main(argv: string[]): number {
   const usage = `usage: ${scriptCmd("get-component")} <design-system/components.local.json> <key|id|name>`;
   if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
-  const [catalogFile, handle] = argv;
+  const OPTIONS = { help: { type: "boolean", short: "h" } } as const;
+  const { positionals } = cliParse("get-component", argv, OPTIONS, usage, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  if (!cliArity("get-component", positionals, 2, 2, usage)) return 2;
+  const [catalogFile, handle] = positionals;
   if (!catalogFile || !handle) {
     console.error(usage);
     return 2;

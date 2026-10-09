@@ -1739,4 +1739,54 @@ console.log("map — SLOT props:");
   check("[shared] raceBudget: a work that rejects propagates the rejection and leaves no ref'd deadline timer behind", rejected === "boom" && refTimers() === timersBefore);
 }
 
+// ---------- the four hand-parsed CLIs share cliParse: --flag=value, every unknown flag, no stray words ---------
+// map-bootstrap, get-component, resolve-screen and verify-build used to take argv by hand (indexOf + splice, or
+// array destructuring), so `--out=x` was an unknown option, a single-dash typo became a positional, only the first
+// unknown flag was named, and a surplus positional was ignored. Real subprocesses: the behaviour is the exit code
+// and what lands on stderr. None binds a port.
+(() => {
+  const D2C = path.join(import.meta.dirname, "..", "design-to-code");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-cliargs-"));
+  fs.writeFileSync(path.join(cwd, "c.json"), JSON.stringify(catalog([{ name: "Sample Button", id: "6:0", type: "COMPONENT_SET", key: "KEY_SAMPLE_BUTTON" }])));
+  fs.mkdirSync(path.join(cwd, "pages"));
+  fs.writeFileSync(path.join(cwd, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [{ name: "Home", id: "1:2", type: "FRAME", page: "P", file: "pages/P/Home__1_2.json" }] }));
+  const run = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(D2C, script), ...args], { encoding: "utf8", cwd, input: "" });
+  const rejects = (script: string, args: string[], code: number, msg: RegExp): boolean => {
+    const r = run(script, args);
+    return r.status === code && msg.test(r.stderr) && /^usage: /m.test(r.stderr) && r.stdout === "";
+  };
+  const mb = "map-bootstrap.ts", gc = "get-component.ts", rs = "resolve-screen.ts", vb = "verify-build.ts";
+
+  const eq = run(mb, ["c.json", "--out=eq.json"]);
+  check("[cli-args] map-bootstrap takes --out=<file> as well as --out <file>", eq.status === 0 && fs.existsSync(path.join(cwd, "eq.json")) && eq.stdout === "");
+  check("[cli-args] …and still takes the space-separated form, a repeated --catalog and the map before the flags",
+    run(mb, ["--out", "sp.json", "--catalog", "c.json", "--catalog", "c.json", "c.json"]).status === 0 && fs.existsSync(path.join(cwd, "sp.json")));
+  check("[cli-args] map-bootstrap names EVERY unknown flag, exit 1", rejects(mb, ["c.json", "--bogus", "--other"], 1, /^map-bootstrap: unknown flag --bogus, --other$/m));
+  check("[cli-args] map-bootstrap rejects a single-dash typo instead of reading it as the existing map", rejects(mb, ["c.json", "-x"], 1, /^map-bootstrap: unknown flag -x$/m));
+  check("[cli-args] map-bootstrap rejects a third positional (it was silently dropped)", rejects(mb, ["c.json", "a.json", "b.json"], 1, /^map-bootstrap: unexpected argument b\.json$/m));
+  check("[cli-args] map-bootstrap: a value-taking flag with no value, or a flag as its value, says so", rejects(mb, ["c.json", "--out"], 1, /^map-bootstrap: --out needs a value$/m)
+    && rejects(mb, ["c.json", "--out", "--screen", "s.json"], 1, /^map-bootstrap: --out needs a value$/m));
+  check("[cli-args] map-bootstrap: an empty --out is no file name (it used to be taken for no --out and print to stdout)", rejects(mb, ["c.json", "--out", ""], 1, /^map-bootstrap: --out needs a value$/m));
+  check("[cli-args] map-bootstrap: no catalog prints the usage, exit 1", run(mb, []).status === 1 && /^usage: /m.test(run(mb, []).stderr));
+
+  check("[cli-args] get-component still resolves a handle", run(gc, ["c.json", "KEY_SAMPLE_BUTTON"]).status === 0);
+  check("[cli-args] get-component rejects an unknown flag instead of looking it up as the handle", rejects(gc, ["c.json", "--bogus"], 2, /^get-component: unknown flag --bogus$/m));
+  check("[cli-args] get-component rejects a single-dash word", rejects(gc, ["c.json", "-x"], 2, /^get-component: unknown flag -x$/m));
+  check("[cli-args] get-component rejects a third positional (it was ignored)", rejects(gc, ["c.json", "KEY_SAMPLE_BUTTON", "extra"], 2, /^get-component: unexpected argument extra$/m));
+  check("[cli-args] get-component with one argument prints the usage, exit 2", run(gc, ["c.json"]).status === 2 && /^usage: /m.test(run(gc, ["c.json"]).stderr));
+
+  check("[cli-args] resolve-screen still resolves, with and without the plan dir", run(rs, [".", "Home"]).status === 0 && run(rs, [".", "Home", "plan"]).status === 0);
+  check("[cli-args] resolve-screen rejects an unknown flag instead of searching for it", rejects(rs, [".", "Home", "--bogus"], 2, /^resolve-screen: unknown flag --bogus$/m));
+  check("[cli-args] resolve-screen rejects a single-dash word", rejects(rs, [".", "Home", "-x"], 2, /^resolve-screen: unknown flag -x$/m));
+  check("[cli-args] resolve-screen rejects a fourth positional (it was ignored)", rejects(rs, [".", "Home", "plan", "extra"], 2, /^resolve-screen: unexpected argument extra$/m));
+  check("[cli-args] resolve-screen with one argument prints the usage, exit 2", run(rs, ["."]).status === 2 && /^usage: /m.test(run(rs, ["."]).stderr));
+
+  check("[cli-args] verify-build --status still runs (no plans is not an error)", run(vb, ["--status"]).status === 0);
+  check("[cli-args] verify-build names every unknown flag, exit 2", rejects(vb, ["--a", "--b", "--status"], 2, /^verify-build: unknown flag --a, --b$/m));
+  check("[cli-args] verify-build rejects a single-dash typo", rejects(vb, ["-x"], 2, /^verify-build: unknown flag -x$/m));
+  check("[cli-args] verify-build: a boolean flag given a value says it takes none", rejects(vb, ["--json=1"], 2, /^verify-build: --json takes no value$/m)
+    && rejects(vb, ["--status=1"], 2, /^verify-build: --status takes no value$/m));
+  fs.rmSync(cwd, { recursive: true, force: true });
+})();
+
 report();

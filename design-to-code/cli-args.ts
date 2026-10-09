@@ -75,3 +75,14 @@ export function cliParse<R>(tool: string, argv: string[], options: ParseArgsOpti
     process.exit(exitCode);
   }
 }
+
+/**
+ * Check how many positionals a tool took: fewer than `min` prints the usage alone (what a tool prints for a
+ * missing argument), more than `max` names the extra ones above the usage — a stray word is a typo, not
+ * something to ignore. Prints to stderr; false means the caller returns its usage exit code.
+ */
+export function cliArity(tool: string, positionals: string[], min: number, max: number, usage: string): boolean {
+  if (positionals.length < min) { console.error(usage); return false; }
+  if (positionals.length > max) { console.error(`${tool}: unexpected argument ${positionals.slice(max).join(", ")}\n${usage}`); return false; }
+  return true;
+}

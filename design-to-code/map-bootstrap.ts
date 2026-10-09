@@ -11,6 +11,7 @@
 //   - Only genuinely new components get a fresh needs-review stub.
 // The `existing` argument is never mutated (entries are deep-cloned).
 import fs from "node:fs";
+import { parseArgs } from "node:util";
 import type {
   BooleanPropMap, CatalogComponent, CodeConnectMap, ComponentPropDef, ComponentProposal, ComponentsCatalog, EnumPropMap, MapEntry, PropMap,
 } from "./types.ts";
@@ -19,7 +20,7 @@ import { TYPE_TO_KIND as KIND } from "./kinds.ts"; // shared vocab — kept in s
 import { readDocFile, readJsonFile, readSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
 import { isComponentsCatalog, isProposalList } from "./doc-guards.ts";
 import { isScreenDoc } from "./export-shape.ts";
-import { scriptCmd } from "./cli-args.ts";
+import { cliArity, cliParse, scriptCmd } from "./cli-args.ts";
 import { visibleInstances } from "./component-match.ts";
 import { isCodeConnectMap, validateMap } from "./map-validate.ts";
 import { readCatalogSet, unionCatalog, catalogSetLine } from "./design-system-dir.ts";
@@ -227,41 +228,20 @@ export { bootstrap, bootstrapFromProposals, proposalsIn };
 function main(argv: string[]): number {
   const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>] [--catalog <components.json>]...`;
   if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
-  let outFile: string | null = null, proposalsFile: string | null = null, screenFile: string | null = null;
   // --catalog is repeatable: each names one more catalog (beyond the ones found beside the named one)
   // that --screen / --from-proposals may take a component from.
-  const extraCatalogFiles: string[] = [];
-  for (let ci = argv.indexOf("--catalog"); ci !== -1; ci = argv.indexOf("--catalog")) {
-    const next = argv[ci + 1];
-    if (!next || next.startsWith("--")) { console.error("--catalog needs a component catalog .json (components.json / components.library.json)\n" + usage); return 1; }
-    extraCatalogFiles.push(next);
-    argv.splice(ci, 2);
-  }
-  const pi = argv.indexOf("--from-proposals");
-  if (pi !== -1) {
-    const next = argv[pi + 1];
-    if (!next || next.startsWith("--")) { console.error("--from-proposals needs the JSON report the cross-check (or audit) script wrote with --out/--json\n" + usage); return 1; }
-    proposalsFile = next;
-    argv.splice(pi, 2);
-  }
-  const si = argv.indexOf("--screen");
-  if (si !== -1) {
-    const next = argv[si + 1];
-    if (!next || next.startsWith("--")) { console.error("--screen needs a screen export .json\n" + usage); return 1; }
-    screenFile = next;
-    argv.splice(si, 2);
-  }
-  const o = argv.indexOf("--out");
-  if (o !== -1) {
-    const next = argv[o + 1];
-    if (!next || next.startsWith("--")) { console.error("--out needs a file path\n" + usage); return 1; }
-    outFile = next;
-    argv.splice(o, 2);
-  }
-  const unknown = argv.find((a) => a.startsWith("--"));
-  if (unknown) { console.error(`unknown option ${unknown}\n${usage}`); return 1; }
-  const [catalogFile, existingArg] = argv;
-  if (!catalogFile) { console.error(usage); return 1; }
+  const OPTIONS = {
+    out: { type: "string" }, "from-proposals": { type: "string" }, screen: { type: "string" }, catalog: { type: "string", multiple: true }, help: { type: "boolean", short: "h" },
+  } as const;
+  const { values: flags, positionals } = cliParse("map-bootstrap", argv, OPTIONS, usage, 1, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  if (!cliArity("map-bootstrap", positionals, 1, 2, usage)) return 1;
+  // an empty word is no file name: `--out ""` would otherwise read as "no --out" and print the map to stdout
+  const emptyFlag = (["out", "from-proposals", "screen"] as const).find((n) => flags[n] === "") ?? (flags.catalog?.includes("") ? "catalog" : undefined);
+  if (emptyFlag) { console.error(`map-bootstrap: --${emptyFlag} needs a value\n${usage}`); return 1; }
+  const outFile = flags.out ?? null, proposalsFile = flags["from-proposals"] ?? null, screenFile = flags.screen ?? null;
+  const extraCatalogFiles = flags.catalog ?? [];
+  const [catalogFile, existingArg] = positionals;
+  if (!catalogFile) { console.error(usage); return 1; } // (an empty word; cliArity has refused none given)
   const catalog = readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json",
     NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
   // A screen's components often live in a library — the sampled components.library.json beside
