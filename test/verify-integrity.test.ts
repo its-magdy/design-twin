@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import * as VS from "../design-to-code/verify-screen.ts";
 import * as VSC from "../design-to-code/verify-compare.ts";
-import { reportToMarkdown } from "../design-to-code/verify-screen.ts";
+import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";

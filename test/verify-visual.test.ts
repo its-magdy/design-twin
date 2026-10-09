@@ -10,7 +10,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { reportToMarkdown, probeLine } from "../design-to-code/verify-screen.ts";
+import { reportToMarkdown, probeLine } from "../design-to-code/verify-report-md.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS, resolveInside } from "../design-to-code/verify-shared.ts";

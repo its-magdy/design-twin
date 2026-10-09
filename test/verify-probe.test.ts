@@ -8,9 +8,9 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import * as VS from "../design-to-code/verify-screen.ts";
 import * as VSH from "../design-to-code/verify-shared.ts";
 import * as VSC from "../design-to-code/verify-compare.ts";
+import * as VSM from "../design-to-code/verify-report-md.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import type { BuiltExpectation, ExpectInput } from "../design-to-code/verify-expect.ts";
 import type { FontSpec, MeasuredNode, MeasuredStyles, ProbeIdentity, ScreenExport, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
@@ -54,7 +54,7 @@ const block = (name: string, fn: () => void): void => { try { fn(); } catch (e) 
 const { compare } = VSC;
 const { FIELDS } = VSH;
 // Read through the namespace so this file still RUNS against a tree without them (the "fails before" check).
-const vsNs: Record<string, unknown> = { ...VS, ...VSH };
+const vsNs: Record<string, unknown> = { ...VSH, ...VSM };
 const STYLE_KEYS: readonly string[] = Array.isArray(vsNs.STYLE_KEYS) ? vsNs.STYLE_KEYS.filter((k): k is string => typeof k === "string") : [];
 type ProbeLineFn = (r: Pick<VerifyReport, "inputs" | "coverage">) => string;
 const isProbeLineFn = (f: unknown): f is ProbeLineFn => typeof f === "function";
@@ -211,7 +211,7 @@ block("identity + census", () => {
   t("[identity] inputs.probe is the probe's identity", () => JSON.stringify(r.inputs?.probe) === JSON.stringify(IDENT));
   t("[identity] probe line: name, version, sha, playwright, browser, matched counts", () =>
     probeLine(r) === "probe verify-probe 0.9.0 (sha aaaaaaaaaaaa…) · playwright 1.63.0 · chromium 140.0.7339.16 · matched: tag 1 · text 1 · ordinal 1 · position 1 · shared path 1 · frame 1 · other 1 · unstated 1");
-  t("[census] the .md has a 'How nodes were matched' table", () => /## How nodes were matched[\s\S]*\| ordinal \| 1 \|/.test(VS.reportToMarkdown(r)));
+  t("[census] the .md has a 'How nodes were matched' table", () => /## How nodes were matched[\s\S]*\| ordinal \| 1 \|/.test(VSM.reportToMarkdown(r)));
   t("[census] a legacy 'data-dt-node' matchedBy counts as a tag match", () => compare(e, measured([probeNode("1:2", { padding: [8, 16, 8, 16] }, { matchedBy: "data-dt-node" })])).coverage.matchedBy?.tag === 1);
 });
 
@@ -234,7 +234,7 @@ block("measured ids the expectation does not know", () => {
   const r = compare(e, measured([probeNode("1:2", { padding: [8, 16, 8, 16] }), probeNode("9:1", {}), probeNode("9:2", {}), probeNode("1:1", {})]));
   t("[not-in-expectation] 2 measured ids outside the expectation are counted and sampled (the frame id is not one)", () =>
     r.probe.measuredIdsNotInExpectation === 2 && JSON.stringify(r.probe.measuredIdsNotInExpectationSample) === JSON.stringify(["9:1", "9:2"]));
-  t("[not-in-expectation] the .md lists them", () => /2 measured node id\(s\) are not in the expectation/.test(VS.reportToMarkdown(r)));
+  t("[not-in-expectation] the .md lists them", () => /2 measured node id\(s\) are not in the expectation/.test(VSM.reportToMarkdown(r)));
 });
 
 // ---- components from the --interactions object; coverage baseline — through the CLI

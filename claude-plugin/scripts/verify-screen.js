@@ -1186,15 +1186,6 @@ function screenExportOf(doc) {
   return isScreenExport(doc) ? doc : null;
 }
 
-// design-to-code/map-util.ts
-function getOrInit(m, k, init) {
-  const have = m.get(k);
-  if (have !== void 0) return have;
-  const made = init();
-  m.set(k, made);
-  return made;
-}
-
 // bridge/src/is-main.ts
 import fs8 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -1577,6 +1568,15 @@ var idSuffix = (id) => {
   return i === -1 ? null : id.slice(i + 1);
 };
 var PAINT_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
+
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
 
 // design-to-code/verify-expect.ts
 var firstSolid = (fills) => (fills || []).find((f) => !!f && f.type === "solid" && f.visible !== false);
@@ -3922,7 +3922,7 @@ function behaviourReport(b, malformed = false) {
   };
 }
 
-// design-to-code/verify-screen.ts
+// design-to-code/verify-report-md.ts
 function matchedLine(census) {
   const c = census || {};
   const always = ["tag", "text", "textOrdinal", "position"];
@@ -4187,6 +4187,8 @@ var withUnit = (v, unit) => {
   const t = fmt(v);
   return unit && !t.endsWith(unit) ? t + unit : t;
 };
+
+// design-to-code/verify-screen.ts
 var STATUS_STALL_MS = 3e5;
 function runStatusNote(base, now = Date.now()) {
   const found = readStatusAt(base);
@@ -4759,8 +4761,5 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
 }
 export {
   findExistingExpectedFor,
-  mdText,
-  probeLine,
-  reportToMarkdown,
   selectForAccept
 };
