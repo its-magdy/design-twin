@@ -432,7 +432,7 @@ export const DIALOG_IDS: readonly BehaviourCheckId[] = ["dialog.focus-on-open", 
 // ---------------------------------------------------------------- page-side functions (SELF-CONTAINED)
 /** P1/R-key: insert a 1px focusable sentinel at the start of body and focus it (the sequential focus starting
  *  point must be known — after a click Chromium starts at the click point). SELF-CONTAINED. */
-export function sentinelInsert(_arg: null): boolean {
+function sentinelInsert(_arg: null): boolean {
   const prev = window.__dtBeh;
   const st: BehState = prev ?? { stops: [], stopVisible: [], sentinel: null, opener: null, dialog: null, dialogModal: false, expander: null, masks: [], maskInline: [] };
   window.__dtBeh = st;
@@ -450,7 +450,7 @@ export function sentinelInsert(_arg: null): boolean {
   return document.activeElement === s;
 }
 /** SELF-CONTAINED. */
-export function sentinelRemove(_arg: null): boolean {
+function sentinelRemove(_arg: null): boolean {
   const st = window.__dtBeh;
   if (st && st.sentinel) { st.sentinel.remove(); st.sentinel = null; }
   return true;
@@ -460,7 +460,7 @@ export function sentinelRemove(_arg: null): boolean {
  *  the fields of a date input, a shadow host, an iframe — is a duplicate, skipped, never a loop: the walk goes on to the cap).
  *  `opener` = it is the marked opener's control (markOpener); `ancestor` = it holds the opener (a focusable row/card, never pressed).
  *  Otherwise the stop is recorded (element reference + visible while focused). SELF-CONTAINED. */
-export function walkStep(arg: { record: boolean }): { end: "sentinel" | "body" | null; opener: boolean; ancestor: string | null; inside: string | null; dup: boolean } {
+function walkStep(arg: { record: boolean }): { end: "sentinel" | "body" | null; opener: boolean; ancestor: string | null; inside: string | null; dup: boolean } {
   const st = window.__dtBeh;
   let a = document.activeElement;
   while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
@@ -504,12 +504,12 @@ export function keyTarget(_arg: null): { ok: boolean; desc: string; why: string 
 }
 
 /** How many stops the walk recorded, and which were visible while focused. SELF-CONTAINED. */
-export function stopsCount(_arg: null): { n: number; visible: boolean[] } {
+function stopsCount(_arg: null): { n: number; visible: boolean[] } {
   const st = window.__dtBeh;
   return st ? { n: st.stops.length, visible: st.stopVisible.slice() } : { n: 0, visible: [] };
 }
 /** The recorded stops, described (after the sentinel is gone: paths are the page's own). SELF-CONTAINED. */
-export function stopsInfo(_arg: null): Array<{ path: string; dt: string | null; tag: string; connected: boolean; domName: string | null }> {
+function stopsInfo(_arg: null): Array<{ path: string; dt: string | null; tag: string; connected: boolean; domName: string | null }> {
   const st = window.__dtBeh;
   if (!st) return [];
   // a path Playwright's CSS engine resolves: inside an open shadow root the chain restarts at the root and is joined to the
@@ -542,7 +542,7 @@ export function stopsInfo(_arg: null): Array<{ path: string; dt: string | null; 
   return st.stops.map((el) => ({ path: pathOf(el), dt: el.getAttribute("data-dt-node"), tag: el.tagName.toLowerCase(), connected: el.isConnected,
     domName: el.tagName.toLowerCase() === "iframe" || el.tagName.toLowerCase() === "frame" ? domName(el) : el.tagName.toLowerCase() === "summary" ? ((el.textContent || "").trim() || null) : null }));
 }
-export interface SubjectRead {
+interface SubjectRead {
   id: string;
   /** inside a closed disclosure — an ancestor with display:none, a closed <details>, [hidden], or a region an
    *  [aria-expanded=false] control names in aria-controls (its description), else null */
@@ -562,7 +562,7 @@ export interface SubjectRead {
 /** keyboard.reachable: one subject (a tagged opener, marked by markOpener just before) against the recorded stops. A stop
  *  inside a container opener reaches it only when it is the opener's control — a card's own Delete reaches the
  *  Delete, not the card. SELF-CONTAINED. */
-export function subjectRead(arg: { id: string }): SubjectRead {
+function subjectRead(arg: { id: string }): SubjectRead {
   const st = window.__dtBeh;
   const stops = st ? st.stops : [];
   const FOCUSABLE = "a[href], area[href], button, input, select, textarea, summary, iframe, [tabindex], [contenteditable]";
@@ -594,7 +594,7 @@ export function subjectRead(arg: { id: string }): SubjectRead {
   };
 }
 /** keyboard.focus-visible: focus the stop before `i` (the sentinel for 0) programmatically, so a real Tab lands on i. SELF-CONTAINED. */
-export function focusBefore(arg: { i: number }): boolean {
+function focusBefore(arg: { i: number }): boolean {
   const st = window.__dtBeh;
   if (!st) return false;
   const prev = arg.i === 0 ? st.sentinel : st.stops[arg.i - 1];
@@ -605,7 +605,7 @@ export function focusBefore(arg: { i: number }): boolean {
   return a === prev;
 }
 /** Is stop i focused now, where is it (viewport), and what draws on it. SELF-CONTAINED. */
-export function focusedStop(arg: { i: number }): { ok: boolean; onPrev: boolean; visible: boolean; rect: { x: number; y: number; w: number; h: number }; vw: number; vh: number; outlineStyle: string; outlineWidth: string; boxShadow: string; focusVisible: boolean } {
+function focusedStop(arg: { i: number }): { ok: boolean; onPrev: boolean; visible: boolean; rect: { x: number; y: number; w: number; h: number }; vw: number; vh: number; outlineStyle: string; outlineWidth: string; boxShadow: string; focusVisible: boolean } {
   const st = window.__dtBeh;
   const el = st ? st.stops[arg.i] : undefined;
   let act = document.activeElement;
@@ -625,13 +625,13 @@ export function focusedStop(arg: { i: number }): { ok: boolean; onPrev: boolean;
   };
 }
 /** SELF-CONTAINED. */
-export function blurActive(_arg: null): boolean {
+function blurActive(_arg: null): boolean {
   const a = document.activeElement;
   if (a && a !== document.body) a.blur();
   return true;
 }
 /** Explicit [role=region] elements with no accessible name (a snapshot drops them). SELF-CONTAINED. */
-export function unnamedRegions(_arg: null): string[] {
+function unnamedRegions(_arg: null): string[] {
   const pathOf = (el: BElement): string => {
     const parts: string[] = [];
     let cur: BElement | null = el;
@@ -656,7 +656,7 @@ export function unnamedRegions(_arg: null): string[] {
   return out;
 }
 /** visible td/th and elements with their own non-blank text, rendered under 1 px wide (and > 0 tall). SELF-CONTAINED. */
-export function subpixelRead(_arg: null): Array<{ path: string; dt: string | null; tag: string; width: number; text: string }> {
+function subpixelRead(_arg: null): Array<{ path: string; dt: string | null; tag: string; width: number; text: string }> {
   const pathOf = (el: BElement): string => {
     const parts: string[] = [];
     let cur: BElement | null = el;
@@ -690,7 +690,7 @@ export function subpixelRead(_arg: null): Array<{ path: string; dt: string | nul
   return out.slice(0, 50);
 }
 /** overflow.narrow: is every offender inside 2-D content (WCAG 1.4.10's exception)? SELF-CONTAINED. */
-export function offendersAre2D(arg: { paths: string[] }): boolean {
+function offendersAre2D(arg: { paths: string[] }): boolean {
   if (!arg.paths.length) return false;
   return arg.paths.every((p) => {
     const el = document.querySelector(p);
@@ -699,7 +699,7 @@ export function offendersAre2D(arg: { paths: string[] }): boolean {
 }
 /** the data-dt-node ids on a visible element with a box, outside closed dialogs — the same rule as the measurement
  *  pass's tagged candidates (box && checkVisibility, not in a closed <dialog>): the unit's page fingerprint. SELF-CONTAINED. */
-export function visibleTags(_arg: null): string[] {
+function visibleTags(_arg: null): string[] {
   const out: string[] = [];
   for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
     if (el.getClientRects().length === 0 || el.closest("dialog:not([open])") !== null || !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) continue;
@@ -709,12 +709,12 @@ export function visibleTags(_arg: null): string[] {
   return out;
 }
 /** The page's size now (the live-resize settle polls it). SELF-CONTAINED. */
-export function docSize(_arg: null): { sw: number; sh: number; scrollY: number; vh: number; vw: number } {
+function docSize(_arg: null): { sw: number; sh: number; scrollY: number; vh: number; vw: number } {
   const de = document.documentElement;
   return { sw: de.scrollWidth, sh: de.scrollHeight, scrollY, vh: innerHeight, vw: innerWidth };
 }
 /** forced-colors.visible candidates: visible elements whose computed mask-image is not none (≤ cap). SELF-CONTAINED. */
-export function maskCandidates(arg: { cap: number }): Array<{ dt: string | null; tag: string }> {
+function maskCandidates(arg: { cap: number }): Array<{ dt: string | null; tag: string }> {
   const st: BehState = window.__dtBeh ?? { stops: [], stopVisible: [], sentinel: null, opener: null, dialog: null, dialogModal: false, expander: null, masks: [], maskInline: [] };
   window.__dtBeh = st;
   st.masks = []; st.maskInline = [];
@@ -736,7 +736,7 @@ export function maskCandidates(arg: { cap: number }): Array<{ dt: string | null;
   return out;
 }
 /** Bring mask candidate i into view; its viewport rect (null when gone). SELF-CONTAINED. */
-export function maskShow(arg: { i: number }): { x: number; y: number; w: number; h: number; vw: number; vh: number } | null {
+function maskShow(arg: { i: number }): { x: number; y: number; w: number; h: number; vw: number; vh: number } | null {
   const st = window.__dtBeh;
   const el = st ? st.masks[arg.i] : undefined;
   if (!el || !el.isConnected) return null;
@@ -745,7 +745,7 @@ export function maskShow(arg: { i: number }): { x: number; y: number; w: number;
   return { x: r.x, y: r.y, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight };
 }
 /** Hide (inline visibility:hidden !important) or restore mask candidate i. SELF-CONTAINED. */
-export function maskHide(arg: { i: number; hide: boolean }): boolean {
+function maskHide(arg: { i: number; hide: boolean }): boolean {
   const st = window.__dtBeh;
   const el = st ? st.masks[arg.i] : undefined;
   const prev = st ? st.maskInline[arg.i] : undefined;
@@ -756,7 +756,7 @@ export function maskHide(arg: { i: number; hide: boolean }): boolean {
   return true;
 }
 /** Scroll the window to y at once; the scrollY it got. SELF-CONTAINED. */
-export function scrollToY(arg: { y: number }): number {
+function scrollToY(arg: { y: number }): number {
   window.scrollTo({ top: arg.y, left: 0, behavior: "instant" });
   return scrollY;
 }
@@ -1168,7 +1168,7 @@ export function ownDecide(arg: { own: boolean; why?: string | null }): boolean {
 }
 /** Focus the marked opener's control (markOpener) without scrolling; false when it has none (or it left the
  *  document). SELF-CONTAINED. */
-export function focusOpener(arg: { preventScroll: boolean }): boolean {
+function focusOpener(arg: { preventScroll: boolean }): boolean {
   const st = window.__dtBeh;
   const f = st && st.opener && st.control && st.control.isConnected ? st.control : null;
   if (!f) return false;
@@ -1177,9 +1177,9 @@ export function focusOpener(arg: { preventScroll: boolean }): boolean {
   while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
   return a === f;
 }
-export interface DialogRead { found: boolean; modal: boolean; dialogOpen: boolean; ariaModal: boolean; native: boolean }
+interface DialogRead { found: boolean; modal: boolean; dialogOpen: boolean; ariaModal: boolean; native: boolean }
 /** Remember the opened element (by the detector's path) and say what kind of dialog it is. SELF-CONTAINED. */
-export function markDialog(arg: { path: string }): DialogRead {
+function markDialog(arg: { path: string }): DialogRead {
   const st = window.__dtBeh;
   const el = document.querySelector(arg.path);
   if (!st || !el) return { found: false, modal: false, dialogOpen: false, ariaModal: false, native: false };
@@ -1206,7 +1206,7 @@ export function markDialog(arg: { path: string }): DialogRead {
   return { found: true, modal, dialogOpen: root.matches("dialog[open]"), ariaModal, native: root.tagName.toLowerCase() === "dialog" };
 }
 /** Is the remembered dialog still open: in the document, with a box, visible, and (when it opened as :modal) still :modal. SELF-CONTAINED. */
-export function dialogOpenNow(_arg: null): boolean {
+function dialogOpenNow(_arg: null): boolean {
   const st = window.__dtBeh;
   const root = st ? st.dialog : null;
   if (!root || !root.isConnected) return false;
@@ -1224,7 +1224,7 @@ export function dialogOpenNow(_arg: null): boolean {
   return true;
 }
 /** Where focus is relative to the remembered dialog (and the destination-tagged element). SELF-CONTAINED. */
-export function focusVsDialog(arg: { destId: string | null }): { inside: boolean; body: boolean; desc: string; name: string } {
+function focusVsDialog(arg: { destId: string | null }): { inside: boolean; body: boolean; desc: string; name: string } {
   const st = window.__dtBeh;
   const d = st ? st.dialog : null;
   const a = document.activeElement;
@@ -1244,7 +1244,7 @@ export function focusVsDialog(arg: { destId: string | null }): { inside: boolean
   return { inside, body, desc: desc(body ? null : a), name: a && !body ? (a.getAttribute("aria-label") || (a.textContent || "").trim().slice(0, 40)) : "" };
 }
 /** Tabbable elements inside the remembered dialog (cap 30). SELF-CONTAINED. */
-export function dialogTabbables(_arg: null): number {
+function dialogTabbables(_arg: null): number {
   const st = window.__dtBeh;
   const d = st ? st.dialog : null;
   if (!d) return 0;
@@ -1263,7 +1263,7 @@ export function dialogTabbables(_arg: null): number {
 }
 /** dialog.nested-escape: the first visible [aria-expanded="false"] inside the dialog (remembered), else whether the dialog
  *  holds only a native picker (select / date-like input). SELF-CONTAINED. */
-export function expanderFind(_arg: null): { path: string | null; nativePicker: boolean; desc: string } {
+function expanderFind(_arg: null): { path: string | null; nativePicker: boolean; desc: string } {
   const st = window.__dtBeh;
   const d = st ? st.dialog : null;
   if (!st || !d) return { path: null, nativePicker: false, desc: "" };
@@ -1287,13 +1287,13 @@ export function expanderFind(_arg: null): { path: string | null; nativePicker: b
   return { path: null, nativePicker: native, desc: "" };
 }
 /** The remembered expander's aria-expanded now. SELF-CONTAINED. */
-export function expanderState(_arg: null): string | null {
+function expanderState(_arg: null): string | null {
   const st = window.__dtBeh;
   const x = st ? st.expander : null;
   return x && x.isConnected ? x.getAttribute("aria-expanded") : null;
 }
 /** Visible clickable controls inside the remembered dialog with their accessible names (safe-close candidates). SELF-CONTAINED. */
-export function closeCandidates(_arg: null): Array<{ path: string; name: string; ariaLabel: string | null; button: boolean }> {
+function closeCandidates(_arg: null): Array<{ path: string; name: string; ariaLabel: string | null; button: boolean }> {
   const st = window.__dtBeh;
   const d = st ? st.dialog : null;
   if (!d) return [];
@@ -1355,7 +1355,7 @@ export function focusReturnRead(_arg: null): { connected: boolean; openerVisible
   };
 }
 /** dialog.scroll-open: where the dialog (its destination-tagged element inside, else itself) is, in viewport coordinates. SELF-CONTAINED. */
-export function dialogGeometry(arg: { destId: string | null }): { rect: { x: number; y: number; w: number; h: number }; vw: number; vh: number; position: string; scrollY: number; via: string } {
+function dialogGeometry(arg: { destId: string | null }): { rect: { x: number; y: number; w: number; h: number }; vw: number; vh: number; position: string; scrollY: number; via: string } {
   const st = window.__dtBeh;
   const d = st ? st.dialog : null;
   let el: BElement | null = st && st.box ? st.box : d;
@@ -1379,7 +1379,7 @@ export function dialogGeometry(arg: { destId: string | null }): { rect: { x: num
   return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, vw, vh, position: getComputedStyle(st && st.box ? st.box : el).getPropertyValue("position"), scrollY: eff, via };
 }
 /** the page's effective scroll — window.scrollY, or −top of a position:fixed body/html (a scroll lock). SELF-CONTAINED. */
-export function effScroll(_arg: null): number {
+function effScroll(_arg: null): number {
   for (const e of [document.body, document.documentElement]) {
     if (!e || getComputedStyle(e).getPropertyValue("position") !== "fixed") continue;
     const t = parseFloat(e.style.getPropertyValue("top") || getComputedStyle(e).getPropertyValue("top"));
@@ -1390,7 +1390,7 @@ export function effScroll(_arg: null): number {
 /** wait until the remembered dialog has settled — every running animation on its subtree finished (Web Animations keep
  *  running under the probe's CSS animation:none; cap 1 s), then its box unchanged over 2 consecutive frames (cap 1 s).
  *  SELF-CONTAINED. */
-export async function settleDialog(_arg: null): Promise<{ animations: number; stable: boolean }> {
+async function settleDialog(_arg: null): Promise<{ animations: number; stable: boolean }> {
   const st = window.__dtBeh;
   const root = st ? st.dialog : null;
   const box = st && st.box ? st.box : root;
@@ -1413,7 +1413,7 @@ export async function settleDialog(_arg: null): Promise<{ animations: number; st
 }
 /** dialog.scrim / click-outside: the scrim colour (a native modal's ::backdrop — read only while :modal — else the
  *  background of a fixed element covering the viewport at the point), and what a click at (x, y) would hit. SELF-CONTAINED. */
-export interface BackdropRead {
+interface BackdropRead {
   /** a native modal's ::backdrop colour (read only while :modal) */
   backdrop: string | null;
   /** the background colour of the scrim found (a fixed element covering ≥ 90% of the viewport) */
@@ -1437,7 +1437,7 @@ export interface BackdropRead {
  *  never inside the dialog's box. Alpha is read from rgb()/rgba() and the `/ a` of oklab() / oklch() / lab() / lch() / color()
  *  (Tailwind v4's bg-black/0 computes to oklab(0 0 0 / 0)); another colour space is unreadable — no point, and the caller
  *  reports not-run. No such point: null ("no backdrop to click"). SELF-CONTAINED. */
-export function scrimRead(_arg: null): BackdropRead {
+function scrimRead(_arg: null): BackdropRead {
   const st = window.__dtBeh;
   const d = st ? st.dialog : null;
   const box = st && st.box ? st.box : d;
