@@ -1,6 +1,6 @@
 // UI <-> main-thread message contract (figma.ui.postMessage / window.onmessage's `pluginMessage`).
 // Derived from what figma-plugin/ui.html actually sends (`parent.postMessage({pluginMessage:{...}})`)
-// and what main.ts actually posts back (`figma.ui.postMessage({...})`) — see ui.html around the
+// and what main.ts actually posts back (its typed `post()`, or progress.ts's figma.ui.postMessage) — see ui.html around the
 // `send()` helper (line ~216) and its handlers (~430-562), and main.ts's figma.ui.onmessage.
 import type { Asset } from "./state";
 import type { ProgressPost } from "./progress";
