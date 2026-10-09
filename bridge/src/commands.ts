@@ -66,7 +66,7 @@ export interface ScreenshotArgs extends NodeArgs {
 
 /** The four write ops figma-plugin/src/writes.ts implements. */
 export type WriteOpName = "createFrame" | "createText" | "setFill" | "setText";
-/** One write op (writes.ts WriteOp, mirrored): only the fields each op actually reads. Every optional
+/** One write op (writes.ts applyWrite imports it): only the fields each op actually reads. Every optional
  *  field admits `undefined` because figma_write hands over its Zod-parsed ops as-is, and Zod types an
  *  `.optional()` field as `T | undefined`; the plugin reads an undefined field exactly as an absent one. */
 export interface WriteOp {
@@ -174,7 +174,8 @@ export interface LibraryRow {
   variableCollections: LibraryCollection[];
   /** USAGE-derived (components of that library used in this file); absent when it cannot be attributed */
   componentCount?: number;
-  note?: string;
+  /** what the row's counts do and do not mean; the plugin sets it on every row */
+  note: string;
 }
 export interface ListLibrariesReply {
   exportedAt: string;
@@ -225,7 +226,7 @@ export type ExportReply = FullExportReply | DesignSystemReply | ScreenReply | Sc
 export interface AppliedWrite {
   id?: string;
 }
-/** writes.ts WriteResult, mirrored: `ok: false` on a partial failure, with what was applied before it. */
+/** writes.ts applyWrites' reply: `ok: false` on a partial failure, with what was applied before it. */
 export interface WriteResult {
   ok: boolean;
   applied: AppliedWrite[];

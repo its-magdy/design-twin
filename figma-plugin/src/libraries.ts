@@ -23,20 +23,8 @@ import type { CatalogComponent, ComponentPropDef } from "../../bridge/src/doc-ty
 import { propName, propType, errMsg, nonEmpty, exportedAt } from "./util";
 import { warn, loadAllPages } from "./state";
 import { ifDefined } from "../../bridge/src/json-util.ts";
-
-// ---- listLibraries' reply (commands.ts ListLibrariesReply, rendered by bridge/src/figma-pull.ts)
-/** One variable collection of a library (or of this file). */
-export interface LibraryCollectionRow { key: string; name: string; variableCount?: number }
-/** One row of listLibraries(): this file, a library with variable collections, or a component-only source. */
-export interface LibraryRow {
-  key: string;
-  name: string;
-  kind: "local" | "library";
-  variableCollections: LibraryCollectionRow[];
-  componentCount?: number;
-  note: string;
-}
-export interface LibrariesListing { exportedAt: string; file?: string; libraries: LibraryRow[]; warnings: string[] }
+// listLibraries' reply is the bridge's wire contract (rendered by bridge/src/figma-pull.ts).
+import type { LibraryCollection, LibraryRow, ListLibrariesReply } from "../../bridge/src/commands.ts";
 
 // The bucket every remote component lands in until a registry says otherwise. Deliberately a visible,
 // greppable string in the output rather than an omitted field: "I don't know" must be readable.
@@ -231,8 +219,8 @@ export async function collectLibraryComponents(sinkIn?: (m: string) => void): Pr
 // Variable collections per enabled library. Wrapped whole: a missing "teamlibrary" permission and a
 // plan without shared libraries BOTH throw here, and neither is a reason to fail the call — the
 // component half below works regardless and is the half that needs no permission at all.
-async function libraryVariableCollections(sink: (m: string) => void): Promise<Map<string, LibraryCollectionRow[]>> {
-  const byLibrary = new Map<string, LibraryCollectionRow[]>();
+async function libraryVariableCollections(sink: (m: string) => void): Promise<Map<string, LibraryCollection[]>> {
+  const byLibrary = new Map<string, LibraryCollection[]>();
   let collections: Array<{ name: string; key: string; libraryName: string }> = [];
   try {
     collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
@@ -271,7 +259,7 @@ async function libraryVariableCollections(sink: (m: string) => void): Promise<Ma
   );
   for (const [i, c] of collections.entries()) {
     const lib = c.libraryName || UNKNOWN_LIBRARY;
-    const entry: LibraryCollectionRow = { key: c.key, name: c.name };
+    const entry: LibraryCollection = { key: c.key, name: c.name };
     const count = counts[i];
     if (count !== undefined) entry.variableCount = count;
     const list = byLibrary.get(lib);
@@ -283,7 +271,7 @@ async function libraryVariableCollections(sink: (m: string) => void): Promise<Ma
 
 // The library discovery call (no export, but the slowest read): which libraries feed this file, so a caller can decide what to pull.
 // Deliberately NOT part of an export — it is the "what's out there?" map, the twin of listPages.
-export async function listLibraries(): Promise<LibrariesListing> {
+export async function listLibraries(): Promise<ListLibrariesReply> {
   const warnings: string[] = [];
   const sink = (m: string) => warnings.push(m);
 
@@ -310,7 +298,7 @@ export async function listLibraries(): Promise<LibrariesListing> {
 
   // The local file first — it is a "library" from the consumer's point of view (its own variables and
   // components), and listing it makes the remote entries interpretable by contrast.
-  const localCollections: LibraryCollectionRow[] = [];
+  const localCollections: LibraryCollection[] = [];
   try {
     const [colls, vars] = await Promise.all([
       figma.variables.getLocalVariableCollectionsAsync(),
