@@ -761,9 +761,14 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   const screenDoc = r.sourceFile
     ? Object.assign({}, r.screen, { sourceFile: r.sourceFile }, r.sourceFileKey ? { sourceFileKey: r.sourceFileKey } : {})
     : r.screen;
-  const prev = opts && opts.keepPrev ? keepPrevCopy(path.join(dir, paths.screen), JSON.stringify(screenDoc, null, 2)) : undefined;
-  if (log && prev) log(`kept the previous ${paths.screen} as ${path.basename(prev)} (it differed from this export)`);
-  writeJson(dir, paths.screen, screenDoc, false, log);
+  // writeJson serialises once and keeps the replaced file through `keep`; quiet, so the kept line can come before the wrote line
+  const keep: string[] | undefined = opts && opts.keepPrev ? [] : undefined;
+  writeJson(dir, paths.screen, screenDoc, true, undefined, keep);
+  const prev = keep && keep[0];
+  if (log) {
+    if (prev) log(`kept the previous ${paths.screen} as ${path.basename(prev)} (it differed from this export)`);
+    log("wrote " + path.join(dir, paths.screen));
+  }
   if (log) { const d = danglingPointers(dir, r.screen.nodes); if (d.length) log(`warn  ${d.length} asset pointer(s) name a file that is not on disk: ${d.slice(0, 3).join(", ")}${d.length > 3 ? ", …" : ""}`); }
   // `variables` is always on a real screen reply; a hand-built one (the tests) may omit it.
   const variables = r.variables ? writeScreenVariables(dir, paths, r.variables, log) : null;

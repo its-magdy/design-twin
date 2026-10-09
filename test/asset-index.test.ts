@@ -513,9 +513,12 @@ console.log("\nkeepPrev keeps <screen>.json.prev when the existing file differs:
   t("[unit] a first write keeps nothing (no file to keep)", () => first.prev === undefined && !fs.existsSync(file + ".prev"));
   const same = one({ keepPrev: true }, "Hello");
   t("[unit] an identical re-write keeps nothing", () => same.prev === undefined && !fs.existsSync(file + ".prev"));
+  const oldBytes = fs.readFileSync(file);
   const changed = one({ keepPrev: true }, "Changed");
   t("[unit] a differing re-write keeps the old bytes as <screen>.json.prev and wrote.prev names it",
     () => changed.prev === file + ".prev" && fs.readFileSync(file + ".prev", "utf8").includes("Hello") && fs.readFileSync(file, "utf8").includes("Changed"));
+  t("[unit] …the .prev is the replaced file byte for byte and the target is the new export as 2-space JSON (one serialisation feeds both the comparison and the write)",
+    () => fs.readFileSync(file + ".prev").equals(oldBytes) && ((txt) => txt === JSON.stringify(JSON.parse(txt) as unknown, null, 2))(fs.readFileSync(file, "utf8")));
   t("[unit] …and logs it", () => changed.log.some((l) => /kept the previous .*Prev__9_1\.json as Prev__9_1\.json\.prev/.test(l)));
   fs.rmSync(file + ".prev", { force: true });
   const plain = one(undefined, "Again");
