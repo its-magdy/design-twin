@@ -25,6 +25,7 @@ import { z } from "zod";
 import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import * as LAYOUT from "./project-layout.ts";
+import { isRecord } from "./json-util.ts";
 
 /** One .mcp.json server entry, as init writes it. */
 export interface McpEntry {
@@ -41,15 +42,14 @@ const McpJsonSchema = z.looseObject(
   { mcpServers: z.record(z.string(), z.unknown(), { error: (iss) => `\`mcpServers\` must be an object of server entries, not ${jsonKind(iss.input)}` }).optional() },
   { error: (iss) => `must be a JSON object, not ${jsonKind(iss.input)}` },
 );
-const isPlainObject = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
 
 /** Check a parsed .mcp.json. On success, `doc` and `servers` are the user's OWN objects, not zod's
  *  copies: zod moves the keys it knows to the front and drops a key named "__proto__", and init
  *  rewrites this file — it must keep its key order and every entry. `error` is one line. */
 function readMcpJson(raw: unknown): { doc: Record<string, unknown>; servers: Record<string, unknown> } | { error: string } {
   const r = McpJsonSchema.safeParse(raw);
-  if (!r.success || !isPlainObject(raw)) return { error: r.success ? "must be a JSON object" : r.error.issues.map((i) => i.message).join("; ") };
-  return { doc: raw, servers: isPlainObject(raw.mcpServers) ? raw.mcpServers : {} };
+  if (!r.success || !isRecord(raw)) return { error: r.success ? "must be a JSON object" : r.error.issues.map((i) => i.message).join("; ") };
+  return { doc: raw, servers: isRecord(raw.mcpServers) ? raw.mcpServers : {} };
 }
 
 /** One step of init's plan (see `plan`), discriminated on `kind`: the file-touching kinds carry their
@@ -90,15 +90,15 @@ const isOurMcpEntry = (e: unknown): boolean => {
 function usesVite(cwd: string): boolean {
   let raw: unknown;
   try { raw = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8")) as unknown; } catch { return false; }
-  return isPlainObject(raw) && [raw.dependencies, raw.devDependencies].filter(isPlainObject).some((d) => "vite" in d);
+  return isRecord(raw) && [raw.dependencies, raw.devDependencies].filter(isRecord).some((d) => "vite" in d);
 }
 
 // Does package.json list Tailwind v4 (tailwindcss not pinned to v3, or its v4-only Vite/PostCSS plugin) in dependencies or devDependencies?
 function usesTailwind(cwd: string): boolean {
   let raw: unknown;
   try { raw = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8")) as unknown; } catch { return false; }
-  if (!isPlainObject(raw)) return false;
-  const deps = [raw.dependencies, raw.devDependencies].filter(isPlainObject);
+  if (!isRecord(raw)) return false;
+  const deps = [raw.dependencies, raw.devDependencies].filter(isRecord);
   // @tailwindcss/vite and @tailwindcss/postcss exist only for v4. `tailwindcss` itself counts unless its
   // range is clearly v3 (^3 / ~3 / 3.x / >=3 <4): v3 scans only its `content` globs, so the note would be wrong.
   if (deps.some((d) => "@tailwindcss/vite" in d || "@tailwindcss/postcss" in d)) return true;

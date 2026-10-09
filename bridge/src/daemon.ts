@@ -17,7 +17,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { errMsg } from "./errmsg.ts";
+import { errMsg, errCode } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
@@ -253,7 +253,7 @@ function findSockDir(place: SockPlace, create: boolean): string | null {
   if (xdg && path.isAbsolute(xdg) && privateDirProblem(xdg, uid) === null) return xdg;
   const dir = path.join(tmpdir, `designtwin-${uid}`);
   if (!create) {
-    try { fs.lstatSync(dir); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return null; }
+    try { fs.lstatSync(dir); } catch (e) { if (errCode(e) === "ENOENT") return null; }
   } else {
     // mode is narrowed further by the umask, never widened; an existing directory is left as it is and
     // judged by the check below.
