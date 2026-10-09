@@ -3,25 +3,11 @@
 
 // design-to-code/verify-screen.ts
 import fs9 from "node:fs";
-import path8 from "node:path";
+import path9 from "node:path";
 
 // bridge/src/hash.ts
 import crypto from "node:crypto";
 var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
-
-// design-to-code/hidden.ts
-var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
-var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
-function walkWithHidden(root, fn, opts) {
-  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path9, parent, depth) {
-    if (!node || typeof node !== "object") return;
-    const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path9, parent, depth });
-    const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path9 ? path9 + " > " : "") + pathOf(kid, i), node, depth + 1);
-  })(root, false, root ? pathOf(root, 0) : "", null, 0);
-}
 
 // design-to-code/content-hash.ts
 import fs from "node:fs";
@@ -627,52 +613,6 @@ function planInteractionsSha256(plan) {
   const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
   return sha256Hex(canonical(rows));
 }
-
-// design-to-code/png.ts
-import { crc32, deflateSync, inflateSync } from "node:zlib";
-var PngError = class extends Error {
-};
-var SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-function chunks(b) {
-  const buf = Buffer.from(b.buffer, b.byteOffset, b.byteLength);
-  if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) throw new PngError("not a PNG (bad signature)");
-  const out = [];
-  let o = 8;
-  while (o + 12 <= buf.length) {
-    const len = buf.readUInt32BE(o);
-    if (o + 12 + len > buf.length) throw new PngError("truncated PNG chunk");
-    const type = buf.toString("latin1", o + 4, o + 8), data = buf.subarray(o + 8, o + 8 + len);
-    if (crc32(buf.subarray(o + 4, o + 8 + len)) >>> 0 !== buf.readUInt32BE(o + 8 + len)) throw new PngError(`bad CRC in the ${type} chunk`);
-    out.push({ type, data });
-    o += 12 + len;
-    if (type === "IEND") break;
-  }
-  if (!out.length || out[0]?.type !== "IHDR") throw new PngError("not a PNG (no IHDR)");
-  return out;
-}
-function pngInfo(b) {
-  let cs;
-  try {
-    cs = chunks(b);
-  } catch {
-    return null;
-  }
-  const ihdr = cs[0];
-  if (!ihdr || ihdr.data.length < 13) return null;
-  const d = ihdr.data;
-  const info = { w: d.readUInt32BE(0), h: d.readUInt32BE(4), bitDepth: d[8] ?? 0, colorType: d[9] ?? 0, interlace: d[12] ?? 0, srgb: false, gama: null, iccp: null };
-  for (const c of cs) {
-    if (c.type === "sRGB") info.srgb = true;
-    else if (c.type === "gAMA" && c.data.length >= 4) info.gama = c.data.readUInt32BE(0);
-    else if (c.type === "iCCP") {
-      const z = c.data.indexOf(0);
-      info.iccp = c.data.toString("latin1", 0, z < 0 ? Math.min(79, c.data.length) : z);
-    }
-  }
-  return info;
-}
-var MAX_DECODE_SIDE = 4096;
-var MAX_DECODE_PIXELS = MAX_DECODE_SIDE * MAX_DECODE_SIDE;
 
 // design-to-code/probe-steps.ts
 var STEP_KINDS = ["click", "waitFor", "goto"];
@@ -1573,7 +1513,70 @@ function samePlanFile(a, b) {
   return path7.resolve(a) === path7.resolve(b);
 }
 
-// design-to-code/verify-screen.ts
+// design-to-code/verify-expect.ts
+import path8 from "node:path";
+
+// design-to-code/hidden.ts
+var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
+var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
+function walkWithHidden(root, fn, opts) {
+  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+  (function go(node, parentHidden, path10, parent, depth) {
+    if (!node || typeof node !== "object") return;
+    const hidden = isHidden(node, parentHidden);
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path10, parent, depth });
+    const kids = Array.isArray(node.children) ? node.children : [];
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path10 ? path10 + " > " : "") + pathOf(kid, i), node, depth + 1);
+  })(root, false, root ? pathOf(root, 0) : "", null, 0);
+}
+
+// design-to-code/png.ts
+import { crc32, deflateSync, inflateSync } from "node:zlib";
+var PngError = class extends Error {
+};
+var SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+function chunks(b) {
+  const buf = Buffer.from(b.buffer, b.byteOffset, b.byteLength);
+  if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) throw new PngError("not a PNG (bad signature)");
+  const out = [];
+  let o = 8;
+  while (o + 12 <= buf.length) {
+    const len = buf.readUInt32BE(o);
+    if (o + 12 + len > buf.length) throw new PngError("truncated PNG chunk");
+    const type = buf.toString("latin1", o + 4, o + 8), data = buf.subarray(o + 8, o + 8 + len);
+    if (crc32(buf.subarray(o + 4, o + 8 + len)) >>> 0 !== buf.readUInt32BE(o + 8 + len)) throw new PngError(`bad CRC in the ${type} chunk`);
+    out.push({ type, data });
+    o += 12 + len;
+    if (type === "IEND") break;
+  }
+  if (!out.length || out[0]?.type !== "IHDR") throw new PngError("not a PNG (no IHDR)");
+  return out;
+}
+function pngInfo(b) {
+  let cs;
+  try {
+    cs = chunks(b);
+  } catch {
+    return null;
+  }
+  const ihdr = cs[0];
+  if (!ihdr || ihdr.data.length < 13) return null;
+  const d = ihdr.data;
+  const info = { w: d.readUInt32BE(0), h: d.readUInt32BE(4), bitDepth: d[8] ?? 0, colorType: d[9] ?? 0, interlace: d[12] ?? 0, srgb: false, gama: null, iccp: null };
+  for (const c of cs) {
+    if (c.type === "sRGB") info.srgb = true;
+    else if (c.type === "gAMA" && c.data.length >= 4) info.gama = c.data.readUInt32BE(0);
+    else if (c.type === "iCCP") {
+      const z = c.data.indexOf(0);
+      info.iccp = c.data.toString("latin1", 0, z < 0 ? Math.min(79, c.data.length) : z);
+    }
+  }
+  return info;
+}
+var MAX_DECODE_SIDE = 4096;
+var MAX_DECODE_PIXELS = MAX_DECODE_SIDE * MAX_DECODE_SIDE;
+
+// design-to-code/verify-expect.ts
 var firstSolid = (fills) => (fills || []).find((f) => !!f && f.type === "solid" && f.visible !== false);
 var STATE_WORD = /(?:^|[^a-z])(hover(?:ed)?|pressed|focus(?:ed)?)(?:[^a-z]|$)/i;
 var normState = (w) => /^hover/i.test(w) ? "hover" : /^press/i.test(w) ? "pressed" : "focus";
@@ -2259,6 +2262,8 @@ function referenceImageFor(o) {
     ...profiles.length ? { colorProfile: profiles.join(" + ") } : {}
   };
 }
+
+// design-to-code/verify-screen.ts
 var KNOWN_NODE_KEYS = /* @__PURE__ */ new Set([
   "nodeId",
   "styles",
@@ -4181,7 +4186,7 @@ var STATUS_STALL_MS = 3e5;
 function runStatusNote(base, now = Date.now()) {
   const found = readStatusAt(base);
   if (!found) return null;
-  const st = found.status, name = path8.basename(base);
+  const st = found.status, name = path9.basename(base);
   if (st === "v1") return `${found.file} is a hand-written status (no run id) \u2014 not checked`;
   const detail = st.detail ? ` (${st.detail})` : "";
   if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} \u2014 its measured/report files are partial; this expectation is safe to re-measure against`;
@@ -4195,8 +4200,8 @@ function findExistingExpectedFor(dir, nodeId, ownTarget) {
   if (!nodeId || !fs9.existsSync(dir)) return null;
   for (const f of fs9.readdirSync(dir)) {
     if (!f.endsWith(".expected.json")) continue;
-    const full = path8.join(dir, f);
-    if (path8.resolve(full) === path8.resolve(ownTarget)) continue;
+    const full = path9.join(dir, f);
+    if (path9.resolve(full) === path9.resolve(ownTarget)) continue;
     const doc = readJsonOrNull(full, isJsonObject);
     if (doc && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
@@ -4205,11 +4210,11 @@ function findExistingExpectedFor(dir, nodeId, ownTarget) {
 function plansFor(frameId, stem) {
   const hits = [];
   for (const f of listPlans(PLAN_DIR)) {
-    const p = readJsonOrNull(path8.join(PLAN_DIR, f), isPlan);
+    const p = readJsonOrNull(path9.join(PLAN_DIR, f), isPlan);
     if (!p) continue;
-    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path8.basename(f, ".json")));
-    const byName = path8.basename(f, ".json") === stem || p.file && path8.basename(String(p.file), ".json") === stem;
-    if (byId || byName) hits.push({ file: path8.join(PLAN_DIR, f).split(path8.sep).join("/"), plan: p });
+    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path9.basename(f, ".json")));
+    const byName = path9.basename(f, ".json") === stem || p.file && path9.basename(String(p.file), ".json") === stem;
+    if (byId || byName) hits.push({ file: path9.join(PLAN_DIR, f).split(path9.sep).join("/"), plan: p });
   }
   return hits;
 }
@@ -4399,11 +4404,11 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       console.error("--expect needs at least one screen export\n" + USAGE);
       return 2;
     }
-    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path8.basename(f, ".json") }));
-    const indexFile = path8.join(EXPORT_DIR, "pages", "index.json");
+    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path9.basename(f, ".json") }));
+    const indexFile = path9.join(EXPORT_DIR, "pages", "index.json");
     const idx = readJson(indexFile, isPagesRootIndex);
     if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} \u2014 interaction destinations are checked against the given export(s) only`);
-    const pagesDir = path8.join(EXPORT_DIR, "pages");
+    const pagesDir = path9.join(EXPORT_DIR, "pages");
     const pageRows = [];
     let dirs = [];
     try {
@@ -4411,15 +4416,15 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     } catch {
     }
     for (const d of dirs) {
-      const pi2 = readJson(path8.join(pagesDir, d, "index.json"), isPageIndex);
+      const pi2 = readJson(path9.join(pagesDir, d, "index.json"), isPageIndex);
       if ("doc" in pi2) pageRows.push(...pi2.doc.layers);
     }
     const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
     const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
     const exportRoot = EXPORT_DIR;
-    const readSibling = (file) => readJsonOrNull(path8.join(exportRoot, file), isScreenDoc);
-    const outBase0 = out || path8.join(VERIFY_DIR, path8.basename(firstFile, ".json"));
+    const readSibling = (file) => readJsonOrNull(path9.join(exportRoot, file), isScreenDoc);
+    const outBase0 = out || path9.join(VERIFY_DIR, path9.basename(firstFile, ".json"));
     let flagged2;
     if (planFlag !== void 0) {
       const r = readJson(planFlag, isPlan);
@@ -4427,10 +4432,10 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
         console.error(`--plan '${planFlag}' ${r.error}`);
         return 2;
       }
-      flagged2 = { file: planFlag.split(path8.sep).join("/"), plan: r.doc };
+      flagged2 = { file: planFlag.split(path9.sep).join("/"), plan: r.doc };
     }
     const firstRoot = docs.map((d) => screenRoots(d.doc)[0]).find((r) => r !== void 0);
-    const chosen = choosePlan(flagged2, firstRoot && firstRoot.id, path8.basename(outBase0));
+    const chosen = choosePlan(flagged2, firstRoot && firstRoot.id, path9.basename(outBase0));
     const planForExpect = chosen.hit;
     if (chosen.all.length > 1 && chosen.all.some((h2) => h2.plan.interactions !== void 0)) {
       console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another` : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
@@ -4444,7 +4449,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
         return null;
       }
     };
-    const ds = readJsonOrNull(path8.join(exportRoot, "design-system.json"), isJsonObject);
+    const ds = readJsonOrNull(path9.join(exportRoot, "design-system.json"), isJsonObject);
     const colorProfile = ds && typeof ds.colorProfile === "string" ? ds.colorProfile : null;
     const expOpts = { ..."doc" in idx || layers.length ? { index: { layers }, readSibling } : {}, ...planForExpect ? { plan: planForExpect } : {}, readReference, colorProfile };
     const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
@@ -4455,15 +4460,15 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     }
     const outBase = outBase0;
     const target = outBase + ".expected.json";
-    const dup = findExistingExpectedFor(path8.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
+    const dup = findExistingExpectedFor(path9.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
       const oldBase = dup.slice(0, -".expected.json".length);
-      const dir = path8.dirname(dup), stemOld = path8.basename(oldBase);
-      const oldFiles = fs9.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path8.join(dir, f));
-      const canonical3 = path8.join(path8.dirname(target), path8.basename(firstFile, ".json"));
+      const dir = path9.dirname(dup), stemOld = path9.basename(oldBase);
+      const oldFiles = fs9.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path9.join(dir, f));
+      const canonical3 = path9.join(path9.dirname(target), path9.basename(firstFile, ".json"));
       const oldStatus = runStatusNote(oldBase);
       if (oldStatus) console.error(`note  ${oldStatus}`);
-      if (stemOld === path8.basename(canonical3)) {
+      if (stemOld === path9.basename(canonical3)) {
         console.error(
           `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). That is the canonical name: drop --out (the default is ${shellArg(canonical3)}), or pass --force to write a second set anyway.`
         );
@@ -4472,8 +4477,8 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       console.error(
         `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set).
        existing set under '${stemOld}' (${oldFiles.length} file(s)): ${oldFiles.join(", ")}
-       the canonical name for this screen is '${path8.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
-       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path8.resolve(target) === path8.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
+       the canonical name for this screen is '${path9.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
+       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path9.resolve(target) === path9.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
        Or keep the old name: --out ${shellArg(oldBase)}. (--force writes a second, parallel set \u2014 not recommended.)`
       );
       return 1;
@@ -4563,11 +4568,11 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
       console.error(`--plan '${planFlag}' ${r.error}`);
       return 2;
     }
-    flagged = { file: planFlag.split(path8.sep).join("/"), plan: r.doc };
+    flagged = { file: planFlag.split(path9.sep).join("/"), plan: r.doc };
   }
   {
     const frameId = expectation.frame && expectation.frame.nodeId;
-    const stem = path8.basename(expFile, ".json").replace(/\.expected$/, "");
+    const stem = path9.basename(expFile, ".json").replace(/\.expected$/, "");
     const chosen = choosePlan(flagged, frameId, stem);
     const all = chosen.all;
     const hits = all.filter((h) => h.plan.files);
@@ -4606,7 +4611,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     ...ifDefined("anchors", planHit.plan.anchors),
     waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) }
   } : {};
-  const compareBase = out || path8.join(VERIFY_DIR, path8.basename(expFile, ".json").replace(/\.expected$/, ""));
+  const compareBase = out || path9.join(VERIFY_DIR, path9.basename(expFile, ".json").replace(/\.expected$/, ""));
   let against;
   if (againstFile !== void 0) {
     const r = readJson(againstFile, isVerifyReport);
@@ -4622,14 +4627,14 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     else if (!r.missing) console.error(`note  ${own} ${r.error} \u2014 no coverage baseline this round (it is about to be overwritten)`);
   }
   const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
-  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path8.join(path8.dirname(expFile), path8.basename(measuredBase)) : null;
-  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path8.resolve(probeBase) !== path8.resolve(measuredBase) ? readStatusAt(probeBase) : null);
-  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path8.basename(found.file) : `${path8.basename(found.file)} (live, ${found.file})`, status: found.status } } : measuredBase !== null ? { status: null } : {};
+  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path9.join(path9.dirname(expFile), path9.basename(measuredBase)) : null;
+  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path9.resolve(probeBase) !== path9.resolve(measuredBase) ? readStatusAt(probeBase) : null);
+  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path9.basename(found.file) : `${path9.basename(found.file)} (live, ${found.file})`, status: found.status } } : measuredBase !== null ? { status: null } : {};
   const vd = measured.visual && measured.visual.ran ? measured.visual.diff : void 0;
   let visualDiff = null;
   if (typeof vd === "string" && vd) {
-    const beside = path8.join(path8.dirname(measuredFile), path8.basename(vd));
-    visualDiff = fs9.existsSync(vd) ? { path: vd, exists: true } : fs9.existsSync(beside) ? { path: beside.split(path8.sep).join("/"), exists: true } : { path: vd, exists: false };
+    const beside = path9.join(path9.dirname(measuredFile), path9.basename(vd));
+    visualDiff = fs9.existsSync(vd) ? { path: vd, exists: true } : fs9.existsSync(beside) ? { path: beside.split(path9.sep).join("/"), exists: true } : { path: vd, exists: false };
   }
   const rep = compare(expectation, measured, { ...statusOpt, ...readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}, ...readable.dropped.includes("visual") ? { visualMalformed: true } : {}, ...visualDiff ? { visualDiff } : {}, ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}, ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...extraInferred !== void 0 ? { inferred: extraInferred } : {}, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...planHit ? { plan: planHit } : {} });
   const md = reportToMarkdown(rep);
@@ -4650,7 +4655,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
         return p;
       }
     };
-    const reportRel = path8.relative(realOf(process.cwd()), realOf(path8.resolve(compareBase + ".report.json"))).split(path8.sep).join("/");
+    const reportRel = path9.relative(realOf(process.cwd()), realOf(path9.resolve(compareBase + ".report.json"))).split(path9.sep).join("/");
     try {
       const r = recordPlan(planHit.file, rep, reportRel, { cwd: process.cwd() });
       for (const n of r.notes) console.error(`note  ${n}`);
@@ -4702,7 +4707,7 @@ function acceptMain(files, flags, USAGE) {
     console.error(`refused  ${sel.error}`);
     return 1;
   }
-  const stem = path8.basename(reportFile, ".json").replace(/\.report$/, "");
+  const stem = path9.basename(reportFile, ".json").replace(/\.report$/, "");
   const recorded = report.inputs && report.inputs.waivers && report.inputs.waivers.plan || report.inputs && report.inputs.code && report.inputs.code.plan || void 0;
   let planFile = flags.plan ?? (recorded && fs9.existsSync(recorded) ? recorded : void 0);
   if (!planFile) {
@@ -4759,14 +4764,11 @@ export {
   behaviourHeadline,
   behaviourReport,
   behaviourSummary,
-  buildExpectation,
   compare,
-  figmaReferenceScale,
   findExistingExpectedFor,
   mdText,
   probeLine,
   radiusCorners,
-  referenceImageFor,
   reportToMarkdown,
   selectForAccept,
   tokenFor,

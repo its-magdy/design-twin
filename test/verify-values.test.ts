@@ -3,8 +3,9 @@
 // ("20px" strings, ["8px",…] radii, `fill` read off an <img>, a -220 gap, a top-level `notFound`).
 // The last block runs the shipped probe's in-page function in chromium (skipped locally without one; CI fails).
 // Run with:  node test/verify-values.test.ts
-import { buildExpectation, compare, reportToMarkdown, radiusCorners } from "../design-to-code/verify-screen.ts";
-import type { ExpectInput } from "../design-to-code/verify-screen.ts";
+import { compare, reportToMarkdown, radiusCorners } from "../design-to-code/verify-screen.ts";
+import { buildExpectation } from "../design-to-code/verify-expect.ts";
+import type { ExpectInput } from "../design-to-code/verify-expect.ts";
 import { measureElements } from "../design-to-code/probe-page.ts";
 import type { MeasureInput, MeasureResult } from "../design-to-code/probe-page.ts";
 import type { JsonValue, MeasuredNode, MeasuredStyles, VerifyMeasured, VerifyReportV2 } from "../design-to-code/types.ts";

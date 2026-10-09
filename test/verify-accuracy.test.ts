@@ -6,10 +6,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildExpectation, compare, reportToMarkdown } from "../design-to-code/verify-screen.ts";
+import { compare, reportToMarkdown } from "../design-to-code/verify-screen.ts";
+import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { publishStaged } from "../design-to-code/verify-run.ts";
 import { isVerifyReport } from "../design-to-code/doc-guards.ts";
-import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-screen.ts";
+import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
 import type { BuildIdentity, CodeInputs, VerifyReport, FontSpec, IndexRow, JsonValue, MeasuredNode, MeasuredStyles, NotComparable, Plan, VerifyDelta, VerifyMeasured, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";
 import { screenExport } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";

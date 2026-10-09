@@ -12,7 +12,8 @@ import { checkPlan, computeStatus, isOpen, verificationContradictions } from "..
 import * as verifyBuild from "../design-to-code/verify-build.ts";
 import type { ReportRef } from "../design-to-code/verify-build.ts";
 import { fileHashes, legacyPlanHash, planCodeFiles, planCodeSkipped } from "../design-to-code/content-hash.ts";
-import { buildExpectation, compare } from "../design-to-code/verify-screen.ts";
+import { compare } from "../design-to-code/verify-screen.ts";
+import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import { isPlan, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import type { MeasuredBehaviour, MeasuredNode, MeasuredStyles, Plan, PlanVerification, VerifyReportV2 } from "../design-to-code/types.ts";
