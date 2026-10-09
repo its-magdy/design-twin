@@ -41,6 +41,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isCI } from "./pool.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 
 type Kind = "lint" | "node";
 interface Suite { name: string; kind: Kind; file: string }
@@ -112,7 +113,6 @@ const fmt = (ms: number): string => {
   const s = Math.round(ms / 1000);
   return s >= 3600 ? `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m${String(s % 60).padStart(2, "0")}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
 };
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 // `detached` puts the suite in its own process group (one kill reaches its children). Not on Windows: there it
 // opens a console window per suite, and the group kill does not exist anyway.

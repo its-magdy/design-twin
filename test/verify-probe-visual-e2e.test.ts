@@ -15,7 +15,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { spawn } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
@@ -23,7 +22,7 @@ import { LAUNCH_ARGS } from "../design-to-code/verify-probe.ts";
 import { decodePng, encodePng, pngInfo, resampleBox } from "../design-to-code/png.ts";
 import type { MeasuredVisual, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { limit } from "./pool.ts";
+import { limit, runNode, type Run } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROBE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -45,18 +44,6 @@ const addr = server.address();
 const port = addr !== null && typeof addr === "object" ? (addr satisfies AddressInfo).port : 0;
 const url = (mode?: string): string => `http://127.0.0.1:${port}/kiln-log.html${mode ? `?mode=${mode}` : ""}`;
 const finish = (): void => { server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
-
-interface Run { status: number | null; stdout: string; stderr: string; ms: number; killed: boolean }
-/** killAfterMs: a run that has not exited by then is SIGKILLed (by its pid) and reported killed — a hung probe fails, never hangs the test */
-const run = (cwd: string, script: string, args: string[], killAfterMs = 0): Promise<Run> => new Promise((resolve) => {
-  const t0 = Date.now();
-  const p = spawn(process.execPath, [script, ...args], { cwd });
-  let stdout = "", stderr = "", killed = false;
-  const timer = killAfterMs > 0 ? setTimeout(() => { killed = true; p.kill("SIGKILL"); }, killAfterMs) : undefined;
-  p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-  p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-  p.on("close", (status) => { clearTimeout(timer); resolve({ status, stdout, stderr, ms: Date.now() - t0, killed }); });
-});
 
 console.log("verify-probe visual e2e — the built bundles in a real chromium, from temp projects:");
 
@@ -144,8 +131,8 @@ for (const pkg of ["playwright", "playwright-core"]) {
   if (fs.existsSync(from)) fs.symlinkSync(from, path.join(monoApp, "node_modules", pkg), "dir");
 }
 
-const probe = (proj: string, args: string[]): Promise<Run> => run(proj, PROBE, [...args, "--project", proj]);
-const vs = (proj: string, args: string[]): Promise<Run> => run(proj, VS, args);
+const probe = (proj: string, args: string[]): Promise<Run> => runNode(proj, PROBE, [...args, "--project", proj]);
+const vs = (proj: string, args: string[]): Promise<Run> => runNode(proj, VS, args);
 const out = (name: string): string => path.join("design", "verify", name);
 const read = (proj: string, base: string): VerifyMeasured | null => readJsonOrNull(path.join(proj, base + ".measured.json"), isVerifyMeasured);
 const readReport = (proj: string, base: string): VerifyReport | null => readJsonOrNull(path.join(proj, base + ".report.json"), isVerifyReport);
@@ -193,8 +180,8 @@ const P = {
   e8: q(() => probe(pMain, ["--expected", EXP, "--url", url(), "--out", out("Short"), "--max-time", "15000", ...OFF])),
   e9: q(() => probe(pMain, ["--expected", EXP, "--url", url("tall"), "--out", out("Tall"), ...OFF])),
   e10: q(() => probe(pMain, ["--expected", out("Ledger") + ".expected.json", "--url", url("long"), "--out", out("Ledger"), ...OFF])),
-  e11: q(() => run(pMain, PROBE, ["--expected", out("Null") + ".expected.json", "--url", url(), "--out", out("Null"), "--project", pMain, ...OFF], 60_000)),
-  e12: q(() => run(monoApp, PROBE, ["--expected", path.join("..", out("Firings") + ".expected.json"), "--url", url(), "--out", path.join("..", out("Mono")), "--project", monoApp, ...OFF], 90_000)),
+  e11: q(() => runNode(pMain, PROBE, ["--expected", out("Null") + ".expected.json", "--url", url(), "--out", out("Null"), "--project", pMain, ...OFF], 60_000)),
+  e12: q(() => runNode(monoApp, PROBE, ["--expected", path.join("..", out("Firings") + ".expected.json"), "--url", url(), "--out", path.join("..", out("Mono")), "--project", monoApp, ...OFF], 90_000)),
 };
 
 // ---- e1: the correct twin

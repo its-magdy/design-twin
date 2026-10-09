@@ -28,7 +28,7 @@ import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { BehaviourCheck, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { limit } from "./pool.ts";
+import { limit, runNode, type Run } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROBE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -113,17 +113,8 @@ const addr = server.address();
 const port = addr !== null && typeof addr === "object" ? (addr satisfies AddressInfo).port : 0;
 const url = (mode?: string): string => `http://127.0.0.1:${port}/seed-shelf.html${mode ? `?mode=${mode}` : ""}`;
 
-interface Run { status: number | null; stdout: string; stderr: string; ms: number }
-const run = (cwd: string, script: string, args: string[]): Promise<Run> => new Promise((resolve) => {
-  const t0 = Date.now();
-  const p = spawn(process.execPath, [script, ...args], { cwd });
-  let stdout = "", stderr = "";
-  p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-  p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-  p.on("close", (status) => resolve({ status, stdout, stderr, ms: Date.now() - t0 }));
-});
-const probe = (proj: string, args: string[]): Promise<Run> => run(proj, PROBE, [...args, "--project", proj]);
-const vs = (proj: string, args: string[]): Promise<Run> => run(proj, VS, args);
+const probe = (proj: string, args: string[]): Promise<Run> => runNode(proj, PROBE, [...args, "--project", proj]);
+const vs = (proj: string, args: string[]): Promise<Run> => runNode(proj, VS, args);
 const finish = (): void => { for (const s of sockets) s.destroy(); server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
 const out = (name: string): string => path.join("design", "verify", name);
 const read = (proj: string, base: string): VerifyMeasured | null => readJsonOrNull(path.join(proj, base + ".measured.json"), isVerifyMeasured);
@@ -512,7 +503,7 @@ if (rep1 === null || rep3 === null) console.log(c1.stderr, c3.stderr);
 check("--compare: verdict and why are the same with behaviour on and off", rep1 !== null && rep3 !== null && rep1.verdict === rep3.verdict && JSON.stringify(rep1.why) === JSON.stringify(rep3.why));
 const bogus = await probe(projAxe, ["--expected", EXP, "--url", url(), "--out", out("Bogus"), "--behaviour", "maybe"]);
 check("--behaviour takes on|off only (exit 2, nothing written)", bogus.status === 2 && /--behaviour must be on or off/.test(bogus.stderr) && read(projAxe, out("Bogus")) === null);
-const help = await run(projAxe, PROBE, ["--help"]);
+const help = await runNode(projAxe, PROBE, ["--help"]);
 check("the usage text lists --behaviour on|off", /\[--behaviour on\|off\]/.test(help.stdout));
 
 // ================================================================ a collapsing table (page checks only)

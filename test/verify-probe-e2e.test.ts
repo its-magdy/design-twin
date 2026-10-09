@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import crypto from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { isVerifyMeasured } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
@@ -20,6 +20,7 @@ import { isJsonObject } from "../design-to-code/types.ts";
 import { freeHoverPoint } from "../design-to-code/probe-page.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
+import { runNode, type Run } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const BUNDLE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -99,18 +100,11 @@ const addr = server.address();
 const port = addr !== null && typeof addr === "object" ? (addr satisfies AddressInfo).port : 0;
 const url = (mode?: string): string => `http://127.0.0.1:${port}/staff-directory.html${mode ? `?mode=${mode}` : ""}`;
 
-// async spawn: the server above lives in THIS process, so a spawnSync would block it from answering
-interface Run { status: number | null; stdout: string; stderr: string }
+// async spawn (runNode in ./pool.ts): the server above lives in THIS process, so a spawnSync would block it from answering
 // These runs check measuring, not behaviour — `--behaviour off` keeps them fast (test/verify-probe-behaviour-e2e.test.ts
 // runs the behaviour checks)
 const behaviourOff = (args: string[]): string[] => (args.includes("--check") || args.includes("--behaviour") ? args : [...args, "--behaviour", "off"]);
-const probe = (args: string[]): Promise<Run> => new Promise((resolve) => {
-  const p = spawn(process.execPath, [BUNDLE, ...behaviourOff(args)], { cwd: tmp });
-  let stdout = "", stderr = "";
-  p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-  p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-  p.on("close", (status) => resolve({ status, stdout, stderr }));
-});
+const probe = (args: string[]): Promise<Run> => runNode(tmp, BUNDLE, behaviourOff(args));
 const finish = (): void => { server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
 
 // ---- the expectation, from the real --expect

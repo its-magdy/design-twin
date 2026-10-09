@@ -35,6 +35,7 @@ import type { TokenStatus } from "../bridge/src/token-store.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
 import type { Check, Report } from "../bridge/src/doctor.ts";
 import type { MergedVariablesDoc } from "../bridge/src/variables-merge.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 
 // A fixed token so verifyClient's comparisons are deterministic. server-core reads this at require
 // time, so it must be set BEFORE the module is loaded.
@@ -54,7 +55,7 @@ const until = async (cond: () => boolean, capMs = 10_000): Promise<boolean> => {
   const end = Date.now() + capMs;
   while (!cond()) {
     if (Date.now() >= end) return false;
-    await new Promise((r) => setTimeout(r, 10));
+    await sleep(10);
   }
   return true;
 };
@@ -286,7 +287,7 @@ async function disconnectErr(code: number, reason: string) {
   const { bridge, client } = await connectedBridge();
   let err: Error | undefined;
   const inflight = bridge.request("exportFull", {}, 20000).catch((e: unknown) => { err = asErr(e); });
-  await new Promise((r) => setTimeout(r, 60)); // let the request register before the close lands
+  await sleep(60); // let the request register before the close lands
   client.close(code, reason);
   await inflight;
   bridge.close();
@@ -545,7 +546,7 @@ void (async () => {
     const base = await open();
     identify(base, { instanceId: "fig-base", file: "App — Base", fileKey: "KEYBASE", page: "Home" });
     autoReply(base, { pong: true, page: "Home", file: "base" });
-    await new Promise((r) => setTimeout(r, 80));
+    await sleep(80);
 
     console.log("\nserver-core — multi-client routing (the two-files question):");
     const one = bridge.listClients();
@@ -561,7 +562,7 @@ void (async () => {
     const lib = await open();
     identify(lib, { instanceId: "fig-lib", file: "NIMA Library", fileKey: "KEYLIB", page: "Tokens" });
     autoReply(lib, { pong: true, page: "Tokens", file: "lib" });
-    await new Promise((r) => setTimeout(r, 80));
+    await sleep(80);
 
     const two = bridge.listClients();
     ok("[multi] BOTH files stay connected — no takeover", two.length === 2);
@@ -599,7 +600,7 @@ void (async () => {
     ok("[multi] waitForClient resolves at once for a name already connected",
       await Promise.race([bridge.waitForClient("nima", 3000).then(() => "resolved"), new Promise((r) => setTimeout(() => r("window"), 2000))]) === "resolved");
     lateWs?.close();
-    await new Promise((r) => setTimeout(r, 80));
+    await sleep(80);
 
     // Ambiguity must REFUSE, not guess. Silently picking one would export the wrong file and look
     // entirely successful — the adb "more than one device" call.
@@ -618,24 +619,24 @@ void (async () => {
     // A substring hitting several files must refuse rather than resolve to the first.
     const dupA = await open();
     identify(dupA, { instanceId: "fig-d", file: "Untitled", fileKey: null, page: "Page 1" });
-    await new Promise((r) => setTimeout(r, 60));
+    await sleep(60);
     let dupErr: Error | undefined;
     try { await bridge.request("ping", {}, 5000, "e"); } catch (e) { dupErr = asErr(e); }
     ok("[multi] an ambiguous name match is refused, not resolved to the first",
       !!dupErr && /matches \d+ connected files/.test(dupErr.message));
     dupA.close();
-    await new Promise((r) => setTimeout(r, 80));
+    await sleep(80);
 
     // The isolation property that matters most: one file's plugin window closing must NOT abort work
     // in flight in another file. Under the single-socket version every pending request shared one map
     // and one close cleared them all.
     const slow = await open(); // connects but never answers
-    await new Promise((r) => setTimeout(r, 60));
+    await sleep(60);
     const slowId = bridge.listClients().find((c) => !c.identified)?.connId;
     let slowErr: Error | undefined;
     const slowReq = bridge.request("exportFull", {}, 20000, slowId).catch((e: unknown) => { slowErr = asErr(e); });
     const liveReq = bridge.request("ping", {}, 5000, "c1"); // base file, still healthy
-    await new Promise((r) => setTimeout(r, 60));
+    await sleep(60);
     slow.close(1001, "");
     await slowReq;
     const liveRes = await liveReq;
@@ -647,14 +648,14 @@ void (async () => {
     // A re-announced hello (what the plugin sends after Figma restarts its runtime) must UPDATE the
     // existing entry rather than duplicate it.
     identify(base, { instanceId: "fig-base-2", file: "App — Base", fileKey: "KEYBASE", page: "Settings" });
-    await new Promise((r) => setTimeout(r, 60));
+    await sleep(60);
     const afterRe = bridge.listClients().find((c) => c.connId === "c1");
     ok("[multi] a re-announced identity updates in place (no duplicate entry)", bridge.listClients().length === 2);
     ok("[multi] and carries the NEW instanceId", afterRe?.instanceId === "fig-base-2");
 
     base.close(); lib.close();
     bridge.close();
-    await new Promise((r) => setTimeout(r, 60));
+    await sleep(60);
     ok("[multi] closing the bridge empties the registry", bridge.listClients().length === 0);
     ok("[multi] and reports disconnected", bridge.connectionInfo().connected === false);
   }
@@ -2258,7 +2259,6 @@ void (async () => {
     const TICK0 = must(TICKS[0], "TICKS[0]"), TICK1 = must(TICKS[1], "TICKS[1]");
     const row: ClientRow = { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true, pluginVersion: null, pluginStale: null };
     const listeners: string[] = []; // whether each forwarded request carried a listener
-    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     const tickBridge: DaemonBridge = {
       port: P_PORT,
       isConnected: () => true,
@@ -2882,7 +2882,7 @@ void (async () => {
     // Dial until the CLI's bridge is up (it binds after module load), then answer every command.
     let plugin: WebSocket | null = null;
     for (let i = 0; i < 50 && !plugin; i++) {
-      await new Promise((r) => setTimeout(r, 100));
+      await sleep(100);
       plugin = await new Promise<WebSocket | null>((res) => {
         const c = new WebSocket("ws://127.0.0.1:8789/?token=" + TOKEN, { origin: "null" });
         c.on("open", () => res(c));
@@ -3111,7 +3111,7 @@ void (async () => {
   ok("[doctor] probePort: a free port is free, and the probe leaves nothing listening",
     (await doctor.probePort(freed)).free === true && (await doctor.probePort(freed)).free === true);
   const held = core.createBridge(nextPort);
-  await new Promise((r) => setTimeout(r, 50));
+  await sleep(50);
   const wsProbe = await doctor.probePort(nextPort);
   ok("[doctor] probePort: a bridge is recognised by its 426 to a plain GET — no WebSocket opened", wsProbe.holder === "websocket" && held.listClients().length === 0);
   held.close();
@@ -3321,7 +3321,7 @@ void (async () => {
     const req = b.request("exportFull", {}, 5000, undefined, 300);
     let rejectedWithStall = false;
     req.catch((e: unknown) => { if (e instanceof Error && /connected but sent nothing/.test(e.message)) rejectedWithStall = true; });
-    await new Promise((r) => setTimeout(r, 900)); // 3x the stall window, with progress the whole time
+    await sleep(900); // 3x the stall window, with progress the whole time
     clearInterval(ticker);
     ok("[stall] periodic progress frames keep resetting the stall clock (no premature abort)", !rejectedWithStall);
     // LIVE 2026-09-25: a working export goes quiet for 14–24 s after a big frame and for 116–135 s
@@ -3330,9 +3330,9 @@ void (async () => {
     // Before this change the line below saw the stall rejection ~800 ms after the ticks stopped.
     let outcome: string | undefined;
     req.then(() => { outcome = "resolved"; }, (e: unknown) => { outcome = e instanceof Error ? e.message : String(e); });
-    await new Promise((r) => setTimeout(r, 1500)); // 5x the stall window (300) of silence after the last tick
+    await sleep(1500); // 5x the stall window (300) of silence after the last tick
     ok("[stall] once the plugin has shown life, silence is NOT a stall: the request stays pending past the stall window", outcome === undefined && !rejectedWithStall);
-    await new Promise((r) => setTimeout(r, 3000)); // now the real timeout (5000 ms from send) has passed
+    await sleep(3000); // now the real timeout (5000 ms from send) has passed
     ok("[stall] …and the real per-command timeout still bounds it, with the timeout text (not the stall text)",
       typeof outcome === "string" && /did not answer 'exportFull' within 5s/.test(outcome) && !/connected but sent nothing/.test(outcome));
     ws1.close();
@@ -3347,7 +3347,7 @@ void (async () => {
     ws1.send(JSON.stringify({ type: "hello", instanceId: "silent-2", file: "Silent File 2" }));
     await b.waitForIdentified(1000);
     ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); // life, but before the request below
-    await new Promise((r) => setTimeout(r, 50));
+    await sleep(50);
     let err: Error | undefined;
     const start = Date.now();
     try { await b.request("exportFull", {}, 60000, undefined, 300); }
@@ -3395,7 +3395,6 @@ void (async () => {
     const cmdFrames = (into: Array<Seen | "socket-closed">) => frames(into).filter((f) => typeof f.cmd === "string");
     const cancelsFor = (into: Array<Seen | "socket-closed">, id: string | undefined) =>
       frames(into).filter((f) => f.type === "cancel" && f.id === id && f.cmd === undefined);
-    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     // (a) the stall check. Pre-change server-core.ts (the stall interval, ~line 797-808) deleted the
     // request and rejected without a word to the plugin — no cancel frame ever reached it.
@@ -3640,7 +3639,6 @@ void (async () => {
   // request went to. Each check drives the REAL socket path with a fake plugin.
   console.log("\nserver-core — per-bridge request ids, reply routing, stall wording, whoami connection:");
   {
-    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     const ABANDONED = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
     /** Every command frame a fake plugin socket receives. */
     const commandsOf = (ws: WebSocket): CommandFrame[] => {
@@ -4336,7 +4334,7 @@ void (async () => {
     } });
     const lout = path.join(pdir, "lib");
     W.writeExport(lout, libReply("2026-10-01T00:00:00.000Z", "#000000"), undefined, { keepPrev: true });
-    await new Promise((r) => setTimeout(r, 5)); // a different generatedAt
+    await sleep(5); // a different generatedAt
     const lib2 = wroteOf(W.writeExport(lout, libReply("2026-10-02T00:00:00.000Z", "#000000"), undefined, { keepPrev: true }));
     ok("an unchanged library re-spilled (fresh generatedAt + row exportedAt) keeps no .prev",
       lib2.prevKept === undefined && prevs(lout).length === 0);

@@ -11,6 +11,7 @@ import * as VR from "../design-to-code/verify-run.ts";
 import { shellArg } from "../design-to-code/cli-args.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { check, report } from "./assert.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const safe = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch (e) { console.log(`    (threw: ${e instanceof Error ? e.message : String(e)})`); } return check(name, r); };
 const VS_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
@@ -444,7 +445,7 @@ await block("verify-screen --wait:", async () => {
     p.stdout.on("data", (d: Buffer) => { out += d.toString(); });
     p.on("close", (code) => resolve(code));
   });
-  await new Promise((r) => setTimeout(r, 700));
+  await sleep(700);
   cli("--status", "Plots", "--phase", "done", "--run", "run-e", "--publish", stage);
   const code = await waiting;
   safe("…a wait that is polling when the run reaches done → exit 0", () => code === 0);

@@ -1,10 +1,12 @@
-// The concurrency helpers shared by the browser e2e suites (verify-probe-drive-e2e, -behaviour-e2e, -visual-e2e).
+// The helpers shared by the browser e2e suites (verify-probe-e2e, -drive-e2e, -behaviour-e2e, -visual-e2e): the concurrency
+// pool and runNode, the async spawn of one probe / verify-screen process.
 //
 //   const q = limit(poolSize());          // a queue running at most n of its tasks at once
 //   const P = { a: q(() => probe(…)), … }; // queued up front, awaited where their checks are
 //
 // Each task is still its own `node verify-probe.js` process with its own chromium (process isolation is what the suites
 // test); this only bounds how many are alive at once.
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import os from "node:os";
 
 /** A queue running at most `n` of its tasks at once, in the order they were queued. A task that throws synchronously rejects
@@ -37,3 +39,25 @@ export const poolSize = (env: NodeJS.ProcessEnv = process.env, cores: number = o
   if (isCI(env)) return 2;
   return Math.min(4, Math.max(2, Math.floor(cores / 2)));
 };
+
+/** What runNode resolves with: the exit status (null when the process was killed by a signal or never started), the captured
+ *  output, spawn → close in ms (never the time a run waited in a pool queue), and whether killAfterMs fired. */
+export interface Run { status: number | null; stdout: string; stderr: string; ms: number; killed: boolean }
+
+/** Runs `node <script> ...args` in `cwd` asynchronously (a suite's server lives in the test's own process, so a spawnSync
+ *  would stop it answering). Never rejects and never hangs on a failed start: a spawn that throws synchronously or emits
+ *  "error" (EAGAIN under load) resolves with status null and "spawn failed: <message>" appended to stderr.
+ *  killAfterMs > 0: a run that has not closed by then is SIGKILLed (by its pid) and reported killed — a hung process fails the
+ *  test instead of hanging it. `node` is the running binary (process.execPath), so a script path or `-e` source both work. */
+export const runNode = (cwd: string, script: string, args: string[], killAfterMs = 0): Promise<Run> => new Promise((resolve) => {
+  const t0 = Date.now();
+  let p: ChildProcessWithoutNullStreams;
+  try { p = spawn(process.execPath, [script, ...args], { cwd }); }
+  catch (e) { resolve({ status: null, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}\n`, ms: Date.now() - t0, killed: false }); return; }
+  let stdout = "", stderr = "", killed = false;
+  const timer = killAfterMs > 0 ? setTimeout(() => { killed = true; p.kill("SIGKILL"); }, killAfterMs) : undefined;
+  p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+  p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+  p.on("error", (e) => { clearTimeout(timer); resolve({ status: null, stdout, stderr: `${stderr}spawn failed: ${e.message}\n`, ms: Date.now() - t0, killed }); });
+  p.on("close", (status) => { clearTimeout(timer); resolve({ status, stdout, stderr, ms: Date.now() - t0, killed }); });
+});

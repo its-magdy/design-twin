@@ -33,6 +33,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 
 // `a` may be an optional channel (alpha): absent is "not near" — what `Math.abs(undefined - b) < 0.001` (NaN) said.
 const near = (a: number | undefined, b: number) => a !== undefined && Math.abs(a - b) < 0.001;
@@ -1661,16 +1662,15 @@ console.log("map — SLOT props:");
   check("[shared] mergeScreenIndex over an array index keeps its elements (its guard accepts arrays, unlike isRecord)", merged["0"] === "x" && Array.isArray(merged.layers) && merged.layers.length === 1);
   // raceBudget: the value of work that beats the deadline; a cut (onCut first, then a settle for the close and work) when it
   // does not — settled false when the settle window runs out (a wedged browser), true when a slow close still returns
-  const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
   const never = <T>(): Promise<T> => new Promise<T>(() => undefined);
   let cuts = 0;
-  const fast = await raceBudget(sleepMs(5).then(() => 7), 500, {}, () => { cuts++; });
+  const fast = await raceBudget(sleep(5).then(() => 7), 500, {}, () => { cuts++; });
   check("[shared] raceBudget: work that finishes inside the deadline returns its value and never calls onCut", !fast.cut && fast.value === 7 && cuts === 0);
   const cutLike = await raceBudget(Promise.resolve("cut"), 500, {});
   check("[shared] raceBudget: work whose value is the string 'cut' is its value, not a cut", !cutLike.cut && cutLike.value === "cut");
   let settled = false;
   const t0 = Date.now();
-  const slow = await raceBudget(sleepMs(120).then(() => { settled = true; return 1; }), 30, {}, () => { cuts++; });
+  const slow = await raceBudget(sleep(120).then(() => { settled = true; return 1; }), 30, {}, () => { cuts++; });
   check("[shared] raceBudget: past the deadline it returns a settled cut, has called onCut once, and waited for work to settle (well under CUT_SETTLE_MS)",
     slow.cut && slow.settled && cuts === 1 && settled && Date.now() - t0 < CUT_SETTLE_MS);
   // the wedge paths, a slow-but-alive close and a context that arrives after the cut run side by side: one CUT_SETTLE_MS wait for all
@@ -1684,34 +1684,34 @@ console.log("map — SLOT props:");
   let lateClosed = false;
   const late: Held = {};
   const lateWork = (async (): Promise<string> => {
-    await sleepMs(200);
+    await sleep(200);
     let closedNow: () => void = () => undefined;
     const closedP = new Promise<void>((r) => { closedNow = r; });
     holdContext(late)({ close: async () => { lateClosed = true; closedNow(); } });
-    await Promise.race([closedP, sleepMs(30_000)]);
+    await Promise.race([closedP, sleep(30_000)]);
     return lateClosed ? "closed" : "ran on";
   })();
   // the same through driveInteractions: newContext answers 200 ms after a 100 ms budget; its page waits until the context closes
   let driveCtxClosed = false;
   const isContext = (x: unknown): x is BrowserContext => typeof x === "object" && x !== null && "close" in x && "newPage" in x;
   const slowContext = async (): Promise<BrowserContext> => {
-    await sleepMs(200);
+    await sleep(200);
     let closedNow: () => void = () => undefined;
     const closedP = new Promise<void>((r) => { closedNow = r; });
     const fake = { close: async (): Promise<void> => { driveCtxClosed = true; closedNow(); },
-      newPage: async (): Promise<never> => { await Promise.race([closedP, sleepMs(30_000)]); throw new Error("Target page, context or browser has been closed"); } };
+      newPage: async (): Promise<never> => { await Promise.race([closedP, sleep(30_000)]); throw new Error("Target page, context or browser has been closed"); } };
     if (!isContext(fake)) throw new Error("fake context");
     return fake;
   };
   const [wedge, alive, noCtx, timed, closeHung, lateCut, straddle] = await Promise.all([
     raceBudget(never<number>(), 20, { ctx: { close: () => { closes++; return never<void>(); } } }).then((r) => ({ ...r, ms: Date.now() - tw })),
-    (async () => { let open = true; const work = (async (): Promise<number> => { while (open) await sleepMs(20); return 1; })();
-      const r = await raceBudget(work, 20, { ctx: { close: async () => { await sleepMs(SLOW_CLOSE_MS); open = false; } } });
+    (async () => { let open = true; const work = (async (): Promise<number> => { while (open) await sleep(20); return 1; })();
+      const r = await raceBudget(work, 20, { ctx: { close: async () => { await sleep(SLOW_CLOSE_MS); open = false; } } });
       return { ...r, ms: Date.now() - tw }; })(),
     raceBudget(never<number>(), 20, {}).then((r) => ({ ...r, ms: Date.now() - tw })),
     driveInteractions({ newContext: () => never() }, { rows: [{ nodeId: "1:1", name: "Open", trigger: "ON_CLICK" }, { nodeId: "1:2", name: "More", trigger: "ON_CLICK" }], viewport: { w: 100, h: 100 }, timeout: 100, initScript: "", budgetMs: 20, reach: async () => undefined })
       .then((r) => ({ ...r, ms: Date.now() - tw })),
-    raceBudget(sleepMs(100).then(() => 1), 20, { ctx: { close: () => never<void>() } }),
+    raceBudget(sleep(100).then(() => 1), 20, { ctx: { close: () => never<void>() } }),
     raceBudget(lateWork, 100, late).then((r) => ({ ...r, ms: Date.now() - tw })),
     driveInteractions({ newContext: slowContext }, { rows: [{ nodeId: "2:1", name: "Open", trigger: "ON_CLICK" }], viewport: { w: 100, h: 100 }, timeout: 30_000, initScript: "", budgetMs: 100, reach: async () => undefined })
       .then((r) => ({ ...r, ms: Date.now() - tw })),
