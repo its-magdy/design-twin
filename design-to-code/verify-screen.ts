@@ -21,11 +21,14 @@
 //   (d) Coverage and interactions were never checked. A screen can match every
 //       pixel and still be a dead mockup with two components missing.
 //
-// Two commands, one file, because the expectation format and the comparison must never drift:
+// Two commands, one CLI. What they must agree on (tolerances, fields, measured keys, schemas) is defined once in
+// verify-shared.ts so the expectation format and the comparison never drift; the expectation is built in verify-expect.ts,
+// compared in verify-compare.ts and rendered in verify-report-md.ts. This file reads the inputs, writes the artefacts and
+// routes the modes:
 //   node verify-screen.js --expect  <screen.json>... --out design/verify/<Screen>
 //   node verify-screen.js --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>
 //
-// There is NO browser in this file. `--compare` diffs two JSON files; the rendering, measuring and
+// There is NO browser here. `--compare` diffs two JSON files; the rendering, measuring and
 // interaction-driving are the probe's job (the visual-verifier agent, or any script), and what it did
 // arrives as measured.json (+ an optional --interactions file). Anything the probe did not measure is
 // reported as not measured / not probed — never as passed, and never as failed.

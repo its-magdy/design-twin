@@ -261,7 +261,7 @@ export interface MeasureInput {
   frameRect: Rect;
   /** the frame root's element path — the highest ancestor paintedBy looks at (absent: up to <html>) */
   framePath?: string | null;
-  /** every key each node's styles must carry (verify-screen.ts STYLE_KEYS) */
+  /** every key each node's styles must carry (verify-shared.ts STYLE_KEYS) */
   keys: readonly string[];
   items: MeasureItem[];
 }

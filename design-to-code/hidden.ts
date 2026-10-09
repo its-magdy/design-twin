@@ -1,6 +1,6 @@
 // hidden.ts — the ONE rule for "does this layer render?", shared by every script that reads a node
-// tree (verify-screen.ts's expectation / comparison / instance list / interaction list / tag
-// coverage, audit.ts's finding emitters, drift-lint.ts's screen-coverage wording).
+// tree (verify-expect.ts's expectation / instance list / interaction list, which --compare's comparison and tag
+// coverage follow; audit.ts's finding emitters, drift-lint.ts's screen-coverage wording).
 //
 // The export marks a layer the designer switched off with `"hidden": true` on that node, and Figma
 // does not render any of its descendants either. It does NOT use `visible: false` — and `"visible"`
