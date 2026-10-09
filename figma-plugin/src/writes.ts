@@ -2,6 +2,7 @@
 import { errMsg } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import { parseHexColor, HEX_COLOR_HINT } from "../../bridge/src/hex-color.ts";
+import type { AppliedWrite, WriteOp, WriteResult } from "../../bridge/src/commands.ts";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
 // which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
@@ -43,26 +44,11 @@ async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNod
   return p as ChildrenMixin & BaseNode;
 }
 
-// Args for the small explicit write-op set above (no eval — see file header). Only the fields each
-// op actually reads are listed; the bridge/CLI callers assemble these from JSON.
-// Optionals are `T | undefined` to accept bridge/src/commands.ts WriteOp (zod-parsed, same widening);
-// applyWrite tests each for truthiness / `!= null`, so absent and undefined behave the same.
-export interface WriteOp {
-  op: string;
-  parentId?: string | undefined;
-  name?: string | undefined;
-  width?: number | undefined;
-  height?: number | undefined;
-  layoutMode?: "HORIZONTAL" | "VERTICAL" | undefined;
-  itemSpacing?: number | undefined;
-  padding?: [number, number, number, number] | undefined;
-  fill?: string | undefined;
-  text?: string | undefined;
-  fontSize?: number | undefined;
-  nodeId?: string | undefined;
-  color?: string | undefined;
-}
-
+// WriteOp (the args of one op), AppliedWrite and WriteResult are the bridge's wire contract, so they
+// are imported from it rather than re-declared here. WriteOp's optionals are `T | undefined`;
+// applyWrite tests each for truthiness / `!= null`, so absent and undefined behave the same. `op` is
+// typed as one of the four names, but the default branch below still refuses anything else, because
+// a write can arrive from any bridge client.
 async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
@@ -123,17 +109,6 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
 // ALREADY committed. Throwing here discarded the ids of everything just created, leaving orphan nodes
 // the caller couldn't find or clean up. Resolve with an explicit outcome instead: `applied` always
 // lists what landed, and ok:false carries the failure point so the caller can report both.
-// What one applied op reports: the id of the node it created or changed.
-export interface AppliedWrite { id?: string }
-
-export interface WriteResult {
-  ok: boolean;
-  applied: AppliedWrite[];
-  failedAt?: number;
-  failedOp?: string;
-  error?: string;
-}
-
 export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
   const list = Array.isArray(ops) ? ops : [];
   const applied: AppliedWrite[] = [];
