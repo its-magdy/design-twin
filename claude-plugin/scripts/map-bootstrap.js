@@ -570,7 +570,7 @@ function findLibraryExports(screenFile, dsDir) {
   const index = readJsonOrNull(path2.join(root, ROOT, INDEX), isLibrariesIndex);
   if (!index) return [];
   return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
-    const rel = path2.join(root, ROOT, r.dir);
+    const rel = path2.join(root, ROOT, r.dir).split(path2.sep).join("/");
     return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path2.join(rel, COMPONENTS), isComponentsCatalog) };
   });
 }

@@ -54,6 +54,9 @@ or MCP once someone's pulling repeatedly or wants Claude to query Figma live.
   stays up; retry the call). Wait for it, or use `dtwin serve`.
 - To run two bridges deliberately, set `FIGMA_BRIDGE_PORT` on one (`8788` or `8789` — the only other
   ports the plugin can dial).
+- **Windows: no sharing (yet).** `dtwin serve` / `dtwin stop` refuse there (Node cannot make the local
+  socket private to the user), so one MCP session or `dtwin` command holds the bridge at a time; the
+  others get a port-in-use error saying so. Close the other session (or wait for the command), then retry.
 
 ## What each one lets Claude actually do
 
@@ -87,7 +90,7 @@ makes a parallel export tree nothing else reads) and the port comes only from `F
 - Keep the connection warm across several pulls with `dtwin serve` (`dtwin stop` / `dtwin status`)
   instead of reconnecting every time: a direct pull ends with `done in Xs — waited Ys for the plugin to
   connect · export Zs · write Ws`, and a long "waited" is the plugin re-dialling a fresh bridge, not a
-  slow export — `dtwin serve` keeps the plugin connected so later commands skip it.
+  slow export — `dtwin serve` keeps the plugin connected so later commands skip it (not on Windows).
 
 **Through the MCP server**, once registered in the target project (as `designtwin` in its `.mcp.json`, so each
 tool's full name is `mcp__designtwin__<tool>`), Claude gets live tools instead of shelling out: `figma_status`, `figma_whoami`, `figma_list_clients`, `figma_get_selection`,

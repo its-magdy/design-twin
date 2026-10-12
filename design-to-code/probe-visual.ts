@@ -34,7 +34,7 @@ import type { Rgba } from "./png.ts";
 import { attribute, crop, diffOptionsFor, diffPixels, planGrid, referenceCrop, renderDiff, resampleBox } from "./visual-diff.ts";
 import type { MeasuredVisual, ProbeFrame, Rect4, VerifyExpectation, VerifyReferenceImage } from "./types.ts";
 import { isVerifyReferenceImage } from "./doc-guards.ts";
-import { pctText, resolveInside } from "./verify-screen.ts";
+import { pctText, resolveInside, scaleText } from "./verify-screen.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 
@@ -280,5 +280,5 @@ export function finishVisual(o: { expectation: Partial<Pick<VerifyExpectation, "
 export function visualLine(v: MeasuredVisual): string {
   if (!v.ran) return `visual not run (${v.why})`;
   return `visual (informational — never the verdict) ${pctText(v.shiftTolerantPct)}% of pixels differ (${pctText(v.differingPct)}% before ${v.shiftPx}-px shift tolerance) · ${v.regionsTotal} hot region(s)` +
-    ` · at the reference's ${v.reference.scale}x (${v.reference.from}) · grid ${v.grid}${v.diff !== null ? ` · ${v.diff}` : ""}`;
+    ` · at the reference's ${scaleText(v.reference.scale)} (${v.reference.from}) · grid ${v.grid}${v.diff !== null ? ` · ${v.diff}` : ""}`;
 }

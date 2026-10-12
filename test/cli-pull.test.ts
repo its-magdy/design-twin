@@ -13,6 +13,7 @@ import type { RawData } from "ws";
 import { check, report } from "./assert.ts";
 import { manifest, screenReply } from "./fixtures.ts";
 import { formatDone } from "../bridge/src/figma-pull.ts";
+import { DAEMON_UNSUPPORTED, daemonSupported } from "../bridge/src/daemon.ts";
 import type { Asset } from "../bridge/src/doc-types.ts";
 
 const PORT = 8789;
@@ -124,9 +125,13 @@ try {
   }
   // The pure formatter: the daemon variant, and the hint at >= 5 s of connect wait.
   {
-    const own = formatDone({ totalMs: 27200, connectMs: 24100, exportMs: 2800, writeMs: 300, viaDaemon: false });
+    const slow = { totalMs: 27200, connectMs: 24100, exportMs: 2800, writeMs: 300, viaDaemon: false };
+    const own = formatDone(slow, "darwin");
     check("formatDone: a 24 s connect wait prints the line and the reconnect hint naming `dtwin serve`",
       own[0] === "done in 27.2s — waited 24.1s for the plugin to connect · export 2.8s · write 0.3s" && own.length === 2 && /reconnecting/.test(own[1] ?? "") && /dtwin serve/.test(own[1] ?? ""));
+    const ownWin = formatDone(slow, "win32");
+    check("formatDone on Windows: the same line and hint, without `dtwin serve` (no daemon there)",
+      ownWin[0] === own[0] && ownWin.length === 2 && /reconnecting/.test(ownWin[1] ?? "") && !/dtwin serve/.test(ownWin[1] ?? ""));
     check("formatDone: 4.9 s of wait → no hint; 5.0 s → hint",
       formatDone({ totalMs: 6000, connectMs: 4900, exportMs: 1000, writeMs: 0, viaDaemon: false }).length === 1 && formatDone({ totalMs: 6000, connectMs: 5000, exportMs: 1000, writeMs: 0, viaDaemon: false }).length === 2);
     const via = formatDone({ totalMs: 3100, connectMs: 0, exportMs: 2800, writeMs: 300, viaDaemon: true });
@@ -184,8 +189,51 @@ try {
   }
   // The same through a running daemon (`dtwin serve`): the connection comes from the daemon's status, narrowed
   // to the addressed file by connectionFor; the timing line says it went via the daemon.
-  console.log("\ncli pull — through a daemon:");
+  // A second command while a one-shot command holds the port (no daemon to route through) exits 1 with
+  // the port-in-use text — on Windows the one that says sharing is not supported there.
+  console.log("\ncli pull — the port held by another one-shot command:");
   {
+    const dir = path.join(tmp, "held");
+    fs.mkdirSync(dir);
+    const env: Record<string, string | undefined> = { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, FIGMA_BRIDGE_PORT: String(PORT) };
+    delete env.FIGMA_BRIDGE_TOKEN_FILE;
+    delete env.DTWIN_PORT;
+    const holder = spawn(process.execPath, [CLI, "whoami", "--timeout", "30"], { cwd: dir, env });
+    const closed = new Promise((r) => holder.once("close", r));
+    let held = "";
+    holder.stderr.on("data", (d: Buffer) => { held += d.toString(); });
+    try {
+      let bound = false;
+      for (let i = 0; i < 100 && !bound; i++) { await sleep(100); bound = /listening on ws:\/\/localhost:8789/.test(held); }
+      check("fixture: a one-shot whoami (no plugin yet) holds 8789", bound);
+      const r = await dtwin(dir, ["whoami", "--timeout", "5"]);
+      const text = daemonSupported()
+        ? /\[bridge\] port 8789 is already in use — another dtwin bridge or MCP server is running\. Stop it first, or set FIGMA_BRIDGE_PORT/
+        : /\[bridge\] port 8789 is already in use — another MCP session or dtwin command holds the bridge, and sharing it between sessions is not supported on Windows \(yet\)\. Close the other one first, or set FIGMA_BRIDGE_PORT/;
+      check(daemonSupported()
+        ? "a second command exits 1 with the port-in-use text"
+        : "a second command exits 1 with the port-in-use text: another session or command holds the bridge, sharing is not supported on Windows, close it",
+      r.code === 1 && text.test(r.stderr));
+    } finally {
+      holder.kill("SIGKILL");
+      await closed;
+    }
+  }
+
+  console.log("\ncli pull — through a daemon:");
+  if (!daemonSupported()) {
+    console.log("  (skipped: the daemon is not supported on Windows — `dtwin serve` refuses, so there is none to route through; the refusals are checked instead)");
+    const dir = path.join(tmp, "daemon");
+    fs.mkdirSync(dir);
+    const lines = (s: string) => s.split("\n").filter((l) => l.trim() && !/ExperimentalWarning|--trace-warnings/.test(l)).join("\n");
+    const serve = await dtwin(dir, ["serve"]);
+    check("on Windows `dtwin serve` exits 1 with one line, the reason (no stack)", serve.code === 1 && lines(serve.stderr) === "[dtwin] error: " + DAEMON_UNSUPPORTED);
+    const stop = await dtwin(dir, ["stop"]);
+    check("…and so does `dtwin stop`", stop.code === 1 && lines(stop.stderr) === "[dtwin] error: " + DAEMON_UNSUPPORTED);
+    const st = await dtwin(dir, ["status"]);
+    check("…while `dtwin status` reports no daemon, with the reason (exit 0)",
+      st.code === 0 && /"daemon": false/.test(st.stdout) && lines(st.stderr) === "[dtwin] no daemon is running: " + DAEMON_UNSUPPORTED);
+  } else {
     const dir = path.join(tmp, "daemon");
     fs.mkdirSync(dir);
     const env: Record<string, string | undefined> = { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, FIGMA_BRIDGE_PORT: String(PORT) };

@@ -159,6 +159,8 @@
 //   dtwin --daemon-status  # is one running, and is the plugin connected?
 //   Only ONE process can hold port 8787 — while a daemon (or the MCP server) is up, a second bridge
 //   exits with EADDRINUSE. That is exactly what routing through the daemon avoids.
+//   Not on Windows yet: there --serve / --stop refuse, nothing shares the bridge, and one MCP session or
+//   dtwin command holds it at a time.
 //
 // The bridge token (auth for the plugin -> bridge handshake). Generated once on the first bridge
 // start, saved to a per-user config file (0600), and reused forever after — so you paste it into the
@@ -764,16 +766,18 @@ const topLevelLayers = (r: ListPagesReply | ListChildrenReply): NodeSummary[] =>
 // out the plugin's reconnect (a 3 s retry timer, slower still in a background window), which measured 27 s
 // against an export of under 3 s; naming the wait is what makes that visible, and `dtwin serve` is the fix.
 // `connectMs` is the own-bridge wait for the plugin (0 / ignored behind a daemon, which waits inside the request).
+// `platform`: where no daemon can run (daemon.ts daemonSupported) the hint names the wait, not `dtwin serve`.
 const CONNECT_HINT_MS = 5000;
 const secs = (ms: number) => (ms / 1000).toFixed(1) + "s";
-function formatDone(t: { totalMs: number; connectMs: number; exportMs: number; writeMs: number; viaDaemon: boolean }): string[] {
+function formatDone(t: { totalMs: number; connectMs: number; exportMs: number; writeMs: number; viaDaemon: boolean }, platform: NodeJS.Platform = process.platform): string[] {
   // Behind a daemon whose plugin is not connected yet, the daemon waits INSIDE the request, so that wait is
   // part of the export figure: the line says so instead of claiming there was no reconnect.
   const wait = t.viaDaemon ? "via the running daemon" : `waited ${secs(t.connectMs)} for the plugin to connect`;
   const exp = t.viaDaemon ? "export (incl. any wait for the plugin)" : "export";
   const lines = [`done in ${secs(t.totalMs)} — ${wait} · ${exp} ${secs(t.exportMs)} · write ${secs(t.writeMs)}`];
   if (!t.viaDaemon && t.connectMs >= CONNECT_HINT_MS) {
-    lines.push("the wait was the plugin reconnecting to this fresh bridge (it retries every 3 s, and slower in a background window) — `dtwin serve` in another terminal keeps one bridge open, so the next command skips it.");
+    lines.push("the wait was the plugin reconnecting to this fresh bridge (it retries every 3 s, and slower in a background window)" +
+      (daemon.daemonSupported(platform) ? " — `dtwin serve` in another terminal keeps one bridge open, so the next command skips it." : "."));
   }
   return lines;
 }
@@ -850,7 +854,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     console.error("[dtwin] " + (st
       ? `daemon up (pid ${st.pid ?? "?"}, port ${st.port ?? "?"}) — plugin ${st.pluginConnected ? "CONNECTED" : "not connected"}` +
         (st.idleMs ? `, idle ${daemon.humanMs(st.idleForMs ?? 0)}/${daemon.humanMs(st.idleMs)} before auto-shutdown.` : ", no idle shutdown.")
-      : "no daemon is running — start one with --serve."));
+      : daemon.daemonSupported() ? "no daemon is running — start one with --serve." : "no daemon is running: " + daemon.DAEMON_UNSUPPORTED));
     return;
   }
   if (daemonCmd === "--serve") {
@@ -894,8 +898,11 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   // Without `dtwin serve`, every pull opens a throwaway bridge and the plugin's
   // reconnect is what actually costs the time (measured 300s/908s vs 7.5-8.8s with a daemon warm).
   // Said up front, before anything is sent, not just diagnosed after the fact by `dtwin doctor`.
+  // Where no daemon can run (daemon.ts daemonSupported) the cost is still said, but not the fix it has none of.
   if (!d && isExportCmd) {
-    console.error("[dtwin] no `dtwin serve` daemon is running — this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection. Run `dtwin serve` in another terminal for a fast, reliable connection.");
+    console.error(daemon.daemonSupported()
+      ? "[dtwin] no `dtwin serve` daemon is running — this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection. Run `dtwin serve` in another terminal for a fast, reliable connection."
+      : "[dtwin] this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection.");
   }
   // The stall-check window (server-core.ts's request() `stallMs`): if NOTHING at all is heard back
   // from the plugin (not even a progress frame) within this long of SENDING the command, abort rather
@@ -936,7 +943,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     bridge = b;
     console.error("[dtwin] listening on ws://localhost:" + b.port);
     console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects)…');
-    console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
+    if (daemon.daemonSupported()) console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
     // --list-clients IS meaningful with nothing ever connecting ("which files can I talk to?" →
     // "none, open one"), but with no daemon running it is talking to a bridge it JUST opened, and every
     // plugin window currently open in Figma is mid-reconnect to it (they retry every 3s). Skipping the
@@ -1193,7 +1200,8 @@ async function cli(argv: string[]): Promise<void> {
         "  Run the Design Twin MCP server on stdio. This is what a .mcp.json entry points at\n" +
         "  (`dtwin init --mcp` writes one); you do not normally run it by hand.\n\n" +
         "  It takes no flags. While it runs it owns the bridge, so ordinary `dtwin` commands\n" +
-        "  route through it rather than starting a second one — `dtwin doctor` says who holds the port.\n\n" +
+        "  route through it rather than starting a second one (not on Windows yet: there they cannot use the\n" +
+        "  port until it exits) — `dtwin doctor` says who holds the port.\n\n" +
         "  Its tools mirror the CLI: figma_list_clients / figma_list / figma_export_* / figma_screenshot /\n" +
         "  figma_status / figma_write. Pass writeToDisk:true to get files plus a compact index instead\n" +
         "  of node payloads inline — asset bytes are never returned inline."

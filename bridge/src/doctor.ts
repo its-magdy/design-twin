@@ -181,7 +181,11 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
 // `refused` is daemon.sockProblem(port): the socket location is not private to this user, so no
 // daemon can be started or reached there — every command still works, one-shot. A fail, not a warn:
 // it is someone else's directory (or a loosened one) in the place this user's daemon would listen.
-function checkDaemon(st: DaemonStatusView | null | undefined, port: number, refused?: string | null): Check {
+// `unsupported` is daemon.DAEMON_UNSUPPORTED where daemon.daemonSupported() is false (Windows): no
+// daemon can run, so there is no socket location to check — a note quoting why, not a failure (there
+// is nothing to fix; every command works one-shot).
+function checkDaemon(st: DaemonStatusView | null | undefined, port: number, refused?: string | null, unsupported?: string | null): Check {
+  if (unsupported) return warn("daemon", "Daemon", unsupported);
   if (refused) {
     return fail(
       "daemon", "Daemon", refused,
@@ -280,7 +284,8 @@ function exportSourceCounts(exportDir: string, now: number): { parts: string[]; 
   const screensByFile = new Map<string, Array<string | undefined>>(); // file (or "" for unstamped) -> [{exportedAt}]
   const problems: string[] = [];
   const note = (l: IndexRowView) => { const key = l.sourceFile || ""; let ats = screensByFile.get(key); if (!ats) { ats = []; screensByFile.set(key, ats); } ats.push(l.exportedAt); };
-  const rootRel = path.join("pages", "index.json");
+  // `/`-spelt like the index's own pageDirs[].index paths it is listed with (path.join takes it on Windows too)
+  const rootRel = "pages/index.json";
   const rootRead = readExportJson(path.join(exportDir, rootRel), IndexSchema);
   if (rootRead && "bad" in rootRead) problems.push(`${rootRel} ${rootRead.bad}`);
   // No (readable) page index — a design-system-only or as-yet-empty export.
@@ -350,7 +355,7 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
       // design/ (design/pages/, design/assets/, design/variables.json, design/design-system/) beside
       // the real one at design/export/. Doctor reads only design/export/ below, so say so out loud —
       // silently picking one is exactly the trap this project is in.
-      out.push(warn("layout", "Layout", `found BOTH layouts: reading ${ex.rel}/ (the current one), but design/pages/, design/assets/, design/variables.json and/or design/design-system/ ALSO exist beside it — a stray pull wrote a second, parallel export tree`,
+      out.push(warn("layout", "Layout", `found BOTH layouts: reading ${ex.rel.split(path.sep).join("/")}/ (the current one), but design/pages/, design/assets/, design/variables.json and/or design/design-system/ ALSO exist beside it — a stray pull wrote a second, parallel export tree`,
         "the two trees can disagree (e.g. two different variables.json). Move anything real out of the stray design/pages, design/assets, design/variables.json, design/design-system into design/export/, then remove them — never `dtwin pull design ...` (that outDir already contains export/); use `dtwin pull --node <id>` etc."));
     }
 
@@ -508,10 +513,11 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
     add(pluginCheck);
   } else {
     // A refused socket location is reported, not read as "no daemon" (status() alone would only warn
-    // on stderr and return null).
-    const refused = daemon.sockProblem(port);
-    const st = refused ? null : await daemon.status(port).catch(() => null);
-    add(checkDaemon(st, port, refused));
+    // on stderr and return null). Where no daemon can run, neither is looked at.
+    const unsupported = daemon.daemonSupported() ? null : daemon.DAEMON_UNSUPPORTED;
+    const refused = unsupported ? null : daemon.sockProblem(port);
+    const st = unsupported || refused ? null : await daemon.status(port).catch(() => null);
+    add(checkDaemon(st, port, refused, unsupported));
     const probe = await probePort(port);
     add(checkPort(port, probe, st, process.env.FIGMA_BRIDGE_PORT));
 

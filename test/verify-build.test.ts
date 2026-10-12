@@ -304,7 +304,8 @@ check("[shape] a plan the hook cannot use is WARNED about by name on every stop,
   const root = project({ "a.tsx": "" }, { status: "pending", files: ["a.tsx"], verification: STATIC });
   fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), JSON.stringify({ status: "pending", tokens: "none" }));
   const r = runHook(root);
-  return /warning: design\/plan\/broken\.json is not a valid plan: `tokens` must be an array — it was NOT checked/.test(r.stderr);
+  // the plan is named as the OS spells the path (path.relative), so the expectation is built the same way
+  return r.stderr.includes(`warning: ${path.join("design", "plan", "broken.json")} is not a valid plan: \`tokens\` must be an array — it was NOT checked`);
 })());
 check("[shape] a plan path argument that is not a plan -> 'cannot read plan(s): <file> (<why>)', exit 1", (() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-bad-"));
@@ -596,6 +597,39 @@ check("[header] an empty string counts as missing, not present", validatePlanHea
 check("abandoned / already-closed plans are skipped (fast path)", (() => {
   const root = project({ "a.tsx": "#5B5FC7" }, { status: "abandoned", files: ["a.tsx"], tokens: [brand] });
   return runHook(root).status === 0 && planOf(root).status === "abandoned";
+})());
+// A real Claude Code payload names its event: a block is then a JSON decision on stdout + exit 0 (a shell-form hook under
+// PowerShell turns a native exit 2 into 1, a non-blocking error); the reason is what exit 2 would have put on stderr.
+const decisionOf = (stdout: string): { decision?: unknown; reason?: unknown } | null => { try { const v: unknown = JSON.parse(stdout); return typeof v === "object" && v !== null && !Array.isArray(v) ? v : null; } catch { return null; } };
+for (const ev of ["SubagentStop", "Stop"]) {
+  check(`a ${ev} payload that fails the check → exit 0 and stdout is ONE JSON object {decision: "block", reason: the itemised stderr}`, (() => {
+    const root = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+    const r = runHook(root, { cwd: root, hook_event_name: ev });
+    const d = decisionOf(r.stdout);
+    // pre-change: fails — exit 2, nothing on stdout
+    return r.status === 0 && d !== null && d.decision === "block" && typeof d.reason === "string" && d.reason === r.stderr.trimEnd()
+      && /brand-600/.test(d.reason) && /build-screen check failed/.test(d.reason) && hookOf(root).result === "blocked";
+  })());
+  check(`…a ${ev} payload that passes → exit 0, nothing on stdout`, (() => {
+    const root = project({ "a.tsx": "text-brand-600" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+    const r = runHook(root, { cwd: root, hook_event_name: ev });
+    return r.status === 0 && r.stdout === "" && hookOf(root).result === "pass";
+  })());
+}
+// The hook as Claude Code runs a shell-form command on Windows without Git Bash: through PowerShell, the bundle as shipped.
+if (process.platform === "win32") {
+  const viaPowerShell = (payload: object) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `node "${path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "verify-build.js")}"`], { input: JSON.stringify(payload), encoding: "utf8" });
+  const failing = () => project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  const legacy = failing(), real = failing();
+  const l = viaPowerShell({ cwd: legacy }), r = viaPowerShell({ cwd: real, hook_event_name: "SubagentStop" });
+  const d = decisionOf(r.stdout);
+  check("[powershell] a native exit 2 arrives as 1 — why exit 2 alone cannot block there", l.status === 1 && /brand-600/.test(l.stderr));
+  check("[powershell] a SubagentStop payload that fails → exit 0 and the JSON block decision on stdout, through PowerShell", r.status === 0 && d !== null && d.decision === "block" && typeof d.reason === "string" && /brand-600/.test(d.reason));
+} else console.log("  (skipped: [powershell] checks — PowerShell's exit-code conversion is checked on Windows)");
+check("…without hook_event_name (a hand-piped payload) a block is still exit 2 with nothing on stdout", (() => {
+  const root = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  const r = runHook(root);
+  return r.status === 2 && r.stdout === "" && /brand-600/.test(r.stderr);
 })());
 check("stop_hook_active short-circuits (no re-entrant block)", (() => {
   const root = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand] });
@@ -1220,10 +1254,10 @@ console.log("field-test fixes:");
   check("a project with a tailwind.config.* is not checked (Tailwind v3 colours live there)",
     !has(problems({ "src/A.tsx": "<p />", "tailwind.config.js": "module.exports = {}" }, { files: ["src/A.tsx"], tokens: [{ figmaName: "Brand/Main", value: "#123456", kind: "color", codeToken: "bg-brand", verdict: "exact" }], verification: STATIC }), /declared nowhere/));
   {
-    const hookWith = (lines: string[], files?: string[]) => {
+    const hookWith = (lines: string[] | ((root: string) => string[]), files?: string[]) => {
       const root = project({ "a.tsx": "#5B5FC7", "src/Other.tsx": "" }, { ...BLOCKING, files: files || BLOCKING.files });
       const t = path.join(root, "t.jsonl");
-      fs.writeFileSync(t, lines.join("\n"));
+      fs.writeFileSync(t, (typeof lines === "function" ? lines(root) : lines).join("\n"));
       return { r: runHook(root, { cwd: root, transcript_path: t }), root };
     };
     check("a Bash heredoc whose notes mention the plan does not make it this session's", (() => {
@@ -1235,7 +1269,9 @@ console.log("field-test fixes:");
       return r.status === 2 && hookOf(root).result === "blocked";
     })());
     check("a Windows-style path to the plan is matched", (() => {
-      const { r } = hookWith([toolUse("Write", { file_path: "C:\\work\\app\\design\\plan\\login.json", content: "{}" })]);
+      // On Windows the hook matches the project's own drive-letter path (a different root's is another checkout's plan);
+      // elsewhere a drive-letter path is matched by its tail.
+      const { r } = hookWith((root) => [toolUse("Write", { file_path: process.platform === "win32" ? path.join(root, "design", "plan", "login.json") : "C:\\work\\app\\design\\plan\\login.json", content: "{}" })]);
       return r.status === 2;
     })());
     check("a builder that only ran plan-skeleton --out on the plan owns it", (() => {

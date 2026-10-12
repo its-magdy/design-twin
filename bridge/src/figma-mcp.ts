@@ -65,6 +65,8 @@ let served: ServeHandle | null = null;
 // The held bridge's close wrapper (`shared.close` below), so leave() can close a bridge whose socket
 // never got served. Idempotent.
 let closeOwn: (() => void) | null = null;
+// The "not sharing" note (daemon.DAEMON_UNSUPPORTED) has been logged: once per process.
+let unsharedSaid = false;
 // The in-flight (or settled) resolution, shared. Without it, two tool calls arriving together (or one
 // arriving while main() is still resolving at startup) each saw no daemon and each called
 // createBridge() — the second bind hit EADDRINUSE. Kept while we OWN the bridge (it is the answer);
@@ -110,6 +112,12 @@ async function resolveHolder(): Promise<Holder> {
   };
   closeOwn = close;
   const shared: DaemonBridge = { ...mine, close };
+  // No daemon socket where daemon.ts says none can run (Windows): this session holds the bridge alone,
+  // and says why once instead of trying a listen that cannot work.
+  if (!daemon.daemonSupported()) {
+    if (!unsharedSaid) { unsharedSaid = true; wlog("not sharing the bridge with other sessions: " + daemon.DAEMON_UNSUPPORTED); }
+    return { own: mine };
+  }
   // idleMin 0 while the client is here: this server lives as long as its session (afterClientGone
   // re-arms the window once the session has gone and others still use the socket).
   daemon.serve(shared, { idleMin: 0, signals: false, log: wlog }).then(

@@ -13,6 +13,13 @@
 //
 // A unix socket, not a second TCP port: it gets filesystem permissions for free (no verifyClient
 // equivalent to write), and it cannot be reached from a browser tab the way a loopback port can.
+//
+// Not on Windows (daemonSupported below). Node's net IPC there is a named pipe, and Node cannot give a
+// pipe a private access list: its default security descriptor grants Everyone read, and a client cannot
+// check who created the server end, so another local user could create the name first and answer with
+// forged replies. Nothing there plays the part of the 0700 directory below. So on win32 serve() / stop() refuse,
+// every "is a daemon running?" lookup is "no" without touching the filesystem, and one process holds
+// the bridge at a time.
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -170,6 +177,9 @@ export interface ServeOptions {
    *  process's signals owns its lifetime too (`dtwin serve`); a host with its own lifetime (the MCP
    *  server passes signals:false) installs its own, and an in-process test passes false. */
   crashHandlers?: boolean;
+  /** The platform daemonSupported() judges (defaults to process.platform): an unsupported one rejects
+   *  with DAEMON_UNSUPPORTED before any file is made or socket bound. */
+  platform?: NodeJS.Platform;
 }
 
 /** connect()'s answer when a daemon is live: its socket, and request functions bound to it.
@@ -186,6 +196,19 @@ export interface DaemonConnection {
   /** As request(), plus the connected file the daemon's bridge used (null from an older daemon). */
   requestWithClient<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }>;
 }
+
+// ---- where the daemon runs at all
+
+/** Can a daemon be served and found on `platform`: `dtwin serve`, and the one bridge an MCP server
+ *  or a dtwin command shares with the rest. Not on win32 (the header says why). The ONE rule: every
+ *  serve/stop/lookup below, figma-mcp, figma-pull, server-core's port-in-use text and doctor read it. */
+export function daemonSupported(platform: NodeJS.Platform = process.platform): boolean {
+  return platform !== "win32";
+}
+
+/** What is unsupported where daemonSupported() is false, why, and what to do instead. The one spelling:
+ *  serve()/stop() reject with it, `dtwin serve`/`dtwin stop` print it, doctor and the MCP server report it. */
+export const DAEMON_UNSUPPORTED = "`dtwin serve` and sharing one bridge between sessions are not supported on Windows yet (Node cannot make the local socket they need, a named pipe, private to your account, so another user on this machine could impersonate it) — one MCP session or dtwin command holds the bridge at a time, so close the other one first.";
 
 // ---- where the socket lives
 //
@@ -205,7 +228,7 @@ export interface DaemonConnection {
 // before use, as a second line.
 //
 // Windows (no process.getuid) keeps os.tmpdir() unchanged: a per-user directory there, and POSIX
-// mode bits do not apply.
+// mode bits do not apply. (No daemon listens there anyway: see daemonSupported.)
 //
 // Length: a Unix socket path is limited by sockaddr_un.sun_path (Node: "107 bytes on Linux and 103
 // bytes on macOS"; longer throws). A macOS tmpdir is ~48 bytes, so
@@ -228,6 +251,8 @@ export interface SockPlace {
   tmpdir?: string;
   /** The owner to require (defaults to process.getuid(); an explicit undefined = no POSIX uids, as on Windows). */
   uid?: number | undefined;
+  /** The platform daemonSupported() judges (defaults to process.platform). */
+  platform?: NodeJS.Platform;
 }
 
 function placeUid(place: SockPlace): number | undefined {
@@ -304,8 +329,9 @@ function findSock(port: number | undefined, place: SockPlace): string | null {
 }
 
 /** Why the socket for `port` cannot be used, or null when it can — the refusal as a value, without
- *  creating anything. */
+ *  creating anything. Also null where there is no daemon at all (daemonSupported), with nothing probed. */
 export function sockProblem(port?: number, place: SockPlace = {}): string | null {
+  if (!daemonSupported(place.platform)) return null;
   try { findSock(port, place); return null; } catch (e) { return errMsg(e); }
 }
 
@@ -313,9 +339,11 @@ export function sockProblem(port?: number, place: SockPlace = {}): string | null
 // <tmpdir>/designtwin-<uid> first (a shared /tmp) could otherwise lock this user out of dtwin
 // entirely. So the "is a daemon running?" lookups (connect, status) read a refusal as "no daemon" —
 // the one-shot path then runs exactly as it does without a daemon — and say so ONCE per process, on
-// stderr (stdout is the MCP server's protocol channel, and a CLI's data).
+// stderr (stdout is the MCP server's protocol channel, and a CLI's data). Where no daemon can run
+// (daemonSupported) the answer is "no daemon", silently and without touching the filesystem.
 let refusalWarned = false;
 function lookupSock(port: number | undefined, place: SockPlace): string | null {
+  if (!daemonSupported(place.platform)) return null;
   try { return findSock(port, place); } catch (e) {
     if (!refusalWarned) {
       refusalWarned = true;
@@ -329,6 +357,7 @@ function lookupSock(port: number | undefined, place: SockPlace): string | null {
  *  (<tmpdir>/designtwin-<port>.sock) — when a socket owned by this user is there and it is not the
  *  current location; otherwise null. Only ever used to stop that daemon or to name it in an error. */
 export function legacySock(port?: number, place: SockPlace = {}): string | null {
+  if (!daemonSupported(place.platform)) return null;
   const uid = placeUid(place);
   if (uid === undefined) return null; // no uids: the current location IS the tmpdir
   const sock = path.join(place.tmpdir ?? os.tmpdir(), sockName(port, place));
@@ -372,8 +401,10 @@ export function alreadyRunning(sock: string): Error {
   return new Error(`a dtwin daemon is already running on ${sock} — stop it with --stop`);
 }
 
-/** The socket path for `port` — or a throw if a LIVE daemon already answers on it. */
+/** The socket path for `port` — or a throw if a LIVE daemon already answers on it, or if no daemon can
+ *  run here (DAEMON_UNSUPPORTED, before anything is created or probed). */
 export async function assertNoDaemon(port?: number, place: SockPlace = {}): Promise<string> {
+  if (!daemonSupported(place.platform)) throw new Error(DAEMON_UNSUPPORTED);
   const sock = sockPath(port, place);
   // A socket file left by a crashed daemon is NOT a running daemon. Probing it first (rather than
   // unlinking unconditionally) is what keeps `--serve` from silently stealing a live daemon's socket.
@@ -454,8 +485,8 @@ export interface ServeHandle {
   idleOut(ms: number): void;
 }
 
-export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true, crashHandlers = signals }: ServeOptions = {}): Promise<ServeHandle> {
-  return assertNoDaemon(port).then((sock) => {
+export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true, crashHandlers = signals, platform }: ServeOptions = {}): Promise<ServeHandle> {
+  return assertNoDaemon(port, ifDefined("platform", platform)).then((sock) => {
     try { fs.unlinkSync(sock); } catch { /* nothing to clean up */ }
 
     // Idle shutdown. A daemon outlives the terminal that started it, so without this an orphan holds
@@ -808,7 +839,10 @@ export async function connect(port?: number, place: SockPlace = {}): Promise<Dae
   };
 }
 
+/** Stops the live daemon for `port`: true when one was stopped, false when none was running. Rejects
+ *  with DAEMON_UNSUPPORTED where no daemon can run, without touching the filesystem. */
 export async function stop(port?: number, place: SockPlace = {}): Promise<boolean> {
+  if (!daemonSupported(place.platform)) throw new Error(DAEMON_UNSUPPORTED);
   const sock = sockPath(port, place);
   if (!(await probe(sock))) return false;
   await request(sock, { cmd: "__shutdown" }, 5000);

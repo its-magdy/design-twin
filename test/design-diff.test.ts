@@ -358,7 +358,7 @@ check("[shape] a corrupt snapshot is ONE line naming it (exit 2), not a SyntaxEr
   fs.writeFileSync(path.join(root, "design", "login.json"), JSON.stringify(screen()));
   fs.writeFileSync(path.join(root, "design", ".sync", "login.json"), "{ truncated");
   const r = spawnSync(process.execPath, [CLI, "design/login.json"], { cwd: root, encoding: "utf8" });
-  return r.status === 2 && /the snapshot design\/\.sync\/login\.json is not valid JSON/.test(r.stderr) && !/\n {4}at /.test(r.stderr);
+  return r.status === 2 && r.stderr.includes(`the snapshot ${path.join("design", ".sync", "login.json")} is not valid JSON`) && !/\n {4}at /.test(r.stderr);
 })());
 check("[args] `--out --json` is '--out needs a value', not a diff written to a file named --json", (() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-args-"));

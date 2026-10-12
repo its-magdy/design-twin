@@ -7,7 +7,8 @@
 // way Figma makes it: ?mode=ref renders the frame inside a transparent 1464×744 page (the shadow in the margin) at
 // deviceScaleFactor 2048/1440 → assets/90_1_ref.png (2082×1058); the index row gets referenceScale = round4(png.w / 1464) and
 // referenceOffset {-12, -12}, as bridge/src/write-out.ts writes them. The Kiln Ledger screen 90:50 (400×5000, generated here)
-// is a tall frame whose reference scale is below 1 (2048/5000).
+// is a tall frame whose reference scale is below 1 (2048/5000). The probe captures at the scale the reference was rendered at
+// (2048/1440, 2048/5000), which the index's 4-decimal number names — never at that rounded number itself.
 //
 // needs the repo's devDependency playwright (+ chromium). Locally an unavailable renderer prints SKIPPED; in CI (CI=true)
 // that is a failure.  Run with:  node test/verify-probe-visual-e2e.test.ts
@@ -90,6 +91,8 @@ try {
 const refInfo = pngInfo(refPng), ledgerInfo = pngInfo(ledgerPng);
 if (!refInfo || !ledgerInfo) { check("the in-test references are PNGs", false); finish(); report(); process.exit(1); }
 const SCALE = round4(refInfo.w / 1464), LEDGER_SCALE = round4(ledgerInfo.w / 400);
+// what the references were rendered at (the shoot() calls above), and so what the probe must capture at
+const RENDER_SCALE = 2048 / 1440, LEDGER_RENDER_SCALE = 2048 / 5000;
 console.log(`  (references: Firings ${refInfo.w}×${refInfo.h} → scale ${SCALE}; Kiln Ledger ${ledgerInfo.w}×${ledgerInfo.h} → scale ${LEDGER_SCALE})`);
 // a discovery thumbnail: 360 px wide
 const thumbPng = encodePng(resampleBox(decodePng(refPng), 360, Math.round(refInfo.h * 360 / refInfo.w)));
@@ -204,8 +207,8 @@ const P = {
   console.log(`    e1: exit ${r.status} ${Math.round(r.ms / 1000)}s — ${brief(m)}`);
   if (r.status !== 0) console.log(r.stderr.slice(0, 2000));
   check("e1 the probe exits 0 and runs the visual diff", r.status === 0 && v !== null);
-  check(`e1 the reference grid, at the index's scale (dsf ${v?.capture.dsf}, scale ${SCALE})`, v !== null && v.grid === "reference" && v.resampled === "none" && v.capture.dsf === SCALE && v.reference.from === "index" && v.reference.scale === SCALE);
-  check(`e1 the reference crop skips the 12 px shadow margin (${JSON.stringify(v?.reference.crop)})`, v !== null && v.reference.crop.x === Math.round(12 * SCALE) && v.reference.crop.y === Math.round(12 * SCALE) && v.reference.offset.x === -12);
+  check(`e1 the reference grid, at the scale the reference was rendered at, 2048/1440, which the index's ${SCALE} rounds (dsf ${v?.capture.dsf})`, v !== null && v.grid === "reference" && v.resampled === "none" && v.capture.dsf === RENDER_SCALE && v.reference.from === "index" && v.reference.scale === RENDER_SCALE);
+  check(`e1 the reference crop skips the 12 px shadow margin (${JSON.stringify(v?.reference.crop)})`, v !== null && v.reference.crop.x === Math.round(12 * RENDER_SCALE) && v.reference.crop.y === Math.round(12 * RENDER_SCALE) && v.reference.offset.x === -12);
   check(`e1 a correct twin: shift-tolerant < 0.5 %, no hot region (${v?.shiftTolerantPct}%, ${v?.regionsTotal})`, v !== null && v.shiftTolerantPct < 0.5 && v.regionsTotal === 0);
   check("e1 the clip is the design window in whole CSS px at the frame's top-left", v !== null && v.capture.clip.x === 0 && v.capture.clip.y === 0 && v.capture.clip.w === 1440 && v.capture.clip.h === 720 && v.capture.frame.nodeId === "90:1" && v.capture.frame.via === "tag");
   const dp = path.join(pMain, out("Firings") + ".diff.png");
@@ -237,7 +240,7 @@ const P = {
   const r = await P.e3;
   const m = read(pOld, out("Firings")), v = ran(m);
   console.log(`    e3: exit ${r.status} — ${brief(m)}`);
-  check(`e3 old export: the scale and offset recomputed from renderBox equal the index's (${v?.reference.scale}, ${JSON.stringify(v?.reference.offset)})`, v !== null && v.reference.from === "export" && v.reference.scale === SCALE && v.reference.offset.x === -12 && v.reference.offset.y === -12);
+  check(`e3 old export: the scale and offset recomputed from renderBox name the same render scale as the index (${v?.reference.scale}, ${JSON.stringify(v?.reference.offset)})`, v !== null && v.reference.from === "export" && v.reference.scale === RENDER_SCALE && v.reference.offset.x === -12 && v.reference.offset.y === -12);
   check("e3 the same result as e1 (low diff, no region)", v !== null && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.regionsTotal === 0);
 }
 // ---- e7: invariance — with and without referenceImage the measurement is the same
@@ -301,7 +304,7 @@ const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? 
   const r = await P.e10;
   const m = read(pMain, out("Ledger")), v = ran(m);
   console.log(`    e10: exit ${r.status} ${Math.round(r.ms / 1000)}s — ${brief(m)}`);
-  check(`e10 a 400×5000 frame at scale ${LEDGER_SCALE}: rendered at it, on the reference grid, low diff`, v !== null && v.capture.dsf === LEDGER_SCALE && LEDGER_SCALE < 1 && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.compared.h >= 2046 && v.compared.h <= 2048);
+  check(`e10 a 400×5000 frame at 2048/5000 (the index's ${LEDGER_SCALE} rounds it): rendered at that, on the reference grid, low diff`, v !== null && v.capture.dsf === LEDGER_RENDER_SCALE && LEDGER_RENDER_SCALE < 1 && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.compared.h >= 2046 && v.compared.h <= 2048);
 }
 // ---- e11: a null referenceImage — ran:false with why, exit 0, the measured file written, the process exits
 {
