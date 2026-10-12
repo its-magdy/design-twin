@@ -1140,13 +1140,15 @@ async function waitMain(screen, f, usage) {
       }
       if (st.phase === "done") {
         const onDisk = sha256File(base + ".measured.json");
-        if (st.measuredSha256 && onDisk === st.measuredSha256) {
-          const ev = st.evidenceSha256 && sha256File(base + ".evidence.json") === st.evidenceSha256 ? ` --interactions ${shellArg(base + ".evidence.json")}` : "";
+        const evOnDisk = st.evidenceSha256 ? sha256File(base + ".evidence.json") : null;
+        if (st.measuredSha256 && onDisk === st.measuredSha256 && evOnDisk === (st.evidenceSha256 ?? null)) {
+          const ev = st.evidenceSha256 ? ` --interactions ${shellArg(base + ".evidence.json")}` : "";
           console.error(`run ${st.runId} done (rev ${st.rev}, ${st.at})`);
           console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(base + ".expected.json")} ${shellArg(base + ".measured.json")}${ev} --out ${shellArg(base)}`);
           return 0;
         }
-        const why = `run ${st.runId} says done, but ${base}.measured.json ${onDisk ? `is not the file it names (sha ${onDisk.slice(0, 12)}\u2026 vs ${(st.measuredSha256 || "none").slice(0, 12)}\u2026)` : "does not exist"} \u2014 still waiting`;
+        const [file, sha, named] = st.measuredSha256 && onDisk === st.measuredSha256 ? [".evidence.json", evOnDisk, st.evidenceSha256] : [".measured.json", onDisk, st.measuredSha256];
+        const why = `run ${st.runId} says done, but ${base}${file} ${sha ? `is not the file it names (sha ${sha.slice(0, 12)}\u2026 vs ${(named || "none").slice(0, 12)}\u2026)` : "does not exist"} \u2014 still waiting`;
         if (why !== noted) {
           console.error(`note  ${why}`);
           noted = why;
@@ -4228,8 +4230,8 @@ function main(argv) {
       .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every
       file of a staging directory into <dir> (tmp file in <dir>, then rename) \u2014 stage in the run cache while any page of the app is open.
   ${scriptCmd("verify-screen")} --wait <Screen> --run <id> [--timeout <s>=1200] [--stall <s>=300] [--interval <s>=2] [--dir design/verify]
-      waits (on the live status, else <dir>/<Screen>.status.json) until run <id> is done and <Screen>.measured.json is the file it
-      names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);
+      waits (on the live status, else <dir>/<Screen>.status.json) until run <id> is done and <Screen>.measured.json (and the
+      evidence this run published) is the file it names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);
       exit 1 when the run failed or is blocked (prints why), 5 on timeout or when the status did not change for --stall seconds,
       6 when the run cache exists but cannot be read.
 exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not writable (sandbox write scope? \u2014 run from the project root).`;

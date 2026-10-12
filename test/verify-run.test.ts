@@ -457,6 +457,28 @@ await block("verify-screen --wait:", async () => {
   const code = await waiting;
   safe("…a wait that is polling when the run reaches done → exit 0", () => code === 0);
   safe("…and prints --interactions for the evidence published in this run", () => out.includes(`--interactions ${relPrinted("Plots.evidence.json")}`));
+  // the window between done's live write and its commit, held open: done names this run's evidence, not in design/verify yet
+  const evStaged = path.join(VR.stageDirOf(base, "run-w"), "Plots.evidence.json");
+  fs.mkdirSync(path.dirname(evStaged), { recursive: true });
+  fs.writeFileSync(evStaged, JSON.stringify({ interactions: [{ nodeId: "2:5", trigger: "on_click", ok: true }] }));
+  fs.rmSync(path.join(dir, "Plots.evidence.json"), { force: true });
+  VR.writeStatus(base, { runId: "run-w", phase: "done", by: "agent", measuredSha256: sha(path.join(dir, "Plots.measured.json")), evidenceSha256: sha(evStaged), published: ["Plots.evidence.json"] });
+  let outW = "", errW = "", closedW = false;
+  const noteW = /Plots\.evidence\.json does not exist — still waiting/;
+  const waitingW = new Promise<number | null>((resolve) => {
+    const p = spawn(process.execPath, [VS_TS, "--wait", "Plots", "--run", "run-w", "--timeout", "15", "--interval", "0.1"], { cwd: path.dirname(path.dirname(dir)) });
+    p.stdout.on("data", (d: Buffer) => { outW += d.toString(); });
+    p.stderr.on("data", (d: Buffer) => { errW += d.toString(); });
+    p.on("close", (code) => { closedW = true; resolve(code); });
+  });
+  // the evidence lands only once the wait has said it is waiting for it (or has exited — the bug), however slow its start
+  for (const t0 = Date.now(); !noteW.test(errW) && !closedW && Date.now() - t0 < 10_000;) await new Promise((r) => setTimeout(r, 50));
+  const sawNote = noteW.test(errW) && !closedW;
+  fs.copyFileSync(evStaged, path.join(dir, "Plots.evidence.json"));
+  const codeW = await waitingW;
+  // pre-change: fails — the wait exited 0 at once, without --interactions
+  safe("done whose evidence is not in design/verify yet (the publish not committed) → keeps waiting, says why", () => sawNote);
+  safe("…then the evidence lands → exit 0 with --interactions", () => codeW === 0 && outW.includes(`--interactions ${relPrinted("Plots.evidence.json")}`));
   // the live file alone moves a wait: design/verify/Plots.status.json is only the published copy
   fs.rmSync(path.join(dir, "Plots.status.json"), { force: true });
   VR.writeStatus(base, { runId: "run-f", phase: "failed", by: "agent", detail: "gave up" });
