@@ -4,6 +4,15 @@ Read this when you need to **find** something: which file holds the tokens, wher
 live, how a browser-downloaded export differs from a CLI one.
 For what the fields on a node mean once you've opened it, see `ir-fields.md`.
 
+## Contents
+- [`design/export/` is dtwin's; the rest of `design/` is yours](#designexport-is-dtwins-the-rest-of-design-is-yours)
+- [Read the manifest first](#read-the-manifest-first)
+- [`design-system.json` + `design-system/`](#design-systemjson--design-system)
+- [`libraries/` — a separately pulled LIBRARY file](#libraries--a-separately-pulled-library-file)
+- [`pages/index.json` — finding a screen](#pagesindexjson--finding-a-screen)
+- [Browser "Download layers" flat naming](#browser-download-layers-flat-naming)
+- [Single-screen exports, assets, config maps](#single-screen-exports-assets-config-maps)
+
 ## `design/export/` is dtwin's; the rest of `design/` is yours
 
 Everything a pull writes lands under `design/export/` and nowhere else — so that directory can be
@@ -19,14 +28,6 @@ either way — drop the `export/` segment — and `dtwin doctor` reports which l
 read it before writing any script against the export. Every CLI pull and MCP `writeToDisk` export
 writes it, rewritten only when its text changes; a `SCHEMA.md` without dtwin's first-line marker is
 yours and is never touched. A browser-downloaded export has none.
-
-## Contents
-- [Read the manifest first](#read-the-manifest-first)
-- [`design-system.json` + `design-system/`](#design-systemjson--design-system)
-- [`libraries/` — a separately pulled LIBRARY file](#libraries--a-separately-pulled-library-file)
-- [`pages/index.json` — finding a screen](#pagesindexjson--finding-a-screen)
-- [Browser "Download layers" flat naming](#browser-download-layers-flat-naming)
-- [Single-screen exports, assets, config maps](#single-screen-exports-assets-config-maps)
 
 ## Read the manifest first
 

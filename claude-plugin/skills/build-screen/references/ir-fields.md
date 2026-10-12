@@ -6,6 +6,9 @@ themed or animated. The audit-design skill reads it too — it is the one field 
 described (and corrected) in exactly one place. For *which file to open*, see `export-layout.md`. For
 how a value becomes code on your stack, see the profile.
 
+The file has two parts: the *Scripting quick keys* (next — the same text as `design/export/SCHEMA.md`), then the
+full field reference, whose **Contents** list follows the quick keys.
+
 <!-- quick-keys:start -->
 ## Scripting quick keys
 
