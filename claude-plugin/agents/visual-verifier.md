@@ -38,13 +38,13 @@ build-screen skill's `references/verify.md`
 
 Nothing available → write a `measured.json` with `{"mode": "static-only", "reason": "<exactly what
 you looked for>"}` and return (the caller's `--compare … --record-plan` records the plan as `static-only` with that
-reason). Do not install tooling or add dependencies without the caller saying so.
+reason). Tooling and dependencies are the user's to install, never yours.
 
 **Web:** check with `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --check` (run from the web app's
 folder, or pass `--project <dir>`). It resolves the project's Playwright and launches Chromium once;
 nothing is measured. Exit 3 means no usable renderer: **stop and ask the user** — the command prints the
-install line. Never run `npx playwright install` (or `npm i -D playwright`) yourself: it edits the
-project's dependencies and, on a cold machine, downloads ~150 MB. Say the cost when you ask. If the user names a
+install line; say the cost when you ask (it edits the project's dependencies and, on a cold machine,
+downloads ~150 MB). If the user names a
 Chromium they already have cached, `--browser-path <executable>` (on `--check` and on the probe) launches that one instead
 — the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`); a path that is not an executable file is
 exit 3. It is only guaranteed with the bundled Chromium; `measured.json` records the browser as `custom`, never the path.
@@ -80,9 +80,7 @@ run every `--status`, `--wait`, probe and `--compare` of one run the same way (a
 the sandbox's write scope is the current directory and the temp dir — so run from the project root, or allow
 writes there; the probe only prints the same as a warning and keeps its exit codes. `--status` and
 `--wait` resolve `--dir` (default `design/verify`) against the current directory: run them from the project
-root, or pass `--dir` (an absolute path works) from anywhere else. Never reinstall dependencies (`npm ci`,
-`npm install`) during a verify run: it clears `node_modules/.cache`, and with it the live status and your
-staged files.
+root, or pass `--dir` (an absolute path works) from anywhere else.
 
 Three things write into the project, each with no page of the app open: the probe (`measured.json` and the
 PNG — it opens and closes its own browser, and writes only after closing it), `--compare` (the report — your
@@ -118,11 +116,10 @@ Write a script with the Write tool (e.g. `scratch/drive.cjs`), never a shell her
 
 ## 2a. Process, permission and time limits
 
+- **Enforced by the plugin's hook** (`scripts/verifier-guard.js`, PreToolUse), each refusal a real block with its reason: a write outside `design/verify/` and the run cache (or to a tool-owned file there), a pattern kill (`pkill`, `killall`, …), a dependency or Playwright browser install (`npm install`/`ci`, `npx playwright install`) and `dangerouslyDisableSandbox`.
 - **Close only what you opened; stop only a PID you started and recorded.** Record the PID when you
-  start a dev server, stop that one, and nothing else. Never `pkill -f`, `killall` or any pattern kill: they
-  take down the user's own servers and editors. Reuse a dev server the user already runs rather than starting a second.
-- **A permission denial is not a sandbox violation.** Never set `dangerouslyDisableSandbox` and never ask the
-  caller to approve a bypass. Three kinds of denial:
+  start a dev server, stop that one, and nothing else. Reuse a dev server the user already runs rather than starting a second.
+- **A permission denial is not a sandbox violation.** Never ask the caller to approve a bypass. Three kinds of denial:
   - *Transient, no verdict* ("… is temporarily unavailable (…), so auto mode cannot determine the safety of …",
     "gave no verdict (timed out, …)", "could not evaluate this action … run with --debug"): wait a few seconds
     and retry the SAME command unchanged, at most 2 retries, doing only read-only work meanwhile.
