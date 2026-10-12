@@ -66,6 +66,34 @@ export function safe(id: unknown): string {
   return String(id).replace(/[^a-zA-Z0-9]/g, "_");
 }
 
+// The inverse of safe() over a node id. safe() folds both of an id's separators to "_" — the ":" inside
+// each "<digits>:<digits>" pair and the ";" that chains an instance sublayer's path — so the inverse
+// rebuilds them from the shape a Figma id has: a plain id is ONE pair ("12:34"); an instance-sublayer id
+// (what a --node or --selection pull of a layer inside an instance files under) is "I" + the instance's
+// pair + one pair per level below it, ";"-joined ("I12:34;56:78"), so never fewer than two pairs. Every
+// other shape — an odd number count, a lone "I12_34", several pairs without the "I" — is no id the
+// writers here put in a filename, and gives null.
+const SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+
+/** `12_34` -> "12:34", `I12_34_56_78` -> "I12:34;56:78"; null for anything safe() never makes of a node id. */
+export function nodeIdFromSafe(safeId: string): string | null {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  // The shape is checked, so the numbers pair up left to right: each pair gets its ":", the "_" left
+  // between pairs is the ";".
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+
+/**
+ * The node id a `<safe(name)>__<safe(id)>` stem (buildPageLayout's layer files, screenPaths' `base`) carries,
+ * or null when it carries none. The split is at the LAST "__": a safe() name can hold "__" itself (or end in
+ * "_"), a safe() id never does. Takes the stem only — a caller holding a file name drops its tail first.
+ */
+export function nodeIdFromStem(stem: unknown): string | null {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+
 // --------------------------------------------------------- title / texts
 //
 // The Figma LAYER name is not the name a user reads on screen: `positions ` (trailing space) IS "Jet

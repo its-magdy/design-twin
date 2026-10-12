@@ -755,4 +755,24 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
+// ---------- a plan named `<Layer>__<id>` describes the frame whose id it carries — an instance sublayer's too ----------
+(() => {
+  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-plan-stem-"));
+  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const put = (rel: string, doc: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), JSON.stringify(doc, null, 4) + "\n"); return rel; };
+  // a --node pull of a layer inside an instance: its frame id is "I5:2;30:7", its files `<Name>__I5_2_30_7.*`
+  const e = buildExpectation([doc([textNode("2:1", "Title", "Chip", { family: "Inter", size: 14 })])]);
+  e.frame.nodeId = "I5:2;30:7";
+  const exp = put("design/verify/Chip__I5_2_30_7.expected.json", e);
+  const meas = put("design/verify/Chip__I5_2_30_7.measured.json", measured([{ nodeId: "2:1", styles: { fontSize: 14, fontFamily: "Inter", text: "Chip" } }]));
+  put("src/Chip.tsx", "export {}\n");
+  // named for the id only (not the expectation's stem), and no nodeId header: only the id in its name ties it to the frame
+  put("design/plan/Chip_copy__I5_2_30_7.json", { files: ["src/Chip.tsx"] });
+  const r = run("--compare", exp, meas, "--record-plan");
+  okOuter(`the plan whose name carries the instance sublayer's id describes the frame (exit ${r.status}: ${r.stderr.split("\n").filter((l) => /record-plan|plan/.test(l)).slice(0, 2).join(" | ")})`,
+    !/no plan in design\/plan\/ describes this frame/.test(r.stderr) && /design\/plan\/Chip_copy__I5_2_30_7\.json/.test(r.stderr));
+  fs.rmSync(cwd, { recursive: true, force: true });
+})();
+
 report();

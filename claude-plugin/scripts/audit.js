@@ -899,6 +899,16 @@ function isDisabledLayer(layer) {
 import fs4 from "node:fs";
 import path2 from "node:path";
 
+// bridge/src/pages-layout.ts
+function safe(id) {
+  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+}
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+
 // bridge/src/design-system-layout.ts
 var COMPONENTS_DIR = "components";
 var TOKENS = "tokens.json";
@@ -993,7 +1003,7 @@ function findExportNeighbours(screenFile) {
     if (!cache.has(f)) cache.set(f, readFrameTexts(path2.join(root, f)));
     return cache.get(f) ?? null;
   };
-  const known = new Set(layers.map((l) => l.id.replace(/[:;]/g, "_")));
+  const known = new Set(layers.map((l) => safe(l.id)));
   const shots = /* @__PURE__ */ new Set();
   let files = [];
   try {
@@ -1003,7 +1013,8 @@ function findExportNeighbours(screenFile) {
   }
   for (const f of files) {
     const m = /^(\d+_\d+)(?:_ref(?:-[0-9A-Za-z]+(?:_\d+)?)?|_shot@[\d.]+x)\.png$/.exec(f);
-    if (m && m[1] && !known.has(m[1])) shots.add(m[1].replace("_", ":"));
+    const id = m && m[1] && !known.has(m[1]) ? nodeIdFromSafe(m[1]) : null;
+    if (id) shots.add(id);
   }
   const exportedIds = new Set(layers.map((l) => l.id));
   for (const pd of index.pageDirs) {
@@ -2965,7 +2976,7 @@ function prototypeLinks(ac) {
     }
   }
   for (const [label, rows] of unexportedTargets) {
-    const list = rows.map(({ n, id }) => `'${n.destination ?? "an unnamed frame"}' (${id}) opened by '${n.node.name}'${shotIds.has(id) ? ` \u2014 screenshotted only (assets/${id.replace(/:/g, "_")}_ref.png)` : ""}`);
+    const list = rows.map(({ n, id }) => `'${n.destination ?? "an unnamed frame"}' (${id}) opened by '${n.node.name}'${shotIds.has(id) ? ` \u2014 screenshotted only (assets/${safe(id)}_ref.png)` : ""}`);
     const first = rows[0];
     add(
       "warning",

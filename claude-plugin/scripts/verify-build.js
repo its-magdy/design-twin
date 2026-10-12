@@ -656,6 +656,18 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
+// bridge/src/pages-layout.ts
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+
 // bridge/src/design-system-layout.ts
 var COMPONENTS_DIR = "components";
 var TOKENS = "tokens.json";
@@ -1332,10 +1344,6 @@ function exportDirOf(cwd) {
   const e = path6.join(cwd, EXPORT_DIR);
   return fs8.existsSync(path6.join(e, "pages")) ? e : path6.join(cwd, DESIGN_DIR);
 }
-var idFromStem = (s) => {
-  const m = /__(I?\d+)_(\d+)$/.exec(String(s || ""));
-  return m ? `${m[1]}:${m[2]}` : null;
-};
 function indexRows(exportDir) {
   const root = readJsonOrNull(path6.join(exportDir, "pages", "index.json"), isPagesRootIndex);
   if (!root) return [];
@@ -1359,7 +1367,7 @@ function locateExport(plan, planFile, cwd) {
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
   const rows = indexRows(exportDir);
-  const ids = [plan.nodeId, idFromStem(plan.screen), planFile ? idFromStem(path6.basename(planFile, ".json")) : null].filter((id) => !!id);
+  const ids = [plan.nodeId, nodeIdFromStem(plan.screen), planFile ? nodeIdFromStem(path6.basename(planFile, ".json")) : null].filter((id) => !!id);
   let row = null;
   for (const id of ids) {
     row = rows.find((r) => r.id === id) || null;
@@ -2061,7 +2069,7 @@ function locateReports(plan, planFile, cwd, exp) {
     planFile ? path6.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null
   ].filter((s) => !!s));
-  const nodeId = plan.nodeId || e && e.nodeId || idFromStem(plan.screen) || (planFile ? idFromStem(path6.basename(planFile, ".json")) : null);
+  const nodeId = plan.nodeId || e && e.nodeId || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path6.basename(planFile, ".json")) : null);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
   for (const f of fs8.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
@@ -2077,7 +2085,7 @@ function locateReports(plan, planFile, cwd, exp) {
       return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null;
     };
     if (stems.has(stem)) by = "name";
-    else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
+    else if (nodeId && (r.nodeId === nodeId || nodeIdFromStem(stem) === nodeId)) by = "nodeId";
     else if (nodeId && fs8.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;

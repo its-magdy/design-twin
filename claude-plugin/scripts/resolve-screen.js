@@ -256,10 +256,14 @@ function decode(s) {
     return s;
   }
 }
+var COLON_ID_RE = /^I?\d+:\d+(?:[;:]\d+:\d+)*$/;
+function isNodeId(s) {
+  return COLON_ID_RE.test(s);
+}
 function normalizeNodeId(raw) {
   if (!raw) return void 0;
   const s = decode(String(raw).trim()).replace(/-/g, ":");
-  return /^I?\d+:\d+(?:[;:]\d+:\d+)*$/.test(s) || /^\d+$/.test(s) ? s : void 0;
+  return COLON_ID_RE.test(s) || /^\d+$/.test(s) ? s : void 0;
 }
 function parseNodeId(input) {
   if (!input) return void 0;
@@ -275,6 +279,18 @@ function parseNodeId(input) {
 }
 function toNodeId(raw) {
   return parseNodeId(raw) || (raw == null ? "" : String(raw));
+}
+
+// bridge/src/pages-layout.ts
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
 }
 
 // design-to-code/map-util.ts
@@ -340,15 +356,14 @@ function listPlans(dir) {
 }
 
 // design-to-code/resolve-screen.ts
-var NODE_ID_RE2 = /^\d+:\d+$/;
-var BASENAME_ID_RE = /__(\d+)_(\d+)(?:\.[A-Za-z0-9-]+)*$/;
+var STEM_TAIL_RE = /(?:\.[A-Za-z0-9-]+)*$/;
 function queryIds(q) {
   const out = [];
   const base = q.split(/[\\/]/).pop() ?? q;
-  const m = BASENAME_ID_RE.exec(base);
-  if (m) out.push(`${m[1]}:${m[2]}`);
+  const carried = nodeIdFromStem(base.replace(STEM_TAIL_RE, ""));
+  if (carried) out.push(carried);
   const t = toNodeId(q);
-  if (t !== q && NODE_ID_RE2.test(t)) out.push(t);
+  if (t !== q && isNodeId(t)) out.push(t);
   return out;
 }
 function findExportRoot(dir) {
@@ -424,7 +439,7 @@ function resolveScreen(exportDir, query, opts) {
     const idMatches = rows.filter((r) => r.id === id);
     return idMatches.length === 1 ? idMatches[0] : void 0;
   };
-  const typed = NODE_ID_RE2.test(q) ? byId(q) : void 0;
+  const typed = isNodeId(q) ? byId(q) : void 0;
   if (typed) return { status: "resolved", row: typed, stage: "node id" };
   const plans = planRows(options.planDir);
   const planHit = qFold ? plans.filter((p) => fold(p.screenName) === qFold || fold(p.route) === qFold) : [];
@@ -451,7 +466,7 @@ function resolveScreen(exportDir, query, opts) {
       candidates: unionRows.map((u) => describe(u.row, [...u.via]))
     };
   }
-  for (const id of NODE_ID_RE2.test(q) ? [] : queryIds(q)) {
+  for (const id of isNodeId(q) ? [] : queryIds(q)) {
     const hit = byId(id);
     if (hit) return { status: "resolved", row: hit, stage: "node id" };
   }
@@ -536,7 +551,6 @@ function main(argv) {
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
-  NODE_ID_RE2 as NODE_ID_RE,
   allRows,
   describe,
   planRows,
