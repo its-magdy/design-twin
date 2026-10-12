@@ -14,11 +14,6 @@ function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
 
-// design-to-code/probe-steps.ts
-function isPlanExpect(x) {
-  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
-}
-
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -199,10 +194,6 @@ function isPlanDescope(x) {
   return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
-function isPlanInteraction(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
-}
-isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -252,6 +243,19 @@ import { fileURLToPath } from "node:url";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+function cliArity(tool, positionals, min, max, usage) {
+  if (positionals.length < min) {
+    console.error(usage);
+    return false;
+  }
+  if (positionals.length > max) {
+    console.error(`${tool}: unexpected argument ${positionals.slice(max).join(", ")}
+${usage}`);
+    return false;
+  }
+  return true;
+}
+var bareArgs = (argv) => argv[0] === "--" ? argv.slice(1) : argv;
 
 // design-to-code/catalog-input.ts
 function isManifest(doc, payloadKey) {
@@ -331,7 +335,9 @@ function main(argv) {
     console.log(usage);
     return 0;
   }
-  const [catalogFile, handle] = argv;
+  const positionals = bareArgs(argv);
+  if (!cliArity("get-component", positionals, 2, 2, usage)) return 2;
+  const [catalogFile, handle] = positionals;
   if (!catalogFile || !handle) {
     console.error(usage);
     return 2;

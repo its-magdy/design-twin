@@ -27,12 +27,12 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import crypto from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import type { InteractionEvidence, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
+import { runNode, type Run } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROBE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -44,9 +44,7 @@ export const READY = "[data-dt-node=\"70:1\"]";
 // the steps' sha: canonical JSON (sorted keys) — for one-key string steps that is JSON.stringify of the list
 export const stepsSha = crypto.createHash("sha256").update(JSON.stringify(STEPS)).digest("hex");
 
-// ms: spawn → close (never the time a run waited in a pool's queue); a spawn that fails (EAGAIN under load, a synchronous
-// throw) resolves as status null — a run never rejects, never hangs the suite
-export interface Run { status: number | null; stdout: string; stderr: string; ms: number }
+export type { Run };
 export const out = (name: string): string => path.join("design", "verify", name);
 export const ix = (m: VerifyMeasured | null, id: string): InteractionEvidence | undefined => (m?.interactions || []).find((i) => i.nodeId === id);
 /** the "had not finished loading after 10s" note of a document whose load timed out */
@@ -159,18 +157,9 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
   const url = (mode?: string): string => `http://127.0.0.1:${port}/plot-ledger.html${mode ? `?mode=${mode}` : ""}`;
   const edge = (mode: string): string => `http://127.0.0.1:${port}/plot-ledger-edge.html?mode=${mode}`;
 
-  // async spawn: the server lives in THIS process, so a spawnSync would block it from answering
-  const run = (script: string, args: string[]): Promise<Run> => new Promise((resolve) => {
-    const t0 = Date.now();
-    let p: ChildProcessWithoutNullStreams;
-    try { p = spawn(process.execPath, [script, ...args], { cwd: proj }); }
-    catch (e) { resolve({ status: null, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}\n`, ms: Date.now() - t0 }); return; }
-    let stdout = "", stderr = "";
-    p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-    p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-    p.on("error", (e) => resolve({ status: null, stdout, stderr: `${stderr}spawn failed: ${e.message}\n`, ms: Date.now() - t0 }));
-    p.on("close", (status) => resolve({ status, stdout, stderr, ms: Date.now() - t0 }));
-  });
+  // async spawn (runNode in ./pool.ts): the server lives in THIS process, so a spawnSync would block it from answering. A spawn
+  // that fails resolves as status null — run never rejects, never hangs the suite
+  const run = (script: string, args: string[]): Promise<Run> => runNode(proj, script, args);
   // These runs check reaching, measuring and driving — `--behaviour off` keeps them fast, except where a run says
   // `--behaviour on` (test/verify-probe-behaviour-e2e.test.ts runs the behaviour checks themselves)
   const probe = (args: string[]): Promise<Run> => {

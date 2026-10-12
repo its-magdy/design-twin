@@ -49,7 +49,7 @@ import { collectCandidates, focusablePath, focusInfo, freeHoverPoint, measureEle
 import type { Candidate, CollectOutput, MeasureInput, MeasureItem, Rect } from "./probe-page.ts";
 import { buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
 import type { Match, NoMatch, ResolvedFrame } from "./probe-match.ts";
-import { STYLE_KEYS } from "./verify-screen.ts";
+import { STYLE_KEYS } from "./verify-shared.ts";
 import { isVerifyExpectation } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
@@ -65,7 +65,7 @@ import { gitHead } from "./content-hash.ts";
 import { RunCacheUnwritable, RunEnded, TERMINAL_PHASES, liveStatusFile, readStatus, stageDirOf, writeStatus } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite } from "./verify-run.ts";
-import type { Expectation } from "./verify-screen.ts";
+import type { Expectation } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts";
 

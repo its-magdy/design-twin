@@ -134,7 +134,7 @@ function getOrInit(m, k, init) {
 function visibleInstances(doc, label) {
   const out = [];
   const roots = screenRoots(doc);
-  const walk2 = (n) => {
+  const walk3 = (n) => {
     if (!n || typeof n !== "object" || n.hidden === true) return;
     if (n.type === "INSTANCE" && n.mainComponent) {
       const mc = n.mainComponent;
@@ -150,9 +150,9 @@ function visibleInstances(doc, label) {
         props: n.props && typeof n.props === "object" ? n.props : {}
       });
     }
-    for (const c of n.children || []) walk2(c);
+    for (const c of n.children || []) walk3(c);
   };
-  for (const r of roots) walk2(r);
+  for (const r of roots) walk3(r);
   return out;
 }
 function parseVariant(s) {
@@ -375,28 +375,71 @@ function joinNegativeValues(argv, options) {
   }
   return out;
 }
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
 function cliParse(tool, argv, options, usage, exitCode, parse) {
   const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
   try {
-    return parse(args);
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
   } catch (e) {
     const code = errCode(e);
     if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-      const unknown = [...new Set(tokens.flatMap((t) => t.kind === "option" && !(t.name in options) ? [t.rawName] : []))];
-      console.error(`${tool}: unknown flag ${unknown.join(", ")}
-${usage}`);
+      failure = unknownFlags();
     } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
       const msg = e instanceof Error ? e.message : "";
-      const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
-      console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
-${usage}`);
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
     } else {
-      console.error(`${tool}: ${errMsg(e)}
-${usage}`);
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
     }
-    process.exit(exitCode);
   }
+  console.error(failure);
+  process.exit(exitCode);
 }
 
 // design-to-code/catalog-input.ts
@@ -625,11 +668,6 @@ function isCodeConnectMap(x) {
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
 if (false) process.exitCode = main(process.argv.slice(2));
 
-// design-to-code/probe-steps.ts
-function isPlanExpect(x) {
-  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
-}
-
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -810,10 +848,6 @@ function isPlanDescope(x) {
   return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
-function isPlanInteraction(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
-}
-isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -935,14 +969,14 @@ function readFrameTexts(file) {
   const doc = readJsonOrNull(file, isScreenDoc);
   if (!doc) return null;
   const all = [], shallow = [];
-  const walk2 = (n, depth) => {
+  const walk3 = (n, depth) => {
     if (n.type === "TEXT" && typeof n.text === "string" && n.text.trim()) {
       all.push(n.text);
       if (depth <= 6) shallow.push(n.text);
     }
-    for (const c of Array.isArray(n.children) ? n.children : []) walk2(c, depth + 1);
+    for (const c of Array.isArray(n.children) ? n.children : []) walk3(c, depth + 1);
   };
-  for (const r of screenRoots(doc)) walk2(r, 0);
+  for (const r of screenRoots(doc)) walk3(r, 0);
   return { all, shallow };
 }
 function findExportNeighbours(screenFile) {
@@ -1090,6 +1124,48 @@ function crossCheck(input) {
   const push = (severity, code, message, extra) => {
     findings.push(Object.assign({ severity, code, message }, extra || {}));
   };
+  const usage = screenUsage(screens);
+  const cc = { input, screens, variables, tokens, components, componentsLibrary, stylesText, catFile, LIST_LIBRARIES, EXPORT_LIBRARY, findings, notChecked, push, ...usage };
+  const prov = collectionProvenance(cc);
+  const sv = screenVariables(cc);
+  foreignNameMap(cc, prov, sv);
+  nameCollisions(cc, sv);
+  danglingTokens(cc, sv);
+  const { coverage, rekey, proposals } = catalogCoverage(cc);
+  fontStrays(cc);
+  textStyleStrays(cc);
+  sentinelValues(cc);
+  singleModeExport(cc, prov.screenColls);
+  mixedModeBindings(screens, variables, tokens, push);
+  contrastPerMode(screens, variables, tokens, push, cc.resolvedModes);
+  contrastRendered(screens, variables, tokens, push);
+  findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
+  const ids = findingIds(findings);
+  findings.forEach((f, i) => {
+    const id = ids[i];
+    if (id !== void 0) f.id = id;
+  });
+  const count = (s) => findings.filter((f) => f.severity === s).length;
+  return {
+    summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
+    coverage,
+    // The confirmation list (catalog-rekeyed). Every entry starts unconfirmed; map-bootstrap.ts
+    // --from-proposals stubs only the ones a person set "confirmed": true on.
+    // Unconfirmed first (shared chrome before screen-only), already-mapped last.
+    componentProposals: proposals,
+    componentResidual: rekey && coverage.rekey && coverage.rekey.rekeyed ? rekey.rows.filter((r) => !r.match).map((r) => ({ name: r.name, instances: r.instances, reasons: r.reasons })) : [],
+    findings,
+    notChecked,
+    inputs: {
+      screens: screens.map((s) => s.label),
+      variables: !!variables,
+      tokens: !!tokens,
+      components: !!components,
+      stylesText: !!stylesText
+    }
+  };
+}
+function screenUsage(screens) {
   const usedTokenNames = /* @__PURE__ */ new Map();
   const instances = [];
   const fonts = /* @__PURE__ */ new Map();
@@ -1128,6 +1204,10 @@ function crossCheck(input) {
       instances.push({ screen: label, nodeId: i.nodeId, name: i.layer, ...ifDefined("key", i.key), ...ifDefined("setKey", i.setKey), setName: i.name, propNames: Object.keys(i.props || {}) });
     }
   });
+  return { usedTokenNames, instances, fonts, textStyles, resolvedModes, visible };
+}
+function collectionProvenance(cc) {
+  const { input, tokens, variables, findings, notChecked, push, LIST_LIBRARIES, EXPORT_LIBRARY } = cc;
   const dsCollByKey = /* @__PURE__ */ new Map();
   const dsCollByName = /* @__PURE__ */ new Map();
   for (const c of tokens && tokens.collections || []) {
@@ -1170,6 +1250,10 @@ function crossCheck(input) {
       push("info", "token-library-matches", `all ${screenColls.length} variable collection(s) the screen binds resolve to the design-system export by key.`, {});
     }
   }
+  return { dsCollByKey, screenColls, foreignPatch };
+}
+function screenVariables(cc) {
+  const { input, screens, tokens, variables } = cc;
   const dsVarByName = /* @__PURE__ */ new Map();
   for (const v of tokens && tokens.variables || []) if (v.name) dsVarByName.set(v.name, v);
   const sliceSources = input.sliceSources || null;
@@ -1203,25 +1287,29 @@ function crossCheck(input) {
     const sc = v && v.key && sliceSources && sliceSources.get(v.key);
     return sc && sc.length ? ` (from ${sc.join(", ")})` : "";
   };
-  function flatten(v) {
-    const out = {};
-    for (const [mode, val] of Object.entries(v && v.values || {})) {
-      out[mode] = val && typeof val === "object" ? "aliasOf" in val ? "-> " + val.aliasOf : JSON.stringify(val) : String(val);
-    }
-    return out;
+  return { dsVarByName, sliceSources, varScope, screenVars, screenVarsByName, screenVarByName, shortKey, fromWhere };
+}
+function flatten(v) {
+  const out = {};
+  for (const [mode, val] of Object.entries(v && v.values || {})) {
+    out[mode] = val && typeof val === "object" ? "aliasOf" in val ? "-> " + val.aliasOf : JSON.stringify(val) : String(val);
   }
-  function valueSet(v) {
-    return new Set(Object.values(flatten(v)));
-  }
-  function sameResolution(a, b) {
-    const fa = flatten(a), fb = flatten(b);
-    const shared = Object.keys(fa).filter((m) => m in fb);
-    if (shared.length) return shared.every((m) => fa[m] === fb[m]);
-    const sa = valueSet(a), sb = valueSet(b);
-    if (!sa.size || !sb.size) return null;
-    for (const x of sa) if (sb.has(x)) return null;
-    return false;
-  }
+  return out;
+}
+function valueSet(v) {
+  return new Set(Object.values(flatten(v)));
+}
+function sameResolution(a, b) {
+  const fa = flatten(a), fb = flatten(b);
+  const shared = Object.keys(fa).filter((m) => m in fb);
+  if (shared.length) return shared.every((m) => fa[m] === fb[m]);
+  const sa = valueSet(a), sb = valueSet(b);
+  if (!sa.size || !sb.size) return null;
+  for (const x of sa) if (sb.has(x)) return null;
+  return false;
+}
+function foreignNameMap(cc, { dsCollByKey, screenColls, foreignPatch }, { screenVars, dsVarByName }) {
+  const { findings } = cc;
   if (foreignPatch) {
     const fp = foreignPatch;
     const foreignNames = new Set(fp.foreign.map((f2) => f2.name));
@@ -1260,6 +1348,10 @@ function crossCheck(input) {
       f.nameMap = ambiguous ? { ...nameMap, ambiguous } : nameMap;
     }
   }
+}
+function nameCollisions(cc, vars) {
+  const { tokens, usedTokenNames, push } = cc;
+  const { dsVarByName, varScope, screenVarsByName, screenVarByName, shortKey, fromWhere } = vars;
   if (tokens && screenVarByName.size) {
     const collisions = [], missing = [];
     for (const [name, list] of screenVarsByName) {
@@ -1303,29 +1395,7 @@ function crossCheck(input) {
       if (used) push("blocker", "token-name-collision", message, extra);
       else push("warning", "token-name-collision", message, { ...extra, confirm: `'${c.name}' has different values here and in the design system, but no visible layer on this screen binds it \u2014 which one is authoritative if it is used later?` });
     }
-    if (variables && varScope !== "union") {
-      const mine = new Set(screenVars.map((v) => v.key).filter(Boolean));
-      const unionByName = /* @__PURE__ */ new Map();
-      for (const v of variables && variables.variables || []) {
-        if (!v || !v.name || !v.key) continue;
-        getOrInit(unionByName, v.name, () => /* @__PURE__ */ new Map()).set(v.key, v);
-      }
-      for (const [name, byKey] of unionByName) {
-        if (byKey.size < 2) continue;
-        const all = [...byKey.values()];
-        const others = all.filter((v) => !mine.has(v.key));
-        if (!others.length) continue;
-        if (new Set(all.flatMap((v) => Object.values(flatten(v)))).size <= 1) continue;
-        if (all.every((v) => JSON.stringify(flatten(v)) === JSON.stringify(flatten(all[0])))) continue;
-        const ours = all.filter((v) => mine.has(v.key));
-        push(
-          "info",
-          "token-name-collision-elsewhere",
-          `'${name}' is ${all.length} different variables in the merged variables.json \u2014 ` + all.map((v) => `key ${shortKey(v)} = ${JSON.stringify(flatten(v))}${fromWhere(v)}`).join(" vs ") + ". " + (ours.length ? `THIS screen's own variables carry only key ${ours.map(shortKey).join(", ")}, so the ambiguity belongs to ${[...new Set(others.flatMap((v) => sliceSources && v.key && sliceSources.get(v.key) || []))].join(", ") || "another screen"} \u2014 do not change this screen's value to match it.` : `THIS screen carries none of them.`) + ` Generate this screen's theme from its own .vars.json (or design-system/tokens.json), not from the union.`,
-          { token: name, keys: all.map((v) => v.key), mine: ours.map((v) => v.key) }
-        );
-      }
-    }
+    collisionsElsewhere(cc, vars);
     if (missing.length) {
       push(
         "warning",
@@ -1335,6 +1405,36 @@ function crossCheck(input) {
       );
     }
   }
+}
+function collisionsElsewhere(cc, sv) {
+  const { variables, push } = cc;
+  const { sliceSources, varScope, screenVars, shortKey, fromWhere } = sv;
+  if (variables && varScope !== "union") {
+    const mine = new Set(screenVars.map((v) => v.key).filter(Boolean));
+    const unionByName = /* @__PURE__ */ new Map();
+    for (const v of variables && variables.variables || []) {
+      if (!v || !v.name || !v.key) continue;
+      getOrInit(unionByName, v.name, () => /* @__PURE__ */ new Map()).set(v.key, v);
+    }
+    for (const [name, byKey] of unionByName) {
+      if (byKey.size < 2) continue;
+      const all = [...byKey.values()];
+      const others = all.filter((v) => !mine.has(v.key));
+      if (!others.length) continue;
+      if (new Set(all.flatMap((v) => Object.values(flatten(v)))).size <= 1) continue;
+      if (all.every((v) => JSON.stringify(flatten(v)) === JSON.stringify(flatten(all[0])))) continue;
+      const ours = all.filter((v) => mine.has(v.key));
+      push(
+        "info",
+        "token-name-collision-elsewhere",
+        `'${name}' is ${all.length} different variables in the merged variables.json \u2014 ` + all.map((v) => `key ${shortKey(v)} = ${JSON.stringify(flatten(v))}${fromWhere(v)}`).join(" vs ") + ". " + (ours.length ? `THIS screen's own variables carry only key ${ours.map(shortKey).join(", ")}, so the ambiguity belongs to ${[...new Set(others.flatMap((v) => sliceSources && v.key && sliceSources.get(v.key) || []))].join(", ") || "another screen"} \u2014 do not change this screen's value to match it.` : `THIS screen carries none of them.`) + ` Generate this screen's theme from its own .vars.json (or design-system/tokens.json), not from the union.`,
+        { token: name, keys: all.map((v) => v.key), mine: ours.map((v) => v.key) }
+      );
+    }
+  }
+}
+function danglingTokens(cc, { dsVarByName, varScope, screenVarByName }) {
+  const { variables, usedTokenNames, push } = cc;
   if (variables || varScope === "own") {
     const dangling = [];
     for (const name of usedTokenNames.keys()) {
@@ -1350,6 +1450,9 @@ function crossCheck(input) {
       );
     }
   }
+}
+function catalogCoverage(cc) {
+  const { input, components, componentsLibrary, catFile, EXPORT_LIBRARY, visible, instances, notChecked, push } = cc;
   let rekey = null;
   let proposals = [];
   const coverage = { instances: instances.length, distinct: 0, matchedByKey: 0, matchedByLocalKey: 0, matchedByName: 0, ambiguousName: 0, unmatched: 0, pct: null, localPct: null, entries: [] };
@@ -1361,59 +1464,7 @@ function crossCheck(input) {
   } else if (!instances.length) {
     notChecked.push("component coverage \u2014 the screen export contains no INSTANCE nodes to compare.");
   } else {
-    const byKey = /* @__PURE__ */ new Map();
-    for (const c of catalog) if (c.key) byKey.set(c.key, c);
-    rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
-    const rowByName = new Map((rekey ? rekey.rows : []).map((r) => [r.name, r]));
-    const distinct = /* @__PURE__ */ new Map();
-    for (const i of instances) {
-      const id = i.setKey || i.key || "name:" + alnumKey(i.setName);
-      getOrInit(distinct, id, () => Object.assign({ count: 0 }, i)).count++;
-    }
-    coverage.distinct = distinct.size;
-    for (const i of distinct.values()) {
-      const byKeyHit = i.setKey && byKey.get(i.setKey) || i.key && byKey.get(i.key);
-      if (byKeyHit) {
-        coverage.matchedByKey++;
-        const local = !!byKeyHit.key && localKeys.has(byKeyHit.key);
-        if (local) coverage.matchedByLocalKey++;
-        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
-        continue;
-      }
-      const row = rowByName.get(i.setName);
-      const verdict = row ? nameVerdict(row) : null;
-      const matched = row && verdict && verdict.status === "matched" ? row.match : null;
-      if (row && matched) {
-        coverage.matchedByName++;
-        const cat = localComps.find((c) => matched.key ? c.key === matched.key : matched.id !== void 0 && c.id === matched.id);
-        const props = Object.keys(cat && cat.props || {}).map((p) => alnumKey(String(p).split("#")[0]));
-        const hit = i.propNames.filter((p) => props.includes(alnumKey(String(p).split("#")[0]))).length;
-        coverage.entries.push({
-          setName: i.setName,
-          ...ifDefined("key", i.setKey || i.key),
-          matchedBy: "name",
-          verified: false,
-          catalogName: matched.name,
-          ...ifDefined("catalogKey", matched.key),
-          ...ifDefined("evidence", row.evidence),
-          propOverlap: `${hit}/${i.propNames.length}`,
-          instances: i.count
-        });
-      } else if (row && verdict && verdict.status === "ambiguous") {
-        coverage.ambiguousName++;
-        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: (row.candidates || []).length, reason: verdict.reason, instances: i.count });
-      } else {
-        coverage.unmatched++;
-        coverage.entries.push({
-          setName: i.setName,
-          ...ifDefined("key", i.setKey || i.key),
-          matchedBy: null,
-          verified: false,
-          reason: verdict ? verdict.reason : `no ${catFile} to match names against (a components.library.json name alone is not a match)`,
-          instances: i.count
-        });
-      }
-    }
+    rekey = coverageEntries(cc, coverage, localComps, localKeys, catalog);
     coverage.pct = Math.round(coverage.matchedByKey / coverage.distinct * 100);
     coverage.localPct = Math.round(coverage.matchedByLocalKey / coverage.distinct * 100);
     const rekeyedBy = rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey) ? rekey : null;
@@ -1427,17 +1478,7 @@ function crossCheck(input) {
       buckets[b]++;
     }
     coverage.buckets = buckets;
-    const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + alnumKey(i.setName)));
-    const hiddenOnly = /* @__PURE__ */ new Set();
-    const everyInstance = (n) => {
-      if (!n || typeof n !== "object") return;
-      if (n.type === "INSTANCE" && n.mainComponent) {
-        const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + alnumKey(mc.setName || mc.name);
-        if (!visibleSets.has(id)) hiddenOnly.add(id);
-      }
-      for (const c of n.children || []) everyInstance(c);
-    };
-    for (const s of screens) for (const root of screenRoots(s.doc)) everyInstance(root);
+    const hiddenOnly = hiddenOnlyComponents(cc);
     coverage.hiddenOnly = hiddenOnly.size;
     if (rekeyedBy) {
       const s = rekeyedBy.summary;
@@ -1470,26 +1511,106 @@ function crossCheck(input) {
     } else {
       push("info", "catalog-covers-screen", `all ${coverage.distinct} component(s) on this screen resolve to ${catFile} by key.`, {});
     }
-    const named = coverage.entries.filter((e) => e.matchedBy === "name" && !proposedNames.has(e.setName));
-    if (named.length) {
-      push(
-        "info",
-        "name-matched-components",
-        `${named.length} component(s) have no key in the catalog but DO have an exact name twin there whose prop signature agrees: ` + named.slice(0, 10).map((e) => `'${e.setName}' (${e.evidence === "name+no-props" ? "no props to compare" : `props ${e.propOverlap}`})`).join(", ") + (named.length > 10 ? `, \u2026` : "") + `. Mapped BY NAME, UNVERIFIED \u2014 confirm one with "Go to main component" before reusing any of their code; if that one instance points at the catalog's file, the rest almost certainly do too.`,
-        { components: named.map((e) => ({ setName: e.setName, ...ifDefined("catalogName", e.catalogName), ...ifDefined("catalogKey", e.catalogKey), ...ifDefined("propOverlap", e.propOverlap), verified: false })) }
-      );
+    nameMatchFindings(cc, coverage, proposedNames);
+  }
+  return { coverage, rekey, proposals };
+}
+function coverageEntries(cc, coverage, localComps, localKeys, catalog) {
+  const { components, componentsLibrary, visible, instances, catFile } = cc;
+  const byKey = /* @__PURE__ */ new Map();
+  for (const c of catalog) if (c.key) byKey.set(c.key, c);
+  const rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
+  const rowByName = new Map((rekey ? rekey.rows : []).map((r) => [r.name, r]));
+  const distinct = /* @__PURE__ */ new Map();
+  for (const i of instances) {
+    const id = i.setKey || i.key || "name:" + alnumKey(i.setName);
+    getOrInit(distinct, id, () => Object.assign({ count: 0 }, i)).count++;
+  }
+  coverage.distinct = distinct.size;
+  for (const i of distinct.values()) {
+    const byKeyHit = i.setKey && byKey.get(i.setKey) || i.key && byKey.get(i.key);
+    if (byKeyHit) {
+      coverage.matchedByKey++;
+      const local = !!byKeyHit.key && localKeys.has(byKeyHit.key);
+      if (local) coverage.matchedByLocalKey++;
+      coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
+      continue;
     }
-    const amb = coverage.entries.filter((e) => e.ambiguous && !proposedNames.has(e.setName));
-    const firstAmb = amb[0];
-    if (firstAmb) {
-      push(
-        "warning",
-        "ambiguous-component-name",
-        `${amb.length} component(s) share their name with SEVERAL catalog entries, and no prop signature picks one of them, so they were left unmatched on purpose: ` + amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", \u2026" : "") + `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed \u2014 binding code to one of them by name would be a guess with a 1-in-${firstAmb.candidates} chance.`,
-        { components: amb.map((e) => ({ setName: e.setName, ...ifDefined("candidates", e.candidates) })) }
-      );
+    const row = rowByName.get(i.setName);
+    const verdict = row ? nameVerdict(row) : null;
+    const matched = row && verdict && verdict.status === "matched" ? row.match : null;
+    if (row && matched) {
+      coverage.matchedByName++;
+      const cat = localComps.find((c) => matched.key ? c.key === matched.key : matched.id !== void 0 && c.id === matched.id);
+      const props = Object.keys(cat && cat.props || {}).map((p) => alnumKey(String(p).split("#")[0]));
+      const hit = i.propNames.filter((p) => props.includes(alnumKey(String(p).split("#")[0]))).length;
+      coverage.entries.push({
+        setName: i.setName,
+        ...ifDefined("key", i.setKey || i.key),
+        matchedBy: "name",
+        verified: false,
+        catalogName: matched.name,
+        ...ifDefined("catalogKey", matched.key),
+        ...ifDefined("evidence", row.evidence),
+        propOverlap: `${hit}/${i.propNames.length}`,
+        instances: i.count
+      });
+    } else if (row && verdict && verdict.status === "ambiguous") {
+      coverage.ambiguousName++;
+      coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: (row.candidates || []).length, reason: verdict.reason, instances: i.count });
+    } else {
+      coverage.unmatched++;
+      coverage.entries.push({
+        setName: i.setName,
+        ...ifDefined("key", i.setKey || i.key),
+        matchedBy: null,
+        verified: false,
+        reason: verdict ? verdict.reason : `no ${catFile} to match names against (a components.library.json name alone is not a match)`,
+        instances: i.count
+      });
     }
   }
+  return rekey;
+}
+function hiddenOnlyComponents(cc) {
+  const { screens, instances } = cc;
+  const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + alnumKey(i.setName)));
+  const hiddenOnly = /* @__PURE__ */ new Set();
+  const everyInstance = (n) => {
+    if (!n || typeof n !== "object") return;
+    if (n.type === "INSTANCE" && n.mainComponent) {
+      const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + alnumKey(mc.setName || mc.name);
+      if (!visibleSets.has(id)) hiddenOnly.add(id);
+    }
+    for (const c of n.children || []) everyInstance(c);
+  };
+  for (const s of screens) for (const root of screenRoots(s.doc)) everyInstance(root);
+  return hiddenOnly;
+}
+function nameMatchFindings(cc, coverage, proposedNames) {
+  const { push } = cc;
+  const named = coverage.entries.filter((e) => e.matchedBy === "name" && !proposedNames.has(e.setName));
+  if (named.length) {
+    push(
+      "info",
+      "name-matched-components",
+      `${named.length} component(s) have no key in the catalog but DO have an exact name twin there whose prop signature agrees: ` + named.slice(0, 10).map((e) => `'${e.setName}' (${e.evidence === "name+no-props" ? "no props to compare" : `props ${e.propOverlap}`})`).join(", ") + (named.length > 10 ? `, \u2026` : "") + `. Mapped BY NAME, UNVERIFIED \u2014 confirm one with "Go to main component" before reusing any of their code; if that one instance points at the catalog's file, the rest almost certainly do too.`,
+      { components: named.map((e) => ({ setName: e.setName, ...ifDefined("catalogName", e.catalogName), ...ifDefined("catalogKey", e.catalogKey), ...ifDefined("propOverlap", e.propOverlap), verified: false })) }
+    );
+  }
+  const amb = coverage.entries.filter((e) => e.ambiguous && !proposedNames.has(e.setName));
+  const firstAmb = amb[0];
+  if (firstAmb) {
+    push(
+      "warning",
+      "ambiguous-component-name",
+      `${amb.length} component(s) share their name with SEVERAL catalog entries, and no prop signature picks one of them, so they were left unmatched on purpose: ` + amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", \u2026" : "") + `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed \u2014 binding code to one of them by name would be a guess with a 1-in-${firstAmb.candidates} chance.`,
+      { components: amb.map((e) => ({ setName: e.setName, ...ifDefined("candidates", e.candidates) })) }
+    );
+  }
+}
+function fontStrays(cc) {
+  const { stylesText, fonts, push } = cc;
   const sorted = [...fonts.entries()].sort((a, b) => b[1] - a[1]);
   const [main2, ...strays] = sorted;
   if (fonts.size > 1 && main2) {
@@ -1499,7 +1620,7 @@ function crossCheck(input) {
       "warning",
       "font-family-stray",
       `${total} text node(s) use ${sorted.length} different font families: ${sorted.map(([f, c]) => `${f} (${c})`).join(", ")}. '${mainFamily}' carries ${mainCount}; the rest are strays \u2014 usually a starter-kit style (Figma's Material 3 kit leaks \`material-theme/*\`) left on a layer. Ask the designer before shipping a second webfont for ${strays.reduce((n, [, c]) => n + c, 0)} node(s).`,
-      { families: sorted.map(([family, count2]) => ({ family, count: count2 })) }
+      { families: sorted.map(([family, count]) => ({ family, count })) }
     );
   }
   if (stylesText && fonts.size) {
@@ -1514,6 +1635,9 @@ function crossCheck(input) {
       );
     }
   }
+}
+function textStyleStrays(cc) {
+  const { stylesText, textStyles, push } = cc;
   if (stylesText && stylesText.styles && textStyles.size) {
     const dsByName = new Map((stylesText.styles || []).map((s) => [s.name, s]));
     const dsNorm = /* @__PURE__ */ new Map();
@@ -1542,6 +1666,9 @@ function crossCheck(input) {
       );
     }
   }
+}
+function sentinelValues(cc) {
+  const { tokens, variables, push } = cc;
   const absurd = [];
   const seenAbsurd = /* @__PURE__ */ new Set();
   const allVars = (tokens && tokens.variables || []).concat(variables && variables.variables || []);
@@ -1564,6 +1691,9 @@ function crossCheck(input) {
       { tokens: absurd }
     );
   }
+}
+function singleModeExport(cc, screenColls) {
+  const { tokens, variables, resolvedModes, push } = cc;
   const multiModeColls = [];
   const seenColl = /* @__PURE__ */ new Set();
   const allColls = (tokens && tokens.collections || []).concat(screenColls);
@@ -1589,34 +1719,6 @@ function crossCheck(input) {
       );
     }
   }
-  mixedModeBindings(screens, variables, tokens, push);
-  contrastPerMode(screens, variables, tokens, push, resolvedModes);
-  contrastRendered(screens, variables, tokens, push);
-  findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
-  const ids = findingIds(findings);
-  findings.forEach((f, i) => {
-    const id = ids[i];
-    if (id !== void 0) f.id = id;
-  });
-  const count = (s) => findings.filter((f) => f.severity === s).length;
-  return {
-    summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
-    coverage,
-    // The confirmation list (catalog-rekeyed). Every entry starts unconfirmed; map-bootstrap.ts
-    // --from-proposals stubs only the ones a person set "confirmed": true on.
-    // Unconfirmed first (shared chrome before screen-only), already-mapped last.
-    componentProposals: proposals,
-    componentResidual: rekey && coverage.rekey && coverage.rekey.rekeyed ? rekey.rows.filter((r) => !r.match).map((r) => ({ name: r.name, instances: r.instances, reasons: r.reasons })) : [],
-    findings,
-    notChecked,
-    inputs: {
-      screens: screens.map((s) => s.label),
-      variables: !!variables,
-      tokens: !!tokens,
-      components: !!components,
-      stylesText: !!stylesText
-    }
-  };
 }
 function labelProposals(rekey, visible, map, siblings) {
   const mapKeys = /* @__PURE__ */ new Set();
@@ -2017,6 +2119,9 @@ function isRasterShell(rasters, paths) {
   return (rasters ?? 0) > 0 && (paths ?? 0) < RASTER_SHELL_MAX_PATHS;
 }
 
+// bridge/src/instance-overrides.ts
+var OVERRIDE_CAP = 100;
+
 // design-to-code/audit.ts
 var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
 var PLATFORMS = Object.keys(TOUCH_MIN);
@@ -2183,6 +2288,92 @@ function audit(input, opts = {}) {
   const roots = docs.flatMap((d) => labelledRoots(d.doc, d.label));
   const catalog = opts.catalog && Array.isArray(opts.catalog.components) ? opts.catalog.components : [];
   const findings = [];
+  const binding = { color: [0, 0], typography: [0, 0], spacing: [0, 0], radius: [0, 0], effects: [0, 0] };
+  const tally = (cat, bound) => {
+    binding[cat][1]++;
+    if (bound) binding[cat][0]++;
+  };
+  const ac = {
+    opts,
+    platform,
+    grid,
+    docs,
+    roots,
+    catalog,
+    findings,
+    add: makeAdd(findings),
+    binding,
+    tally,
+    rawColors: /* @__PURE__ */ new Map(),
+    // hex -> { count, sample node, channels }
+    usedComponents: /* @__PURE__ */ new Map(),
+    // setKey|key|name -> { name, kind }
+    stateHits: { loading: [], empty: [], error: [] },
+    validationHits: [],
+    inputsSeen: 0,
+    // visible input controls — whether a validation state applies at all
+    annotations: [],
+    hiddenIds: /* @__PURE__ */ new Set(),
+    // every node skipped by the hidden predicate — cross-file findings are filtered by it too
+    nodesById: /* @__PURE__ */ new Map(),
+    // visible nodes, so a finding raised off-tree (a heavy asset) can cite one
+    // Prototype links out of this screen, one row per destination: the export has them, and a
+    // link copied along with a layer ("every row opens the Details screen") is invisible until clicked.
+    navigations: /* @__PURE__ */ new Map(),
+    // Sublayer ids (I<inst>;<layer>) whose `characters` some instance overrides, the instances whose list hit
+    // the plugin's cap (incomplete), and every visible instance text that is not driven by a TEXT property.
+    charOverridden: /* @__PURE__ */ new Set(),
+    cappedInstances: /* @__PURE__ */ new Set(),
+    instanceTexts: [],
+    // Failing control boundaries, one entry per screen + stroke + backdrop.
+    boundaries: /* @__PURE__ */ new Map(),
+    // Input instances that read like a select/picker ("Select …", a chevron/calendar layer).
+    pickers: []
+  };
+  walkRoots(ac);
+  const raws = nearDuplicateColors(ac);
+  const nearToken = nearTokenColors(ac, raws);
+  nonTextContrast(ac);
+  const copyQuestions = defaultCopyInInstances(ac);
+  duplicateRootSubtrees(ac);
+  const lookup = stateLookup(ac);
+  const { components, unchecked } = componentStates(ac, lookup);
+  const openStates = undesignedOpenStates(ac, lookup);
+  const { allDialogs, screenStates, screenStatesScope } = screenStatesOf(ac);
+  heavyAssets(ac);
+  prototypeLinks(ac);
+  const tokenBinding = tokenBindingOf(ac);
+  const questions = openQuestions(ac, { allDialogs, screenStates, unchecked, components, copyQuestions, openStates, nearToken });
+  const { crossFile, crossOrigin, hiddenFindingsOmitted } = crossFilePass(ac);
+  libraryNotes(ac, crossFile, lookup.screenCollKeys);
+  const overridesUnmatched = applyOverrides(ac, crossFile, crossOrigin);
+  finishFindings(ac, questions);
+  const count = (s) => findings.filter((f) => f.severity === s).length;
+  return {
+    platform,
+    platformAssumed,
+    crossFile,
+    grid,
+    gridAssumed,
+    gridMismatch,
+    screenStatesScope,
+    screens: roots.map((r) => r.label),
+    // The root node id(s) audited — additive, read only by the CLI's duplicate-artefact
+    // check: it lets a re-run find an EARLIER report for the same screen under a
+    // different name without re-parsing every screen export in the directory.
+    nodeIds: roots.map((r) => r.tree && r.tree.id).filter((id) => !!id),
+    summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
+    hiddenLayers: { nodesSkipped: ac.hiddenIds.size, crossFileFindingsOmitted: hiddenFindingsOmitted },
+    ...overridesUnmatched.length ? { overridesUnmatched } : {},
+    tokenBinding,
+    components,
+    screenStates,
+    annotations: ac.annotations,
+    questions,
+    findings
+  };
+}
+function makeAdd(findings) {
   const placeOf = (ctx) => ({ screen: ctx.label, ...ifDefined("path", ctx.path) });
   function add(severity, code, message, node, ctx, extra) {
     return findings.push(Object.assign(
@@ -2192,25 +2383,10 @@ function audit(input, opts = {}) {
       extra || {}
     ));
   }
-  const binding = { color: [0, 0], typography: [0, 0], spacing: [0, 0], radius: [0, 0], effects: [0, 0] };
-  const tally = (cat, bound) => {
-    binding[cat][1]++;
-    if (bound) binding[cat][0]++;
-  };
-  const rawColors = /* @__PURE__ */ new Map();
-  const usedComponents = /* @__PURE__ */ new Map();
-  const stateHits = { loading: [], empty: [], error: [] };
-  const validationHits = [];
-  let inputsSeen = 0;
-  const annotations = [];
-  const hiddenIds = /* @__PURE__ */ new Set();
-  const nodesById = /* @__PURE__ */ new Map();
-  const navigations = /* @__PURE__ */ new Map();
-  const charOverridden = /* @__PURE__ */ new Set();
-  const cappedInstances = /* @__PURE__ */ new Set();
-  const instanceTexts = [];
-  const boundaries = /* @__PURE__ */ new Map();
-  const pickers = [];
+  return add;
+}
+function walkRoots(ac) {
+  const { roots, add } = ac;
   for (const root of roots) {
     const m = root.manifest || {};
     if (m.truncated) add("blocker", "export-truncated", `export of '${root.label}' was truncated (${m.truncated} subtree(s) past the depth limit) \u2014 the tree is incomplete; re-export a narrower scope before building`, null, { label: root.label });
@@ -2218,263 +2394,270 @@ function audit(input, opts = {}) {
     if (root.tree.devStatus && root.tree.devStatus !== "ready_for_dev" && root.tree.devStatus !== "completed") {
       add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${String(root.tree.devStatus)}' \u2014 confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
     }
-    walk2(root.tree, [], { label: root.label, ...ifDefined("rootBox", root.tree.box) });
+    walk2(ac, root.tree, [], { label: root.label, ...ifDefined("rootBox", root.tree.box) });
   }
-  function walk2(node, ancestors, ctx) {
-    if (!node || typeof node !== "object") return;
-    const path7 = [...ancestors.map((a) => a.name), node.name].join(" > ");
-    const here = { label: ctx.label, path: path7 };
-    const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
-    if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
-    if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
-    for (const state of STATE_KEYS) {
-      const re = STATE_WORDS[state];
-      if (re.test(node.name || "") || node.type === "TEXT" && (state === "empty" || ancestors.length <= 6) && re.test(node.text || "")) {
-        stateHits[state].push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
+}
+function walk2(ac, node, ancestors, ctx) {
+  const { platform, grid, add, tally, annotations, stateHits, validationHits, cappedInstances, charOverridden, hiddenIds, nodesById, usedComponents, pickers, navigations, instanceTexts } = ac;
+  if (!node || typeof node !== "object") return;
+  const path7 = [...ancestors.map((a) => a.name), node.name].join(" > ");
+  const here = { label: ctx.label, path: path7 };
+  const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
+  if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
+  if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
+  for (const state of STATE_KEYS) {
+    const re = STATE_WORDS[state];
+    if (re.test(node.name || "") || node.type === "TEXT" && (state === "empty" || ancestors.length <= 6) && re.test(node.text || "")) {
+      stateHits[state].push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
+    }
+  }
+  const variantValues = variantValuesOf(node.mainComponent);
+  if (node.type === "TEXT" && VALIDATION_WORDS.test(node.text || "") || VALIDATION_WORDS.test(node.name || "") || isField(controlKind(node.mainComponent && node.mainComponent.setName || node.component)) && variantValues.some((v) => STATE_SYNONYMS.error.test(v))) {
+    validationHits.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
+  }
+  if (Array.isArray(node.overrides)) {
+    if (node.overrides.length >= OVERRIDE_CAP) cappedInstances.add(node.id);
+    for (const o of node.overrides) if (Array.isArray(o.fields) && o.fields.includes("characters")) charOverridden.add(o.id);
+  }
+  if (hiddenBranch) {
+    if (node.id) hiddenIds.add(node.id);
+    const self = { name: node.name, hidden: true, fills: [], __tappable: false, __beneath: [] };
+    for (const child of Array.isArray(node.children) ? node.children : []) walk2(ac, child, [...ancestors, self], ctx);
+    return;
+  }
+  if (node.id) nodesById.set(node.id, node);
+  if (node.mainComponent || node.component) {
+    const mc = node.mainComponent || {};
+    const name = mc.setName || node.component;
+    const key = mc.setKey || mc.key || name;
+    const icon = !!(node.asset || node.geometry || node.assetSkipped) && !CONTROL_WORD.test(String(name || ""));
+    if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), ...ifDefined("variantKey", mc.key), remote: !!mc.remote, nodeId: node.id, ...icon ? { icon: true } : {} });
+    if (!icon && isField(controlKind(name)) && !/\b(search|filter)/i.test(String(name || ""))) ac.inputsSeen++;
+    if (!icon && node.type === "INSTANCE" && key && controlKind(name) === "input" && !/\b(search|filter)/i.test(String(name || "")) && !ancestors.some((a) => a.id !== void 0 && pickers.some((p) => p.node.id === a.id))) {
+      const cue = pickerCue(node);
+      if (cue) pickers.push({ node, here, useKey: key, cue });
+    }
+  }
+  for (const r of Array.isArray(node.reactions) ? node.reactions : []) {
+    for (const a of Array.isArray(r.actions) ? r.actions : []) {
+      if (a.type !== "node" || !(a.destination || a.destinationId) || a.navigation === "change_to" || a.navigation === "scroll_to") continue;
+      const nav = a.navigation || "navigate";
+      const id = nav + "|" + (a.destinationId || a.destination);
+      const row = navigations.get(id);
+      if (row) row.count++;
+      else navigations.set(id, { destination: a.destination, destinationId: a.destinationId, navigation: nav, count: 1, node, label: ctx.label });
+    }
+  }
+  if (node.detachedFrom) add("warning", "detached-instance", `'${node.name}' is a detached component instance \u2014 map it back to the component unless the detach was deliberate`, node, here);
+  if (node.missingFont) add("blocker", "missing-font", `'${node.name}' uses a font Figma couldn't load \u2014 the recorded family/weight may not match the render; confirm the font files and license`, node, here);
+  if (node.layout && node.layout.mode === "absolute" && Array.isArray(node.children) && node.children.length > 1 && node.type !== "GROUP" && ancestors.length > 0) {
+    add("info", "no-auto-layout", `'${node.name}' has no auto layout (${node.children.length} children placed by coordinates) \u2014 infer a flow layout and ask how it should resize`, node, here);
+  }
+  const flow = Array.isArray(node.children) ? node.children.filter((c) => c && !hiddenSelf(c) && !c.absolute) : [];
+  if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && flow.length) {
+    const [padTop, , padBottom] = node.layout.padding;
+    const kids = flow.filter((c) => !!(c.box && typeof c.box.h === "number"));
+    if (kids.length === flow.length && padTop !== void 0 && padBottom !== void 0) {
+      const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
+      const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
+      let expectedH = null;
+      if (direction === "row") expectedH = padTop + padBottom + Math.max(...kids.map((c) => c.box.h));
+      else if (direction === "column") expectedH = padTop + padBottom + kids.reduce((s, c) => s + c.box.h, 0) + gap * (kids.length - 1);
+      const heightMode = node.heightMode || "fixed";
+      const delta = expectedH === null ? 0 : expectedH - node.box.h;
+      const overflow = expectedH !== null && delta > 1;
+      const hugMismatch = expectedH !== null && heightMode === "hug" && Math.abs(delta) > 1;
+      if (expectedH !== null && (overflow || hugMismatch)) {
+        const how = direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom);
+        const why = heightMode === "hug" ? `heightMode:"hug" means this box's height IS the content height, but its own padding + children compute ${expectedH}, not the declared ${node.box.h}` : `content (padding + children) computes ${expectedH}, which OVERFLOWS the declared box.h=${node.box.h} by ${delta}px`;
+        add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h} (heightMode:${JSON.stringify(heightMode)}) \u2014 ${why}: ${padTop}+${how}+${padBottom} = ${expectedH}. The export contradicts itself \u2014 decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH, heightMode });
       }
     }
-    const variantValues = variantValuesOf(node.mainComponent);
-    if (node.type === "TEXT" && VALIDATION_WORDS.test(node.text || "") || VALIDATION_WORDS.test(node.name || "") || isField(controlKind(node.mainComponent && node.mainComponent.setName || node.component)) && variantValues.some((v) => STATE_SYNONYMS.error.test(v))) {
-      validationHits.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
-    }
-    if (Array.isArray(node.overrides)) {
-      if (node.overrides.length >= 100) cappedInstances.add(node.id);
-      for (const o of node.overrides) if (Array.isArray(o.fields) && o.fields.includes("characters")) charOverridden.add(o.id);
-    }
-    if (hiddenBranch) {
-      if (node.id) hiddenIds.add(node.id);
-      const self = { name: node.name, hidden: true, fills: [], __tappable: false, __beneath: [] };
-      for (const child of Array.isArray(node.children) ? node.children : []) walk2(child, [...ancestors, self], ctx);
-      return;
-    }
-    if (node.id) nodesById.set(node.id, node);
-    if (node.mainComponent || node.component) {
-      const mc = node.mainComponent || {};
-      const name = mc.setName || node.component;
-      const key = mc.setKey || mc.key || name;
-      const icon = !!(node.asset || node.geometry || node.assetSkipped) && !CONTROL_WORD.test(String(name || ""));
-      if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), ...ifDefined("variantKey", mc.key), remote: !!mc.remote, nodeId: node.id, ...icon ? { icon: true } : {} });
-      if (!icon && isField(controlKind(name)) && !/\b(search|filter)/i.test(String(name || ""))) inputsSeen++;
-      if (!icon && node.type === "INSTANCE" && key && controlKind(name) === "input" && !/\b(search|filter)/i.test(String(name || "")) && !ancestors.some((a) => a.id !== void 0 && pickers.some((p) => p.node.id === a.id))) {
-        const cue = pickerCue(node);
-        if (cue) pickers.push({ node, here, useKey: key, cue });
-      }
-    }
-    for (const r of Array.isArray(node.reactions) ? node.reactions : []) {
-      for (const a of Array.isArray(r.actions) ? r.actions : []) {
-        if (a.type !== "node" || !(a.destination || a.destinationId) || a.navigation === "change_to" || a.navigation === "scroll_to") continue;
-        const nav = a.navigation || "navigate";
-        const id = nav + "|" + (a.destinationId || a.destination);
-        const row = navigations.get(id);
-        if (row) row.count++;
-        else navigations.set(id, { destination: a.destination, destinationId: a.destinationId, navigation: nav, count: 1, node, label: ctx.label });
-      }
-    }
-    if (node.detachedFrom) add("warning", "detached-instance", `'${node.name}' is a detached component instance \u2014 map it back to the component unless the detach was deliberate`, node, here);
-    if (node.missingFont) add("blocker", "missing-font", `'${node.name}' uses a font Figma couldn't load \u2014 the recorded family/weight may not match the render; confirm the font files and license`, node, here);
-    if (node.layout && node.layout.mode === "absolute" && Array.isArray(node.children) && node.children.length > 1 && node.type !== "GROUP" && ancestors.length > 0) {
-      add("info", "no-auto-layout", `'${node.name}' has no auto layout (${node.children.length} children placed by coordinates) \u2014 infer a flow layout and ask how it should resize`, node, here);
-    }
-    const flow = Array.isArray(node.children) ? node.children.filter((c) => c && !hiddenSelf(c) && !c.absolute) : [];
-    if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && flow.length) {
-      const [padTop, , padBottom] = node.layout.padding;
-      const kids = flow.filter((c) => !!(c.box && typeof c.box.h === "number"));
-      if (kids.length === flow.length && padTop !== void 0 && padBottom !== void 0) {
-        const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
-        const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
-        let expectedH = null;
-        if (direction === "row") expectedH = padTop + padBottom + Math.max(...kids.map((c) => c.box.h));
-        else if (direction === "column") expectedH = padTop + padBottom + kids.reduce((s, c) => s + c.box.h, 0) + gap * (kids.length - 1);
-        const heightMode = node.heightMode || "fixed";
-        const delta = expectedH === null ? 0 : expectedH - node.box.h;
-        const overflow = expectedH !== null && delta > 1;
-        const hugMismatch = expectedH !== null && heightMode === "hug" && Math.abs(delta) > 1;
-        if (expectedH !== null && (overflow || hugMismatch)) {
-          const how = direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom);
-          const why = heightMode === "hug" ? `heightMode:"hug" means this box's height IS the content height, but its own padding + children compute ${expectedH}, not the declared ${node.box.h}` : `content (padding + children) computes ${expectedH}, which OVERFLOWS the declared box.h=${node.box.h} by ${delta}px`;
-          add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h} (heightMode:${JSON.stringify(heightMode)}) \u2014 ${why}: ${padTop}+${how}+${padBottom} = ${expectedH}. The export contradicts itself \u2014 decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH, heightMode });
-        }
-      }
-    }
-    if (ancestors.length <= 2 && node.box && ctx.rootBox && platform !== "web") {
-      const label = `${node.name || ""} ${node.component || ""} ${node.mainComponent && node.mainComponent.setName || ""}`;
-      if (CHROME_TOP.test(label) && node.box.h <= 64) add("warning", "fake-status-bar", `'${node.name}' looks like a drawn status bar \u2014 don't build it; apply the system safe-area/status-bar inset instead`, node, here);
-      else if (CHROME_BOTTOM.test(label) && node.box.h <= 40) add("warning", "fake-home-indicator", `'${node.name}' looks like a drawn home indicator/gesture bar \u2014 use the bottom safe-area inset instead`, node, here);
-    }
-    const isAssetLeaf = !!(node.asset || node.geometry);
-    if (!isAssetLeaf && node.type !== "TEXT" && Array.isArray(node.fills)) {
-      for (const f of node.fills) {
-        if (f.type === "solid") {
-          const bound = !!(f.tokens || hasTok(node, "fills") || node.styles && node.styles.fill);
-          tally("color", bound);
-          if (!bound) noteRaw(f.color, node);
-        }
-        if (f.type === "gradient" && /DIAMOND/.test(f.kind || "") && platform !== "flutter") add("info", "diamond-gradient", `'${node.name}' uses a diamond gradient \u2014 no native equivalent; use the exported asset or approximate`, node, here);
-        if (f.type === "image" && (f.scaleMode === "crop" || f.scaleMode === "tile")) add("info", "image-scale-mode", `'${node.name}' image fill uses scaleMode '${f.scaleMode}' \u2014 not a plain cover/contain; read the crop transform / tile scale`, node, here);
-      }
-    }
-    if (!isAssetLeaf && node.strokes && (node.strokes.align === "outside" || node.strokes.align === "center") && (node.strokes.weight || node.strokes.weights)) {
-      const how = { web: "a CSS border is inside the box \u2014 use outline/box-shadow (no layout) or grow the box", ios: "SwiftUI .strokeBorder is inside, .stroke is centered \u2014 pad an overlay for outside", android: "Modifier.border draws inside \u2014 compensate with padding or drawBehind", "react-native": "borderWidth is inside \u2014 wrap or add padding", flutter: "use BorderSide.strokeAlign outside/center" };
-      add("info", "stroke-align", `'${node.name}' has a ${node.strokes.align} stroke \u2014 ${how[platform]}; the rendered size differs from box`, node, here);
-    }
-    if (!isAssetLeaf && node.strokes && Array.isArray(node.strokes.colors)) {
-      for (const c of node.strokes.colors) {
-        const bound = !!(hasTok(node, "strokes") || node.styles && node.styles.stroke || (node.strokes.paints || []).some((p) => p.tokens));
+  }
+  if (ancestors.length <= 2 && node.box && ctx.rootBox && platform !== "web") {
+    const label = `${node.name || ""} ${node.component || ""} ${node.mainComponent && node.mainComponent.setName || ""}`;
+    if (CHROME_TOP.test(label) && node.box.h <= 64) add("warning", "fake-status-bar", `'${node.name}' looks like a drawn status bar \u2014 don't build it; apply the system safe-area/status-bar inset instead`, node, here);
+    else if (CHROME_BOTTOM.test(label) && node.box.h <= 40) add("warning", "fake-home-indicator", `'${node.name}' looks like a drawn home indicator/gesture bar \u2014 use the bottom safe-area inset instead`, node, here);
+  }
+  const isAssetLeaf = !!(node.asset || node.geometry);
+  if (!isAssetLeaf && node.type !== "TEXT" && Array.isArray(node.fills)) {
+    for (const f of node.fills) {
+      if (f.type === "solid") {
+        const bound = !!(f.tokens || hasTok(node, "fills") || node.styles && node.styles.fill);
         tally("color", bound);
-        if (!bound) noteRaw(c, node);
+        if (!bound) noteRaw(ac, f.color, node);
       }
-      if (node.type !== "TEXT" && node.type !== "LINE") boundaryCheck(node, ancestors, here);
+      if (f.type === "gradient" && /DIAMOND/.test(f.kind || "") && platform !== "flutter") add("info", "diamond-gradient", `'${node.name}' uses a diamond gradient \u2014 no native equivalent; use the exported asset or approximate`, node, here);
+      if (f.type === "image" && (f.scaleMode === "crop" || f.scaleMode === "tile")) add("info", "image-scale-mode", `'${node.name}' image fill uses scaleMode '${f.scaleMode}' \u2014 not a plain cover/contain; read the crop transform / tile scale`, node, here);
     }
-    if (node.type === "TEXT") {
-      const runs = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ ...ifDefined("font", node.font), ...ifDefined("tokens", node.textTokens), ...ifDefined("textStyle", node.styles && node.styles.text) }];
-      for (const r of runs) {
-        const typoBound = !!(r.textStyle || node.styles && node.styles.text || r.tokens && (r.tokens.fontSize || r.tokens.fontFamily || r.tokens.lineHeight) || node.textTokens && (node.textTokens.fontSize || node.textTokens.fontFamily));
-        tally("typography", typoBound);
-        if (r.font && r.font.color) {
-          const cBound = !!(r.tokens && r.tokens.fills || r.fillStyle || node.textTokens && node.textTokens.fills || hasTok(node, "fills") || node.styles && node.styles.fill);
-          tally("color", cBound);
-          if (!cBound) noteRaw(r.font.color, node);
-        }
-      }
-      if (!hiddenBranch) textChecks(node, ancestors, here);
-      const inst = [...ancestors].reverse().find((a) => a.type === "INSTANCE");
-      if (inst && !(node.propRefs && node.propRefs.characters) && (node.text || "").trim() && !ancestors.some((a) => a.id !== void 0 && cappedInstances.has(a.id))) {
-        instanceTexts.push({ node, here, inst });
-      }
+  }
+  if (!isAssetLeaf && node.strokes && (node.strokes.align === "outside" || node.strokes.align === "center") && (node.strokes.weight || node.strokes.weights)) {
+    const how = { web: "a CSS border is inside the box \u2014 use outline/box-shadow (no layout) or grow the box", ios: "SwiftUI .strokeBorder is inside, .stroke is centered \u2014 pad an overlay for outside", android: "Modifier.border draws inside \u2014 compensate with padding or drawBehind", "react-native": "borderWidth is inside \u2014 wrap or add padding", flutter: "use BorderSide.strokeAlign outside/center" };
+    add("info", "stroke-align", `'${node.name}' has a ${node.strokes.align} stroke \u2014 ${how[platform]}; the rendered size differs from box`, node, here);
+  }
+  if (!isAssetLeaf && node.strokes && Array.isArray(node.strokes.colors)) {
+    for (const c of node.strokes.colors) {
+      const bound = !!(hasTok(node, "strokes") || node.styles && node.styles.stroke || (node.strokes.paints || []).some((p) => p.tokens));
+      tally("color", bound);
+      if (!bound) noteRaw(ac, c, node);
     }
-    if (node.layout && !isAssetLeaf && !node.assetSkipped) {
-      const L = node.layout;
-      const spacing = [];
-      if (typeof L.gap === "number") spacing.push(["gap", L.gap, hasTok(node, "itemSpacing")]);
-      if (typeof L.rowGap === "number") spacing.push(["rowGap", L.rowGap, hasTok(node, "counterAxisSpacing")]);
-      if (typeof L.columnGap === "number") spacing.push(["columnGap", L.columnGap, hasTok(node, "gridColumnGap")]);
-      if (Array.isArray(L.padding)) {
-        const pad = L.padding;
-        ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].forEach((k, j) => {
-          if (pad[j]) spacing.push([k, pad[j], hasTok(node, k)]);
-        });
-      }
-      const offGrid = [];
-      for (const [k, v, bound] of spacing) {
-        tally("spacing", bound);
-        if (v < 0) add("info", "negative-spacing", `'${node.name}' ${k} is ${v} (overlap) \u2014 Compose Arrangement.spacedBy rejects negatives; use offset/overlay`, node, here);
-        else if (!bound && (v % grid !== 0 || !Number.isInteger(v))) offGrid.push(`${k}=${v}`);
-      }
-      if (offGrid.length) add("info", "off-grid-spacing", `'${node.name}' has unbound spacing off the ${grid}px grid (${offGrid.join(", ")}) \u2014 likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY \u2014 it must not round them to the grid`, node, here);
-    }
-    if (node.radius != null) {
-      const vals = typeof node.radius === "number" ? [node.radius] : Object.values(node.radius);
-      const bound = hasTok(node, "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius");
-      vals.forEach(() => tally("radius", bound));
-      if (node.cornerSmoothing && (platform === "android" || platform === "web" || platform === "react-native")) {
-        add("info", "corner-smoothing", `'${node.name}' uses corner smoothing ${node.cornerSmoothing} (squircle) \u2014 ${platform} has no native continuous corners; plain radius or a custom shape`, node, here);
+    if (node.type !== "TEXT" && node.type !== "LINE") boundaryCheck(ac, node, ancestors, here);
+  }
+  if (node.type === "TEXT") {
+    const runs = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ ...ifDefined("font", node.font), ...ifDefined("tokens", node.textTokens), ...ifDefined("textStyle", node.styles && node.styles.text) }];
+    for (const r of runs) {
+      const typoBound = !!(r.textStyle || node.styles && node.styles.text || r.tokens && (r.tokens.fontSize || r.tokens.fontFamily || r.tokens.lineHeight) || node.textTokens && (node.textTokens.fontSize || node.textTokens.fontFamily));
+      tally("typography", typoBound);
+      if (r.font && r.font.color) {
+        const cBound = !!(r.tokens && r.tokens.fills || r.fillStyle || node.textTokens && node.textTokens.fills || hasTok(node, "fills") || node.styles && node.styles.fill);
+        tally("color", cBound);
+        if (!cBound) noteRaw(ac, r.font.color, node);
       }
     }
-    if (Array.isArray(node.effects)) {
-      for (const e of node.effects) {
-        tally("effects", !!(e.tokens || node.styles && node.styles.effect));
-        if ((e.type === "drop_shadow" || e.type === "inner_shadow") && e.spread && (platform === "ios" || platform === "android")) {
-          add("info", "shadow-spread", `'${node.name}' shadow has spread ${e.spread} \u2014 ${platform === "ios" ? "SwiftUI .shadow/CALayer have no spread (use shadowPath or a padded shape)" : "Modifier.shadow can't express it (use Compose 1.9+ Modifier.dropShadow)"}`, node, here);
-        }
-        if (e.type === "background_blur" && (platform === "android" || platform === "react-native")) add("info", "background-blur", `'${node.name}' uses a background blur \u2014 ${platform === "android" ? "no backdrop blur below API 31 / needs window blur or a library" : "needs expo-blur or a native blur view"}`, node, here);
-        if ("blurType" in e && e.blurType === "progressive") add("info", "progressive-blur", `'${node.name}' uses a progressive blur \u2014 no direct equivalent on any platform; mask a blur with a gradient or use the asset`, node, here);
-        if (["noise", "glass", "texture", "shader"].includes(e.type)) add("info", "exotic-effect", `'${node.name}' uses a '${e.type}' effect \u2014 no code equivalent; rasterize via the exported asset if it's load-bearing`, node, here);
-      }
+    if (!hiddenBranch) textChecks(ac, node, ancestors, here);
+    const inst = [...ancestors].reverse().find((a) => a.type === "INSTANCE");
+    if (inst && !(node.propRefs && node.propRefs.characters) && (node.text || "").trim() && !ancestors.some((a) => a.id !== void 0 && cappedInstances.has(a.id))) {
+      instanceTexts.push({ node, here, inst });
     }
-    if (node.blendMode && (platform === "android" || platform === "react-native")) add("info", "blend-mode", `'${node.name}' uses blend mode '${node.blendMode}' \u2014 limited support on ${platform}; flag or bake into an asset`, node, here);
-    const tappable = !hiddenBranch && isTappable(node);
-    if (tappable && node.box && !ancestors.some((a) => a.__tappable)) {
-      const min = TOUCH_MIN[platform];
-      if (node.box.w < min || node.box.h < min) {
-        add("warning", "small-touch-target", `'${node.name}' is ${node.box.w}\xD7${node.box.h} \u2014 below the ${min}\xD7${min} ${platform} minimum; expand the hit area (padding/hitSlop/contentShape) even if the visual stays small`, node, here, { size: { w: node.box.w, h: node.box.h }, min });
-      }
+  }
+  if (node.layout && !isAssetLeaf && !node.assetSkipped) {
+    const L = node.layout;
+    const spacing = [];
+    if (typeof L.gap === "number") spacing.push(["gap", L.gap, hasTok(node, "itemSpacing")]);
+    if (typeof L.rowGap === "number") spacing.push(["rowGap", L.rowGap, hasTok(node, "counterAxisSpacing")]);
+    if (typeof L.columnGap === "number") spacing.push(["columnGap", L.columnGap, hasTok(node, "gridColumnGap")]);
+    if (Array.isArray(L.padding)) {
+      const pad = L.padding;
+      ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].forEach((k, j) => {
+        if (pad[j]) spacing.push([k, pad[j], hasTok(node, k)]);
+      });
     }
-    if (Array.isArray(node.children)) {
-      const stacks = !node.layout || node.layout.mode === "absolute";
-      const earlier = [];
-      const self = { name: node.name, id: node.id, type: node.type, ...ifDefined("mainComponent", node.mainComponent), ...ifDefined("component", node.component), ...ifDefined("props", node.props), ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: [] };
-      const chain = [...ancestors, self];
-      for (const child of node.children) {
-        self.__beneath = stacks || child.absolute ? earlier.filter((l) => overlaps(l.box, child.box)).flatMap((l) => l.fills) : [];
-        walk2(child, chain, ctx);
-        if (!hiddenSelf(child) && child.type !== "TEXT" && !isIconInk(child) && Array.isArray(child.fills) && child.fills.length) {
-          earlier.push({ fills: child.fills, ...ifDefined("box", child.box) });
-        }
+    const offGrid = [];
+    for (const [k, v, bound] of spacing) {
+      tally("spacing", bound);
+      if (v < 0) add("info", "negative-spacing", `'${node.name}' ${k} is ${v} (overlap) \u2014 Compose Arrangement.spacedBy rejects negatives; use offset/overlay`, node, here);
+      else if (!bound && (v % grid !== 0 || !Number.isInteger(v))) offGrid.push(`${k}=${v}`);
+    }
+    if (offGrid.length) add("info", "off-grid-spacing", `'${node.name}' has unbound spacing off the ${grid}px grid (${offGrid.join(", ")}) \u2014 likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY \u2014 it must not round them to the grid`, node, here);
+  }
+  if (node.radius != null) {
+    const vals = typeof node.radius === "number" ? [node.radius] : Object.values(node.radius);
+    const bound = hasTok(node, "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius");
+    vals.forEach(() => tally("radius", bound));
+    if (node.cornerSmoothing && (platform === "android" || platform === "web" || platform === "react-native")) {
+      add("info", "corner-smoothing", `'${node.name}' uses corner smoothing ${node.cornerSmoothing} (squircle) \u2014 ${platform} has no native continuous corners; plain radius or a custom shape`, node, here);
+    }
+  }
+  if (Array.isArray(node.effects)) {
+    for (const e of node.effects) {
+      tally("effects", !!(e.tokens || node.styles && node.styles.effect));
+      if ((e.type === "drop_shadow" || e.type === "inner_shadow") && e.spread && (platform === "ios" || platform === "android")) {
+        add("info", "shadow-spread", `'${node.name}' shadow has spread ${e.spread} \u2014 ${platform === "ios" ? "SwiftUI .shadow/CALayer have no spread (use shadowPath or a padded shape)" : "Modifier.shadow can't express it (use Compose 1.9+ Modifier.dropShadow)"}`, node, here);
+      }
+      if (e.type === "background_blur" && (platform === "android" || platform === "react-native")) add("info", "background-blur", `'${node.name}' uses a background blur \u2014 ${platform === "android" ? "no backdrop blur below API 31 / needs window blur or a library" : "needs expo-blur or a native blur view"}`, node, here);
+      if ("blurType" in e && e.blurType === "progressive") add("info", "progressive-blur", `'${node.name}' uses a progressive blur \u2014 no direct equivalent on any platform; mask a blur with a gradient or use the asset`, node, here);
+      if (["noise", "glass", "texture", "shader"].includes(e.type)) add("info", "exotic-effect", `'${node.name}' uses a '${e.type}' effect \u2014 no code equivalent; rasterize via the exported asset if it's load-bearing`, node, here);
+    }
+  }
+  if (node.blendMode && (platform === "android" || platform === "react-native")) add("info", "blend-mode", `'${node.name}' uses blend mode '${node.blendMode}' \u2014 limited support on ${platform}; flag or bake into an asset`, node, here);
+  const tappable = !hiddenBranch && isTappable(node);
+  if (tappable && node.box && !ancestors.some((a) => a.__tappable)) {
+    const min = TOUCH_MIN[platform];
+    if (node.box.w < min || node.box.h < min) {
+      add("warning", "small-touch-target", `'${node.name}' is ${node.box.w}\xD7${node.box.h} \u2014 below the ${min}\xD7${min} ${platform} minimum; expand the hit area (padding/hitSlop/contentShape) even if the visual stays small`, node, here, { size: { w: node.box.w, h: node.box.h }, min });
+    }
+  }
+  if (Array.isArray(node.children)) {
+    const stacks = !node.layout || node.layout.mode === "absolute";
+    const earlier = [];
+    const self = { name: node.name, id: node.id, type: node.type, ...ifDefined("mainComponent", node.mainComponent), ...ifDefined("component", node.component), ...ifDefined("props", node.props), ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: [] };
+    const chain = [...ancestors, self];
+    for (const child of node.children) {
+      self.__beneath = stacks || child.absolute ? earlier.filter((l) => overlaps(l.box, child.box)).flatMap((l) => l.fills) : [];
+      walk2(ac, child, chain, ctx);
+      if (!hiddenSelf(child) && child.type !== "TEXT" && !isIconInk(child) && Array.isArray(child.fills) && child.fills.length) {
+        earlier.push({ fills: child.fills, ...ifDefined("box", child.box) });
       }
     }
   }
-  function isTappable(node) {
-    if (Array.isArray(node.reactions) && node.reactions.some((r) => TAP_TRIGGER.test(r.trigger || ""))) return true;
-    const compName = node.mainComponent && node.mainComponent.setName || node.component || "";
-    if (node.type === "INSTANCE" && controlKind(compName)) return true;
-    return (node.type === "INSTANCE" || node.type === "FRAME" || node.type === "COMPONENT") && INTERACTIVE_NAME.test(node.name || "") && !/\b(group|container|list|bar|section|row)s?\b/i.test(node.name || "");
+}
+function isTappable(node) {
+  if (Array.isArray(node.reactions) && node.reactions.some((r) => TAP_TRIGGER.test(r.trigger || ""))) return true;
+  const compName = node.mainComponent && node.mainComponent.setName || node.component || "";
+  if (node.type === "INSTANCE" && controlKind(compName)) return true;
+  return (node.type === "INSTANCE" || node.type === "FRAME" || node.type === "COMPONENT") && INTERACTIVE_NAME.test(node.name || "") && !/\b(group|container|list|bar|section|row)s?\b/i.test(node.name || "");
+}
+function noteRaw(ac, hex, node) {
+  const { rawColors } = ac;
+  const h = String(hex || "").toLowerCase();
+  const rgb = parseHex(h);
+  if (!rgb) return;
+  const e = rawColors.get(h) || { count: 0, nodeId: node.id, nodeName: node.name, rgb };
+  e.count++;
+  rawColors.set(h, e);
+}
+function textChecks(ac, node, ancestors, here) {
+  const { add } = ac;
+  const font = node.font || {};
+  if (!node.autoResize && !node.truncate && !node.maxLines) {
+    add("warning", "fixed-size-text", `${cite(node)} is a fixed-size text box with no truncation rule \u2014 it will clip under font scaling or longer translations; decide wrap / truncate / grow`, node, here, textExtra(node));
   }
-  function noteRaw(hex, node) {
-    const h = String(hex || "").toLowerCase();
-    const rgb = parseHex(h);
-    if (!rgb) return;
-    const e = rawColors.get(h) || { count: 0, nodeId: node.id, nodeName: node.name, rgb };
-    e.count++;
-    rawColors.set(h, e);
+  const fg = parseHex(font.color);
+  if (!fg) return;
+  const { bg, complex } = backdropOf(ancestors);
+  const size = typeof font.size === "number" ? font.size : null;
+  const bold = (font.weightValue || 0) >= 700 || /bold|black|heavy/i.test(font.weight || "");
+  const large = size != null && (size >= 24 || size >= 18.66 && bold);
+  const need = large ? 3 : 4.5;
+  if (complex) {
+    add("info", "contrast-manual", `${cite(node)} sits on a gradient/image \u2014 check text contrast manually (needs ${need}:1)`, node, here, textExtra(node));
+    return;
   }
-  function textChecks(node, ancestors, here) {
-    const font = node.font || {};
-    if (!node.autoResize && !node.truncate && !node.maxLines) {
-      add("warning", "fixed-size-text", `${cite(node)} is a fixed-size text box with no truncation rule \u2014 it will clip under font scaling or longer translations; decide wrap / truncate / grow`, node, here, textExtra(node));
-    }
-    const fg = parseHex(font.color);
-    if (!fg) return;
-    const { bg, complex } = backdropOf(ancestors);
-    const size = typeof font.size === "number" ? font.size : null;
-    const bold = (font.weightValue || 0) >= 700 || /bold|black|heavy/i.test(font.weight || "");
-    const large = size != null && (size >= 24 || size >= 18.66 && bold);
-    const need = large ? 3 : 4.5;
-    if (complex) {
-      add("info", "contrast-manual", `${cite(node)} sits on a gradient/image \u2014 check text contrast manually (needs ${need}:1)`, node, here, textExtra(node));
-      return;
-    }
-    const assumed = !bg;
-    const base = bg || WHITE;
-    const ratio = contrastRatio(over(fg, base), base);
-    if (ratio < need) {
-      add(assumed ? "info" : "warning", "low-contrast", `${cite(node)} text contrast ${r1(ratio)}:1 is below WCAG AA ${need}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need, ...textExtra(node) });
-    }
+  const assumed = !bg;
+  const base = bg || WHITE;
+  const ratio = contrastRatio(over(fg, base), base);
+  if (ratio < need) {
+    add(assumed ? "info" : "warning", "low-contrast", `${cite(node)} text contrast ${r1(ratio)}:1 is below WCAG AA ${need}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need, ...textExtra(node) });
   }
-  function boundaryCheck(node, ancestors, here) {
-    const strokes = node.strokes;
-    const hex = strokes && Array.isArray(strokes.colors) ? strokes.colors.find((c) => {
-      const x = parseHex(c);
-      return !!x && x.a > 0;
-    }) : void 0;
-    const sc = parseHex(hex);
-    const weight = strokes ? Math.max(strokes.weight || 0, ...Object.values(strokes.weights || {}).map((w) => w || 0)) : 0;
-    if (!sc || !(weight > 0) || hex === void 0) return;
-    const near = [node, ...ancestors.slice(-3).reverse()];
-    const outer = outermostControl(near);
-    if (outer < 0 || near.some((a) => isDisabledLayer(a))) return;
-    const outside = ancestors.slice(0, ancestors.length - outer), inside = ancestors.slice(ancestors.length - outer);
-    const back = backdropOf(outside);
-    if (back.complex) return;
-    const base = back.bg || WHITE;
-    const ratio = contrastRatio(over(sc, base), base);
-    if (ratio >= 3) return;
-    let inner = null;
-    for (const f of [...inside.flatMap((a) => [...Array.isArray(a.fills) ? a.fills : [], ...a.__beneath || []]), ...Array.isArray(node.fills) ? node.fills : []]) {
-      const c = f.type === "solid" ? parseHex(f.color) : null;
-      if (c) inner = over(c, inner || base);
-    }
-    if (inner && contrastRatio(inner, base) >= 3) return;
-    const stroke = normHex(hex) ?? hex, backdrop = formatHex(base), assumed = !back.bg;
-    const k = `${here.label}|${stroke}|${backdrop}|${assumed}`;
-    const row = boundaries.get(k);
-    if (row) {
-      row.nodes.push(node);
-      return;
-    }
-    const st = node.tokens && node.tokens.strokes;
-    const strokeToken = Array.isArray(st) ? st[0] : st;
-    boundaries.set(k, { nodes: [node], here, stroke, backdrop, ratio, assumed, hasFill: !!inner, ...ifDefined("strokeToken", strokeToken), ...ifDefined("backdropToken", assumed ? void 0 : back.token) });
+}
+function boundaryCheck(ac, node, ancestors, here) {
+  const { boundaries } = ac;
+  const strokes = node.strokes;
+  const hex = strokes && Array.isArray(strokes.colors) ? strokes.colors.find((c) => {
+    const x = parseHex(c);
+    return !!x && x.a > 0;
+  }) : void 0;
+  const sc = parseHex(hex);
+  const weight = strokes ? Math.max(strokes.weight || 0, ...Object.values(strokes.weights || {}).map((w) => w || 0)) : 0;
+  if (!sc || !(weight > 0) || hex === void 0) return;
+  const near = [node, ...ancestors.slice(-3).reverse()];
+  const outer = outermostControl(near);
+  if (outer < 0 || near.some((a) => isDisabledLayer(a))) return;
+  const outside = ancestors.slice(0, ancestors.length - outer), inside = ancestors.slice(ancestors.length - outer);
+  const back = backdropOf(outside);
+  if (back.complex) return;
+  const base = back.bg || WHITE;
+  const ratio = contrastRatio(over(sc, base), base);
+  if (ratio >= 3) return;
+  let inner = null;
+  for (const f of [...inside.flatMap((a) => [...Array.isArray(a.fills) ? a.fills : [], ...a.__beneath || []]), ...Array.isArray(node.fills) ? node.fills : []]) {
+    const c = f.type === "solid" ? parseHex(f.color) : null;
+    if (c) inner = over(c, inner || base);
   }
+  if (inner && contrastRatio(inner, base) >= 3) return;
+  const stroke = normHex(hex) ?? hex, backdrop = formatHex(base), assumed = !back.bg;
+  const k = `${here.label}|${stroke}|${backdrop}|${assumed}`;
+  const row = boundaries.get(k);
+  if (row) {
+    row.nodes.push(node);
+    return;
+  }
+  const st = node.tokens && node.tokens.strokes;
+  const strokeToken = Array.isArray(st) ? st[0] : st;
+  boundaries.set(k, { nodes: [node], here, stroke, backdrop, ratio, assumed, hasFill: !!inner, ...ifDefined("strokeToken", strokeToken), ...ifDefined("backdropToken", assumed ? void 0 : back.token) });
+}
+function nearDuplicateColors(ac) {
+  const { rawColors, add } = ac;
   const raws = [...rawColors.entries()].map(([hex, e]) => ({ hex, ...e })).filter((x) => x.rgb.a >= 1);
   const labs = raws.map((x) => ({ x, lab: toLab(x.rgb) }));
   const seen = /* @__PURE__ */ new Set();
@@ -2489,6 +2672,10 @@ function audit(input, opts = {}) {
     }
     if (cluster.length > 1) add("info", "near-duplicate-colors", `unbound colors ${cluster.map((c) => `${c.hex}\xD7${c.count}`).join(", ")} are visually indistinguishable (\u0394E<3) \u2014 probably one token`, null, null, { colors: cluster.map((c) => c.hex) });
   }
+  return raws;
+}
+function nearTokenColors(ac, raws) {
+  const { opts, docs, nodesById, add } = ac;
   const tokenColors = /* @__PURE__ */ new Map();
   for (const doc of [opts.variables, opts.designSystem && opts.designSystem.tokens, ...docs.map((d) => d.vars)]) {
     for (const v of doc && doc.variables || []) {
@@ -2517,6 +2704,10 @@ function audit(input, opts = {}) {
     add("info", "near-token-color", `unbound '${x.hex}' \xD7${x.count} (e.g. '${x.nodeName}') is \u0394E ${bestD.toFixed(2)} from token '${best.name}' (${best.hex}) \u2014 a typo of the token, or a deliberate value? Use the literal exactly until the designer answers`, sample, null, { token: best.name, colors: [x.hex, best.hex] });
     nearToken.push(`'${x.hex}' (e.g. '${x.nodeName}' ${x.nodeId}) vs token '${best.name}' ${best.hex}`);
   }
+  return nearToken;
+}
+function nonTextContrast(ac) {
+  const { boundaries, add } = ac;
   for (const b of boundaries.values()) {
     const [first, ...more] = b.nodes;
     if (!first) continue;
@@ -2529,6 +2720,9 @@ function audit(input, opts = {}) {
       { nodeIds: b.nodes.map((n) => n.id), stroke: b.stroke, backdrop: b.backdrop, ...ifDefined("strokeToken", b.strokeToken), ...ifDefined("backdropToken", b.backdropToken), ratio: r1(b.ratio), required: 3 }
     );
   }
+}
+function defaultCopyInInstances(ac) {
+  const { instanceTexts, charOverridden, add } = ac;
   const copyGroups = /* @__PURE__ */ new Map();
   for (const t of instanceTexts) {
     const mc = t.inst.mainComponent || {};
@@ -2539,23 +2733,27 @@ function audit(input, opts = {}) {
   }
   const copyQuestions = [];
   for (const g of copyGroups.values()) {
-    const own2 = [...new Set(g.overridden.map((m) => (m.node.text || "").trim()))];
-    const plain = g.plain.filter((m) => !own2.includes((m.node.text || "").trim()));
+    const own = [...new Set(g.overridden.map((m) => (m.node.text || "").trim()))];
+    const plain = g.plain.filter((m) => !own.includes((m.node.text || "").trim()));
     const first = plain[0];
-    if (!own2.length || !first) continue;
+    if (!own.length || !first) continue;
     const comp = g.inst.mainComponent && g.inst.mainComponent.setName || g.inst.component || g.inst.name;
     const dflt = textOf(first.node) ?? (first.node.text || "").trim();
-    const eg = own2[0] ?? "";
+    const eg = own[0] ?? "";
     add(
       "info",
       "default-copy-in-instance",
       `'${comp}' > '${first.node.name}': ${plain.length} instance(s) show the component's default copy ("${dflt}") while ${g.overridden.length} show their own copy (e.g. "${eg.length > 40 ? eg.slice(0, 39) + "\u2026" : eg}") \u2014 a placeholder left in, or intended? Build the copy as drawn and ask the designer`,
       first.node,
       first.here,
-      { nodeIds: plain.map((m) => m.node.id), copies: { default: (first.node.text || "").trim(), overridden: own2 } }
+      { nodeIds: plain.map((m) => m.node.id), copies: { default: (first.node.text || "").trim(), overridden: own } }
     );
     copyQuestions.push(`'${comp}' > '${first.node.name}' (${first.node.id}) still says "${dflt}" (the component's default) where other instances say "${eg}" \u2014 is "${dflt}" the intended copy, or a placeholder? \u2192 Default: build "${dflt}" as drawn.`);
   }
+  return copyQuestions;
+}
+function duplicateRootSubtrees(ac) {
+  const { roots, add } = ac;
   for (const root of roots) {
     const strays = (Array.isArray(root.tree.children) ? root.tree.children : []).filter((c) => c && c.absolute && !hiddenSelf(c));
     if (!strays.length || hiddenSelf(root.tree)) continue;
@@ -2594,31 +2792,34 @@ function audit(input, opts = {}) {
       );
     }
   }
+}
+var valuesOf = (c) => {
+  const values = [];
+  for (const p of Object.values(c.props || {})) {
+    if (p.type === "VARIANT") values.push(...Array.isArray(p.options) ? p.options : Array.isArray(p.observed) ? p.observed : []);
+    if (p.type === "BOOLEAN") values.push(String(p.key || "").split("#")[0] ?? "");
+  }
+  if (c.variant) for (const part of c.variant.split(",")) {
+    const v = part.split("=")[1];
+    if (v) values.push(v.trim());
+  }
+  return values;
+};
+var isSampled = (c) => !!(c.remote || c.derivedFrom === "instances");
+var sameDir = (a, b) => b !== void 0 && path6.resolve(a) === path6.resolve(b);
+function stateLookup(ac) {
+  const { opts, docs, catalog } = ac;
   const screenCollKeys = new Set(docs.flatMap((d) => (d.vars && d.vars.collections || []).map((c) => c.key)).filter((k) => !!k));
   const fullCatalogs = [];
   if (catalog.length) fullCatalogs.push({ label: "--catalog", components: catalog, byName: true });
   const dsCatalog = opts.designSystem && opts.designSystem.components;
   if (dsCatalog && dsCatalog !== opts.catalog && Array.isArray(dsCatalog.components)) fullCatalogs.push({ label: opts.designSystemDir || "the design system", components: dsCatalog.components, byName: true });
-  const sameDir = (a, b) => b !== void 0 && path6.resolve(a) === path6.resolve(b);
   for (const lib of opts.libraries || []) {
     if (!lib.components || sameDir(lib.rel, opts.designSystemDir)) continue;
     const unknown = !screenCollKeys.size || !lib.collectionKeys.length;
     fullCatalogs.push({ label: lib.rel, components: lib.components.components, byName: unknown || lib.collectionKeys.some((k) => screenCollKeys.has(k)), unproven: unknown });
   }
   const sampledCatalog = opts.designSystem && opts.designSystem.componentsLibrary && opts.designSystem.componentsLibrary.components || [];
-  const valuesOf = (c) => {
-    const values = [];
-    for (const p of Object.values(c.props || {})) {
-      if (p.type === "VARIANT") values.push(...Array.isArray(p.options) ? p.options : Array.isArray(p.observed) ? p.observed : []);
-      if (p.type === "BOOLEAN") values.push(String(p.key || "").split("#")[0] ?? "");
-    }
-    if (c.variant) for (const part of c.variant.split(",")) {
-      const v = part.split("=")[1];
-      if (v) values.push(v.trim());
-    }
-    return values;
-  };
-  const isSampled = (c) => !!(c.remote || c.derivedFrom === "instances");
   const hasVariants = (c) => !!c.variant || Object.values(c.props || {}).some((p) => p.type === "VARIANT");
   const merged = (rows, label, matchedBy, sampled) => {
     const withVariants = rows.filter(hasVariants);
@@ -2646,6 +2847,11 @@ function audit(input, opts = {}) {
     }
     return sampledDef || (u.name === void 0 ? null : merged(sampledCatalog.filter((c) => c.name === u.name), "components.library.json", "name", true));
   }
+  return { screenCollKeys, fullCatalogs, sampledCatalog, stateDefOf };
+}
+function componentStates(ac, lookup) {
+  const { platform, catalog, usedComponents, add } = ac;
+  const { fullCatalogs, sampledCatalog, stateDefOf } = lookup;
   const components = [];
   const unchecked = [];
   const candidates = usedComponents.size ? [...usedComponents.values()].filter((u) => !u.icon).map((u) => ({ use: u, found: stateDefOf(u) })) : catalog.filter((c) => c.type === "COMPONENT_SET" || c.type === "COMPONENT").map((c) => ({ use: { name: c.name }, found: { def: c, values: valuesOf(c), label: "--catalog", matchedBy: "name", sampled: isSampled(c) } }));
@@ -2679,6 +2885,11 @@ function audit(input, opts = {}) {
       { controls: unchecked }
     );
   }
+  return { components, unchecked };
+}
+function undesignedOpenStates(ac, lookup) {
+  const { pickers, usedComponents, add } = ac;
+  const { stateDefOf } = lookup;
   const openStates = /* @__PURE__ */ new Map();
   for (const p of pickers) {
     const u = usedComponents.get(p.useKey);
@@ -2699,6 +2910,10 @@ function audit(input, opts = {}) {
       { nodeIds: o.nodes }
     );
   }
+  return openStates;
+}
+function screenStatesOf(ac) {
+  const { roots, stateHits, validationHits, inputsSeen } = ac;
   const stateOf = (s) => stateHits[s].length ? "designed" : "not-found";
   const allDialogs = roots.length > 0 && roots.every((r) => DIALOG_NAME.test(r.tree.name || ""));
   const screenStates = {
@@ -2708,6 +2923,10 @@ function audit(input, opts = {}) {
     ...inputsSeen ? { validation: validationHits.length ? "designed" : "not-found" } : {}
   };
   const screenStatesScope = { rootsAudited: roots.length, singleFrame: roots.length === 1 };
+  return { allDialogs, screenStates, screenStatesScope };
+}
+function heavyAssets(ac) {
+  const { docs, hiddenIds, nodesById, add } = ac;
   for (const d of docs) {
     const a = d.assets;
     if (!a || !Array.isArray(a.heavy)) continue;
@@ -2721,6 +2940,9 @@ function audit(input, opts = {}) {
       add("info", "heavy-asset", msg, node || null, { label }, { file: h.file, bytes: h.bytes, ...ifDefined("paths", h.paths), ...ifDefined("embeddedRaster", h.embeddedRaster) });
     }
   }
+}
+function prototypeLinks(ac) {
+  const { opts, navigations, nodesById, hiddenIds, add } = ac;
   const nb = opts.neighbours;
   const exportedIds = nb ? nb.exportedIds ?? new Set(nb.layers.map((l) => l.id)) : null;
   const shotIds = new Set(nb && nb.unexportedShots || []);
@@ -2754,6 +2976,9 @@ function audit(input, opts = {}) {
       { ids: rows.map((r) => r.id) }
     );
   }
+}
+function tokenBindingOf(ac) {
+  const { binding, add } = ac;
   const bindingOf = (k) => {
     const [b, t] = binding[k];
     return { bound: b, total: t, pct: t ? Math.round(b / t * 100) : null };
@@ -2763,6 +2988,10 @@ function audit(input, opts = {}) {
     const v = tokenBinding[k];
     if (v.total >= 5 && v.pct !== null && v.pct < 50) add("warning", "low-token-binding", `only ${v.pct}% of ${k} values are bound to tokens/styles (${v.bound}/${v.total}) \u2014 expect to carry raw values through EXACTLY and report each as unbound; do not snap them to the nearest token`, null, null, { category: k });
   }
+  return tokenBinding;
+}
+function openQuestions(ac, { allDialogs, screenStates, unchecked, components, copyQuestions, openStates, nearToken }) {
+  const { opts, roots, findings, add } = ac;
   const questions = [];
   const STATE_QUESTION = {
     loading: allDialogs ? "what shows while the dialog's action runs (disabled buttons, spinner, can it be dismissed)?" : "what shows while data loads (skeleton vs spinner, delay before showing)?",
@@ -2781,9 +3010,9 @@ function audit(input, opts = {}) {
   const sameSize = (l) => auditedRows.some((a) => a.w === l.w && a.h === l.h);
   for (const s of STATE_KEYS) {
     if (screenStates[s] !== "not-found") continue;
-    const candidates2 = layers.filter((l) => !auditedIds.has(l.id) && l.pageId !== void 0 && pageIds.has(l.pageId)).map((l) => {
-      const own2 = opts.neighbours?.textsOf?.(l);
-      return { l, text: [l.title, ...(own2 && (s === "empty" ? own2.all : own2.shallow)) ?? l.texts ?? []].find((t) => !!t && STATE_WORDS[s].test(t)) };
+    const candidates = layers.filter((l) => !auditedIds.has(l.id) && l.pageId !== void 0 && pageIds.has(l.pageId)).map((l) => {
+      const own = opts.neighbours?.textsOf?.(l);
+      return { l, text: [l.title, ...(own && (s === "empty" ? own.all : own.shallow)) ?? l.texts ?? []].find((t) => !!t && STATE_WORDS[s].test(t)) };
     }).filter((c) => c.text !== void 0).map((c) => {
       const t = alnumKey(c.l.title);
       const titleMatch = t.length >= 3 && (ownTitles.has(t) || ownNames.has(t));
@@ -2793,9 +3022,9 @@ function audit(input, opts = {}) {
       const said = ownPhrases.some((p) => c.text.toLowerCase().replace(/[^a-z0-9]+/g, " ").includes(p)) ? 2 : 0;
       return { id: c.l.id, name: c.l.name, text: c.text, score: named + said + (sameSize(c.l) ? 1 : 0), related: named + said > 0 };
     }).filter((c) => c.related).sort((x, y) => y.score - x.score).slice(0, 3).map(({ id, name, text }) => ({ id, name, text }));
-    if (candidates2.length) {
-      const list = candidates2.map((c) => `'${c.name}' (${c.id}: "${c.text}")`).join(", ");
-      add("info", "state-in-sibling", `no ${s} state in the audited frame, but ${list} on the same page read${candidates2.length === 1 ? "s" : ""} like one \u2014 audit it with this screen before asking the designer`, null, null, { state: s, candidates: candidates2 });
+    if (candidates.length) {
+      const list = candidates.map((c) => `'${c.name}' (${c.id}: "${c.text}")`).join(", ");
+      add("info", "state-in-sibling", `no ${s} state in the audited frame, but ${list} on the same page read${candidates.length === 1 ? "s" : ""} like one \u2014 audit it with this screen before asking the designer`, null, null, { state: s, candidates });
       questions.push(`No ${s} state in this frame \u2014 is ${list} this screen's ${s} state? If not: ${STATE_QUESTION[s]}`);
     } else questions.push(`No ${s} state was found in the exported layers \u2014 ${STATE_QUESTION[s]}`);
   }
@@ -2813,6 +3042,10 @@ function audit(input, opts = {}) {
     questions.push(`${list.join(", ")} read${list.length === 1 ? "s" : ""} like a select/picker with no open state drawn \u2014 what does the open list (or calendar) look like: the platform's native picker, or a designed one (which frame)? \u2192 Default: the platform's native control, styled with the field's tokens.`);
   }
   if (nearToken.length) questions.push(`Unbound colour${nearToken.length === 1 ? "" : "s"} a hair off a token \u2014 ${nearToken.join("; ")}: a typo of the token, or deliberate? \u2192 Default: the literal exactly as drawn, flagged.`);
+  return questions;
+}
+function crossFilePass(ac) {
+  const { opts, docs, hiddenIds, findings } = ac;
   let crossFile;
   const crossOrigin = /* @__PURE__ */ new Map();
   let hiddenFindingsOmitted = 0;
@@ -2845,9 +3078,9 @@ function audit(input, opts = {}) {
         continue;
       }
       const { severity, code, message, ...rest } = f;
-      const merged2 = { severity, code, message, crossFile: true, ...rest };
-      findings.push(merged2);
-      crossOrigin.set(merged2, f);
+      const merged = { severity, code, message, crossFile: true, ...rest };
+      findings.push(merged);
+      crossOrigin.set(merged, f);
     }
   } else {
     crossFile = {
@@ -2860,6 +3093,10 @@ function audit(input, opts = {}) {
       inputs: {}
     };
   }
+  return { crossFile, crossOrigin, hiddenFindingsOmitted };
+}
+function libraryNotes(ac, crossFile, screenCollKeys) {
+  const { opts } = ac;
   for (const lib of opts.libraries || []) {
     if (sameDir(lib.rel, opts.designSystemDir)) continue;
     const shared = lib.collectionKeys.filter((k) => screenCollKeys.has(k)).length;
@@ -2867,6 +3104,9 @@ function audit(input, opts = {}) {
       `the library export ${lib.rel} ('${lib.name}') \u2014 the cross-file pass did not compare this screen against it` + (screenCollKeys.size ? ` (the screen binds ${shared} of its ${screenCollKeys.size} variable collection(s) from it by key)` : "") + `. Its components.json ${lib.components ? "WAS" : "could not be"} read for the component-state check. To check tokens, text styles and components against it, re-run with --design-system ${lib.rel}.`
     );
   }
+}
+function applyOverrides(ac, crossFile, crossOrigin) {
+  const { opts, findings } = ac;
   const overridesUnmatched = [];
   for (const o of opts.overrides || []) {
     const hits = findings.filter((f) => f.code === o.code && OVERRIDE_KEYS.every((k) => o[k] === void 0 || f[k] === o[k]));
@@ -2896,6 +3136,10 @@ function audit(input, opts = {}) {
     const cf = crossFile.findings;
     crossFile.summary = { blockers: cf.filter((f) => f.severity === "blocker").length, warnings: cf.filter((f) => f.severity === "warning").length, info: cf.filter((f) => f.severity === "info").length };
   }
+  return overridesUnmatched;
+}
+function finishFindings(ac, questions) {
+  const { findings } = ac;
   for (const f of findings) if (f.crossFile && f.confirm && !f.overridden) questions.push(`Confirm (${f.code}): ${f.confirm}`);
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
   const ownIds = findingIds(findings.filter((f) => !f.crossFile));
@@ -2905,30 +3149,6 @@ function audit(input, opts = {}) {
     findings[i] = { severity, code, id: f.crossFile && id ? id : ownIds[own] ?? code, ...rest };
     if (!f.crossFile) own++;
   });
-  const count = (s) => findings.filter((f) => f.severity === s).length;
-  return {
-    platform,
-    platformAssumed,
-    crossFile,
-    grid,
-    gridAssumed,
-    gridMismatch,
-    screenStatesScope,
-    screens: roots.map((r) => r.label),
-    // The root node id(s) audited — additive, read only by the CLI's duplicate-artefact
-    // check: it lets a re-run find an EARLIER report for the same screen under a
-    // different name without re-parsing every screen export in the directory.
-    nodeIds: roots.map((r) => r.tree && r.tree.id).filter((id) => !!id),
-    summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
-    hiddenLayers: { nodesSkipped: hiddenIds.size, crossFileFindingsOmitted: hiddenFindingsOmitted },
-    ...overridesUnmatched.length ? { overridesUnmatched } : {},
-    tokenBinding,
-    components,
-    screenStates,
-    annotations,
-    questions,
-    findings
-  };
 }
 function pathTail(p) {
   const parts = p.split(" > ");

@@ -15,11 +15,11 @@ import { manifest, screenReply } from "./fixtures.ts";
 import { formatDone } from "../bridge/src/figma-pull.ts";
 import { DAEMON_UNSUPPORTED, daemonSupported } from "../bridge/src/daemon.ts";
 import type { Asset } from "../bridge/src/doc-types.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const PORT = 8789;
 const TOKEN = "cli-pull-test-token";
 const CLI = path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts");
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------- the fake plugin
 

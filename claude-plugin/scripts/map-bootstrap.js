@@ -3,6 +3,7 @@
 
 // design-to-code/map-bootstrap.ts
 import fs6 from "node:fs";
+import { parseArgs as parseArgs2 } from "node:util";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -17,6 +18,7 @@ import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
 // design-to-code/read-json.ts
 var anyJson = (_x) => true;
@@ -102,11 +104,6 @@ function ifDefined(key, v) {
   const o = {};
   if (v !== void 0) o[key] = v;
   return o;
-}
-
-// design-to-code/probe-steps.ts
-function isPlanExpect(x) {
-  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
 }
 
 // design-to-code/doc-guards.ts
@@ -289,10 +286,6 @@ function isPlanDescope(x) {
   return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
-function isPlanInteraction(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
-}
-isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -322,9 +315,105 @@ function screenRoots(doc) {
 // design-to-code/cli-args.ts
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
+  try {
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      failure = unknownFlags();
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
+    } else {
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
+    }
+  }
+  console.error(failure);
+  process.exit(exitCode);
+}
+function cliArity(tool, positionals, min, max, usage) {
+  if (positionals.length < min) {
+    console.error(usage);
+    return false;
+  }
+  if (positionals.length > max) {
+    console.error(`${tool}: unexpected argument ${positionals.slice(max).join(", ")}
+${usage}`);
+    return false;
+  }
+  return true;
+}
 
 // design-to-code/component-match.ts
 function visibleInstances(doc, label) {
@@ -823,54 +912,28 @@ function main(argv) {
     console.log(usage);
     return 0;
   }
-  let outFile = null, proposalsFile = null, screenFile = null;
-  const extraCatalogFiles = [];
-  for (let ci = argv.indexOf("--catalog"); ci !== -1; ci = argv.indexOf("--catalog")) {
-    const next = argv[ci + 1];
-    if (!next || next.startsWith("--")) {
-      console.error("--catalog needs a component catalog .json (components.json / components.library.json)\n" + usage);
-      return 1;
-    }
-    extraCatalogFiles.push(next);
-    argv.splice(ci, 2);
+  const OPTIONS = {
+    out: { type: "string" },
+    "from-proposals": { type: "string" },
+    screen: { type: "string" },
+    catalog: { type: "string", multiple: true },
+    help: { type: "boolean", short: "h" }
+  };
+  const { values: flags, positionals } = cliParse("map-bootstrap", argv, OPTIONS, usage, 1, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) {
+    console.log(usage);
+    return 0;
   }
-  const pi = argv.indexOf("--from-proposals");
-  if (pi !== -1) {
-    const next = argv[pi + 1];
-    if (!next || next.startsWith("--")) {
-      console.error("--from-proposals needs the JSON report the cross-check (or audit) script wrote with --out/--json\n" + usage);
-      return 1;
-    }
-    proposalsFile = next;
-    argv.splice(pi, 2);
-  }
-  const si = argv.indexOf("--screen");
-  if (si !== -1) {
-    const next = argv[si + 1];
-    if (!next || next.startsWith("--")) {
-      console.error("--screen needs a screen export .json\n" + usage);
-      return 1;
-    }
-    screenFile = next;
-    argv.splice(si, 2);
-  }
-  const o = argv.indexOf("--out");
-  if (o !== -1) {
-    const next = argv[o + 1];
-    if (!next || next.startsWith("--")) {
-      console.error("--out needs a file path\n" + usage);
-      return 1;
-    }
-    outFile = next;
-    argv.splice(o, 2);
-  }
-  const unknown = argv.find((a) => a.startsWith("--"));
-  if (unknown) {
-    console.error(`unknown option ${unknown}
+  if (!cliArity("map-bootstrap", positionals, 1, 2, usage)) return 1;
+  const emptyFlag = ["out", "from-proposals", "screen"].find((n) => flags[n] === "") ?? (flags.catalog?.includes("") ? "catalog" : void 0);
+  if (emptyFlag) {
+    console.error(`map-bootstrap: --${emptyFlag} needs a value
 ${usage}`);
     return 1;
   }
-  const [catalogFile, existingArg] = argv;
+  const outFile = flags.out ?? null, proposalsFile = flags["from-proposals"] ?? null, screenFile = flags.screen ?? null;
+  const extraCatalogFiles = flags.catalog ?? [];
+  const [catalogFile, existingArg] = positionals;
   if (!catalogFile) {
     console.error(usage);
     return 1;

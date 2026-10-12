@@ -97,7 +97,7 @@ export interface PaintBase {
   opacity?: number;
   /** Paint-level variable bindings (e.g. `{ color: "Primary/Primary" }`). */
   tokens?: TokenMap;
-  /** Never emitted (invisible paints are filtered out); verify-screen.ts still tests `!== false`. */
+  /** Never emitted (invisible paints are filtered out); design-to-code/verify-expect.ts still tests `!== false`. */
   visible?: boolean;
 }
 export interface SolidPaint extends PaintBase { type: "solid"; color: string }

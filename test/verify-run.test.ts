@@ -12,6 +12,7 @@ import { shellArg } from "../design-to-code/cli-args.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { check, report } from "./assert.ts";
 import { POSIX_SH } from "./posix-sh.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const safe = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch (e) { console.log(`    (threw: ${e instanceof Error ? e.message : String(e)})`); } return check(name, r); };
 const VS_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
@@ -452,7 +453,7 @@ await block("verify-screen --wait:", async () => {
     p.stdout.on("data", (d: Buffer) => { out += d.toString(); });
     p.on("close", (code) => resolve(code));
   });
-  await new Promise((r) => setTimeout(r, 700));
+  await sleep(700);
   cli("--status", "Plots", "--phase", "done", "--run", "run-e", "--publish", stage);
   const code = await waiting;
   safe("…a wait that is polling when the run reaches done → exit 0", () => code === 0);
@@ -472,7 +473,7 @@ await block("verify-screen --wait:", async () => {
     p.on("close", (code) => { closedW = true; resolve(code); });
   });
   // the evidence lands only once the wait has said it is waiting for it (or has exited — the bug), however slow its start
-  for (const t0 = Date.now(); !noteW.test(errW) && !closedW && Date.now() - t0 < 10_000;) await new Promise((r) => setTimeout(r, 50));
+  for (const t0 = Date.now(); !noteW.test(errW) && !closedW && Date.now() - t0 < 10_000;) await sleep(50);
   const sawNote = noteW.test(errW) && !closedW;
   fs.copyFileSync(evStaged, path.join(dir, "Plots.evidence.json"));
   const codeW = await waitingW;

@@ -1811,13 +1811,10 @@
     }
     return t;
   }
-  function isVariableAlias2(v) {
-    return !!v && typeof v === "object" && "type" in v && v.type === "VARIABLE_ALIAS";
-  }
   async function simplifyVariableData(vd) {
     if (!vd || typeof vd !== "object") return vd;
     const v = "value" in vd ? vd.value : vd;
-    if (isVariableAlias2(v)) {
+    if (isVariableAlias(v)) {
       return { token: await varName(v.id) || v.id };
     }
     return v;
@@ -1900,6 +1897,9 @@
     }
     return out.length ? out : void 0;
   }
+
+  // ../bridge/src/instance-overrides.ts
+  var OVERRIDE_CAP = 100;
 
   // src/libraries.ts
   var UNKNOWN_LIBRARY = "unknown-library";
@@ -2183,7 +2183,6 @@
     }
     return nonEmpty(out);
   }
-  var OVERRIDE_CAP = 100;
   function instanceOverrides(node) {
     if (node.type !== "INSTANCE") return void 0;
     const overrides = node.overrides;
@@ -3852,16 +3851,17 @@
   globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
   figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
+  var post2 = (m) => figma.ui.postMessage(m);
   async function runExport(label, collect, toFiles) {
     let r;
     try {
       r = await serializeRun(collect, { source: "ui", label });
     } catch (e) {
-      figma.ui.postMessage({ type: "error", message: errMsg(e) });
+      post2({ type: "error", message: errMsg(e) });
       return;
     }
     const { files, layerFiles, summary, warnings: warnings2 } = toFiles(r);
-    figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary, warnings: warnings2 ? warnings2.length : 0 });
+    post2({ type: "files", files, ...ifDefined("layerFiles", layerFiles), assets: r.assets, summary, warnings: warnings2 ? warnings2.length : 0 });
   }
   var runSelection = () => runExport("current selection", () => collectSelection(), (r) => ({
     files: [
@@ -3890,14 +3890,14 @@
   function notifySelection() {
     const sel = figma.currentPage.selection;
     const first2 = sel[0];
-    figma.ui.postMessage({ type: "selection", count: sel.length, name: first2 ? first2.name : null });
+    post2({ type: "selection", count: sel.length, name: first2 ? first2.name : null });
   }
   figma.ui.onmessage = async (raw) => {
     if (!isUIToMain(raw)) return;
     switch (raw.type) {
       case "get-token": {
         const token = await figma.clientStorage.getAsync("bridgeToken");
-        figma.ui.postMessage({ type: "token", token: typeof token === "string" ? token : "" });
+        post2({ type: "token", token: typeof token === "string" ? token : "" });
         break;
       }
       case "set-token": {
@@ -3911,7 +3911,7 @@
         } catch (e) {
           identity = { error: errMsg(e) };
         }
-        figma.ui.postMessage({ type: "identity", identity });
+        post2({ type: "identity", identity });
         break;
       }
       case "run-selection": {
@@ -3932,7 +3932,7 @@
           break;
         }
         const hit = requestCancel();
-        figma.ui.postMessage({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
+        post2({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
         break;
       }
       case "bridge": {
@@ -3943,7 +3943,7 @@
         } catch (e) {
           error = errMsg(e);
         }
-        figma.ui.postMessage({ type: "bridge-result", id: raw.id, ok: !error, result, error });
+        post2({ type: "bridge-result", ...ifDefined("id", raw.id), ok: !error, result, ...ifDefined("error", error) });
         break;
       }
       default: {

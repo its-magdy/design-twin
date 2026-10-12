@@ -649,7 +649,6 @@ function parseCssColor(v) {
 }
 
 // design-to-code/probe-match.ts
-var CANONICAL_MATCHED_BY = ["tag", "tag-shared-path", "tag-alias", "text", "text-ordinal", "position", "frame"];
 var isMatch = (m) => "matchedBy" in m;
 var normText = (s) => s.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 var attrSelector = (id) => `[data-dt-node="${id.replace(/["\\]/g, "\\$&")}"]`;
@@ -905,111 +904,139 @@ function census(nodes, notMeasured) {
   return c;
 }
 
-// design-to-code/verify-screen.ts
-import path5 from "node:path";
-
-// design-to-code/content-hash.ts
-import { spawnSync } from "node:child_process";
-
-// bridge/src/json-util.ts
-function isStringArray(x) {
-  return Array.isArray(x) && x.every((v) => typeof v === "string");
-}
-
-// design-to-code/content-hash.ts
-function gitHead(cwd) {
-  try {
-    const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
-    const h = r.status === 0 && String(r.stdout || "").trim();
-    return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
-  } catch {
-    return null;
-  }
-}
-
-// bridge/src/atomic-write.ts
-import crypto2 from "node:crypto";
-import fs from "node:fs";
+// design-to-code/verify-shared.ts
 import path from "node:path";
-var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
-function writeFileAtomic(file, data, opts = {}) {
-  fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
-  const tmp = file + tmpSuffix();
-  try {
-    fs.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
-    if (opts.mode !== void 0) fs.chmodSync(tmp, opts.mode);
-    fs.renameSync(tmp, file);
-  } catch (e) {
-    try {
-      fs.rmSync(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
+var TOLERANCE = {
+  fontSize: 0.5,
+  // a browser rounds; a different token does not
+  fontWeight: 0,
+  // 500 vs 600 is a different style, never a rendering artifact
+  lineHeight: 2,
+  // normal/unitless line-heights and font-metric rounding genuinely differ
+  letterSpacing: 0.2,
+  radius: 0.5,
+  padding: 1,
+  gap: 1,
+  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
+  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
+  size: 1,
+  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
+  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
+  position: 2,
+  opacity: 0.02,
+  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
+  stroke: 0.5,
+  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
+  // in the field runs. Known miss: heavy italics/overhang can exceed it.
+  textInk: 3
+};
+function normColor(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  const key = colorKey(s);
+  if (key) return key;
+  const c = parseCssColor(s);
+  if (c === null) return s;
+  if (c.a === 0) return "transparent";
+  return colorKey(formatHex(c)) ?? s;
 }
+var WEIGHTS = {
+  thin: 100,
+  extralight: 200,
+  ultralight: 200,
+  light: 300,
+  normal: 400,
+  regular: 400,
+  book: 400,
+  medium: 500,
+  semibold: 600,
+  demibold: 600,
+  bold: 700,
+  extrabold: 800,
+  ultrabold: 800,
+  black: 900,
+  heavy: 900
+};
+function normWeight(v) {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  const s = String(v).trim();
+  if (/^\d+$/.test(s)) return Number(s);
+  const key = s.toLowerCase().replace(/[^a-z]/g, "");
+  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
+}
+function normFamily(v) {
+  if (v == null) return null;
+  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+}
+var scaleText = (n) => `${Math.round(n * 1e4) / 1e4}x`;
+function resolveInside(base, rel, within = base) {
+  const root = path.resolve(within), file = path.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path.sep) ? file : null;
+}
+var FIELDS = [
+  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
+  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
+  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
+  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
+  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
+  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
+  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
+  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
+  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
+  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
+  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
+  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
+  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
+  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
+  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
+  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
+  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
+  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
+];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEY_SHAPE = {
+  borderRadius: "number | [tl,tr,br,bl]",
+  padding: "[t,r,b,l]",
+  fill: "an SVG's paint",
+  textBox: "{x,w} of a Range over the text",
+  placeholderText: "el.placeholder",
+  placeholderColor: "the ::placeholder colour",
+  tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display"
+};
+var MEASURED_KEYS_DOC = {
+  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
+  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
+  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
+  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
+  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
+  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
+  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
+  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
+  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
+  "nodes[].styles.tag": "the element's tagName, lower-case",
+  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
+  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
+  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
+  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
+  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
+  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
+  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
+  "expectationSha256": "sha256 of the .expected.json you measured against"
+};
+var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
 
 // design-to-code/types.ts
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
 
-// design-to-code/plan-waivers.ts
-function canonical(v) {
-  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
-  if (v && typeof v === "object") {
-    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
-  }
-  return JSON.stringify(v ?? null);
-}
-
-// design-to-code/probe-steps.ts
-var STEP_KINDS = ["click", "waitFor", "goto"];
-var isStepKind = (k) => STEP_KINDS.includes(k);
-var REFUSED = {
-  fill: "a typed value may submit a form when the steps are replayed",
-  type: "a typed value may submit a form when the steps are replayed",
-  press: "a key press may submit a form when the steps are replayed",
-  hover: "a hover is not a navigation (hover-revealed openers are revealed by the probe itself)",
-  check: "a checked box is state, not navigation",
-  select: "a selected option is state, not navigation"
-};
-function describeStep(s, i) {
-  const [k, v] = Object.entries(s)[0] ?? ["?", ""];
-  return `step ${i + 1} {${k}: ${JSON.stringify(v)}}`;
-}
-function isSameOriginPath(v) {
-  return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
-}
-function parseSteps(x) {
-  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
-  if (!Array.isArray(list)) {
-    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
-  }
-  const steps = [];
-  for (const [i, raw] of list.entries()) {
-    const at = `step ${i + 1}`;
-    if (!isJsonObject(raw)) return { error: `${at} is not an object like {"click": "<selector>"}` };
-    const keys = Object.keys(raw);
-    const k = keys[0];
-    if (keys.length !== 1 || k === void 0) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} \u2014 exactly one of ${STEP_KINDS.join(" / ")}` };
-    const v = raw[k];
-    if (!isStepKind(k)) {
-      const lk = k.toLowerCase();
-      const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : void 0;
-      return { error: `${at} {${k}: \u2026} is not a step \u2014 the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
-    }
-    if (typeof v !== "string" || v.trim() === "") return { error: `${at} {${k}: \u2026} needs a non-empty string` };
-    if (k === "goto" && !isSameOriginPath(v)) return { error: `${at} {goto: ${JSON.stringify(v)}} must be a same-origin path starting with "/" (e.g. "/orders?tab=open") \u2014 never "//" or "/\\", and no backslash, whitespace or control character` };
-    steps.push(k === "click" ? { click: v } : k === "waitFor" ? { waitFor: v } : { goto: v });
-  }
-  return { steps };
-}
-function stepsSha256(steps) {
-  return sha256Hex(canonical(steps));
-}
-function isPlanExpect(x) {
-  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
+// bridge/src/json-util.ts
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
 
 // design-to-code/doc-guards.ts
@@ -1198,17 +1225,13 @@ function isPlanDescope(x) {
   return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
-function isPlanInteraction(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
-}
-isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
 
 // design-to-code/read-json.ts
-import fs2 from "node:fs";
+import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
@@ -1227,7 +1250,7 @@ function readFailure(e) {
 function readJson(file, guard) {
   let buf;
   try {
-    buf = fs2.readFileSync(file);
+    buf = fs.readFileSync(file);
   } catch (e) {
     return readFailure(e);
   }
@@ -1250,11 +1273,6 @@ function readJsonOrNull(file, guard) {
   const r = readJson(file, guard);
   return "doc" in r ? r.doc : null;
 }
-
-// design-to-code/verify-run.ts
-import fs3 from "node:fs";
-import os from "node:os";
-import path4 from "node:path";
 
 // design-to-code/cli-args.ts
 import path2 from "node:path";
@@ -1281,435 +1299,127 @@ function joinNegativeValues(argv, options) {
   }
   return out;
 }
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
 function cliParse(tool, argv, options, usage, exitCode, parse) {
   const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
   try {
-    return parse(args);
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
   } catch (e) {
     const code = errCode(e);
     if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-      const unknown = [...new Set(tokens.flatMap((t) => t.kind === "option" && !(t.name in options) ? [t.rawName] : []))];
-      console.error(`${tool}: unknown flag ${unknown.join(", ")}
-${usage}`);
+      failure = unknownFlags();
     } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
       const msg = e instanceof Error ? e.message : "";
-      const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
-      console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
-${usage}`);
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
     } else {
-      console.error(`${tool}: ${errMsg(e)}
-${usage}`);
-    }
-    process.exit(exitCode);
-  }
-}
-
-// bridge/src/project-layout.ts
-import path3 from "node:path";
-var DESIGN_DIR = "design";
-var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
-var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
-var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
-var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path3.sep).join("/");
-var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
-
-// design-to-code/verify-run.ts
-var STATUS_SCHEMA = "designtwin/verify-status@2";
-var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
-var TERMINAL_PHASES = ["done", "failed", "blocked"];
-var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
-}
-isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var statusFile = (base) => base + ".status.json";
-var CACHE_NAME = "designtwin-verify";
-var shortSha = (s) => sha256Hex(s).slice(0, 16);
-var isDir = (p) => {
-  try {
-    return fs3.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
-};
-var exists = (p) => fs3.existsSync(p);
-function realpath(p) {
-  if (typeof fs3.realpathSync.native === "function") {
-    try {
-      return fs3.realpathSync.native(p);
-    } catch {
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
     }
   }
-  return fs3.realpathSync(p);
-}
-function canonical2(p) {
-  const abs = path4.resolve(p);
-  try {
-    return realpath(abs);
-  } catch {
-    const parent = path4.dirname(abs);
-    return parent === abs ? abs : path4.join(canonical2(parent), path4.basename(abs));
-  }
-}
-var hasPnp = (d) => exists(path4.join(d, ".pnp.cjs")) || exists(path4.join(d, ".pnp.js"));
-function isWorkspaceRoot(d) {
-  if (exists(path4.join(d, "pnpm-workspace.yaml"))) return true;
-  const r = readJson(path4.join(d, "package.json"), anyJson);
-  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
-}
-function installRootOf(dir) {
-  let P = null;
-  for (let d = dir; ; d = path4.dirname(d)) {
-    if (exists(path4.join(d, "package.json"))) {
-      P = d;
-      break;
-    }
-    if (exists(path4.join(d, ".git")) || path4.dirname(d) === d) return null;
-  }
-  if (isDir(path4.join(P, "node_modules"))) return P;
-  let ws = null;
-  for (let d = P; ; d = path4.dirname(d)) {
-    if (isWorkspaceRoot(d)) {
-      ws = d;
-      break;
-    }
-    if (exists(path4.join(d, ".git")) || path4.dirname(d) === d) break;
-  }
-  if (ws !== null && isDir(path4.join(ws, "node_modules"))) return ws;
-  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
-  return P;
-}
-function runCacheOf(verifyDir) {
-  const v = canonical2(verifyDir);
-  const root = installRootOf(v);
-  if (root !== null) {
-    const cache = path4.join(root, "node_modules", ".cache", CACHE_NAME);
-    const rel = path4.relative(root, v).split(path4.sep).join("/");
-    return { dir: rel === VERIFY_DIR.split(path4.sep).join("/") ? cache : path4.join(cache, "dirs", shortSha(rel)), root };
-  }
-  return { dir: path4.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
-}
-function runCacheDir(verifyDir) {
-  return runCacheOf(verifyDir).dir;
-}
-var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
-var RunCacheUnwritable = class extends Error {
-  cacheDir;
-  root;
-  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
-   *  permission: a directory on the way was removed while the run wrote there */
-  constructor(cacheDir, root, code) {
-    super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
-    this.name = "RunCacheUnwritable";
-    this.cacheDir = cacheDir;
-    this.root = root;
-  }
-};
-function inRunCache(verifyDir, fn) {
-  try {
-    return fn();
-  } catch (e) {
-    const code = errCode(e);
-    if (code !== void 0 && UNWRITABLE_CODES.has(code)) {
-      const c = runCacheOf(verifyDir);
-      throw new RunCacheUnwritable(c.dir, c.root, code);
-    }
-    throw e;
-  }
-}
-var liveStatusFile = (base) => path4.join(runCacheDir(path4.dirname(base)), path4.basename(base) + ".status.json");
-var stageDirOf = (base, runId) => path4.join(runCacheDir(path4.dirname(base)), "stage", runId);
-function readStatusFile(file) {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return null;
-  if (isVerifyStatusV2(r.doc)) return r.doc;
-  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
-}
-function readStatusAt(base) {
-  for (const file of [liveStatusFile(base), statusFile(base)]) {
-    const status = readStatusFile(file);
-    if (status !== null) return { file, status };
-  }
-  return null;
-}
-function readStatus(base) {
-  const r = readStatusAt(base);
-  return r ? r.status : null;
-}
-var RunEnded = class extends Error {
-  constructor(runId, phase, detail) {
-    super(`run ${runId} already ended at ${phase}${detail ? ` (${detail})` : ""} \u2014 start a new run with --new-run`);
-    this.name = "RunEnded";
-  }
-};
-function writeStatus(base, p) {
-  const prev = readStatus(base);
-  const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
-  if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
-  const pick = (k) => {
-    const v = p[k] ?? (same ? same[k] : void 0);
-    return v !== void 0 ? { [k]: v } : {};
-  };
-  const published = p.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...p.published || []])].sort() : void 0;
-  const doc = {
-    schema: STATUS_SCHEMA,
-    screen: path4.basename(base),
-    runId: p.runId,
-    rev: same ? same.rev + 1 : 1,
-    phase: p.phase,
-    detail: p.detail ?? "",
-    at: (/* @__PURE__ */ new Date()).toISOString(),
-    by: p.by,
-    ...pick("expectationSha256"),
-    ...pick("measuredSha256"),
-    ...pick("evidenceSha256"),
-    ...published !== void 0 ? { published } : {}
-  };
-  const live = liveStatusFile(base);
-  inRunCache(path4.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
-  return doc;
+  console.error(failure);
+  process.exit(exitCode);
 }
 
-// design-to-code/export-shape.ts
-function isIrNode(x) {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
-}
-function isScreenExport(x) {
-  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
-}
-function isLayerFile(x) {
-  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
-}
-function isScreenDoc(x) {
-  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
-}
-isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
-
-// bridge/src/is-main.ts
-import fs4 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs4.realpathSync(argv1) === fs4.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
+// design-to-code/plan-waivers.ts
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
   }
+  return JSON.stringify(v ?? null);
 }
 
-// design-to-code/verify-screen.ts
-var TOLERANCE = {
-  fontSize: 0.5,
-  // a browser rounds; a different token does not
-  fontWeight: 0,
-  // 500 vs 600 is a different style, never a rendering artifact
-  lineHeight: 2,
-  // normal/unitless line-heights and font-metric rounding genuinely differ
-  letterSpacing: 0.2,
-  radius: 0.5,
-  padding: 1,
-  gap: 1,
-  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
-  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
-  size: 1,
-  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
-  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
-  position: 2,
-  opacity: 0.02,
-  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
-  stroke: 0.5,
-  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
-  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
-  // in the field runs. Known miss: heavy italics/overhang can exceed it.
-  textInk: 3
+// design-to-code/probe-steps.ts
+var STEP_KINDS = ["click", "waitFor", "goto"];
+var isStepKind = (k) => STEP_KINDS.includes(k);
+var REFUSED = {
+  fill: "a typed value may submit a form when the steps are replayed",
+  type: "a typed value may submit a form when the steps are replayed",
+  press: "a key press may submit a form when the steps are replayed",
+  hover: "a hover is not a navigation (hover-revealed openers are revealed by the probe itself)",
+  check: "a checked box is state, not navigation",
+  select: "a selected option is state, not navigation"
 };
-function normColor(v) {
-  if (v == null) return null;
-  const s = String(v).trim().toLowerCase();
-  const key = colorKey(s);
-  if (key) return key;
-  const c = parseCssColor(s);
-  if (c === null) return s;
-  if (c.a === 0) return "transparent";
-  return colorKey(formatHex(c)) ?? s;
+function describeStep(s, i) {
+  const [k, v] = Object.entries(s)[0] ?? ["?", ""];
+  return `step ${i + 1} {${k}: ${JSON.stringify(v)}}`;
 }
-var WEIGHTS = {
-  thin: 100,
-  extralight: 200,
-  ultralight: 200,
-  light: 300,
-  normal: 400,
-  regular: 400,
-  book: 400,
-  medium: 500,
-  semibold: 600,
-  demibold: 600,
-  bold: 700,
-  extrabold: 800,
-  ultrabold: 800,
-  black: 900,
-  heavy: 900
-};
-function normWeight(v) {
-  if (v == null) return null;
-  if (typeof v === "number") return v;
-  const s = String(v).trim();
-  if (/^\d+$/.test(s)) return Number(s);
-  const key = s.toLowerCase().replace(/[^a-z]/g, "");
-  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
+function isSameOriginPath(v) {
+  return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
 }
-function normFamily(v) {
-  if (v == null) return null;
-  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+function parseSteps(x) {
+  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
+  if (!Array.isArray(list)) {
+    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
+  }
+  const steps = [];
+  for (const [i, raw] of list.entries()) {
+    const at = `step ${i + 1}`;
+    if (!isJsonObject(raw)) return { error: `${at} is not an object like {"click": "<selector>"}` };
+    const keys = Object.keys(raw);
+    const k = keys[0];
+    if (keys.length !== 1 || k === void 0) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} \u2014 exactly one of ${STEP_KINDS.join(" / ")}` };
+    const v = raw[k];
+    if (!isStepKind(k)) {
+      const lk = k.toLowerCase();
+      const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : void 0;
+      return { error: `${at} {${k}: \u2026} is not a step \u2014 the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
+    }
+    if (typeof v !== "string" || v.trim() === "") return { error: `${at} {${k}: \u2026} needs a non-empty string` };
+    if (k === "goto" && !isSameOriginPath(v)) return { error: `${at} {goto: ${JSON.stringify(v)}} must be a same-origin path starting with "/" (e.g. "/orders?tab=open") \u2014 never "//" or "/\\", and no backslash, whitespace or control character` };
+    steps.push(k === "click" ? { click: v } : k === "waitFor" ? { waitFor: v } : { goto: v });
+  }
+  return { steps };
 }
-var round4 = (n) => Math.round(n * 1e4) / 1e4;
-var scaleText = (n) => `${round4(n)}x`;
-function resolveInside(base, rel, within = base) {
-  const root = path5.resolve(within), file = path5.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path5.sep) ? file : null;
-}
-var KNOWN_NODE_KEYS = /* @__PURE__ */ new Set([
-  "nodeId",
-  "styles",
-  "states",
-  "matchedBy",
-  "note",
-  "notes",
-  "selector",
-  "selectorCount",
-  "unmeasured",
-  "textFrom",
-  "textFromMixed",
-  "fillSource"
-]);
-var KNOWN_STYLE_KEYS = /* @__PURE__ */ new Set([
-  "fontFamily",
-  "fontSize",
-  "fontWeight",
-  "lineHeight",
-  "letterSpacing",
-  "color",
-  "backgroundColor",
-  "fill",
-  "borderColor",
-  "borderWidth",
-  "borderRadius",
-  "gap",
-  "gapVisual",
-  "width",
-  "height",
-  "x",
-  "y",
-  "opacity",
-  "padding",
-  "text",
-  "placeholderText",
-  "placeholderColor",
-  "tag",
-  "textBox",
-  "display",
-  "transform",
-  "rotate",
-  "visible",
-  // where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
-  "strokeFrom",
-  "strokeAlign",
-  // a TEXT's computed text-transform; who paints a transparent element (optional keys)
-  "textTransform",
-  "paintedBy",
-  // free text, never read for a judgement — tolerated on either level
-  "note",
-  "notes"
-]);
-var KNOWN_MEASURED_KEYS = /* @__PURE__ */ new Set([...KNOWN_NODE_KEYS, ...KNOWN_STYLE_KEYS]);
-var KEY_HINTS = {
-  radius: "borderRadius",
-  borderTopLeftRadius: "borderRadius",
-  background: "backgroundColor",
-  bg: "backgroundColor",
-  w: "width",
-  h: "height",
-  svgFill: "fill",
-  placeholder: "placeholderText",
-  rowGap: "gapVisual",
-  columnGap: "gap",
-  // a node-level key written INSIDE styles is not read there (a styles.fillSource "img" would not exempt the fill)
-  ...Object.fromEntries([...KNOWN_NODE_KEYS].filter((k) => k !== "nodeId" && k !== "styles" && k !== "note" && k !== "notes").map((k) => [k, `nodes[].${k} (beside styles, not inside)`]))
-};
-var FIELDS = [
-  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
-  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
-  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
-  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
-  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
-  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
-  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
-  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
-  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
-  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
-  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
-  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
-  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
-  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
-  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
-  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
-  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
-];
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
-var STYLE_KEY_SHAPE = {
-  borderRadius: "number | [tl,tr,br,bl]",
-  padding: "[t,r,b,l]",
-  fill: "an SVG's paint",
-  textBox: "{x,w} of a Range over the text",
-  placeholderText: "el.placeholder",
-  placeholderColor: "the ::placeholder colour",
-  tag: "tagName, lower-case",
-  display: "getComputedStyle(el).display"
-};
-var MEASURED_KEYS_DOC = {
-  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
-  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
-  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
-  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
-  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
-  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
-  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
-  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
-  "nodes[].styles.tag": "the element's tagName, lower-case",
-  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
-  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
-  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
-  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
-  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
-  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
-  "expectationSha256": "sha256 of the .expected.json you measured against"
-};
-var CANONICAL_MATCH = new Set(CANONICAL_MATCHED_BY);
-var INTERACTION_OUTCOMES = ["url-changed", "dialog-opened", "selector-appeared", "state-changed", "none"];
-var ANY_BUT_NONE = INTERACTION_OUTCOMES.filter((o) => o !== "none");
-var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
-if (false) {
-  const code = main(process.argv.slice(2));
-  if (typeof code === "number") process.exitCode = code;
-  else code.then((c) => {
-    process.exitCode = c;
-  }, (e) => {
-    console.error(`verify-screen: ${errMsg(e)}`);
-    process.exitCode = 1;
-  });
+function stepsSha256(steps) {
+  return sha256Hex(canonical(steps));
 }
 
 // design-to-code/probe-drive.ts
@@ -4470,113 +4180,143 @@ async function runBehaviour(browser, o) {
 }
 var WRITE_BLOCK_SETUP_MS = 5e3;
 async function runUnits(browser, o, block, t0) {
-  const end = t0 + o.budgetMs;
-  const checks = [];
-  let cut = false;
-  let landmarks = null;
-  let axe = "why" in o.axe ? { ran: false, why: o.axe.why } : { ran: false, why: "axe did not run (the a11y unit was not reached)" };
-  const widths = [];
-  let forced = null;
-  const keyOpens = /* @__PURE__ */ new Map();
-  const nonModal = /* @__PURE__ */ new Set();
-  let batteryLeft = 0;
-  const runUnit = async (unit) => {
-    const tu = Date.now();
+  const ctx = {
+    browser,
+    o,
+    block,
+    end: t0 + o.budgetMs,
+    checks: [],
+    cut: false,
+    landmarks: null,
+    axe: "why" in o.axe ? { ran: false, why: o.axe.why } : { ran: false, why: "axe did not run (the a11y unit was not reached)" },
+    widths: [],
+    forced: null,
+    keyOpens: /* @__PURE__ */ new Map(),
+    nonModal: /* @__PURE__ */ new Set(),
+    batteryLeft: 0
+  };
+  await runUnit(ctx, a11yUnit(ctx));
+  await runUnit(ctx, renderUnit(ctx));
+  await runBattery(ctx);
+  return {
+    behaviour: {
+      version: 1,
+      ran: true,
+      browser: { name: o.browserName ?? "chromium", version: browser.version() },
+      namesComputedBy: NAMES_COMPUTED_BY,
+      budgetMs: o.budgetMs,
+      elapsedMs: Date.now() - t0,
+      cut: ctx.cut,
+      checks: ctx.checks,
+      landmarks: ctx.landmarks,
+      axe: ctx.axe,
+      widths: ctx.widths,
+      artifacts: ctx.forced ? [o.forcedPng] : [],
+      writeBlock: WRITE_BLOCK_SCOPE
+    },
+    forcedPng: ctx.forced
+  };
+}
+async function runUnit(ctx, unit) {
+  const tu = Date.now();
+  try {
+    await runUnitInner(ctx, unit);
+  } finally {
+    if (process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name} ${Date.now() - tu}ms`);
+  }
+}
+async function runUnitInner(ctx, unit) {
+  const { browser, o, block, end, checks } = ctx;
+  const produced = [];
+  const budgetLeft = end - Date.now();
+  const left = unit.battery ? unitCap(budgetLeft, ctx.batteryLeft) : budgetLeft;
+  if (unit.battery) ctx.batteryLeft--;
+  if (left <= 0) {
+    ctx.cut = true;
+    fill(checks, [], unit.declared, "time budget");
+    return;
+  }
+  const unitEnd = Date.now() + left;
+  let closed = false;
+  const held = {};
+  let loadsAt = 0;
+  let loadsNow = () => 0;
+  const trace = { phases: [{ seq: 0, keys: ["reach|"] }], actions: [] };
+  const tried = { list: [], more: 0 };
+  const net = { armed: false, write: (method, url) => {
+    const kept = logTried(tried, method, url);
+    if (kept && process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name}: blocked ${method} ${url} (in ${trace.phases.at(-1)?.keys.join(" ") ?? "?"})`);
+    return kept;
+  } };
+  const api = (page) => ({
+    page,
+    add: (c) => {
+      if (!closed) produced.push(c);
+    },
+    phase: (...keys) => {
+      trace.phases.push({ seq: trace.phases.length, keys: keys.map((k) => k.includes("|") ? k : `${k}|`) });
+    },
+    act: () => {
+      net.armed = true;
+      trace.actions.push({ at: Date.now(), seq: trace.phases.length - 1 });
+    },
+    guard: () => {
+      if (loadsNow() !== loadsAt) throw new UnitNavigated("the page loaded a new document");
+    }
+  });
+  const blocked = () => blockedOf(tried, taintedPhases(trace));
+  block.unit(net);
+  const work = (async () => {
+    let reached;
     try {
-      await runUnitInner(unit);
+      reached = await openUnitPage(browser, o, holdContext(held), net);
+    } catch (e) {
+      return e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine(e)}`;
+    }
+    try {
+      loadsAt = reached.loads();
+      loadsNow = reached.loads;
+      if (o.measuredTags && o.measuredTags.length) {
+        const diff = fingerprintDiff(o.measuredTags, await reached.page.evaluate(visibleTags, null), unit.uses);
+        if (diff !== null) throw new BatteryStop(`the page reached for this check differs from the measured page (${diff}${reached.failed.length ? `; failed while loading: ${reached.failed.slice(0, 3).join(", ")}` : ""})`);
+      }
+      await reached.page.evaluate(tipPreMark, null).catch(() => false);
+      await unit.run(api(reached.page));
+      return null;
     } finally {
-      if (process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name} ${Date.now() - tu}ms`);
+      const last = trace.actions.at(-1);
+      const wait = last ? Math.min(WRITE_SETTLE_MS - (Date.now() - last.at), unitEnd - Date.now()) : 0;
+      if (wait > 0) await sleep2(wait, void 0, { ref: false });
+      await reached.context.close().catch(() => void 0);
     }
-  };
-  const runUnitInner = async (unit) => {
-    const produced = [];
-    const budgetLeft = end - Date.now();
-    const left = unit.battery ? unitCap(budgetLeft, batteryLeft) : budgetLeft;
-    if (unit.battery) batteryLeft--;
-    if (left <= 0) {
-      cut = true;
-      fill(checks, [], unit.declared, "time budget");
-      return;
-    }
-    const unitEnd = Date.now() + left;
-    let closed = false;
-    const held = {};
-    let loadsAt = 0;
-    let loadsNow = () => 0;
-    const trace = { phases: [{ seq: 0, keys: ["reach|"] }], actions: [] };
-    const tried = { list: [], more: 0 };
-    const net = { armed: false, write: (method, url) => {
-      const kept = logTried(tried, method, url);
-      if (kept && process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name}: blocked ${method} ${url} (in ${trace.phases.at(-1)?.keys.join(" ") ?? "?"})`);
-      return kept;
-    } };
-    const api = (page) => ({
-      page,
-      add: (c) => {
-        if (!closed) produced.push(c);
-      },
-      phase: (...keys) => {
-        trace.phases.push({ seq: trace.phases.length, keys: keys.map((k) => k.includes("|") ? k : `${k}|`) });
-      },
-      act: () => {
-        net.armed = true;
-        trace.actions.push({ at: Date.now(), seq: trace.phases.length - 1 });
-      },
-      guard: () => {
-        if (loadsNow() !== loadsAt) throw new UnitNavigated("the page loaded a new document");
-      }
-    });
-    const blocked = () => blockedOf(tried, taintedPhases(trace));
-    block.unit(net);
-    const work = (async () => {
-      let reached;
-      try {
-        reached = await openUnitPage(browser, o, holdContext(held), net);
-      } catch (e) {
-        return e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine(e)}`;
-      }
-      try {
-        loadsAt = reached.loads();
-        loadsNow = reached.loads;
-        if (o.measuredTags && o.measuredTags.length) {
-          const diff = fingerprintDiff(o.measuredTags, await reached.page.evaluate(visibleTags, null), unit.uses);
-          if (diff !== null) throw new BatteryStop(`the page reached for this check differs from the measured page (${diff}${reached.failed.length ? `; failed while loading: ${reached.failed.slice(0, 3).join(", ")}` : ""})`);
-        }
-        await reached.page.evaluate(tipPreMark, null).catch(() => false);
-        await unit.run(api(reached.page));
-        return null;
-      } finally {
-        const last = trace.actions.at(-1);
-        const wait = last ? Math.min(WRITE_SETTLE_MS - (Date.now() - last.at), unitEnd - Date.now()) : 0;
-        if (wait > 0) await sleep2(wait, void 0, { ref: false });
-        await reached.context.close().catch(() => void 0);
-      }
-    })().catch((e) => {
-      if (e instanceof UnitNavigated || NAVIGATED.test(errMsg(e))) return "the page loaded a new document";
-      if (e instanceof BatteryStop) return e.message;
-      return `the check could not run \u2014 ${firstLine(e)}`;
-    });
-    const raced = await raceBudget(work, left, held, () => {
-      closed = true;
-      cut = true;
-    });
-    if (raced.cut) {
-      block.unit(null);
-      checks.push(...judgeWrites(produced, blocked()));
-      fill(checks, produced, unit.declared, left < budgetLeft ? `time budget (this unit's share: ${Math.round(left / 1e3)} s)` : "time budget");
-      return;
-    }
-    const r = raced.value;
-    block.unit(null);
+  })().catch((e) => {
+    if (e instanceof UnitNavigated || NAVIGATED.test(errMsg(e))) return "the page loaded a new document";
+    if (e instanceof BatteryStop) return e.message;
+    return `the check could not run \u2014 ${firstLine(e)}`;
+  });
+  const raced = await raceBudget(work, left, held, () => {
     closed = true;
+    ctx.cut = true;
+  });
+  if (raced.cut) {
+    block.unit(null);
     checks.push(...judgeWrites(produced, blocked()));
-    if (r !== null) fill(checks, produced, unit.declared, r);
-    else fill(checks, produced, unit.declared, "the unit ended before this check");
-  };
+    fill(checks, produced, unit.declared, left < budgetLeft ? `time budget (this unit's share: ${Math.round(left / 1e3)} s)` : "time budget");
+    return;
+  }
+  const r = raced.value;
+  block.unit(null);
+  closed = true;
+  checks.push(...judgeWrites(produced, blocked()));
+  if (r !== null) fill(checks, produced, unit.declared, r);
+  else fill(checks, produced, unit.declared, "the unit ended before this check");
+}
+function a11yUnit(ctx) {
+  const { o, end } = ctx;
   const exp = o.expectation;
   const hidden = new Set(exp.hidden && exp.hidden.ids || []);
   const subjectIds = [...new Set((exp.interactions || []).filter((r) => !hidden.has(r.nodeId) && /^on_(click|press)$/i.test(String(r.trigger))).map((r) => r.nodeId))];
-  await runUnit({
+  return {
     name: "a11y",
     declared: [{ id: "a11y.landmarks" }, { id: "a11y.axe" }, { id: "keyboard.reachable" }, { id: "keyboard.focus-visible" }, { id: "a11y.name" }],
     run: async (u) => {
@@ -4590,7 +4330,7 @@ async function runUnits(browser, o, block, t0) {
         if (NAVIGATED.test(errMsg(e))) throw e;
       }
       const tree = yaml === null ? null : parseAriaLandmarkTree(yaml);
-      landmarks = tree ? tree.landmarks : null;
+      ctx.landmarks = tree ? tree.landmarks : null;
       for (const c of landmarkFindings(tree, tree ? await page.evaluate(unnamedRegions, null) : [])) u.add(c);
       u.guard();
       u.phase("a11y.axe");
@@ -4605,7 +4345,7 @@ async function runUnits(browser, o, block, t0) {
           ]);
           if (res === AXE_TIMED_OUT) throw new AxeTimeout(`axe timed out after ${Math.round(axeCap / 1e3)} s`);
           const parsed = readAxeResult(res, o.axe.version);
-          axe = parsed;
+          ctx.axe = parsed;
           if (parsed.ran) {
             const st = axeStatus(parsed.violations);
             const list = parsed.violations.map((v) => `${v.id} (${v.impact ?? "?"}, ${v.nodes} node${v.nodes === 1 ? "" : "s"})`).join(", ");
@@ -4613,8 +4353,8 @@ async function runUnits(browser, o, block, t0) {
           }
         } catch (e) {
           if (NAVIGATED.test(errMsg(e))) throw e;
-          axe = { ran: false, why: e instanceof AxeTimeout ? e.message : `axe-core ${o.axe.version} failed in the page: ${firstLine(e)}` };
-          u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${axe.why}` });
+          ctx.axe = { ran: false, why: e instanceof AxeTimeout ? e.message : `axe-core ${o.axe.version} failed in the page: ${firstLine(e)}` };
+          u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${ctx.axe.why}` });
         }
       }
       u.guard();
@@ -4762,10 +4502,13 @@ async function runUnits(browser, o, block, t0) {
       for (const c of perElement("a11y.name", nameRows, nameOk, info.length, `Tab stop(s) have a role and an accessible name (${NAMES_COMPUTED_BY})`)) u.add(c);
       if (info.length === 0) u.add({ id: "a11y.name", status: "not-run", detail: "not-run: Tab reached no focusable element" });
     }
-  });
+  };
+}
+function renderUnit(ctx) {
+  const { o, widths } = ctx;
   const designW = o.viewport.w, designH = o.viewport.h;
   const mid = designW >= 1280, narrow = designW > 320;
-  await runUnit({
+  return {
     name: "render",
     declared: [
       { id: "forced-colors.visible" },
@@ -4805,7 +4548,7 @@ async function runUnits(browser, o, block, t0) {
         await page.emulateMedia({ forcedColors: "active" });
         await page.evaluate(scrollToY, { y: 0 });
         await raf2(page);
-        forced = await page.screenshot({ animations: "disabled", caret: "hide" });
+        ctx.forced = await page.screenshot({ animations: "disabled", caret: "hide" });
         const rows = [];
         let okN = 0, total = 0;
         for (let i = 0; i < cands.length; i++) {
@@ -4885,432 +4628,429 @@ async function runUnits(browser, o, block, t0) {
       if (!mid) u.add({ id: "overflow.mid", status: "not-run", detail: `not-run: the design is ${designW}px wide (the 1024px check runs for designs \u2265 1280px)` });
       if (!narrow) u.add({ id: "overflow.narrow", status: "not-run", detail: `not-run: the design is ${designW}px wide (not wider than 320px)` });
     }
-  });
+  };
+}
+async function runBattery(ctx) {
+  const { o, checks, keyOpens } = ctx;
+  const exp = o.expectation;
   const { battery, skipped } = batteryRows(exp, o.driven);
   for (const { row, why } of skipped) for (const id of DIALOG_IDS) checks.push({ id, status: "not-run", nodeId: row.nodeId, trigger: row.trigger, detail: `not-run: ${why}` });
-  batteryLeft = battery.length * 2;
+  ctx.batteryLeft = battery.length * 2;
   for (const row of battery) {
     const key = `${row.nodeId}|${row.trigger}`;
     const base = { nodeId: row.nodeId, trigger: row.trigger };
     const destId = row.destinationId ?? null;
     const contract = [...DIALOG_CONTRACT];
     const uses = destId === null ? [row.nodeId] : [row.nodeId, destId];
-    await runUnit({
-      name: `keyboard ${key}`,
-      battery: true,
-      uses,
-      declared: [
-        { id: "keyboard.activation", ...base },
-        { id: "dialog.focus-on-open", ...base },
-        { id: "dialog.focus-trap", ...base },
-        { id: "dialog.escape-closes", ...base },
-        { id: "dialog.focus-return", ...base, variant: "escape" },
-        { id: "dialog.focus-return", ...base, variant: "close" },
-        { id: "dialog.nested-escape", ...base }
-      ],
-      run: async (u) => {
-        const { page } = u;
-        const add = (c2) => u.add({ ...c2, ...base });
-        await park(page);
-        const detect = async () => {
-          const t = Date.now();
-          for (; ; ) {
-            const r = await page.evaluate(pollDetector, { destId, contract });
-            if (r.lost) throw new UnitNavigated("the page loaded a new document");
-            if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
-            if (Date.now() - t >= 2e3) return r.opened;
-            await sleep2(100);
-          }
-        };
-        const keyOpen = async (key2) => {
-          await page.evaluate(armDetector, { destId, contract });
-          const blocked = await pressOnOpener(page, key2, u.act);
-          return blocked !== null ? { opened: null, blocked } : { opened: await detect(), blocked: null };
-        };
-        const mouseOpen = async () => {
-          let st = await page.evaluate(openerState, { id: row.nodeId });
-          if (st.count !== 1 || st.path === null) return { opened: null, why: `the opener matched ${st.count} element(s)` };
-          if (st.disabled) return { opened: null, why: "the opener is disabled" };
-          if (!st.visible && st.hoverPath !== null) {
-            await page.mouse.move(0, 0);
-            u.act();
-            await page.locator(st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
-            await raf2(page);
-            st = await page.evaluate(openerState, { id: row.nodeId });
-          }
-          if (!st.visible || st.path === null) return { opened: null, why: "the opener is not visible even on hover" };
-          const loc = page.locator(st.path).first();
-          if (await loc.evaluate(submitGuard) !== null) return { opened: null, why: "the opener would submit a form" };
-          await markOpenerSeen(page, row.nodeId, u.act);
-          await page.evaluate(armDetector, { destId, contract });
+    const b = { row, key, base, destId, contract, uses };
+    await runUnit(ctx, keyUnit(ctx, b));
+    if (keyOpens.get(key) !== null && checks.some((c) => c.id === "keyboard.activation" && c.nodeId === row.nodeId && c.trigger === row.trigger && c.status === "not-run")) keyOpens.set(key, null);
+    await runUnit(ctx, scrollUnit(ctx, b));
+  }
+}
+function keyUnit(ctx, b) {
+  const { keyOpens, nonModal } = ctx;
+  const { row, key, base, destId, contract, uses } = b;
+  return {
+    name: `keyboard ${key}`,
+    battery: true,
+    uses,
+    declared: [
+      { id: "keyboard.activation", ...base },
+      { id: "dialog.focus-on-open", ...base },
+      { id: "dialog.focus-trap", ...base },
+      { id: "dialog.escape-closes", ...base },
+      { id: "dialog.focus-return", ...base, variant: "escape" },
+      { id: "dialog.focus-return", ...base, variant: "close" },
+      { id: "dialog.nested-escape", ...base }
+    ],
+    run: async (u) => {
+      const { page } = u;
+      const add = (c2) => u.add({ ...c2, ...base });
+      await park(page);
+      const detect = async () => {
+        const t = Date.now();
+        for (; ; ) {
+          const r = await page.evaluate(pollDetector, { destId, contract });
+          if (r.lost) throw new UnitNavigated("the page loaded a new document");
+          if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
+          if (Date.now() - t >= 2e3) return r.opened;
+          await sleep2(100);
+        }
+      };
+      const keyOpen = async (key2) => {
+        await page.evaluate(armDetector, { destId, contract });
+        const blocked = await pressOnOpener(page, key2, u.act);
+        return blocked !== null ? { opened: null, blocked } : { opened: await detect(), blocked: null };
+      };
+      const mouseOpen = async () => {
+        let st = await page.evaluate(openerState, { id: row.nodeId });
+        if (st.count !== 1 || st.path === null) return { opened: null, why: `the opener matched ${st.count} element(s)` };
+        if (st.disabled) return { opened: null, why: "the opener is disabled" };
+        if (!st.visible && st.hoverPath !== null) {
+          await page.mouse.move(0, 0);
           u.act();
-          await loc.click({ timeout: 2e3 });
-          return { opened: await detect() };
-        };
-        u.phase("keyboard.activation");
-        const marked = await markOpenerSeen(page, row.nodeId, u.act);
-        await page.evaluate(sentinelInsert, null);
-        let reachedOpener = false;
-        let ancestorStop = null, insideStop = null;
-        for (let i = 0; i < WALK_CAP; i++) {
-          u.act();
-          await page.keyboard.press("Tab");
-          const s = await page.evaluate(walkStep, { record: true });
-          if (s.opener) {
-            reachedOpener = true;
-            break;
-          }
-          if (s.ancestor !== null && ancestorStop === null) ancestorStop = s.ancestor;
-          if (s.inside !== null && insideStop === null) insideStop = s.inside;
-          if (s.end !== null) break;
+          await page.locator(st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
+          await raf2(page);
+          st = await page.evaluate(openerState, { id: row.nodeId });
         }
-        await page.evaluate(sentinelRemove, null);
-        u.guard();
-        let opened = null;
-        let via = null;
-        const notSelf = (what) => `not-run: the Tab stop at the opener is not the opener itself (${what}) \u2014 no key is pressed there`;
-        if (!reachedOpener) add({ id: "keyboard.activation", status: "not-run", detail: insideStop !== null ? notSelf(`the opener is a container; its focusable child ${insideStop} is not pressed${marked.why !== null ? ` \u2014 ${marked.why}` : ""}`) : ancestorStop !== null ? notSelf(`${ancestorStop}, an ancestor of it`) : "not-run: Tab never reaches the opener (keyboard.reachable reports it)" });
-        else {
-          const e1 = await keyOpen("Enter");
-          if (e1.blocked !== null) add({ id: "keyboard.activation", status: "not-run", detail: notSelf(e1.blocked) });
-          else {
-            opened = e1.opened;
-            let spaceBlocked = null;
-            if (opened) via = "Enter";
-            else {
-              u.guard();
-              const e2 = await keyOpen(" ");
-              spaceBlocked = e2.blocked;
-              opened = e2.opened;
-              if (opened) via = " ";
-            }
-            add(via === "Enter" ? { id: "keyboard.activation", status: "pass", detail: "Tab reaches the opener and Enter opens the dialog" } : via === " " ? { id: "keyboard.activation", status: "warn", detail: "only Space opens it, Enter does not \u2014 a button opens on both (a <button> does this by itself)" } : { id: "keyboard.activation", status: "fail", detail: `Tab reaches the opener but ${spaceBlocked === null ? "neither Enter nor Space opens" : `Enter does not open (Space not pressed: ${spaceBlocked})`} the dialog \u2014 a div with only onclick? use <button> (or handle Enter and Space)` });
-          }
-        }
-        keyOpens.set(key, via);
-        u.guard();
-        const open = async () => {
-          if (via !== null) {
-            await markOpenerSeen(page, row.nodeId, u.act);
-            await page.evaluate(focusOpener, { preventScroll: false });
-            const r = await keyOpen(via);
-            if (r.blocked === null) return { opened: r.opened };
-          }
-          return mouseOpen();
-        };
-        if (!opened) {
-          u.phase("dialog.focus-on-open");
-          const m = await mouseOpen();
-          opened = m.opened;
-          if (!opened) throw new BatteryStop(`the dialog did not open in the battery's page (${m.why ?? "nothing opened within 2 s"})`);
-        }
-        const kind = await page.evaluate(markDialog, { path: opened.selector });
-        if (!kind.found) throw new BatteryStop("the opened element could not be found again");
-        if (!(kind.modal || kind.dialogOpen || kind.ariaModal)) {
-          nonModal.add(key);
-          throw new BatteryStop(`the opened element is not a modal dialog \u2014 ${NOT_MODAL}`);
-        }
-        const modal = kind.modal || kind.ariaModal;
-        u.phase("dialog.focus-on-open");
-        await park(page);
-        const f0 = await page.evaluate(focusVsDialog, { destId });
-        add(f0.inside ? { id: "dialog.focus-on-open", status: "pass", detail: `focus moved into the dialog (initial target ${f0.desc}; recorded, not graded)`, evidence: { initial: f0.desc } } : { id: "dialog.focus-on-open", status: "fail", detail: `focus stayed ${f0.body ? "on <body>" : `on ${f0.desc}, outside the dialog`} when it opened \u2014 move focus into the dialog (its first control or its heading)`, evidence: { active: f0.desc } });
-        u.guard();
-        u.phase("dialog.focus-trap");
-        if (!modal) add({ id: "dialog.focus-trap", status: "not-run", detail: "not-run: a non-modal dialog[open] (show()) does not trap focus" });
-        else {
-          const n = await page.evaluate(dialogTabbables, null);
-          if (n > 30) add({ id: "dialog.focus-trap", status: "not-run", detail: "not-run: too many tabbables to prove a trap (more than 30 in the dialog)" });
-          let escaped = n > 30 ? "" : null;
-          for (const k of ["Tab", "Shift+Tab"]) {
-            for (let i = 0; i < n + 2 && escaped === null; i++) {
-              u.act();
-              await page.keyboard.press(k);
-              const f = await page.evaluate(focusVsDialog, { destId });
-              if (!f.inside && !f.body) escaped = `${k} \xD7${i + 1} moved focus to ${f.desc}`;
-            }
-          }
-          if (n <= 30) add(escaped === null ? { id: "dialog.focus-trap", status: "pass", detail: `Tab and Shift+Tab \xD7${n + 2} each stay inside the dialog (${n} tabbable element(s))` } : { id: "dialog.focus-trap", status: "fail", detail: `focus left the modal dialog: ${escaped} \u2014 trap Tab inside a modal (showModal() does, a div needs a focus trap)` });
-        }
-        u.guard();
-        u.phase("dialog.escape-closes", "dialog.focus-return|escape");
+        if (!st.visible || st.path === null) return { opened: null, why: "the opener is not visible even on hover" };
+        const loc = page.locator(st.path).first();
+        if (await loc.evaluate(submitGuard) !== null) return { opened: null, why: "the opener would submit a form" };
+        await markOpenerSeen(page, row.nodeId, u.act);
+        await page.evaluate(armDetector, { destId, contract });
         u.act();
-        await page.keyboard.press("Escape");
-        const closedAfter = async () => {
-          const t = Date.now();
-          for (; ; ) {
-            await raf2(page);
-            if (!await page.evaluate(dialogOpenNow, null)) return true;
-            if (Date.now() - t >= 1e3) return false;
-            await sleep2(100);
-          }
-        };
-        const escClosed = await closedAfter();
-        add(escClosed ? { id: "dialog.escape-closes", status: "pass", detail: "Escape closes the dialog" } : { id: "dialog.escape-closes", status: modal ? "fail" : "warn", detail: `Escape left the ${modal ? "modal " : ""}dialog open \u2014 close it on Escape (showModal() does; a div dialog needs a keydown handler)` });
-        let closedBy = "";
-        const focusReturn = async (variant) => {
-          await park(page);
-          const r = await page.evaluate(focusReturnRead, null);
-          const s = focusReturnStatus(r);
-          add({
-            id: "dialog.focus-return",
-            status: s.status,
-            variant,
-            detail: `after ${variant === "escape" ? "Escape" : `the close control "${closedBy}"`}: ${s.detail}`,
-            evidence: { active: r.activeDesc, openerVisible: r.openerVisible, opacity0: r.opacity0, connected: r.connected, ...variant === "close" ? { closedBy } : {} }
-          });
-        };
-        const safeClose = async () => {
-          const r = await safeCloseOn(page, closedAfter, u.act);
-          closedBy = r.name;
-          return r;
-        };
-        let closeDone = false;
-        if (escClosed) await focusReturn("escape");
+        await loc.click({ timeout: 2e3 });
+        return { opened: await detect() };
+      };
+      u.phase("keyboard.activation");
+      const marked = await markOpenerSeen(page, row.nodeId, u.act);
+      await page.evaluate(sentinelInsert, null);
+      let reachedOpener = false;
+      let ancestorStop = null, insideStop = null;
+      for (let i = 0; i < WALK_CAP; i++) {
+        u.act();
+        await page.keyboard.press("Tab");
+        const s = await page.evaluate(walkStep, { record: true });
+        if (s.opener) {
+          reachedOpener = true;
+          break;
+        }
+        if (s.ancestor !== null && ancestorStop === null) ancestorStop = s.ancestor;
+        if (s.inside !== null && insideStop === null) insideStop = s.inside;
+        if (s.end !== null) break;
+      }
+      await page.evaluate(sentinelRemove, null);
+      u.guard();
+      let opened = null;
+      let via = null;
+      const notSelf = (what) => `not-run: the Tab stop at the opener is not the opener itself (${what}) \u2014 no key is pressed there`;
+      if (!reachedOpener) add({ id: "keyboard.activation", status: "not-run", detail: insideStop !== null ? notSelf(`the opener is a container; its focusable child ${insideStop} is not pressed${marked.why !== null ? ` \u2014 ${marked.why}` : ""}`) : ancestorStop !== null ? notSelf(`${ancestorStop}, an ancestor of it`) : "not-run: Tab never reaches the opener (keyboard.reachable reports it)" });
+      else {
+        const e1 = await keyOpen("Enter");
+        if (e1.blocked !== null) add({ id: "keyboard.activation", status: "not-run", detail: notSelf(e1.blocked) });
         else {
-          add({ id: "dialog.focus-return", status: "not-run", variant: "escape", detail: "not-run: Escape did not close the dialog" });
-          u.phase("dialog.focus-return|close");
-          const c2 = await safeClose();
-          if (!c2.closed) {
-            add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: ${c2.why ?? "the dialog stayed open"}` });
-            throw new BatteryStop(`the dialog could not be closed for a fresh open (${c2.why ?? "?"})`);
-          }
-          await focusReturn("close");
-          closeDone = true;
-        }
-        u.guard();
-        u.phase("dialog.nested-escape");
-        const o2 = await open();
-        if (!o2.opened) throw new BatteryStop(`the dialog did not open again (${o2.why ?? "nothing opened within 2 s"})`);
-        await page.evaluate(markDialog, { path: o2.opened.selector });
-        const x = await page.evaluate(expanderFind, null);
-        let stillOpen = true;
-        if (x.path === null) {
-          add(x.nativePicker ? { id: "dialog.nested-escape", status: "not-run", synthetic: true, detail: "not-run: native picker: synthetic (headless), not a real-browser observation \u2014 the dialog holds only a native <select>/date control, whose popup headless Chromium does not open" } : { id: "dialog.nested-escape", status: "not-run", detail: "not-run: no expandable control ([aria-expanded]) in the dialog" });
-        } else {
-          const loc = page.locator(x.path).first();
-          if (await loc.evaluate(submitGuard) !== null) add({ id: "dialog.nested-escape", status: "not-run", detail: "not-run: the expandable control would submit a form" });
+          opened = e1.opened;
+          let spaceBlocked = null;
+          if (opened) via = "Enter";
           else {
+            u.guard();
+            const e2 = await keyOpen(" ");
+            spaceBlocked = e2.blocked;
+            opened = e2.opened;
+            if (opened) via = " ";
+          }
+          add(via === "Enter" ? { id: "keyboard.activation", status: "pass", detail: "Tab reaches the opener and Enter opens the dialog" } : via === " " ? { id: "keyboard.activation", status: "warn", detail: "only Space opens it, Enter does not \u2014 a button opens on both (a <button> does this by itself)" } : { id: "keyboard.activation", status: "fail", detail: `Tab reaches the opener but ${spaceBlocked === null ? "neither Enter nor Space opens" : `Enter does not open (Space not pressed: ${spaceBlocked})`} the dialog \u2014 a div with only onclick? use <button> (or handle Enter and Space)` });
+        }
+      }
+      keyOpens.set(key, via);
+      u.guard();
+      const open = async () => {
+        if (via !== null) {
+          await markOpenerSeen(page, row.nodeId, u.act);
+          await page.evaluate(focusOpener, { preventScroll: false });
+          const r = await keyOpen(via);
+          if (r.blocked === null) return { opened: r.opened };
+        }
+        return mouseOpen();
+      };
+      if (!opened) {
+        u.phase("dialog.focus-on-open");
+        const m = await mouseOpen();
+        opened = m.opened;
+        if (!opened) throw new BatteryStop(`the dialog did not open in the battery's page (${m.why ?? "nothing opened within 2 s"})`);
+      }
+      const kind = await page.evaluate(markDialog, { path: opened.selector });
+      if (!kind.found) throw new BatteryStop("the opened element could not be found again");
+      if (!(kind.modal || kind.dialogOpen || kind.ariaModal)) {
+        nonModal.add(key);
+        throw new BatteryStop(`the opened element is not a modal dialog \u2014 ${NOT_MODAL}`);
+      }
+      const modal = kind.modal || kind.ariaModal;
+      u.phase("dialog.focus-on-open");
+      await park(page);
+      const f0 = await page.evaluate(focusVsDialog, { destId });
+      add(f0.inside ? { id: "dialog.focus-on-open", status: "pass", detail: `focus moved into the dialog (initial target ${f0.desc}; recorded, not graded)`, evidence: { initial: f0.desc } } : { id: "dialog.focus-on-open", status: "fail", detail: `focus stayed ${f0.body ? "on <body>" : `on ${f0.desc}, outside the dialog`} when it opened \u2014 move focus into the dialog (its first control or its heading)`, evidence: { active: f0.desc } });
+      u.guard();
+      u.phase("dialog.focus-trap");
+      if (!modal) add({ id: "dialog.focus-trap", status: "not-run", detail: "not-run: a non-modal dialog[open] (show()) does not trap focus" });
+      else {
+        const n = await page.evaluate(dialogTabbables, null);
+        if (n > 30) add({ id: "dialog.focus-trap", status: "not-run", detail: "not-run: too many tabbables to prove a trap (more than 30 in the dialog)" });
+        let escaped = n > 30 ? "" : null;
+        for (const k of ["Tab", "Shift+Tab"]) {
+          for (let i = 0; i < n + 2 && escaped === null; i++) {
             u.act();
-            await loc.click({ timeout: 2e3 });
-            let expanded = false;
-            const t = Date.now();
-            while (Date.now() - t < 1e3) {
-              if (await page.evaluate(expanderState, null) === "true") {
-                expanded = true;
-                break;
-              }
-              await sleep2(100);
-            }
-            if (!expanded) add({ id: "dialog.nested-escape", status: "not-run", detail: `not-run: ${x.desc} never reported aria-expanded="true" within 1 s of a click` });
-            else {
-              u.act();
-              await page.keyboard.press("Escape");
-              await raf2(page);
-              await sleep2(150);
-              await raf2(page);
-              const dlgOpen = await page.evaluate(dialogOpenNow, null);
-              const ctl = await page.evaluate(expanderState, null);
-              stillOpen = dlgOpen;
-              add(!dlgOpen ? { id: "dialog.nested-escape", status: "fail", detail: `Escape on the open ${x.desc} closed the whole dialog \u2014 the inner control must handle Escape (collapse it, preventDefault + stopPropagation) so the dialog stays open` } : ctl === "true" ? { id: "dialog.nested-escape", status: "warn", detail: `Escape left ${x.desc} expanded (the dialog stayed open) \u2014 Escape should collapse it first` } : { id: "dialog.nested-escape", status: "pass", detail: `Escape collapsed ${x.desc} and the dialog stayed open` });
-            }
+            await page.keyboard.press(k);
+            const f = await page.evaluate(focusVsDialog, { destId });
+            if (!f.inside && !f.body) escaped = `${k} \xD7${i + 1} moved focus to ${f.desc}`;
           }
         }
-        u.guard();
-        if (closeDone) return;
+        if (n <= 30) add(escaped === null ? { id: "dialog.focus-trap", status: "pass", detail: `Tab and Shift+Tab \xD7${n + 2} each stay inside the dialog (${n} tabbable element(s))` } : { id: "dialog.focus-trap", status: "fail", detail: `focus left the modal dialog: ${escaped} \u2014 trap Tab inside a modal (showModal() does, a div needs a focus trap)` });
+      }
+      u.guard();
+      u.phase("dialog.escape-closes", "dialog.focus-return|escape");
+      u.act();
+      await page.keyboard.press("Escape");
+      const closedAfter = async () => {
+        const t = Date.now();
+        for (; ; ) {
+          await raf2(page);
+          if (!await page.evaluate(dialogOpenNow, null)) return true;
+          if (Date.now() - t >= 1e3) return false;
+          await sleep2(100);
+        }
+      };
+      const escClosed = await closedAfter();
+      add(escClosed ? { id: "dialog.escape-closes", status: "pass", detail: "Escape closes the dialog" } : { id: "dialog.escape-closes", status: modal ? "fail" : "warn", detail: `Escape left the ${modal ? "modal " : ""}dialog open \u2014 close it on Escape (showModal() does; a div dialog needs a keydown handler)` });
+      let closedBy = "";
+      const focusReturn = async (variant) => {
+        await park(page);
+        const r = await page.evaluate(focusReturnRead, null);
+        const s = focusReturnStatus(r);
+        add({
+          id: "dialog.focus-return",
+          status: s.status,
+          variant,
+          detail: `after ${variant === "escape" ? "Escape" : `the close control "${closedBy}"`}: ${s.detail}`,
+          evidence: { active: r.activeDesc, openerVisible: r.openerVisible, opacity0: r.opacity0, connected: r.connected, ...variant === "close" ? { closedBy } : {} }
+        });
+      };
+      const safeClose = async () => {
+        const r = await safeCloseOn(page, closedAfter, u.act);
+        closedBy = r.name;
+        return r;
+      };
+      let closeDone = false;
+      if (escClosed) await focusReturn("escape");
+      else {
+        add({ id: "dialog.focus-return", status: "not-run", variant: "escape", detail: "not-run: Escape did not close the dialog" });
         u.phase("dialog.focus-return|close");
-        if (!stillOpen || !await page.evaluate(dialogOpenNow, null)) {
-          const o3 = await open();
-          if (!o3.opened) {
-            add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: the dialog did not open again (${o3.why ?? "nothing opened"})` });
-            return;
-          }
-          await page.evaluate(markDialog, { path: o3.opened.selector });
-        }
-        const c = await safeClose();
-        if (!c.closed) {
-          add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: ${c.why ?? "the dialog stayed open"}` });
-          return;
+        const c2 = await safeClose();
+        if (!c2.closed) {
+          add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: ${c2.why ?? "the dialog stayed open"}` });
+          throw new BatteryStop(`the dialog could not be closed for a fresh open (${c2.why ?? "?"})`);
         }
         await focusReturn("close");
+        closeDone = true;
       }
-    });
-    if (keyOpens.get(key) !== null && checks.some((c) => c.id === "keyboard.activation" && c.nodeId === row.nodeId && c.trigger === row.trigger && c.status === "not-run")) keyOpens.set(key, null);
-    await runUnit({
-      name: `scroll ${key}`,
-      battery: true,
-      uses,
-      declared: [{ id: "dialog.scroll-open", ...base }, { id: "dialog.scrim", ...base }, { id: "dialog.click-outside", ...base }],
-      run: async (u) => {
-        if (nonModal.has(key)) throw new BatteryStop(`the opened element is not a modal dialog \u2014 ${NOT_MODAL}`);
-        const { page } = u;
-        const add = (c) => u.add({ ...c, ...base });
-        const ov = row.overlay;
-        const centre = overlayCentred(ov);
-        const keyVia = keyOpens.get(key) ?? null;
-        await park(page);
-        const detect = async () => {
+      u.guard();
+      u.phase("dialog.nested-escape");
+      const o2 = await open();
+      if (!o2.opened) throw new BatteryStop(`the dialog did not open again (${o2.why ?? "nothing opened within 2 s"})`);
+      await page.evaluate(markDialog, { path: o2.opened.selector });
+      const x = await page.evaluate(expanderFind, null);
+      let stillOpen = true;
+      if (x.path === null) {
+        add(x.nativePicker ? { id: "dialog.nested-escape", status: "not-run", synthetic: true, detail: "not-run: native picker: synthetic (headless), not a real-browser observation \u2014 the dialog holds only a native <select>/date control, whose popup headless Chromium does not open" } : { id: "dialog.nested-escape", status: "not-run", detail: "not-run: no expandable control ([aria-expanded]) in the dialog" });
+      } else {
+        const loc = page.locator(x.path).first();
+        if (await loc.evaluate(submitGuard) !== null) add({ id: "dialog.nested-escape", status: "not-run", detail: "not-run: the expandable control would submit a form" });
+        else {
+          u.act();
+          await loc.click({ timeout: 2e3 });
+          let expanded = false;
           const t = Date.now();
-          for (; ; ) {
-            const r = await page.evaluate(pollDetector, { destId, contract });
-            if (r.lost) throw new UnitNavigated("the page loaded a new document");
-            if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
-            if (Date.now() - t >= 2e3) return r.opened;
+          while (Date.now() - t < 1e3) {
+            if (await page.evaluate(expanderState, null) === "true") {
+              expanded = true;
+              break;
+            }
             await sleep2(100);
           }
-        };
-        const openStill = async () => {
-          await page.mouse.move(0, 0);
-          let p = await markOpenerSeen(page, row.nodeId, u.act);
-          if (!p.found) return { why: "the opener is not on the page" };
-          if (!p.visible && p.hover && p.hover.inViewport) {
+          if (!expanded) add({ id: "dialog.nested-escape", status: "not-run", detail: `not-run: ${x.desc} never reported aria-expanded="true" within 1 s of a click` });
+          else {
             u.act();
-            await page.mouse.move(p.hover.x, p.hover.y);
+            await page.keyboard.press("Escape");
             await raf2(page);
-            p = await markOpenerSeen(page, row.nodeId, u.act);
-          }
-          if (p.visible && p.inViewport && p.hits) {
-            await page.evaluate(armDetector, { destId, contract });
-            u.act();
-            await page.mouse.click(p.x, p.y);
-            return { opened: await detect(), how: "a mouse click at its on-screen point" };
-          }
-          if (keyVia !== null) {
-            await page.evaluate(focusOpener, { preventScroll: true });
-            await page.evaluate(armDetector, { destId, contract });
-            const blocked = await pressOnOpener(page, keyVia, u.act);
-            if (blocked !== null) return { why: `the opener is off screen at this scroll and the key is not pressed there (${blocked})` };
-            return { opened: await detect(), how: `focus({preventScroll}) + ${keyVia === " " ? "Space" : "Enter"}` };
-          }
-          return { why: "the opener is off screen at this scroll and opens only by mouse (keyboard.activation did not pass)" };
-        };
-        const closedAfter = async () => {
-          const t = Date.now();
-          for (; ; ) {
+            await sleep2(150);
             await raf2(page);
-            if (!await page.evaluate(dialogOpenNow, null)) return true;
-            if (Date.now() - t >= 1e3) return false;
-            await sleep2(100);
+            const dlgOpen = await page.evaluate(dialogOpenNow, null);
+            const ctl = await page.evaluate(expanderState, null);
+            stillOpen = dlgOpen;
+            add(!dlgOpen ? { id: "dialog.nested-escape", status: "fail", detail: `Escape on the open ${x.desc} closed the whole dialog \u2014 the inner control must handle Escape (collapse it, preventDefault + stopPropagation) so the dialog stays open` } : ctl === "true" ? { id: "dialog.nested-escape", status: "warn", detail: `Escape left ${x.desc} expanded (the dialog stayed open) \u2014 Escape should collapse it first` } : { id: "dialog.nested-escape", status: "pass", detail: `Escape collapsed ${x.desc} and the dialog stayed open` });
           }
-        };
-        const closeAny = async () => (await safeCloseOn(page, closedAfter, u.act)).closed;
-        const size = await page.evaluate(docSize, null);
-        const max = Math.max(0, size.sh - size.vh);
-        const ys = max > 1 ? max > 150 ? [{ y: 150, variant: "y=150" }, { y: max, variant: "y=max" }] : [{ y: max, variant: "y=max" }] : [{ y: 0, variant: "y=0" }];
-        let stuck = false;
-        for (const { y, variant } of ys) {
-          u.phase(`dialog.scroll-open|${variant}`);
-          u.guard();
-          if (stuck) {
-            add({ id: "dialog.scroll-open", status: "not-run", variant, detail: "not-run: the dialog did not close after the previous scroll position" });
-            continue;
-          }
-          u.act();
-          await page.evaluate(scrollToY, { y });
-          await raf2(page);
-          const y0 = await page.evaluate(effScroll, null);
-          const op2 = await openStill();
-          if ("why" in op2) {
-            add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: ${op2.why}` });
-            continue;
-          }
-          if (!op2.opened) {
-            add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: nothing opened after ${op2.how}` });
-            continue;
-          }
-          const k = await page.evaluate(markDialog, { path: op2.opened.selector });
-          if (k.found && !(k.modal || k.dialogOpen || k.ariaModal)) throw new BatteryStop(`the opened element is not a modal dialog \u2014 ${NOT_MODAL}`);
-          const settled = await page.evaluate(settleDialog, null);
-          const g = await page.evaluate(dialogGeometry, { destId });
-          const problems = [];
-          if (Math.abs(g.scrollY - y0) > 1) problems.push(`opening it scrolled the page from y=${Math.round(y0)} to y=${Math.round(g.scrollY)}`);
-          const rect = { x: Math.round(g.rect.x), y: Math.round(g.rect.y), w: Math.round(g.rect.w), h: Math.round(g.rect.h) };
-          if (centre) {
-            const c = centredIn(g.rect, { w: g.vw, h: g.vh });
-            if (!c.centred) problems.push(`it is not centred in the viewport (${g.via} at ${rect.x},${rect.y} ${rect.w}\xD7${rect.h} in ${g.vw}\xD7${g.vh}; position ${g.position || "?"}) \u2014 the design centres it (overlay ${ov?.from === "default" ? "default = center" : "position center"}); a fixed / top-layer dialog stays centred at any scroll`);
-          } else if (g.rect.x < -1 || g.rect.y < -1 || g.rect.x + g.rect.w > g.vw + 1 || g.rect.y + g.rect.h > g.vh + 1) problems.push(`it leaves the viewport (${g.via} at ${rect.x},${rect.y} ${rect.w}\xD7${rect.h} in ${g.vw}\xD7${g.vh})`);
-          u.act();
-          await page.keyboard.press("Escape");
-          const closed = await closedAfter();
-          await raf2(page);
-          const after = await page.evaluate(effScroll, null);
-          if (closed && Math.abs(after - y0) > 1) problems.push(`closing it scrolled the page from y=${Math.round(y0)} to y=${Math.round(after)}`);
-          if (!closed && !await closeAny()) stuck = true;
-          const evidence = {
-            y: Math.round(y0),
-            afterOpen: Math.round(g.scrollY),
-            afterClose: closed ? Math.round(after) : null,
-            rect,
-            viewport: { w: g.vw, h: g.vh },
-            position: g.position,
-            openedBy: op2.how,
-            animations: settled.animations,
-            stable: settled.stable
-          };
-          add(problems.length ? { id: "dialog.scroll-open", status: "fail", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op2.how}: ${problems.join("; ")}`, evidence } : { id: "dialog.scroll-open", status: "pass", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op2.how}: the page did not move${centre ? ", the dialog is centred" : ", the dialog is inside the viewport"}`, evidence });
         }
+      }
+      u.guard();
+      if (closeDone) return;
+      u.phase("dialog.focus-return|close");
+      if (!stillOpen || !await page.evaluate(dialogOpenNow, null)) {
+        const o3 = await open();
+        if (!o3.opened) {
+          add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: the dialog did not open again (${o3.why ?? "nothing opened"})` });
+          return;
+        }
+        await page.evaluate(markDialog, { path: o3.opened.selector });
+      }
+      const c = await safeClose();
+      if (!c.closed) {
+        add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: ${c.why ?? "the dialog stayed open"}` });
+        return;
+      }
+      await focusReturn("close");
+    }
+  };
+}
+function scrollUnit(ctx, b) {
+  const { keyOpens, nonModal } = ctx;
+  const { row, key, base, destId, contract, uses } = b;
+  return {
+    name: `scroll ${key}`,
+    battery: true,
+    uses,
+    declared: [{ id: "dialog.scroll-open", ...base }, { id: "dialog.scrim", ...base }, { id: "dialog.click-outside", ...base }],
+    run: async (u) => {
+      if (nonModal.has(key)) throw new BatteryStop(`the opened element is not a modal dialog \u2014 ${NOT_MODAL}`);
+      const { page } = u;
+      const add = (c) => u.add({ ...c, ...base });
+      const ov = row.overlay;
+      const centre = overlayCentred(ov);
+      const keyVia = keyOpens.get(key) ?? null;
+      await park(page);
+      const detect = async () => {
+        const t = Date.now();
+        for (; ; ) {
+          const r = await page.evaluate(pollDetector, { destId, contract });
+          if (r.lost) throw new UnitNavigated("the page loaded a new document");
+          if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
+          if (Date.now() - t >= 2e3) return r.opened;
+          await sleep2(100);
+        }
+      };
+      const openStill = async () => {
+        await page.mouse.move(0, 0);
+        let p = await markOpenerSeen(page, row.nodeId, u.act);
+        if (!p.found) return { why: "the opener is not on the page" };
+        if (!p.visible && p.hover && p.hover.inViewport) {
+          u.act();
+          await page.mouse.move(p.hover.x, p.hover.y);
+          await raf2(page);
+          p = await markOpenerSeen(page, row.nodeId, u.act);
+        }
+        if (p.visible && p.inViewport && p.hits) {
+          await page.evaluate(armDetector, { destId, contract });
+          u.act();
+          await page.mouse.click(p.x, p.y);
+          return { opened: await detect(), how: "a mouse click at its on-screen point" };
+        }
+        if (keyVia !== null) {
+          await page.evaluate(focusOpener, { preventScroll: true });
+          await page.evaluate(armDetector, { destId, contract });
+          const blocked = await pressOnOpener(page, keyVia, u.act);
+          if (blocked !== null) return { why: `the opener is off screen at this scroll and the key is not pressed there (${blocked})` };
+          return { opened: await detect(), how: `focus({preventScroll}) + ${keyVia === " " ? "Space" : "Enter"}` };
+        }
+        return { why: "the opener is off screen at this scroll and opens only by mouse (keyboard.activation did not pass)" };
+      };
+      const closedAfter = async () => {
+        const t = Date.now();
+        for (; ; ) {
+          await raf2(page);
+          if (!await page.evaluate(dialogOpenNow, null)) return true;
+          if (Date.now() - t >= 1e3) return false;
+          await sleep2(100);
+        }
+      };
+      const closeAny = async () => (await safeCloseOn(page, closedAfter, u.act)).closed;
+      const size = await page.evaluate(docSize, null);
+      const max = Math.max(0, size.sh - size.vh);
+      const ys = max > 1 ? max > 150 ? [{ y: 150, variant: "y=150" }, { y: max, variant: "y=max" }] : [{ y: max, variant: "y=max" }] : [{ y: 0, variant: "y=0" }];
+      let stuck = false;
+      for (const { y, variant } of ys) {
+        u.phase(`dialog.scroll-open|${variant}`);
         u.guard();
-        u.phase("dialog.scrim", "dialog.click-outside");
-        if (!ov) {
-          add({ id: "dialog.scrim", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row (a plan row, or the destination was not exported)" });
-          add({ id: "dialog.click-outside", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row" });
-          return;
-        }
         if (stuck) {
-          for (const id of ["dialog.scrim", "dialog.click-outside"]) add({ id, status: "not-run", detail: "not-run: the dialog could not be closed for a fresh open" });
-          return;
+          add({ id: "dialog.scroll-open", status: "not-run", variant, detail: "not-run: the dialog did not close after the previous scroll position" });
+          continue;
         }
         u.act();
-        await page.evaluate(scrollToY, { y: 0 });
+        await page.evaluate(scrollToY, { y });
         await raf2(page);
-        const op = await openStill();
-        if ("why" in op || !op.opened) {
-          for (const id of ["dialog.scrim", "dialog.click-outside"]) add({ id, status: "not-run", detail: `not-run: ${"why" in op ? op.why : "nothing opened"}` });
-          return;
+        const y0 = await page.evaluate(effScroll, null);
+        const op2 = await openStill();
+        if ("why" in op2) {
+          add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: ${op2.why}` });
+          continue;
         }
-        const kd = await page.evaluate(markDialog, { path: op.opened.selector });
-        await page.evaluate(settleDialog, null);
-        const sr = await page.evaluate(scrimRead, null);
-        const built = sr.backdrop ?? sr.cover;
-        const want = ov.background;
-        const unread = sr.backdrop === null && sr.unreadable !== null ? sr.unreadable : built !== null && parseCssColor(built) === null ? built : want !== null && parseCssColor(want) === null ? want : null;
-        if (unread !== null) {
-          add({ id: "dialog.scrim", status: "not-run", detail: `not-run: the scrim colour ${unread} is in a colour space the probe does not read`, evidence: { built, designed: want } });
-        } else {
-          const match = scrimMatches(want, built);
-          add({ id: "dialog.scrim", status: match ? "pass" : "warn", detail: match ? `the scrim matches the design (${want ?? "no scrim"} vs ${built ?? "none"})` : `the scrim is ${built ?? "none"}${sr.backdrop !== null ? " (::backdrop)" : ""}, the design's overlay background is ${want ?? "none (no scrim)"}${ov.from === "default" ? " (Figma's default)" : ""}`, evidence: { built: built ?? null, designed: want, via: sr.backdrop !== null ? "::backdrop" : sr.cover !== null ? "fixed cover" : "none" } });
+        if (!op2.opened) {
+          add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: nothing opened after ${op2.how}` });
+          continue;
         }
-        const pt = sr.point;
-        if (pt === null) add({ id: "dialog.click-outside", status: "not-run", detail: sr.unreadable !== null ? `not-run: a layer over the page has a colour the probe does not read (${sr.unreadable}) \u2014 no point is known to be the backdrop` : `not-run: no backdrop to click \u2014 nothing covers the page outside the dialog (the furthest point hits ${sr.hitDesc}); a click there would land on the page` });
-        else {
-          u.phase("dialog.click-outside");
-          u.act();
-          await page.mouse.click(pt.x, pt.y);
-          const closed = await closedAfter();
-          const want2 = ov.closeOnClickOutside;
-          const hint = closed ? "" : kd.native ? " (a native <dialog>: close it on a click whose event.target is the dialog)" : " (close it from the scrim's click)";
-          add(closed === want2 ? { id: "dialog.click-outside", status: "pass", detail: `a click on the backdrop (${pt.x},${pt.y}) ${closed ? "closed" : "did not close"} it, as designed (closeOnClickOutside ${String(want2)})` } : { id: "dialog.click-outside", status: "warn", detail: `a click on the backdrop (${pt.x},${pt.y}) ${closed ? "closed" : "did not close"} it \u2014 the design says closeOnClickOutside ${String(want2)}${ov.from === "default" ? " (Figma's default)" : ""}${hint}`, evidence: { x: pt.x, y: pt.y, closed, designed: want2 } });
-        }
+        const k = await page.evaluate(markDialog, { path: op2.opened.selector });
+        if (k.found && !(k.modal || k.dialogOpen || k.ariaModal)) throw new BatteryStop(`the opened element is not a modal dialog \u2014 ${NOT_MODAL}`);
+        const settled = await page.evaluate(settleDialog, null);
+        const g = await page.evaluate(dialogGeometry, { destId });
+        const problems = [];
+        if (Math.abs(g.scrollY - y0) > 1) problems.push(`opening it scrolled the page from y=${Math.round(y0)} to y=${Math.round(g.scrollY)}`);
+        const rect = { x: Math.round(g.rect.x), y: Math.round(g.rect.y), w: Math.round(g.rect.w), h: Math.round(g.rect.h) };
+        if (centre) {
+          const c = centredIn(g.rect, { w: g.vw, h: g.vh });
+          if (!c.centred) problems.push(`it is not centred in the viewport (${g.via} at ${rect.x},${rect.y} ${rect.w}\xD7${rect.h} in ${g.vw}\xD7${g.vh}; position ${g.position || "?"}) \u2014 the design centres it (overlay ${ov?.from === "default" ? "default = center" : "position center"}); a fixed / top-layer dialog stays centred at any scroll`);
+        } else if (g.rect.x < -1 || g.rect.y < -1 || g.rect.x + g.rect.w > g.vw + 1 || g.rect.y + g.rect.h > g.vh + 1) problems.push(`it leaves the viewport (${g.via} at ${rect.x},${rect.y} ${rect.w}\xD7${rect.h} in ${g.vw}\xD7${g.vh})`);
+        u.act();
+        await page.keyboard.press("Escape");
+        const closed = await closedAfter();
+        await raf2(page);
+        const after = await page.evaluate(effScroll, null);
+        if (closed && Math.abs(after - y0) > 1) problems.push(`closing it scrolled the page from y=${Math.round(y0)} to y=${Math.round(after)}`);
+        if (!closed && !await closeAny()) stuck = true;
+        const evidence = {
+          y: Math.round(y0),
+          afterOpen: Math.round(g.scrollY),
+          afterClose: closed ? Math.round(after) : null,
+          rect,
+          viewport: { w: g.vw, h: g.vh },
+          position: g.position,
+          openedBy: op2.how,
+          animations: settled.animations,
+          stable: settled.stable
+        };
+        add(problems.length ? { id: "dialog.scroll-open", status: "fail", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op2.how}: ${problems.join("; ")}`, evidence } : { id: "dialog.scroll-open", status: "pass", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op2.how}: the page did not move${centre ? ", the dialog is centred" : ", the dialog is inside the viewport"}`, evidence });
       }
-    });
-  }
-  return {
-    behaviour: {
-      version: 1,
-      ran: true,
-      browser: { name: o.browserName ?? "chromium", version: browser.version() },
-      namesComputedBy: NAMES_COMPUTED_BY,
-      budgetMs: o.budgetMs,
-      elapsedMs: Date.now() - t0,
-      cut,
-      checks,
-      landmarks,
-      axe,
-      widths,
-      artifacts: forced ? [o.forcedPng] : [],
-      writeBlock: WRITE_BLOCK_SCOPE
-    },
-    forcedPng: forced
+      u.guard();
+      u.phase("dialog.scrim", "dialog.click-outside");
+      if (!ov) {
+        add({ id: "dialog.scrim", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row (a plan row, or the destination was not exported)" });
+        add({ id: "dialog.click-outside", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row" });
+        return;
+      }
+      if (stuck) {
+        for (const id of ["dialog.scrim", "dialog.click-outside"]) add({ id, status: "not-run", detail: "not-run: the dialog could not be closed for a fresh open" });
+        return;
+      }
+      u.act();
+      await page.evaluate(scrollToY, { y: 0 });
+      await raf2(page);
+      const op = await openStill();
+      if ("why" in op || !op.opened) {
+        for (const id of ["dialog.scrim", "dialog.click-outside"]) add({ id, status: "not-run", detail: `not-run: ${"why" in op ? op.why : "nothing opened"}` });
+        return;
+      }
+      const kd = await page.evaluate(markDialog, { path: op.opened.selector });
+      await page.evaluate(settleDialog, null);
+      const sr = await page.evaluate(scrimRead, null);
+      const built = sr.backdrop ?? sr.cover;
+      const want = ov.background;
+      const unread = sr.backdrop === null && sr.unreadable !== null ? sr.unreadable : built !== null && parseCssColor(built) === null ? built : want !== null && parseCssColor(want) === null ? want : null;
+      if (unread !== null) {
+        add({ id: "dialog.scrim", status: "not-run", detail: `not-run: the scrim colour ${unread} is in a colour space the probe does not read`, evidence: { built, designed: want } });
+      } else {
+        const match = scrimMatches(want, built);
+        add({ id: "dialog.scrim", status: match ? "pass" : "warn", detail: match ? `the scrim matches the design (${want ?? "no scrim"} vs ${built ?? "none"})` : `the scrim is ${built ?? "none"}${sr.backdrop !== null ? " (::backdrop)" : ""}, the design's overlay background is ${want ?? "none (no scrim)"}${ov.from === "default" ? " (Figma's default)" : ""}`, evidence: { built: built ?? null, designed: want, via: sr.backdrop !== null ? "::backdrop" : sr.cover !== null ? "fixed cover" : "none" } });
+      }
+      const pt = sr.point;
+      if (pt === null) add({ id: "dialog.click-outside", status: "not-run", detail: sr.unreadable !== null ? `not-run: a layer over the page has a colour the probe does not read (${sr.unreadable}) \u2014 no point is known to be the backdrop` : `not-run: no backdrop to click \u2014 nothing covers the page outside the dialog (the furthest point hits ${sr.hitDesc}); a click there would land on the page` });
+      else {
+        u.phase("dialog.click-outside");
+        u.act();
+        await page.mouse.click(pt.x, pt.y);
+        const closed = await closedAfter();
+        const want2 = ov.closeOnClickOutside;
+        const hint = closed ? "" : kd.native ? " (a native <dialog>: close it on a click whose event.target is the dialog)" : " (close it from the scrim's click)";
+        add(closed === want2 ? { id: "dialog.click-outside", status: "pass", detail: `a click on the backdrop (${pt.x},${pt.y}) ${closed ? "closed" : "did not close"} it, as designed (closeOnClickOutside ${String(want2)})` } : { id: "dialog.click-outside", status: "warn", detail: `a click on the backdrop (${pt.x},${pt.y}) ${closed ? "closed" : "did not close"} it \u2014 the design says closeOnClickOutside ${String(want2)}${ov.from === "default" ? " (Figma's default)" : ""}${hint}`, evidence: { x: pt.x, y: pt.y, closed, designed: want2 } });
+      }
+    }
   };
 }
 function readAxeResult(x, fallbackVersion) {
@@ -5330,8 +5070,8 @@ function readAxeResult(x, fallbackVersion) {
 }
 
 // design-to-code/probe-visual.ts
-import fs5 from "node:fs";
-import path6 from "node:path";
+import fs2 from "node:fs";
+import path4 from "node:path";
 import { setTimeout as sleep3 } from "node:timers/promises";
 
 // design-to-code/visual-diff.ts
@@ -5560,6 +5300,21 @@ function renderDiff(build, d) {
   return { w, h, data: out };
 }
 
+// bridge/src/project-layout.ts
+import path3 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path3.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+
 // design-to-code/probe-visual.ts
 var VISUAL_CAP_MS = 3e4;
 function visualBudget(now, deadline, cap = VISUAL_CAP_MS, reserve = BEHAVIOUR_RESERVE_MS) {
@@ -5568,8 +5323,8 @@ function visualBudget(now, deadline, cap = VISUAL_CAP_MS, reserve = BEHAVIOUR_RE
 var FONTS_CAP_MS = 5e3;
 var BUILT_CAP = 2e3;
 function referenceRoot(expected, project) {
-  const dir = path6.resolve(path6.dirname(expected));
-  return dir.endsWith(path6.sep + VERIFY_DIR) ? path6.dirname(path6.dirname(dir)) : project;
+  const dir = path4.resolve(path4.dirname(expected));
+  return dir.endsWith(path4.sep + VERIFY_DIR) ? path4.dirname(path4.dirname(dir)) : project;
 }
 var REFERENCE_MALFORMED = "the expectation's referenceImage is malformed \u2014 re-run --expect";
 function prepareVisual(exp, root) {
@@ -5581,11 +5336,11 @@ function prepareVisual(exp, root) {
   if (!ri.usable) return { ok: false, why: ri.why };
   const fw = exp.frame?.w, fh = exp.frame?.h;
   if (typeof fw !== "number" || typeof fh !== "number" || fw < 1 || fh < 1) return { ok: false, why: "the expectation states no frame size" };
-  const file = resolveInside(root, ri.path, path6.join(root, EXPORT_DIR));
+  const file = resolveInside(root, ri.path, path4.join(root, EXPORT_DIR));
   if (file === null) return { ok: false, why: `the reference path ${ri.path} is outside design/export \u2014 re-run --expect` };
   let bytes;
   try {
-    bytes = fs5.readFileSync(file);
+    bytes = fs2.readFileSync(file);
   } catch {
     return { ok: false, why: `the reference PNG ${ri.path} is missing \u2014 re-pull the screen, then re-run --expect` };
   }
@@ -5757,6 +5512,215 @@ function finishVisual(o) {
 function visualLine(v) {
   if (!v.ran) return `visual not run (${v.why})`;
   return `visual (informational \u2014 never the verdict) ${pctText(v.shiftTolerantPct)}% of pixels differ (${pctText(v.differingPct)}% before ${v.shiftPx}-px shift tolerance) \xB7 ${v.regionsTotal} hot region(s) \xB7 at the reference's ${scaleText(v.reference.scale)} (${v.reference.from}) \xB7 grid ${v.grid}${v.diff !== null ? ` \xB7 ${v.diff}` : ""}`;
+}
+
+// design-to-code/content-hash.ts
+import { spawnSync } from "node:child_process";
+function gitHead(cwd) {
+  try {
+    const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
+    const h = r.status === 0 && String(r.stdout || "").trim();
+    return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
+  } catch {
+    return null;
+  }
+}
+
+// design-to-code/verify-run.ts
+import fs4 from "node:fs";
+import os from "node:os";
+import path6 from "node:path";
+
+// bridge/src/atomic-write.ts
+import crypto2 from "node:crypto";
+import fs3 from "node:fs";
+import path5 from "node:path";
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
+function writeFileAtomic(file, data, opts = {}) {
+  fs3.mkdirSync(path5.dirname(path5.resolve(file)), { recursive: true });
+  const tmp = file + tmpSuffix();
+  try {
+    fs3.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.mode !== void 0) fs3.chmodSync(tmp, opts.mode);
+    fs3.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs3.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+
+// design-to-code/verify-run.ts
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var statusFile = (base) => base + ".status.json";
+var CACHE_NAME = "designtwin-verify";
+var shortSha = (s) => sha256Hex(s).slice(0, 16);
+var isDir = (p) => {
+  try {
+    return fs4.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var exists = (p) => fs4.existsSync(p);
+function realpath(p) {
+  if (typeof fs4.realpathSync.native === "function") {
+    try {
+      return fs4.realpathSync.native(p);
+    } catch {
+    }
+  }
+  return fs4.realpathSync(p);
+}
+function canonical2(p) {
+  const abs = path6.resolve(p);
+  try {
+    return realpath(abs);
+  } catch {
+    const parent = path6.dirname(abs);
+    return parent === abs ? abs : path6.join(canonical2(parent), path6.basename(abs));
+  }
+}
+var hasPnp = (d) => exists(path6.join(d, ".pnp.cjs")) || exists(path6.join(d, ".pnp.js"));
+function isWorkspaceRoot(d) {
+  if (exists(path6.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path6.join(d, "package.json"), anyJson);
+  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
+}
+function installRootOf(dir) {
+  let P = null;
+  for (let d = dir; ; d = path6.dirname(d)) {
+    if (exists(path6.join(d, "package.json"))) {
+      P = d;
+      break;
+    }
+    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) return null;
+  }
+  if (isDir(path6.join(P, "node_modules"))) return P;
+  let ws = null;
+  for (let d = P; ; d = path6.dirname(d)) {
+    if (isWorkspaceRoot(d)) {
+      ws = d;
+      break;
+    }
+    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) break;
+  }
+  if (ws !== null && isDir(path6.join(ws, "node_modules"))) return ws;
+  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
+  return P;
+}
+function runCacheOf(verifyDir) {
+  const v = canonical2(verifyDir);
+  const root = installRootOf(v);
+  if (root !== null) {
+    const cache = path6.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path6.relative(root, v).split(path6.sep).join("/");
+    return { dir: rel === VERIFY_DIR.split(path6.sep).join("/") ? cache : path6.join(cache, "dirs", shortSha(rel)), root };
+  }
+  return { dir: path6.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+}
+function runCacheDir(verifyDir) {
+  return runCacheOf(verifyDir).dir;
+}
+var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
+var RunCacheUnwritable = class extends Error {
+  cacheDir;
+  root;
+  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
+   *  permission: a directory on the way was removed while the run wrote there */
+  constructor(cacheDir, root, code) {
+    super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
+    this.name = "RunCacheUnwritable";
+    this.cacheDir = cacheDir;
+    this.root = root;
+  }
+};
+function inRunCache(verifyDir, fn) {
+  try {
+    return fn();
+  } catch (e) {
+    const code = errCode(e);
+    if (code !== void 0 && UNWRITABLE_CODES.has(code)) {
+      const c = runCacheOf(verifyDir);
+      throw new RunCacheUnwritable(c.dir, c.root, code);
+    }
+    throw e;
+  }
+}
+var liveStatusFile = (base) => path6.join(runCacheDir(path6.dirname(base)), path6.basename(base) + ".status.json");
+var stageDirOf = (base, runId) => path6.join(runCacheDir(path6.dirname(base)), "stage", runId);
+function readStatusFile(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return null;
+  if (isVerifyStatusV2(r.doc)) return r.doc;
+  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
+}
+function readStatusAt(base) {
+  for (const file of [liveStatusFile(base), statusFile(base)]) {
+    const status = readStatusFile(file);
+    if (status !== null) return { file, status };
+  }
+  return null;
+}
+function readStatus(base) {
+  const r = readStatusAt(base);
+  return r ? r.status : null;
+}
+var RunEnded = class extends Error {
+  constructor(runId, phase, detail) {
+    super(`run ${runId} already ended at ${phase}${detail ? ` (${detail})` : ""} \u2014 start a new run with --new-run`);
+    this.name = "RunEnded";
+  }
+};
+function writeStatus(base, p) {
+  const prev = readStatus(base);
+  const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+  if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
+  const pick = (k) => {
+    const v = p[k] ?? (same ? same[k] : void 0);
+    return v !== void 0 ? { [k]: v } : {};
+  };
+  const published = p.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...p.published || []])].sort() : void 0;
+  const doc = {
+    schema: STATUS_SCHEMA,
+    screen: path6.basename(base),
+    runId: p.runId,
+    rev: same ? same.rev + 1 : 1,
+    phase: p.phase,
+    detail: p.detail ?? "",
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    by: p.by,
+    ...pick("expectationSha256"),
+    ...pick("measuredSha256"),
+    ...pick("evidenceSha256"),
+    ...published !== void 0 ? { published } : {}
+  };
+  const live = liveStatusFile(base);
+  inRunCache(path6.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+  return doc;
+}
+
+// bridge/src/is-main.ts
+import fs5 from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs5.realpathSync(argv1) === fs5.realpathSync(fileURLToPath2(metaUrl));
+  } catch {
+    return false;
+  }
 }
 
 // design-to-code/verify-probe.ts

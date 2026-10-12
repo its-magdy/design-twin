@@ -33,6 +33,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 
 // A printed command quotes the script's path in double quotes, or in single quotes when it holds a character a
 // shell expands inside them: a backslash (cli-args.ts shellQuote), which every Windows path does.
@@ -1665,16 +1666,15 @@ console.log("map — SLOT props:");
   check("[shared] mergeScreenIndex over an array index keeps its elements (its guard accepts arrays, unlike isRecord)", merged["0"] === "x" && Array.isArray(merged.layers) && merged.layers.length === 1);
   // raceBudget: the value of work that beats the deadline; a cut (onCut first, then a settle for the close and work) when it
   // does not — settled false when the settle window runs out (a wedged browser), true when a slow close still returns
-  const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
   const never = <T>(): Promise<T> => new Promise<T>(() => undefined);
   let cuts = 0;
-  const fast = await raceBudget(sleepMs(5).then(() => 7), 500, {}, () => { cuts++; });
+  const fast = await raceBudget(sleep(5).then(() => 7), 500, {}, () => { cuts++; });
   check("[shared] raceBudget: work that finishes inside the deadline returns its value and never calls onCut", !fast.cut && fast.value === 7 && cuts === 0);
   const cutLike = await raceBudget(Promise.resolve("cut"), 500, {});
   check("[shared] raceBudget: work whose value is the string 'cut' is its value, not a cut", !cutLike.cut && cutLike.value === "cut");
   let settled = false;
   const t0 = Date.now();
-  const slow = await raceBudget(sleepMs(120).then(() => { settled = true; return 1; }), 30, {}, () => { cuts++; });
+  const slow = await raceBudget(sleep(120).then(() => { settled = true; return 1; }), 30, {}, () => { cuts++; });
   check("[shared] raceBudget: past the deadline it returns a settled cut, has called onCut once, and waited for work to settle (well under CUT_SETTLE_MS)",
     slow.cut && slow.settled && cuts === 1 && settled && Date.now() - t0 < CUT_SETTLE_MS);
   // the wedge paths, a slow-but-alive close and a context that arrives after the cut run side by side: one CUT_SETTLE_MS wait for all
@@ -1688,34 +1688,34 @@ console.log("map — SLOT props:");
   let lateClosed = false;
   const late: Held = {};
   const lateWork = (async (): Promise<string> => {
-    await sleepMs(200);
+    await sleep(200);
     let closedNow: () => void = () => undefined;
     const closedP = new Promise<void>((r) => { closedNow = r; });
     holdContext(late)({ close: async () => { lateClosed = true; closedNow(); } });
-    await Promise.race([closedP, sleepMs(30_000)]);
+    await Promise.race([closedP, sleep(30_000)]);
     return lateClosed ? "closed" : "ran on";
   })();
   // the same through driveInteractions: newContext answers 200 ms after a 100 ms budget; its page waits until the context closes
   let driveCtxClosed = false;
   const isContext = (x: unknown): x is BrowserContext => typeof x === "object" && x !== null && "close" in x && "newPage" in x;
   const slowContext = async (): Promise<BrowserContext> => {
-    await sleepMs(200);
+    await sleep(200);
     let closedNow: () => void = () => undefined;
     const closedP = new Promise<void>((r) => { closedNow = r; });
     const fake = { close: async (): Promise<void> => { driveCtxClosed = true; closedNow(); },
-      newPage: async (): Promise<never> => { await Promise.race([closedP, sleepMs(30_000)]); throw new Error("Target page, context or browser has been closed"); } };
+      newPage: async (): Promise<never> => { await Promise.race([closedP, sleep(30_000)]); throw new Error("Target page, context or browser has been closed"); } };
     if (!isContext(fake)) throw new Error("fake context");
     return fake;
   };
   const [wedge, alive, noCtx, timed, closeHung, lateCut, straddle] = await Promise.all([
     raceBudget(never<number>(), 20, { ctx: { close: () => { closes++; return never<void>(); } } }).then((r) => ({ ...r, ms: Date.now() - tw })),
-    (async () => { let open = true; const work = (async (): Promise<number> => { while (open) await sleepMs(20); return 1; })();
-      const r = await raceBudget(work, 20, { ctx: { close: async () => { await sleepMs(SLOW_CLOSE_MS); open = false; } } });
+    (async () => { let open = true; const work = (async (): Promise<number> => { while (open) await sleep(20); return 1; })();
+      const r = await raceBudget(work, 20, { ctx: { close: async () => { await sleep(SLOW_CLOSE_MS); open = false; } } });
       return { ...r, ms: Date.now() - tw }; })(),
     raceBudget(never<number>(), 20, {}).then((r) => ({ ...r, ms: Date.now() - tw })),
     driveInteractions({ newContext: () => never() }, { rows: [{ nodeId: "1:1", name: "Open", trigger: "ON_CLICK" }, { nodeId: "1:2", name: "More", trigger: "ON_CLICK" }], viewport: { w: 100, h: 100 }, timeout: 100, initScript: "", budgetMs: 20, reach: async () => undefined })
       .then((r) => ({ ...r, ms: Date.now() - tw })),
-    raceBudget(sleepMs(100).then(() => 1), 20, { ctx: { close: () => never<void>() } }),
+    raceBudget(sleep(100).then(() => 1), 20, { ctx: { close: () => never<void>() } }),
     raceBudget(lateWork, 100, late).then((r) => ({ ...r, ms: Date.now() - tw })),
     driveInteractions({ newContext: slowContext }, { rows: [{ nodeId: "2:1", name: "Open", trigger: "ON_CLICK" }], viewport: { w: 100, h: 100 }, timeout: 30_000, initScript: "", budgetMs: 100, reach: async () => undefined })
       .then((r) => ({ ...r, ms: Date.now() - tw })),
@@ -1742,5 +1742,78 @@ console.log("map — SLOT props:");
   const rejected = await raceBudget(Promise.reject(new Error("boom")), 60_000, {}).then(() => "resolved", (e: unknown) => errMsg(e));
   check("[shared] raceBudget: a work that rejects propagates the rejection and leaves no ref'd deadline timer behind", rejected === "boom" && refTimers() === timersBefore);
 }
+
+// ---------- the four hand-parsed CLIs share cliParse: --flag=value, every unknown flag, no stray words ---------
+// map-bootstrap, get-component, resolve-screen and verify-build used to take argv by hand (indexOf + splice, or
+// array destructuring), so `--out=x` was an unknown option, a single-dash typo became a positional, only the first
+// unknown flag was named, and a surplus positional was ignored. Real subprocesses: the behaviour is the exit code
+// and what lands on stderr. None binds a port.
+(() => {
+  const D2C = path.join(import.meta.dirname, "..", "design-to-code");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-cliargs-"));
+  fs.writeFileSync(path.join(cwd, "c.json"), JSON.stringify(catalog([{ name: "Sample Button", id: "6:0", type: "COMPONENT_SET", key: "KEY_SAMPLE_BUTTON" },
+    { name: "-Divider", id: "6:1", type: "COMPONENT", key: "KEY_DIVIDER" }, { name: "--- Section ---", id: "6:2", type: "COMPONENT", key: "KEY_SECTION" }])));
+  fs.mkdirSync(path.join(cwd, "pages"));
+  fs.writeFileSync(path.join(cwd, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [
+    { name: "Home", id: "1:2", type: "FRAME", page: "P", file: "pages/P/Home__1_2.json" },
+    { name: "- Draft", id: "1:3", type: "FRAME", page: "P", file: "pages/P/Draft__1_3.json" },
+    { name: "---", id: "1:4", type: "FRAME", page: "P", file: "pages/P/Rule__1_4.json" },
+  ] }));
+  const run = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(D2C, script), ...args], { encoding: "utf8", cwd, input: "" });
+  const rejects = (script: string, args: string[], code: number, msg: RegExp): boolean => {
+    const r = run(script, args);
+    return r.status === code && msg.test(r.stderr) && /^usage: /m.test(r.stderr) && r.stdout === "";
+  };
+  const mb = "map-bootstrap.ts", gc = "get-component.ts", rs = "resolve-screen.ts", vb = "verify-build.ts";
+
+  const eq = run(mb, ["c.json", "--out=eq.json"]);
+  check("[cli-args] map-bootstrap takes --out=<file> as well as --out <file>", eq.status === 0 && fs.existsSync(path.join(cwd, "eq.json")) && eq.stdout === "");
+  check("[cli-args] …and still takes the space-separated form, a repeated --catalog and the map before the flags",
+    run(mb, ["--out", "sp.json", "--catalog", "c.json", "--catalog", "c.json", "c.json"]).status === 0 && fs.existsSync(path.join(cwd, "sp.json")));
+  check("[cli-args] map-bootstrap names EVERY unknown flag, exit 1", rejects(mb, ["c.json", "--bogus", "--other"], 1, /^map-bootstrap: unknown flag --bogus, --other$/m));
+  check("[cli-args] map-bootstrap rejects a single-dash typo instead of reading it as the existing map", rejects(mb, ["c.json", "-x"], 1, /^map-bootstrap: unknown flag -x$/m));
+  check("[cli-args] map-bootstrap names a value that starts with '-' once, as typed, with the way out — not the letters Node splits it into",
+    rejects(mb, ["c.json", "-Button"], 1, /^map-bootstrap: unknown flag -Button \(a value starting with "-": put -- before it, or use --flag=value\)$/m)
+    && rejects(mb, ["c.json", "-h-thing"], 1, /^map-bootstrap: unknown flag -h-thing \(/m) && run(mb, ["c.json", "--", "-Button"]).stderr.includes("unexpected argument") === false);
+  check("[cli-args] …alongside a long unknown flag, each once", rejects(mb, ["c.json", "--bogus", "-Button", "-Button"], 1, /^map-bootstrap: unknown flag --bogus, -Button \(/m));
+  check("[cli-args] …and -hh is help, not a silently ignored flag", run(mb, ["-hh"]).status === 0 && /^usage: /m.test(run(mb, ["-hh"]).stdout)
+    && run(vb, ["-hh"]).status === 0 && /^usage: /m.test(run(vb, ["-hh"]).stdout));
+  check("[cli-args] a dash-leading word after a value-taking flag is that flag's missing value, not an unknown flag", rejects(mb, ["c.json", "--out", "-Button"], 1, /^map-bootstrap: --out needs a value$/m));
+  check("[cli-args] map-bootstrap rejects a third positional (it was silently dropped)", rejects(mb, ["c.json", "a.json", "b.json"], 1, /^map-bootstrap: unexpected argument b\.json$/m));
+  check("[cli-args] map-bootstrap: a value-taking flag with no value, or a flag as its value, says so", rejects(mb, ["c.json", "--out"], 1, /^map-bootstrap: --out needs a value$/m)
+    && rejects(mb, ["c.json", "--out", "--screen", "s.json"], 1, /^map-bootstrap: --out needs a value$/m));
+  check("[cli-args] map-bootstrap: an empty --out is no file name (it used to be taken for no --out and print to stdout)", rejects(mb, ["c.json", "--out", ""], 1, /^map-bootstrap: --out needs a value$/m));
+  check("[cli-args] map-bootstrap: no catalog prints the usage, exit 1", run(mb, []).status === 1 && /^usage: /m.test(run(mb, []).stderr));
+
+  check("[cli-args] get-component still resolves a handle", run(gc, ["c.json", "KEY_SAMPLE_BUTTON"]).status === 0);
+  // get-component and resolve-screen have no flag but --help: a name that starts with "-" is a name, never parsed as flags
+  const found = (script: string, args: string[], id: string): boolean => { const r = run(script, args); return r.status === 0 && r.stdout.includes(id); };
+  check("[cli-args] get-component looks up a name that starts with '-' (it is not split into short flags)",
+    found(gc, ["c.json", "-Divider"], "6:1") && found(gc, ["c.json", "--- Section ---"], "6:2") && found(gc, ["c.json", "KEY_DIVIDER"], "6:1"));
+  check("[cli-args] …a leading -- is dropped, so `-- -Divider` works too", found(gc, ["c.json", "-Divider"], "6:1") && found(gc, ["--", "c.json", "-Divider"], "6:1"));
+  const noMatch = (script: string, args: string[], what: RegExp): boolean => { const r = run(script, args); return r.status === 1 && what.test(r.stderr) && !/unknown flag|unexpected argument/.test(r.stderr); };
+  check("[cli-args] get-component: --bogus, -x, -h-thing and -hh are names to look up (no match, exit 1), not flags",
+    ["--bogus", "-x", "-h-thing", "-hh"].every((h) => noMatch(gc, ["c.json", h], new RegExp(`no component matches '${h}'`))));
+  check("[cli-args] get-component rejects a third positional (it was ignored)", rejects(gc, ["c.json", "KEY_SAMPLE_BUTTON", "extra"], 2, /^get-component: unexpected argument extra$/m));
+  check("[cli-args] get-component with one argument prints the usage, exit 2", run(gc, ["c.json"]).status === 2 && /^usage: /m.test(run(gc, ["c.json"]).stderr));
+
+  check("[cli-args] resolve-screen still resolves, with and without the plan dir", run(rs, [".", "Home"]).status === 0 && run(rs, [".", "Home", "plan"]).status === 0);
+  check("[cli-args] resolve-screen looks up a screen name that starts with '-' (it is not split into short flags)",
+    found(rs, [".", "- Draft"], "1:3") && found(rs, [".", "---"], "1:4") && found(rs, ["--", ".", "- Draft"], "1:3"));
+  check("[cli-args] resolve-screen: --bogus, -x, -h-thing and -hh are names to look up (no match, exit 1), not flags",
+    ["--bogus", "-x", "-h-thing", "-hh"].every((h) => noMatch(rs, [".", h], new RegExp(`'${h}' matches no screen`))));
+  check("[cli-args] resolve-screen rejects a fourth positional (it was ignored)", rejects(rs, [".", "Home", "plan", "extra"], 2, /^resolve-screen: unexpected argument extra$/m));
+  check("[cli-args] resolve-screen with one argument prints the usage, exit 2", run(rs, ["."]).status === 2 && /^usage: /m.test(run(rs, ["."]).stderr));
+
+  check("[cli-args] verify-build --status still runs (no plans is not an error)", run(vb, ["--status"]).status === 0);
+  check("[cli-args] verify-build names every unknown flag, exit 2", rejects(vb, ["--a", "--b", "--status"], 2, /^verify-build: unknown flag --a, --b$/m));
+  check("[cli-args] verify-build rejects a single-dash typo", rejects(vb, ["-x"], 2, /^verify-build: unknown flag -x$/m));
+  check("[cli-args] verify-build names a value that starts with '-' once, as typed", rejects(vb, ["-Button"], 2, /^verify-build: unknown flag -Button \(a value starting with "-"/m)
+    && rejects(vb, ["-h-thing"], 2, /^verify-build: unknown flag -h-thing \(/m));
+  check("[cli-args] verify-build: a boolean flag given a value says it takes none", rejects(vb, ["--json=1"], 2, /^verify-build: --json takes no value$/m)
+    && rejects(vb, ["--help=1"], 2, /^verify-build: --help takes no value$/m)
+    && rejects(vb, ["--status=1"], 2, /^verify-build: --status takes no value$/m));
+  fs.rmSync(cwd, { recursive: true, force: true });
+})();
 
 report();

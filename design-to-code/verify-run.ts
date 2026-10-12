@@ -87,7 +87,7 @@ isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, pha
 /** `<base>.status.json` — the PUBLISHED (durable) status in the verify dir; base is design/verify/<S>. */
 export const statusFile = (base: string): string => base + ".status.json";
 /** sha256 of a file's bytes, or null when it cannot be read. */
-export function sha256File(file: string): string | null {
+function sha256File(file: string): string | null {
   try { return sha256Hex(fs.readFileSync(file)); } catch { return null; }
 }
 
@@ -147,7 +147,7 @@ function installRootOf(dir: string): string | null {
 }
 /** The run cache of a verify directory and the directory it belongs to (the project root, or the verify dir itself
  *  for the temp-dir fallback) — see runCacheDir. */
-export function runCacheOf(verifyDir: string): { dir: string; root: string } {
+function runCacheOf(verifyDir: string): { dir: string; root: string } {
   const v = canonical(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
@@ -188,7 +188,7 @@ export class RunCacheUnwritable extends Error {
   }
 }
 /** Run `fn` (a write into the run cache of `verifyDir`); a permission / read-only / missing-dir refusal becomes RunCacheUnwritable. */
-export function inRunCache<T>(verifyDir: string, fn: () => T): T {
+function inRunCache<T>(verifyDir: string, fn: () => T): T {
   try { return fn(); } catch (e) {
     const code = errCode(e);
     if (code !== undefined && UNWRITABLE_CODES.has(code)) { const c = runCacheOf(verifyDir); throw new RunCacheUnwritable(c.dir, c.root, code); }
@@ -203,7 +203,7 @@ export const liveStatusFile = (base: string): string => path.join(runCacheDir(pa
 export const stageDirOf = (base: string, runId: string): string => path.join(runCacheDir(path.dirname(base)), "stage", runId);
 
 /** A run id: time + randomness, sortable, safe in a file name and a shell word. */
-export function newRunId(): string {
+function newRunId(): string {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto.randomBytes(3).toString("hex");
 }
 
@@ -318,7 +318,7 @@ export function publishStaged(stageDir: string, destDir: string): { published: s
 
 // ---------------------------------------------------------------- CLI glue (called from verify-screen.ts main)
 /** `<dir>/<S>`: S is a screen name (`--dir` defaults to design/verify); a path with a separator is taken as-is. */
-export function runBase(screen: string, dir: string | undefined): string {
+function runBase(screen: string, dir: string | undefined): string {
   const s = screen.replace(/\.(status|measured|expected|evidence)\.json$/, "");
   return /[\\/]/.test(s) && dir === undefined ? s : path.join(dir ?? VERIFY_DIR, s);
 }

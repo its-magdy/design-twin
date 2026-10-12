@@ -41,6 +41,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isCI } from "./pool.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 
 type Kind = "lint" | "node";
 interface Suite { name: string; kind: Kind; file: string }
@@ -67,7 +68,7 @@ const SUITE_ENV: NodeJS.ProcessEnv = process.env.NODE_COMPILE_CACHE === undefine
 const NODE_SUITES: readonly string[] = [
   // the real-name guard, right after the lints (fast, repo-wide)
   "real-names.test.ts",
-  "harness.ts", "bridge.test.ts", "daemon-framing.test.ts", "cli-help.test.ts", "cli-pull.test.ts", "asset-compare.test.ts", "asset-index.test.ts", "asset-key-cache.test.ts", "quick-keys.test.ts", "design-to-code.test.ts", "tokens-cli.test.ts", "g14-step0.test.ts", "cli-exit.test.ts", "atomic-write.test.ts",
+  "harness.ts", "bridge.test.ts", "daemon-framing.test.ts", "cli-help.test.ts", "figma-pull-args.test.ts", "ports.test.ts", "cli-pull.test.ts", "asset-compare.test.ts", "asset-index.test.ts", "asset-key-cache.test.ts", "quick-keys.test.ts", "design-to-code.test.ts", "tokens-cli.test.ts", "g14-step0.test.ts", "cli-exit.test.ts", "atomic-write.test.ts",
   "audit.test.ts", "build-screen-docs.test.ts", "verify-build.test.ts", "plan-record.test.ts", "verify-screen.test.ts", "verify-accuracy.test.ts", "verify-values.test.ts",
   "verify-waivers.test.ts", "verify-node-rules.test.ts", "verify-run.test.ts", "verify-behaviour.test.ts",
   "verify-integrity.test.ts", "verify-probe.test.ts", "verify-probe-e2e.test.ts", "verify-drive.test.ts",
@@ -112,7 +113,6 @@ const fmt = (ms: number): string => {
   const s = Math.round(ms / 1000);
   return s >= 3600 ? `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m${String(s % 60).padStart(2, "0")}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
 };
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 // `detached` puts the suite in its own process group (one kill reaches its children). Not on Windows: there it
 // opens a console window per suite, and the group kill does not exist anyway.

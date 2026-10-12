@@ -15,7 +15,7 @@ import { argsShapeError } from "../bridge/src/commands.ts";
 import { QUICK_KEYS } from "../bridge/src/quick-keys.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 import { must } from "./fixtures.ts";
-import { buildExpectation } from "../design-to-code/verify-screen.ts";
+import { buildExpectation } from "../design-to-code/verify-expect.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
 // are plain objects; the types below name only what the harness itself builds or reads back. (The real

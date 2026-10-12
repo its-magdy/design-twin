@@ -9,8 +9,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { buildExpectation, compare, reportToMarkdown, STYLE_KEYS } from "../design-to-code/verify-screen.ts";
-import type { CompareOptions, ExpectInput, ExpectOptions } from "../design-to-code/verify-screen.ts";
+import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
+import { compare } from "../design-to-code/verify-compare.ts";
+import { buildExpectation } from "../design-to-code/verify-expect.ts";
+import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
+import type { CompareOptions } from "../design-to-code/verify-compare.ts";
+import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
 import { planInteractionsSha256 } from "../design-to-code/plan-waivers.ts";
 import { actionForExpect, parseSteps, stepsSha256 } from "../design-to-code/probe-steps.ts";
 import { isVerifyExpectation, isVerifyReport, readableMeasured } from "../design-to-code/doc-guards.ts";
@@ -77,6 +81,15 @@ safe("destination never exported (another file's id) → destinationExported fal
   return !!share && share.destinationExported === false && share.overlay === undefined && !!nav && nav.overlay === undefined && ia(exp.interactions, "2:2")?.overlay !== undefined;
 });
 safe("the frame root's scroll direction travels with expectation.frame", () => buildExpectation([screen("horizontal")], OPTS).frame.scroll === "horizontal" && exp.frame.scroll === undefined);
+
+safe("a sibling export is read once per --expect, though the alias pass and the overlay pass both want it", () => {
+  const reads: Record<string, number> = {};
+  const withShell = PANTRY();
+  withShell.children = [...(withShell.children ?? []), { type: "INSTANCE", id: "2:8", name: "Nav", mainComponent: { name: "Nav", key: "k-nav", setName: "Nav" } }];
+  const doc: ExpectInput = { doc: screenExport([withShell], { exportedAt: "2026-10-01T00:00:00Z", screen: "Pantry", nodeId: "1:1", sourceFile: KIT }), label: "Pantry__1_1" };
+  const e = buildExpectation([doc], { index: { layers: LAYERS }, readSibling: (f) => { reads[f] = (reads[f] ?? 0) + 1; return SIBLINGS[f] ?? null; } });
+  return Object.keys(reads).length >= 3 && Object.values(reads).every((n) => n === 1) && ia(e.interactions, "2:2")?.overlay?.from === "export";
+});
 
 // ---------------------------------------------------------------- plan interactions merged at --expect
 console.log("plan.interactions merged at --expect:");
