@@ -429,23 +429,6 @@ async function pull<C extends "exportFull" | "exportDesignSystem" | "exportSelec
 interface LastWrite { tool: string; at: string; implicit: boolean; file: string; prev?: string; prevKept?: number }
 let lastWrite: LastWrite | null = null;
 
-// Every pages/**/*.json under `dir` with its inode: a file the write replaces gets a new inode (writeJson
-// renames over it), which is how an implicit full/page spill counts what it overwrote.
-function pageFileInodes(dir: string): Map<string, number> {
-  const out = new Map<string, number>();
-  const walk = (d: string): void => {
-    let ents: fs.Dirent[] = [];
-    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const e of ents) {
-      const f = path.join(d, e.name);
-      if (e.isDirectory()) walk(f);
-      else if (e.name.endsWith(".json") && e.name !== "index.json") { try { out.set(f, fs.statSync(f).ino); } catch { /* vanished */ } }
-    }
-  };
-  walk(path.join(dir, "pages"));
-  return out;
-}
-
 // An outDir the caller NAMED (or a writeToDisk:true, which writes to the default) is
 // checked BEFORE the export, so a refused path costs no plugin walk — the plugin is never asked.
 // exportResult still checks again after it (the one case left: FIGMA_EXPORT_DIR alone plus an implicit
@@ -497,10 +480,10 @@ function exportResult(tool: string, a: WriteArgs, p: Pulled, opts?: { scale?: nu
   // An IMPLICIT spill must not silently replace what is on disk. A screen keeps `<screen>.json.prev`
   // (when the old file differs); a full/design-system export keeps `<file>.prev` beside every JSON
   // under pages/, design-system/ or libraries/ it replaces with different content (`wrote.prevKept`), and
-  // the replaced pages/ layer files are counted by inode.
-  const before = implicit && !("screen" in r) && !("reference" in r) ? pageFileInodes(dir) : null;
+  // the pages/ layer files it replaced are counted (writeExport lists each one that was on disk before it).
+  const replacedFiles: string[] | null = implicit && !("screen" in r) && !("reference" in r) ? [] : null;
   const w0 = Date.now();
-  const written = writeAny(a.outDir, r, wlog, { scale: opts && opts.scale, keepPrev: implicit });
+  const written = writeAny(a.outDir, r, wlog, { scale: opts && opts.scale, keepPrev: implicit, replaced: replacedFiles ?? undefined });
   const writeMs = Date.now() - w0;
   const wrote = written.wrote;
   const newPrev = "prev" in wrote && typeof wrote.prev === "string" ? wrote.prev : undefined;
@@ -514,10 +497,8 @@ function exportResult(tool: string, a: WriteArgs, p: Pulled, opts?: { scale?: nu
     replacedNote = `It replaced ${wrote.screen}; the previous version is kept at ${newPrev} (one level — the next implicit spill replaces it). `;
   } else if (earlierPrev) {
     replacedNote = `An earlier version is still at ${earlierPrev} (this export matched what was on disk). `;
-  } else if (before) {
-    const after = pageFileInodes(dir);
-    let n = 0;
-    for (const [f, ino] of before) { const now = after.get(f); if (now !== undefined && now !== ino) n++; }
+  } else if (replacedFiles) {
+    const n = replacedFiles.length;
     // write-out.ts's writeExport lists the .prev copies it made (absolute paths), only when there are any.
     const keptRaw: unknown = "prevKept" in wrote ? wrote.prevKept : undefined;
     const kept = isStringArray(keptRaw) ? keptRaw : [];
