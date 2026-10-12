@@ -7009,12 +7009,15 @@ ${USAGE}`);
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
   return 0;
 }
+var EXIT_GRACE_MS = 1e3;
+function exitWhenDone(code) {
+  process.exitCode = code;
+  setTimeout(() => process.stderr.write("", () => process.stdout.write("", () => process.exit(code))), EXIT_GRACE_MS).unref();
+}
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  main(process.argv.slice(2)).then((code) => {
-    process.exitCode = code;
-  }, (e) => {
+  main(process.argv.slice(2)).then(exitWhenDone, (e) => {
     console.error(`verify-probe: ${errMsg(e)}`);
-    process.exitCode = 1;
+    exitWhenDone(1);
   });
 }
 export {
