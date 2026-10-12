@@ -28,10 +28,10 @@ writes the real path here, not there).
 
 | File | Load it when |
 |------|--------------|
-| `../build-screen/profiles/<profile>.md` | You are about to write or change code for a node — the stack's conversion rules. Same profile the screen was built with (`design/target.json`). |
-| `../build-screen/references/ir-fields.md` | A changed field's meaning or unit isn't obvious (`font.lineHeight` percent, `rotation` sign, `strokes.align`). |
-| `../build-screen/references/export-layout.md` | You can't find the screen's JSON, the token file, or the reference image. |
-| `../build-screen/references/verify.md` | Step 5 — rendering and comparing the patched screen. |
+| `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/profiles/<profile>.md` | You are about to write or change code for a node — the stack's conversion rules. Same profile the screen was built with (`design/target.json`). |
+| `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/ir-fields.md` | A changed field's meaning or unit isn't obvious (`font.lineHeight` percent, `rotation` sign, `strokes.align`). |
+| `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/export-layout.md` | You can't find the screen's JSON, the token file, or the reference image. |
+| `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md` | Step 5 — rendering and comparing the patched screen. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/verify/references/run-protocol.md` | Step 5, when a verifier run is involved — run ids, `--status` / `--wait`, the run cache, staging, permission denials. |
 
 ## Procedure
@@ -46,14 +46,10 @@ writes the real path here, not there).
 ```
 
 1. **Find what was built.** First resolve which screen the user means:
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan` (node id wins alone;
-   otherwise exact layer name, indexed `title` and plan `screenName`/`route` are checked TOGETHER, as
-   one pool, never in sequence — more than one match anywhere in that pool stops the run instead of
-   resolving on whichever field was checked first; see `extract/SKILL.md`). A text-search fallback
-   runs last but never resolves alone — a single hit is
-   a candidate to confirm by node id, never a screen to sync against. Do **not** resolve through
-   `design/plan/*.json`'s free-text `screen` field alone — it happens to work only when a human wrote
-   a good string into it, and its sibling plan from the very same build may not have one. Once
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`. It prints the one
+   screen it resolved, or stops and prints the candidates — show those and ask, rather than syncing against a guess
+   or resolving through `design/plan/*.json`'s free-text `screen` field (a human's string, and a sibling plan
+   from the same build may not have one). Once
    resolved, `design/plan/<screen>.json` is the
    record of the first build: `files[]` is where the code lives, `anchors{}` maps node ids to the
    file and symbol each became (absent on plans written before anchors were recorded), `tokens[]` and
@@ -134,7 +130,7 @@ writes the real path here, not there).
    dtwin pull --design-system --client "<the design-system file's name>"
    ```
    (`--as-library "<name>"` instead of `--design-system` when that file is a Figma library rather than
-   a plain design-system file the export already recognises — see `extract/SKILL.md`.) Skip this
+   a plain design-system file the export already recognises — the extract skill says which.) Skip this
    re-pull only when you have already confirmed nothing token/style/component-shaped changed.
 
 4. **Diff, and show it before editing.**
@@ -212,7 +208,7 @@ writes the real path here, not there).
      or removed, and append the applied
      changes to a `syncs[]` array (`{date, summary, diff:"design/sync/<screen>.md"}`) so the next
      sync — and the next reader — can see what happened.
-   - **Verify the touched regions** per `references/verify.md` against the new reference image, then
+   - **Verify the touched regions** per build-screen's `references/verify.md` (table above) against the new reference image, then
      record `verification` in the plan as build-screen step 5 describes. A patch that was not
      rendered is reported as `static-only`, not as matching.
 
