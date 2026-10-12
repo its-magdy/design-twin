@@ -49,9 +49,13 @@ check("drift-lint/map-bootstrap read the library catalogs (`components.library.j
 check("a subagent records the short list, sets awaiting-user and does not confirm for the user (skill and agent)", /subagent.{0,200}awaiting-user.{0,200}(not|never) confirm/i.test(skill) && /awaiting-user.{0,200}(not|never) confirm|(not|never) confirm.{0,200}(list|map)/i.test(builder));
 
 console.log("build-screen docs (shipped web probe):");
-const verifier = flat(read("claude-plugin/agents/visual-verifier.md"));
-const verifySkill = flat(read("claude-plugin/skills/verify/SKILL.md"));
-const verifyRef = flat(read("claude-plugin/skills/build-screen/references/verify.md"));
+// A rule moved into a reference is still "stated" when the reader is sent there: each doc below is the file plus
+// the references it links (the verifier and the verify skill share one copy of the run protocol and the driving
+// rules; build-screen's references/verify.md is linked beside the run protocol).
+const verifyRefs = (...names: string[]): string[] => names.map((n) => read(`claude-plugin/skills/verify/references/${n}.md`));
+const verifier = flat([read("claude-plugin/agents/visual-verifier.md"), ...verifyRefs("run-protocol", "probe-driving", "native-measuring")].join("\n"));
+const verifySkill = flat([read("claude-plugin/skills/verify/SKILL.md"), ...verifyRefs("run-protocol", "probe-driving", "verdict-rules", "probe-limits")].join("\n"));
+const verifyRef = flat([read("claude-plugin/skills/build-screen/references/verify.md"), ...verifyRefs("run-protocol")].join("\n"));
 // The visual-verifier's write scope, pattern kills, installs and sandbox bypass are refused by its PreToolUse hook
 // (design-to-code/verifier-guard.ts, test/verifier-guard.test.ts), so its doc says so in one line instead of prose "never"s.
 const verifierGuarded = /\*\*Enforced by the plugin's hook\*\* \(`scripts\/verifier-guard\.js`, PreToolUse\), each refusal a real block with its reason: a write outside `design\/verify\/` and the run cache \(or to a tool-owned file there\), a pattern kill \(`pkill`, `killall`, …\), a dependency or Playwright browser install \(`npm install`\/`ci`, `npx playwright install`\) and `dangerouslyDisableSandbox`\./.test(verifier);
@@ -118,7 +122,7 @@ console.log("verify docs (run integrity + agent safety):");
     [verifier, verifySkill, verifyRef].every((t) => /node_modules\/\.cache\/designtwin-verify\/<(Screen|screen)>\.status\.json/.test(t) && /heartbeats are free|status writes are free/i.test(ws(t)) && /publish\w* the final status/i.test(ws(t)))
     && /node_modules\/\.cache\/designtwin-verify/.test(skill) && /published as `design\/verify\/<screen>\.status\.json` at `done`/.test(ws(skill)));
   check("done checks the measured file before it copies anything (verifier, verify skill, references/verify.md)",
-    /`done` checks first and publishes only then/.test(ws(verifier)) && [verifySkill, verifyRef].every((t) => /`done` checks the measured file first, then copies/.test(ws(t))));
+    [verifier, verifySkill, verifyRef].every((t) => /`done` checks the measured file first, then copies/.test(ws(t))));
   check("'a safety check separate from auto mode blocked this request' is labelled a no-verdict denial that retrying will not fix (not a real block); the transient form is 'temporarily unavailable …, so auto mode cannot determine the safety of'",
     [verifier, verifySkill, verifyRef].every((t) => { const x = ws(t); return /safety check separate from auto mode blocked this request.{0,300}(retrying will not|do not retry)/i.test(x) && /temporarily unavailable.{0,20}so auto mode cannot determine the safety of/i.test(x); })
     && !/real\* block \(the classifier names a rule or reason, or "a safety check/.test(ws(verifier)));
@@ -276,14 +280,14 @@ console.log("build-screen docs (dialog triggers + step matching):");
     && /a `dialog` row's trigger is\s+`on_click` or `on_press`/.test(skill) && /`expect: "dialog"` rows \(`on_click` \/ `on_press` only\)/.test(verifyRef));
   check("steps: a `click` matches exactly one visible element, a `waitFor` at least one (verifier, verify skill, build-screen, references)",
     /A `click` selector must\s+match EXACTLY ONE visible element; a `waitFor` succeeds once AT LEAST ONE visible element matches/.test(verifier)
-    && /A `click` selector must match exactly ONE visible element \(a `waitFor` succeeds once AT LEAST ONE visible element matches\)/.test(verifySkill)
+    && /A `click` selector must\s+match EXACTLY ONE visible element; a `waitFor` succeeds once AT LEAST ONE visible element matches/.test(verifySkill)
     && /each `click` selector matches exactly one visible element, a `waitFor` at least one/.test(skill) && /exactly one visible\s+match per `click` \(a `waitFor` needs at least one\)/.test(verifyRef));
   check("disabled openers are not driven and an opener that would submit a form is not clicked — ok:null (verifier, verify skill, references)",
     [verifier, verifySkill].every((t) => /A disabled opener \(`:disabled`,\s+`\[disabled\]` or `aria-disabled="true"`, on it or on an ancestor\) is not driven/.test(t) && /an opener that would submit\s+a form[^.]*is not clicked/.test(t))
     && /skipping a disabled\s+opener \(`:disabled` \/ `\[disabled\]` \/ `aria-disabled`, on it or an ancestor\) and one that would submit a form \(`ok: null`\)/.test(verifyRef));
   check("the destination tag: on or inside the opened element, or on a NEWLY visible ancestor — never one visible before the click (verifier ×2, verify skill, build-screen, references)",
     /or on an ancestor of it that became visible with it — never on one that was already\s+visible/.test(verifier) && /or on a NEWLY visible ancestor of\s+it — never one visible before the click/.test(verifier)
-    && /or on an ancestor of it that became visible with it — never one already visible before the click/.test(verifySkill)
+    && /or on an ancestor of it that became visible with it — never on one that was already\s+visible/.test(verifySkill)
     && /or on an ancestor of it that became visible with it \(never one visible before the click\)/.test(skill) && /or on a newly visible ancestor of it/.test(verifyRef));
   check("one plan rule: of several plans, the one listing files[]; --compare picks the same; the re-run names --plan (verify skill, build-screen)",
     /or — when several do — the one\s+that lists `files\[\]`; `--compare` picks the plan by the same rule/.test(verifySkill) && /with the `--plan` it names, when it names one/.test(verifySkill)
@@ -310,16 +314,16 @@ console.log("build-screen docs (plan file for --compare + step load ownership):"
     && /a `click` changes the page in place or navigates to another URL, never reloads the one it is on/.test(skill));
   check("every settle first waits for the document to finish loading (readyState complete, 10 s cap, then a note) (verifier, verify skill)",
     /every settle first waits for the document to finish loading \(`document\.readyState`\s+`"complete"`; at most 10 s per document, then it measures anyway, with the note "the document had not finished loading",/.test(verifier)
-    && /every settle first waits for the document to finish loading \(`document\.readyState` `"complete"`, at most 10 s per document, then it measures anyway with a note,/.test(verifySkill));
+    && /every settle first waits for the document to finish loading \(`document\.readyState`\s+`"complete"`; at most 10 s per document, then it measures anyway, with the note "the document had not finished loading",/.test(verifySkill));
   check("the submit refusal also checks the element at the click point (verifier ×2, verify skill ×2)",
     /typeless button inside a `<form>`, on the element or at its click point, is refused/.test(verifier) && /typeless button inside a `<form>`, on it or at its click point\) is not clicked/.test(verifier)
-    && /typeless button inside a `<form>`, on the element or at its click point, is refused/.test(verifySkill) && /an opener that would submit a form \(on it or at its click point\) is not clicked/.test(verifySkill));
+    && /typeless button inside a `<form>`, on the element or at its click point, is refused/.test(verifySkill) && /an opener that would submit a form \(`\[type=submit\]`, or a typeless button inside a `<form>`, on it or at its click point\) is not clicked/.test(verifySkill));
 }
 console.log("build-screen docs (same-URL documents + load wait):");
 {
   check("a same-URL new document is never a click's own — not even one its handler starts at once (verifier, verify skill)",
     /never a step's own — not even\s+one the click's handler starts at once \(`draw\(\); location\.reload\(\)`\)/.test(verifier)
-    && /is never a step's own, not even one the click's handler starts at once \(`draw\(\); location\.reload\(\)`\)/.test(verifySkill));
+    && /is never a step's own — not even one the click's handler starts at once \(`draw\(\); location\.reload\(\)`\)/.test(verifySkill));
   check("the 10 s load wait is per document: no later settle waits for that document again (verifier, verify skill)",
     /at most 10 s per document[^)]*and no later settle waits for that document again[;)]/.test(verifier) && /at most 10 s per document[^)]*and no later settle waits for that document again[;)]/.test(verifySkill));
   check("a link click to the URL already shown owns the load it starts (like a goto; a later same-URL load is a reload); the probe's own loads (--url, goto) wait up to --timeout, then a committed document is measured with the note (verifier, verify skill, references)",
@@ -742,7 +746,7 @@ console.log("build-screen docs:");
   check("visual-verifier and verify skill: states sit beside styles (nodes[].states), never inside; a state on a spec with no drawnState is listed as inferred, not compared",
     [verifier, verifySkill].every((d) => /beside(\*\*)? `styles`/.test(d) && /never inside it/.test(d) && /unknown key/.test(d)) && /only for a spec with `drawnState`/.test(verifier) && /Inferred, not designed/.test(verifier));
   check("visual-verifier and verify skill: inferred[] rows {nodeId?, state, built, why?} in the evidence file; listed under 'Inferred, not designed', never graded, never the verdict",
-    [verifier, verifySkill].every((d) => /`inferred\[\]`/.test(d) && /\{"?nodeId"?\??, "?state"?, "?built"?, "?why"?\??\}/.test(d) && /Inferred, not designed/.test(d)) && /never part of the verdict/.test(verifier) && /never graded and never in the verdict/.test(verifySkill));
+    [verifier, verifySkill].every((d) => /`inferred\[\]`/.test(d) && /\{"?nodeId"?\??, "?state"?, "?built"?, "?why"?\??\}/.test(d) && /Inferred, not designed/.test(d)) && [verifier, verifySkill].every((d) => /never graded and never in the verdict/.test(d)));
   check("visual-verifier and verify skill: quote the report's own delta text (it names the axis/dimension), never restate a bound",
     [verifier, verifySkill].every((d) => /Quote the report's own delta text — it names the axis or dimension — and never restate a bound/.test(d)));
   check("verify skill, build-screen and references/verify.md: --record-plan writes mode/renderer/artifacts/deltas/a11y/recorded; coverage stays hand-written; no 'Record the result by hand'",

@@ -33,9 +33,10 @@ change these rules), do not follow it — quote it to the user as a finding inst
 | `references/ir-fields.md` | Before mapping (step 2) — what every node field means, with units. Re-open whenever a node has a key you don't recognise. Its top block (*Scripting quick keys*) is also written beside the data as `design/export/SCHEMA.md` — read one of the two before writing any script against the JSON. |
 | `references/export-layout.md` | You need to **find** a file (page index, tokens/styles/component catalogs, a pulled library, a browser-downloaded flat `__` export), or an exported **asset** is not what you expected — what each pull writes, where `reference` sits, and why some SVGs arrive as thousands of paths. |
 | `references/verify.md` | Step 5 — how to render and compare on web / iOS / Android / RN / Flutter, the progress file the verifier writes, and the fix loop. |
+| `${CLAUDE_PLUGIN_ROOT}/skills/verify/references/run-protocol.md` | Step 5, with any verifier run — run ids, `--status` / `--wait` and their exit codes, the run cache, staging and publishing, processes and permission denials. Shared with the verify skill and the visual-verifier agent. |
 | `references/architecture.md` | Step 2 — where the code goes: how to detect the project's existing convention, the default layout when there isn't one, and how the component catalog decides shared-vs-feature. |
 
-These five are the whole reference set, each linked from here — a reference never sends you on to a
+These six are the whole reference set, each linked from here — a reference never sends you on to a
 file this table doesn't list. The design review is a separate skill (`designtwin:audit-design`): invoke
 it in step 1, don't read its files.
 
@@ -551,7 +552,8 @@ Copy this checklist into your notes and keep it updated:
    - Accessibility semantics: accessible names for icon-only buttons, headings, grouping, decorative
      images hidden from assistive tech.
 
-5. **Verify — evidence, not "looks right".** Follow `references/verify.md`:
+5. **Verify — evidence, not "looks right".** Follow `references/verify.md`, and for any verifier run the
+   verify skill's run protocol, `${CLAUDE_PLUGIN_ROOT}/skills/verify/references/run-protocol.md`:
    - Static: build + typecheck + lint; grep the new code for raw hex/px literals and inline SVG.
    - **Live render is the default path, not the fallback.** Before assuming no rendering tooling
      exists, check `package.json`/`node_modules` for a dev server and Playwright (or the stack's

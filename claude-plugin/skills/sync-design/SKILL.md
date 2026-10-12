@@ -32,6 +32,7 @@ writes the real path here, not there).
 | `../build-screen/references/ir-fields.md` | A changed field's meaning or unit isn't obvious (`font.lineHeight` percent, `rotation` sign, `strokes.align`). |
 | `../build-screen/references/export-layout.md` | You can't find the screen's JSON, the token file, or the reference image. |
 | `../build-screen/references/verify.md` | Step 5 — rendering and comparing the patched screen. |
+| `${CLAUDE_PLUGIN_ROOT}/skills/verify/references/run-protocol.md` | Step 5, when a verifier run is involved — run ids, `--status` / `--wait`, the run cache, staging, permission denials. |
 
 ## Procedure
 
