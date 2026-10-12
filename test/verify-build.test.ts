@@ -598,6 +598,39 @@ check("abandoned / already-closed plans are skipped (fast path)", (() => {
   const root = project({ "a.tsx": "#5B5FC7" }, { status: "abandoned", files: ["a.tsx"], tokens: [brand] });
   return runHook(root).status === 0 && planOf(root).status === "abandoned";
 })());
+// A real Claude Code payload names its event: a block is then a JSON decision on stdout + exit 0 (a shell-form hook under
+// PowerShell turns a native exit 2 into 1, a non-blocking error); the reason is what exit 2 would have put on stderr.
+const decisionOf = (stdout: string): { decision?: unknown; reason?: unknown } | null => { try { const v: unknown = JSON.parse(stdout); return typeof v === "object" && v !== null && !Array.isArray(v) ? v : null; } catch { return null; } };
+for (const ev of ["SubagentStop", "Stop"]) {
+  check(`a ${ev} payload that fails the check → exit 0 and stdout is ONE JSON object {decision: "block", reason: the itemised stderr}`, (() => {
+    const root = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+    const r = runHook(root, { cwd: root, hook_event_name: ev });
+    const d = decisionOf(r.stdout);
+    // pre-change: fails — exit 2, nothing on stdout
+    return r.status === 0 && d !== null && d.decision === "block" && typeof d.reason === "string" && d.reason === r.stderr.trimEnd()
+      && /brand-600/.test(d.reason) && /build-screen check failed/.test(d.reason) && hookOf(root).result === "blocked";
+  })());
+  check(`…a ${ev} payload that passes → exit 0, nothing on stdout`, (() => {
+    const root = project({ "a.tsx": "text-brand-600" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+    const r = runHook(root, { cwd: root, hook_event_name: ev });
+    return r.status === 0 && r.stdout === "" && hookOf(root).result === "pass";
+  })());
+}
+// The hook as Claude Code runs a shell-form command on Windows without Git Bash: through PowerShell, the bundle as shipped.
+if (process.platform === "win32") {
+  const viaPowerShell = (root: string, payload: object) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `node "${path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "verify-build.js")}"`], { input: JSON.stringify(payload), encoding: "utf8" });
+  const failing = () => project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  const legacy = failing(), real = failing();
+  const l = viaPowerShell(legacy, { cwd: legacy }), r = viaPowerShell(real, { cwd: real, hook_event_name: "SubagentStop" });
+  const d = decisionOf(r.stdout);
+  check("[powershell] a native exit 2 arrives as 1 — why exit 2 alone cannot block there", l.status === 1 && /brand-600/.test(l.stderr));
+  check("[powershell] a SubagentStop payload that fails → exit 0 and the JSON block decision on stdout, through PowerShell", r.status === 0 && d !== null && d.decision === "block" && typeof d.reason === "string" && /brand-600/.test(d.reason));
+} else console.log("  (skipped: [powershell] checks — PowerShell's exit-code conversion is checked on Windows)");
+check("…without hook_event_name (a hand-piped payload) a block is still exit 2 with nothing on stdout", (() => {
+  const root = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  const r = runHook(root);
+  return r.status === 2 && r.stdout === "" && /brand-600/.test(r.stderr);
+})());
 check("stop_hook_active short-circuits (no re-entrant block)", (() => {
   const root = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand] });
   return runHook(root, { cwd: root, stop_hook_active: true }).status === 0;

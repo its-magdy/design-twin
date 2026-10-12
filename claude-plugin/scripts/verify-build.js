@@ -2349,6 +2349,8 @@ var USAGE2 = [
   "prose strings and .svg/.json/non-source files are not scanned); a visible design node with no anchor",
   "(itself or an ancestor) in anchors{}; and, on web profiles, no data-dt-node tag in any plan's files[]",
   '(opt out: "tagging": {"off": true, "reason": "\u2026"}). Everything else is a warning (exit 0).',
+  'A Claude Code hook payload (it has hook_event_name) gets a block as {"decision":"block","reason":\u2026} on stdout',
+  "and exit 0 instead \u2014 a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
   "Hook mode checks the plans the stopping agent's transcript names; a transcript that names none checks nothing.",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<\u2026>.report.json. First match wins:",
@@ -2455,6 +2457,12 @@ ${USAGE2}`);
     input = r.payload || {};
     if (input.stop_hook_active) return 0;
   }
+  const asDecision = typeof input.hook_event_name === "string";
+  const said = [];
+  const say = (s) => {
+    console.error(s);
+    said.push(s);
+  };
   const all = [];
   let hookCwd = null, hookPlans;
   if (targets) {
@@ -2473,7 +2481,7 @@ ${USAGE2}`);
     const { plans, bad } = findPlans(cwd);
     hookCwd = cwd;
     hookPlans = plans;
-    for (const b of bad) console.error(`verify-build: warning: ${path6.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
+    for (const b of bad) say(`verify-build: warning: ${path6.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
     const open = plans.filter((p) => isOpen(p, cwd));
     if (!open.length) return 0;
     const own = ownPlans(open, input, plans, cwd);
@@ -2489,19 +2497,20 @@ ${USAGE2}`);
   for (const { p, cwd } of all) {
     const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : void 0)));
     const name = path6.basename(p.file);
-    if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
+    if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
     if (res.blocking.length) blockedOut.push(`# ${name}`, ...res.blocking.map((m) => `  - ${m}`));
     const why = res.blocking.length ? "see below" : res.status.reasons[res.status.reasons.length - 1];
     lines.push(`verify-build: ${name}: hook ${res.blocking.length ? "BLOCKED" : "passed"} \xB7 computed status: ${res.status.status}${why ? ` \u2014 ${why}` : ""}`);
   }
-  for (const [w, names] of warned) console.error(`verify-build: warning (${names.join(", ")}): ${w}`);
-  for (const l of lines) console.error(l);
+  for (const [w, names] of warned) say(`verify-build: warning (${names.join(", ")}): ${w}`);
+  for (const l of lines) say(l);
   if (blockedOut.length) {
-    console.error("\nverify-build: build-screen check failed \u2014 do not report this screen as done until these are resolved");
-    console.error('(a plan that will not be finished: set its status to "abandoned"; a build paused on a question for the user: "awaiting-user", then ask):\n');
-    console.error(blockedOut.join("\n"));
-    return 2;
+    say("\nverify-build: build-screen check failed \u2014 do not report this screen as done until these are resolved");
+    say('(a plan that will not be finished: set its status to "abandoned"; a build paused on a question for the user: "awaiting-user", then ask):\n');
+    say(blockedOut.join("\n"));
+    if (!asDecision) return 2;
+    console.log(JSON.stringify({ decision: "block", reason: said.join("\n") }));
   }
   return 0;
 }
