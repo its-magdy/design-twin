@@ -55,7 +55,7 @@ import { ifDefined } from "../bridge/src/json-util.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
-import { TEXT_BOX_HEIGHT, fmt, resolveInside, samePlanFile } from "./verify-shared.ts";
+import { TEXT_BOX_HEIGHT, fmt, resolveInside, samePlanFile, scaleText } from "./verify-shared.ts";
 import type { ChosenPlan } from "./verify-shared.ts";
 import { buildExpectation } from "./verify-expect.ts";
 import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
@@ -204,8 +204,8 @@ function main(argv: string[]): number | Promise<number> {
     "      .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every\n" +
     "      file of a staging directory into <dir> (tmp file in <dir>, then rename) — stage in the run cache while any page of the app is open.\n" +
     `  ${scriptCmd("verify-screen")} --wait <Screen> --run <id> [--timeout <s>=1200] [--stall <s>=300] [--interval <s>=2] [--dir design/verify]\n` +
-    "      waits (on the live status, else <dir>/<Screen>.status.json) until run <id> is done and <Screen>.measured.json is the file it\n" +
-    "      names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);\n" +
+    "      waits (on the live status, else <dir>/<Screen>.status.json) until run <id> is done and <Screen>.measured.json (and the\n" +
+    "      evidence this run published) is the file it names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);\n" +
     "      exit 1 when the run failed or is blocked (prints why), 5 on timeout or when the status did not change for --stall seconds,\n" +
     "      6 when the run cache exists but cannot be read.\n" +
     "exit (--status): 0 wrote · 1 refused · 2 usage · 6 the run cache is not writable (sandbox write scope? — run from the project root).";
@@ -396,7 +396,7 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
     `skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ` +
     `${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable${lineBoxes ? `; ${lineBoxes} a line box taller than its fixed text box — the build chooses its line-height` : ""}) · expectation sha256 ${h.slice(0, 12)}…`);
   const ri = exp.referenceImage;
-  if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}×${ri.png.h} at ${ri.scale}x (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` — ${ri.colorProfile}: colours are compared without colour management` : ""}`
+  if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}×${ri.png.h} at ${scaleText(ri.scale)} (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` — ${ri.colorProfile}: colours are compared without colour management` : ""}`
     : `note  no visual diff for this screen: ${ri.why}`);
   if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers — interaction coverage cannot be checked, and the report will say so rather than passing.");
   return 0;

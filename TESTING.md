@@ -9,10 +9,10 @@ it catches logic bugs cheaply — then B to confirm the real `figma.*` calls.
 ## Layer A — offline logic test (agent-runnable, no Figma)
 
 `npm test` runs every suite in order and ends with a summary; `node test/run-suites.ts <name>` runs a subset.
-`npm run test:fast` leaves out the three slow probe e2e suites (verify-probe-e2e, verify-probe-drive-e2e, verify-probe-behaviour-e2e; ~3 min instead of ~20) and
-ends with a line saying it was not the full run — use it while iterating, `npm test` before a commit; CI's other matrix legs run the three it leaves out (naming only those three with `--fast` exits 2: nothing would run).
+`npm run test:fast` leaves out the four slow probe e2e suites (verify-probe-e2e, verify-probe-drive-e2e, verify-probe-drive-tail-e2e, verify-probe-behaviour-e2e; ~3 min instead of ~20) and
+ends with a line saying it was not the full run — use it while iterating, `npm test` before a commit; CI's other matrix legs run the four it leaves out (naming only those with `--fast` exits 2: nothing would run).
 The run-suites summary is the authority for the check counts: the per-suite numbers below were true when written and drift as checks are added, so read the `N/N checks passed` row, not a figure in this file.
-The browser e2e suites run their probes through a small pool (`test/pool.ts`): `DT_E2E_POOL=<n>` sets its size (default: 2 under CI, else half the cores clamped to 2–4; an out-of-range value is clamped to 1–8 with a warning). Only the drive e2e (`verify-probe-drive-e2e`) has a serial tail: its wall-clock-timing cases run one at a time after the pool drains.
+The browser e2e suites run their probes through a small pool (`test/pool.ts`): `DT_E2E_POOL=<n>` sets its size (default: 2 under CI, else half the cores clamped to 2–4; an out-of-range value is clamped to 1–8 with a warning). The drive e2e's wall-clock-timing cases are a suite of their own, `verify-probe-drive-tail-e2e`, which runs its probes strictly one at a time (no pool); the pooled cases are `verify-probe-drive-e2e`, and the two share `test/drive-e2e-fixture.ts`.
 Right after the two lints, `test/real-names.test.ts` fails if a real field-test file, company, layer or
 person name reaches the tree; it reports `file:line`, never the name. The list is stored as salted hashes, which
 keeps plain names out of the tree but is not secrecy: they are dictionary-reversible, and git history already holds

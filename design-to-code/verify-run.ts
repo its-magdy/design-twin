@@ -458,7 +458,7 @@ const seconds = (v: string | undefined, dflt: number): number | null => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 /**
- * `--wait <S> --run <id>` → 0 when that run is `done` and the measured file on disk is the one it names (prints the
+ * `--wait <S> --run <id>` → 0 when that run is `done` and the measured (and evidence) file on disk is the one it names (prints the
  * --compare command); 1 when it is failed/blocked (prints the detail); 5 on --timeout, or when the status has not
  * changed for --stall seconds; 6 when the run cache exists but cannot be read; 2 usage. Polls every --interval seconds (2).
  */
@@ -480,15 +480,18 @@ export async function waitMain(screen: string | undefined, f: WaitFlags, usage: 
     if (st && st !== "v1" && st.runId === f.run) {
       if (st.phase === "failed" || st.phase === "blocked") { console.error(`run ${st.runId} ${st.phase} (rev ${st.rev}, ${st.at})${st.detail ? `: ${st.detail}` : ""}`); return 1; }
       if (st.phase === "done") {
+        // done is written before --publish moves its files in: a file it names that is not on disk yet is still waited for
         const onDisk = sha256File(base + ".measured.json");
-        if (st.measuredSha256 && onDisk === st.measuredSha256) {
+        const evOnDisk = st.evidenceSha256 ? sha256File(base + ".evidence.json") : null;
+        if (st.measuredSha256 && onDisk === st.measuredSha256 && evOnDisk === (st.evidenceSha256 ?? null)) {
           // only this run's evidence: the file the status hashed at done
-          const ev = st.evidenceSha256 && sha256File(base + ".evidence.json") === st.evidenceSha256 ? ` --interactions ${shellArg(base + ".evidence.json")}` : "";
+          const ev = st.evidenceSha256 ? ` --interactions ${shellArg(base + ".evidence.json")}` : "";
           console.error(`run ${st.runId} done (rev ${st.rev}, ${st.at})`);
           console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(base + ".expected.json")} ${shellArg(base + ".measured.json")}${ev} --out ${shellArg(base)}`);
           return 0;
         }
-        const why = `run ${st.runId} says done, but ${base}.measured.json ${onDisk ? `is not the file it names (sha ${onDisk.slice(0, 12)}… vs ${(st.measuredSha256 || "none").slice(0, 12)}…)` : "does not exist"} — still waiting`;
+        const [file, sha, named] = st.measuredSha256 && onDisk === st.measuredSha256 ? [".evidence.json", evOnDisk, st.evidenceSha256] : [".measured.json", onDisk, st.measuredSha256];
+        const why = `run ${st.runId} says done, but ${base}${file} ${sha ? `is not the file it names (sha ${sha.slice(0, 12)}… vs ${(named || "none").slice(0, 12)}…)` : "does not exist"} — still waiting`;
         if (why !== noted) { console.error(`note  ${why}`); noted = why; }
       }
     } else if (st && st !== "v1" && noted !== st.runId) {

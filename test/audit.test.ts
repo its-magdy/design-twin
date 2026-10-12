@@ -902,7 +902,9 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   put("design/audit/Login__1_1.overrides.json", { overrides: [{ code: "missing-font", nodeId: "1:11", severity: "warning", reason: "licensed", decidedBy: "user" }] });
   const lib = spawnSync(process.execPath, [cli, screenRel, "--platform", "ios", "--out", "design/audit/Login__1_1.library"], { encoding: "utf8", cwd: root });
   const libRep = parseAs(fs.readFileSync(path.join(root, "design/audit/Login__1_1.library.json"), "utf8"), isAuditReport, "library report");
-  check("a `<report>.library` run applies the report's own overrides file", lib.status === 0 && libRep.summary.blockers === 0 && /overrides: design\/audit\/Login__1_1\.overrides\.json/.test(lib.stderr));
+  // the CLI prints the path as the OS spells it (path.join), so the expectation is built the same way
+  const overridesShown = path.join("design", "audit", "Login__1_1.overrides.json");
+  check("a `<report>.library` run applies the report's own overrides file", lib.status === 0 && libRep.summary.blockers === 0 && lib.stderr.includes(`overrides: ${overridesShown}`));
 }
 
 {

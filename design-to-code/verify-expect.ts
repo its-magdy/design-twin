@@ -919,22 +919,28 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   const rb = root.renderBox && num(root.renderBox.w) && root.renderBox.w > 0 ? root.renderBox : undefined;
   const exportOffset = !rb ? { x: 0, y: 0 } : num(rb.x) && num(rb.y) && num(box.x) && num(box.y) ? { x: rb.x - box.x, y: rb.y - box.y } : null;
   const rowOffset = row && row.referenceOffset && num(row.referenceOffset.x) && num(row.referenceOffset.y) ? { x: row.referenceOffset.x, y: row.referenceOffset.y } : null;
-  const scale = row && num(row.referenceScale) ? row.referenceScale : round4(png.w / (rb ? rb.w : box.w));
+  const stated = row && num(row.referenceScale) ? row.referenceScale : round4(png.w / (rb ? rb.w : box.w));
   const offset = rowOffset ?? exportOffset;
   if (!offset) return unusable(p, "the export root has render bounds but no position (box.x/y) — where the reference sits over the frame is unknown");
   // a discovery thumbnail (360 px for a 1440 frame) is no export reference — Figma renders roots at s0
   // (the PNG on disk is checked too, not only the index's number: a thumbnail written over the pointer after the pull)
   const s0 = figmaReferenceScale(box.w, box.h), onDisk = png.w / (rb ? rb.w : box.w);
-  if (![scale, onDisk].every((v) => Math.abs(v - s0) <= REFERENCE_SCALE_SLACK * s0))
+  if (![stated, onDisk].every((v) => Math.abs(v - s0) <= REFERENCE_SCALE_SLACK * s0))
     return unusable(p, `the reference is a ${png.w} px image, not the export reference (a discovery thumbnail) — re-pull the screen`);
   // the PNG must be the render bounds at that scale on BOTH axes (±2 px; on the height also the scale's own rounding — it
   // comes from png.w, up to 1 px off the true width, + round4 — so a tall narrow frame's round(h · scale) can be h/w px off:
   // 0 extra for 1440×720, 12 for 400×5000). A PNG of another height is a stale or
   // foreign image under the pointer — and an absurd one (150 000 px tall) would be decoded in full by the probe.
   const refW = rb ? rb.w : box.w, refH = rb && num(rb.h) && rb.h > 0 ? rb.h : box.h;
-  const ew = Math.round(refW * scale), eh = Math.round(refH * scale), tolH = 2 + Math.floor(refH * (1 / refW + 0.00005));
+  const ew = Math.round(refW * stated), eh = Math.round(refH * stated), tolH = 2 + Math.floor(refH * (1 / refW + 0.00005));
   if (Math.abs(png.w - ew) > 2 || Math.abs(png.h - eh) > tolH)
-    return unusable(p, `the reference ${p} is ${png.w}×${png.h} px, but the frame's render bounds at ${scale}x are ${ew}×${eh} — a stale or foreign PNG under the pointer; re-pull the screen, then re-run --expect`);
+    return unusable(p, `the reference ${p} is ${png.w}×${png.h} px, but the frame's render bounds at ${stated}x are ${ew}×${eh} — a stale or foreign PNG under the pointer; re-pull the screen, then re-run --expect`);
+  // The scale the PNG was MADE at, which the probe captures at: Figma renders a root at s0 exactly (collectReference passes no
+  // scale), and a stated scale is s0 up to its own rounding — png.w is whole pixels (≤ 1 px off refW · s0) and the index keeps
+  // 4 decimals. Captured at the rounded value instead, the build drifts off the reference by up to ~0.3 device px across a
+  // 1440 frame, which whole-pixel glyph placement (Windows) turns into hot text regions. A stated scale further from s0
+  // (inside the slack above) is used as stated.
+  const scale = Math.abs(stated - s0) <= 1 / refW + 0.00005 ? s0 : stated;
   // the frame box inside the PNG, device px, clamped to the image
   const x = Math.min(Math.max(0, Math.round(-offset.x * scale)), png.w), y = Math.min(Math.max(0, Math.round(-offset.y * scale)), png.h);
   const crop = { x, y, w: Math.max(0, Math.min(Math.round(box.w * scale), png.w - x)), h: Math.max(0, Math.min(Math.round(box.h * scale), png.h - y)) };

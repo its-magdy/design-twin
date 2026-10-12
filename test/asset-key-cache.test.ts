@@ -98,11 +98,15 @@ console.log("\nasset-compare.ts — FileKeyCache:");
     const c = new cmp.FileKeyCache({ now: later });
     const before = c.keyOf(f, "icon.svg");
     const st0 = fs.statSync(f);
+    // A file-clock tick apart, as every real rewrite of a cached file is: the cache keeps no file changed in the last
+    // recentMs (2 s), and `later` skips that guard — on Windows a file's ctime moves in coarse steps (a CI runner: unmoved
+    // on 154 of 200 back-to-back rewrites, steps of 0.3–2 ms), so two writes inside one step would share it.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
     fs.writeFileSync(f, svg(5)); pin(); // same length, different number, mtime put back
     const st1 = fs.statSync(f);
     const after = c.keyOf(f, "icon.svg");
     const direct = cmp.contentKey("icon.svg", fs.readFileSync(f));
-    return st0.size === st1.size && st0.mtimeMs === st1.mtimeMs && st0.ino === st1.ino
+    return st0.size === st1.size && st0.mtimeMs === st1.mtimeMs && st0.ino === st1.ino && st0.ctimeMs !== st1.ctimeMs
       && before !== undefined && after !== undefined && after.nums.join() === direct.nums.join() && before.nums.join() !== after.nums.join();
   });
   t("[cache] a file replaced by rename (new inode) misses", () => {

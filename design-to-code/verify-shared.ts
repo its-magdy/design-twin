@@ -133,6 +133,9 @@ export const TEXT_BOX_HEIGHT = "text box height";
 /** An expectation as READ BACK from disk (or built here): every field may be absent. */
 export type Expectation = Partial<VerifyExpectation>;
 
+/** A reference scale as printed (4 decimals): the value itself stays exact — 2048/1440 is captured as 1.4222222…. */
+export const scaleText = (n: number): string => `${Math.round(n * 10000) / 10000}x`;
+
 /** `base` joined with a "/"-separated relative path, resolved, when it lies strictly inside `within` (default `base`) — else
  *  null (a pointer or a referenceImage.path with `..` segments never reads a file outside design/export). Lexical only:
  *  no file is touched. Shared by --expect and the probe (probe-visual.ts). */

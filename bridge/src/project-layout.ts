@@ -63,9 +63,11 @@ export const VITE_WATCH_IGNORED_NOTE =
   `Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above — both stop it`;
 
 // design/verify/ is regenerated on every verify run (measurements, screenshots, reports); the
-// plan's waivers and descopes live in design/plan/, so ignoring it loses no decision.
+// plan's waivers and descopes live in design/plan/, so ignoring it loses no decision. Spelt with `/` on every OS: a
+// .gitignore pattern takes only `/` (a `\` there escapes the next character, so `design\verify/` ignores nothing).
+const slashed = (p: string): string => p.split(path.sep).join("/");
 export const VERIFY_GITIGNORE_NOTE =
-  `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) — consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+  `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) — consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
 
 // The marks of an export directory, in the order a pull creates them. Used to tell "this project uses
 // the old flat layout" from "this project has no export yet", which are different problems with

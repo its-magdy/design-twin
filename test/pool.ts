@@ -1,5 +1,5 @@
-// The helpers shared by the browser e2e suites (verify-probe-e2e, -drive-e2e, -behaviour-e2e, -visual-e2e): the concurrency
-// pool and runNode, the async spawn of one probe / verify-screen process.
+// The helpers shared by the browser e2e suites (verify-probe-e2e, -drive-e2e, -drive-tail-e2e, -behaviour-e2e, -visual-e2e):
+// the concurrency pool and runNode, the async spawn of one probe / verify-screen process.
 //
 //   const q = limit(poolSize());          // a queue running at most n of its tasks at once
 //   const P = { a: q(() => probe(…)), … }; // queued up front, awaited where their checks are
@@ -26,8 +26,9 @@ export const isCI = (env: NodeJS.ProcessEnv = process.env): boolean => env.CI !=
 /** How many probe processes a suite runs at once: DT_E2E_POOL when set (an integer, clamped to 1–8 with a warning on stderr; a
  *  non-integer warns and falls back to the default); else 2 when CI is set (any value but "", "0" or "false" — Playwright's CI guide
  *  advises few workers there, and the 4-vCPU hosted runners have no core to spare for a 4th chromium); else half the logical
- *  cores (Playwright's own local default), clamped to 2–4. Only the drive e2e has a serial tail: its cases whose outcome rides
- *  on a few seconds of wall-clock run one at a time after the pool has drained, so concurrent chromiums cannot flip them. */
+ *  cores (Playwright's own local default), clamped to 2–4. The drive e2e's cases whose outcome rides on a few seconds of
+ *  wall-clock are not pooled: they are a suite of their own (verify-probe-drive-tail-e2e) that runs one probe at a time, so
+ *  concurrent chromiums cannot flip them. */
 export const poolSize = (env: NodeJS.ProcessEnv = process.env, cores: number = os.availableParallelism(), warn: (msg: string) => void = (m) => { console.error(m); }): number => {
   const raw = env.DT_E2E_POOL;
   if (raw !== undefined && raw !== "") {

@@ -19,6 +19,10 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   `dtwin pull` still running, a stale `node`, or an MCP server from an older install (current ones
   share the bridge and show up in `dtwin status`). Wait for the pull, or stop the stale process. If the
   error names a socket from an earlier dtwin version, `dtwin --stop` stops that daemon.
+- **Windows: "port … is already in use — another MCP session or dtwin command holds the bridge"**, or
+  `dtwin serve` says it is not supported → there is no daemon on Windows yet (Node cannot make its socket
+  private to you), so nothing shares the bridge: one MCP session or `dtwin` command at a time. Close the
+  other Claude Code session (or wait for the other command) and retry; the plugin reconnects on its own.
 - **"refusing to use … for the dtwin daemon socket"**, or `dtwin status` says no daemon while one is
   running → the daemon socket lives in `$XDG_RUNTIME_DIR`, else `$TMPDIR/designtwin-<uid>/`, so two
   processes with different `XDG_RUNTIME_DIR` / `TMPDIR` see different daemons — start them from the same
