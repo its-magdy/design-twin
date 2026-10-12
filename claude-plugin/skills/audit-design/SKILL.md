@@ -1,6 +1,6 @@
 ---
 name: audit-design
-description: Review a Figma export the way a senior frontend / iOS / Android engineer does BEFORE writing any code — token and typography binding, spacing grid, sizing and responsiveness, component variants and interaction states (hover/pressed/focus/disabled/error), loading/empty/error screens, content edge cases, touch targets, contrast, font scaling, dark mode, RTL, platform chrome and safe areas, assets and effects that won't translate — and turn every gap into a concrete question for the designer. Use this whenever the user asks whether a design is ready to build, what's missing from a Figma file/frame, to review or QA a design handoff, to check a design before implementation, or to list questions for the designer — and run it as the first step before building a non-trivial screen with build-screen. Produces design/audit/<screen>.md and .json; never writes app code.
+description: Reviews a Figma export the way a senior frontend / iOS / Android engineer does before any code is written — token and typography binding, spacing grid, sizing and responsiveness, component variants and interaction states (hover/pressed/focus/disabled/error), loading/empty/error screens, content edge cases, touch targets, contrast, font scaling, dark mode, RTL, platform chrome and safe areas, assets and effects that won't translate — and turns every gap into a concrete question for the designer. Use this whenever the user asks whether a design is ready to build, what's missing from a Figma file/frame, to review or QA a design handoff, to check a design before implementation, or to list questions for the designer — and run it as the first step before building a non-trivial screen with build-screen. Produces design/audit/<screen>.md and .json; never writes app code.
 argument-hint: "[screen name | path to the screen's export] [--live]"
 context: fork
 agent: general-purpose
@@ -15,7 +15,7 @@ font size. The code has to handle every other moment too. This skill finds what 
 decisions get made by the designer (or explicitly assumed) instead of silently invented during the
 build.
 
-You are reviewing, not implementing. Don't write app code here — the output is a report the user and
+You are reviewing, not implementing. Write no app code here — the output is a report the user and
 `build-screen` both read.
 
 
@@ -141,7 +141,7 @@ report the pair once, not once per screen.
      --design-system design/export/design-system
    ```
 
-   **Don't pass `--out`.** It defaults to `design/audit/<Screen>__<id>` — the exact basename of the
+   **Leave `--out` off.** It defaults to `design/audit/<Screen>__<id>` — the exact basename of the
    screen file you just gave it, which the export already named `<LayerName>__<node-id>` — so this
    skill never has to invent a name, and re-auditing the same screen always overwrites the same
    report pair instead of adding a new one under whatever string was typed that time (which leaves one node
@@ -206,7 +206,7 @@ report the pair once, not once per screen.
    only ever run a single-screen pull has no design system to point at, so drop the flag rather than
    passing a path that isn't there — and then say in the report that the cross-file half did not run.
 
-   **Never let a question's default tell the build to approximate a value.** "Bind to the nearest 4px
+   **A question's default keeps the exact value; it never tells the build to approximate one.** "Bind to the nearest 4px
    step" and "use the closest existing token" both contradict `build-screen`'s rule 5, which treats an
    approximate match as silent hardcoding-by-proxy — the build uses exact values. An off-grid spacing
    or an unbound colour is a question about whether the *design* should change; the default is always
@@ -288,7 +288,7 @@ report the pair once, not once per screen.
 - **Distinguish "not in the export" from "not designed".** A missing error state may live on another
   page or in a library; say where you looked before calling it missing. Library components
   (`components.library.json`) carry *sampled* props — "unknown", never "missing".
-- **Never invent a design decision.** Anything you'd have to make up (a loading pattern, a truncation
+- **Design decisions are the designer's.** Anything you'd have to make up (a loading pattern, a truncation
   rule, a dark-mode color) becomes a question with a proposed default, not a silent choice.
 - **Every finding points at a node id**, so the designer can click straight to it.
 - **Severity is about building, and stays consistent.** Start from `audit.json`'s severities and only
@@ -304,5 +304,5 @@ report the pair once, not once per screen.
   assumptions*. The counts in your summary must equal the items you list.
 - **Read every stroke and effect for the platform** in step 5, not just what the script flags —
   `strokes.align` outside/center, per-side `weights`, multiple or negative-spread shadows, blurs.
-- **Don't re-litigate the visual design.** Flag accessibility failures and inconsistencies (off-token
+- **Leave the visual design to the designer.** Flag accessibility failures and inconsistencies (off-token
   values, near-duplicate colors); don't critique aesthetics.

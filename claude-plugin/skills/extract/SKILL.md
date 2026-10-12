@@ -1,6 +1,6 @@
 ---
 name: extract
-description: Get a design OUT of Figma and onto disk as JSON + assets, using the local "Design Twin" plugin (free Figma plan, no Figma API, no network egress). Use this whenever the user wants design data pulled, exported, refreshed or re-pulled from Figma — "pull the login screen", "export this frame", "get the design system", "get me the colors", "set up my theme from Figma", "grab the components from Figma" — and ALSO whenever a build/codegen task needs files that aren't in design/export/ yet, or the ones there are stale. This is the step BEFORE writing any code; once files land, hand off to build-screen. When a screen that is ALREADY built must catch up with a changed design, use sync-design — it snapshots before re-pulling.
+description: Gets a design out of Figma and onto disk as JSON + assets, using the local "Design Twin" plugin (free Figma plan, no Figma API, no network egress). Use this whenever the user wants design data pulled, exported, refreshed or re-pulled from Figma — "pull the login screen", "export this frame", "get the design system", "get me the colors", "set up my theme from Figma", "grab the components from Figma" — and also whenever a build/codegen task needs files that aren't in design/export/ yet, or the ones there are stale. This is the step before writing any code; once files land, hand off to build-screen. When a screen that is already built must catch up with a changed design, use sync-design — it snapshots before re-pulling.
 argument-hint: "[what to pull: page, frame name, node id or Figma URL]"
 ---
 
@@ -276,8 +276,8 @@ carry a `hash` rather than a path, and the byte lands at `assets/img_<hash>.<ext
 
 **A pull warns about assets too heavy to inline.** A flattened illustration exports as one SVG with
 thousands of paths — the live run hit 2.47 MB, which inlined into a 2.71 MB JS bundle until it was
-moved to a URL import. Import those by URL, or ask the designer to re-export as a PNG. Do not redraw
-or simplify one yourself.
+moved to a URL import. Import those by URL, or ask the designer to re-export as a PNG; leave the artwork as
+exported rather than redrawing or simplifying it.
 
 ## Is this screen even from that design system?
 

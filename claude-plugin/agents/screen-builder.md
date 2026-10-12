@@ -1,6 +1,6 @@
 ---
 name: screen-builder
-description: Builds ONE screen from a Figma export in design/ using the build-screen skill, in its own context. Use when several screens need building in one session (delegate one screen per screen-builder so each screen's large node JSON stays out of the main context), or when the user asks to build a screen "in the background". Give it the screen/layer name or node id, the target stack if known, and any shared scaffolding (navigation, theme files) it must reuse rather than recreate.
+description: Builds one screen from a Figma export in design/ using the build-screen skill, in its own context. Use when several screens need building in one session (delegate one screen per screen-builder so each screen's large node JSON stays out of the main context), or when the user asks to build a screen "in the background". Give it the screen/layer name or node id, the target stack if known, and any shared scaffolding (navigation, theme files) it must reuse rather than recreate.
 skills:
   - build-screen
 ---

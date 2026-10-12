@@ -1,6 +1,6 @@
 ---
 name: sync-design
-description: Update ALREADY-BUILT code after the Figma design changed, by patching only what moved instead of rebuilding the screen. Use this whenever a screen that exists in code needs to catch up with its design — "the designer changed the header", "the design was updated, update my code", "re-sync this screen with Figma", "what changed in the design since I built it?", "the primary color changed", "apply the new spacing" — or when the user re-pulled an export and asks what to do next. It snapshots the current export, re-pulls, diffs the two by node id, shows the change list, then edits only the affected code and re-verifies. For a screen that has never been built use build-screen; to just fetch a design use extract.
+description: Updates already-built code after the Figma design changed, by patching only what moved instead of rebuilding the screen. Use this whenever a screen that exists in code needs to catch up with its design — "the designer changed the header", "the design was updated, update my code", "re-sync this screen with Figma", "what changed in the design since I built it?", "the primary color changed", "apply the new spacing" — or when the user re-pulled an export and asks what to do next. It snapshots the current export, re-pulls, diffs the two by node id, shows the change list, then edits only the affected code and re-verifies. For a screen that has never been built use build-screen; to just fetch a design use extract.
 argument-hint: "[screen name | path to the screen's export]"
 hooks:
   Stop:
@@ -103,7 +103,7 @@ writes the real path here, not there).
    when `design/` is committed, and a snapshot taken too late is recognised as the same export and
    ignored rather than reported as "nothing changed". If it is neither snapshotted nor committed, say so plainly: the change list
    can't be computed, and the choices are an older copy passed with `--against`, or a careful manual
-   comparison of the code against the new export. Don't present a guess as a diff.
+   comparison of the code against the new export. Only a computed diff is presented as a diff.
    **Running this step twice does not destroy the first baseline**: `--snapshot` refuses to replace an
    existing, DIFFERENT copy in `design/.sync/` unless you pass `--force` (which keeps the old one as
    `<name>.prev`) — a snapshot identical to what's already there is a silent no-op. So re-running step 2
@@ -177,7 +177,7 @@ writes the real path here, not there).
      back to `files[]` plus the node's name, text and position in the tree, and add anchors for what
      you touch so the next sync doesn't have to search. Read the surrounding code before editing: it may have been restructured
      since the build, and the edit has to fit what is there now.
-   - **Edit in place; never regenerate a file.** Change the one value, prop, string or element the
+   - **Edit in place rather than regenerating a file.** Change the one value, prop, string or element the
      diff names. Everything the diff does not mention stays byte-for-byte as it is — including code
      you would have written differently.
    - **By kind of change:**
