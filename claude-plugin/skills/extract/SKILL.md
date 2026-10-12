@@ -19,6 +19,17 @@ is headless — the plugin *is* the reader. If the user hasn't started it: Figma
 
 Not imported yet? That's one-time setup — send them to `/designtwin:help`.
 
+## References — load on demand
+
+`<scripts>` in these files means `${CLAUDE_PLUGIN_ROOT}/scripts`, and `<plugin>` means `${CLAUDE_PLUGIN_ROOT}`
+(Claude Code writes the real path here, not there).
+
+| File | Load it when |
+|------|--------------|
+| `references/cross-check.md` | A pull produced a screen and a design system — what each cross-check finding means and what it changes. |
+| `references/theme-tokens.md` | Turning the variables into a theme file — which input, what `tokens.js` writes, `--check`, `--lookup`, its warnings. |
+| `${CLAUDE_PLUGIN_ROOT}/skills/help/references/troubleshooting.md` | Something failed — bridge offline, `EADDRINUSE`, empty library list, 401. |
+
 ## Where things land
 
 `dtwin` writes to **`design/export/` and nowhere else**. Everything beside it under `design/` —
@@ -215,33 +226,24 @@ but no `w`/`h`; its `reference` sits in the layer file, and it has no `.vars.jso
 
 **Resolving a screen by the name a user types (not the layer name Figma gave it):** the visible title
 is very often NOT the Figma layer name — a layer named `people ` (trailing space) can be the frame
-whose on-screen `<h1>` reads "Members". Use the one shared procedure,
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name-or-id>" design/plan`, rather
-than re-deriving name matching here. The query may also be a `<Layer>__<id>` basename or a path to the
-screen's `.json` (or `.vars.json`) — the id it carries resolves like a node id. Pointing it at a folder
-that is not an export root (no `pages/index.json`) prints `not an export root` and the root to pass
-instead. First, a node id (e.g. `7314:87192`) is tried alone and, if it
-matches, wins outright — an id is unique and never ambiguous with a name/title. Otherwise, THREE exact
-checks — layer name, indexed `title`, a plan's `screenName`/`route` (each trimmed, case-insensitive)
-— are evaluated TOGETHER as one pool, not as a sequence tried one after another: any row matching
-ANY of the three joins the pool. Exactly one row in that pool resolves; more than one STOPS and
-prints every candidate (name, id, size, node count, `dtwin screenshot <id>`, and WHICH field each one
-matched on) — never guessing the nearest, and never resolving on whichever field happened to be
-checked first. (Evaluating them as an in-order sequence is itself the bug a sequence looks safe but
-isn't: a case-insensitive layer-name hit can resolve and return before ever reaching the title stage,
-hiding a second row that is ALSO titled the same thing — the empty-state sibling of "Members",
-layered `members`, is exactly this case.) If the pool is empty, a final, looser stage — a
-case-insensitive substring over `name`/`title`/`texts[]` — runs, but **a hit there is never a result,
-only a candidate list**, even when there is exactly one hit: print the candidate(s) and ask the user
-to confirm by node id rather than building/auditing/verifying it. (Even a single substring hit never auto-resolves,
-not only multiple hits.) If NOT ONE row in
-the index carries a `title` at all, say so explicitly: the export predates title indexing, and a
-re-pull of the screen (`dtwin pull --node <id>`) — not a cleverer query — is what fixes it. **A screen
-that has never been pulled at all cannot be named by its title yet** — `dtwin list`/`dtwin
-screenshot` only ever show Figma layer names, so the FIRST pull of a screen must be by node id (from
-`dtwin list` or a screenshot), and title-based lookup only works from the second command onward, once
-that pull has indexed it. Every other skill that resolves a screen by name calls this same script; do
-not re-implement the procedure.
+whose on-screen `<h1>` reads "Members". Every skill resolves with the one shared script,
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name-or-id>" design/plan`. The query may also
+be a `<Layer>__<id>` basename or a path to the screen's `.json` (or `.vars.json`); a folder that is not an export
+root (no `pages/index.json`) prints `not an export root` and the root to pass instead. How it decides:
+
+- A node id (e.g. `7314:87192`) is tried alone and, if it matches, wins outright — an id is unique.
+- Otherwise THREE exact checks — layer name, indexed `title`, a plan's `screenName`/`route` (each trimmed,
+  case-insensitive) — form ONE pool: any row matching any of them joins it. Exactly one row resolves; more than one
+  stops and prints every candidate (name, id, size, node count, `dtwin screenshot <id>`, and which field each
+  matched on). The pool is what keeps a layer-name hit from hiding a second row titled the same — the empty-state
+  sibling of "Members", layered `members`, is exactly this case.
+- With an empty pool, a looser case-insensitive substring search over `name`/`title`/`texts[]` runs, and its hits
+  are only a candidate list, even a single one: print the candidate(s) and ask the user to confirm by node id
+  before building, auditing or verifying it.
+- When not one index row carries a `title`, it says so: the export predates title indexing, and a re-pull of the
+  screen (`dtwin pull --node <id>`) fixes it. A screen never pulled cannot be named by its title yet —
+  `dtwin list`/`dtwin screenshot` show only Figma layer names — so the FIRST pull of a screen is by node id (from
+  `dtwin list` or a screenshot), and title lookup works from the second command on.
 
 `--design-system` counts and `dtwin list libraries` counts legitimately differ: the export includes
 variables this file merely *references* from a published library, flagged `remote: true`, and
@@ -279,114 +281,36 @@ or simplify one yourself.
 
 ## Is this screen even from that design system?
 
-Pulling the design system and then pulling a screen does **not** mean the two are related. Both may
-be copies of one original, in which case names and values line up while every key differs; or the
-screen may simply consume a library you never exported. That failure is invisible in either file
-alone and produces a build that looks plausible and is themed from the wrong source.
-
-One command answers it:
+Pulling the design system and then pulling a screen does **not** mean the two are related — both may be copies of
+one original (names and values line up while every key differs), or the screen may consume a library you never
+exported. One command answers it:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" design/export/pages/<Page>/<Screen>__<id>.json \
   --design-system design/export/design-system
 ```
 
-Run it after any pull that produced both, and report its blockers and every warning that carries a
-`confirm` question (asked, with the default the build takes) before offering to build. It reads
-the screen's own `.vars.json` beside it, so a token collision is reported against the screen that
-actually carries the colliding variable; a collision that belongs to another screen is only an
-`info` note naming that screen — do not "fix" this screen's value to match it.
-
-**`foreign-token-library` — read its offline counts first.** The message carries "Offline check (no
-Figma needed): of the N variables in those collections, A … D … U … M …" (the same counts are the
-finding's `nameMap {agree, differ, undecidable, absent}`; the counts are absent, and `nameMap` all zero,
-when no screen variable sits in the flagged collections): A have a design-system variable of the same name
-resolving the same in every shared mode, D resolve differently (each listed as `token-name-collision`), U
-cannot be compared (no shared mode), M have no same-name variable. **D = 0 → mapping by NAME is safe for the
-A**: say so in the plan; the screen's own `.vars.json` is the ground truth for names and values. A = 0 with
-M = N → none of them exists here by name, so this is not the screen's library: pull the one it uses.
-The counts go by collection and variable NAME, not key: when the screen uses two collections of one name
-(two `Spacing`, different keys) and only one is flagged, the other's variables are counted in too. The
-live route (`dtwin list libraries`, then `--as-library`) is only for finding the owning file.
-
-**`catalog-rekeyed` is not "wrong design system".** Duplicating a Figma file re-mints every component
-key, so a copied design system matches its screens 0% by key while names and prop signatures still
-agree. When that is what cross-check finds, it lists name + prop-signature matches under
-`componentProposals` in its JSON (`--out design/audit/<screen>.cross` writes it), every one
-`"confirmed": false`. Show the user that list — name, catalog id, evidence — and let them accept
-entries. Pass `--map design/codeconnect.local.json` (found by default) and each proposal is labelled:
-`alreadyMapped` (a key of it is already in the map — confirm only the others) and `sharedWith: N` (N other
-exported screens use the same component; confirm once, it covers them all). The report lists them in
-that order — shared, this screen only, already mapped — and nothing is confirmed for you; set `"confirmed": true` on the accepted ones, then
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json --from-proposals design/audit/<screen>.cross.json`
-stubs exactly those, filed under the screen's own instance keys. Never confirm on the user's behalf:
-the confirmation is the only thing that separates a real match from two components that share a name.
-`/designtwin:audit-design` runs the same pass as part of its report; this is the standalone form for
-when you have only just pulled.
+Run it after any pull that produced both, and report its blockers and every warning that carries a `confirm`
+question (asked, with the default the build takes) before offering to build. What each finding means and what to
+do about it — token collisions, `foreign-token-library` and its offline name-map counts, `catalog-covers-nothing`,
+`catalog-rekeyed` proposals the user confirms before `map-bootstrap.js --from-proposals` stubs them — is in
+`references/cross-check.md`; read it before you report. `/designtwin:audit-design` runs the same pass as part of
+its report; this is the standalone form for when you have only just pulled.
 
 ## Tokens → a theme file the app can import
 
-"Get me the colors" is not finished when the raw variables land — nothing in the app can import
-those. Turn them into the stack's own theme file once, instead of re-mapping values on every screen.
-
-**Choose the input by what the theme is for — the choice changes values, not just coverage:**
-
-1. `design/export/libraries/<slug>/tokens.json` (from `--as-library`) when the screens CONSUME a
-   library — the library's own definition of every token, one variable per name.
-   `design/export/design-system/tokens.json` is that only when it was pulled from the file that DEFINES
-   the tokens (its variables are not `remote: true`); pulled from a consuming file it holds just the
-   library variables something there references.
-2. Otherwise, the screen's own `design/export/pages/<Page>/<Screen>__<id>.vars.json` — the variables
-   that screen's file references, so its names mean what that screen means.
-3. `design/export/variables.json` (the union of every pull) only when you need every screen's tokens
-   in one file, and then read its `_conflicts` first.
-
-Why not the union by default: names repeat across screens' libraries. A union can hold two
-`Space 4` — say 24 (the design system's) and 16 (one screen's local copy); a theme generated from the
-union cannot give both screens the plain `space-4`, so each is emitted under its key
-(`space-4-<first 8 of key A>`, `space-4-<first 8 of key B>`) and the screen that binds 24 must pick that one. Generated from
-that screen's own `.vars.json`, it is simply `space-4: 24px`.
+"Get me the colors" is not finished when the raw variables land — nothing in the app can import those. Turn them
+into the stack's own theme file once, instead of re-mapping values on every screen:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/design-system/tokens.json design/export/   # DTCG json + tokens.css + a tokens/ set dir
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/design-system/tokens.json <css dir> --web tailwind
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/design-system/tokens.json <theme dir> --native swiftui   # or compose | flutter | react-native
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> design/export/   # DTCG json + tokens.css + a tokens/ set dir
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> <css dir> --web tailwind
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> <theme dir> --native swiftui   # or compose | flutter | react-native
 ```
 
-It writes more than a theme file: `tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json` and a
-`tokens/` directory of per-collection/per-mode set files — around 20 files for a real system. Point
-it at a directory you are happy to have filled. With a `--web`/`--native` target, `tokens.js` writes
-only that target's file to the given directory by default — pass `--also-generic` if you also want the
-generic handoff set (`tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json`, `tokens/`) written
-there, and keep that set under `design/`, not the app's source tree.
-
-Each CSS / native file starts with a `designtwin-source: <dir>/<input> · <n> variables · sha256 <12>` line.
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> --check <generated file>` writes nothing and
-says whether the file is still current (exit 0), stale after a re-pull (1) or has no such line (2,
-regenerate once) — also 2 when it was generated from a different file (it names that file: check against it,
-never regenerate from a narrower one; a design-system and a library `tokens.json` are told apart by their parent directory) or the command line is wrong (usage errors in `--check`/`--lookup` are 2, never 1); a later pull that merges new variables says the generated file is now behind. To find
-the variable behind a colour: `tokens.js <library tokens.json> --lookup <hex>` (repeatable; COLOR
-variables, per mode, through aliases; exit 1 when none, 2 on a usage error; pass `ffbc1c` or a quoted `'#ffbc1c'` — an unquoted
-`#` starts a shell comment).
-
-Pick the output by stack; the build-screen profile for the stack says which flag and what the
-generated names look like. `tokens.css` (no flag) is plain `:root` custom properties for CSS
-Modules or vanilla CSS; `--web tailwind` writes a Tailwind v4 `theme.css`; `--native <profile>`
-writes one native token file. Import the result as the app's theme. Do not hand-write a theme from
-bound token names: that is the per-screen re-mapping this step exists to stop.
-
-**Read the warnings it prints.** Nothing is dropped, but one warning changes names: `N
-different Figma variables share the name 'X' … resolve DIFFERENTLY` means both were emitted, each
-suffixed with the first 8 characters of its key, and the warning lists each key's values and the
-screens it came from. Pick the one the screen binds (by key, via the screen's `.vars.json`) — or
-regenerate from that screen's own `.vars.json`, where the plain name usually survives. `… resolve
-identically in every mode — emitted ONCE` and the rest — a name sanitised for CSS, a resolver file
-renamed to avoid a collision — are informational.
-
-The file is generated: say where it landed and how to wire it in (its header comment shows the one
-line), don't hand-edit it, and re-run it after the next token pull. Variables only — text styles and
-shadows are not emitted yet. If the project already has a theme file, do not add a second one beside
-it; show the user the difference and ask which is the source of truth.
+Which `tokens.json` to feed it changes the values, not just the coverage — read `references/theme-tokens.md` before
+generating: the input order (a pulled library's catalog, the defining file's design system, the screen's own
+`.vars.json`, the merged union last), what it writes, `--check` and `--lookup`, and its warnings.
 
 ## Then hand off
 
@@ -396,5 +320,4 @@ cross-check blocker or `confirm` question. Then **`/designtwin:audit-design <scr
 **`/designtwin:build-screen <screen>`** to build it.
 
 If something failed — bridge offline, `EADDRINUSE`, empty library list, 401 — the symptom→fix list is
-the **help** skill's `references/troubleshooting.md` (`${CLAUDE_PLUGIN_ROOT}/skills/help/references/troubleshooting.md`;
-where it says `<plugin>` it means `${CLAUDE_PLUGIN_ROOT}`). Load it; don't debug from memory.
+the **help** skill's troubleshooting reference (table above). Load it rather than debugging from memory.

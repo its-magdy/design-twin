@@ -95,6 +95,27 @@ Work top-down; a structural miss makes pixel diffs meaningless.
    Inspector / VoiceOver labels, Dynamic Type at AX sizes. Android: accessibility scanner / semantics
    tree, font scale 2.0. Touch targets at platform minimums.
 
+**Numbers: what `--expect`, the probe and `--compare` do.** `--expect` emits the spec as data — font
+family/weight/size/line-height/colour, background, radius, padding, gap, size, and the literal text — one row per
+node, read straight off the export. Read those rows rather than retyping them into a code comment: one build's
+wrong text styles traced to exactly that — a component carrying the comment "heading 20/Semi Bold, subtitle
+16/Regular" which contradicted the export, and no later step re-read the node.
+
+`--compare` has **no browser**: it diffs the measured computed styles against the spec with explicit tolerances and
+grades the interaction results the probe recorded (in `measured.json`'s `interactions[]`, or a separate
+`--interactions <file>`), then writes `design/verify/<Screen>.report.json`. Driving each designed interaction is the
+probe's job (the `visual-verifier` agent drives the rest and records the selector it drove); anything nobody drove
+is reported `not-probed`, never `pass`. It exits non-zero unless the verdict is `pass` or `pass-with-deviations`
+(nothing open, and ≥1 delta the user accepted or interaction the user descoped — waivers and descopes are the user's
+word, recorded through the verify skill). That verdict is computed, and it is what you report.
+
+A probe without `--run` writes an **unbound** measured file (it names no run): `--compare` grades it as your evidence,
+and an ended run's `<Screen>.status.json` beside it (a `visual-verifier` or verify-skill run at `done`, `failed` or
+`blocked`) only adds a note — as long as you measured AFTER that run ended (an older measured file is still judged by
+the run: measure again). A run still in flight makes `--compare` `incomplete` — wait for it
+(`node <scripts>/verify-screen.js --wait <Screen> --run <id>`), or, only if nothing is running it any more (its agent
+stopped or crashed), end it: `node <scripts>/verify-screen.js --status <Screen> --phase failed --run <id>`.
+
 **Known approximations** (listed in the plan: shadow spread on iOS, blur radius conversions, diamond
 gradients, progressive blur, noise/glass, P3 colors, Figma-vs-platform text rasterizing) are excluded
 from "must match" — note their residual difference instead of iterating on them.

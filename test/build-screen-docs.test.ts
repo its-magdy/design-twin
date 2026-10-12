@@ -15,7 +15,13 @@ const read = (rel: string): string => {
   catch { console.log("  ✗ FAIL cannot read " + rel); return ""; }
 };
 const flat = (t: string): string => t.replace(/\s*\n\s*/g, " "); // prose wraps; the rules are sentences
-const skill = flat(read("claude-plugin/skills/build-screen/SKILL.md"));
+// A skill "states" a rule when the text sits in its SKILL.md or in a reference that SKILL.md links (read on demand):
+// build-screen links its step references and the extract skill's shared cross-check and theme-tokens references.
+const withRefs = (main: string, refs: readonly string[]): string => flat([read(main), ...refs.map((r) => read(r))].join("\n"));
+const extractRefs = ["claude-plugin/skills/extract/references/cross-check.md", "claude-plugin/skills/extract/references/theme-tokens.md"] as const;
+const skill = withRefs("claude-plugin/skills/build-screen/SKILL.md", [
+  ...["gates", "names", "assets", "measurable", "hook-and-status"].map((n) => `claude-plugin/skills/build-screen/references/${n}.md`), ...extractRefs]);
+const extractDocs = withRefs("claude-plugin/skills/extract/SKILL.md", extractRefs);
 const twRaw = read("claude-plugin/skills/build-screen/profiles/web-tailwind.md");
 const tw = flat(twRaw);
 const cssm = flat(read("claude-plugin/skills/build-screen/profiles/web-css-modules.md"));
@@ -450,7 +456,7 @@ console.log("build-screen docs (assets):");
 {
   const irf = flat(read("claude-plugin/skills/build-screen/references/ir-fields.md"));
   const exl = flat(read("claude-plugin/skills/build-screen/references/export-layout.md"));
-  const ext = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const ext = extractDocs;
   const readme = flat(read("bridge/README.md"));
   const mcp = flat(read("bridge/src/figma-mcp.ts"));
   const hv = flat(read("claude-plugin/skills/audit-design/references/heuristics.md"));
@@ -486,7 +492,7 @@ console.log("build-screen docs (assets):");
 console.log("build-screen docs:");
 {
   const rd = (rel: string): string => flat(read(rel));
-  const docs = [rd("bridge/README.md"), skill, rd("claude-plugin/skills/extract/SKILL.md"), rd("claude-plugin/skills/help/SKILL.md")].join(" ");
+  const docs = [rd("bridge/README.md"), skill, extractDocs, rd("claude-plugin/skills/help/SKILL.md")].join(" ");
   const src = (rel: string): string => read(rel);
   // Each new flag a doc mentions is registered in the script's own OPTIONS.
   const flags: ReadonlyArray<readonly [string, string, string]> = [
@@ -500,9 +506,9 @@ console.log("build-screen docs:");
     ["bridge/README.md", "claude-plugin/skills/help/SKILL.md", "claude-plugin/skills/extract/SKILL.md"].every((f) => /FIGMA_BRIDGE_PORT/.test(rd(f)) && /positional/.test(rd(f))));
   check("the `done in` timing line and `dtwin serve` keeping the plugin connected are stated", /done in Xs|done in 12\.4s/.test(docs) && /`dtwin serve`.{0,200}(skip|connected)/.test(docs));
   check("troubleshooting explains `connected but sent nothing` and the fixed abandoned-reply bug", /connected but sent nothing/.test(rd("claude-plugin/skills/help/references/troubleshooting.md")) && /unique per bridge/.test(rd("claude-plugin/skills/help/references/troubleshooting.md")));
-  check("variables.json scope sentence + tokens --lookup, in build-screen and extract", [skill, rd("claude-plugin/skills/extract/SKILL.md")].every((d) => /only (the )?variables bound by pulled nodes/.test(d) && /--lookup/.test(d)));
+  check("variables.json scope sentence + tokens --lookup, in build-screen and extract", [skill, extractDocs].every((d) => /only (the )?variables bound by pulled nodes/.test(d) && /--lookup/.test(d)));
   check("build-screen: catalog by:\"ambiguous\", finding ids code@nodeId (legacy code#i), crossCheckFile", /by:"ambiguous"/.test(skill) && /`code@nodeId`/.test(skill) && /code#i/.test(skill) && /crossCheckFile/.test(skill));
-  check("cross-check labels alreadyMapped / sharedWith documented", [skill, rd("claude-plugin/skills/extract/SKILL.md")].every((d) => /alreadyMapped/.test(d) && /sharedWith/.test(d)));
+  check("cross-check labels alreadyMapped / sharedWith documented", [skill, extractDocs].every((d) => /alreadyMapped/.test(d) && /sharedWith/.test(d)));
   check("every resolve-screen snippet passes design/plan", ["audit-design", "sync-design", "verify", "build-screen", "extract"].every((n) => {
     const t = rd(`claude-plugin/skills/${n}/SKILL.md`);
     const m = t.match(/resolve-screen\.js" <exportDir> "<[a-z-]+>"[^`]*/g) ?? [];
@@ -519,22 +525,22 @@ console.log("build-screen docs:");
   check("crossCheckFile = the cross-check report beside the audit, when there is one (build-screen + audit-design)",
     [skill, audit].every((d) => /cross-check report beside the audit/.test(d) && /when there is one/.test(d)) &&
     !/the findings were merged from/.test(skill) && !/the cross-file half came from/.test(audit));
-  const lookupDocs = [rd("bridge/README.md"), skill, rd("claude-plugin/skills/extract/SKILL.md"), src("design-to-code/tokens.ts")];
+  const lookupDocs = [rd("bridge/README.md"), skill, extractDocs, src("design-to-code/tokens.ts")];
   check("no doc shows an unquoted `--lookup <#hex>` / `--lookup #…`, and each says the bare or quoted form",
     lookupDocs.every((d) => !/--lookup <#hex>|--lookup #/.test(d) && /ffbc1c/.test(d) && /'#ffbc1c'/.test(d)));
   // the .prev is kept only when the design differs — the export stamp alone does not count.
   check("README + extract + write-out say `.prev` ignores the exportedAt stamp; no 'bytes differ' wording",
-    [rd("bridge/README.md"), rd("claude-plugin/skills/extract/SKILL.md"), src("bridge/src/write-out.ts")].every((d) => /(content differs|DIFFERENT design)[^.]{0,80}exportedAt/.test(d)) &&
+    [rd("bridge/README.md"), extractDocs, src("bridge/src/write-out.ts")].every((d) => /(content differs|DIFFERENT design)[^.]{0,80}exportedAt/.test(d)) &&
     !/whose bytes\s+differ/.test(rd("bridge/README.md")) && !/with DIFFERENT bytes/.test(src("bridge/src/write-out.ts")));
   check("README + extract say usage errors in --check/--lookup are 2 and the parent directory tells two tokens.json apart",
-    [rd("bridge/README.md"), rd("claude-plugin/skills/extract/SKILL.md")].every((d) => /usage errors?[^.]{0,40}\b2\b/.test(d) && /parent directory/.test(d)));
+    [rd("bridge/README.md"), extractDocs].every((d) => /usage errors?[^.]{0,40}\b2\b/.test(d) && /parent directory/.test(d)));
 }
 console.log("build-screen docs (quick keys + export docs):");
 {
   const rd = (rel: string): string => flat(read(rel));
   const exists = (rel: string): boolean => fs.existsSync(path.join(root, rel));
   const irRaw = read("claude-plugin/skills/build-screen/references/ir-fields.md");
-  const ext = rd("claude-plugin/skills/extract/SKILL.md");
+  const ext = extractDocs;
   const help = rd("claude-plugin/skills/help/SKILL.md");
   const readme = rd("bridge/README.md");
   const norm = (t: string): string => t.replace(/\r\n/g, "\n").trim();
@@ -590,7 +596,7 @@ console.log("build-screen docs (quick keys + export docs):");
   check("sync-design: a \"differ only by the exporter's format\" warning after a plugin update is not a design change; re-run --expect/--compare once",
     /differ only by the exporter's format" after a plugin update is not a design change/.test(syncSkill) && /Re-run `verify-screen --expect` \/ `--compare` once/.test(syncSkill));
   const readme21 = flat(read("bridge/README.md"));
-  const extract21 = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const extract21 = extractDocs;
   const verbs21 = read("bridge/src/verbs.ts");
   const mcp21 = read("bridge/src/figma-mcp.ts");
   const mcpAt = mcp21.indexOf('"figma_list_children",');
@@ -778,7 +784,7 @@ console.log("build-screen docs:");
     /A sibling or overlay painting over the element is not seen \(it may pass\)/.test(verifySkill) && /its own children paint all over gets no painter/.test(verifySkill));
   const readme20 = flat(read("bridge/README.md"));
   const help20 = flat(read("claude-plugin/skills/help/SKILL.md"));
-  const extract20 = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const extract20 = extractDocs;
   const audit20 = flat(read("claude-plugin/skills/audit-design/SKILL.md"));
   check("README + help: an owning MCP server exits when its client goes away, unless its socket was used, then idles out on FIGMA_DAEMON_IDLE_MIN",
     [readme20, help20].every((d) => /exits when its client goes away/.test(d) && /FIGMA_DAEMON_IDLE_MIN/.test(d) && /unless another process has used/.test(d)));
