@@ -3,9 +3,9 @@
 // (design-to-code/visual-diff.ts), and the capture's budget (design-to-code/probe-visual.ts). No browser.
 // Run with:  node test/visual-diff.test.ts
 import { deflateSync, crc32 } from "node:zlib";
-import { PngError, decodePng, encodePng, pngInfo, pngSize } from "../bridge/src/png.ts";
+import { PngError, crop, decodePng, encodePng, pngInfo, pngSize, resampleBox } from "../bridge/src/png.ts";
 import type { Rgba } from "../bridge/src/png.ts";
-import { MASK, attribute, colorDelta, crop, diffOptionsFor, diffPixels, maxDeltaOf, planGrid, referenceCrop, renderDiff, resampleBox } from "../design-to-code/visual-diff.ts";
+import { MASK, attribute, colorDelta, diffOptionsFor, diffPixels, maxDeltaOf, planGrid, referenceCrop, renderDiff } from "../design-to-code/visual-diff.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

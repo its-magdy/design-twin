@@ -1,6 +1,7 @@
 // Offline tests for the design-to-code/ layer. No Figma, no dependencies:  node test/design-to-code.test.ts
 // Assertions pin VALUES (not just presence) and every confirmed bug has a regression test.
-import { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName, toNative, platformOf } from "../design-to-code/tokens.ts";
+import { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName } from "../design-to-code/tokens.ts";
+import { toNative, platformOf } from "../design-to-code/tokens-native.ts";
 import { isCodeConnectMap, validateMap } from "../design-to-code/map-validate.ts";
 import { driftLint, checkFreshness, DEFAULT_MAX_AGE_MS } from "../design-to-code/drift-lint.ts";
 import { bootstrap } from "../design-to-code/map-bootstrap.ts";
@@ -376,7 +377,7 @@ check("[T-fw] FONT_WEIGHT-scoped FLOAT is unitless", toCSS(tokens({ variables: [
 check("[T-ul] opts.unitless overrides px", toCSS(tokens({ variables: [{ name: "z/top", type: "FLOAT", values: { v: 100 } }] }), { unitless: new Set(["z/top"]) }).includes("--z-top: 100;"));
 check("[T-sn] string-number FLOAT gets px", toCSS(tokens({ variables: [{ name: "s/x", type: "FLOAT", values: { v: "16" } }] })).includes("--s-x: 16px;"));
 // [T-lh] Figma LineHeight is px|percent, NEVER a unitless multiplier -> px is the correct default
-// (unitless `line-height: 24` would mean 24x font size). See UNITLESS_SCOPES comment.
+// (unitless `line-height: 24` would mean 24x font size). See the UNITLESS_SCOPES comment in tokens-core.ts.
 check("[T-lh] LINE_HEIGHT-scoped FLOAT stays px (not unitless)", toCSS(tokens({ variables: [{ name: "text/lh", type: "FLOAT", scopes: ["LINE_HEIGHT"], values: { v: 24 } }] })).includes("--text-lh: 24px;"));
 // [T-ls] letter-spacing bare number is invalid CSS -> px, not unitless.
 check("[T-ls] LETTER_SPACING-scoped FLOAT stays px (bare number is invalid CSS)", toCSS(tokens({ variables: [{ name: "text/ls", type: "FLOAT", scopes: ["LETTER_SPACING"], values: { v: 0.5 } }] })).includes("--text-ls: 0.5px;"));

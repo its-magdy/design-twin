@@ -34,29 +34,12 @@
 // ================================================================ re-exported from bridge/src/doc-types.ts
 // raw JSON, the IR, the documents a pull writes, the design-system split files (and the collector
 // documents the bridge's layout modules split) — declared in the bridge because the bridge's tsc program
-// must stay inside its rootDir. Explicit list on purpose: a name added there is a deliberate addition here.
-
+// must stay inside its rootDir. Every type there is re-exported here; a local declaration of the same name
+// (ScreenDoc below) takes precedence over the star export, so the bridge's wider ScreenDoc is not.
 import type {
   JsonValue, JsonObject, IrNodeType, TokenMap, ComponentPropValues, IndexRow, IrNode, LayerFile, ScreenExport,
 } from "../bridge/src/doc-types.ts";
-export type {
-  JsonPrimitive, JsonValue, JsonObject, IrNodeType, TokenMap, XY, Box, RenderBox, RadiusCorners, SizeLimits,
-  PinMode, Pin, FlexAlign, GridTrack, LayoutSpec, LayoutGridSpec, PaintBase, SolidPaint, GradientStop,
-  GradientPaint, ImageFilters, MediaPaint, PatternPaint, ShaderPaint, Paint, Strokes, EffectBase,
-  ShadowEffect, BlurEffect, NoiseEffect, GlassEffect, TextureEffect, ShaderEffect, Effect, LengthSpec,
-  FontSpec, TextRun, ReactionTrigger, ActionType, ActionNavigation, CubicBezier, Transition, Action, Reaction,
-  MotionKeyframe, MotionTrack, MotionAnimation, NodeMotion,
-  MainComponentRef, ComponentPropValues, Annotation, ExportSetting, Overlay, InstanceOverride, Geometry,
-  TableCell, DevResource, StyleRefs, ModeMap, TextFields, IrNode, Manifest, Measurement, ScreenExport,
-  LayerFile, IndexRow, PageDirEntry, PageIndex, PrototypeFlow, PageSettings, PagesRootIndex,
-  DesignSystemStamp, DesignSystemManifest, VariableType, VariableAlias, VariableValue, VariableCollection,
-  Variable, SliceEntry, ValueConflict, SameNameConflict, VariableConflict, TokensDoc, VariablesDoc, StyleMeta,
-  PaintStyle, TextStyle, EffectStyle, GridStyle, StylesDoc, PaintStylesDoc, TextStylesDoc, EffectStylesDoc,
-  GridStylesDoc, HygieneDoc, ComponentPropType, ComponentPropDef, CatalogVariant, CatalogComponent,
-  ComponentsCatalog, ComponentDetailFile,
-  LayersDocLayer, LayersDocIndexRow, LayersDoc, DesignSystemStyles, DesignSystemDoc, LibraryStamp, LibraryCounts,
-  LibraryManifest, LibrariesIndexRow, LibrariesIndex,
-} from "../bridge/src/doc-types.ts";
+export type * from "../bridge/src/doc-types.ts";
 
 // ================================================================ the screen documents a reader accepts
 

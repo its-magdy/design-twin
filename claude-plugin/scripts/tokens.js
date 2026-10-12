@@ -104,10 +104,9 @@ function ifDefined(key, v) {
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
 }
-var isObj = isJsonObject;
-var optObj = (x) => x === void 0 || isObj(x);
+var optObj = (x) => x === void 0 || isJsonObject(x);
 var optStr = (x) => x === void 0 || typeof x === "string";
-var anyObject = (x) => isObj(x);
+var anyObject = (x) => isJsonObject(x);
 var isAlias = (v) => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
 var isComposed = (v) => {
   if (!v || typeof v !== "object" || !("composed" in v)) return false;
@@ -119,98 +118,98 @@ var isComposed = (v) => {
 };
 var NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function isVariable(x) {
-  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
+  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection);
 }
 function isVariableCollection(x) {
-  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
+  return isJsonObject(x) && typeof x.name === "string" && isStringArray(x.modes);
 }
 function isTokensDoc(x) {
-  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+  return isJsonObject(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
 }
 isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
 function isCatalogComponent(x) {
-  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+  return isJsonObject(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
 }
 function isComponentsCatalog(x) {
-  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+  return isJsonObject(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
 }
 isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
 function isComponentDetailFile(x) {
-  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+  return isJsonObject(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
 }
 isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
 function isTextStylesDoc(x) {
-  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
+  return isJsonObject(x) && Array.isArray(x.styles) && x.styles.every((s) => isJsonObject(s) && typeof s.name === "string");
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
 function isScreenAssetsDoc(x) {
-  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+  return isJsonObject(x) && optArrayOf(x.heavy, (h) => isJsonObject(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isJsonObject(f) && typeof f.file === "string" && optStr(f.node));
 }
 isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
 function isLibrariesIndex(x) {
-  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+  return isJsonObject(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isJsonObject(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
 }
 isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
 var SEVERITIES = ["blocker", "warning", "info"];
 function isAuditOverridesDoc(x) {
-  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+  return isJsonObject(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isJsonObject(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
 }
 isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
 function isAuditReport(x) {
-  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
+  return isJsonObject(x) && isJsonObject(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isJsonObject(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
 isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
-  return isObj(x) && typeof x.name === "string";
+  return isJsonObject(x) && typeof x.name === "string";
 }
 function isProposalList(x) {
   return Array.isArray(x) && x.every(isProposal);
 }
 isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
 function isIndexRowLike(x) {
-  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
+  return isJsonObject(x) && typeof x.id === "string" && typeof x.name === "string";
 }
 function isPagesRootIndex(x) {
-  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+  return isJsonObject(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isJsonObject(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
 }
 isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
 function isPageIndex(x) {
-  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+  return isJsonObject(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
 }
 isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
 function isVerifyExpectation(x) {
-  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+  return isJsonObject(x) && isJsonObject(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isJsonObject(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
 isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
-var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+var isNameVersion = (x) => isJsonObject(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
 function isProbeIdentity(x) {
-  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+  return isJsonObject(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
 }
 function isBuildIdentity(x) {
-  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+  return isJsonObject(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
 }
-var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
-var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
-var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
-var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
-var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var isProbeFrame = (x) => isJsonObject(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isJsonObject(x.rect);
+var isCountMap = (x) => isJsonObject(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isJsonObject(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isJsonObject(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isJsonObject(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isJsonObject(x) && Object.values(x).every((v) => typeof v === "string");
 var isNum = (x) => typeof x === "number" && Number.isFinite(x);
 function isProbeReach(x) {
-  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+  return isJsonObject(x) && Array.isArray(x.steps) && x.steps.every(isJsonObject) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
 }
 function isPageOverflow(x) {
-  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+  return isJsonObject(x) && isJsonObject(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isJsonObject(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
 }
 var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
 var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
 function isBehaviourCheck(x) {
-  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+  return isJsonObject(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
 }
 function isMeasuredBehaviour(x) {
-  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+  return isJsonObject(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
 }
 function isMeasuredVisual(x) {
-  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+  return isJsonObject(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
 }
 var MEASURED_EXTRAS = [
   ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
@@ -232,48 +231,48 @@ var MEASURED_EXTRAS = [
   ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
 ];
 function isMeasuredCore(x) {
-  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+  return isJsonObject(x) && optArrayOf(x.nodes, (n) => isJsonObject(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
 function isVerifyMeasured(x) {
-  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isJsonObject(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
 }
 isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
 function isEvidence(x) {
-  return isObj(x) && typeof x.nodeId === "string";
+  return isJsonObject(x) && typeof x.nodeId === "string";
 }
 function isInteractionEvidenceList(x) {
   return Array.isArray(x) && x.every(isEvidence);
 }
 isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
 function isMeasuredComponentList(x) {
-  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
+  return Array.isArray(x) && x.every((c) => isJsonObject(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
 }
 isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
 function isVerifyReport(x) {
-  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+  return isJsonObject(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
-  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  if (!isJsonObject(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
   for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
-  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isJsonObject(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
   for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
     const list = x[k];
-    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+    if (Array.isArray(list) && !list.every(isJsonObject)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
-  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
-  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
-  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
-  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
-  if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
-  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isJsonObject(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isJsonObject(x.anchors) && !Object.values(x.anchors).every(isJsonObject)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isJsonObject(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isJsonObject(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isJsonObject(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
+  if (isJsonObject(x.verification) && x.verification.hook !== void 0 && !isJsonObject(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
   for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
@@ -283,15 +282,15 @@ function isPlan(x) {
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
 function isPlanWaiver(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+  return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
 }
 isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
 function isPlanDescope(x) {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+  return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
 function isStringRecord(x) {
-  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
+  return isJsonObject(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
 
@@ -464,375 +463,429 @@ function composeAlpha(alpha, opacityPct) {
   return alpha * (clampOpacityPct(opacityPct) / 100);
 }
 
+// design-to-code/tokens-core.ts
+var segsCache = /* @__PURE__ */ new Map();
+function segs(name) {
+  const key = String(name || "");
+  let v = segsCache.get(key);
+  if (v === void 0) {
+    v = key.split("/").map((s) => s.trim().replace(/[.{}$]/g, "").replace(/\s+/g, "-")).filter(Boolean);
+    segsCache.set(key, v);
+  }
+  return v;
+}
+var SENTINEL_MIN = 1e4;
+function isRadiusVar(v) {
+  const scopes = v.scopes || [];
+  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
+  if (narrowed) return scopes.includes("CORNER_RADIUS");
+  return /radius|corner|round/i.test(String(v.collection || "") + "/" + v.name);
+}
+function isSentinel(v, raw) {
+  if (!v || v.type !== "FLOAT" || isAlias(raw)) return false;
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isFinite(n) && Math.abs(n) >= SENTINEL_MIN && isRadiusVar(v);
+}
+function defaultModeName(variable, collections) {
+  const c = (collections || []).find((x) => x.name === variable.collection);
+  const modes = variable.values ? Object.keys(variable.values) : [];
+  if (c && c.default && modes.includes(c.default)) return c.default;
+  return modes[0];
+}
+function baseValue(variable, collections, def) {
+  const values = variable.values || {};
+  if (def === void 0) def = defaultModeName(variable, collections);
+  if (def !== void 0 && values[def] !== void 0) return values[def];
+  const firstDefined = Object.keys(values).find((m) => values[m] !== void 0);
+  return firstDefined !== void 0 ? values[firstDefined] : void 0;
+}
+var UNITLESS_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY", "FONT_WEIGHT"]);
+var UNITLESS_NAME_SEGMENTS = /* @__PURE__ */ new Set(["opacity", "fontweight"]);
+function unitlessName(name) {
+  return segs(name).some((seg) => UNITLESS_NAME_SEGMENTS.has(seg.replace(/[-_ ]/g, "").toLowerCase()));
+}
+function scopesSayUnitless(scopes) {
+  return !!scopes.length && scopes.every((s) => UNITLESS_SCOPES.has(s));
+}
+function unitDecision(variable, opts) {
+  if (opts && opts.unitless && opts.unitless.has && opts.unitless.has(variable.name)) return "override";
+  const scopes = variable.scopes || [];
+  if (scopesSayUnitless(scopes)) return "scopes";
+  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
+  if (!narrowed && unitlessName(variable.name)) return "name";
+  return "px";
+}
+var PERCENT_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY"]);
+function percentOpacity(variable, opts) {
+  return variable.type === "FLOAT" && unitDecision(variable, opts) === "scopes" && (variable.scopes || []).every((s) => PERCENT_SCOPES.has(s));
+}
+
 // design-to-code/tokens-native.ts
 var FULL = Object.freeze({ fullyRounded: true });
-function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaultModeName2, baseValue: baseValue2, unitDecision: unitDecision2, isSentinel: isSentinel2, percentOpacity: percentOpacity2 }) {
-  const PLATFORMS2 = {
-    swiftui: { file: "DesignTokens.swift" },
-    compose: { file: "DesignTokens.kt" },
-    flutter: { file: "design_tokens.dart" },
-    "react-native": { file: "designTokens.ts" }
+var PLATFORMS = {
+  swiftui: { file: "DesignTokens.swift" },
+  compose: { file: "DesignTokens.kt" },
+  flutter: { file: "design_tokens.dart" },
+  "react-native": { file: "designTokens.ts" }
+};
+var PROFILE_ALIASES = { "android-compose": "compose", ios: "swiftui", swift: "swiftui", android: "compose", rn: "react-native", dart: "flutter" };
+var RESERVED = new Set("default,class,object,in,is,as,do,if,else,for,while,return,var,val,let,func,fun,import,package,switch,case,break,continue,true,false,null,nil,self,super,this,new,static,final,const,enum,struct,extension,protocol,init,internal,public,private,open,operator,typealias,interface,when,try,catch,throw,void,with,get,set,dynamic,external,factory,mixin,part,required,show,hide,on,type,function,delete,export,yield,await,async,inout,repeat,guard,defer,where,any,some,lerp,copyWith,hashCode,toString,description".split(","));
+var words = (s) => String(s).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
+function camel(parts) {
+  const w = parts.flatMap(words);
+  let id = w.map((x, i) => i === 0 ? x.charAt(0).toLowerCase() + x.slice(1) : x.charAt(0).toUpperCase() + x.slice(1)).join("");
+  if (!id) id = "token";
+  if (/^[0-9]/.test(id)) id = "n" + id;
+  if (RESERVED.has(id)) id += "Token";
+  return id;
+}
+var pascal = (parts) => {
+  const c = camel(parts);
+  return c.charAt(0).toUpperCase() + c.slice(1);
+};
+function isFontSize(v) {
+  const scopes = v.scopes || [];
+  if (scopes.length && !scopes.every((s) => s === "ALL_SCOPES")) return scopes.includes("FONT_SIZE");
+  return /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name);
+}
+function kindOf(v, opts) {
+  if (v.type === "COLOR") return "color";
+  if (v.type === "BOOLEAN") return "bool";
+  if (v.type === "STRING") return "string";
+  if (v.type === "FLOAT") return unitDecision(v, opts) === "px" ? isFontSize(v) ? "fontSize" : "dimension" : "number";
+  return null;
+}
+var hasComposedKey = (x) => !!x && typeof x === "object" && "composed" in x;
+var isNativeScalar = (x) => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
+function resolve(byName, collections, v, mode, seen) {
+  const values = v.values || {};
+  let raw = values[mode];
+  if (raw === void 0) raw = baseValue(v, collections, defaultModeName(v, collections));
+  const next = new Set(seen || []).add(v.name);
+  const follow = (a) => {
+    const target = byName.get(a.aliasOf);
+    if (!target || seen && seen.has(target.name)) return void 0;
+    const tMode = target.values && target.values[mode] !== void 0 ? mode : defaultModeName(target, collections);
+    if (tMode === void 0) return void 0;
+    return resolve(byName, collections, target, tMode, next);
   };
-  const PROFILE_ALIASES = { "android-compose": "compose", ios: "swiftui", swift: "swiftui", android: "compose", rn: "react-native", dart: "flutter" };
-  const RESERVED = new Set("default,class,object,in,is,as,do,if,else,for,while,return,var,val,let,func,fun,import,package,switch,case,break,continue,true,false,null,nil,self,super,this,new,static,final,const,enum,struct,extension,protocol,init,internal,public,private,open,operator,typealias,interface,when,try,catch,throw,void,with,get,set,dynamic,external,factory,mixin,part,required,show,hide,on,type,function,delete,export,yield,await,async,inout,repeat,guard,defer,where,any,some,lerp,copyWith,hashCode,toString,description".split(","));
-  const words = (s) => String(s).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
-  function camel(parts) {
-    const w = parts.flatMap(words);
-    let id = w.map((x, i) => i === 0 ? x.charAt(0).toLowerCase() + x.slice(1) : x.charAt(0).toUpperCase() + x.slice(1)).join("");
-    if (!id) id = "token";
-    if (/^[0-9]/.test(id)) id = "n" + id;
-    if (RESERVED.has(id)) id += "Token";
-    return id;
+  if (raw && typeof raw === "object" && "composed" in raw) {
+    const { color, opacity } = raw.composed;
+    const c = typeof color === "string" ? color : isAlias(color) ? follow(color) : void 0;
+    const o = typeof opacity === "number" ? opacity : isAlias(opacity) ? follow(opacity) : void 0;
+    const rgba = parseHex(c);
+    if (!rgba || typeof o !== "number" || !Number.isFinite(o)) return void 0;
+    return formatHex({ ...rgba, a: composeAlpha(rgba.a, o) });
   }
-  const pascal = (parts) => {
-    const c = camel(parts);
-    return c.charAt(0).toUpperCase() + c.slice(1);
-  };
-  function isFontSize(v) {
-    const scopes = v.scopes || [];
-    if (scopes.length && !scopes.every((s) => s === "ALL_SCOPES")) return scopes.includes("FONT_SIZE");
-    return /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name);
-  }
-  function kindOf(v, opts) {
-    if (v.type === "COLOR") return "color";
-    if (v.type === "BOOLEAN") return "bool";
-    if (v.type === "STRING") return "string";
-    if (v.type === "FLOAT") return unitDecision2(v, opts) === "px" ? isFontSize(v) ? "fontSize" : "dimension" : "number";
-    return null;
-  }
-  const hasComposedKey = (x) => !!x && typeof x === "object" && "composed" in x;
-  const isNativeScalar = (x) => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
-  function resolve(byName, collections, v, mode, seen) {
-    const values = v.values || {};
-    let raw = values[mode];
-    if (raw === void 0) raw = baseValue2(v, collections, defaultModeName2(v, collections));
-    const next = new Set(seen || []).add(v.name);
-    const follow = (a) => {
-      const target = byName.get(a.aliasOf);
-      if (!target || seen && seen.has(target.name)) return void 0;
-      const tMode = target.values && target.values[mode] !== void 0 ? mode : defaultModeName2(target, collections);
-      if (tMode === void 0) return void 0;
-      return resolve(byName, collections, target, tMode, next);
-    };
-    if (raw && typeof raw === "object" && "composed" in raw) {
-      const { color, opacity } = raw.composed;
-      const c = typeof color === "string" ? color : isAlias2(color) ? follow(color) : void 0;
-      const o = typeof opacity === "number" ? opacity : isAlias2(opacity) ? follow(opacity) : void 0;
-      const rgba = parseHex(c);
-      if (!rgba || typeof o !== "number" || !Number.isFinite(o)) return void 0;
-      return formatHex({ ...rgba, a: composeAlpha(rgba.a, o) });
-    }
-    if (!isAlias2(raw)) return isNativeScalar(raw) ? raw : void 0;
-    return follow(raw);
-  }
-  function opacityNumber(r) {
-    const n = typeof r === "number" ? r : typeof r === "string" && NUMERIC_TEXT.test(r) ? Number(r) : NaN;
-    return Number.isFinite(n) ? n : null;
-  }
-  function model(designSystem, warnings, opts) {
-    const collections = designSystem && designSystem.collections || [];
-    const vars = designSystem && designSystem.variables || [];
-    const byName = new Map(vars.map((v) => [v.name, v]));
-    const typeNames = /* @__PURE__ */ new Set();
-    const out = [];
-    for (const c of collections) {
-      const mine = vars.filter((v) => v.collection === c.name);
-      const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
-      const [firstModeName, ...otherModeNames] = modeNames;
-      if (!mine.length || firstModeName === void 0) continue;
-      let type = `${pascal([c.name])}Tokens`;
-      for (let n = 2; typeNames.has(type); n++) type = `${pascal([c.name])}Tokens${n}`;
-      typeNames.add(type);
-      const ids = /* @__PURE__ */ new Set();
-      const fields = [];
-      const cands = [];
-      for (const v of mine) {
-        const kind = kindOf(v, opts);
-        if (!segs2(v.name).length) continue;
-        if (!kind) {
-          warnings.push(`${v.name}: skipped \u2014 a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`);
-          continue;
+  if (!isAlias(raw)) return isNativeScalar(raw) ? raw : void 0;
+  return follow(raw);
+}
+function opacityNumber(r) {
+  const n = typeof r === "number" ? r : typeof r === "string" && NUMERIC_TEXT.test(r) ? Number(r) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+function model(designSystem, warnings, opts) {
+  const collections = designSystem && designSystem.collections || [];
+  const vars = designSystem && designSystem.variables || [];
+  const byName = new Map(vars.map((v) => [v.name, v]));
+  const typeNames = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const c of collections) {
+    const mine = vars.filter((v) => v.collection === c.name);
+    const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
+    const [firstModeName, ...otherModeNames] = modeNames;
+    if (!mine.length || firstModeName === void 0) continue;
+    let type = `${pascal([c.name])}Tokens`;
+    for (let n = 2; typeNames.has(type); n++) type = `${pascal([c.name])}Tokens${n}`;
+    typeNames.add(type);
+    const ids = /* @__PURE__ */ new Set();
+    const fields = [];
+    const cands = [];
+    for (const v of mine) {
+      const kind = kindOf(v, opts);
+      if (!segs(v.name).length) continue;
+      if (!kind) {
+        warnings.push(`${v.name}: skipped \u2014 a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`);
+        continue;
+      }
+      const pct = kind === "number" && percentOpacity(v, opts);
+      const values = {};
+      let ok = true;
+      for (const m of modeNames) {
+        const r = resolve(byName, collections, v, m);
+        if (r === void 0 || kind === "color" && !normHex(r)) {
+          ok = false;
+          break;
         }
-        const pct = kind === "number" && percentOpacity2(v, opts);
-        const values = {};
-        let ok = true;
-        for (const m of modeNames) {
-          const r = resolve(byName, collections, v, m);
-          if (r === void 0 || kind === "color" && !normHex(r)) {
+        if (pct) {
+          const n = opacityNumber(r);
+          if (n === null) {
             ok = false;
             break;
           }
-          if (pct) {
-            const n = opacityNumber(r);
-            if (n === null) {
-              ok = false;
-              break;
-            }
-            const clamped = clampOpacityPct(n);
-            if (clamped !== n) warnings.push(`${v.name} (mode ${m}): opacity ${n} is outside Figma's 0\u2013100 range; clamped to ${clamped} (as Figma does) and written as ${clamped / 100}`);
-            values[m] = clamped / 100;
-            continue;
-          }
-          values[m] = isSentinel2 && isSentinel2(v, r) ? FULL : r;
-        }
-        if (!ok && Object.values(v.values || {}).some(hasComposedKey)) {
-          warnings.push(`${v.name}: skipped \u2014 a composed colour (colour + separate opacity) whose colour or opacity could not be resolved inside this file has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
+          const clamped = clampOpacityPct(n);
+          if (clamped !== n) warnings.push(`${v.name} (mode ${m}): opacity ${n} is outside Figma's 0\u2013100 range; clamped to ${clamped} (as Figma does) and written as ${clamped / 100}`);
+          values[m] = clamped / 100;
           continue;
         }
-        if (!ok) {
-          warnings.push(`${v.name}: skipped \u2014 its value could not be resolved inside this file (an alias to a library variable that was not exported?)`);
-          continue;
-        }
-        cands.push({ v, kind, values, id: camel(segs2(v.name)) });
+        values[m] = isSentinel(v, r) ? FULL : r;
       }
-      const tag = (v) => v.key ? String(v.key).slice(0, 8).toLowerCase() : null;
-      const label = (x) => `${x.v.name}${x.v.key ? ` (key ${tag(x.v)}\u2026)` : ""} = ${JSON.stringify(x.v.values || {})}`;
-      const byId = /* @__PURE__ */ new Map();
-      for (const x of cands) {
-        const list = byId.get(x.id);
-        if (list) list.push(x);
-        else byId.set(x.id, [x]);
-      }
-      for (const [id, list] of byId) {
-        const distinct = [list[0]];
-        for (const x of list.slice(1)) if (!distinct.some((d) => JSON.stringify(d.values) === JSON.stringify(x.values))) distinct.push(x);
-        if (list.length > distinct.length) warnings.push(`${list.map(label).join(" and ")}: identical in every mode, so "${id}" in ${type} is emitted once`);
-        if (distinct.length === 1) {
-          distinct[0].final = id;
-          continue;
-        }
-        const sameName = distinct.every((x) => x.v.name === distinct[0].v.name);
-        const lossless = distinct.filter((x) => /^[A-Za-z0-9 /_-]+$/.test(String(x.v.name)));
-        const keeper = sameName ? null : lossless.length === 1 ? lossless[0] : distinct[0];
-        const names = [];
-        distinct.forEach((x, i) => {
-          if (x === keeper) {
-            x.final = id;
-            ids.add(id);
-            names.push(`${label(x)} \u2192 "${id}"`);
-            return;
-          }
-          let next = tag(x.v) ? `${id}_${tag(x.v)}` : `${id}${i + 1}`;
-          for (let n = 2; ids.has(next) || byId.has(next); n++) next = (tag(x.v) ? `${id}_${tag(x.v)}` : id) + n;
-          ids.add(next);
-          x.final = next;
-          names.push(`${label(x)} \u2192 "${next}"`);
-        });
-        warnings.push(`${distinct.length} different variables fold onto "${id}" in ${type} and DIFFER \u2014 none is dropped: ${names.join("; ")}`);
-      }
-      for (const x of cands) {
-        if (!x.final) continue;
-        if (ids.has(x.final) && fields.some((f) => f.id === x.final)) continue;
-        ids.add(x.final);
-        fields.push({ id: x.final, kind: x.kind, source: x.v.name, values: x.values });
-      }
-      if (!fields.length) continue;
-      const units = fields.reduce((n, f) => n + (f.kind === "color" || f.kind === "fontSize" ? 2 : 1), 0) + Math.ceil(fields.length / 32) + 2;
-      if (modeNames.length > 1 && units > 255) warnings.push(`${c.name}: ${fields.length} tokens in one multi-mode collection need ${units} JVM parameter units (Color and TextUnit count double) \u2014 over the 255 limit, so the Compose data class will not compile; split the collection in Figma`);
-      const modeIds = /* @__PURE__ */ new Set();
-      const modeOf = (name) => {
-        let id = camel([name]);
-        if (ids.has(id)) id += "Mode";
-        for (let n = 2, base = id; modeIds.has(id); n++) id = base + n;
-        modeIds.add(id);
-        return { name, id };
-      };
-      const modes = [modeOf(firstModeName), ...otherModeNames.map(modeOf)];
-      const defMode = modes.find((m) => m.name === String(c.default)) ?? modes[0];
-      out.push({ name: c.name, type, modes, default: defMode.name, defaultId: defMode.id, fields });
-    }
-    return out;
-  }
-  const num = (raw) => {
-    const n = Number(raw);
-    return Number.isFinite(n) ? String(Math.round(n * 1e4) / 1e4) : "0";
-  };
-  const str = (raw) => JSON.stringify(String(raw));
-  const bool = (raw) => String(raw === true || raw === "true");
-  const hexOf = (raw) => {
-    const h = normHex(raw);
-    if (h === null) throw new Error(`tokens-native: colour value ${JSON.stringify(raw)} was not validated`);
-    return h;
-  };
-  const argb = (raw) => {
-    const h = hexOf(raw);
-    return "0x" + (h.length === 9 ? h.slice(7) + h.slice(1, 7) : "ff" + h.slice(1)).toUpperCase();
-  };
-  const valueIn = (f, mode) => {
-    const r = f.values[mode];
-    if (r === void 0) throw new Error(`tokens-native: field ${f.id} has no value for mode ${JSON.stringify(mode)}`);
-    return r;
-  };
-  const HEADER = "GENERATED by Design Twin (tokens.js --native) from design-system/tokens.json \u2014 do not edit by hand; re-run after a token pull.";
-  function compose(cols, opts) {
-    const T = { color: "Color", dimension: "Dp", fontSize: "TextUnit", number: "Float", bool: "Boolean", string: "String" };
-    const lit = (k, r) => r === FULL ? k === "fontSize" ? "9999.sp" : k === "number" ? "9999f" : "9999.dp /* Figma 'fully rounded' \u2014 use CircleShape */" : k === "color" ? `Color(${argb(r)})` : k === "dimension" ? `${num(r)}.dp` : k === "fontSize" ? `${num(r)}.sp` : k === "number" ? `${num(r)}f` : k === "bool" ? bool(r) : str(r).replace(/\$/g, "\\$");
-    const L = [
-      `// ${HEADER}`,
-      `package ${opts && opts.package || "design.tokens"}`,
-      "",
-      "import androidx.compose.runtime.Immutable",
-      "import androidx.compose.runtime.staticCompositionLocalOf",
-      "import androidx.compose.ui.graphics.Color",
-      "import androidx.compose.ui.unit.Dp",
-      "import androidx.compose.ui.unit.TextUnit",
-      "import androidx.compose.ui.unit.dp",
-      "import androidx.compose.ui.unit.sp"
-    ];
-    for (const c of cols) {
-      L.push("", `// Figma collection "${c.name}"`);
-      const [m0, m1] = c.modes;
-      if (m1 === void 0) {
-        L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, m0.name))} // ${f.source}`), "}");
+      if (!ok && Object.values(v.values || {}).some(hasComposedKey)) {
+        warnings.push(`${v.name}: skipped \u2014 a composed colour (colour + separate opacity) whose colour or opacity could not be resolved inside this file has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
         continue;
       }
-      L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
-      for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
-      const active = c.modes.find((m) => m.name !== c.default) ?? m1;
-      L.push(
-        "",
-        `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([active.id])}) { \u2026 }`,
-        `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`
-      );
-    }
-    return L.join("\n") + "\n";
-  }
-  function swiftModeHint(c) {
-    const ids = c.modes.map((m) => m.id);
-    if (ids.includes("light") && ids.includes("dark")) return "colorScheme == .dark ? .dark : .light" + (ids.length > 2 ? ` /* also: ${ids.filter((i) => i !== "light" && i !== "dark").map((i) => "." + i).join(", ")} */` : "");
-    return `.${(c.modes.find((m) => m.name !== c.default) || c.modes[0]).id} /* one of: ${ids.map((i) => "." + i).join(", ")} \u2014 the app picks */`;
-  }
-  function swiftui(cols) {
-    const T = { color: "Color", dimension: "CGFloat", fontSize: "CGFloat", number: "Double", bool: "Bool", string: "String" };
-    const chan = (h, i) => num(parseInt(h.slice(i, i + 2), 16) / 255);
-    const lit = (k, r) => {
-      if (r === FULL) return ".infinity";
-      if (k === "color") {
-        const h = hexOf(r);
-        return `Color(.sRGB, red: ${chan(h, 1)}, green: ${chan(h, 3)}, blue: ${chan(h, 5)}, opacity: ${h.length === 9 ? chan(h, 7) : "1"})`;
+      if (!ok) {
+        warnings.push(`${v.name}: skipped \u2014 its value could not be resolved inside this file (an alias to a library variable that was not exported?)`);
+        continue;
       }
-      return k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\\u([0-9a-fA-F]{4})/g, "\\u{$1}") : num(r);
+      cands.push({ v, kind, values, id: camel(segs(v.name)) });
+    }
+    const tag = (v) => v.key ? String(v.key).slice(0, 8).toLowerCase() : null;
+    const label = (x) => `${x.v.name}${x.v.key ? ` (key ${tag(x.v)}\u2026)` : ""} = ${JSON.stringify(x.v.values || {})}`;
+    const byId = /* @__PURE__ */ new Map();
+    for (const x of cands) {
+      const list = byId.get(x.id);
+      if (list) list.push(x);
+      else byId.set(x.id, [x]);
+    }
+    for (const [id, list] of byId) {
+      const distinct = [list[0]];
+      for (const x of list.slice(1)) if (!distinct.some((d) => JSON.stringify(d.values) === JSON.stringify(x.values))) distinct.push(x);
+      if (list.length > distinct.length) warnings.push(`${list.map(label).join(" and ")}: identical in every mode, so "${id}" in ${type} is emitted once`);
+      if (distinct.length === 1) {
+        distinct[0].final = id;
+        continue;
+      }
+      const sameName = distinct.every((x) => x.v.name === distinct[0].v.name);
+      const lossless = distinct.filter((x) => /^[A-Za-z0-9 /_-]+$/.test(String(x.v.name)));
+      const keeper = sameName ? null : lossless.length === 1 ? lossless[0] : distinct[0];
+      const names = [];
+      distinct.forEach((x, i) => {
+        if (x === keeper) {
+          x.final = id;
+          ids.add(id);
+          names.push(`${label(x)} \u2192 "${id}"`);
+          return;
+        }
+        let next = tag(x.v) ? `${id}_${tag(x.v)}` : `${id}${i + 1}`;
+        for (let n = 2; ids.has(next) || byId.has(next); n++) next = (tag(x.v) ? `${id}_${tag(x.v)}` : id) + n;
+        ids.add(next);
+        x.final = next;
+        names.push(`${label(x)} \u2192 "${next}"`);
+      });
+      warnings.push(`${distinct.length} different variables fold onto "${id}" in ${type} and DIFFER \u2014 none is dropped: ${names.join("; ")}`);
+    }
+    for (const x of cands) {
+      if (!x.final) continue;
+      if (ids.has(x.final) && fields.some((f) => f.id === x.final)) continue;
+      ids.add(x.final);
+      fields.push({ id: x.final, kind: x.kind, source: x.v.name, values: x.values });
+    }
+    if (!fields.length) continue;
+    const units = fields.reduce((n, f) => n + (f.kind === "color" || f.kind === "fontSize" ? 2 : 1), 0) + Math.ceil(fields.length / 32) + 2;
+    if (modeNames.length > 1 && units > 255) warnings.push(`${c.name}: ${fields.length} tokens in one multi-mode collection need ${units} JVM parameter units (Color and TextUnit count double) \u2014 over the 255 limit, so the Compose data class will not compile; split the collection in Figma`);
+    const modeIds = /* @__PURE__ */ new Set();
+    const modeOf = (name) => {
+      let id = camel([name]);
+      if (ids.has(id)) id += "Mode";
+      for (let n = 2, base = id; modeIds.has(id); n++) id = base + n;
+      modeIds.add(id);
+      return { name, id };
     };
-    const L = [`// ${HEADER}`, "import SwiftUI"];
-    for (const c of cols) {
-      L.push("", `// Figma collection "${c.name}"`);
-      if (c.modes.length === 1) {
-        L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${f.source}`), "}");
-        continue;
-      }
-      L.push(
-        `public struct ${c.type}: Sendable, Equatable {`,
-        ...c.fields.map((f) => `    public let ${f.id}: ${T[f.kind]} // ${f.source}`),
-        "",
-        `    public init(${c.fields.map((f) => `${f.id}: ${T[f.kind]}`).join(", ")}) {`,
-        ...c.fields.map((f) => `        self.${f.id} = ${f.id}`),
-        "    }"
-      );
-      for (const m of c.modes) L.push("", `    public static let ${m.id} = ${c.type}(`, c.fields.map((f) => `        ${f.id}: ${lit(f.kind, valueIn(f, m.name))}`).join(",\n"), "    )");
-      const env = c.type.charAt(0).toLowerCase() + c.type.slice(1);
-      const defId = c.defaultId;
-      L.push(
-        "}",
-        "",
-        `private struct ${c.type}Key: EnvironmentKey { static let defaultValue = ${c.type}.${defId} }`,
-        "public extension EnvironmentValues {",
-        `    // Set once near the root: .environment(\\.${env}, ${swiftModeHint(c)}); read with @Environment(\\.${env}).`,
-        `    var ${env}: ${c.type} {`,
-        `        get { self[${c.type}Key.self] }`,
-        `        set { self[${c.type}Key.self] = newValue }`,
-        "    }",
-        "}"
-      );
+    const modes = [modeOf(firstModeName), ...otherModeNames.map(modeOf)];
+    const defMode = modes.find((m) => m.name === String(c.default)) ?? modes[0];
+    out.push({ name: c.name, type, modes, default: defMode.name, defaultId: defMode.id, fields });
+  }
+  return out;
+}
+var num = (raw) => {
+  const n = Number(raw);
+  return Number.isFinite(n) ? String(Math.round(n * 1e4) / 1e4) : "0";
+};
+var str = (raw) => JSON.stringify(String(raw));
+var bool = (raw) => String(raw === true || raw === "true");
+var hexOf = (raw) => {
+  const h = normHex(raw);
+  if (h === null) throw new Error(`tokens-native: colour value ${JSON.stringify(raw)} was not validated`);
+  return h;
+};
+var argb = (raw) => {
+  const h = hexOf(raw);
+  return "0x" + (h.length === 9 ? h.slice(7) + h.slice(1, 7) : "ff" + h.slice(1)).toUpperCase();
+};
+var valueIn = (f, mode) => {
+  const r = f.values[mode];
+  if (r === void 0) throw new Error(`tokens-native: field ${f.id} has no value for mode ${JSON.stringify(mode)}`);
+  return r;
+};
+var HEADER = "GENERATED by Design Twin (tokens.js --native) from design-system/tokens.json \u2014 do not edit by hand; re-run after a token pull.";
+function compose(cols, opts) {
+  const T = { color: "Color", dimension: "Dp", fontSize: "TextUnit", number: "Float", bool: "Boolean", string: "String" };
+  const lit = (k, r) => r === FULL ? k === "fontSize" ? "9999.sp" : k === "number" ? "9999f" : "9999.dp /* Figma 'fully rounded' \u2014 use CircleShape */" : k === "color" ? `Color(${argb(r)})` : k === "dimension" ? `${num(r)}.dp` : k === "fontSize" ? `${num(r)}.sp` : k === "number" ? `${num(r)}f` : k === "bool" ? bool(r) : str(r).replace(/\$/g, "\\$");
+  const L = [
+    `// ${HEADER}`,
+    `package ${opts && opts.package || "design.tokens"}`,
+    "",
+    "import androidx.compose.runtime.Immutable",
+    "import androidx.compose.runtime.staticCompositionLocalOf",
+    "import androidx.compose.ui.graphics.Color",
+    "import androidx.compose.ui.unit.Dp",
+    "import androidx.compose.ui.unit.TextUnit",
+    "import androidx.compose.ui.unit.dp",
+    "import androidx.compose.ui.unit.sp"
+  ];
+  for (const c of cols) {
+    L.push("", `// Figma collection "${c.name}"`);
+    const [m0, m1] = c.modes;
+    if (m1 === void 0) {
+      L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, m0.name))} // ${f.source}`), "}");
+      continue;
     }
-    return L.join("\n") + "\n";
+    L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
+    for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
+    const active = c.modes.find((m) => m.name !== c.default) ?? m1;
+    L.push(
+      "",
+      `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([active.id])}) { \u2026 }`,
+      `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`
+    );
   }
-  function flutter(cols) {
-    const T = { color: "Color", dimension: "double", fontSize: "double", number: "double", bool: "bool", string: "String" };
-    const lit = (k, r) => r === FULL ? "double.infinity" : k === "color" ? `Color(${argb(r)})` : k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\$/g, "\\$") : num(r);
-    const lerp = (f) => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
-    const L = [`// ${HEADER}`, "// ignore_for_file: constant_identifier_names", "import 'dart:ui' show lerpDouble;", "", "import 'package:flutter/material.dart';"];
-    for (const c of cols) {
-      L.push("", `/// Figma collection "${c.name}"`);
-      if (c.modes.length === 1) {
-        L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, valueIn(f, c.modes[0].name))}; // ${f.source}`), "}");
-        continue;
-      }
-      L.push(
-        `/// Register per theme: ThemeData(extensions: [${c.type}.${c.modes[0].id}]); read: Theme.of(context).extension<${c.type}>()!`,
-        "@immutable",
-        `class ${c.type} extends ThemeExtension<${c.type}> {`,
-        `  const ${c.type}({`,
-        ...c.fields.map((f) => `    required this.${f.id},`),
-        "  });",
-        "",
-        ...c.fields.map((f) => `  final ${T[f.kind]} ${f.id}; // ${f.source}`)
-      );
-      for (const m of c.modes) L.push("", `  static const ${m.id} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  );");
-      L.push(
-        "",
-        "  @override",
-        `  ${c.type} copyWith({`,
-        ...c.fields.map((f) => `    ${T[f.kind]}? ${f.id},`),
-        "  }) {",
-        `    return ${c.type}(`,
-        ...c.fields.map((f) => `      ${f.id}: ${f.id} ?? this.${f.id},`),
-        "    );",
-        "  }",
-        "",
-        "  @override",
-        `  ${c.type} lerp(ThemeExtension<${c.type}>? other, double t) {`,
-        `    if (other is! ${c.type}) return this;`,
-        `    return ${c.type}(`,
-        ...c.fields.map((f) => `      ${f.id}: ${lerp(f)},`),
-        "    );",
-        "  }",
-        "}"
-      );
+  return L.join("\n") + "\n";
+}
+function swiftModeHint(c) {
+  const ids = c.modes.map((m) => m.id);
+  if (ids.includes("light") && ids.includes("dark")) return "colorScheme == .dark ? .dark : .light" + (ids.length > 2 ? ` /* also: ${ids.filter((i) => i !== "light" && i !== "dark").map((i) => "." + i).join(", ")} */` : "");
+  return `.${(c.modes.find((m) => m.name !== c.default) || c.modes[0]).id} /* one of: ${ids.map((i) => "." + i).join(", ")} \u2014 the app picks */`;
+}
+function swiftui(cols) {
+  const T = { color: "Color", dimension: "CGFloat", fontSize: "CGFloat", number: "Double", bool: "Bool", string: "String" };
+  const chan = (h, i) => num(parseInt(h.slice(i, i + 2), 16) / 255);
+  const lit = (k, r) => {
+    if (r === FULL) return ".infinity";
+    if (k === "color") {
+      const h = hexOf(r);
+      return `Color(.sRGB, red: ${chan(h, 1)}, green: ${chan(h, 3)}, blue: ${chan(h, 5)}, opacity: ${h.length === 9 ? chan(h, 7) : "1"})`;
     }
-    return L.join("\n") + "\n";
-  }
-  function reactNative(cols) {
-    const T = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
-    const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str(hexOf(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
-    const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
-    for (const c of cols) {
-      const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
-      L.push("", `/** Figma collection "${c.name}" */`);
-      if (c.modes.length === 1) {
-        L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, valueIn(f, c.modes[0].name))}, // ${f.source}`), "} as const;");
-        continue;
-      }
-      L.push(
-        `export interface ${c.type} {`,
-        ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${f.source}`),
-        "}",
-        "",
-        `export type ${c.type}Mode = ${c.modes.map((m) => str(m.id)).join(" | ")};`,
-        `export const ${v}DefaultMode: ${c.type}Mode = ${str(c.defaultId)};`,
-        "",
-        `export const ${v}: Record<${c.type}Mode, ${c.type}> = {`
-      );
-      for (const m of c.modes) L.push(`  ${m.id}: {`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  },");
-      L.push("};");
+    return k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\\u([0-9a-fA-F]{4})/g, "\\u{$1}") : num(r);
+  };
+  const L = [`// ${HEADER}`, "import SwiftUI"];
+  for (const c of cols) {
+    L.push("", `// Figma collection "${c.name}"`);
+    if (c.modes.length === 1) {
+      L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${f.source}`), "}");
+      continue;
     }
-    return L.join("\n") + "\n";
+    L.push(
+      `public struct ${c.type}: Sendable, Equatable {`,
+      ...c.fields.map((f) => `    public let ${f.id}: ${T[f.kind]} // ${f.source}`),
+      "",
+      `    public init(${c.fields.map((f) => `${f.id}: ${T[f.kind]}`).join(", ")}) {`,
+      ...c.fields.map((f) => `        self.${f.id} = ${f.id}`),
+      "    }"
+    );
+    for (const m of c.modes) L.push("", `    public static let ${m.id} = ${c.type}(`, c.fields.map((f) => `        ${f.id}: ${lit(f.kind, valueIn(f, m.name))}`).join(",\n"), "    )");
+    const env = c.type.charAt(0).toLowerCase() + c.type.slice(1);
+    const defId = c.defaultId;
+    L.push(
+      "}",
+      "",
+      `private struct ${c.type}Key: EnvironmentKey { static let defaultValue = ${c.type}.${defId} }`,
+      "public extension EnvironmentValues {",
+      `    // Set once near the root: .environment(\\.${env}, ${swiftModeHint(c)}); read with @Environment(\\.${env}).`,
+      `    var ${env}: ${c.type} {`,
+      `        get { self[${c.type}Key.self] }`,
+      `        set { self[${c.type}Key.self] = newValue }`,
+      "    }",
+      "}"
+    );
   }
-  const EMIT = { compose, swiftui, flutter, "react-native": reactNative };
-  function platformOf2(name) {
-    const key = String(name || "").toLowerCase();
-    const p = PROFILE_ALIASES[key] || key;
-    return PLATFORMS2[p] ? p : null;
+  return L.join("\n") + "\n";
+}
+function flutter(cols) {
+  const T = { color: "Color", dimension: "double", fontSize: "double", number: "double", bool: "bool", string: "String" };
+  const lit = (k, r) => r === FULL ? "double.infinity" : k === "color" ? `Color(${argb(r)})` : k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\$/g, "\\$") : num(r);
+  const lerp = (f) => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
+  const L = [`// ${HEADER}`, "// ignore_for_file: constant_identifier_names", "import 'dart:ui' show lerpDouble;", "", "import 'package:flutter/material.dart';"];
+  for (const c of cols) {
+    L.push("", `/// Figma collection "${c.name}"`);
+    if (c.modes.length === 1) {
+      L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, valueIn(f, c.modes[0].name))}; // ${f.source}`), "}");
+      continue;
+    }
+    L.push(
+      `/// Register per theme: ThemeData(extensions: [${c.type}.${c.modes[0].id}]); read: Theme.of(context).extension<${c.type}>()!`,
+      "@immutable",
+      `class ${c.type} extends ThemeExtension<${c.type}> {`,
+      `  const ${c.type}({`,
+      ...c.fields.map((f) => `    required this.${f.id},`),
+      "  });",
+      "",
+      ...c.fields.map((f) => `  final ${T[f.kind]} ${f.id}; // ${f.source}`)
+    );
+    for (const m of c.modes) L.push("", `  static const ${m.id} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  );");
+    L.push(
+      "",
+      "  @override",
+      `  ${c.type} copyWith({`,
+      ...c.fields.map((f) => `    ${T[f.kind]}? ${f.id},`),
+      "  }) {",
+      `    return ${c.type}(`,
+      ...c.fields.map((f) => `      ${f.id}: ${f.id} ?? this.${f.id},`),
+      "    );",
+      "  }",
+      "",
+      "  @override",
+      `  ${c.type} lerp(ThemeExtension<${c.type}>? other, double t) {`,
+      `    if (other is! ${c.type}) return this;`,
+      `    return ${c.type}(`,
+      ...c.fields.map((f) => `      ${f.id}: ${lerp(f)},`),
+      "    );",
+      "  }",
+      "}"
+    );
   }
-  function toNative2(designSystem, platform, opts) {
-    const p = platformOf2(platform);
-    if (!p) throw new Error(`unknown native platform "${String(platform)}" \u2014 use one of: ${Object.keys(PLATFORMS2).join(", ")}`);
-    const warnings = [];
-    const cols = model(designSystem, warnings, opts);
-    const target = PLATFORMS2[p], emit = EMIT[p];
-    if (target === void 0 || emit === void 0) throw new Error(`tokens-native: platform "${p}" has no emitter`);
-    return { file: target.file, text: emit(cols, opts), warnings };
+  return L.join("\n") + "\n";
+}
+function reactNative(cols) {
+  const T = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
+  const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str(hexOf(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
+  const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
+  for (const c of cols) {
+    const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
+    L.push("", `/** Figma collection "${c.name}" */`);
+    if (c.modes.length === 1) {
+      L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, valueIn(f, c.modes[0].name))}, // ${f.source}`), "} as const;");
+      continue;
+    }
+    L.push(
+      `export interface ${c.type} {`,
+      ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${f.source}`),
+      "}",
+      "",
+      `export type ${c.type}Mode = ${c.modes.map((m) => str(m.id)).join(" | ")};`,
+      `export const ${v}DefaultMode: ${c.type}Mode = ${str(c.defaultId)};`,
+      "",
+      `export const ${v}: Record<${c.type}Mode, ${c.type}> = {`
+    );
+    for (const m of c.modes) L.push(`  ${m.id}: {`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  },");
+    L.push("};");
   }
-  return { toNative: toNative2, platformOf: platformOf2, PLATFORMS: PLATFORMS2 };
+  return L.join("\n") + "\n";
+}
+var EMIT = { compose, swiftui, flutter, "react-native": reactNative };
+function platformOf(name) {
+  const key = String(name || "").toLowerCase();
+  const p = PROFILE_ALIASES[key] || key;
+  return PLATFORMS[p] ? p : null;
+}
+function toNative(designSystem, platform, opts) {
+  const p = platformOf(platform);
+  if (!p) throw new Error(`unknown native platform "${String(platform)}" \u2014 use one of: ${Object.keys(PLATFORMS).join(", ")}`);
+  const warnings = [];
+  const cols = model(designSystem, warnings, opts);
+  const target = PLATFORMS[p], emit = EMIT[p];
+  if (target === void 0 || emit === void 0) throw new Error(`tokens-native: platform "${p}" has no emitter`);
+  return { file: target.file, text: emit(cols, opts), warnings };
 }
 
 // bridge/src/hash.ts
@@ -879,16 +932,6 @@ var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every ver
 // design-to-code/tokens.ts
 var isLeaf = (n) => n !== void 0 && n.$value !== void 0;
 var round = (x) => Math.round(x * 1e4) / 1e4;
-var segsCache = /* @__PURE__ */ new Map();
-function segs(name) {
-  const key = String(name || "");
-  let v = segsCache.get(key);
-  if (v === void 0) {
-    v = key.split("/").map((s) => s.trim().replace(/[.{}$]/g, "").replace(/\s+/g, "-")).filter(Boolean);
-    segsCache.set(key, v);
-  }
-  return v;
-}
 var dtcgRef = (tokenName) => "{" + segs(tokenName).join(".") + "}";
 var varNameCache = /* @__PURE__ */ new Map();
 var cssVarName = (tokenName) => {
@@ -1024,19 +1067,7 @@ function collisionMessages(notes, opts) {
   }
   return out;
 }
-var SENTINEL_MIN = 1e4;
 var WEB_FULL_ROUND = 9999;
-function isRadiusVar(v) {
-  const scopes = v.scopes || [];
-  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
-  if (narrowed) return scopes.includes("CORNER_RADIUS");
-  return /radius|corner|round/i.test(String(v.collection || "") + "/" + v.name);
-}
-function isSentinel(v, raw) {
-  if (!v || v.type !== "FLOAT" || isAlias(raw)) return false;
-  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
-  return Number.isFinite(n) && Math.abs(n) >= SENTINEL_MIN && isRadiusVar(v);
-}
 var webNumber = (v, raw) => isSentinel(v, raw) ? WEB_FULL_ROUND : raw;
 var isHexish = (v) => typeof v === "string" && /^#/.test(v);
 var isScalar = (v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean";
@@ -1086,19 +1117,6 @@ function hexToColorValue(hex, colorProfile) {
 var DTCG_TYPE = { COLOR: "color", FLOAT: "number", STRING: "string" };
 var EMITTED_TYPES = /* @__PURE__ */ new Set(["COLOR", "FLOAT", "STRING", "BOOLEAN"]);
 var emitted = (v) => EMITTED_TYPES.has(v.type);
-function defaultModeName(variable, collections) {
-  const c = (collections || []).find((x) => x.name === variable.collection);
-  const modes = variable.values ? Object.keys(variable.values) : [];
-  if (c && c.default && modes.includes(c.default)) return c.default;
-  return modes[0];
-}
-function baseValue(variable, collections, def) {
-  const values = variable.values || {};
-  if (def === void 0) def = defaultModeName(variable, collections);
-  if (def !== void 0 && values[def] !== void 0) return values[def];
-  const firstDefined = Object.keys(values).find((m) => values[m] !== void 0);
-  return firstDefined !== void 0 ? values[firstDefined] : void 0;
-}
 function dtcgValue(raw, colorProfile, dimension, ref) {
   if (isAlias(raw)) return ref ? ref(raw.aliasOf) : dtcgRef(raw.aliasOf);
   if (isComposed(raw)) {
@@ -1263,26 +1281,6 @@ function toDTCG(designSystem, warnings, opts, notes) {
   if (notes) notes.push(...plan.notes);
   else for (const m of collisionMessages(plan.notes, opts)) warn(m);
   return tree;
-}
-var UNITLESS_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY", "FONT_WEIGHT"]);
-var UNITLESS_NAME_SEGMENTS = /* @__PURE__ */ new Set(["opacity", "fontweight"]);
-function unitlessName(name) {
-  return segs(name).some((seg) => UNITLESS_NAME_SEGMENTS.has(seg.replace(/[-_ ]/g, "").toLowerCase()));
-}
-function scopesSayUnitless(scopes) {
-  return !!scopes.length && scopes.every((s) => UNITLESS_SCOPES.has(s));
-}
-function unitDecision(variable, opts) {
-  if (opts && opts.unitless && opts.unitless.has && opts.unitless.has(variable.name)) return "override";
-  const scopes = variable.scopes || [];
-  if (scopesSayUnitless(scopes)) return "scopes";
-  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
-  if (!narrowed && unitlessName(variable.name)) return "name";
-  return "px";
-}
-var PERCENT_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY"]);
-function percentOpacity(variable, opts) {
-  return variable.type === "FLOAT" && unitDecision(variable, opts) === "scopes" && (variable.scopes || []).every((s) => PERCENT_SCOPES.has(s));
 }
 function numberUnit(variable, opts) {
   if (percentOpacity(variable, opts)) return "%";
@@ -1745,7 +1743,6 @@ function emitTokens(designSystem, opts) {
   lintNames(designSystem, opts, warnings);
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
-var { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity });
 var canonJson = (x) => {
   if (Array.isArray(x)) return "[" + x.map(canonJson).join(",") + "]";
   if (x && typeof x === "object") {
@@ -1782,12 +1779,12 @@ function lookupColor(ds, query) {
   const byName = /* @__PURE__ */ new Map();
   for (const v of ds.variables || []) getOrInit(byName, v.name, () => []).push(v);
   const target = (name, referrer) => (byName.get(name) || []).slice().sort((a, b) => Number(b.collection === referrer.collection) - Number(a.collection === referrer.collection) || cmpStr(a.key ?? "", b.key ?? ""))[0];
-  const resolve = (v, mode, via) => {
+  const resolve2 = (v, mode, via) => {
     if (via.length > 20) return null;
     const raw = v.values[mode] !== void 0 ? v.values[mode] : baseValue(v, collections);
     if (isAlias(raw)) {
       const t = target(raw.aliasOf, v);
-      return t && t.type === "COLOR" ? resolve(t, mode, [...via, raw.aliasOf]) : null;
+      return t && t.type === "COLOR" ? resolve2(t, mode, [...via, raw.aliasOf]) : null;
     }
     const hex = isHexish(raw) ? normHex(raw) : null;
     return hex === null ? null : { hex, via };
@@ -1796,7 +1793,7 @@ function lookupColor(ds, query) {
   for (const v of ds.variables || []) {
     if (v.type !== "COLOR") continue;
     for (const mode of Object.keys(v.values || {})) {
-      const r = resolve(v, mode, []);
+      const r = resolve2(v, mode, []);
       if (r && same(r.hex)) hits.push({ name: v.name, collection: v.collection ?? "(no collection)", mode, hex: r.hex, via: r.via });
     }
   }
@@ -1974,17 +1971,14 @@ ${USAGE}`);
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
-  PLATFORMS,
   TW_PREFIX,
   WEB_FULL_ROUND,
   cssVarName,
   emitTokens,
   hexToColorValue,
   lintTokens,
-  platformOf,
   toCSS,
   toDTCG,
-  toNative,
   toResolver,
   toTailwind
 };
