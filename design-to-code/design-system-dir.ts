@@ -47,7 +47,9 @@ function readDesignSystemDir(dir: string): DesignSystemDir {
 // ---------------------------------------------------------------- libraries/ beside the export
 /** One --as-library export listed in <export>/libraries/index.json. */
 export interface LibraryExport {
-  /** the directory as a path the user can pass back (`--design-system <rel>`) */
+  /** the directory as a path the user can pass back (`--design-system <rel>`): `/`-separated on every OS, which node
+   *  takes on Windows too, so a printed re-run hint survives Git Bash (it would eat unquoted `\`) and the report's
+   *  catalog label is the same on every OS */
   rel: string;
   name: string;
   collectionKeys: string[];
@@ -78,7 +80,7 @@ function findLibraryExports(screenFile: string | undefined, dsDir: string | unde
   return index.libraries
     .filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)) // a directory NAME, never a path out of libraries/
     .map((r) => {
-      const rel = path.join(root, LIBRARIES_DIR, r.dir);
+      const rel = path.join(root, LIBRARIES_DIR, r.dir).split(path.sep).join("/");
       return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path.join(rel, LIBRARY_COMPONENTS), isComponentsCatalog) };
     });
 }

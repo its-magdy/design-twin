@@ -1055,7 +1055,7 @@ export async function closeCapped(b: Pick<Browser, "newBrowserCDPSession" | "clo
 }
 /** SIGKILL this process's browser children (chromium / headless_shell) — the last step of closeCapped. A POSIX-only, best-effort
  *  fallback: on Windows, or where `ps -A -o pid=,ppid=,command=` is missing or fails (BusyBox), it does nothing and never throws
- *  (the wedged browser is then left as it is). Only DIRECT children of this process whose command names chrom/headless are
+ *  (the wedged browser is then left to Playwright's exit hook — see exitWhenDone). Only DIRECT children of this process whose command names chrom/headless are
  *  killed — never the user's own browser. Its `ps` is capped at PS_CAP_MS, which the behaviour reserve includes. */
 function killBrowserChildren(): void {
   if (process.platform === "win32") return;
@@ -1409,6 +1409,17 @@ export async function main(argv: string[]): Promise<number> {
   return 0;
 }
 
+/** A browser told to quit can be slow to go, and Playwright's browser.close() then waits up to 30 s for it (a ref'd timer and
+ *  the browser's pipes), keeping this process up past --max-time — where killBrowserChildren kills nothing (Windows), every
+ *  time. So a process still up EXIT_GRACE_MS after main is done exits, stdio flushed first (process.exit drops what an async
+ *  pipe has not written yet): Playwright's exit hook then kills each browser this process launched that is still running
+ *  (taskkill /T /F on Windows, its process group on POSIX). A process that drains on its own never reaches the timer. */
+const EXIT_GRACE_MS = 1_000;
+function exitWhenDone(code: number): void {
+  process.exitCode = code;
+  setTimeout(() => process.stderr.write("", () => process.stdout.write("", () => process.exit(code))), EXIT_GRACE_MS).unref();
+}
+
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e: unknown) => { console.error(`verify-probe: ${errMsg(e)}`); process.exitCode = 1; });
+  main(process.argv.slice(2)).then(exitWhenDone, (e: unknown) => { console.error(`verify-probe: ${errMsg(e)}`); exitWhenDone(1); });
 }

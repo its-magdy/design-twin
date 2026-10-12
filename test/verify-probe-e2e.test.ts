@@ -20,6 +20,7 @@ import { isJsonObject } from "../design-to-code/types.ts";
 import { freeHoverPoint } from "../design-to-code/probe-page.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
+import { POSIX_SH } from "./posix-sh.ts";
 import { runNode, type Run } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
@@ -292,21 +293,27 @@ check("after close: status `measured` rev 2 by verify-probe, measuredSha256 = sh
   && st8.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(stage + ".measured.json")).digest("hex") && m8?.runId === "run-e2e-1");
 check("the status is the verify dir's (live, run cache), not in the --out staging dir, and not in design/verify until done; no tmp files left", !fs.existsSync(stage + ".status.json") && treeState(projDir) === treeBefore && fs.existsSync(path.dirname(stage)) && !fs.readdirSync(path.dirname(stage)).some((f) => f.includes(".tmp-")));
 
+// The two refused-write blocks make a directory read-only with chmod; on Windows that refuses nothing.
+const NO_READONLY_DIRS = process.platform === "win32" ? "mode bits do not make a directory read-only on Windows — chmod 0o555 / 0o000 refuses nothing" : null;
+
 // M-a: the run cache turns read-only while the page is measured — the `measured` status write is refused: the
 // measured file stays, exit 0, and a warning names the --status command that records it
-const cache10 = path.dirname(liveFile);
-const stage10 = path.join(tmp, "stage10", "Staff");
-onPage = () => fs.chmodSync(cache10, 0o555);
-const r10 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stage10, "--project", ROOT, "--run", "run-e2e-10"]);
-onPage = null;
-fs.chmodSync(cache10, 0o755);
-const st10 = readStatus(liveFile);
-check("a refused post-measure status write → exit 0, the measured file stays, a warning naming the cache and `--status Staff --phase measured --run run-e2e-10`, no stack",
-  r10.status === 0 && fs.existsSync(stage10 + ".measured.json") && /warning {2}run cache \S+ is not writable \(sandbox write scope\?\)/.test(r10.stderr)
-  && /--status Staff --phase measured --run run-e2e-10 --dir /.test(r10.stderr) && !/\n\s+at /.test(r10.stderr) && st10?.phase === "measuring" && st10.runId === "run-e2e-10");
-if (r10.status !== 0) console.log(r10.stderr);
-check("…the warning says which write was refused and that the live status still says measuring (compare: incomplete)",
-  /the run cache refused the probe's `measured` status write for run run-e2e-10 — the live status still says measuring/.test(r10.stderr));
+if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused post-measure status write — ${NO_READONLY_DIRS})`);
+else {
+  const cache10 = path.dirname(liveFile);
+  const stage10 = path.join(tmp, "stage10", "Staff");
+  onPage = () => fs.chmodSync(cache10, 0o555);
+  const r10 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stage10, "--project", ROOT, "--run", "run-e2e-10"]);
+  onPage = null;
+  fs.chmodSync(cache10, 0o755);
+  const st10 = readStatus(liveFile);
+  check("a refused post-measure status write → exit 0, the measured file stays, a warning naming the cache and `--status Staff --phase measured --run run-e2e-10`, no stack",
+    r10.status === 0 && fs.existsSync(stage10 + ".measured.json") && /warning {2}run cache \S+ is not writable \(sandbox write scope\?\)/.test(r10.stderr)
+    && /--status Staff --phase measured --run run-e2e-10 --dir /.test(r10.stderr) && !/\n\s+at /.test(r10.stderr) && st10?.phase === "measuring" && st10.runId === "run-e2e-10");
+  if (r10.status !== 0) console.log(r10.stderr);
+  check("…the warning says which write was refused and that the live status still says measuring (compare: incomplete)",
+    /the run cache refused the probe's `measured` status write for run run-e2e-10 — the live status still says measuring/.test(r10.stderr));
+}
 
 // the orchestrator ends the run while the page is measured → the probe writes no files, exits 2,
 // and the ended status stays (no measured.json or PNG written, no exit 0, no "next --compare")
@@ -323,32 +330,40 @@ if (rA1.status !== 2) console.log(rA1.stderr);
 // a project whose path holds a space, and a run cache refusing every status write of the run (measuring
 // too): the warning says no live status exists (compare: unrecorded); its recovery command and the `next` line
 // run as printed; the recovery records the measured file's sha
-const spaced = path.join(tmp, "staff app");
-const svdir = path.join(spaced, "design", "verify");
-fs.mkdirSync(svdir, { recursive: true });
-fs.mkdirSync(path.join(spaced, "node_modules"));
-fs.writeFileSync(path.join(spaced, "package.json"), "{\"name\":\"staff-app\",\"private\":true}\n");
-fs.copyFileSync(expected, path.join(svdir, "Staff.expected.json"));
-const sBase = path.join(svdir, "Staff");
-const sLive = liveStatusFile(sBase);
-const sStage = stageDirOf(sBase, "run-e2e-11");
-fs.mkdirSync(sStage, { recursive: true });
-fs.chmodSync(path.dirname(sLive), 0o555);
-const r11 = await probe(["--expected", path.join(svdir, "Staff.expected.json"), "--url", url(), "--out", path.join(sStage, "Staff"), "--project", ROOT, "--run", "run-e2e-11"]);
-fs.chmodSync(path.dirname(sLive), 0o755);
-const recovery = /with: (node .*--phase measured --run run-e2e-11 --dir .*)$/m.exec(r11.stderr)?.[1] ?? "";
-check("every status write refused → exit 0, the warning says no live status exists and --compare will report the run as unrecorded",
-  r11.status === 0 && !fs.existsSync(sLive) && /no live status of the run exists, so --compare will report the run as unrecorded/.test(r11.stderr) && recovery !== "");
-if (r11.status !== 0) console.log(r11.stderr);
-const next11 = /^next {2}(.+)$/m.exec(r11.stderr)?.[1] ?? "";
-const c11 = spawnSync("/bin/sh", ["-c", next11], { cwd: os.tmpdir(), encoding: "utf8" });
-check("the printed `next` --compare runs as printed from another directory (paths with a space) → incomplete: 'no status of that run records it'",
-  c11.status === 1 && /no status of that run records it/.test(fs.existsSync(path.join(sStage, "Staff.report.json")) ? fs.readFileSync(path.join(sStage, "Staff.report.json"), "utf8") : ""));
-const rec11 = spawnSync("/bin/sh", ["-c", recovery], { cwd: os.tmpdir(), encoding: "utf8" });
-const st11 = readStatus(sLive);
-check("the printed recovery runs as printed → status measured, measuredSha256 = the staged measured file",
-  rec11.status === 0 && st11?.phase === "measured" && st11.runId === "run-e2e-11" && st11.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(path.join(sStage, "Staff.measured.json"))).digest("hex"));
-if (rec11.status !== 0) console.log(rec11.stderr);
+if (NO_READONLY_DIRS !== null) console.log(`  (skipped: every status write refused, its recovery and next commands — ${NO_READONLY_DIRS})`);
+else {
+  const spaced = path.join(tmp, "staff app");
+  const svdir = path.join(spaced, "design", "verify");
+  fs.mkdirSync(svdir, { recursive: true });
+  fs.mkdirSync(path.join(spaced, "node_modules"));
+  fs.writeFileSync(path.join(spaced, "package.json"), "{\"name\":\"staff-app\",\"private\":true}\n");
+  fs.copyFileSync(expected, path.join(svdir, "Staff.expected.json"));
+  const sBase = path.join(svdir, "Staff");
+  const sLive = liveStatusFile(sBase);
+  const sStage = stageDirOf(sBase, "run-e2e-11");
+  fs.mkdirSync(sStage, { recursive: true });
+  fs.chmodSync(path.dirname(sLive), 0o555);
+  const r11 = await probe(["--expected", path.join(svdir, "Staff.expected.json"), "--url", url(), "--out", path.join(sStage, "Staff"), "--project", ROOT, "--run", "run-e2e-11"]);
+  fs.chmodSync(path.dirname(sLive), 0o755);
+  const recovery = /with: (node .*--phase measured --run run-e2e-11 --dir .*)$/m.exec(r11.stderr)?.[1] ?? "";
+  check("every status write refused → exit 0, the warning says no live status exists and --compare will report the run as unrecorded",
+    r11.status === 0 && !fs.existsSync(sLive) && /no live status of the run exists, so --compare will report the run as unrecorded/.test(r11.stderr) && recovery !== "");
+  if (r11.status !== 0) console.log(r11.stderr);
+  if (POSIX_SH === null) console.log("(skipped: no sh on PATH — the printed commands are POSIX-shell quoted, run through Git Bash on Windows)");
+  else {
+    const sh = POSIX_SH;
+    const next11 = /^next {2}(.+)$/m.exec(r11.stderr)?.[1] ?? "";
+    const c11 = spawnSync(sh, ["-c", next11], { cwd: os.tmpdir(), encoding: "utf8" });
+    check("the printed `next` --compare runs as printed from another directory (paths with a space) → incomplete: 'no status of that run records it'",
+      c11.status === 1 && /no status of that run records it/.test(fs.existsSync(path.join(sStage, "Staff.report.json")) ? fs.readFileSync(path.join(sStage, "Staff.report.json"), "utf8") : ""));
+    // an empty recovery (no warning printed) would run as `sh -c ""` and pass on the probe's own status write
+    const rec11 = spawnSync(sh, ["-c", recovery], { cwd: os.tmpdir(), encoding: "utf8" });
+    const st11 = readStatus(sLive);
+    check("the printed recovery runs as printed → status measured, measuredSha256 = the staged measured file",
+      recovery !== "" && rec11.status === 0 && st11?.phase === "measured" && st11.runId === "run-e2e-11" && st11.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(path.join(sStage, "Staff.measured.json"))).digest("hex"));
+    if (rec11.status !== 0) console.log(rec11.stderr);
+  }
+}
 
 const bd = m1?.build;
 check("measured.build: the url, mode static, same-origin assets hashed (document + asset.js), git state of the project", bd !== undefined && bd.url === url() && bd.mode === "static" && bd.assets === 2

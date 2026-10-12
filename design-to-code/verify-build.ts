@@ -6,7 +6,8 @@
 // screen-builder agent): Claude Code ignores `hooks` in a plugin-shipped agent's frontmatter, so the
 // fan-out builder can only be gated from the plugin level.
 //
-// Only three things BLOCK (exit 2): an unexplained colour literal, a visible design node with no
+// Only three things BLOCK (exit 2; for a Claude Code payload — it has hook_event_name — a JSON
+// {decision: "block", reason} on stdout + exit 0, which survives PowerShell): an unexplained colour literal, a visible design node with no
 // anchor, and (web profiles) no `data-dt-node` tag at all. Everything else is a WARNING (exit 0): a
 // gate that blocks on correct reuse teaches users to lie to it. The colour check is a source check,
 // not a DOM check: only code is scanned (comments, prose strings and non-source files such as an
@@ -1592,6 +1593,8 @@ const USAGE = [
   "prose strings and .svg/.json/non-source files are not scanned); a visible design node with no anchor",
   "(itself or an ancestor) in anchors{}; and, on web profiles, no data-dt-node tag in any plan's files[]",
   "(opt out: \"tagging\": {\"off\": true, \"reason\": \"…\"}). Everything else is a warning (exit 0).",
+  "A Claude Code hook payload (it has hook_event_name) gets a block as {\"decision\":\"block\",\"reason\":…} on stdout",
+  "and exit 0 instead — a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
   "Hook mode checks the plans the stopping agent's transcript names; a transcript that names none checks nothing.",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<…>.report.json. First match wins:",
@@ -1684,6 +1687,12 @@ async function main(argv: string[]): Promise<number> {
     if (input.stop_hook_active) return 0; // avoid re-entrant loops on the same turn
   }
 
+  // A real Claude Code payload (it names its event) gets a block as a JSON decision on stdout + exit 0, not exit 2: under
+  // PowerShell (Windows without Git Bash runs shell-form hooks there) a native exit 2 reaches Claude Code as 1, a
+  // non-blocking error, so the gate would never block. The reason is everything printed to stderr, which exit 2 delivered.
+  const asDecision = typeof input.hook_event_name === "string";
+  const said: string[] = [];
+  const say = (s: string): void => { console.error(s); said.push(s); };
   const all: Array<{ p: PlanFile; cwd: string }> = [];
   let hookCwd: string | null = null, hookPlans: PlanFile[] | undefined;
   if (targets) {
@@ -1700,7 +1709,7 @@ async function main(argv: string[]): Promise<number> {
     const { plans, bad } = findPlans(cwd);
     hookCwd = cwd; hookPlans = plans;
     // A plan the hook cannot read is not checked — say so on every stop rather than skip it silently.
-    for (const b of bad) console.error(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
+    for (const b of bad) say(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
     const open = plans.filter((p) => isOpen(p, cwd));
     if (!open.length) return 0; // fast path
     const own = ownPlans(open, input, plans, cwd);
@@ -1719,19 +1728,20 @@ async function main(argv: string[]): Promise<number> {
     // the hook's own cwd has its plans parsed already (findPlans above); a plan named on the command line is found again
     const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : undefined)));
     const name = path.basename(p.file);
-    if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" — status is computed now (${scriptCmd("verify-build")} --status), never stored`);
+    if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" — status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
     if (res.blocking.length) blockedOut.push(`# ${name}`, ...res.blocking.map((m) => `  - ${m}`));
     const why = res.blocking.length ? "see below" : res.status.reasons[res.status.reasons.length - 1];
     lines.push(`verify-build: ${name}: hook ${res.blocking.length ? "BLOCKED" : "passed"} · computed status: ${res.status.status}${why ? ` — ${why}` : ""}`);
   }
-  for (const [w, names] of warned) console.error(`verify-build: warning (${names.join(", ")}): ${w}`);
-  for (const l of lines) console.error(l);
+  for (const [w, names] of warned) say(`verify-build: warning (${names.join(", ")}): ${w}`);
+  for (const l of lines) say(l);
   if (blockedOut.length) {
-    console.error("\nverify-build: build-screen check failed — do not report this screen as done until these are resolved");
-    console.error("(a plan that will not be finished: set its status to \"abandoned\"; a build paused on a question for the user: \"awaiting-user\", then ask):\n");
-    console.error(blockedOut.join("\n"));
-    return 2;
+    say("\nverify-build: build-screen check failed — do not report this screen as done until these are resolved");
+    say("(a plan that will not be finished: set its status to \"abandoned\"; a build paused on a question for the user: \"awaiting-user\", then ask):\n");
+    say(blockedOut.join("\n"));
+    if (!asDecision) return 2;
+    console.log(JSON.stringify({ decision: "block", reason: said.join("\n") }));
   }
   return 0;
 }

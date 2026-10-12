@@ -204,7 +204,8 @@ dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next }] }
 1. **Node.js** version against this package's `engines`.
 2. **Bridge token** — saved or not, where, loose file permissions, and whether `FIGMA_BRIDGE_TOKEN` is
    shadowing the saved one. Fingerprint only, never the token.
-3. **Daemon** — running or not, and which files are connected to it.
+3. **Daemon** — running or not, and which files are connected to it (on Windows: a note that it is not
+   supported there, and why).
 4. **Port** (`FIGMA_BRIDGE_PORT`, one of 8787/8788/8789) — free, held by the daemon, held by another
    bridge (almost always the MCP server), or held by something unrelated.
 5. **Figma plugin** — can it actually connect? If a plugin is running with a *different* token, doctor
@@ -671,6 +672,14 @@ started with different values (a terminal, and an MCP server launched by an app)
 A daemon started by an earlier dtwin version listens at `$TMPDIR/designtwin-<port>.sock`: `--stop`
 stops it too, and a port-in-use error names that socket.
 
+> **Not on Windows (yet).** There the socket would be a named pipe, and Node cannot make one private to
+> your account (nor let a client check who created it), so another user on the machine could pose as the
+> daemon. So on Windows `--serve` and `--stop` refuse with that reason (exit 1), `--daemon-status`
+> reports no daemon, and nothing shares the bridge: one MCP session or `dtwin` command holds port 8787
+> at a time. A second one gets a port-in-use error saying so — close the other session (or let the
+> other command finish) and retry. `dtwin doctor` notes the daemon as unsupported. One-shot pulls and a
+> single MCP session work as everywhere else.
+
 Behaviour worth knowing:
 - Requests are **serialized**. The plugin is single-threaded and its heavy commands mutate shared
   per-run state (`serializeRun` in `bridge.ts`), so the daemon runs one at a time, in arrival order —
@@ -780,7 +789,9 @@ lexically or by real path), so a refused path never costs a read; a server start
 > The one holder that does NOT share is a plain one-shot `dtwin pull` with no daemon: while it runs,
 > another `dtwin` command that needs the port exits with `EADDRINUSE`, while an MCP server stays up and
 > only that tool call errors — retry it once the pull is done. `writeToDisk` is still the simplest way
-> to get files from inside an MCP session.
+> to get files from inside an MCP session. On Windows nothing shares the bridge (no daemon there — see
+> the `--serve` section): whichever session or command holds the port is the only one that can use it,
+> and the others' calls error until it is closed.
 
 **Look before you pull.** `figma_list_pages` (and `figma_list_children` to drill into one frame) return
 a cheap structural index — ids, names, types, sizes; no recursion, no assets, no node properties. Every
@@ -835,6 +846,8 @@ Pre-approve tools in `.claude/settings.json`:
   (later `dtwin` commands and MCP servers route through it); only a one-shot pull does not. A `dtwin`
   command that then finds the port taken exits immediately with a clear `EADDRINUSE` message; an MCP
   server stays up and that one tool call errors — retry it after the pull.
+- Windows: no daemon (`dtwin serve` / `stop` refuse) and no sharing — one MCP session or `dtwin` command
+  holds the bridge at a time; close the other one first.
 - Image assets travel as base64 (not JSON int-arrays) — ~3.5–4x smaller on the wire.
 - v1 sends each response as a single WebSocket frame. If you hit very large pages, add chunking
   (see ARCHITECTURE.md "chunk large payloads").

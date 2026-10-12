@@ -4,7 +4,7 @@
 // from the report compare() built (verify-compare.ts). A library: the CLI is verify-screen.ts.
 import type { BehaviourCheck, ReportBehaviour, ReportVisual, VerifyDelta, VerifyReport, VerifyReportV2 } from "./types.ts";
 import { getOrInit } from "./map-util.ts";
-import { fmt, pctText } from "./verify-shared.ts";
+import { fmt, pctText, scaleText } from "./verify-shared.ts";
 import { MATCH_BUCKETS, MATCH_LABEL, NAMES_LABEL, VISUAL_NOT_APPLICABLE } from "./verify-compare.ts";
 
 /** The census as "tag 3 · text 1 · ordinal 0 · position 0" (the four the probe always reports, then any other non-zero bucket). */
@@ -36,7 +36,7 @@ function visualMarkdown(v: ReportVisual): string[] {
     return L;
   }
   L.push(`${pctText(v.shiftTolerantPct ?? 0)}% of the compared pixels differ after the shift tolerance (${pctText(v.differingPct ?? 0)}% before it; anti-aliased edge pixels excluded) · ${v.regionsTotal ?? v.regions.length} hot region(s).`, "");
-  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale ?? "?"}x (geometry from the ${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
+  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale !== undefined ? scaleText(v.scale) : "?x"} (geometry from the ${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
   if (v.grid === "1x") L.push("Grid: **resampled to 1x** — the capture and the reference crop differ by more than 2 px, so both were resampled to the design size (up or down); resampling can hide a difference.", "");
   else if (v.grid) L.push("Grid: the reference's own pixel grid (the build rendered at the reference's scale).", "");
   if (v.reference && v.reference.colorProfile) L.push(`Colour profile: ${mdText(v.reference.colorProfile)} — colours are compared without colour management, so colour differences are unreliable.`, "");
