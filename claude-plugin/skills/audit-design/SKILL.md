@@ -68,7 +68,7 @@ for f in design/export/pages/*/*.json; do
   case "$f" in *.vars.json|*.assets.json|*/index.json) continue;; esac
   node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" "$f" --platform <platform> \
     --design-system design/export/design-system --json | \
-    python3 -c "import json,sys; d=json.load(sys.stdin); print(d['summary'], [x['code'] for x in d['findings'] if x['severity']=='blocker'])"
+    node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); console.log(JSON.stringify(d.summary), d.findings.filter((x) => x.severity === "blocker").map((x) => x.code))'
 done
 ```
 
@@ -146,7 +146,7 @@ report the pair once, not once per screen.
    ```
 
    **Don't pass `--out`.** It defaults to `design/audit/<Screen>__<id>` — the exact basename of the
-   screen file you just gave it, which write-out.ts already named `<LayerName>__<node-id>` — so this
+   screen file you just gave it, which the export already named `<LayerName>__<node-id>` — so this
    skill never has to invent a name, and re-auditing the same screen always overwrites the same
    report pair instead of adding a new one under whatever string was typed that time (which leaves one node
    with two byte-identical reports under different names). Pass `--out` explicitly only if the user asks for

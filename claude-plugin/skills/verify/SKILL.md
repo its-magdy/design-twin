@@ -32,13 +32,8 @@ S="<screen>"                                     # the export/plan base name, e.
 cat design/target.json                           # -> profile (always exists once init has run;
                                                  #    profile may be null, meaning nobody decided yet)
 ls design/plan/*.json                            # the plan may not be named after THIS screen
-python3 - <<'EOF'
-import json, glob
-for f in sorted(glob.glob("design/plan/*.json")):
-    d = json.load(open(f))
-    print(f, "->", d.get("screen"), "| target:", d.get("target"), "| files:", len(d.get("files", [])))
-EOF
-python3 -c "import json;i=json.load(open('design/export/pages/index.json'));print(*[(p['page'],p['index']) for p in i['pageDirs']],sep='\n')"
+node -e 'const fs = require("fs"); for (const f of fs.readdirSync("design/plan").filter((n) => n.endsWith(".json")).sort()) { const d = JSON.parse(fs.readFileSync("design/plan/" + f, "utf8")); console.log("design/plan/" + f, "->", d.screen, "| target:", JSON.stringify(d.target), "| files:", (d.files ?? []).length); }'
+node -e 'const i = JSON.parse(require("fs").readFileSync("design/export/pages/index.json", "utf8")); for (const p of i.pageDirs ?? []) console.log(p.page, p.index)'
 ```
 
 Five things to know before running the commands above:

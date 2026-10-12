@@ -6,7 +6,7 @@ themed or animated. The audit-design skill reads it too — it is the one field 
 described (and corrected) in exactly one place. For *which file to open*, see `export-layout.md`. For
 how a value becomes code on your stack, see the profile.
 
-<!-- quick-keys:start — the same text is written to design/export/SCHEMA.md; edit bridge/src/quick-keys.ts and paste here -->
+<!-- quick-keys:start -->
 ## Scripting quick keys
 
 Read these before writing ANY script against an export JSON (field names guessed from Figma's Plugin API are wrong).
