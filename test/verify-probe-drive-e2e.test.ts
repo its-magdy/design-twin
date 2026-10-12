@@ -48,6 +48,11 @@ const SLOW_NAV = [0, 120, 160, 200, 400, 1500] as const;
 const ownPxOut = (mode: string): string => out(`OwnPixels-${mode.replace(/[^\w-]/g, "_")}`);
 const ownPxRun = (mode: string): Promise<Run> => probe(["--expected", EXPECTED, "--url", edge(mode), "--out", ownPxOut(mode), "--max-time", "90000"]);
 console.log(`pool ${POOL} (DT_E2E_POOL to override)`);
+// own-content-3's 70:48 label sits 8000 elements deep (deeper than a recursive walk survives). On Windows chromium crashes
+// loading any DOM 2000 deep (page.goto: Page crashed, before the probe runs), so there the label sits 1 deep: the page's
+// other checks still run, and the depth check is skipped with this reason.
+const NO_DEEP_DOM = process.platform === "win32" ? "chromium on Windows crashes loading a DOM 2000+ elements deep (page.goto: Page crashed) — before the probe runs" : null;
+const OWN_CONTENT_3 = NO_DEEP_DOM === null ? "own-content-3" : "own-content-3&depth=1";
 const P = {
   // the main run again with the behaviour battery on (the longest run: first) — its check compares with main's
   bedsOn: q(() => probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, "--out", out("BedsOn"), "--behaviour", "on"])),
@@ -64,7 +69,7 @@ const P = {
   churnDomGoto: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("ChurnDomGoto"), "--steps", "steps-goto-churn.json", "--max-time", "60000"])),
   gotoHang: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("GotoHang"), "--steps", "steps-goto-hang.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"])),
   hangFirst: q(() => probe(["--expected", QUIET, "--url", edge("hang-first"), "--out", out("HangFirst"), "--steps", "steps-click-only.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"])),
-  ownContent3: q(() => probe(["--expected", EXPECTED, "--url", edge("own-content-3"), "--out", out("OwnContent3"), "--max-time", "90000"])),
+  ownContent3: q(() => probe(["--expected", EXPECTED, "--url", edge(OWN_CONTENT_3), "--out", out("OwnContent3"), "--max-time", "90000"])),
   // the run, then its --compare
   wide: q(async () => {
     const r5 = await probe(["--expected", EXPECTED, "--url", url("wide"), "--out", out("Wide"), "--steps", "steps.json", "--ready", READY, "--max-time", "30000"]);
@@ -340,9 +345,10 @@ check("a cell with an out-of-flow opacity-0 ::after tooltip (70:47), the plain c
 // own ::after over the whole cell is a painted pseudo of its own: its sole button is not taken for the opener's
 check("a cell painting a tint with its own empty ::after over the whole cell (70:46) → not driven by the pixels, ok:null naming its button",
   notDrivenFor(mO3, "70:46", "<button aria-label=\"Open bed\">") && /paints something of its own beside it/.test(ix(mO3, "70:46")?.detail ?? ""));
-check(`a card whose label is 8000 elements deep (70:48) → a clean refusal naming the Delete, no 'driving failed' (saw: ${ix(mO3, "70:48")?.detail ?? "no row"})`,
+if (NO_DEEP_DOM !== null) console.log(`  (skipped: a card whose label is 8000 elements deep — ${NO_DEEP_DOM})`);
+else check(`a card whose label is 8000 elements deep (70:48) → a clean refusal naming the Delete, no 'driving failed' (saw: ${ix(mO3, "70:48")?.detail ?? "no row"})`,
   notDrivenFor(mO3, "70:48", "<button aria-label=\"Delete bed\">"));
-const wO3 = writesOf(edge("own-content-3"));
+const wO3 = writesOf(edge(OWN_CONTENT_3));
 check(`the drive pressed no Delete (server saw: ${wO3.join(", ") || "nothing"})`, rO3.status === 0 && mO3 !== null && wO3.length === 0);
 
 // an activating control anywhere on the click point's path wins over a merely focusable element below it; an

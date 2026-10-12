@@ -438,8 +438,9 @@
       <div data-dt-node="70:49" style="display:inline-block;width:160px;height:44px;text-align:center"><button id="move" aria-label="Move bed" style="margin-top:8px">m</button></div>
       <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div>
     </div>`);
+    // &depth=N nests the label N deep instead (the e2e passes 1 on Windows, where chromium crashes loading a DOM that deep)
     let p = document.getElementById("deep-root");
-    for (let i = 0; i < 8000; i++) { const s = document.createElement("span"); p.appendChild(s); p = s; }
+    for (let i = 0, depth = Number(q.get("depth") ?? 8000); i < depth; i++) { const s = document.createElement("span"); p.appendChild(s); p = s; }
     p.textContent = "Feed bed";
     const show = () => { document.getElementById("fresh").hidden = false; };
     for (const id of ["off", "dot", "tn", "tp", "deep", "move"]) document.getElementById(id).addEventListener("click", show);
