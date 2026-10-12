@@ -1,5 +1,6 @@
 // png.ts — a small PNG codec for the visual diff: Node builtins only (node:zlib), so the shipped bundles stay
-// builtins-only and the pixels never go through a browser.
+// builtins-only and the pixels never go through a browser. It lives in bridge/src because the bridge reads a PNG's
+// size too (write-out.ts, via pngSize) and bridge/src never imports design-to-code; design-to-code imports it from here.
 //
 // Why not decode in Chromium: an <img> / createImageBitmap colour-manages gAMA / cHRM / iCCP by default,
 // a 2D canvas quantises alpha, and returning the pixels through page.evaluate takes 45 s (a number[]) or 4–5× the time of
@@ -11,7 +12,7 @@
 // is checked (W3C PNG 3 §5.3), the filters are §9 (None, Sub, Up, Average, Paeth). What it writes: RGB8, filter 0, deflate
 // level 1 (a mostly uniform diff image compresses well at level 1, and fast), CRC via zlib.crc32 (Node ≥ 22.2).
 import { crc32, deflateSync, inflateSync } from "node:zlib";
-import { errMsg } from "../bridge/src/errmsg.ts";
+import { errMsg } from "./errmsg.ts";
 
 /** RGBA8 pixels, row-major, w·h·4 bytes. */
 export interface Rgba { w: number; h: number; data: Uint8Array }
@@ -38,6 +39,15 @@ function chunks(b: Uint8Array): Chunk[] {
   }
   if (!out.length || out[0]?.type !== "IHDR") throw new PngError("not a PNG (no IHDR)");
   return out;
+}
+
+/** Width/height from the signature + IHDR header bytes alone, for a reader that only needs the size and must not reject a
+ *  PNG over a later chunk (no CRC check, no walk past IHDR — unlike pngInfo, which needs every chunk intact). null when the
+ *  bytes are not a PNG header. */
+export function pngSize(b: Uint8Array): { w: number; h: number } | null {
+  const buf = Buffer.from(b.buffer, b.byteOffset, b.byteLength);
+  if (buf.length < 24 || !buf.subarray(0, 8).equals(SIGNATURE) || buf.readUInt32BE(8) < 13 || buf.toString("latin1", 12, 16) !== "IHDR") return null;
+  return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
 }
 
 export interface PngInfo { w: number; h: number; colorType: number; bitDepth: number; interlace: number; srgb: boolean; gama: number | null; iccp: string | null }

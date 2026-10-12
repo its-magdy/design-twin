@@ -2,7 +2,7 @@
 // ${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js).
 //
 // Why a bundle and not a copy or a symlink: an installed plugin is ONLY the claude-plugin/ directory.
-// drift-lint.ts and get-component.ts import ../bridge/src/*.ts, which does not exist there, and a symlink
+// Many design-to-code modules import ../bridge/src/*.ts, which does not exist there, and a symlink
 // pointing outside the plugin directory is not installed at all — so either one ships a plugin whose
 // Stop hook and every scripts/ call fail. bundle:true inlines those imports, so each output file is
 // self-contained (Node builtins only).

@@ -11,7 +11,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Browser, Page } from "playwright";
 import * as PD from "../design-to-code/probe-drive.ts";
-import { decodePng } from "../design-to-code/png.ts";
+import { decodePng } from "../bridge/src/png.ts";
 import * as VP from "../design-to-code/verify-probe.ts";
 import { check, report } from "./assert.ts";
 
