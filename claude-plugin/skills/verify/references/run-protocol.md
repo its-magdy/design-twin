@@ -4,6 +4,10 @@ How one verify run reports progress, where its files live, and how it treats pro
 verify skill, the build-screen skill and the visual-verifier agent all follow this one copy. `<scripts>` below is
 the plugin's scripts folder — the skill or agent that sent you here gives its real path.
 
+For the visual-verifier, the plugin's PreToolUse hook (`scripts/verifier-guard.js`) refuses pattern kills,
+dependency and browser installs (reinstalls included) and `dangerouslyDisableSandbox` outright, so the rules below
+about those are written for the orchestrator and the builder, whose calls no hook checks.
+
 ## Contents
 - Status: one run, one id
 - Waiting on a run
@@ -135,8 +139,8 @@ servers and editors. Reuse a dev server the user already runs rather than starti
 
 ## Permission denials
 
-A permission denial is not a sandbox violation. Never set `dangerouslyDisableSandbox`, and never ask anyone to
-approve a bypass. Three kinds:
+A permission denial is not a sandbox violation. Never set `dangerouslyDisableSandbox`, and never ask the caller to
+approve a bypass (nor the user, when you are the orchestrator). Three kinds:
 
 - *Transient, no verdict* ("… is temporarily unavailable (…), so auto mode cannot determine the safety of …",
   "gave no verdict (timed out, …)", "could not evaluate this action … run with --debug"): wait a few seconds and
