@@ -90,7 +90,7 @@ The agent drives every designed row the probe does not — navigate, `change_to`
 overlay row the probe left `ok: null` — and names the components it judges genuinely absent. Results go in
 `<Screen>.evidence.json` — staged in the run's stage dir and published into `design/verify/` at `done`, never
 written there directly — an object `{"interactions": [...], "components": [{"setName", "present": false,
-"detail"}], "inferred": [...]}` that the caller passes to `--compare` as `--interactions` (a bare JSON array of
+"detail"}], "inferred": [...]}` (`inferred` is optional) that the caller passes to `--compare` as `--interactions` (a bare JSON array of
 interaction rows also works). They never go into `measured.json`.
 
 One result per `nodeId` + `trigger`: `{"nodeId", "trigger", "ok": true|false|null, "selector", "selectorCount",

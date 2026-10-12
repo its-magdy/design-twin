@@ -25,8 +25,9 @@ the tool, never by hand — the tool stamps `rev`, `at` and the file hashes itse
 node "<scripts>/verify-screen.js" --status <Screen> --phase <p> --run <id> [--detail "<one line>"]
 ```
 
-The first call of a run uses `--new-run` instead of `--run` and prints `run <id> rev <n>`; without `--run` a call
-only continues a run that has not ended. A run id is good for ONE pass: each verifier pass and each re-verify round
+Use the run id you were given. Only when you were given none does your first call use `--new-run` instead of `--run`
+(it prints `run <id> rev <n>`) — starting a new run while the caller holds an id forks it, and the caller's
+`--wait` then ends in exit 5. Without `--run` a call only continues a run that has not ended. A run id is good for ONE pass: each verifier pass and each re-verify round
 gets its own new run id. A run that ended (`done`, `failed`, `blocked`) takes no more writes, with or without
 `--run <id>` — `--status` and the probe's `--run` both refuse them (exit 2). If the id you were given has already
 ended, start a new run with `--new-run` and say so.
@@ -118,12 +119,13 @@ config.
 
 A throwaway script written to look at something goes in `node_modules/.cache/designtwin-verify/scratch/`
 (project-local, writable from the project root, created on demand) — never under `src/` or `design/`, where the
-project's linter, type-checker and dev server pick it up. Delete it when done. Write it with the Write tool, never
-a shell heredoc (`cat <<EOF`) or `node -e` (e.g. `scratch/drive.cjs`): Claude Code asks for approval of those for
-a script holding braces and quotes. The Write tool is allowed there by `Edit(node_modules/.cache/designtwin-verify/**)`
-— Claude Code checks file writes against `Edit(...)` rules only, so a `Write(...)` path rule is never consulted;
-that tree also holds the staged evidence — and running the script by
-`Bash(node node_modules/.cache/designtwin-verify/scratch/*)`.
+project's linter, type-checker and dev server pick it up. Delete it when done. Write it (e.g. `scratch/drive.cjs`)
+with the Write tool, never a shell heredoc (`cat <<EOF`) or `node -e`: Claude Code asks for approval of those for a
+script holding braces and quotes.
+
+Two allow rules cover this. `Edit(node_modules/.cache/designtwin-verify/**)` lets the Write tool write there (Claude
+Code checks file writes against `Edit(...)` rules only, so a `Write(...)` path rule is never consulted; the same tree
+holds the staged evidence). `Bash(node node_modules/.cache/designtwin-verify/scratch/*)` lets the script run.
 
 ## Processes
 
@@ -147,8 +149,8 @@ approve a bypass. Three kinds:
 
 Then write status phase `blocked` (detail = the denied command) and hand back "blocked on permissions: done /
 remaining", suggesting the user approve it or add a narrow allow rule for `node …/verify-probe.js` /
-`node …/verify-screen.js`, and `Edit(node_modules/.cache/designtwin-verify/**)` when a scratch script or staged
-evidence was denied.
+`node …/verify-screen.js`, and `Edit(node_modules/.cache/designtwin-verify/**)` plus
+`Bash(node node_modules/.cache/designtwin-verify/scratch/*)` when a scratch script or staged evidence was denied.
 
 ## Bounded runs
 

@@ -45,8 +45,8 @@ S="<screen>"                                     # the export/plan base name, e.
 cat design/target.json                           # -> profile (always exists once init has run;
                                                  #    profile may be null, meaning nobody decided yet)
 ls design/plan/*.json                            # the plan may not be named after THIS screen
-node -e 'const fs = require("fs"); for (const f of fs.readdirSync("design/plan").filter((n) => n.endsWith(".json")).sort()) { const d = JSON.parse(fs.readFileSync("design/plan/" + f, "utf8")); console.log("design/plan/" + f, "->", d.screen, "| target:", JSON.stringify(d.target), "| files:", (d.files ?? []).length); }'
-node -e 'const i = JSON.parse(require("fs").readFileSync("design/export/pages/index.json", "utf8")); for (const p of i.pageDirs ?? []) console.log(p.page, p.index)'
+node -e 'const fs = require("fs"); if (!fs.existsSync("design/plan")) process.exit(0); for (const f of fs.readdirSync("design/plan").filter((n) => n.endsWith(".json")).sort()) { const d = JSON.parse(fs.readFileSync("design/plan/" + f, "utf8")); console.log("design/plan/" + f, "->", d.screen ?? "-", "| target:", d.target === undefined ? "-" : JSON.stringify(d.target), "| files:", (d.files ?? []).length); }'
+node -e 'const fs = require("fs"), f = "design/export/pages/index.json"; if (!fs.existsSync(f)) process.exit(0); for (const p of JSON.parse(fs.readFileSync(f, "utf8")).pageDirs ?? []) console.log(p.page ?? "-", p.index ?? "-")'
 ```
 
 Five things to know before running the commands above:

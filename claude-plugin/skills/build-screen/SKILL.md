@@ -88,7 +88,7 @@ its export directly in `design/` — every path below works either way, just dro
 - **`design/codeconnect.local.json`** — Figma component → code component, keyed by the stable publish
   **`key`**. Scaffold with `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js"
   design/export/design-system/components.local.json --out design/codeconnect.local.json` (re-running
-  merges, never overwrites your edits). *(Older projects keep it at the repo root; `dtwin doctor` finds either.)*
+  merges, never overwrites your edits). *(Older projects keep it at the repo root; `dtwin doctor` finds either. Prefer the `design/` location.)*
 - **`design/tokens.dtcg.json`** (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <variables file> design/`)
   plus **`design/tokens.json`** overrides — Figma value → your token. The input you feed `tokens.js` changes the
   values (a pulled library's catalog, the defining file's design system, the screen's own `.vars.json`, the merged
@@ -145,7 +145,8 @@ Copy this checklist into your notes and keep it updated:
    follow it for every step below.
 
    Where plugin internals are out of bounds, say so and build from this skill body alone — knowing that the
-   stack's native-controls list, the *Fit the existing app* checklist and the render recipe are only in the profile.
+   stack's native-controls list, the *Fit the existing app* checklist and the render recipe are only in the profile,
+   and each step's detail is in the references above.
 
 1. **Gather and gate.** Each of these can stop the build; `references/gates.md` has the detail.
    - Read the export `manifest` (`truncated`/`assetsFailed`/`warnings`). Anything incomplete → tell
@@ -368,13 +369,11 @@ Copy this checklist into your notes and keep it updated:
 5. **Verify — evidence, not "looks right".** Follow `references/verify.md`, and for any verifier run the
    verify skill's run protocol, `${CLAUDE_PLUGIN_ROOT}/skills/verify/references/run-protocol.md`:
    - Static: build + typecheck + lint; grep the new code for raw hex/px literals and inline SVG.
-   - **Live render is the default path, not the fallback.** Before assuming no rendering tooling
-     exists, check `package.json`/`node_modules` for a dev server and Playwright (or the stack's
-     equivalent from the table in `verify.md`). If present, use them: launch the dev server, render
-     the actual screen, and diff **computed styles** (`getComputedStyle` — `backgroundColor`, padding,
-     gap, font metrics, etc., or the platform equivalent) against the IR's `layout`/`fills`/token
-     values — not just a visual read of the `.png`. Computed colors come back as `rgb()`/`rgba()`, not
-     hex — convert one side before comparing rather than string-matching `rgb(229, 231, 235)` against `#E5E7EB`.
+   - **Live render is the default path, not the fallback.** Check `package.json`/`node_modules` for a dev server
+     and Playwright (or the stack's equivalent from `verify.md`'s table); if present, render the actual screen and
+     diff **computed styles** (`getComputedStyle` — `backgroundColor`, padding, gap, font metrics, or the platform
+     equivalent) against the IR's `layout`/`fills`/token values, not just a visual read of the `.png`. Computed
+     colours come back as `rgb()`/`rgba()` — convert one side rather than string-matching `rgb(229, 231, 235)` against `#E5E7EB`.
    - **Getting a dev server up is itself a step, not an assumption.** Follow whatever the repo already
      documents (a `README`/`Makefile`/`package.json` script, a `docker-compose.yml`) — the first
      attempt at an unfamiliar or cross-arch setup (e.g. a container built for a different CPU
@@ -410,7 +409,8 @@ Copy this checklist into your notes and keep it updated:
      colour. The numbers are the script's job; your eyes catch what numbers can't express.
    - **Re-render immediately before saving any screenshot you will cite as evidence.** A dev server
      with hot reload picks up edits mid-pass, so a saved screenshot can show strings the shipped
-     code does not have — while the same plan block cites it as proof they were fixed.
+     code does not have — while the same plan block cites it as proof they were fixed. An artifact that does not
+     depict the build it claims to depict is worse than none.
    - Re-render key states, a large font scale, the other theme, and RTL when supported.
    - Fix the largest discrepancy first, at most **5 rounds** per component, and never buy pixels with worse code —
      `references/verify.md` (*The fix loop*) has the rules; a residual difference goes in `deviations[]` with its reason.

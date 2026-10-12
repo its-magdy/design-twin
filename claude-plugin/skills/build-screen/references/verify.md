@@ -113,8 +113,8 @@ A probe without `--run` writes an **unbound** measured file (it names no run): `
 and an ended run's `<Screen>.status.json` beside it (a `visual-verifier` or verify-skill run at `done`, `failed` or
 `blocked`) only adds a note — as long as you measured AFTER that run ended (an older measured file is still judged by
 the run: measure again). A run still in flight makes `--compare` `incomplete` — wait for it
-(`node <scripts>/verify-screen.js --wait <Screen> --run <id>`), or, only if nothing is running it any more (its agent
-stopped or crashed), end it: `node <scripts>/verify-screen.js --status <Screen> --phase failed --run <id>`.
+(`node "<scripts>/verify-screen.js" --wait <Screen> --run <id>`), or, only if nothing is running it any more (its agent
+stopped or crashed), end it: `node "<scripts>/verify-screen.js" --status <Screen> --phase failed --run <id>`.
 
 **Known approximations** (listed in the plan: shadow spread on iOS, blur radius conversions, diamond
 gradients, progressive blur, noise/glass, P3 colors, Figma-vs-platform text rasterizing) are excluded

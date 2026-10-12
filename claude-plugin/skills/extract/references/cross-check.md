@@ -88,7 +88,8 @@ node "<scripts>/map-bootstrap.js" design/export/design-system/components.local.j
 ```
 
 stubs only them, filed under the screen's own instance keys so a lookup by key finds them. Confirmed ones are ports
-of the catalog (reuse its variant/prop matrix); the rest stay `verdict:"new"`. The confirmation is the user's: it is
+of the catalog (reuse its variant/prop matrix); the rest stay `verdict:"new"`. Never set `"confirmed": true` on the
+user's behalf — `--from-proposals` stubs exactly the rows marked confirmed. The confirmation is the user's: it is
 the only thing that separates a real match from two components that share a name, and shared generic names
 (`Component 1`, `Header`) are exactly where a wrong match hides.
 

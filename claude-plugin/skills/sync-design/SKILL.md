@@ -32,6 +32,7 @@ writes the real path here, not there).
 | `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/ir-fields.md` | A changed field's meaning or unit isn't obvious (`font.lineHeight` percent, `rotation` sign, `strokes.align`). |
 | `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/export-layout.md` | You can't find the screen's JSON, the token file, or the reference image. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md` | Step 5 — rendering and comparing the patched screen. |
+| `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/hook-and-status.md` | Step 5 — recording `verification` in the plan, what the Stop hook checks, the computed status. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/verify/references/run-protocol.md` | Step 5, when a verifier run is involved — run ids, `--status` / `--wait`, the run cache, staging, permission denials. |
 
 ## Procedure
@@ -209,7 +210,7 @@ writes the real path here, not there).
      changes to a `syncs[]` array (`{date, summary, diff:"design/sync/<screen>.md"}`) so the next
      sync — and the next reader — can see what happened.
    - **Verify the touched regions** per build-screen's `references/verify.md` (table above) against the new reference image, then
-     record `verification` in the plan as build-screen step 5 describes. A patch that was not
+     record `verification` in the plan as build-screen's `references/hook-and-status.md` describes (table above). A patch that was not
      rendered is reported as `static-only`, not as matching.
 
 6. **Report** (short): what the designer changed, what you applied and where (file + the element),

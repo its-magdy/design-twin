@@ -211,7 +211,7 @@ report the pair once, not once per screen.
    approximate match as silent hardcoding-by-proxy — the build uses exact values. An off-grid spacing
    or an unbound colour is a question about whether the *design* should change; the default is always
    "use the exact value and flag it". See `references/questions.md`. The script ships with the plugin
-   (`${CLAUDE_PLUGIN_ROOT}/scripts/audit.js`; `<scripts>` in the `references/` and `profiles/` files this skill loads (its own and build-screen's)
+   (`${CLAUDE_PLUGIN_ROOT}/scripts/audit.js`; `<scripts>` in the `references/` and `profiles/` files this skill loads (its own, build-screen's and extract's `cross-check.md`)
    means that folder), so it should always be present; only fall back to doing the same
    checks by hand from `references/heuristics.md` if it genuinely errors out, and say which checks you
    skipped. Read the resulting `.json`; treat it as evidence to verify, not a verdict.

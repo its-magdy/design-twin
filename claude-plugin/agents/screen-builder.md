@@ -19,8 +19,8 @@ everything else it prints as warnings — fix those too.
 Code substitutes it in this prompt), and the plugin itself is `${CLAUDE_PLUGIN_ROOT}`. The preloaded skill may
 still show the plugin-root variable unexpanded (a `$` followed by `{CLAUDE_PLUGIN_ROOT}`) in its commands and in the
 shared references it links (the run protocol is `${CLAUDE_PLUGIN_ROOT}/skills/verify/references/run-protocol.md`):
-read it as that plugin path. Its `references/`/
-`profiles/` files say `<scripts>`, which means the scripts folder, so run e.g.
+read it as that plugin path. The skill's own `references/…` and `profiles/…` paths are relative to
+`${CLAUDE_PLUGIN_ROOT}/skills/build-screen/`. Its `references/`/`profiles/` files say `<scripts>`, which means the scripts folder, so run e.g.
 `node "<that folder>/plan-skeleton.js" …`. The variable is not set in the Bash shell, so type the real path, not
 `$CLAUDE_PLUGIN_ROOT`, into a command. A script that seems missing is a path to fix, not a check to redo by hand.
 
