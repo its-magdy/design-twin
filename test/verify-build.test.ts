@@ -618,10 +618,10 @@ for (const ev of ["SubagentStop", "Stop"]) {
 }
 // The hook as Claude Code runs a shell-form command on Windows without Git Bash: through PowerShell, the bundle as shipped.
 if (process.platform === "win32") {
-  const viaPowerShell = (root: string, payload: object) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `node "${path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "verify-build.js")}"`], { input: JSON.stringify(payload), encoding: "utf8" });
+  const viaPowerShell = (payload: object) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `node "${path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "verify-build.js")}"`], { input: JSON.stringify(payload), encoding: "utf8" });
   const failing = () => project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   const legacy = failing(), real = failing();
-  const l = viaPowerShell(legacy, { cwd: legacy }), r = viaPowerShell(real, { cwd: real, hook_event_name: "SubagentStop" });
+  const l = viaPowerShell({ cwd: legacy }), r = viaPowerShell({ cwd: real, hook_event_name: "SubagentStop" });
   const d = decisionOf(r.stdout);
   check("[powershell] a native exit 2 arrives as 1 — why exit 2 alone cannot block there", l.status === 1 && /brand-600/.test(l.stderr));
   check("[powershell] a SubagentStop payload that fails → exit 0 and the JSON block decision on stdout, through PowerShell", r.status === 0 && d !== null && d.decision === "block" && typeof d.reason === "string" && /brand-600/.test(d.reason));
