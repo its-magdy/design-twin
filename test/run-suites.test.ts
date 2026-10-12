@@ -280,8 +280,8 @@ console.log("CMD " + JSON.stringify({
   // CI splits the run over a matrix (.github/workflows/test.yml): each `include:` entry is a leg (from its `- leg:` line); a leg
   // without `node:` or `os:` is on the primary Node and OS. There, one leg is `--fast` and the others name suites — between them every
   // suite runs exactly once (the named ones are exactly what --fast leaves out, none twice). A leg on another Node version or OS
-  // runs `--fast` alone, and only a leg on another OS may be `allow-failure` (non-blocking): a primary leg's failure always fails
-  // `test result`.
+  // runs `--fast` alone, and every leg blocks: none is `allow-failure`, and the job has no continue-on-error, so any leg's failure
+  // fails `test result`.
   const wf = read(path.join(testDir, "..", ".github", "workflows", "test.yml"));
   const inc = /^( *)include:\n((?:(?:\1 +.*|[ \t]*)\n)*)/m.exec(wf)?.[2] ?? "";
   const legs = inc.split(/^\s*- (?=leg:)/m).slice(1).map((l) => ({
@@ -304,8 +304,8 @@ console.log("CMD " + JSON.stringify({
   check("[ci] every leg on another OS (`os:`) is `--fast` alone, and the job runs each leg on its `os:` (else the pinned Ubuntu image)",
     legs.some((l) => l.os !== undefined) && legs.filter((l) => l.os !== undefined).every((l) => l.suites.join(" ") === "--fast")
     && /^ {4}runs-on: \$\{\{ matrix\.os \|\| 'ubuntu-24\.04' \}\}$/m.test(wf));
-  check("[ci] only a leg on another OS is `allow-failure`, and the job's continue-on-error is that flag (a primary or other-Node leg always blocks)",
-    legs.every((l) => !l.allowFailure || l.os !== undefined) && /^ {4}continue-on-error: \$\{\{ matrix\.allow-failure \|\| false \}\}$/m.test(wf));
+  check("[ci] every leg blocks: none is `allow-failure` and the workflow has no continue-on-error (a failed continue-on-error job is a success to `needs`)",
+    legs.every((l) => !l.allowFailure) && !/continue-on-error/.test(wf));
 
   const mirror = path.join(tmp, "mirror");
   fs.mkdirSync(mirror);

@@ -23,9 +23,6 @@ jobs:
     name: test (${{ matrix.leg }})
     # pinned, not ubuntu-latest: the Budget checks' margins were measured on this image
     runs-on: ${{ matrix.os || 'ubuntu-24.04' }}
-    # A leg with `allow-failure` shows red when it fails but does not fail `test result` (a failed continue-on-error
-    # job is a success to `needs`)
-    continue-on-error: ${{ matrix.allow-failure || false }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -39,12 +36,10 @@ jobs:
           - leg: fast-node26
             node: 26
             suites: --fast
-          # the same quick suites on Windows; non-blocking until it has stayed green (the dtwin daemon is not
-          # supported there, and its checks skip with that reason)
+          # the same quick suites on Windows (the dtwin daemon is not supported there, and its checks skip with that reason)
           - leg: fast-windows
             os: windows-latest
             suites: --fast
-            allow-failure: true
           - leg: drive-e2e
             suites: verify-probe-drive-e2e
           - leg: drive-tail-e2e
