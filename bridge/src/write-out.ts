@@ -22,6 +22,8 @@ import { mergeVariablesDoc } from "./variables-merge.ts";
 import { sha1Hex, normalizeForCompare, ContentIndex, contentKey, fileKeyCache } from "./asset-compare.ts";
 import { isRasterShell } from "./svg-normalize.ts";
 import { collectGraphics, reuseHiddenAssets, usesByPointer } from "./asset-owners.ts";
+import { FileMemo } from "./file-memo.ts";
+import type { FileMemoOptions } from "./file-memo.ts";
 import type { AssetContext, AssetOwner, Graphic, ReuseResult } from "./asset-owners.ts";
 import { EXPORT_DIR as DEFAULT_OUT_DIR } from "./project-layout.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
@@ -159,12 +161,23 @@ function writeSchemaDoc(dir: string, log?: Log): void {
 // page-dir disambiguation, layer filenames, index shape, pageDirs — lives in pages-layout.ts, which
 // the plugin's browser-download twin builds from too (with "__" instead of "/"), so the two writers
 // cannot drift. This function only creates directories and writes bytes.
-function writePages(dir: string, layersDoc: LayersDoc | null | undefined, log?: Log, keep?: string[]): { meta: PagesRootIndex; layerFiles: number; pageDirs: number; rootIndex: string } {
+//
+// `replaced`: when passed, every layer file already on disk before this write is pushed onto it (absolute path,
+// once each) — the files this write replaces.
+function writePages(dir: string, layersDoc: LayersDoc | null | undefined, log?: Log, keep?: string[], replaced?: string[]): { meta: PagesRootIndex; layerFiles: number; pageDirs: number; rootIndex: string } {
   const pdir = path.join(dir, "pages");
   fs.mkdirSync(pdir, { recursive: true }); // guarantee pages/ exists even for a zero-layer run
   const { meta, layerFiles, indexFiles, rootIndex } = buildPageLayout(layersDoc, "/");
   for (const p of meta.pageDirs) fs.mkdirSync(path.join(pdir, p.dir), { recursive: true }); // once per PAGE, not per layer
-  for (const f of layerFiles) writeJson(dir, f.path, f.data, true, undefined, keep);
+  const seen = new Set<string>();
+  for (const f of layerFiles) {
+    if (replaced) {
+      const file = path.join(dir, f.path);
+      // A path written twice in one export was on disk before it only if the FIRST write found it.
+      if (!seen.has(file)) { seen.add(file); if (fs.existsSync(file)) replaced.push(file); }
+    }
+    writeJson(dir, f.path, f.data, true, undefined, keep);
+  }
   for (const f of indexFiles) writeJson(dir, f.path, f.data, false, log, keep);
   writeJson(dir, rootIndex, meta, false, log, keep);
   if (log) log("wrote " + layerFiles.length + " layer file(s) across " + meta.pageDirs.length + " page dir(s) under " + pdir);
@@ -281,7 +294,7 @@ function readExistingDirCaseFold(adir: string): Map<string, string> {
 // writeExport over the files ALREADY on disk, updated as writeAssets writes, and handed on to
 // writeScreenAssets' `duplicates` — one scan, one rule, so a file writeAssets reuses can never show up
 // as a `duplicates` entry it did not also see. A file unchanged since an earlier pull in this process is
-// not read again (asset-compare.ts fileKeyCache says when a cached key may be used).
+// not read again (asset-compare.ts fileKeyCache; file-memo.ts says when a remembered key may be used).
 function buildContentIndex(adir: string): ContentIndex {
   const index = new ContentIndex();
   let names: string[] = [];
@@ -609,7 +622,9 @@ function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, 
 // `<file>.prev` — one level, the next such spill replaces it — and `wrote.prevKept` lists those .prev
 // paths (absolute), present only when non-empty. The CLI and an explicit writeToDisk keep nothing.
 // Assets need nothing: writeAssets never overwrites a file with different bytes.
-function writeExport(outDir: string | null | undefined, r: Stamped<FullExportReply | DesignSystemReply>, log?: Log, opts?: { keepPrev?: boolean | undefined }) {
+// `opts.replaced` (the MCP server's implicit spill only): receives every pages/ layer file this write replaced —
+// each one that was on disk before it (absolute paths) — for the spill's note. Nothing is added to the result.
+function writeExport(outDir: string | null | undefined, r: Stamped<FullExportReply | DesignSystemReply>, log?: Log, opts?: { keepPrev?: boolean | undefined; replaced?: string[] | undefined }) {
   const dir = resolveOutDir(outDir);
   const keep: string[] | undefined = opts && opts.keepPrev ? [] : undefined;
   const kept = (): { prevKept?: string[] } => (keep && keep.length ? { prevKept: keep } : {});
@@ -653,7 +668,7 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
     const hn = hiddenNodesLine(full.layersDoc.manifest);
     if (log && hn) log(hn);
   }
-  const pages = full ? writePages(dir, full.layersDoc, log, keep) : null;
+  const pages = full ? writePages(dir, full.layersDoc, log, keep, opts && opts.replaced) : null;
   if (full && log) { const d = danglingPointers(dir, full.layersDoc); if (d.length) log(`warn  ${d.length} asset pointer(s) name a file that is not on disk: ${d.slice(0, 3).join(", ")}${d.length > 3 ? ", …" : ""}`); }
   return {
     outDir: dir,
@@ -668,6 +683,28 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
     },
     index: pages ? pages.meta : undefined,
   };
+}
+
+// The `reuseKey`s of a <base>.assets.json's rows whose owner carries no paint override — all otherScreenTrees
+// needs from it. Remembered per file while it is unchanged (file-memo.ts), so a process pulling screen after
+// screen into a project of hundreds re-reads only the ones that changed; an unreadable or malformed file has none.
+// resetScreenReuseKeys starts it afresh, with a given clock in the tests (a file is remembered only once it is 2 s old).
+let screenReuseKeys = new FileMemo<ReadonlySet<string>>();
+function resetScreenReuseKeys(o: FileMemoOptions = {}): void { screenReuseKeys = new FileMemo<ReadonlySet<string>>(o); }
+function reuseKeysOf(file: string): ReadonlySet<string> {
+  return screenReuseKeys.get(file, () => {
+    const doc = readJsonOr(file, null);
+    const rows: unknown[] = doc && typeof doc === "object" && "files" in doc && Array.isArray(doc.files) ? doc.files : [];
+    const out = new Set<string>();
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const key = "reuseKey" in row ? row.reuseKey : undefined;
+      const owner = "owner" in row ? row.owner : undefined;
+      const blocked = !!owner && typeof owner === "object" && "paintOverrides" in owner && owner.paintOverrides === true;
+      if (typeof key === "string" && !blocked) out.add(key);
+    }
+    return out;
+  }) ?? new Set<string>();
 }
 
 // The other screens' trees that may hold a visible twin for one of `keys`: every pages/**/<base>.assets.json
@@ -690,15 +727,9 @@ function otherScreenTrees(dir: string, ownAssets: string, keys: ReadonlySet<stri
   };
   walk(path.join(dir, "pages"));
   for (const f of files) {
-    const doc = readJsonOr(f, null);
-    const rows = doc && typeof doc === "object" && "files" in doc && Array.isArray(doc.files) ? doc.files : [];
-    const wanted = rows.some((row: unknown) => {
-      if (!row || typeof row !== "object") return false;
-      const key = "reuseKey" in row ? row.reuseKey : undefined;
-      const owner = "owner" in row ? row.owner : undefined;
-      const blocked = !!owner && typeof owner === "object" && "paintOverrides" in owner && owner.paintOverrides === true;
-      return typeof key === "string" && keys.has(key) && !blocked;
-    });
+    const has = reuseKeysOf(f);
+    let wanted = false;
+    for (const k of keys) if (has.has(k)) { wanted = true; break; }
     if (!wanted) continue;
     const screen = readJsonOr(f.slice(0, -".assets.json".length) + ".json", null);
     const nodes = screen && typeof screen === "object" && "nodes" in screen && Array.isArray(screen.nodes) ? screen.nodes : null;
@@ -1118,10 +1149,10 @@ function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesD
 // having to know which writer its own command implies. Each member of ExportReply carries a field
 // the others do not — `screen` (a screen pull), `reference` (a screenshot), otherwise a catalog with
 // or without a page walk — so `in` narrows the union to the writer's own reply type.
-function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: { scale?: number | undefined; keepPrev?: boolean | undefined }) {
+function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: { scale?: number | undefined; keepPrev?: boolean | undefined; replaced?: string[] | undefined }) {
   if ("screen" in r) return writeScreen(outDir, r, log, opts && opts.keepPrev !== undefined ? { keepPrev: opts.keepPrev } : undefined);
   if ("reference" in r) return writeScreenshot(outDir, r, log, opts);
-  return writeExport(outDir, r, log, opts && opts.keepPrev !== undefined ? { keepPrev: opts.keepPrev } : undefined);
+  return writeExport(outDir, r, log, opts && (opts.keepPrev !== undefined || opts.replaced) ? { keepPrev: opts.keepPrev, replaced: opts.replaced } : undefined);
 }
 
 // How many characters an INLINE tool result may be before the MCP client truncates it. Claude Code caps
@@ -1136,4 +1167,4 @@ function inlineLimitChars(env: NodeJS.ProcessEnv = process.env): number {
   return Math.min(Math.floor((tokens > 0 ? tokens : 25000) * 4 * 0.8), INLINE_CHAR_CAP);
 }
 
-export { DEFAULT_OUT_DIR, inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, assetsHiddenLine, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny };
+export { DEFAULT_OUT_DIR, inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, assetsHiddenLine, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny, screenReuseKeys, resetScreenReuseKeys };

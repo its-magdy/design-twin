@@ -631,6 +631,8 @@ void (async () => {
           ok("the replaced layer file is kept as <layer>.json.prev with the hand-edited text", read(layer + ".prev") === edited && prevsUnder(out).length === 1);
           ok(`…wrote.prevKept lists it (got ${JSON.stringify(kept)})`, Array.isArray(kept) && kept.length === 1 && kept[0] === layer + ".prev");
           ok("…and the note names the count and the .prev", /previous version of each changed file — 1 file\(s\) under pages\/ or design-system\/ \(or design-system\.json\), e\.g\. /.test(note) && note.includes(layer + ".prev") && /\.prev \(one level/.test(note));
+          // Both layer files (Panel, Sheet) were on disk from the explicit export, so the spill replaced 2 — changed or not.
+          ok(`…and says it replaced the 2 existing layer files (got ${JSON.stringify(note.slice(0, 200))})`, /^Written to disk WITHOUT being asked: .*It replaced 2 existing screen file\(s\) under .*pages\. The previous version of each changed file/.test(note));
           const lw = rec(rec((await s.call("figma_status", {}))?.json).lastWrite);
           ok(`figma_status.lastWrite.prevKept === 1 (implicit) (got ${JSON.stringify(lw)})`, lw.prevKept === 1 && lw.implicit === true && lw.tool === "figma_export_full");
           const again = await s.call("figma_export_full", {});
@@ -638,6 +640,7 @@ void (async () => {
           ok("a re-spill of the unchanged design keeps no new .prev, the earlier one is untouched",
             prevsUnder(out).length === 1 && read(layer + ".prev") === edited && rec(again?.json.wrote).prevKept === undefined);
           ok("…and the note says the earlier versions are still kept", /Earlier versions are still kept as 1 \.prev file\(s\)/.test(note2));
+          ok("…after saying it replaced the 2 layer files again", /It replaced 2 existing screen file\(s\) under .*pages\. Earlier versions are still kept as 1 \.prev file\(s\)/.test(note2));
           fs.rmSync(layer + ".prev");
           fs.writeFileSync(layer, edited);
           const explicit = await s.call("figma_export_full", { writeToDisk: true });
