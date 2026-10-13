@@ -12,6 +12,12 @@ builder instead of after the design system's catalog. Every individual choice wa
 sum of them meant a second feature built later would have had nothing to reuse *by design-system
 name*, and no recorded reason for the split.
 
+## Contents
+- 1. Follow what is already there
+- 2. Only on a fresh scaffold, propose
+- 3. The catalog decides shared-vs-feature, not taste (and evolving a shared component the catalog covers 0% of)
+- 4. What the plan records
+
 ## 1. Follow what is already there
 
 Matching a neighbouring feature beats any convention this file could name, so look before proposing.

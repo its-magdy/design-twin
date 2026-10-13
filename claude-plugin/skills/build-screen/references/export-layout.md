@@ -4,6 +4,15 @@ Read this when you need to **find** something: which file holds the tokens, wher
 live, how a browser-downloaded export differs from a CLI one.
 For what the fields on a node mean once you've opened it, see `ir-fields.md`.
 
+## Contents
+- [`design/export/` is dtwin's; the rest of `design/` is yours](#designexport-is-dtwins-the-rest-of-design-is-yours)
+- [Read the manifest first](#read-the-manifest-first)
+- [`design-system.json` + `design-system/`](#design-systemjson--design-system)
+- [`libraries/` — a separately pulled LIBRARY file](#libraries--a-separately-pulled-library-file)
+- [`pages/index.json` — finding a screen](#pagesindexjson--finding-a-screen)
+- [Browser "Download layers" flat naming](#browser-download-layers-flat-naming)
+- [Single-screen exports, assets, config maps](#single-screen-exports-assets-config-maps)
+
 ## `design/export/` is dtwin's; the rest of `design/` is yours
 
 Everything a pull writes lands under `design/export/` and nowhere else — so that directory can be
@@ -19,14 +28,6 @@ either way — drop the `export/` segment — and `dtwin doctor` reports which l
 read it before writing any script against the export. Every CLI pull and MCP `writeToDisk` export
 writes it, rewritten only when its text changes; a `SCHEMA.md` without dtwin's first-line marker is
 yours and is never touched. A browser-downloaded export has none.
-
-## Contents
-- [Read the manifest first](#read-the-manifest-first)
-- [`design-system.json` + `design-system/`](#design-systemjson--design-system)
-- [`libraries/` — a separately pulled LIBRARY file](#libraries--a-separately-pulled-library-file)
-- [`pages/index.json` — finding a screen](#pagesindexjson--finding-a-screen)
-- [Browser "Download layers" flat naming](#browser-download-layers-flat-naming)
-- [Single-screen exports, assets, config maps](#single-screen-exports-assets-config-maps)
 
 ## Read the manifest first
 
@@ -222,7 +223,7 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
 - `design/codeconnect.local.json` — Figma component → **your** code component +
   import path, keyed by the component's stable publish **`key`** so a rename in Figma can't silently
   unmap it. Scaffold from the Figma side with `node "<scripts>/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json`, or auto-seed the code
-  side from **Code Connect files** in the repo with `dtwin seed` (the same as `node bridge/src/seed-components.ts`). Check it with
+  side from **Code Connect files** in the repo with `dtwin seed`. Check it with
   the **`design_drift_lint`** MCP tool before building. If it's missing/thin, offer to run those.
   *(Older projects keep this file at the repo ROOT; `dtwin doctor` finds either and says which. A
   legacy `design/components.json` keyed by component NAME also exists in some projects; it cannot

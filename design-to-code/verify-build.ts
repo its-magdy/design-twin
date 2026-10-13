@@ -58,7 +58,7 @@ import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { isScreenDoc } from "./export-shape.ts";
 import type {
-  CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
+  CodeInputs, IndexRow, IrNode, IrNodeType, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
   PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyReport,
 } from "./types.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
@@ -66,6 +66,8 @@ import { writePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { DESIGN_DIR, EXPORT_DIR, LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Screen>__<id>` stem (the exporter's own file naming)
+import { readHookInput as readHookPayload } from "./hook-input.ts";
+import type { HookPayload, HookRead } from "./hook-input.ts";
 
 // ================================================================ input / timeouts
 
@@ -75,41 +77,16 @@ const STDIN_WAIT_MS = (): number => { const n = Number(process.env.DTWIN_HOOK_ST
 let phase = "starting";
 const setPhase = (p: string): void => { phase = p; };
 
-/** The Stop-hook payload as read off stdin: arbitrary JSON from Claude Code, so a plain JSON object. */
-export type HookPayload = JsonObject;
-/** readHookInput()'s result: a payload and where it came from, or an error naming what stalled. */
-export interface HookRead { payload?: HookPayload; source?: string; error?: string }
+export type { HookPayload, HookRead };
 
-// The hook JSON, read only when stdin is not a terminal. A regular file or /dev/null reads to EOF at
-// once; a pipe/socket is read asynchronously with two deadlines, so an inherited pipe that never
-// closes ("same command, two different outcomes") cannot stall the build.
+// The Stop-hook JSON (hook-input.ts: read only when stdin is not a terminal, never stalled by a pipe
+// that never closes). The hard deadline sits a little inside the process watchdog, so its (more
+// specific) message is the one printed.
 function readHookInput(): Promise<HookRead> {
-  if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
-  let st: fs.Stats;
-  try { st = fs.fstatSync(0); } catch { return Promise.resolve({ payload: {}, source: "closed" }); }
-  // Whatever the pipe carried: only a JSON object is a payload (anything else reads as an empty one).
-  const parse = (raw: string): HookPayload => { if (!raw.trim()) return {}; try { const v: unknown = JSON.parse(raw); return isJsonObject(v) ? v : {}; } catch { return {}; } };
-  if (st.isFile() || st.isCharacterDevice()) {
-    try { return Promise.resolve({ payload: parse(fs.readFileSync(0, "utf8")), source: "file" }); } catch { return Promise.resolve({ payload: {}, source: "unreadable" }); }
-  }
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    let bytes = 0, finished = false;
-    const done = (value: HookRead): void => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(first); clearTimeout(hard);
-      process.stdin.removeAllListeners("data"); process.stdin.removeAllListeners("end");
-      try { process.stdin.pause(); process.stdin.unref && process.stdin.unref(); } catch { /* ignore */ }
-      resolve(value);
-    };
-    const first = setTimeout(() => { if (!bytes) done({ payload: {}, source: "silent-pipe" }); }, STDIN_WAIT_MS());
-    // a little inside the process watchdog, so this (more specific) message is the one printed
-    const hard = setTimeout(() => done({ error: `timed out after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s waiting for the hook payload on stdin (${bytes} byte(s) received, no end-of-file) — pass the plan path as an argument instead, or pipe the payload: echo '{"cwd":"…"}' | ${scriptCmd("verify-build")}` }), Math.max(50, HOOK_TIMEOUT_MS() - 250));
-    process.stdin.on("data", (c: Buffer) => { bytes += c.length; chunks.push(c); });
-    process.stdin.on("end", () => done({ payload: parse(Buffer.concat(chunks).toString("utf8")), source: "pipe" }));
-    process.stdin.on("error", () => done({ payload: {}, source: "error" }));
-    process.stdin.resume();
+  return readHookPayload({
+    waitMs: STDIN_WAIT_MS(),
+    hardMs: Math.max(50, HOOK_TIMEOUT_MS() - 250),
+    stalled: (bytes) => `timed out after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s waiting for the hook payload on stdin (${bytes} byte(s) received, no end-of-file) — pass the plan path as an argument instead, or pipe the payload: echo '{"cwd":"…"}' | ${scriptCmd("verify-build")}`,
   });
 }
 

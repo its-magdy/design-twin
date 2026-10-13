@@ -15,7 +15,13 @@ const read = (rel: string): string => {
   catch { console.log("  ✗ FAIL cannot read " + rel); return ""; }
 };
 const flat = (t: string): string => t.replace(/\s*\n\s*/g, " "); // prose wraps; the rules are sentences
-const skill = flat(read("claude-plugin/skills/build-screen/SKILL.md"));
+// A skill "states" a rule when the text sits in its SKILL.md or in a reference that SKILL.md links (read on demand):
+// build-screen links its step references and the extract skill's shared cross-check and theme-tokens references.
+const withRefs = (main: string, refs: readonly string[]): string => flat([read(main), ...refs.map((r) => read(r))].join("\n"));
+const extractRefs = ["claude-plugin/skills/extract/references/cross-check.md", "claude-plugin/skills/extract/references/theme-tokens.md"] as const;
+const skill = withRefs("claude-plugin/skills/build-screen/SKILL.md", [
+  ...["gates", "names", "assets", "measurable", "hook-and-status"].map((n) => `claude-plugin/skills/build-screen/references/${n}.md`), ...extractRefs]);
+const extractDocs = withRefs("claude-plugin/skills/extract/SKILL.md", extractRefs);
 const twRaw = read("claude-plugin/skills/build-screen/profiles/web-tailwind.md");
 const tw = flat(twRaw);
 const cssm = flat(read("claude-plugin/skills/build-screen/profiles/web-css-modules.md"));
@@ -49,14 +55,22 @@ check("drift-lint/map-bootstrap read the library catalogs (`components.library.j
 check("a subagent records the short list, sets awaiting-user and does not confirm for the user (skill and agent)", /subagent.{0,200}awaiting-user.{0,200}(not|never) confirm/i.test(skill) && /awaiting-user.{0,200}(not|never) confirm|(not|never) confirm.{0,200}(list|map)/i.test(builder));
 
 console.log("build-screen docs (shipped web probe):");
-const verifier = flat(read("claude-plugin/agents/visual-verifier.md"));
-const verifySkill = flat(read("claude-plugin/skills/verify/SKILL.md"));
-const verifyRef = flat(read("claude-plugin/skills/build-screen/references/verify.md"));
+// A rule moved into a reference is still "stated" when the reader is sent there: each doc below is the file plus
+// the references it links (the verifier and the verify skill share one copy of the run protocol and the driving
+// rules; build-screen's references/verify.md is linked beside the run protocol).
+const verifyRefs = (...names: string[]): string[] => names.map((n) => read(`claude-plugin/skills/verify/references/${n}.md`));
+const verifier = flat([read("claude-plugin/agents/visual-verifier.md"), ...verifyRefs("run-protocol", "probe-driving", "native-measuring")].join("\n"));
+const verifySkill = flat([read("claude-plugin/skills/verify/SKILL.md"), ...verifyRefs("run-protocol", "probe-driving", "verdict-rules", "probe-limits")].join("\n"));
+const verifyRef = flat([read("claude-plugin/skills/build-screen/references/verify.md"), ...verifyRefs("run-protocol")].join("\n"));
+// The visual-verifier's write scope, pattern kills, installs and sandbox bypass are refused by its PreToolUse hook
+// (design-to-code/verifier-guard.ts, test/verifier-guard.test.ts), so its doc says so in one line instead of prose "never"s.
+const verifierGuarded = /\*\*Enforced by the plugin's hook\*\* \(`scripts\/verifier-guard\.js`, PreToolUse\), each refusal a real block with its reason: a write outside `design\/verify\/` and the run cache \(or to a tool-owned file there\), a pattern kill \(`pkill`, `killall`, …\), a dependency or Playwright browser install \(`npm install`\/`ci`, `npx playwright install`\) and `dangerouslyDisableSandbox`\./.test(verifier);
+check("the visual-verifier names its hook-enforced limits in one line (verifier-guard.js: writes, pattern kills, installs, dangerouslyDisableSandbox)", verifierGuarded);
 check("the verifier invokes scripts/verify-probe.js, with --check for the renderer and --expected/--url/--out to measure", /scripts\/verify-probe\.js" --check/.test(verifier) && /scripts\/verify-probe\.js".{0,200}--expected .{0,120}--url .{0,120}--out/.test(verifier));
 check("the verify skill invokes verify-probe.js --check (no inline Playwright script) and the probe for measuring", /scripts\/verify-probe\.js" --check/.test(verifySkill) && /verify-probe\.js".{0,200}--expected/.test(verifySkill) && !/node --input-type=module -e/.test(verifySkill));
 check("the verifier forbids writing its own probe and editing/rewriting the probe's measured.json", /never write your own probe/i.test(verifier) && /never (edit|.{0,20}edit).{0,80}(patch|rewrite).{0,40}`measured\.json`/i.test(verifier) && /interactions.{0,300}evidence\.json/.test(verifier) && /:focus-visible.{0,200}(keyboard Tab|Tab)/.test(verifier));
 check("the verifier: exit 3 asks the user, exit 4 reports the navigation log, untagged nodes are reported not matched by hand", /exit 3.{0,200}ask the user/i.test(verifier) && /exit 4.{0,300}navigation log/i.test(verifier) && /tag it.{0,200}do not match them by hand/i.test(verifier));
-check("no skill/agent doc tells the agent to run `npx playwright install` (only the user does; the agent asks)", /never run `npx playwright install`/i.test(verifier) && /never run either yourself/i.test(verifySkill) && !/playwright install[^.]{0,60}if the caller approves/i.test(verifier));
+check("no skill/agent doc tells the agent to run `npx playwright install` (only the user does; the agent asks)", verifierGuarded && /the user's to install, never yours/.test(verifier) &&/never run either yourself/i.test(verifySkill) && !/playwright install[^.]{0,60}if the caller approves/i.test(verifier));
 check("the verify skill: implicit baseline, --against, COVERAGE FELL, and a probe of `unknown` is not comparable", /--against/.test(verifySkill) && /COVERAGE FELL/.test(verifySkill) && /inputs\.probe.{0,40}unknown.{0,200}not comparable/i.test(verifySkill) && /\[--interactions design\/verify\/<Screen>\.evidence\.json\].{0,120}only when the verifier wrote that file/.test(verifySkill));
 check("build-screen step 5 names verify-probe.js and says web measurements are never hand-written", /verify-probe\.js/.test(step(5)) && /never a hand-written one/i.test(step(5)));
 check("references/verify.md: readiness on web is the probe's (fonts.ready, reduced motion, --ready), and networkidle is not used", /verify-probe\.js/.test(verifyRef) && /document\.fonts\.ready/.test(verifyRef) && /reduced motion/i.test(verifyRef) && /does not use `networkidle`/.test(verifyRef));
@@ -107,18 +121,20 @@ console.log("verify docs (run integrity + agent safety):");
     && /never write into the project tree while a page of the app is open/i.test(verifier) && /server\.watch\.ignored/.test(verifier) && /@source not/.test(verifier) && /suggestions, never edits/i.test(verifier));
   check("every non-measurement claim carries its evidence (command + count, path + stat mtime, navigation log) and unproven leads are listed separately and labelled (verifier and verify skill)",
     [verifier, verifySkill].every((t) => /not a measurement carries its evidence/i.test(t) && /stat` mtime/.test(t) && /navigation log/.test(t) && /unproven leads/.test(t)));
-  check("close only what you opened, stop only a PID you started and recorded, never pkill -f / killall / pattern kills, reuse the user's dev server",
-    [verifier, verifySkill].every((t) => /only what you opened/i.test(t) && /PID you started and recorded/.test(t) && /never `pkill -f`, `killall`/i.test(t) && /(reuse|reusing) a dev server the user/i.test(t)) && /never `pkill -f`/.test(verifyRef));
+  check("close only what you opened, stop only a PID you started and recorded, never pkill -f / killall / pattern kills (the verifier: refused by its hook), reuse the user's dev server",
+    [verifier, verifySkill].every((t) => /only what you opened/i.test(t) && /PID you started and recorded/.test(t) && /(reuse|reusing) a dev server the user/i.test(t))
+    && /never `pkill -f`, `killall`/i.test(verifySkill) && verifierGuarded && /never `pkill -f`/.test(verifyRef));
   check("the live status lives in the run cache (node_modules/.cache/designtwin-verify/), so heartbeats never touch the project; done publishes design/verify/<S>.status.json (verifier, verify skill, references/verify.md, build-screen)",
     [verifier, verifySkill, verifyRef].every((t) => /node_modules\/\.cache\/designtwin-verify\/<(Screen|screen)>\.status\.json/.test(t) && /heartbeats are free|status writes are free/i.test(ws(t)) && /publish\w* the final status/i.test(ws(t)))
     && /node_modules\/\.cache\/designtwin-verify/.test(skill) && /published as `design\/verify\/<screen>\.status\.json` at `done`/.test(ws(skill)));
   check("done checks the measured file before it copies anything (verifier, verify skill, references/verify.md)",
-    /`done` checks first and publishes only then/.test(ws(verifier)) && [verifySkill, verifyRef].every((t) => /`done` checks the measured file first, then copies/.test(ws(t))));
+    [verifier, verifySkill, verifyRef].every((t) => /`done` checks the measured file first, then copies/.test(ws(t))));
   check("'a safety check separate from auto mode blocked this request' is labelled a no-verdict denial that retrying will not fix (not a real block); the transient form is 'temporarily unavailable …, so auto mode cannot determine the safety of'",
     [verifier, verifySkill, verifyRef].every((t) => { const x = ws(t); return /safety check separate from auto mode blocked this request.{0,300}(retrying will not|do not retry)/i.test(x) && /temporarily unavailable.{0,20}so auto mode cannot determine the safety of/i.test(x); })
     && !/real\* block \(the classifier names a rule or reason, or "a safety check/.test(ws(verifier)));
-  check("a permission denial is not a sandbox violation: never dangerouslyDisableSandbox, transient no-verdict retried unchanged at most 2 times, a real block is neither retried nor rephrased, then status blocked + hand-back with a narrow allow rule",
-    [verifier, verifySkill].every((t) => /never (set|use) `dangerouslyDisableSandbox`/i.test(t) && /(at most 2 retries|at most twice)/i.test(t) && /(do not rephrase|do not retry or rephrase)/i.test(t) && /blocked on permissions: done \/ remaining/.test(t) && /narrow allow rule/.test(t))
+  check("a permission denial is not a sandbox violation: never dangerouslyDisableSandbox (the verifier: refused by its hook), transient no-verdict retried unchanged at most 2 times, a real block is neither retried nor rephrased, then status blocked + hand-back with a narrow allow rule",
+    /never (set|use) `dangerouslyDisableSandbox`/i.test(verifySkill) && verifierGuarded && /never ask the caller to approve a bypass/i.test(verifier)
+    && [verifier, verifySkill].every((t) => /(at most 2 retries|at most twice)/i.test(t) && /(do not rephrase|do not retry or rephrase)/i.test(t) && /blocked on permissions: done \/ remaining/.test(t) && /narrow allow rule/.test(t))
     && /`blocked`/.test(verifyRef) && /dangerouslyDisableSandbox/.test(verifyRef));
   check("the probe is bounded by --max-time (exit 4); one re-run after exit 4, then status failed — never a loop", [verifier, verifySkill].every((t) => /--max-time/.test(t) && /ONCE/.test(t) && /status `failed`/.test(t)) && /one re-run/.test(verifyRef));
   check("nodeId and trigger are copied VERBATIM from the expectation row; a pair that matches no row is reported", /VERBATIM from the\s+expectation row/.test(verifier) && /VERBATIM from the expectation row/.test(verifySkill) && /matched no designed interaction/.test(verifier + verifySkill));
@@ -159,8 +175,8 @@ console.log("verify docs (run integrity + agent safety):");
     !/judges absent, in `design\/verify\/<Screen>\.evidence\.json`/.test(verifySkill) && /in `<Screen>\.evidence\.json` — staged in the run's stage dir and published into `design\/verify\/` at `done`, never written there directly/.test(verifySkill));
   check("--wait exit 5 is 'timeout or no progress' everywhere (never 'no timeout/progress')",
     [verifier, verifySkill, verifyRef].every((t) => /5 timeout or no progress/.test(t) && !/no timeout\/progress/.test(t)));
-  check("never reinstall dependencies (npm ci / npm install) during a verify run — it clears node_modules/.cache (live status + staged files)",
-    [verifier, verifySkill, verifyRef].every((t) => /Never reinstall dependencies \(`npm ci`, `npm install`\) during a verify run/.test(t) && /clears `node_modules\/\.cache`/.test(t)));
+  check("never reinstall dependencies (npm ci / npm install) during a verify run — it clears node_modules/.cache (live status + staged files); the verifier's hook refuses it",
+    [verifySkill, verifyRef].every((t) => /Never reinstall dependencies \(`npm ci`, `npm install`\) during a verify run/.test(t) && /clears `node_modules\/\.cache`/.test(t)) && verifierGuarded);
   check("--status/--wait resolve --dir (default design/verify) against the current directory; from elsewhere pass --dir (absolute works)",
     [verifier, verifySkill, verifyRef].every((t) => /`--status` and `--wait` resolve `--dir` \(default `design\/verify`\) against the current directory/.test(t) && /an absolute path works/.test(t)));
   // integrity failures outrank the grades
@@ -270,14 +286,14 @@ console.log("build-screen docs (dialog triggers + step matching):");
     && /a `dialog` row's trigger is\s+`on_click` or `on_press`/.test(skill) && /`expect: "dialog"` rows \(`on_click` \/ `on_press` only\)/.test(verifyRef));
   check("steps: a `click` matches exactly one visible element, a `waitFor` at least one (verifier, verify skill, build-screen, references)",
     /A `click` selector must\s+match EXACTLY ONE visible element; a `waitFor` succeeds once AT LEAST ONE visible element matches/.test(verifier)
-    && /A `click` selector must match exactly ONE visible element \(a `waitFor` succeeds once AT LEAST ONE visible element matches\)/.test(verifySkill)
+    && /A `click` selector must\s+match EXACTLY ONE visible element; a `waitFor` succeeds once AT LEAST ONE visible element matches/.test(verifySkill)
     && /each `click` selector matches exactly one visible element, a `waitFor` at least one/.test(skill) && /exactly one visible\s+match per `click` \(a `waitFor` needs at least one\)/.test(verifyRef));
   check("disabled openers are not driven and an opener that would submit a form is not clicked — ok:null (verifier, verify skill, references)",
     [verifier, verifySkill].every((t) => /A disabled opener \(`:disabled`,\s+`\[disabled\]` or `aria-disabled="true"`, on it or on an ancestor\) is not driven/.test(t) && /an opener that would submit\s+a form[^.]*is not clicked/.test(t))
     && /skipping a disabled\s+opener \(`:disabled` \/ `\[disabled\]` \/ `aria-disabled`, on it or an ancestor\) and one that would submit a form \(`ok: null`\)/.test(verifyRef));
   check("the destination tag: on or inside the opened element, or on a NEWLY visible ancestor — never one visible before the click (verifier ×2, verify skill, build-screen, references)",
     /or on an ancestor of it that became visible with it — never on one that was already\s+visible/.test(verifier) && /or on a NEWLY visible ancestor of\s+it — never one visible before the click/.test(verifier)
-    && /or on an ancestor of it that became visible with it — never one already visible before the click/.test(verifySkill)
+    && /or on an ancestor of it that became visible with it — never on one that was already\s+visible/.test(verifySkill)
     && /or on an ancestor of it that became visible with it \(never one visible before the click\)/.test(skill) && /or on a newly visible ancestor of it/.test(verifyRef));
   check("one plan rule: of several plans, the one listing files[]; --compare picks the same; the re-run names --plan (verify skill, build-screen)",
     /or — when several do — the one\s+that lists `files\[\]`; `--compare` picks the plan by the same rule/.test(verifySkill) && /with the `--plan` it names, when it names one/.test(verifySkill)
@@ -304,16 +320,16 @@ console.log("build-screen docs (plan file for --compare + step load ownership):"
     && /a `click` changes the page in place or navigates to another URL, never reloads the one it is on/.test(skill));
   check("every settle first waits for the document to finish loading (readyState complete, 10 s cap, then a note) (verifier, verify skill)",
     /every settle first waits for the document to finish loading \(`document\.readyState`\s+`"complete"`; at most 10 s per document, then it measures anyway, with the note "the document had not finished loading",/.test(verifier)
-    && /every settle first waits for the document to finish loading \(`document\.readyState` `"complete"`, at most 10 s per document, then it measures anyway with a note,/.test(verifySkill));
+    && /every settle first waits for the document to finish loading \(`document\.readyState`\s+`"complete"`; at most 10 s per document, then it measures anyway, with the note "the document had not finished loading",/.test(verifySkill));
   check("the submit refusal also checks the element at the click point (verifier ×2, verify skill ×2)",
     /typeless button inside a `<form>`, on the element or at its click point, is refused/.test(verifier) && /typeless button inside a `<form>`, on it or at its click point\) is not clicked/.test(verifier)
-    && /typeless button inside a `<form>`, on the element or at its click point, is refused/.test(verifySkill) && /an opener that would submit a form \(on it or at its click point\) is not clicked/.test(verifySkill));
+    && /typeless button inside a `<form>`, on the element or at its click point, is refused/.test(verifySkill) && /an opener that would submit a form \(`\[type=submit\]`, or a typeless button inside a `<form>`, on it or at its click point\) is not clicked/.test(verifySkill));
 }
 console.log("build-screen docs (same-URL documents + load wait):");
 {
   check("a same-URL new document is never a click's own — not even one its handler starts at once (verifier, verify skill)",
     /never a step's own — not even\s+one the click's handler starts at once \(`draw\(\); location\.reload\(\)`\)/.test(verifier)
-    && /is never a step's own, not even one the click's handler starts at once \(`draw\(\); location\.reload\(\)`\)/.test(verifySkill));
+    && /is never a step's own — not even one the click's handler starts at once \(`draw\(\); location\.reload\(\)`\)/.test(verifySkill));
   check("the 10 s load wait is per document: no later settle waits for that document again (verifier, verify skill)",
     /at most 10 s per document[^)]*and no later settle waits for that document again[;)]/.test(verifier) && /at most 10 s per document[^)]*and no later settle waits for that document again[;)]/.test(verifySkill));
   check("a link click to the URL already shown owns the load it starts (like a goto; a later same-URL load is a reload); the probe's own loads (--url, goto) wait up to --timeout, then a committed document is measured with the note (verifier, verify skill, references)",
@@ -440,7 +456,7 @@ console.log("build-screen docs (assets):");
 {
   const irf = flat(read("claude-plugin/skills/build-screen/references/ir-fields.md"));
   const exl = flat(read("claude-plugin/skills/build-screen/references/export-layout.md"));
-  const ext = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const ext = extractDocs;
   const readme = flat(read("bridge/README.md"));
   const mcp = flat(read("bridge/src/figma-mcp.ts"));
   const hv = flat(read("claude-plugin/skills/audit-design/references/heuristics.md"));
@@ -476,7 +492,7 @@ console.log("build-screen docs (assets):");
 console.log("build-screen docs:");
 {
   const rd = (rel: string): string => flat(read(rel));
-  const docs = [rd("bridge/README.md"), skill, rd("claude-plugin/skills/extract/SKILL.md"), rd("claude-plugin/skills/help/SKILL.md")].join(" ");
+  const docs = [rd("bridge/README.md"), skill, extractDocs, rd("claude-plugin/skills/help/SKILL.md")].join(" ");
   const src = (rel: string): string => read(rel);
   // Each new flag a doc mentions is registered in the script's own OPTIONS.
   const flags: ReadonlyArray<readonly [string, string, string]> = [
@@ -490,9 +506,9 @@ console.log("build-screen docs:");
     ["bridge/README.md", "claude-plugin/skills/help/SKILL.md", "claude-plugin/skills/extract/SKILL.md"].every((f) => /FIGMA_BRIDGE_PORT/.test(rd(f)) && /positional/.test(rd(f))));
   check("the `done in` timing line and `dtwin serve` keeping the plugin connected are stated", /done in Xs|done in 12\.4s/.test(docs) && /`dtwin serve`.{0,200}(skip|connected)/.test(docs));
   check("troubleshooting explains `connected but sent nothing` and the fixed abandoned-reply bug", /connected but sent nothing/.test(rd("claude-plugin/skills/help/references/troubleshooting.md")) && /unique per bridge/.test(rd("claude-plugin/skills/help/references/troubleshooting.md")));
-  check("variables.json scope sentence + tokens --lookup, in build-screen and extract", [skill, rd("claude-plugin/skills/extract/SKILL.md")].every((d) => /only (the )?variables bound by pulled nodes/.test(d) && /--lookup/.test(d)));
+  check("variables.json scope sentence + tokens --lookup, in build-screen and extract", [skill, extractDocs].every((d) => /only (the )?variables bound by pulled nodes/.test(d) && /--lookup/.test(d)));
   check("build-screen: catalog by:\"ambiguous\", finding ids code@nodeId (legacy code#i), crossCheckFile", /by:"ambiguous"/.test(skill) && /`code@nodeId`/.test(skill) && /code#i/.test(skill) && /crossCheckFile/.test(skill));
-  check("cross-check labels alreadyMapped / sharedWith documented", [skill, rd("claude-plugin/skills/extract/SKILL.md")].every((d) => /alreadyMapped/.test(d) && /sharedWith/.test(d)));
+  check("cross-check labels alreadyMapped / sharedWith documented", [skill, extractDocs].every((d) => /alreadyMapped/.test(d) && /sharedWith/.test(d)));
   check("every resolve-screen snippet passes design/plan", ["audit-design", "sync-design", "verify", "build-screen", "extract"].every((n) => {
     const t = rd(`claude-plugin/skills/${n}/SKILL.md`);
     const m = t.match(/resolve-screen\.js" <exportDir> "<[a-z-]+>"[^`]*/g) ?? [];
@@ -509,22 +525,22 @@ console.log("build-screen docs:");
   check("crossCheckFile = the cross-check report beside the audit, when there is one (build-screen + audit-design)",
     [skill, audit].every((d) => /cross-check report beside the audit/.test(d) && /when there is one/.test(d)) &&
     !/the findings were merged from/.test(skill) && !/the cross-file half came from/.test(audit));
-  const lookupDocs = [rd("bridge/README.md"), skill, rd("claude-plugin/skills/extract/SKILL.md"), src("design-to-code/tokens.ts")];
+  const lookupDocs = [rd("bridge/README.md"), skill, extractDocs, src("design-to-code/tokens.ts")];
   check("no doc shows an unquoted `--lookup <#hex>` / `--lookup #…`, and each says the bare or quoted form",
     lookupDocs.every((d) => !/--lookup <#hex>|--lookup #/.test(d) && /ffbc1c/.test(d) && /'#ffbc1c'/.test(d)));
   // the .prev is kept only when the design differs — the export stamp alone does not count.
   check("README + extract + write-out say `.prev` ignores the exportedAt stamp; no 'bytes differ' wording",
-    [rd("bridge/README.md"), rd("claude-plugin/skills/extract/SKILL.md"), src("bridge/src/write-out.ts")].every((d) => /(content differs|DIFFERENT design)[^.]{0,80}exportedAt/.test(d)) &&
+    [rd("bridge/README.md"), extractDocs, src("bridge/src/write-out.ts")].every((d) => /(content differs|DIFFERENT design)[^.]{0,80}exportedAt/.test(d)) &&
     !/whose bytes\s+differ/.test(rd("bridge/README.md")) && !/with DIFFERENT bytes/.test(src("bridge/src/write-out.ts")));
   check("README + extract say usage errors in --check/--lookup are 2 and the parent directory tells two tokens.json apart",
-    [rd("bridge/README.md"), rd("claude-plugin/skills/extract/SKILL.md")].every((d) => /usage errors?[^.]{0,40}\b2\b/.test(d) && /parent directory/.test(d)));
+    [rd("bridge/README.md"), extractDocs].every((d) => /usage errors?[^.]{0,40}\b2\b/.test(d) && /parent directory/.test(d)));
 }
 console.log("build-screen docs (quick keys + export docs):");
 {
   const rd = (rel: string): string => flat(read(rel));
   const exists = (rel: string): boolean => fs.existsSync(path.join(root, rel));
   const irRaw = read("claude-plugin/skills/build-screen/references/ir-fields.md");
-  const ext = rd("claude-plugin/skills/extract/SKILL.md");
+  const ext = extractDocs;
   const help = rd("claude-plugin/skills/help/SKILL.md");
   const readme = rd("bridge/README.md");
   const norm = (t: string): string => t.replace(/\r\n/g, "\n").trim();
@@ -580,7 +596,7 @@ console.log("build-screen docs (quick keys + export docs):");
   check("sync-design: a \"differ only by the exporter's format\" warning after a plugin update is not a design change; re-run --expect/--compare once",
     /differ only by the exporter's format" after a plugin update is not a design change/.test(syncSkill) && /Re-run `verify-screen --expect` \/ `--compare` once/.test(syncSkill));
   const readme21 = flat(read("bridge/README.md"));
-  const extract21 = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const extract21 = extractDocs;
   const verbs21 = read("bridge/src/verbs.ts");
   const mcp21 = read("bridge/src/figma-mcp.ts");
   const mcpAt = mcp21.indexOf('"figma_list_children",');
@@ -736,7 +752,7 @@ console.log("build-screen docs:");
   check("visual-verifier and verify skill: states sit beside styles (nodes[].states), never inside; a state on a spec with no drawnState is listed as inferred, not compared",
     [verifier, verifySkill].every((d) => /beside(\*\*)? `styles`/.test(d) && /never inside it/.test(d) && /unknown key/.test(d)) && /only for a spec with `drawnState`/.test(verifier) && /Inferred, not designed/.test(verifier));
   check("visual-verifier and verify skill: inferred[] rows {nodeId?, state, built, why?} in the evidence file; listed under 'Inferred, not designed', never graded, never the verdict",
-    [verifier, verifySkill].every((d) => /`inferred\[\]`/.test(d) && /\{"?nodeId"?\??, "?state"?, "?built"?, "?why"?\??\}/.test(d) && /Inferred, not designed/.test(d)) && /never part of the verdict/.test(verifier) && /never graded and never in the verdict/.test(verifySkill));
+    [verifier, verifySkill].every((d) => /`inferred\[\]`/.test(d) && /\{"?nodeId"?\??, "?state"?, "?built"?, "?why"?\??\}/.test(d) && /Inferred, not designed/.test(d)) && [verifier, verifySkill].every((d) => /never graded and never in the verdict/.test(d)));
   check("visual-verifier and verify skill: quote the report's own delta text (it names the axis/dimension), never restate a bound",
     [verifier, verifySkill].every((d) => /Quote the report's own delta text — it names the axis or dimension — and never restate a bound/.test(d)));
   check("verify skill, build-screen and references/verify.md: --record-plan writes mode/renderer/artifacts/deltas/a11y/recorded; coverage stays hand-written; no 'Record the result by hand'",
@@ -757,6 +773,9 @@ console.log("build-screen docs:");
   check("troubleshooting: the probe's exit 3 (no usable browser) → --browser-path <executable> (also on --check; macOS inner binary; only guaranteed with the bundled Chromium; recorded as custom)",
     /`verify-probe` exits 3/.test(trouble) && /--browser-path <executable>/.test(trouble) && /also on `--check`/.test(trouble) && /Contents\/MacOS/.test(trouble)
     && /Only guaranteed with the bundled Chromium/.test(trouble) && /records `custom`, never the path/.test(trouble));
+  check("troubleshooting: a \"designtwin visual-verifier guard: …\" stop is the verifier's PreToolUse hook (verifier-guard.js), by design; installs are the user's, its own server stops by PID / group / pkill -P",
+    /"designtwin visual-verifier guard: …"/.test(trouble) && /`scripts\/verifier-guard\.js`/.test(trouble) && /applies to that agent only/.test(trouble)
+    && /`dangerouslyDisableSandbox`/.test(trouble) && /is the user's to run/.test(trouble) && /`kill -- -<pgid>`/.test(trouble) && /`pkill -P <pid>`/.test(trouble));
   check("verify skill: recording never reopens a plan — a hook record from before the hash change is re-stamped in the same write",
     /recording never reopens a plan \(the hook's hash does not cover `verification`; a hook record from before that change is re-stamped in the same write\)/.test(verifySkill));
   check("build-screen: the hook hashes files[] and every mapped module (extensionless resolves like an import; an alias or package is not hashed — --status and the report name it once)",
@@ -765,7 +784,7 @@ console.log("build-screen docs:");
     /A sibling or overlay painting over the element is not seen \(it may pass\)/.test(verifySkill) && /its own children paint all over gets no painter/.test(verifySkill));
   const readme20 = flat(read("bridge/README.md"));
   const help20 = flat(read("claude-plugin/skills/help/SKILL.md"));
-  const extract20 = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const extract20 = extractDocs;
   const audit20 = flat(read("claude-plugin/skills/audit-design/SKILL.md"));
   check("README + help: an owning MCP server exits when its client goes away, unless its socket was used, then idles out on FIGMA_DAEMON_IDLE_MIN",
     [readme20, help20].every((d) => /exits when its client goes away/.test(d) && /FIGMA_DAEMON_IDLE_MIN/.test(d) && /unless another process has used/.test(d)));

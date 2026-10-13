@@ -2,6 +2,18 @@
 
 Loaded from the `help` skill. Find the symptom, give the fix — don't debug from memory.
 
+## Contents
+- Run `dtwin doctor` first
+- Connecting the plugin and the bridge
+- Slow or stalled pulls
+- Commands, tokens and ports
+- Exports
+- Project setup and the MCP server
+- Audit, scripts and the verify probe
+- Assets and plugin development
+
+## Run `dtwin doctor` first
+
 **Connection-shaped problem (hangs, timeouts, `EADDRINUSE`, token rejected, "nothing connected")? Run
 `dtwin doctor` first.** It checks Node, the token (incl. an env var shadowing the saved one), the
 daemon, the port and who holds it, whether the plugin connects — and if a plugin is running with the
@@ -10,6 +22,8 @@ daemon, the port and who holds it, whether the plugin connects — and if a plug
 file). `--wait 30` waits longer for the plugin; `--json` for machine output. The entries below are the
 detail behind its findings, and everything it can't see. (Commands below are written as flags; the
 verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … — are the same commands.)
+
+## Connecting the plugin and the bridge
 
 - **Plugin isn't in the menu / a manifest change didn't take** → re-import via *Import plugin from
   manifest…*. It lives under **Plugins → Development**, not the main plugin list.
@@ -44,6 +58,9 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   plugin (`dtwin serve` in another terminal) the same read answers in seconds. The plugin reports `start`
   when it begins a run and `queued` when it arrives behind another, so a progress line shows which. If it
   keeps happening, look at the plugin window.
+
+## Slow or stalled pulls
+
 - **A pull took ~80 s but the export itself was ~3 s** → read the closing `done in …` line: `waited Ys for
   the plugin to connect` is the plugin re-dialling a fresh one-shot bridge (3 s retry, slower in a
   background window). `dtwin serve` keeps one bridge open and the plugin connected.
@@ -51,6 +68,9 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   and a reply only settles the connection it was sent to. A cancelled request stops in the plugin
   within one node (a single long `exportAsync` still runs to its end), so an abandoned export does not
   keep the plugin busy for the next command.
+
+## Commands, tokens and ports
+
 - **`dtwin pull --out <dir>` → "outDir is positional"** → write `dtwin pull <dir>`. There is also no
   `--port`: set `FIGMA_BRIDGE_PORT` (`DTWIN_PORT` is not read; `dtwin doctor` warns about it).
 - **Token rejected / 401** → token mismatch: the plugin's **Bridge token** field doesn't equal
@@ -71,6 +91,9 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   `design/lib`) so exports don't collide.
 - **A connection that sat idle came back as a different `instanceId`** → Figma restarted the plugin
   runtime. Don't leave the Figma window **minimized** (its renderer gets suspended); occluded is fine.
+
+## Exports
+
 - **An export slowed to a crawl — a progress tick every ~3 s and the node counter barely moving** → the
   file's tab is not the *active* tab in Figma Desktop. Measured live (2026-09-25, one page, daemon):
   31–38 ticks and ~2,500 nodes per 10 s with the file's tab in front; 3–5 ticks and ~15 nodes per 10 s
@@ -84,6 +107,9 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   front.
 - **A component in an export has no library/main component** → its library probably wasn't enabled
   when the export ran. Enable it in Figma, re-pull; there is no API to enable it.
+
+## Project setup and the MCP server
+
 - **MCP `designtwin` not showing up** → **this repo registers no MCP server** (there is no `.mcp.json`
   here, by choice — see `bridge/README.md`). Path C is for the project you are *building*: add a
   `.mcp.json` there pointing at an absolute path to `bridge/dist/figma-mcp.js` (built and linked) or
@@ -97,6 +123,9 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 - **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/` is older than
   24h (or has no `exportedAt`), so a "clean" result is against the snapshot, not the live file.
   Re-run Path A/B. Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.
+
+## Audit, scripts and the verify probe
+
 - **Audit verdict is "Blocked"** → only four things block: a truncated export, failed assets, a missing
   font, or a frame not marked ready for dev. Re-export a narrower scope / install the font / confirm
   with the designer; everything else is a warning with a stated default and doesn't stop the build.
@@ -118,9 +147,19 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   (also on `--check`) — the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`). A path that is
   not an executable file is exit 3 with one line saying so. Only guaranteed with the bundled Chromium (another
   version may not launch or may render differently); `measured.json` records `custom`, never the path.
+- **A verify run stops with "designtwin visual-verifier guard: …"** → the plugin's PreToolUse hook
+  (`hooks/hooks.json` → `scripts/verifier-guard.js`) refused one of the `visual-verifier` agent's own calls; it
+  applies to that agent only. It refuses a write outside `design/verify/` and the run cache
+  (`node_modules/.cache/designtwin-verify/`), or to a file the verify tools own; a pattern kill (`pkill`,
+  `killall`, `kill -1`, …); a dependency or Playwright browser install; and `dangerouslyDisableSandbox`. The reason
+  says what to do instead. This is by design, not a fault to work round: a needed install (e.g. the probe's exit 3)
+  is the user's to run, and the verifier stops its own server with `kill <pid>`, `kill -- -<pgid>` or `pkill -P <pid>`.
 - **Audit flags a lot of `small-touch-target` / `fixed-size-text`** → thresholds differ per platform
   (web 24px, iOS 44pt, Android 48dp) — make sure `--platform` matches the stack. Visual size can stay
   small if the hit area is padded; decorative static text can ignore the fixed-size warning.
+
+## Assets and plugin development
+
 - **Icons missing / lots of asset warnings** → warnings aggregate by kind. Invisible vector nodes are
   skipped silently; failed SVG exports fall back to a `geometry` field the codegen renders inline. A
   node with **neither** `asset` nor `geometry` is a genuine failure — report it.

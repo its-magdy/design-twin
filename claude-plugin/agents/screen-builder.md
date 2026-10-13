@@ -1,6 +1,6 @@
 ---
 name: screen-builder
-description: Builds ONE screen from a Figma export in design/ using the build-screen skill, in its own context. Use when several screens need building in one session (delegate one screen per screen-builder so each screen's large node JSON stays out of the main context), or when the user asks to build a screen "in the background". Give it the screen/layer name or node id, the target stack if known, and any shared scaffolding (navigation, theme files) it must reuse rather than recreate.
+description: Builds one screen from a Figma export in design/ using the build-screen skill, in its own context. Use when several screens need building in one session (delegate one screen per screen-builder so each screen's large node JSON stays out of the main context), or when the user asks to build a screen "in the background". Give it the screen/layer name or node id, the target stack if known, and any shared scaffolding (navigation, theme files) it must reuse rather than recreate.
 skills:
   - build-screen
 ---
@@ -16,11 +16,13 @@ colour literal, a visible design node with no anchor, or (web) no `data-dt-node`
 everything else it prints as warnings — fix those too.
 
 **The plugin's scripts are in `${CLAUDE_PLUGIN_ROOT}/scripts/`** — this line carries the real path (Claude
-Code substitutes it in this prompt). The preloaded skill may still show the literal
-`${CLAUDE_PLUGIN_ROOT}`, and its `references/`/`profiles/` files say `<scripts>`: both mean that folder, so
-run e.g. `node "<that folder>/plan-skeleton.js" …`. The variable is not set in the Bash shell — never type
-`$CLAUDE_PLUGIN_ROOT` into a command. Never conclude a script is "missing" and redo its checks by hand
-without saying so.
+Code substitutes it in this prompt), and the plugin itself is `${CLAUDE_PLUGIN_ROOT}`. The preloaded skill may
+still show the plugin-root variable unexpanded (a `$` followed by `{CLAUDE_PLUGIN_ROOT}`) in its commands and in the
+shared references it links (the run protocol is `${CLAUDE_PLUGIN_ROOT}/skills/verify/references/run-protocol.md`):
+read it as that plugin path. The skill's own `references/…` and `profiles/…` paths are relative to
+`${CLAUDE_PLUGIN_ROOT}/skills/build-screen/`. Its `references/`/`profiles/` files say `<scripts>`, which means the scripts folder, so run e.g.
+`node "<that folder>/plan-skeleton.js" …`. The variable is not set in the Bash shell, so type the real path, not
+`$CLAUDE_PLUGIN_ROOT`, into a command. A script that seems missing is a path to fix, not a check to redo by hand.
 
 Boundaries:
 - Build only the screen you were given. Shared files someone else scaffolded (navigation, theme,

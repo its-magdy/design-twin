@@ -56,6 +56,9 @@ node test/verify-build.test.ts         # expect: all checks pass, exit 0 — the
                                        # (stdin only when fd 0 is not a TTY, 1s silent-pipe / 60s hard cutoff,
                                        # computed --status never stored), and that claude-plugin/scripts/ is in
                                        # sync with design-to-code/ (stale? run: node claude-plugin/build-scripts.ts)
+node test/verifier-guard.test.ts       # expect: all checks pass, exit 0 — the visual-verifier's PreToolUse guard: scoped by
+                                       # agent_type, the write allow-list, refused pattern kills / installs / sandbox bypass,
+                                       # the shipped bundle's deny JSON + exit 0, fail-open on bad input, the hooks.json matcher
 node test/plan-skeleton.test.ts        # expect: all checks pass, exit 0 — the build-screen plan skeleton generated
                                        # from the export (tokens, visible instances, anchors, hidden roots, --out merge,
                                        # --seed-from) and the visibility rule verify-build.js walks with
@@ -82,7 +85,7 @@ node test/resolve-screen.test.ts       # expect: all checks pass, exit 0 — the
 node test/mcp-share.test.ts            # expect: all checks pass, exit 0 — two MCP servers on one port share the bridge
 node test/mcp-smoke.test.ts            # expect: all checks pass, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
-node --check design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/verify-screen.ts design-to-code/verify-shared.ts design-to-code/verify-expect.ts design-to-code/verify-compare.ts design-to-code/verify-report-md.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts
+node --check design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/hook-input.ts design-to-code/verifier-guard.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/verify-screen.ts design-to-code/verify-shared.ts design-to-code/verify-expect.ts design-to-code/verify-compare.ts design-to-code/verify-report-md.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts
 ```
 
 `test/audit.test.ts` drives `design-to-code/audit.ts` (the pre-build design audit behind the
