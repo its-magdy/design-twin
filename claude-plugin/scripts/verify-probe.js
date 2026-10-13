@@ -151,10 +151,11 @@ function collectCandidates(input) {
     placeholders[t] = (ph.get(t) || []).map((e) => cand(e, false));
   }
   const positions = {};
+  const allRects = input.positions.length ? all.map((el) => pageRect(el.getBoundingClientRect())) : [];
   for (const p of input.positions) {
-    const hits = all.filter((el) => {
-      const r = pageRect(el.getBoundingClientRect());
-      return Math.abs(r.x - p.x) <= 2 && Math.abs(r.y - p.y) <= 2 && Math.abs(r.w - p.w) <= 2 && Math.abs(r.h - p.h) <= 2;
+    const hits = all.filter((_el, i) => {
+      const r = allRects[i];
+      return !!r && Math.abs(r.x - p.x) <= 2 && Math.abs(r.y - p.y) <= 2 && Math.abs(r.w - p.w) <= 2 && Math.abs(r.h - p.h) <= 2;
     });
     positions[p.nodeId] = innermost(hits).map((e) => cand(e, false));
   }
