@@ -38,9 +38,10 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { BehaviourAxe, BehaviourCheck, BehaviourCheckId, BehaviourLandmark, BehaviourStatus, BehaviourWidth, InteractionEvidence, JsonObject, MeasuredBehaviour, PageOverflow, VerifyExpectation, VerifyInteraction } from "./types.ts";
-import { CUT_SETTLE_MS, DIALOG_CONTRACT, NAVIGATED, StepError, armDetector, drivable, holdContext, openerState, ownPixels, pollDetector, raceBudget, raf2, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
+import { CUT_SETTLE_MS, DIALOG_CONTRACT, StepError, armDetector, drivable, holdContext, openerState, ownPixels, pollDetector, raceBudget, raf2, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
 import type { DetectorRead, Held } from "./probe-drive.ts";
-import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
+import { firstLine } from "../bridge/src/errmsg.ts";
+import { pwErrorKind } from "./pw-errors.ts";
 import { parseCssColor } from "./color.ts";
 import type { BehState, PageBox, PageDocument, PageElement, PageNode, PageStyle, PageWindow } from "./page-dom.ts";
 
@@ -1463,6 +1464,9 @@ const AXE_CAP_MS = 20_000;
 const AXE_TIMED_OUT = Symbol("axe timed out");
 /** A battery unit that cannot go on: its remaining checks are not-run with this reason. */
 class BatteryStop extends Error {}
+/** A replaced document or a closed / crashed page ends the unit: no later check can run on this page, so a step that
+ *  otherwise records its own not-run row rethrows these. */
+const endsUnit = (e: unknown, page: Page): boolean => { const k = pwErrorKind(e, page); return k === "navigated" || k === "gone"; };
 const park = async (page: Page): Promise<void> => { await page.mouse.move(0, 0); await raf2(page); };
 /** markOpener, then — when it took a container's sole control that this page has not judged yet — the SAME
  *  pixel check as the drive's (probe-drive.ts ownPixels): content of the container's own drops the control (no key is
@@ -1788,8 +1792,11 @@ async function runUnitInner(ctx: UnitCtx, unit: Unit): Promise<void> {
       await reached.context.close().catch(() => undefined);
     }
   })().catch((e: unknown): string => {
-    if (e instanceof UnitNavigated || NAVIGATED.test(errMsg(e))) return "the page loaded a new document";
+    // no page to ask: the context is closed by now, so the error alone says what happened
+    const kind = pwErrorKind(e);
+    if (e instanceof UnitNavigated || kind === "navigated") return "the page loaded a new document";
     if (e instanceof BatteryStop) return e.message;
+    if (kind === "gone") return `the browser closed or crashed — ${firstLine(e)}`;
     return `the check could not run — ${firstLine(e)}`;
   });
   // the context exists from before the screen was reached: closing it ends whatever the unit waits on — ≤ 5 s in all
@@ -1822,7 +1829,7 @@ function a11yUnit(ctx: UnitCtx): Unit {
       await park(page);
       u.phase("a11y.landmarks");
       let yaml: string | null = null;
-      try { yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(o.timeout, 10_000) }); } catch (e) { if (NAVIGATED.test(errMsg(e))) throw e; }
+      try { yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(o.timeout, 10_000) }); } catch (e) { if (endsUnit(e, page)) throw e; }
       const tree = yaml === null ? null : parseAriaLandmarkTree(yaml);
       ctx.landmarks = tree ? tree.landmarks : null;
       for (const c of landmarkFindings(tree, tree ? await page.evaluate(unnamedRegions, null) : [])) u.add(c);
@@ -1846,7 +1853,7 @@ function a11yUnit(ctx: UnitCtx): Unit {
             u.add({ id: "a11y.axe", status: st, detail: st === "pass" ? `axe-core ${parsed.version}: no violations (main frame; iframes not scanned)` : `axe-core ${parsed.version}: ${parsed.violations.length} violation(s) — ${list} (critical/serious = fail, moderate/minor = warn; main frame; iframes not scanned)`, evidence: { version: parsed.version, violations: parsed.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes, help: v.help, targets: v.targets })) } });
           }
         } catch (e) {
-          if (NAVIGATED.test(errMsg(e))) throw e;
+          if (endsUnit(e, page)) throw e;
           ctx.axe = { ran: false, why: e instanceof AxeTimeout ? e.message : `axe-core ${o.axe.version} failed in the page: ${firstLine(e)}` };
           u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${ctx.axe.why}` });
         }
@@ -1943,7 +1950,7 @@ function a11yUnit(ctx: UnitCtx): Unit {
         if (!s.connected) { nameRows.push({ id: "a11y.name", status: "not-run", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: "not-run: left the document during the walk" }); continue; }
         let snap = "";
         try { snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2000 }); } catch (e) {
-          if (NAVIGATED.test(errMsg(e))) throw e;
+          if (endsUnit(e, page)) throw e;
           nameRows.push({ id: "a11y.name", status: "not-run", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
           continue;
         }

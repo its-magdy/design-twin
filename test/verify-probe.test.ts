@@ -594,9 +594,11 @@ const whyOf = (m: Match | NoMatch): string => (isMatch(m) ? "" : m.why);
 
 // a dead browser is not a reload
 t("'Target page, context or browser has been closed' (or a closed page) → gone, never 'navigated'", () =>
-  errorKind("page.evaluate: Target page, context or browser has been closed", false) === "gone" && errorKind("anything", true) === "gone");
-t("a destroyed execution context → navigated", () => errorKind("page.evaluate: Execution context was destroyed, most likely because of a navigation", false) === "navigated");
-t("an unrelated message that merely says 'navigating' is not a reload", () => errorKind("locator.hover: element is navigating away? (invented)", false) === "other");
+  errorKind("page.evaluate: Target page, context or browser has been closed") === "gone" && errorKind("anything", { isClosed: () => true }) === "gone");
+t("a destroyed execution context → navigated", () => errorKind("page.evaluate: Execution context was destroyed, most likely because of a navigation") === "navigated");
+t("an unrelated message that merely says 'navigating' is not a reload", () => errorKind("locator.hover: element is navigating away? (invented)") === "other");
+t("a timeout is 'other' to errorKind (its callers that wait on one ask pwErrorKind)", () =>
+  errorKind(Object.assign(new Error("locator.click: Timeout 2000ms exceeded."), { name: "TimeoutError" })) === "other");
 // a failed load's cause in plain words — a 204 and a download both end net::ERR_ABORTED; the thrown message
 // tells them apart; another cause is Playwright's first line, as before
 t("loadFailureWhy: net::ERR_ABORTED → no document (e.g. 204 No Content) or the page stopped its own load",

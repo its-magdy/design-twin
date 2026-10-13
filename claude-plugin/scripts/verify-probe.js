@@ -1425,6 +1425,19 @@ function stepsSha256(steps) {
 // design-to-code/probe-drive.ts
 import { setTimeout as sleep } from "node:timers/promises";
 
+// design-to-code/pw-errors.ts
+var CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected|Target crashed|Page crashed/i;
+var NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
+var TIMED_OUT = /Timeout \d+\s*ms exceeded/i;
+function pwErrorKind(e, page) {
+  const name = e instanceof Error ? e.name : "";
+  const m = errMsg(e);
+  if (page !== void 0 && page.isClosed() || name === "TargetClosedError" || CLOSED.test(m)) return "gone";
+  if (name === "TimeoutError") return "timeout";
+  if (NAVIGATED.test(m)) return "navigated";
+  return TIMED_OUT.test(m) ? "timeout" : "other";
+}
+
 // bridge/src/png.ts
 import { crc32, deflateSync, inflateSync } from "node:zlib";
 var PngError = class extends Error {
@@ -2506,8 +2519,6 @@ function judge(action, e) {
 var StepError = class extends Error {
 };
 var raf2 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
-var CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i;
-var NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
 var CUT_SETTLE_MS = 5e3;
 var CUT = /* @__PURE__ */ Symbol("cut");
 var UNSETTLED = /* @__PURE__ */ Symbol("unsettled");
@@ -2723,8 +2734,9 @@ async function driveRow(browser, o, row, hooks, onContext) {
       await page.locator(openerPath).first().click({ timeout: 2e3 });
     } catch (e) {
       const m = errMsg(e);
-      if (CLOSED.test(m)) throw e;
-      if (!NAVIGATED.test(m)) {
+      const kind = pwErrorKind(e, page);
+      if (kind === "gone") throw e;
+      if (kind !== "navigated") {
         clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
         activation = "synthetic";
         await restoreSettled(page);
@@ -2738,8 +2750,7 @@ async function driveRow(browser, o, row, hooks, onContext) {
       try {
         read = await page.evaluate(pollDetector, { destId, contract });
       } catch (e) {
-        if (CLOSED.test(errMsg(e))) throw e;
-        if (!NAVIGATED.test(errMsg(e))) throw e;
+        if (pwErrorKind(e, page) !== "navigated") throw e;
         read = { lost: true, detectedBy: null, opened: null, dest: null };
       }
       if (read.lost) break;
@@ -2796,7 +2807,7 @@ async function driveInteractions(browser, o, hooks) {
     }
     const held = {};
     const work = driveRow(browser, o, row, hooks, holdContext(held)).catch((e) => {
-      if (CLOSED.test(errMsg(e))) return notRun(row, `the browser closed while driving \u2014 ${firstLine(e)}`);
+      if (pwErrorKind(e) === "gone") return notRun(row, `the browser closed or crashed while driving \u2014 ${firstLine(e)}`);
       return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
     });
     const r = await raceBudget(work, left, held);
@@ -4014,6 +4025,10 @@ var AXE_CAP_MS = 2e4;
 var AXE_TIMED_OUT = /* @__PURE__ */ Symbol("axe timed out");
 var BatteryStop = class extends Error {
 };
+var endsUnit = (e, page) => {
+  const k = pwErrorKind(e, page);
+  return k === "navigated" || k === "gone";
+};
 var park = async (page) => {
   await page.mouse.move(0, 0);
   await raf2(page);
@@ -4290,8 +4305,10 @@ async function runUnitInner(ctx, unit) {
       await reached.context.close().catch(() => void 0);
     }
   })().catch((e) => {
-    if (e instanceof UnitNavigated || NAVIGATED.test(errMsg(e))) return "the page loaded a new document";
+    const kind = pwErrorKind(e);
+    if (e instanceof UnitNavigated || kind === "navigated") return "the page loaded a new document";
     if (e instanceof BatteryStop) return e.message;
+    if (kind === "gone") return `the browser closed or crashed \u2014 ${firstLine(e)}`;
     return `the check could not run \u2014 ${firstLine(e)}`;
   });
   const raced = await raceBudget(work, left, held, () => {
@@ -4327,7 +4344,7 @@ function a11yUnit(ctx) {
       try {
         yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(o.timeout, 1e4) });
       } catch (e) {
-        if (NAVIGATED.test(errMsg(e))) throw e;
+        if (endsUnit(e, page)) throw e;
       }
       const tree = yaml === null ? null : parseAriaLandmarkTree(yaml);
       ctx.landmarks = tree ? tree.landmarks : null;
@@ -4352,7 +4369,7 @@ function a11yUnit(ctx) {
             u.add({ id: "a11y.axe", status: st, detail: st === "pass" ? `axe-core ${parsed.version}: no violations (main frame; iframes not scanned)` : `axe-core ${parsed.version}: ${parsed.violations.length} violation(s) \u2014 ${list} (critical/serious = fail, moderate/minor = warn; main frame; iframes not scanned)`, evidence: { version: parsed.version, violations: parsed.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes, help: v.help, targets: v.targets })) } });
           }
         } catch (e) {
-          if (NAVIGATED.test(errMsg(e))) throw e;
+          if (endsUnit(e, page)) throw e;
           ctx.axe = { ran: false, why: e instanceof AxeTimeout ? e.message : `axe-core ${o.axe.version} failed in the page: ${firstLine(e)}` };
           u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${ctx.axe.why}` });
         }
@@ -4489,7 +4506,7 @@ function a11yUnit(ctx) {
         try {
           snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2e3 });
         } catch (e) {
-          if (NAVIGATED.test(errMsg(e))) throw e;
+          if (endsUnit(e, page)) throw e;
           nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
           continue;
         }
@@ -5428,7 +5445,12 @@ async function captureVisual(browser, o) {
     } finally {
       await context.close().catch(() => void 0);
     }
-  })().catch((e) => ({ why: /Execution context was destroyed|frame was detached|navigation/i.test(errMsg(e)) ? "the page loaded a new document during the visual capture" : `the visual capture failed \u2014 ${firstLine(e)}` }));
+  })().catch((e) => {
+    const kind = pwErrorKind(e);
+    if (kind === "navigated") return { why: "the page loaded a new document during the visual capture" };
+    if (kind === "gone") return { why: `the browser closed or crashed during the visual capture \u2014 ${firstLine(e)}` };
+    return { why: `the visual capture failed \u2014 ${firstLine(e)}` };
+  });
   const r = await raceBudget(work, o.budgetMs, held);
   if (!r.cut) return r.value;
   return { why: `the visual capture did not finish within its budget (${Math.round(o.budgetMs / 1e3)} s)` };
@@ -5870,9 +5892,9 @@ var INIT_SCRIPT = `(() => {
 var QUIET_MS = 500;
 var QUIET_CAP_MS = 1e4;
 var POLL_MS = 100;
-function errorKind(message, pageClosed) {
-  if (pageClosed || CLOSED.test(message)) return "gone";
-  return NAVIGATED.test(message) ? "navigated" : "other";
+function errorKind(e, page) {
+  const kind = pwErrorKind(e, page);
+  return kind === "timeout" ? "other" : kind;
 }
 var NavigatedError = class extends Error {
 };
@@ -5897,8 +5919,8 @@ async function docTokenOrNull(page) {
     const v = await page.evaluate("window.__dtProbeDoc || ''");
     return String(v);
   } catch (e) {
-    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-    if (errorKind(errMsg(e), false) === "navigated") return null;
+    if (errorKind(e, page) === "gone") throw gone(e);
+    if (errorKind(e) === "navigated") return null;
     throw e;
   }
 }
@@ -5932,7 +5954,7 @@ async function settle(page, log, ready, timeout) {
     try {
       state = await page.evaluate("document.readyState");
     } catch (e) {
-      if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+      if (errorKind(e, page) === "gone") throw gone(e);
       return loadNote;
     }
     if (state !== "complete") return loadNote;
@@ -5950,8 +5972,8 @@ async function settle(page, log, ready, timeout) {
         try {
           await page.waitForLoadState("load", { timeout: Math.max(1, docDeadline - Date.now()) });
         } catch (e) {
-          if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-          if (errorKind(errMsg(e), false) === "navigated") throw e;
+          if (errorKind(e, page) === "gone") throw gone(e);
+          if (errorKind(e) === "navigated") throw e;
           loadNote = `the document had not finished loading after ${Math.round(cap / 1e3)}s (document.readyState "${String(state)}") \u2014 measured anyway`;
           const now = await docTokenOrNull(page);
           if (now !== null && now !== "" && (token === null || now === token)) {
@@ -5966,7 +5988,7 @@ async function settle(page, log, ready, timeout) {
       if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, docDeadline - Date.now()) : timeout });
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
-      if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+      if (errorKind(e, page) === "gone") throw gone(e);
       const now = await docTokenOrNull(page);
       if (now !== null && token !== null && now !== token) {
         await newDocument();
@@ -5978,7 +6000,7 @@ async function settle(page, log, ready, timeout) {
         continue;
       }
       if (moved()) throw kept();
-      if (errorKind(errMsg(e), false) === "navigated" && Date.now() < docDeadline) {
+      if (errorKind(e) === "navigated" && Date.now() < docDeadline) {
         await sleep4(POLL_MS);
         continue;
       }
@@ -5995,8 +6017,8 @@ async function settle(page, log, ready, timeout) {
         tok = String(v[0]);
         sig = String(v[1]);
       } catch (e) {
-        if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-        if (errorKind(errMsg(e), false) !== "navigated") throw e;
+        if (errorKind(e, page) === "gone") throw gone(e);
+        if (errorKind(e) !== "navigated") throw e;
         if (Date.now() >= docDeadline) throw kept();
         continue;
       }
@@ -6033,7 +6055,7 @@ async function oneVisible(page, sel, wait, name, atLeastOne = false) {
       if (only !== void 0 && (vis.length === 1 || atLeastOne)) return only;
       last = { visible: vis.length, all };
     } catch (e) {
-      const kind = errorKind(errMsg(e), page.isClosed());
+      const kind = errorKind(e, page);
       if (kind === "gone") throw gone(e);
       if (kind === "other") throw new StepError(`${name}: ${firstLine(e)}`);
     }
@@ -6084,9 +6106,9 @@ async function ownGoto(page, log, url, timeout) {
   try {
     await page.goto(url, { waitUntil: "load", timeout });
   } catch (e) {
-    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+    if (errorKind(e, page) === "gone") throw gone(e);
     if (/interrupted by another navigation/i.test(errMsg(e))) return;
-    if (!committed || !/Timeout \d+ms exceeded/i.test(errMsg(e))) throw e;
+    if (!committed || pwErrorKind(e) !== "timeout") throw e;
     let state = "unknown";
     try {
       state = await page.evaluate("document.readyState");
@@ -6158,7 +6180,7 @@ async function runSteps(page, log, o) {
           }
         } catch (e) {
           if (e instanceof StepError) throw e;
-          const kind = errorKind(errMsg(e), page.isClosed());
+          const kind = errorKind(e, page);
           if (kind === "gone") throw gone(e);
           if (kind === "other") throw new StepError(`${name} could not be clicked: ${firstLine(e)}`);
         }
@@ -6341,7 +6363,7 @@ async function pass(page, log, o) {
           node.states = { [state]: { styles: shaped.styles || {}, ...shaped.unmeasured ? { unmeasured: shaped.unmeasured } : {} } };
         }
       } catch (e) {
-        if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
+        if (errorKind(e, page) !== "other") throw e;
         node.note = `${state} state not measured: ${firstLine(e)}`;
       } finally {
         if (state === "hover") await page.mouse.move(0, 0).catch(() => void 0);
@@ -6375,8 +6397,8 @@ async function pass(page, log, o) {
     };
   } catch (e) {
     if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError || e instanceof StepError) throw e;
-    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-    if (errorKind(errMsg(e), false) === "navigated") throw new NavigatedError(firstLine(e));
+    if (errorKind(e, page) === "gone") throw gone(e);
+    if (errorKind(e) === "navigated") throw new NavigatedError(firstLine(e));
     throw e;
   }
 }
@@ -6397,7 +6419,7 @@ async function hoverDrawnState(page, spec, m, own, byTag) {
         await loc.hover({ position, timeout: 1e3 });
         return { hovered: c.path, note: null };
       } catch (e) {
-        if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
+        if (errorKind(e, page) !== "other") throw e;
         covered ??= `the free point on ${c.id} was covered (${firstLine(e)})`;
         await page.mouse.move(0, 0);
       }
@@ -6755,7 +6777,7 @@ ${USAGE}`);
         console.error(`verify-probe: ${e.message} \u2014 nothing written.`);
         return 4;
       }
-      if (/Timeout .*exceeded/i.test(errMsg(e))) {
+      if (pwErrorKind(e) === "timeout") {
         console.error(`verify-probe: timed out \u2014 ${firstLine(e)} \u2014 nothing written.`);
         return 4;
       }
