@@ -1,6 +1,7 @@
 // The parts of bridge/src/asset-compare.ts that keep a pull's asset scan cheap: ContentIndex's deferred
 // bucket sort (the same representative order whatever the insertion order, with replaces and reads
-// interleaved) and FileKeyCache (a file's ContentKey reused only while the file is provably unchanged).
+// interleaved) and FileKeyCache (a file's ContentKey reused only while the file is provably unchanged), with
+// the FileMemo it is built on (file-memo.ts).
 // Pure functions and temp files only — binds no port.
 // Run with:  node test/asset-key-cache.test.ts
 import fs from "node:fs";
@@ -8,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { ok, report } from "./assert.ts";
 import * as cmp from "../bridge/src/asset-compare.ts";
+import * as memo from "../bridge/src/file-memo.ts";
 import type { ContentKey } from "../bridge/src/asset-compare.ts";
 
 const t = (name: string, cond: () => boolean): void => {
@@ -145,6 +147,49 @@ console.log("\nasset-compare.ts — FileKeyCache:");
     const bThird = c.keyOf(pb, "b.svg"); // still cached
     const cAgain = c.keyOf(pc, "c.svg"); // computed afresh
     return c.size === 2 && bAgain === first[1] && bThird === first[1] && aAgain !== first[0] && cAgain !== first[2];
+  });
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+console.log("\nfile-memo.ts — FileMemo (what FileKeyCache and write-out.ts's screen reuse keys are built on):");
+{
+  const dir = tmp();
+  const f = path.join(dir, "a.json");
+  fs.writeFileSync(f, "1");
+  let calls = 0;
+  const count = <V>(v: V) => (): V => { calls++; return v; };
+  t("[memo] an unchanged file computes once", () => {
+    const m = new memo.FileMemo<number>({ now: later });
+    calls = 0;
+    return m.get(f, count(1)) === 1 && m.get(f, count(2)) === 1 && calls === 1 && m.size === 1;
+  });
+  t("[memo] a compute that gives undefined stores nothing (the next get computes again)", () => {
+    const m = new memo.FileMemo<number>({ now: later });
+    calls = 0;
+    return m.get(f, count<number | undefined>(undefined)) === undefined && m.get(f, count(3)) === 3 && calls === 2 && m.size === 1;
+  });
+  t("[memo] a missing file never calls compute", () => {
+    const m = new memo.FileMemo<number>({ now: later });
+    calls = 0;
+    return m.get(path.join(dir, "gone.json"), count(1)) === undefined && calls === 0 && m.size === 0;
+  });
+  t("[memo] a directory is computed every time and never stored", () => {
+    const m = new memo.FileMemo<number>({ now: later });
+    calls = 0;
+    return m.get(dir, count(1)) === 1 && m.get(dir, count(2)) === 2 && calls === 2 && m.size === 0;
+  });
+  t("[memo] a file with an old mtime but a ctime in the last 2 s is not stored (a copy that preserved its mtime)", () => {
+    const m = new memo.FileMemo<number>();
+    fs.writeFileSync(f, "2"); fs.utimesSync(f, 1_600_000_000, 1_600_000_000); // utimes itself moves ctime to now
+    calls = 0;
+    return m.get(f, count(1)) === 1 && m.get(f, count(2)) === 2 && calls === 2 && m.size === 0;
+  });
+  t("[memo] a file replaced by rename (atomic-write's way) computes again", () => {
+    const m = new memo.FileMemo<number>({ now: later });
+    m.get(f, count(1));
+    const g = path.join(dir, "next.tmp");
+    fs.writeFileSync(g, "1"); fs.renameSync(g, f); // same size and content: only the inode (and ctime) moved
+    return m.get(f, count(2)) === 2;
   });
   fs.rmSync(dir, { recursive: true, force: true });
 }

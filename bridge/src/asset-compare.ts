@@ -12,6 +12,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { normalizeSvgText, isSvgName, svgFingerprint, numsWithin, relWithin, SVG_TOL } from "./svg-normalize.ts";
+import { FileMemo } from "./file-memo.ts";
 
 // `content` may be a Buffer (bytes on disk / about to be written) or a string (an SVG the plugin just
 // produced, before it's ever touched a filesystem) — normalised either way. Always returns a Buffer.
@@ -143,59 +144,18 @@ export class ContentIndex {
 
 // ---- FileKeyCache: a file's ContentKey, remembered across pulls in one process
 //
-// Every screen pull builds the ContentIndex over the whole shared assets/ directory, so a process that
-// pulls many screens (the daemon, the MCP server, a multi-screen CLI run) would otherwise re-read and
-// re-fingerprint every file in it on every pull. The cache lives in memory only: a sidecar file in the
-// export would have to be trusted across processes and dtwin versions (a changed fingerprint rule would
-// silently keep old keys), and the one-shot CLI pulls few screens per process anyway.
-//
-// A cached key is used only while the file's identity and status are unchanged: size, mtime, ctime, inode
-// and device all equal to what they were when the key was computed. ctime is set by the kernel on every
-// write, rename-over or utimes call and cannot be set back by a user, so a file rewritten with the same size
-// and a preserved or restored mtime still misses. Timestamp precision is platform specific (whole seconds on
-// some file systems), so a rewrite within the same tick could keep every field equal; a key is therefore
-// stored only for a file whose mtime and ctime are both at least `recentMs` (default 2 s) in the past —
-// a file still being written to, or written in the last tick, is always read again.
+// Every screen pull builds the ContentIndex over the whole shared assets/ directory, so a process that pulls
+// many screens would otherwise re-read and re-fingerprint every file in it on every pull. file-memo.ts says
+// when a remembered key may be used.
 
-interface CachedKey { size: number; mtimeMs: number; ctimeMs: number; ino: number; dev: number; key: ContentKey }
-export interface FileKeyCacheOptions { recentMs?: number; maxEntries?: number; now?: () => number }
-
-export class FileKeyCache {
-  private readonly entries = new Map<string, CachedKey>();
-  private readonly recentMs: number;
-  private readonly maxEntries: number;
-  private readonly now: () => number;
-  constructor(o: FileKeyCacheOptions = {}) {
-    this.recentMs = o.recentMs ?? 2000;
-    this.maxEntries = o.maxEntries ?? 50_000;
-    this.now = o.now ?? Date.now;
-  }
-
-  get size(): number { return this.entries.size; }
-  clear(): void { this.entries.clear(); }
-
+export class FileKeyCache extends FileMemo<ContentKey> {
   /** contentKey(name, <the bytes of `file`>), or undefined when the file cannot be read. */
   keyOf(file: string, name: string): ContentKey | undefined {
-    let st: fs.Stats;
-    try { st = fs.statSync(file); } catch { return undefined; }
-    if (!st.isFile()) {
-      try { return contentKey(name, fs.readFileSync(file)); } catch { return undefined; }
-    }
-    const hit = this.entries.get(file);
-    if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs && hit.ctimeMs === st.ctimeMs && hit.ino === st.ino && hit.dev === st.dev) {
-      this.entries.delete(file); this.entries.set(file, hit); // most recently used last
-      return hit.key;
-    }
-    this.entries.delete(file);
-    let bytes: Buffer;
-    try { bytes = fs.readFileSync(file); } catch { return undefined; }
-    const key = contentKey(name, bytes);
-    // `st` is from before the read: a change between the two moves ctime past it, so the next stat misses.
-    if (Math.max(st.mtimeMs, st.ctimeMs) <= this.now() - this.recentMs) {
-      this.entries.set(file, { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, ino: st.ino, dev: st.dev, key });
-      for (const oldest of this.entries.keys()) { if (this.entries.size <= this.maxEntries) break; this.entries.delete(oldest); }
-    }
-    return key;
+    return this.get(file, () => {
+      let bytes: Buffer;
+      try { bytes = fs.readFileSync(file); } catch { return undefined; }
+      return contentKey(name, bytes);
+    });
   }
 }
 

@@ -3,7 +3,7 @@
 
 
 // design-to-code/design-diff.ts
-import fs4 from "node:fs";
+import fs5 from "node:fs";
 import path2 from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -395,7 +395,7 @@ import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/asset-compare.ts
 import crypto from "node:crypto";
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 
 // bridge/src/svg-normalize.ts
 var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
@@ -465,6 +465,57 @@ function svgFingerprint(svg) {
   return { skeleton, nums: Float64Array.from(nums), rel: Float64Array.from(rel) };
 }
 
+// bridge/src/file-memo.ts
+import fs2 from "node:fs";
+var FileMemo = class {
+  entries = /* @__PURE__ */ new Map();
+  recentMs;
+  maxEntries;
+  now;
+  constructor(o = {}) {
+    this.recentMs = o.recentMs ?? 2e3;
+    this.maxEntries = o.maxEntries ?? 5e4;
+    this.now = o.now ?? Date.now;
+  }
+  get size() {
+    return this.entries.size;
+  }
+  clear() {
+    this.entries.clear();
+  }
+  /** `compute()` for `file` — it reads the file itself — or the value it gave while the file is unchanged.
+   *  undefined when `file` cannot be stat'ed (compute is not called) or when compute returns undefined (nothing is
+   *  stored). A path that is not a regular file is computed every time and never stored. */
+  get(file, compute) {
+    const now = this.now();
+    let st;
+    try {
+      st = fs2.statSync(file, { bigint: true });
+    } catch {
+      return void 0;
+    }
+    if (!st.isFile()) return compute();
+    const hit = this.entries.get(file);
+    if (hit && hit.size === st.size && hit.mtimeNs === st.mtimeNs && hit.ctimeNs === st.ctimeNs && hit.ino === st.ino && hit.dev === st.dev) {
+      this.entries.delete(file);
+      this.entries.set(file, hit);
+      return hit.value;
+    }
+    this.entries.delete(file);
+    const value = compute();
+    if (value === void 0) return void 0;
+    const changedNs = st.mtimeNs > st.ctimeNs ? st.mtimeNs : st.ctimeNs;
+    if (changedNs <= BigInt(Math.floor(now - this.recentMs)) * 1000000n) {
+      this.entries.set(file, { size: st.size, mtimeNs: st.mtimeNs, ctimeNs: st.ctimeNs, ino: st.ino, dev: st.dev, value });
+      for (const oldest of this.entries.keys()) {
+        if (this.entries.size <= this.maxEntries) break;
+        this.entries.delete(oldest);
+      }
+    }
+    return value;
+  }
+};
+
 // bridge/src/asset-compare.ts
 function normalizeForCompare(fileName, content) {
   const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
@@ -481,59 +532,18 @@ function contentKey(fileName, content) {
   const fp = svgFingerprint(buf.toString("utf8"));
   return { key: "s:" + sha1Hex(fp.skeleton), nums: fp.nums, rel: fp.rel };
 }
-var FileKeyCache = class {
-  entries = /* @__PURE__ */ new Map();
-  recentMs;
-  maxEntries;
-  now;
-  constructor(o = {}) {
-    this.recentMs = o.recentMs ?? 2e3;
-    this.maxEntries = o.maxEntries ?? 5e4;
-    this.now = o.now ?? Date.now;
-  }
-  get size() {
-    return this.entries.size;
-  }
-  clear() {
-    this.entries.clear();
-  }
+var FileKeyCache = class extends FileMemo {
   /** contentKey(name, <the bytes of `file`>), or undefined when the file cannot be read. */
   keyOf(file, name) {
-    let st;
-    try {
-      st = fs2.statSync(file);
-    } catch {
-      return void 0;
-    }
-    if (!st.isFile()) {
+    return this.get(file, () => {
+      let bytes;
       try {
-        return contentKey(name, fs2.readFileSync(file));
+        bytes = fs3.readFileSync(file);
       } catch {
         return void 0;
       }
-    }
-    const hit = this.entries.get(file);
-    if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs && hit.ctimeMs === st.ctimeMs && hit.ino === st.ino && hit.dev === st.dev) {
-      this.entries.delete(file);
-      this.entries.set(file, hit);
-      return hit.key;
-    }
-    this.entries.delete(file);
-    let bytes;
-    try {
-      bytes = fs2.readFileSync(file);
-    } catch {
-      return void 0;
-    }
-    const key = contentKey(name, bytes);
-    if (Math.max(st.mtimeMs, st.ctimeMs) <= this.now() - this.recentMs) {
-      this.entries.set(file, { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, ino: st.ino, dev: st.dev, key });
-      for (const oldest of this.entries.keys()) {
-        if (this.entries.size <= this.maxEntries) break;
-        this.entries.delete(oldest);
-      }
-    }
-    return key;
+      return contentKey(name, bytes);
+    });
   }
 };
 var fileKeyCache = new FileKeyCache();
@@ -565,13 +575,13 @@ var DESIGN_SYSTEM_FILES = {
 };
 
 // bridge/src/is-main.ts
-import fs3 from "node:fs";
+import fs4 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs3.realpathSync(argv1) === fs3.realpathSync(fileURLToPath2(metaUrl));
+    return fs4.realpathSync(argv1) === fs4.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -942,14 +952,14 @@ function assetPaths(doc) {
 }
 function assetRoot(file, assets) {
   let dir = path2.dirname(path2.resolve(file));
-  for (let i = 0; i < 6; i++, dir = path2.dirname(dir)) if (assets.some((a) => fs4.existsSync(path2.join(dir, a)))) return dir;
+  for (let i = 0; i < 6; i++, dir = path2.dirname(dir)) if (assets.some((a) => fs5.existsSync(path2.join(dir, a)))) return dir;
   return null;
 }
 function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
   if (root) for (const a of assets) {
     try {
-      out[a] = hashAssetBytes(a, fs4.readFileSync(path2.join(root, a)));
+      out[a] = hashAssetBytes(a, fs5.readFileSync(path2.join(root, a)));
     } catch {
     }
   }
@@ -977,13 +987,13 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   }
   const found = [];
   const snap = snapshotPath(file, cwd);
-  if (fs4.existsSync(snap)) {
+  if (fs5.existsSync(snap)) {
     const assets = readJsonOrNull(snap + ".assets.json", isStringRecord);
     const r = readJson(snap, anyJson);
     if (!("doc" in r)) throw new Error(`the snapshot ${path2.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force, or pass --against <an older copy>`);
     found.push({ doc: r.doc, source: path2.relative(cwd, snap), kind: "snapshot", assets });
   }
-  if (fs4.existsSync(snap + ".prev")) {
+  if (fs5.existsSync(snap + ".prev")) {
     const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord);
     const r = readJson(snap + ".prev", anyJson);
     if ("doc" in r) found.push({ doc: r.doc, source: path2.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
@@ -1034,14 +1044,14 @@ function siblingFilesOf(f) {
   if (m) {
     for (const suf of [".vars.json", ".assets.json"]) {
       const p = path2.join(dir, m + suf);
-      if (fs4.existsSync(p)) out.push(path2.relative(process.cwd(), p));
+      if (fs5.existsSync(p)) out.push(path2.relative(process.cwd(), p));
     }
   }
   const pageDir = dir;
   const pagesDir = path2.dirname(pageDir);
   if (path2.basename(pagesDir) === "pages") {
     const idx = path2.join(pagesDir, "index.json");
-    if (fs4.existsSync(idx)) out.push(path2.relative(process.cwd(), idx));
+    if (fs5.existsSync(idx)) out.push(path2.relative(process.cwd(), idx));
   }
   return out;
 }
@@ -1064,42 +1074,42 @@ function main(argv) {
     const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
     let refused = 0;
     for (const f of files) {
-      if (!fs4.existsSync(f)) {
+      if (!fs5.existsSync(f)) {
         console.error(`design-diff: ${f} not found \u2014 nothing to snapshot (first pull?)`);
         continue;
       }
       const dest = snapshotPath(f);
-      fs4.mkdirSync(path2.dirname(dest), { recursive: true });
+      fs5.mkdirSync(path2.dirname(dest), { recursive: true });
       let identical = false;
-      if (fs4.existsSync(dest)) {
+      if (fs5.existsSync(dest)) {
         try {
-          identical = Buffer.compare(fs4.readFileSync(dest), fs4.readFileSync(f)) === 0;
+          identical = Buffer.compare(fs5.readFileSync(dest), fs5.readFileSync(f)) === 0;
         } catch {
         }
       }
-      if (fs4.existsSync(dest) && !identical && !force) {
+      if (fs5.existsSync(dest) && !identical && !force) {
         console.error(`design-diff: ${path2.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
         refused++;
         continue;
       }
-      if (fs4.existsSync(dest) && !identical && force) {
+      if (fs5.existsSync(dest) && !identical && force) {
         try {
-          fs4.copyFileSync(dest, dest + ".prev");
+          fs5.copyFileSync(dest, dest + ".prev");
         } catch {
         }
         try {
-          if (fs4.existsSync(dest + ".assets.json")) fs4.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
+          if (fs5.existsSync(dest + ".assets.json")) fs5.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
         } catch {
         }
       }
-      if (!identical) fs4.copyFileSync(f, dest);
+      if (!identical) fs5.copyFileSync(f, dest);
       let n = 0;
       try {
         const parsed = readJsonOrNull(f, isScreen);
         if (parsed) {
           const h = assetHashes(f, parsed).hashes;
           n = Object.keys(h).length;
-          fs4.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
+          fs5.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
         }
       } catch {
       }
@@ -1141,8 +1151,8 @@ Next time run \`${scriptCmd("design-diff")} --snapshot ${file}\` BEFORE re-pulli
   const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) {
-    fs4.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
-    fs4.writeFileSync(out, text);
+    fs5.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
+    fs5.writeFileSync(out, text);
     console.log(`wrote ${out} \u2014 ${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`);
   } else process.stdout.write(text);
   return 0;
