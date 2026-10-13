@@ -8,7 +8,7 @@
 // browser. (esbuild does not hoist or rename a function's nested locals without minification; the e2e
 // run is the check that it still does not.)
 //
-// The DOM is typed by the small module-local declarations below, not lib:dom: the test/design-to-code
+// The DOM is typed by page-dom.ts (types only, imported with `import type`), not lib:dom: the test/design-to-code
 // tsconfig has no DOM lib (the rest of this layer runs in Node, where `document` does not exist), and
 // these declarations are erased, so nothing here reaches the bundle but the two functions.
 //
@@ -16,47 +16,15 @@
 // Every decision — which element is a spec's, which frame root wins, what a null means — is in
 // probe-match.ts, which is pure and unit-tested without a browser.
 
-// ---------------------------------------------------------------- the page, as far as these functions use it
-interface PRect { x: number; y: number; width: number; height: number }
-interface PStyle { getPropertyValue(prop: string): string }
-interface PNode { nodeType: number; nodeValue: string | null; textContent: string | null; childNodes: ArrayLike<PNode> }
-interface PElement extends PNode {
-  tagName: string;
-  children: ArrayLike<PElement>;
-  parentElement: PElement | null;
-  placeholder?: string;
-  /** the left / top border widths (the padding box's offset inside the border box) */
-  clientLeft: number;
-  clientTop: number;
-  getAttribute(name: string): string | null;
-  hasAttribute(name: string): boolean;
-  getBoundingClientRect(): PRect;
-  getClientRects(): ArrayLike<PRect>;
-  closest(selector: string): PElement | null;
-  matches(selector: string): boolean;
-  contains(other: PElement): boolean;
-  checkVisibility(opts?: { visibilityProperty?: boolean; checkVisibilityCSS?: boolean; opacityProperty?: boolean }): boolean;
-  querySelectorAll(selector: string): ArrayLike<PElement>;
-}
-interface PRange { selectNodeContents(node: PNode): void; getBoundingClientRect(): PRect }
-interface PCtx { fillStyle: string; clearRect(x: number, y: number, w: number, h: number): void; fillRect(x: number, y: number, w: number, h: number): void; getImageData(x: number, y: number, w: number, h: number): { data: ArrayLike<number> } }
-interface PCanvas { width: number; height: number; getContext(kind: "2d", opts?: { willReadFrequently?: boolean }): PCtx | null }
-interface PDocument {
-  body: PElement | null;
-  documentElement: PElement;
-  querySelector(selector: string): PElement | null;
-  querySelectorAll(selector: string): ArrayLike<PElement>;
-  createRange(): PRange;
-  createElement(tag: "canvas"): PCanvas;
-  activeElement: PElement | null;
-  elementFromPoint(x: number, y: number): PElement | null;
-}
-declare const document: PDocument;
+import type { PageCanvasContext, PageDocument, PageElement, PageRect, PageStyle } from "./page-dom.ts";
+
+// ---------------------------------------------------------------- the page, as far as these functions use it (page-dom.ts)
+declare const document: PageDocument;
 declare const scrollX: number;
 declare const scrollY: number;
 declare const innerWidth: number;
 declare const innerHeight: number;
-declare function getComputedStyle(el: PElement, pseudo?: string | null): PStyle;
+declare function getComputedStyle(el: PageElement, pseudo?: string | null): PageStyle;
 
 // ---------------------------------------------------------------- the data both sides agree on
 /** Page coordinates (viewport rect + scroll), so a frame-relative value does not depend on the scroll. */
@@ -126,12 +94,12 @@ export interface CollectOutput {
 export function collectCandidates(input: CollectInput): CollectOutput {
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
   const norm = (s: string | null): string => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-  const pageRect = (r: PRect): Rect => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
-  const pathOf = (el: PElement): string => {
+  const pageRect = (r: PageRect): Rect => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
+  const pathOf = (el: PageElement): string => {
     const parts: string[] = [];
-    let cur: PElement | null = el;
+    let cur: PageElement | null = el;
     while (cur && cur !== document.documentElement) {
-      const parent: PElement | null = cur.parentElement;
+      const parent: PageElement | null = cur.parentElement;
       if (!parent) break;
       const idx = Array.from(parent.children).indexOf(cur) + 1;
       parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${idx})`);
@@ -140,11 +108,11 @@ export function collectCandidates(input: CollectInput): CollectOutput {
     parts.unshift("html");
     return parts.join(" > ");
   };
-  const all: PElement[] = document.body ? [document.body, ...Array.from(document.body.querySelectorAll("*"))].filter((e) => !SKIP.has(e.tagName)) : [];
-  const orderOf = new Map<PElement, number>();
+  const all: PageElement[] = document.body ? [document.body, ...Array.from(document.body.querySelectorAll("*"))].filter((e) => !SKIP.has(e.tagName)) : [];
+  const orderOf = new Map<PageElement, number>();
   all.forEach((e, i) => orderOf.set(e, i));
-  const depthOf = (el: PElement): number => { let d = 0; for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) d++; return el === document.body ? 0 : d + 1; };
-  const cand = (el: PElement, withRange: boolean): Candidate => {
+  const depthOf = (el: PageElement): number => { let d = 0; for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) d++; return el === document.body ? 0 : d + 1; };
+  const cand = (el: PageElement, withRange: boolean): Candidate => {
     const r = el.getBoundingClientRect();
     let rangeRect: Rect | null = null;
     if (withRange) { const range = document.createRange(); range.selectNodeContents(el); rangeRect = pageRect(range.getBoundingClientRect()); }
@@ -174,7 +142,7 @@ export function collectCandidates(input: CollectInput): CollectOutput {
   };
   // "Paints": a background colour with alpha > 0, or a background image. The colour is drawn on a 1×1
   // canvas and read back, so any syntax the browser computes (rgb(), color(srgb …), oklch(…)) is judged alike.
-  let ctx: PCtx | null = null;
+  let ctx: PageCanvasContext | null = null;
   const alphaOf = (css: string): number => {
     const m = /^rgba?\(([^)]*)\)$/.exec(css.trim());
     if (m) { const p = (m[1] || "").split(/[\s,/]+/).filter(Boolean); return p.length >= 4 ? Number(p[3]) : 1; }
@@ -192,9 +160,9 @@ export function collectCandidates(input: CollectInput): CollectOutput {
     const sized: SizedCandidate[] = [];
     if (f.w !== null && f.h !== null && document.body) {
       // breadth-first from <body>, depth ≤ 8, so the OUTERMOST matching element comes first
-      let level: PElement[] = [document.body];
+      let level: PageElement[] = [document.body];
       for (let depth = 0; depth <= 8 && level.length; depth++) {
-        const next: PElement[] = [];
+        const next: PageElement[] = [];
         for (const el of level) {
           if (SKIP.has(el.tagName)) continue;
           const r = el.getBoundingClientRect();
@@ -213,12 +181,12 @@ export function collectCandidates(input: CollectInput): CollectOutput {
 
   // Text owners: elements whose normalised textContent equals the text, keeping the INNERMOST (an element
   // that contains another hit is its wrapper, not its owner).
-  const innermost = (els: PElement[]): PElement[] => els.filter((e) => !els.some((o) => o !== e && e.contains(o)));
+  const innermost = (els: PageElement[]): PageElement[] => els.filter((e) => !els.some((o) => o !== e && e.contains(o)));
   const wanted = new Set(input.texts);
   const wantedLower = new Map<string, string[]>();
   for (const t of wanted) { const k = t.toLowerCase(); wantedLower.set(k, [...(wantedLower.get(k) || []), t]); }
-  const exact = new Map<string, PElement[]>(), caseless = new Map<string, PElement[]>(), ph = new Map<string, PElement[]>();
-  const push = (m: Map<string, PElement[]>, k: string, e: PElement): void => { const l = m.get(k); if (l) l.push(e); else m.set(k, [e]); };
+  const exact = new Map<string, PageElement[]>(), caseless = new Map<string, PageElement[]>(), ph = new Map<string, PageElement[]>();
+  const push = (m: Map<string, PageElement[]>, k: string, e: PageElement): void => { const l = m.get(k); if (l) l.push(e); else m.set(k, [e]); };
   if (wanted.size) {
     for (const el of all) {
       const t = norm(el.textContent);
@@ -236,11 +204,14 @@ export function collectCandidates(input: CollectInput): CollectOutput {
     placeholders[t] = (ph.get(t) || []).map((e) => cand(e, false));
   }
 
+  // Each element's rect is read once for all positions: reading it per position costs P × E layout reads (~1 s at 300
+  // positions × 3,000 elements). Nothing between the reads changes layout, so the hits — in document order — are the same.
   const positions: CollectOutput["positions"] = {};
+  const allRects = input.positions.length ? all.map((el) => pageRect(el.getBoundingClientRect())) : [];
   for (const p of input.positions) {
-    const hits = all.filter((el) => {
-      const r = pageRect(el.getBoundingClientRect());
-      return Math.abs(r.x - p.x) <= 2 && Math.abs(r.y - p.y) <= 2 && Math.abs(r.w - p.w) <= 2 && Math.abs(r.h - p.h) <= 2;
+    const hits = all.filter((_el, i) => {
+      const r = allRects[i];
+      return !!r && Math.abs(r.x - p.x) <= 2 && Math.abs(r.y - p.y) <= 2 && Math.abs(r.w - p.w) <= 2 && Math.abs(r.h - p.h) <= 2;
     });
     positions[p.nodeId] = innermost(hits).map((e) => cand(e, false));
   }
@@ -285,12 +256,12 @@ export interface MeasureResult {
 export function measureElements(input: MeasureInput): MeasureResult[] {
   const px = (v: string): number | null => { const n = parseFloat(v); return Number.isFinite(n) ? Math.round(n * 100) / 100 : null; };
   const r2 = (n: number): number => Math.round(n * 100) / 100;
-  const pageRect = (r: PRect): Rect => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
+  const pageRect = (r: PageRect): Rect => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
   const collapse = (s: string | null): string => (s || "").replace(/[ \t\n\r\f]+/g, " ").trim();
   // Colours as rgba(): the browser may compute oklch()/color(srgb …) (Tailwind v4), which the compare's
   // colour normaliser does not read — so anything that is not already rgb()/rgba() is painted on a 1×1
   // canvas and read back as sRGB bytes.
-  let ctx: PCtx | null = null;
+  let ctx: PageCanvasContext | null = null;
   const rgba = (css: string): string | null => {
     const s = css.trim();
     if (!s) return null;
@@ -302,17 +273,17 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     const [r = 0, g = 0, b = 0, a = 255] = [d[0], d[1], d[2], d[3]];
     return a === 255 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${Math.round((a / 255) * 1000) / 1000})`;
   };
-  const ownText = (el: PElement): string => Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("").trim();
-  const elementsWithOwnText = (el: PElement): PElement[] => {
-    const out: PElement[] = [];
-    const walk = (e: PElement): void => { if (ownText(e)) out.push(e); for (const c of Array.from(e.children)) walk(c); };
+  const ownText = (el: PageElement): string => Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("").trim();
+  const elementsWithOwnText = (el: PageElement): PageElement[] => {
+    const out: PageElement[] = [];
+    const walk = (e: PageElement): void => { if (ownText(e)) out.push(e); for (const c of Array.from(e.children)) walk(c); };
     walk(el);
     return out;
   };
   // The element that owns a TEXT spec's characters: descend single-child chains from the matched
   // element to the first one whose OWN text nodes hold text; when the text is split over several elements,
   // the first run's owner (textFromMixed).
-  const textOwner = (el: PElement): { owner: PElement; mixed: boolean } | null => {
+  const textOwner = (el: PageElement): { owner: PageElement; mixed: boolean } | null => {
     const owners = elementsWithOwnText(el);
     const mixed = owners.length > 1;
     let cur = el;
@@ -429,11 +400,11 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     // shows on it: no answer either. Ancestor opacity/filter, ::before painters and a sibling/overlay painting over the
     // element are not looked at (known misses: an overlay may make it pass — LIMITS).
     const frameRoot = input.framePath ? document.querySelector(input.framePath) : null;
-    const paintOf = (e: PElement): { color: string | null; image: boolean } => {
+    const paintOf = (e: PageElement): { color: string | null; image: boolean } => {
       const s = getComputedStyle(e), img = s.getPropertyValue("background-image").trim();
       return { color: rgba(s.getPropertyValue("background-color")), image: img !== "" && img !== "none" };
     };
-    const painter = (e: PElement, via: "ancestor" | "child", depth: number, color: string): PValue => {
+    const painter = (e: PageElement, via: "ancestor" | "child", depth: number, color: string): PValue => {
       const dt = e.getAttribute("data-dt-node");
       return { backgroundColor: color, via, tag: e.tagName.toLowerCase(), depth, ...(dt !== null ? { dt } : {}) };
     };
@@ -630,9 +601,9 @@ export function focusablePath(path: string): string | null {
   const f = el ? el.closest(FOCUSABLE) : null;
   if (!f) return null;
   const parts: string[] = [];
-  let cur: PElement | null = f;
+  let cur: PageElement | null = f;
   while (cur && cur !== document.documentElement) {
-    const parent: PElement | null = cur.parentElement;
+    const parent: PageElement | null = cur.parentElement;
     if (!parent) break;
     parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
     cur = parent;

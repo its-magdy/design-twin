@@ -37,6 +37,7 @@ import { isVerifyReferenceImage } from "./doc-guards.ts";
 import { pctText, resolveInside, scaleText } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
+import type { PageDocument, PageWindow } from "./page-dom.ts";
 
 // ---------------------------------------------------------------- budget
 /** The capture's own cap; what --max-time leaves is shared with behaviour, whose reserve (settle, capped close, write) it keeps. */
@@ -83,18 +84,10 @@ export function prepareVisual(exp: Partial<Pick<VerifyExpectation, "referenceIma
 }
 
 // ---------------------------------------------------------------- the capture (page side)
-interface VRect { left: number; top: number; width: number; height: number }
-interface VElement { getBoundingClientRect(): VRect }
-interface VDocument {
-  querySelectorAll(sel: string): { length: number; item(i: number): VElement | null };
-  documentElement: { scrollWidth: number; scrollHeight: number };
-  body: { scrollWidth: number; scrollHeight: number } | null;
-  fonts: { ready: Promise<unknown> };
-}
-declare const document: VDocument;
+declare const document: PageDocument;
 declare const scrollX: number;
 declare const scrollY: number;
-declare const window: { __dtProbeDoc?: string };
+declare const window: PageWindow;
 
 interface FrameRead { count: number; rect: Rect4 | null; doc: { w: number; h: number }; token: string }
 /** The frame's document rect (when its selector matches exactly one element), the document's scroll size, the doc token. */
