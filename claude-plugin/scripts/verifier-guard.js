@@ -69,63 +69,7 @@ function readHookInput(opts) {
   });
 }
 
-// design-to-code/cli-args.ts
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-var SELF = fileURLToPath(import.meta.url);
-var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
-
-// bridge/src/is-main.ts
-import fs2 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
-}
-
-// design-to-code/verifier-guard.ts
-var VERIFIER_AGENT = /^(designtwin:)?visual-verifier$/;
-var HOOK_WAIT_MS = 1e3;
-var HOOK_HARD_MS = 5e3;
-var TOOL_OWNED = /\.(expected(\.prev)?\.json|report\.json|report\.md|status\.json|diff\.png)$/i;
-var CACHE_RUN = ["node_modules", ".cache", "designtwin-verify"];
-var VERIFY_DIR = ["design", "verify"];
-function segments(p, cwd) {
-  const norm = (s) => s.replaceAll("\\", "/");
-  const abs = (s) => s.startsWith("/") || /^[A-Za-z]:\//.test(s);
-  const full = abs(norm(p)) ? norm(p) : norm(cwd) + "/" + norm(p);
-  const out = [];
-  for (const s of full.toLowerCase().split("/")) {
-    if (s === "" || s === ".") continue;
-    if (s === "..") out.pop();
-    else out.push(s);
-  }
-  return out;
-}
-function after(segs, want) {
-  for (let i = 0; i + want.length < segs.length; i++) if (want.every((w, j) => segs[i + j] === w)) return i + want.length;
-  return -1;
-}
-var startsWith = (segs, root) => root.length > 0 && root.length <= segs.length && root.every((r, i) => segs[i] === r);
-function writeVerdict(file, ctx) {
-  const segs = segments(file, ctx.cwd);
-  if (after(segs, CACHE_RUN) >= 0) return null;
-  for (const root of ctx.tmpRoots) {
-    const r = segments(root, "/");
-    if (startsWith(segs, r) && after(segs.slice(r.length), ["designtwin-verify"]) >= 0) return null;
-  }
-  if (after(segs, VERIFY_DIR) >= 0) {
-    if (!TOOL_OWNED.test(segs[segs.length - 1] ?? "")) return null;
-    return `${file} is the verify tools' own (the expectation, report, status and diff), never written by hand. Report progress with \`${scriptCmd("verify-screen")} --status <Screen> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
-  }
-  return `the visual-verifier measures, it never edits app code: it writes only design/verify/ (its measured file and screenshots) and the run cache node_modules/.cache/designtwin-verify/ (stage/<runId>/ for evidence, scratch/ for throwaway scripts). ${file} is outside both. Put a scratch script in node_modules/.cache/designtwin-verify/scratch/, and report a defect in the build as a measurement or a note \u2014 never fix it.`;
-}
+// design-to-code/shell-words.ts
 function simpleCommands(src) {
   const cmds = [];
   const stack = [];
@@ -214,6 +158,64 @@ function simpleCommands(src) {
   while (stack.length) close(src.length - 1);
   endCmd();
   return cmds;
+}
+
+// design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+
+// bridge/src/is-main.ts
+import fs2 from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
+  } catch {
+    return false;
+  }
+}
+
+// design-to-code/verifier-guard.ts
+var VERIFIER_AGENT = /^(designtwin:)?visual-verifier$/;
+var HOOK_WAIT_MS = 1e3;
+var HOOK_HARD_MS = 5e3;
+var TOOL_OWNED = /\.(expected(\.prev)?\.json|report\.json|report\.md|status\.json|diff\.png)$/i;
+var CACHE_RUN = ["node_modules", ".cache", "designtwin-verify"];
+var VERIFY_DIR = ["design", "verify"];
+function segments(p, cwd) {
+  const norm = (s) => s.replaceAll("\\", "/");
+  const abs = (s) => s.startsWith("/") || /^[A-Za-z]:\//.test(s);
+  const full = abs(norm(p)) ? norm(p) : norm(cwd) + "/" + norm(p);
+  const out = [];
+  for (const s of full.toLowerCase().split("/")) {
+    if (s === "" || s === ".") continue;
+    if (s === "..") out.pop();
+    else out.push(s);
+  }
+  return out;
+}
+function after(segs, want) {
+  for (let i = 0; i + want.length < segs.length; i++) if (want.every((w, j) => segs[i + j] === w)) return i + want.length;
+  return -1;
+}
+var startsWith = (segs, root) => root.length > 0 && root.length <= segs.length && root.every((r, i) => segs[i] === r);
+function writeVerdict(file, ctx) {
+  const segs = segments(file, ctx.cwd);
+  if (after(segs, CACHE_RUN) >= 0) return null;
+  for (const root of ctx.tmpRoots) {
+    const r = segments(root, "/");
+    if (startsWith(segs, r) && after(segs.slice(r.length), ["designtwin-verify"]) >= 0) return null;
+  }
+  if (after(segs, VERIFY_DIR) >= 0) {
+    if (!TOOL_OWNED.test(segs[segs.length - 1] ?? "")) return null;
+    return `${file} is the verify tools' own (the expectation, report, status and diff), never written by hand. Report progress with \`${scriptCmd("verify-screen")} --status <Screen> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
+  }
+  return `the visual-verifier measures, it never edits app code: it writes only design/verify/ (its measured file and screenshots) and the run cache node_modules/.cache/designtwin-verify/ (stage/<runId>/ for evidence, scratch/ for throwaway scripts). ${file} is outside both. Put a scratch script in node_modules/.cache/designtwin-verify/scratch/, and report a defect in the build as a measurement or a note \u2014 never fix it.`;
 }
 var prog = (w) => (w.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, "");
 var isAssign = (w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w);
@@ -534,7 +536,6 @@ export {
   decide,
   denyOutput,
   main,
-  simpleCommands,
   tempRoots,
   writeVerdict
 };

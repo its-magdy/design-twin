@@ -28,8 +28,9 @@ for and didn't find>}`.
 
 ## What the Stop hook checks
 
-The `Stop` hook (`verify-build.js`, as your turn ends) checks the plans your session wrote (Write/Edit, a redirect,
-`--out`, `cp`/`mv`, `sed -i`) and the plan whose `files[]` alone lists a file you wrote. A session that claims no
+The `Stop` hook (`verify-build.js`, as your turn ends) checks the plans your session wrote (Write/Edit, or
+plan-skeleton's `--out`) and the plan whose `files[]` alone lists a file you wrote with Write/Edit — it does not
+read other shell commands, so edit the plan and the code with Write/Edit, not `sed`/`cp`/a redirect. A session that claims no
 plan checks nothing — an orchestrator that only delegated, or one that edited only files several plans share; the
 screen-builder's own hook still gates each delegated build.
 

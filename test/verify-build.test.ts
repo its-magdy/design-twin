@@ -1325,13 +1325,55 @@ console.log("field-test fixes:");
       return x.status === 0 && x.checked.length === 0;
     })());
     check("an Edit of a file only one plan lists claims that plan alone", onlyLogin(five(() => [toolUse("Edit", { file_path: "src/OnlyX.tsx", old_string: "a", new_string: "b" })])));
-    check("`jq … > /tmp/t && mv /tmp/t design/plan/<x>.json` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: "jq '.route = \"/a\"' design/plan/login.json > /tmp/t && mv /tmp/t design/plan/login.json" })])));
-    check("`cp a design/plan/<x>.json` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: "cp a.json design/plan/login.json" })])));
-    check("`sed -i '' 's/a/b/' design/plan/<x>.json` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: "sed -i '' 's/a/b/' design/plan/login.json" })])));
-    check("`python3 -c \"open('design/plan/<x>.json','w')\"` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: "python3 -c \"import json; json.dump({}, open('design/plan/login.json','w'))\"" })])));
-    check("a Bash heredoc written to a file only plan X lists (`cat > src/OnlyX.tsx <<E`) claims X", onlyLogin(five(() => [toolUse("Bash", { command: "cat > src/OnlyX.tsx <<E\nexport const X = 1;\nE" })])));
+    // Only structured writes claim: a shell command's targets are not guessed, so none of these claims a plan —
+    // a builder's own transcript still holds its plan-skeleton --out call and the Write/Edit calls of its code.
+    const none = (x: { status: number | null; checked: string[] }) => x.status === 0 && x.checked.length === 0;
+    for (const command of [
+      "jq '.route = \"/a\"' design/plan/login.json > /tmp/t && mv /tmp/t design/plan/login.json", "cp a.json design/plan/login.json",
+      "sed -i '' 's/a/b/' design/plan/login.json", "python3 -c \"import json; json.dump({}, open('design/plan/login.json','w'))\"",
+      "echo {} > design/plan/login.json", "cat a.json | tee design/plan/login.json", "node -e \"require('fs').writeFileSync('design/plan/login.json','{}')\"",
+      "perl -pi -e 's/a/b/' design/plan/login.json", "curl -s -o design/plan/login.json https://example.test/plan", "node scripts/other.js --out design/plan/login.json",
+      "cat > src/OnlyX.tsx <<E\nexport const X = 1;\nE", "sed -i '' 's/a/b/' src/OnlyX.tsx",
+      "node plan-skeleton.js a.json a.vars.json ds > design/plan/login.json",
+      "cat > notes.md <<'EOF'\nnode plan-skeleton.js a.json a.vars.json ds --out design/plan/login.json\nEOF",
+    ]) check(`a shell write is not read: \`${command.split("\n")[0]}\` claims no plan`, none(five(() => [toolUse("Bash", { command })])));
+    const SKEL = "node \"/opt/plugin/scripts/plan-skeleton.js\" a.json a.vars.json design/export/design-system";
+    check("plan-skeleton `--out=<plan>` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: `${SKEL} --out=design/plan/login.json` })])));
+    check("plan-skeleton run through `npx tsx …/plan-skeleton.ts --out <plan>` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: "npx tsx design-to-code/plan-skeleton.ts a.json a.vars.json ds --out design/plan/login.json" })])));
+    check("`--seed-from <sibling plan>` on plan-skeleton claims only the --out plan, not the sibling it seeds from", onlyLogin(five(() => [toolUse("Bash", { command: `${SKEL} --out design/plan/login.json --seed-from design/plan/screen-1.json --seed-from design/plan/screen-2.json` })])));
+    check("`cd design && plan-skeleton … --out plan/<x>.json` follows the cd", onlyLogin(five(() => [toolUse("Bash", { command: `cd design && ${SKEL} --out plan/login.json` })])));
+    check("`cd /elsewhere && plan-skeleton … --out design/plan/<x>.json` is another tree's plan: claims none", none(five(() => [toolUse("Bash", { command: `cd /elsewhere && ${SKEL} --out design/plan/login.json` })])));
+    check("after a cd it cannot follow (`cd -`, `cd $X`), a relative --out claims none, an absolute one still claims",
+      none(five(() => [toolUse("Bash", { command: `cd - && ${SKEL} --out design/plan/login.json` })])) && none(five(() => [toolUse("Bash", { command: `cd "$D" && ${SKEL} --out design/plan/login.json` })]))
+      && onlyLogin(five((root) => [toolUse("Bash", { command: `cd ~ && ${SKEL} --out "${path.join(root, "design", "plan", "login.json")}"` })])));
+    check("a MultiEdit of the plan, and a NotebookEdit of a file only it lists, claim it",
+      onlyLogin(five(() => [toolUse("MultiEdit", { file_path: "design/plan/login.json", edits: [] })])) && onlyLogin(five(() => [toolUse("NotebookEdit", { notebook_path: "src/OnlyX.tsx", new_source: "x" })])));
     check("a relative path resolves against the transcript entry's own cwd", onlyLogin(five((root) => [JSON.stringify({ type: "assistant", cwd: path.join(root, "design"), message: { role: "assistant", content: [{ type: "tool_use", id: "t", name: "Write", input: { file_path: "plan/login.json", content: "{}" } }] } })])));
   }
+  check("parallel builders: each SubagentStop checks only the plan its own builder created — B seeding from A's half-built plan, or sed-ing it, is not blocked on it", (() => {
+    // both plans would BLOCK if checked: a.tsx and b.tsx each hold the raw brand colour
+    const root = project({ "a.tsx": "#5B5FC7", "b.tsx": "#5B5FC7" }, { ...BLOCKING, files: ["a.tsx"] });
+    addPlan(root, "settings", { ...BLOCKING, files: ["b.tsx"] });
+    const skel = (plan: string, extra = "") => toolUse("Bash", { command: `node "/opt/plugin/scripts/plan-skeleton.js" a.json a.vars.json ds --out design/plan/${plan}.json${extra}` });
+    const a = path.join(root, "agent-a.jsonl"), b = path.join(root, "agent-b.jsonl");
+    fs.writeFileSync(a, [skel("login"), toolUse("Write", { file_path: "a.tsx", content: "x" })].join("\n"));
+    fs.writeFileSync(b, [skel("settings", " --seed-from design/plan/login.json"), toolUse("Bash", { command: "sed -i '' 's/x/y/' design/plan/login.json" }), toolUse("Write", { file_path: "b.tsx", content: "x" })].join("\n"));
+    const rb = runHook(root, { cwd: root, hook_event_name: "SubagentStop", agent_id: "b", agent_type: "designtwin:screen-builder", agent_transcript_path: b, transcript_path: path.join(root, "main.jsonl") });
+    const bOnly = !planAt(root, "login").verification?.hook && planAt(root, "settings").verification?.hook?.result === "blocked" && /settings\.json/.test(rb.stdout) && !/login\.json/.test(rb.stdout);
+    const ra = runHook(root, { cwd: root, hook_event_name: "SubagentStop", agent_id: "a", agent_type: "designtwin:screen-builder", agent_transcript_path: a, transcript_path: path.join(root, "main.jsonl") });
+    return rb.status === 0 && bOnly && ra.status === 0 && planAt(root, "login").verification?.hook?.result === "blocked" && /"decision":"block"/.test(ra.stdout);
+  })());
+  check("planSkeletonOuts: the --out of a plan-skeleton call only, past a followed cd, heredoc bodies dropped", (() => {
+    const o = verifyBuild.planSkeletonOuts;
+    const eq = (got: string[], want: string[]) => JSON.stringify(got) === JSON.stringify(want);
+    return eq(o("node plan-skeleton.js s.json v.json ds --out design/plan/a.json --seed-from design/plan/b.json"), ["design/plan/a.json"])
+      && eq(o("node \"C:\\p\\scripts\\plan-skeleton.js\" s v ds --out=\"design\\plan\\a.json\""), ["design\\plan\\a.json"])
+      && eq(o("cd app/ && cd design; node plan-skeleton.mjs s v ds --out plan/a.json"), ["app/design/plan/a.json"])
+      && eq(o("cd /x && node plan-skeleton.js s v ds --out plan/a.json && cd && node plan-skeleton.js s v ds --out b.json"), ["/x/plan/a.json"])
+      && eq(o("node plan-skeleton.js s v ds > design/plan/a.json"), [])
+      && eq(o("node other.js --out design/plan/a.json"), [])
+      && eq(o("cat > run.sh <<'EOF'\nnode plan-skeleton.js s v ds --out design/plan/a.json\nEOF\nnode plan-skeleton.js s v ds --out design/plan/c.json"), ["design/plan/c.json"]);
+  })());
   check("the not-imported warning tells the builder to list a shared layout above the screen", has(shellProject(false), /list that layout file in this plan's files\[\] too/));
   {
     const c = (codeToken: string): PlanTokenRow => ({ figmaName: "Brand/" + codeToken, value: "#123456", kind: "color", codeToken, verdict: "exact" });

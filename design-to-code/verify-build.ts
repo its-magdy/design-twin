@@ -68,6 +68,7 @@ import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main i
 import { DESIGN_DIR, EXPORT_DIR, LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Screen>__<id>` stem (the exporter's own file naming)
 import { readHookInput as readHookPayload } from "./hook-input.ts";
+import { dropHeredocBodies, simpleCommands } from "./shell-words.ts";
 import type { HookPayload, HookRead } from "./hook-input.ts";
 
 // ================================================================ input / timeouts
@@ -1367,11 +1368,11 @@ function computeStatus(plan: Plan, opts?: StatusOptions): StatusResult {
 // ================================================================ fan-out scoping
 
 // Several screens build in parallel (one screen-builder each), and every one lands here when it
-// stops. Narrow to the plans the stopping agent's own transcript mentions (a subagent's own transcript
-// when the payload names one, else the session's). A transcript that mentions NO plan file checks
+// stops. Narrow to the plans the stopping agent's own transcript claims (OWNERSHIP below; a subagent's own
+// transcript when the payload names one, else the session's). A transcript that claims NO plan checks
 // NOTHING: build-screen's Stop hook is skill-scoped, so it also fires in an orchestrator session
 // that loaded the skill and built nothing itself — it must not block that session on a plan another
-// agent is still filling. A transcript that mentions only plans the hook already closed narrows to
+// agent is still filling. A transcript that claims only plans the hook already closed narrows to
 // nothing too: agent A, finished, is not blocked on agent B's half-built plan. `scope: "unscoped"` means
 // the payload carried no readable transcript at all (a hand-piped `{"cwd": …}`): every open plan is checked.
 export type PlanScope = "unscoped" | "none-named" | "named";
@@ -1380,13 +1381,18 @@ export type PlanScope = "unscoped" | "none-named" | "named";
 //   (a) WRITE the plan; or
 //   (b) WRITE a file that exactly ONE open plan lists in files[] — a builder or fixer editing that
 //       screen's code. A file several plans list (a shared component) claims none of them.
-// "Write" = a Write/Edit/MultiEdit/NotebookEdit of the path, or a Bash command that writes it (see
-// bashWriteTargets; a path merely inside a heredoc body or echo text does not count). Not prose, not an
-// Agent/Task prompt (an orchestrator naming the plan a subagent should fill), not a tool_result (a
-// subagent's report). Relative paths resolve against the transcript entry's own `cwd`, else the payload's
-// (so `cd design/plan && echo {} > x.json` in ONE command is missed — accepted: fail-open). Separators
-// are normalised; a Windows drive path from another machine matches by its project-relative tail.
-// Nothing claimed → nothing checked, by design: the screen-builder's SubagentStop still gates delegated builds.
+// "Write" = a structured write only: a Write/Edit/MultiEdit/NotebookEdit of the path, or a Bash call that runs
+// the plan-skeleton script with `--out <path>` (build-screen's step 2, the call that creates the plan — see
+// planSkeletonOuts). Any other shell command (a redirect, `sed -i`, `cp`/`mv`, a script writing through fs) is
+// not read: a command's targets can only be guessed, and a guess misses as much as it finds. The builder's own
+// transcript is the owner's identity because nothing else is per-agent: Claude Code hands a subagent's Bash
+// only the session id (CLAUDE_CODE_SESSION_ID), which parallel builders share, so a plan cannot carry its
+// owner; the agent id is in the hook payload alone. Not prose, not an Agent/Task prompt (an orchestrator
+// naming the plan a subagent should fill), not a tool_result (a subagent's report). Relative paths resolve
+// against the transcript entry's own `cwd`, else the payload's. Separators are normalised; a Windows drive
+// path from another machine matches by its project-relative tail.
+// Nothing claimed → nothing checked, by design: the screen-builder's SubagentStop still gates delegated builds,
+// and every builder's transcript holds its plan-skeleton call and the Write/Edit calls of its own code.
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 /** A path the session wrote, and the directory it was relative to (the entry's `cwd`, when recorded). */
 export interface WrittenPath { path: string; base: string | null }
@@ -1401,7 +1407,7 @@ function lineActions(line: string, ownOnly: boolean, out: WrittenPath[]): void {
     const inp = item.input;
     const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
     if (WRITE_TOOLS.has(item.name)) { for (const k of ["file_path", "notebook_path"]) { const f = inp[k]; if (typeof f === "string") out.push({ path: f, base }); } }
-    else if (item.name === "Bash" && typeof inp.command === "string") for (const f of bashWriteTargets(inp.command)) out.push({ path: f, base });
+    else if (item.name === "Bash" && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command)) out.push({ path: f, base });
   }
 }
 
@@ -1441,89 +1447,34 @@ function transcriptActions(file: string, ownOnly: boolean): WrittenPath[] {
   return out;
 }
 
-// The paths a shell command writes (see OWNERSHIP): after `>`/`>>`; after `tee`; after `--out`/`-o`; every
-// argument of a command running plan-skeleton; the last argument of cp/mv/install/ln; the file arguments of
-// `sed -i`/`perl -i`; a quoted path in a `python -c` / `node -e` code string. Heredoc bodies are dropped
-// first; then the command is tokenised (quotes respected) and split into simple commands at && || ; | and
-// newlines.
-function bashWriteTargets(cmd: string): string[] {
-  const kept: string[] = [];
-  let delim: string | null = null;
-  for (const line of cmd.split("\n")) {
-    if (delim !== null) { if (line.trim() === delim) delim = null; continue; }
-    kept.push(line);
-    const h = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
-    if (h && h[2]) delim = h[2];
-  }
-  type Tok = { op: string } | { word: string };
-  const toks: Tok[] = [];
-  const text = kept.join("\n");
-  let i = 0, word: string | null = null;
-  const flush = (): void => { if (word !== null) { toks.push({ word }); word = null; } };
-  while (i < text.length) {
-    const c = text[i] ?? "";
-    if (c === "'" || c === '"') {
-      const j = text.indexOf(c, i + 1);
-      const end = j === -1 ? text.length : j;
-      word = (word ?? "") + text.slice(i + 1, end).replace(/\\(.)/g, c === '"' ? "$1" : "\\$1");
-      i = end + 1; continue;
-    }
-    if (c === "\\" && i + 1 < text.length) { word = (word ?? "") + (text[i + 1] ?? ""); i += 2; continue; }
-    if (/\s/.test(c) && c !== "\n") { flush(); i++; continue; }
-    const two = text.slice(i, i + 2);
-    // `2>` / `2>>`: the digits are a file descriptor, not a word
-    const fdThenFlush = (): void => { if (word !== null && /^\d+$/.test(word)) word = null; else flush(); };
-    if (two === ">>" || two === "&>") { fdThenFlush(); toks.push({ op: two === "&>" ? ">" : ">>" }); i += 2; continue; }
-    if (c === ">") { fdThenFlush(); toks.push({ op: ">" }); i++; continue; }
-    if (two === "&&" || two === "||" || two === "<<") { flush(); toks.push({ op: two }); i += 2; continue; }
-    if ([";", "|", "\n", "<", "&", "(", ")"].includes(c)) { flush(); toks.push({ op: c }); i++; continue; }
-    word = (word ?? "") + c; i++;
-  }
-  flush();
+// The plan files a Bash command creates through plan-skeleton (see OWNERSHIP): the `--out <path>` / `--out=<path>`
+// of each simple command with a word naming the plan-skeleton script (`plan-skeleton.js`, `.ts`, …) — run directly
+// or through node/npx/tsx, or merely named (`echo plan-skeleton.js --out x` counts too: a miss would leave a plan
+// unchecked, a false claim only checks one). A `cd <dir>` earlier in the same command line is followed, so a relative `--out` after it
+// resolves under that dir; after a `cd` whose target it cannot read (none, `-`, `~…`, a `$` expansion) only an
+// absolute `--out` counts. Heredoc bodies are data, not commands.
+const PLAN_SKELETON = /^plan-skeleton(\.[cm]?[jt]s)?$/i;
+const isAbsPath = (p: string): boolean => /^(?:[A-Za-z]:)?[\\/]/.test(p);
+function planSkeletonOuts(cmd: string): string[] {
   const out: string[] = [];
-  let cmdWords: string[] = [];
-  const endCommand = (): void => {
-    const [head, ...args] = cmdWords;
-    const name = head === undefined ? "" : path.posix.basename(head.replace(/\\/g, "/"));
-    const plain = args.filter((w) => !w.startsWith("-"));
-    if (["cp", "mv", "install", "ln"].includes(name) && plain.length >= 2) out.push(plain[plain.length - 1] ?? "");
-    if ((name === "sed" && args.some((w) => w === "-i" || w.startsWith("-i") || w.startsWith("--in-place"))) || (name === "perl" && args.some((w) => /^-\w*i/.test(w)))) {
-      // skip the flags, the in-place suffix (`-i ''`), the script (`-e X`, or the first bare word for sed); the rest are files
-      let script = false;
-      for (let k = 0; k < args.length; k++) {
-        const w = args[k] ?? "";
-        if (w === "-i" && args[k + 1] === "") { k++; continue; }
-        if (w === "-e" || w === "-f" || (name === "perl" && /^-\w*e$/.test(w))) { k++; script = true; continue; }
-        if (w.startsWith("-")) continue;
-        if (!script && name === "sed") { script = true; continue; }
-        out.push(w);
-      }
+  let dir: string | null = ""; // "" = the transcript entry's cwd; null = a cd this cannot follow
+  const under = (d: string, p: string): string => (d && !isAbsPath(p) ? `${d.replace(/[\\/]+$/, "")}/${p}` : p);
+  for (const words of simpleCommands(dropHeredocBodies(cmd))) {
+    if (words[0] === "cd") {
+      const to = words.slice(1).find((w) => w === "-" || !w.startsWith("-"));
+      dir = to === undefined || to === "-" || /^~|\$|`/.test(to) ? null : isAbsPath(to) ? to : dir === null ? null : under(dir, to);
+      continue;
     }
-    if (/^(python3?|node)$/.test(name)) {
-      const at = args.findIndex((w) => w === "-c" || w === "-e");
-      const code = at === -1 ? undefined : args[at + 1];
-      if (code) for (const m of code.matchAll(/['"`]([^'"`\n]+)['"`]/g)) if (m[1]) out.push(m[1]);
-    }
-    if (cmdWords.some((w) => /plan-skeleton/.test(w))) out.push(...cmdWords.filter((w) => !w.startsWith("-")));
-    const tee = cmdWords.findIndex((w) => w === "tee" || w.endsWith("/tee"));
-    if (tee !== -1) out.push(...cmdWords.slice(tee + 1).filter((w) => !w.startsWith("-")));
-    cmdWords.forEach((w, k) => {
-      if ((w === "--out" || w === "-o") && cmdWords[k + 1] !== undefined) out.push(cmdWords[k + 1] ?? "");
+    if (!words.some((w) => PLAN_SKELETON.test(w.split(/[\\/]/).pop() ?? ""))) continue;
+    words.forEach((w, k) => {
       const eq = /^--out=(.+)$/.exec(w);
-      if (eq && eq[1]) out.push(eq[1]);
+      const target = w === "--out" ? words[k + 1] : eq?.[1];
+      if (!target) return;
+      if (isAbsPath(target)) out.push(target);
+      else if (dir !== null) out.push(under(dir, target));
     });
-    cmdWords = [];
-  };
-  for (let k = 0; k < toks.length; k++) {
-    const t = toks[k];
-    if (!t) continue;
-    if ("word" in t) { cmdWords.push(t.word); continue; }
-    if (t.op === ">" || t.op === ">>") { const n = toks[k + 1]; if (n && "word" in n) { out.push(n.word); k++; } continue; }
-    if (t.op === "<" || t.op === "<<") { const n = toks[k + 1]; if (n && "word" in n) k++; continue; } // input / heredoc delimiter
-    endCommand();
   }
-  endCommand();
-  return out.filter(Boolean);
+  return out;
 }
 
 // Does a path the session wrote name `rel` (project-relative) under `cwd`?
@@ -1570,7 +1521,8 @@ const USAGE = [
   "(opt out: \"tagging\": {\"off\": true, \"reason\": \"…\"}). Everything else is a warning (exit 0).",
   "A Claude Code hook payload (it has hook_event_name) gets a block as {\"decision\":\"block\",\"reason\":…} on stdout",
   "and exit 0 instead — a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
-  "Hook mode checks the plans the stopping agent's transcript names; a transcript that names none checks nothing.",
+  "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",
+  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing.",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<…>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
@@ -1711,7 +1663,7 @@ async function main(argv: string[]): Promise<number> {
     if (!open.length) return 0; // fast path
     const own = ownPlans(open, input, plans, cwd);
     if (own.scope === "none-named") {
-      console.error(`verify-build: this session wrote or ran nothing naming a plan under design/plan/ — nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
+      console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) — nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
       return 0;
     }
     for (const p of own.plans) all.push({ p, cwd });
@@ -1747,7 +1699,7 @@ export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
   verificationWarnings, recordedReportWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
   colorLiterals, arbitraryPx, colorKey, isStale, isOpen, fileHashes, readHookInput, main, USAGE,
-  forEachLine, mayHoldToolUse, transcriptActions, buildGraph,
+  forEachLine, mayHoldToolUse, transcriptActions, planSkeletonOuts, buildGraph,
 };
 
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
