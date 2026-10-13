@@ -1201,6 +1201,18 @@ function isMainFallback(metaUrl) {
   }
 }
 
+// bridge/src/pages-layout.ts
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+
 // design-to-code/verify-shared.ts
 import path7 from "node:path";
 
@@ -4696,7 +4708,7 @@ function plansFor(frameId, stem) {
   for (const f of listPlans(PLAN_DIR)) {
     const p = readJsonOrNull(path9.join(PLAN_DIR, f), isPlan);
     if (!p) continue;
-    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path9.basename(f, ".json")));
+    const byId = frameId && (p.nodeId === frameId || nodeIdFromStem(path9.basename(f, ".json")) === frameId);
     const byName = path9.basename(f, ".json") === stem || p.file && path9.basename(String(p.file), ".json") === stem;
     if (byId || byName) hits.push({ file: path9.join(PLAN_DIR, f).split(path9.sep).join("/"), plan: p });
   }

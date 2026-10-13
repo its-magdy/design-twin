@@ -1794,5 +1794,24 @@ void build(tmp).then(async () => {
     check("control: with its expectation in place the same report is located", rels().includes("design/verify/Nick.report.json"));
   }
 
+  {
+    // The node id a plan's `screen` stem carries ties a report named for the same id to it: an instance
+    // sublayer's stem (`__I5_2_30_7`, how a pull of a layer inside an instance is filed) carries "I5:2;30:7".
+    // `__I5_2` is no name the exporter writes (an instance sublayer's id has at least two pairs), so it carries none.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vb-stem-id-"));
+    const v = path.join(root, "design", "verify");
+    fs.mkdirSync(v, { recursive: true });
+    const rep = JSON.stringify({ schema: "designtwin/verify-report@2", verdict: "pass", screen: "Other", nodeId: "9:9", why: [], deltas: [], inputs: {} });
+    fs.writeFileSync(path.join(v, "Chip_copy__I5_2_30_7.report.json"), rep);
+    fs.writeFileSync(path.join(v, "Chip_copy__I5_2.report.json"), rep);
+    const found = (screen: string): string[] => verifyBuild.locateReports({ screen }, path.join(root, "design", "plan", "chip.json"), root, null).map((r) => `${r.rel} by ${r.matchedBy}`);
+    const inst = found("Chip__I5_2_30_7");
+    check(`a plan screen stem carrying an instance-sublayer id finds the report whose stem carries the same id (got ${JSON.stringify(inst)})`,
+      JSON.stringify(inst) === JSON.stringify(["design/verify/Chip_copy__I5_2_30_7.report.json by nodeId"]));
+    const lone = found("Chip__I5_2");
+    check(`a stem ending \`__I5_2\` carries no node id, so finds nothing by id (got ${JSON.stringify(lone)})`, lone.length === 0);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
   report();
 });
