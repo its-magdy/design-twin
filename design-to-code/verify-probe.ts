@@ -62,7 +62,8 @@ import { CLOSE_STEP_CAP_MS, PS_CAP_MS, behaviourBudget, runBehaviour } from "./p
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
-import { RunCacheUnwritable, RunEnded, TERMINAL_PHASES, liveStatusFile, readStatus, stageDirOf, writeStatus } from "./verify-run.ts";
+import { RunCacheUnwritable, RunEnded, endedRun, liveStatusFile, readStatus, stageDirOf, writeStatus } from "./verify-run.ts";
+import { LockBusy } from "../bridge/src/file-lock.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite } from "./verify-run.ts";
 import type { Expectation } from "./verify-shared.ts";
@@ -1129,33 +1130,26 @@ export async function main(argv: string[]): Promise<number> {
   const expSha = expBytes ? sha256Hex(expBytes) : undefined;
   const runId = f.run !== undefined && !f.check && statusBase ? f.run : undefined;
   // an ended run (done/failed/blocked) takes no more writes — a probe with its --run would reopen it
-  // (phase back to measuring) and lose the verifier's `blocked` the same way a --status write would
-  // Checked again right before the files are written: a run ended while the page was measured gets none of them.
-  const endedRun = (): boolean => {
-    if (runId === undefined) return false;
-    const prev = readStatus(statusBase);
-    if (!prev || prev === "v1" || prev.runId !== runId || !TERMINAL_PHASES.includes(prev.phase)) return false;
-    console.error(`verify-probe: run ${runId} already ended at ${prev.phase}${prev.detail ? ` (${prev.detail})` : ""} — start a new run with --new-run`);
-    return true;
-  };
-  if (endedRun()) return 2;
-  // M-a: a status write the run cache refuses (the sandbox's write scope) is a warning — the probe keeps its exit
-  // contract (0/2/3/4) and never crashes on it. Returns false when the write was refused.
-  let endedMeanwhile = false;
-  const status = (w: StatusWrite): boolean => {
-    try { writeStatus(statusBase, w); return true; } catch (e) {
-      // the run was ended (failed/blocked by the orchestrator) while this probe ran: the ended status stays — not a
-      // refused write, so no "record it with --status" recovery either
-      if (e instanceof RunEnded) { endedMeanwhile = true; console.error(`warning  ${e.message} — it ended while this probe ran; its status is left as it is`); return true; }
-      if (!(e instanceof RunCacheUnwritable)) throw e;
+  // (phase back to measuring) and lose the verifier's `blocked` the same way a --status write would. Said before
+  // anything is resolved; every later status write checks again under its lock (writeStatus), and the files are
+  // written inside the `measured` one — a run ended while the page was measured gets none of them.
+  const endedAtStart = runId !== undefined ? endedRun(readStatus(statusBase), runId) : null;
+  if (endedAtStart) { console.error(`verify-probe: ${endedAtStart.message}`); return 2; }
+  // M-a: a status write the run cache refuses (the sandbox's write scope), or that another write keeps waiting past
+  // its lock's wait, is a warning — the probe keeps its exit contract (0/2/3/4) and never crashes on it. A run ended
+  // meanwhile (the orchestrator's failed/blocked) keeps its status and exits 2: no files, no next step.
+  const status = (w: StatusWrite, before?: () => Pick<StatusWrite, "measuredSha256">): "ok" | "refused" | "ended" => {
+    try { writeStatus(statusBase, w, before ? { before } : {}); return "ok"; } catch (e) {
+      if (e instanceof RunEnded) { console.error(`verify-probe: ${e.message} — it ended while this probe ran; its status is left as it is`); return "ended"; }
+      if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
       console.error(`warning  ${e.message}`);
-      return false;
+      return "refused";
     }
   };
   // an exit 3/4 with --run: the status says so (rev bumped, phase stays measuring — the one allowed re-run follows)
   const ended = (code: number): number => {
     if (runId !== undefined && (code === 3 || code === 4)) {
-      status({ runId, phase: "measuring", by: "verify-probe", detail: `probe exit ${code} — nothing written`, ...(expSha ? { expectationSha256: expSha } : {}) });
+      if (status({ runId, phase: "measuring", by: "verify-probe", detail: `probe exit ${code} — nothing written`, ...(expSha ? { expectationSha256: expSha } : {}) }) === "ended") return 2;
     }
     return code;
   };
@@ -1165,8 +1159,9 @@ export async function main(argv: string[]): Promise<number> {
   const res = resolvePlaywright(project);
   if (!res.ok) return ended(rendererUnavailable(res.reason, res.hint));
   // written BEFORE the browser starts, and outside the project tree; false when refused (or no --run)
-  const measuringRecorded = runId !== undefined && status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...(expSha ? { expectationSha256: expSha } : {}) });
-  if (endedMeanwhile) return 2; // ended between the check above and this write: launch nothing for a finished run
+  const measuring = runId !== undefined ? status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...(expSha ? { expectationSha256: expSha } : {}) }) : "refused";
+  if (measuring === "ended") return 2; // ended between the check above and this write: launch nothing for a finished run
+  const measuringRecorded = runId !== undefined && measuring === "ok";
   if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
 
   // one bound over launch → measure → close. Past it the browser is closed (at most 10 s more) and nothing is written.
@@ -1339,54 +1334,72 @@ export async function main(argv: string[]): Promise<number> {
   let visual: MeasuredVisual = { version: 1, ran: false, why: prep.ok ? "not captured" : prep.why };
   let diffPng: Buffer | null = null;
   if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path.sep).join("/"), captureMs }));
-  try {
-    if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
-    else if (fs.existsSync(diffPath)) fs.rmSync(diffPath, { force: true });
-  } catch (e) {
-    console.error(`warning  ${diffPath}: ${firstLine(e)} — the visual diff image is not written`);
-    if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
-  }
-  const measured: VerifyMeasured = {
-    measuredAt: new Date().toISOString(),
-    renderer: "playwright-chromium",
-    viewport: `${viewport.w}x${viewport.h}`,
-    artifacts: [png.split(path.sep).join("/")],
-    expectationSha256: sha256Hex(expBytes),
-    probe: identity,
-    ...(firstFrame ? { frame: frameOut(firstFrame) } : {}),
-    ...(r.frames.length > 1 ? { frames: r.frames.map(frameOut) } : {}),
-    navigation: run.navigation,
-    matchedByCensus: { ...census(r.nodes, r.notMeasured) },
-    nodes: r.nodes,
-    notMeasured: r.notMeasured,
-    components: r.components,
-    tagsNotInExpectation: r.tagsNotInExpectation,
-    ...(run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {}),
-    ...(f.run !== undefined ? { runId: f.run } : {}),
-    build: { ...run.build, ...gitState(project) },
-    ...(stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {}),
-    page: r.page,
-    ...(driven ? { interactions: driven } : {}),
-    behaviour,
-    visual,
-  };
   const allNotes = [...notes, ...r.notes, ...(driveNote !== null ? [driveNote] : [])];
-  // atomic, the picture first — a reader that sees measured.json sees the screenshot it lists
-  const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
-  if (endedRun()) return 2;
-  writeFileAtomic(png, r.png);
-  // Listed in behaviour.artifacts only (never measured.artifacts: compare's artifact check stays verdict-neutral). A run
-  // that takes none removes an earlier run's (that exact path) — it would sit unlisted next to a measured file that never saw
-  // it. Never a reason to lose measured.json: a failure here is a note on stderr.
-  const forcedPath = outBase + ".forced-colors.png";
-  try {
-    if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
-    else if (fs.existsSync(forcedPath)) fs.rmSync(forcedPath, { force: true });
-  } catch (e) { console.error(`warning  ${forcedPath}: ${firstLine(e)} — the behaviour screenshot is not written`); }
-  writeFileAtomic(outBase + ".measured.json", measuredText);
-  // the measured file stays when this write is refused: the run's status still says measuring, so say what records it
-  const statusRefused = runId !== undefined && !status({ runId, phase: "measured", by: "verify-probe", detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
-    ...(expSha ? { expectationSha256: expSha } : {}), measuredSha256: sha256Hex(measuredText) });
+  // Every file of this measurement, written (or an earlier run's removed) in one step: with --run, inside the
+  // `measured` status write's lock after its ended-run check, so a run ended while the page was measured gets none.
+  // Returns the measured file's sha for that record; `written` says it got that far.
+  let written = false, statusRefused = false;
+  const writeFiles = (): Pick<StatusWrite, "measuredSha256"> => {
+    try {
+      if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
+      else if (fs.existsSync(diffPath)) fs.rmSync(diffPath, { force: true });
+    } catch (e) {
+      console.error(`warning  ${diffPath}: ${firstLine(e)} — the visual diff image is not written`);
+      if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
+    }
+    const measured: VerifyMeasured = {
+      measuredAt: new Date().toISOString(),
+      renderer: "playwright-chromium",
+      viewport: `${viewport.w}x${viewport.h}`,
+      artifacts: [png.split(path.sep).join("/")],
+      expectationSha256: sha256Hex(expBytes),
+      probe: identity,
+      ...(firstFrame ? { frame: frameOut(firstFrame) } : {}),
+      ...(r.frames.length > 1 ? { frames: r.frames.map(frameOut) } : {}),
+      navigation: run.navigation,
+      matchedByCensus: { ...census(r.nodes, r.notMeasured) },
+      nodes: r.nodes,
+      notMeasured: r.notMeasured,
+      components: r.components,
+      tagsNotInExpectation: r.tagsNotInExpectation,
+      ...(run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {}),
+      ...(f.run !== undefined ? { runId: f.run } : {}),
+      build: { ...run.build, ...gitState(project) },
+      ...(stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {}),
+      page: r.page,
+      ...(driven ? { interactions: driven } : {}),
+      behaviour,
+      visual,
+    };
+    // atomic, the picture first — a reader that sees measured.json sees the screenshot it lists
+    const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
+    writeFileAtomic(png, r.png);
+    // Listed in behaviour.artifacts only (never measured.artifacts: compare's artifact check stays verdict-neutral). A run
+    // that takes none removes an earlier run's (that exact path) — it would sit unlisted next to a measured file that never saw
+    // it. Never a reason to lose measured.json: a failure here is a note on stderr.
+    const forcedPath = outBase + ".forced-colors.png";
+    try {
+      if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
+      else if (fs.existsSync(forcedPath)) fs.rmSync(forcedPath, { force: true });
+    } catch (e) { console.error(`warning  ${forcedPath}: ${firstLine(e)} — the behaviour screenshot is not written`); }
+    writeFileAtomic(outBase + ".measured.json", measuredText);
+    written = true;
+    return { measuredSha256: sha256Hex(measuredText) };
+  };
+  if (runId === undefined) writeFiles();
+  else {
+    const wrote = status({ runId, phase: "measured", by: "verify-probe", detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
+      ...(expSha ? { expectationSha256: expSha } : {}) }, writeFiles);
+    if (wrote === "ended") return 2; // ended while the page was measured: no files, no next step
+    if (wrote === "refused") {
+      // the measured file stays when the status write is refused: the run's status still says measuring, so say what
+      // records it. Refused before the files (the lock itself): checked for an ended run without the lock, then written
+      statusRefused = true;
+      const endedNow = written ? null : endedRun(readStatus(statusBase), runId);
+      if (endedNow) { console.error(`verify-probe: ${endedNow.message}`); return 2; }
+      if (!written) writeFiles();
+    }
+  }
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
   console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) — tag ${c.tag} · shared path ${c.sharedPath} · alias ${c.tagAlias} · text ${c.text} · ordinal ${c.textOrdinal} · position ${c.position} · frame ${c.frame} · not measured ${c.notMeasured}` +
@@ -1412,7 +1425,6 @@ export async function main(argv: string[]): Promise<number> {
       `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` +
       (findable ? "" : ` — after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
   }
-  if (endedMeanwhile) return 2; // ended between the check before the writes and the `measured` write: no next step for it
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
   return 0;
 }

@@ -78,7 +78,10 @@ every `--status`, `--wait`, probe and `--compare` of one run the same way (all s
 
 Exit 6 from `--status` or `--wait` means the run cache is not writable (or readable) from where you ran it — the
 sandbox's write scope is the current directory and the temp dir — so run from the project root, or allow writes
-there; the probe only prints the same as a warning and keeps its exit codes. `--status` and `--wait` resolve
+there; the probe only prints the same as a warning and keeps its exit codes. Status writes of one screen take turns
+(a `<Screen>.status.json.lock` beside the live status, held for the moment of the write; one left by a killed
+command is cleared by the next write): a `--status` still waiting on another write after 15 s refuses with exit 1 —
+run it again. `--status` and `--wait` resolve
 `--dir` (default `design/verify`) against the current directory; from anywhere but the project root pass `--dir`
 (an absolute path works).
 

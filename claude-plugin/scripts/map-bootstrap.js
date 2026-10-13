@@ -731,6 +731,9 @@ function writeFileAtomic(file, data, opts = {}) {
   }
 }
 
+// bridge/src/file-lock.ts
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+
 // bridge/src/json-file.ts
 var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
 function formatJsonLike(value, raw) {

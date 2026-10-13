@@ -15,7 +15,7 @@ import type { AddressInfo } from "node:net";
 import { isVerifyMeasured } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
-import { liveStatusFile, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
+import { liveStatusFile, lockFileOfStatus, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { freeHoverPoint } from "../design-to-code/probe-page.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
@@ -316,16 +316,17 @@ else {
 }
 
 // the orchestrator ends the run while the page is measured → the probe writes no files, exits 2,
-// and the ended status stays (no measured.json or PNG written, no exit 0, no "next --compare")
+// and the ended status stays (no measured.json, PNG, diff or behaviour screenshot written, no exit 0, no "next --compare")
 const stageA1 = path.join(tmp, "stageA1", "Staff");
 onPage = () => writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-12", phase: "failed", by: "agent", detail: "gave up" });
 const rA1 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA1, "--project", ROOT, "--run", "run-e2e-12"]);
 onPage = null;
 const stA1 = readStatus(liveFile);
-check("a run ended while the page is measured → exit 2, no measured file or screenshot, the failed status unchanged, no next step",
-  rA1.status === 2 && !fs.existsSync(stageA1 + ".measured.json") && !fs.existsSync(stageA1 + ".png") && stA1?.phase === "failed" && stA1.runId === "run-e2e-12"
-  && rA1.stderr.includes("run run-e2e-12 already ended at failed (gave up)") && !/^next /m.test(rA1.stderr));
-if (rA1.status !== 2) console.log(rA1.stderr);
+const leftA1 = fs.existsSync(path.dirname(stageA1)) ? fs.readdirSync(path.dirname(stageA1)) : [];
+check("a run ended while the page is measured → exit 2, nothing in --out's directory (no measured file, screenshot or diff), the failed status unchanged, no next step",
+  rA1.status === 2 && leftA1.length === 0 && stA1?.phase === "failed" && stA1.runId === "run-e2e-12"
+  && rA1.stderr.includes("run run-e2e-12 already ended at failed (gave up)") && !/^next /m.test(rA1.stderr) && !fs.existsSync(lockFileOfStatus(path.join(vdir, "Staff"))));
+if (rA1.status !== 2 || leftA1.length) console.log(`${rA1.stderr}\n  left: ${leftA1.join(", ")}`);
 
 // a project whose path holds a space, and a run cache refusing every status write of the run (measuring
 // too): the warning says no live status exists (compare: unrecorded); its recovery command and the `next` line

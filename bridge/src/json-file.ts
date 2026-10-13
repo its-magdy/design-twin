@@ -2,6 +2,9 @@
 // Shared by bridge/ and design-to-code/ (the layer may import bridge/src; bridge cannot import the layer).
 import fs from "node:fs";
 import { writeFileAtomic } from "./atomic-write.ts";
+import { errCode } from "./errmsg.ts";
+import { lockFileOf, withFileLock } from "./file-lock.ts";
+import type { FileLockOpts } from "./file-lock.ts";
 
 // The file's own indentation: the first indented line's leading whitespace (2 spaces when the file has none).
 const indentOf = (text: string): string => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
@@ -26,4 +29,32 @@ export function writeJsonLike(file: string, value: unknown, raw?: string | null)
   if (out === was) return false;
   writeFileAtomic(file, out);
   return true;
+}
+
+/** How often updateJsonLike starts over when the file changed under it. */
+const UPDATE_TRIES = 3;
+const readIfThere = (file: string): string | null => {
+  try { return fs.readFileSync(file, "utf8"); } catch (e) { if (errCode(e) === "ENOENT") return null; throw e; }
+};
+/**
+ * Read-modify-write of a JSON file several writers share (a plan: --record-plan, --accept, plan-skeleton --out, the
+ * verify-build hook). Under the lock `<file>.lock` (file-lock.ts) it reads the file (null when there is none), gives
+ * the text to `fn`, which returns the new value, and writes it like writeJsonLike — formatted like the file, atomic,
+ * only when the bytes change; true when written. Two tool writers never interleave: the second reads what the first
+ * wrote. A writer that takes no lock (an agent's Edit/Write) is caught by reading the file again before the rename —
+ * changed bytes start over from them (up to UPDATE_TRIES times, then it throws); its write landing between that
+ * re-read and the rename is still lost. `fn` may run more than once, so it computes from its argument only. Throws
+ * LockBusy (file-lock.ts) when another writer holds the lock past `opts.waitMs`, and whatever reading the file throws
+ * other than ENOENT (an unreadable plan is never treated as absent and overwritten).
+ */
+export function updateJsonLike(file: string, fn: (raw: string | null) => unknown, opts: FileLockOpts = {}): boolean {
+  return withFileLock(lockFileOf(file), () => {
+    for (let tries = 1; ; tries++) {
+      const raw = readIfThere(file);
+      const out = formatJsonLike(fn(raw), raw);
+      if (out === raw) return false;
+      if (readIfThere(file) === raw) { writeFileAtomic(file, out); return true; }
+      if (tries >= UPDATE_TRIES) throw new Error(`${file} kept changing while it was being updated (${UPDATE_TRIES} tries) — retry once its other writer is done`);
+    }
+  }, opts);
 }

@@ -2,8 +2,8 @@
 
 
 // design-to-code/plan-skeleton.ts
-import fs7 from "node:fs";
-import path5 from "node:path";
+import fs8 from "node:fs";
+import path6 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -239,12 +239,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path6, parent, depth) {
+  (function go(node, parentHidden, path7, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path6, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path7, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path6 ? path6 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path7 ? path7 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -485,7 +485,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path6, message) => errors.push({ path: path6, message });
+  const err = (path7, message) => errors.push({ path: path7, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -894,7 +894,7 @@ function auditGateStatus(cwd, screenFile, screenName) {
 import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/json-file.ts
-import fs6 from "node:fs";
+import fs7 from "node:fs";
 
 // bridge/src/atomic-write.ts
 import crypto from "node:crypto";
@@ -917,6 +917,136 @@ function writeFileAtomic(file, data, opts = {}) {
   }
 }
 
+// bridge/src/file-lock.ts
+import crypto2 from "node:crypto";
+import fs6 from "node:fs";
+import os from "node:os";
+import path5 from "node:path";
+var STALE_MS = 3e4;
+var WAIT_MS = 1e4;
+var POLL_MS = 25;
+var lockFileOf = (file) => file + ".lock";
+var LockBusy = class extends Error {
+  lockFile;
+  constructor(lockFile, holder, waitedMs) {
+    super(`${lockFile} is held by ${holder} \u2014 another write was still in progress after ${Math.round(waitedMs / 100) / 10}s; retry once it is done`);
+    this.name = "LockBusy";
+    this.lockFile = lockFile;
+  }
+};
+function holderOf(text) {
+  try {
+    const v = JSON.parse(text);
+    if (v === null || typeof v !== "object" || !("pid" in v) || !("host" in v) || !("at" in v) || !("token" in v)) return null;
+    const { pid, host, at, token } = v;
+    return typeof pid === "number" && Number.isInteger(pid) && pid > 0 && typeof host === "string" && typeof at === "number" && typeof token === "string" ? { pid, host, at, token } : null;
+  } catch {
+    return null;
+  }
+}
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return errCode(e) === "EPERM";
+  }
+}
+var read = (file) => {
+  try {
+    return fs6.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+};
+var describeHolder = (text) => {
+  const h = text === null ? null : holderOf(text);
+  return h ? `process ${h.pid}${h.host !== os.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
+};
+function isStale(lockFile, text, staleMs) {
+  const h = holderOf(text);
+  let at;
+  if (h) at = h.at;
+  else {
+    try {
+      at = fs6.statSync(lockFile).mtimeMs;
+    } catch {
+      return false;
+    }
+  }
+  if (Math.abs(Date.now() - at) > staleMs) return true;
+  return h !== null && h.host === os.hostname() && !pidAlive(h.pid);
+}
+function breakStale(lockFile, seen) {
+  const aside = lockFile + ".stale" + tmpSuffix();
+  try {
+    fs6.renameSync(lockFile, aside);
+  } catch {
+    return;
+  }
+  if (read(aside) === seen) {
+    fs6.rmSync(aside, { force: true });
+    return;
+  }
+  try {
+    fs6.linkSync(aside, lockFile);
+  } catch {
+  }
+  fs6.rmSync(aside, { force: true });
+}
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+var sleepSync = (ms) => {
+  Atomics.wait(sleeper, 0, 0, ms);
+};
+function acquireFileLock(lockFile, opts = {}) {
+  const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
+  const token = crypto2.randomBytes(8).toString("hex");
+  fs6.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
+  const t0 = Date.now();
+  for (; ; ) {
+    let fd = null;
+    try {
+      fd = fs6.openSync(lockFile, "wx");
+    } catch (e) {
+      if (errCode(e) !== "EEXIST") throw e;
+    }
+    if (fd !== null) {
+      const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token });
+      try {
+        fs6.writeSync(fd, mine);
+      } catch (e) {
+        fs6.closeSync(fd);
+        fs6.rmSync(lockFile, { force: true });
+        throw e;
+      }
+      fs6.closeSync(fd);
+      return () => {
+        if (read(lockFile) === mine) try {
+          fs6.rmSync(lockFile, { force: true });
+        } catch {
+        }
+      };
+    }
+    const text = read(lockFile);
+    if (text === null) continue;
+    if (isStale(lockFile, text, staleMs)) {
+      breakStale(lockFile, text);
+      continue;
+    }
+    const waited = Date.now() - t0;
+    if (waited >= waitMs) throw new LockBusy(lockFile, describeHolder(text), waited);
+    sleepSync(Math.min(POLL_MS, waitMs - waited));
+  }
+}
+function withFileLock(lockFile, fn, opts = {}) {
+  const release = acquireFileLock(lockFile, opts);
+  try {
+    return fn();
+  } finally {
+    release();
+  }
+}
+
 // bridge/src/json-file.ts
 var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
 function formatJsonLike(value, raw) {
@@ -926,21 +1056,38 @@ function formatJsonLike(value, raw) {
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
 }
-function writeJsonLike(file, value, raw) {
-  let was = raw ?? null;
-  if (raw === void 0) try {
-    was = fs6.readFileSync(file, "utf8");
-  } catch {
-    was = null;
+var UPDATE_TRIES = 3;
+var readIfThere = (file) => {
+  try {
+    return fs7.readFileSync(file, "utf8");
+  } catch (e) {
+    if (errCode(e) === "ENOENT") return null;
+    throw e;
   }
-  const out = formatJsonLike(value, was);
-  if (out === was) return false;
-  writeFileAtomic(file, out);
-  return true;
+};
+function updateJsonLike(file, fn, opts = {}) {
+  return withFileLock(lockFileOf(file), () => {
+    for (let tries = 1; ; tries++) {
+      const raw = readIfThere(file);
+      const out = formatJsonLike(fn(raw), raw);
+      if (out === raw) return false;
+      if (readIfThere(file) === raw) {
+        writeFileAtomic(file, out);
+        return true;
+      }
+      if (tries >= UPDATE_TRIES) throw new Error(`${file} kept changing while it was being updated (${UPDATE_TRIES} tries) \u2014 retry once its other writer is done`);
+    }
+  }, opts);
 }
 
 // design-to-code/plan-record.ts
-var writePlan = writeJsonLike;
+var updatePlan = updateJsonLike;
+function parsePlanText(raw, file) {
+  const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
+  const pp = parsePlan(parsed);
+  if (!("plan" in pp)) throw new Error(`${file} ${pp.error}`);
+  return pp.plan;
+}
 
 // design-to-code/plan-skeleton.ts
 var USAGE = [
@@ -1292,7 +1439,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };
   const nodeId = exp && exp.nodeId || root && root.id || null;
   const title = indexRow && indexRow.title;
-  const rel = screenFile ? path5.relative(cwd || process.cwd(), path5.resolve(screenFile)).split(path5.sep).join("/") : null;
+  const rel = screenFile ? path6.relative(cwd || process.cwd(), path6.resolve(screenFile)).split(path6.sep).join("/") : null;
   const screenName = String(title || exp && exp.screen || root && root.name || "").trim() || null;
   let auditGate = null;
   try {
@@ -1300,14 +1447,14 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     const g = auditGateStatus(base, screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
       const cross = g.auditFile.replace(/\.json$/, ".cross.json");
-      const crossCheckFile = cross !== g.auditFile && fs7.existsSync(path5.join(base, cross)) ? cross : null;
+      const crossCheckFile = cross !== g.auditFile && fs8.existsSync(path6.join(base, cross)) ? cross : null;
       auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
   } catch {
   }
   return {
     schema: "designtwin/plan@2",
-    screen: screenFile ? path5.basename(screenFile).replace(/\.json$/, "") : null,
+    screen: screenFile ? path6.basename(screenFile).replace(/\.json$/, "") : null,
     screenName,
     nodeId,
     route: route || null,
@@ -1427,8 +1574,8 @@ function seed(plan, from, label) {
 }
 var isIndexDoc = (x) => isPagesRootIndex(x) || isPageIndex(x);
 function findIndexRow(screenFile, nodeId) {
-  const dir = path5.dirname(path5.resolve(screenFile));
-  for (const idx of [path5.join(dir, "..", "index.json"), path5.join(dir, "index.json")]) {
+  const dir = path6.dirname(path6.resolve(screenFile));
+  for (const idx of [path6.join(dir, "..", "index.json"), path6.join(dir, "index.json")]) {
     const d = readJsonOrNull(idx, isIndexDoc);
     const hit = (d && d.layers || []).find((r) => r.id === nodeId);
     if (hit) return hit;
@@ -1458,18 +1605,18 @@ function main(argv) {
   const varsRead = readJson(varsFile, isTokensDoc);
   if (!("doc" in varsRead)) return cannotRead("the screen's variables", varsFile, varsRead.error);
   const doc = screen.doc, vars = varsRead.doc;
-  const hasDs = dsDir && fs7.existsSync(dsDir) && fs7.statSync(dsDir).isDirectory();
+  const hasDs = dsDir && fs8.existsSync(dsDir) && fs8.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const optional = (file, guard) => {
     if (!hasDs) return { doc: null };
-    const r = readJson(path5.join(dsDir, file), guard);
+    const r = readJson(path6.join(dsDir, file), guard);
     return "doc" in r ? r : r.missing ? { doc: null } : { error: r.error };
   };
   const { TOKENS: TOKENS4, COMPONENTS_LOCAL: COMPONENTS_LOCAL3, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY3 } = DESIGN_SYSTEM_FILES;
   const dsRead = optional(TOKENS4, isTokensDoc), catRead = optional(COMPONENTS_LOCAL3, isComponentsCatalog), libRead = optional(COMPONENTS_LIBRARY3, isComponentsCatalog);
-  if ("error" in dsRead) return cannotRead("the design system's tokens", path5.join(dsDir, TOKENS4), dsRead.error);
-  if ("error" in catRead) return cannotRead("the component catalog", path5.join(dsDir, COMPONENTS_LOCAL3), catRead.error);
-  if ("error" in libRead) return cannotRead("the library component catalog", path5.join(dsDir, COMPONENTS_LIBRARY3), libRead.error);
+  if ("error" in dsRead) return cannotRead("the design system's tokens", path6.join(dsDir, TOKENS4), dsRead.error);
+  if ("error" in catRead) return cannotRead("the component catalog", path6.join(dsDir, COMPONENTS_LOCAL3), catRead.error);
+  if ("error" in libRead) return cannotRead("the library component catalog", path6.join(dsDir, COMPONENTS_LIBRARY3), libRead.error);
   const mapAt = findMapFile(process.cwd());
   const mapFile = mapFlag || (mapAt.missing ? void 0 : mapAt.rel);
   let mapKeys = /* @__PURE__ */ new Map();
@@ -1485,17 +1632,15 @@ function main(argv) {
     if (!parsed || "error" in parsed) return cannotRead("the --seed-from plan", f, !("doc" in r) ? r.error : parsed && "error" in parsed ? parsed.error : "is not a plan");
     seeds.push({ file: f, plan: parsed.plan });
   }
-  const seedAll = (plan) => {
-    for (const sd of seeds) {
-      const n = seed(plan, sd.plan, path5.basename(sd.file));
-      console.error(`plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " \u2014 review them (seededFrom)" : ""));
-    }
-  };
+  const seedAll = (plan) => seeds.map((sd) => {
+    const n = seed(plan, sd.plan, path6.basename(sd.file));
+    return `plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " \u2014 review them (seededFrom)" : "");
+  });
   const nodeId = screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id;
   const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow: findIndexRow(screenFile, nodeId) });
   const c = fresh.counts;
   if (!out) {
-    seedAll(fresh);
+    for (const l of seedAll(fresh)) console.error(l);
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");
   } else {
     const prevRead = readJson(out, anyJson);
@@ -1505,13 +1650,24 @@ function main(argv) {
       console.error(`plan-skeleton: ${out} exists but ${why} \u2014 refusing to overwrite it`);
       return 1;
     }
-    const prev = parsed && "plan" in parsed ? parsed.plan : null;
-    const { plan, dropped } = merge(fresh, prev);
-    seedAll(plan);
-    if (!writePlan(out, plan)) {
-      const now = /* @__PURE__ */ new Date();
-      fs7.utimesSync(out, now, now);
+    let done = { prev: null, dropped: { tokens: 0, components: 0, anchors: 0 }, seeded: [] };
+    try {
+      const changed = updatePlan(out, (raw) => {
+        const prev2 = raw === null ? null : parsePlanText(raw, out);
+        const { plan, dropped: dropped2 } = merge(structuredClone(fresh), prev2);
+        done = { prev: prev2, dropped: dropped2, seeded: seedAll(plan) };
+        return plan;
+      });
+      if (!changed) {
+        const now = /* @__PURE__ */ new Date();
+        fs8.utimesSync(out, now, now);
+      }
+    } catch (e) {
+      console.error(`plan-skeleton: ${out}: ${errMsg(e)} \u2014 not written`);
+      return 1;
     }
+    for (const l of done.seeded) console.error(l);
+    const { prev, dropped } = done;
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }
   console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded, ${fresh.anchorsSuggested.length} suggested anchor root(s) (anchorsSuggested)`);

@@ -2,8 +2,8 @@
 
 
 // design-to-code/verify-probe.ts
-import fs6 from "node:fs";
-import path7 from "node:path";
+import fs7 from "node:fs";
+import path8 from "node:path";
 
 // bridge/src/hash.ts
 import crypto from "node:crypto";
@@ -300,9 +300,9 @@ function measureElements(input) {
       const ring = distinct.length === 1 ? distinct[0] : insetOnes.length === 1 ? insetOnes[0] : void 0;
       if (ring) return strokeMemo = { width: ring.spread, color: ring.color, from: "box-shadow", align: ring.inset ? "inside" : "outside" };
       if (distinct.length > 1) return strokeMemo;
-      const os2 = cs.getPropertyValue("outline-style").trim(), ow = px(cs.getPropertyValue("outline-width")), oo = px(cs.getPropertyValue("outline-offset"));
+      const os3 = cs.getPropertyValue("outline-style").trim(), ow = px(cs.getPropertyValue("outline-width")), oo = px(cs.getPropertyValue("outline-offset"));
       const oc = rgba(cs.getPropertyValue("outline-color"));
-      if (!os2 || os2 === "none" || os2 === "auto" || ow === null || !(ow > 0) || oo === null || transparentColour(oc)) return strokeMemo;
+      if (!os3 || os3 === "none" || os3 === "auto" || ow === null || !(ow > 0) || oo === null || transparentColour(oc)) return strokeMemo;
       if (oo === -ow) return strokeMemo = { width: ow, color: oc, from: "outline", align: "inside" };
       if (oo === 0) return strokeMemo = { width: ow, color: oc, from: "outline", align: "outside" };
       return strokeMemo;
@@ -546,9 +546,9 @@ function freeHoverPoint(arg) {
   }
   return null;
 }
-function focusablePath(path8) {
+function focusablePath(path9) {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
-  const el = document.querySelector(path8);
+  const el = document.querySelector(path9);
   const f = el ? el.closest(FOCUSABLE) : null;
   if (!f) return null;
   const parts = [];
@@ -562,8 +562,8 @@ function focusablePath(path8) {
   parts.unshift("html");
   return parts.join(" > ");
 }
-function focusInfo(path8) {
-  const el = document.querySelector(path8);
+function focusInfo(path9) {
+  const el = document.querySelector(path9);
   const focused = !!el && document.activeElement === el;
   return { focused, focusVisible: focused && !!el && el.matches(":focus-visible") };
 }
@@ -1425,20 +1425,6 @@ function stepsSha256(steps) {
 // design-to-code/probe-drive.ts
 import { setTimeout as sleep } from "node:timers/promises";
 
-// design-to-code/pw-errors.ts
-var pwFirstLine = (e) => firstLine(e).trimEnd();
-var CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected|Target crashed|Page crashed/i;
-var NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
-var TIMED_OUT = /Timeout \d+\s*ms exceeded/i;
-function pwErrorKind(e, page) {
-  const name = e instanceof Error ? e.name : "";
-  const m = firstLine(e);
-  if (page !== void 0 && page.isClosed() || name === "TargetClosedError" || CLOSED.test(m)) return "gone";
-  if (name === "TimeoutError") return "timeout";
-  if (NAVIGATED.test(m)) return "navigated";
-  return TIMED_OUT.test(m) ? "timeout" : "other";
-}
-
 // bridge/src/png.ts
 import { crc32, deflateSync, inflateSync } from "node:zlib";
 var PngError = class extends Error {
@@ -2070,8 +2056,8 @@ function ownClear(_arg) {
   window.__dtOwn = null;
   return true;
 }
-function syntheticClick(path8) {
-  const el = document.querySelector(path8);
+function syntheticClick(path9) {
+  const el = document.querySelector(path9);
   if (!el) return false;
   el.click();
   return true;
@@ -2495,14 +2481,14 @@ var DRIVE_RESERVE_MS = 15e3;
 function driveBudget(now, deadline, capMs = DRIVE_CAP_MS, reserveMs = DRIVE_RESERVE_MS) {
   return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
 }
-function classifyOutcome(action, read) {
-  const destNew = !!(read.dest && read.dest.newly);
+function classifyOutcome(action, read2) {
+  const destNew = !!(read2.dest && read2.dest.newly);
   if (String(action).toLowerCase() === "swap") {
-    if (destNew) return { outcome: "selector-appeared", detectedBy: read.detectedBy ?? "destination-tag" };
-    return read.detectedBy ? { outcome: "dialog-opened", detectedBy: read.detectedBy } : { outcome: "none" };
+    if (destNew) return { outcome: "selector-appeared", detectedBy: read2.detectedBy ?? "destination-tag" };
+    return read2.detectedBy ? { outcome: "dialog-opened", detectedBy: read2.detectedBy } : { outcome: "none" };
   }
-  if (read.detectedBy) return { outcome: "dialog-opened", detectedBy: read.detectedBy };
-  if (destNew && read.opened) return { outcome: "selector-appeared", detectedBy: "destination-tag" };
+  if (read2.detectedBy) return { outcome: "dialog-opened", detectedBy: read2.detectedBy };
+  if (destNew && read2.opened) return { outcome: "selector-appeared", detectedBy: "destination-tag" };
   return { outcome: "none" };
 }
 var ALLOWED = { overlay: ["dialog-opened", "selector-appeared"], swap: ["state-changed", "selector-appeared"] };
@@ -2520,6 +2506,8 @@ function judge(action, e) {
 var StepError = class extends Error {
 };
 var raf2 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+var CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i;
+var NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
 var CUT_SETTLE_MS = 5e3;
 var CUT = /* @__PURE__ */ Symbol("cut");
 var UNSETTLED = /* @__PURE__ */ Symbol("unsettled");
@@ -2735,9 +2723,8 @@ async function driveRow(browser, o, row, hooks, onContext) {
       await page.locator(openerPath).first().click({ timeout: 2e3 });
     } catch (e) {
       const m = errMsg(e);
-      const kind = pwErrorKind(e, page);
-      if (kind === "gone") throw e;
-      if (kind !== "navigated") {
+      if (CLOSED.test(m)) throw e;
+      if (!NAVIGATED.test(m)) {
         clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
         activation = "synthetic";
         await restoreSettled(page);
@@ -2745,32 +2732,33 @@ async function driveRow(browser, o, row, hooks, onContext) {
       }
     }
     const t0 = Date.now();
-    let read = { lost: false, detectedBy: null, opened: null, dest: null };
+    let read2 = { lost: false, detectedBy: null, opened: null, dest: null };
     let detectedAt = null;
     for (; ; ) {
       try {
-        read = await page.evaluate(pollDetector, { destId, contract });
+        read2 = await page.evaluate(pollDetector, { destId, contract });
       } catch (e) {
-        if (pwErrorKind(e, page) !== "navigated") throw e;
-        read = { lost: true, detectedBy: null, opened: null, dest: null };
+        if (CLOSED.test(errMsg(e))) throw e;
+        if (!NAVIGATED.test(errMsg(e))) throw e;
+        read2 = { lost: true, detectedBy: null, opened: null, dest: null };
       }
-      if (read.lost) break;
-      if (read.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
-      const destDone = destId === null || read.dest !== null && read.dest.inside;
-      if (read.opened && destDone) break;
+      if (read2.lost) break;
+      if (read2.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
+      const destDone = destId === null || read2.dest !== null && read2.dest.inside;
+      if (read2.opened && destDone) break;
       if (detectedAt !== null && Date.now() - detectedAt >= 500) break;
       if (Date.now() - t0 >= 2e3) break;
       await sleep(100);
     }
-    if (read.lost) await page.waitForLoadState("load", { timeout: 2e3 }).catch(() => void 0);
+    if (read2.lost) await page.waitForLoadState("load", { timeout: 2e3 }).catch(() => void 0);
     let tokenAfter = "";
     try {
       tokenAfter = String(await page.evaluate("window.__dtProbeDoc || ''"));
     } catch {
       tokenAfter = "";
     }
-    const navEvents = Math.max(loads() - loadsBefore, tokenAfter !== tokenBefore || read.lost ? 1 : 0);
-    const { outcome, detectedBy } = read.lost ? { outcome: "none", detectedBy: void 0 } : classifyOutcome(action, read);
+    const navEvents = Math.max(loads() - loadsBefore, tokenAfter !== tokenBefore || read2.lost ? 1 : 0);
+    const { outcome, detectedBy } = read2.lost ? { outcome: "none", detectedBy: void 0 } : classifyOutcome(action, read2);
     const ev = {
       ...base,
       outcome,
@@ -2778,15 +2766,15 @@ async function driveRow(browser, o, row, hooks, onContext) {
       activation,
       ...detectedBy !== void 0 ? { detectedBy } : {},
       ...revealedBy !== void 0 ? { revealedBy } : {},
-      ...destId !== null ? { destination: { nodeId: destId, inside: !read.lost && !!read.dest && read.dest.inside, count: read.dest ? read.dest.count : 0 } } : {},
-      ...read.opened && !read.lost ? { opened: read.opened } : {}
+      ...destId !== null ? { destination: { nodeId: destId, inside: !read2.lost && !!read2.dest && read2.dest.inside, count: read2.dest ? read2.dest.count : 0 } } : {},
+      ...read2.opened && !read2.lost ? { opened: read2.opened } : {}
     };
     const j = judge(action, ev);
     const how = `${activation === "mouse" ? "clicked" : `synthetic click (${clickWhy})`}${revealedBy !== void 0 ? ` after hovering ${revealedBy}` : ""}`;
-    const saw = read.lost ? "the page loaded a new document" : detectedBy !== void 0 ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
+    const saw = read2.lost ? "the page loaded a new document" : detectedBy !== void 0 ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
     ev.ok = j.ok;
     ev.detail = j.ok ? `${how}: ${saw}, destination ${destId} inside` : `${how}: ${saw} \u2014 ${j.missing.join("; ")}`;
-    if (hooks && hooks.afterOpen && read.opened && !read.lost) await hooks.afterOpen(page, row, read.opened);
+    if (hooks && hooks.afterOpen && read2.opened && !read2.lost) await hooks.afterOpen(page, row, read2.opened);
     return ev;
   } finally {
     await context.close().catch(() => void 0);
@@ -2808,7 +2796,7 @@ async function driveInteractions(browser, o, hooks) {
     }
     const held = {};
     const work = driveRow(browser, o, row, hooks, holdContext(held)).catch((e) => {
-      if (pwErrorKind(e) === "gone") return notRun(row, `the page or browser closed or crashed while driving \u2014 ${pwFirstLine(e)}`);
+      if (CLOSED.test(errMsg(e))) return notRun(row, `the browser closed while driving \u2014 ${firstLine(e)}`);
       return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
     });
     const r = await raceBudget(work, left, held);
@@ -4026,17 +4014,6 @@ var AXE_CAP_MS = 2e4;
 var AXE_TIMED_OUT = /* @__PURE__ */ Symbol("axe timed out");
 var BatteryStop = class extends Error {
 };
-var endsUnit = (e, page) => {
-  const k = pwErrorKind(e, page);
-  return k === "navigated" || k === "gone";
-};
-var unitEndWhy = (e) => {
-  const kind = pwErrorKind(e);
-  if (e instanceof UnitNavigated || kind === "navigated") return "the page loaded a new document";
-  if (e instanceof BatteryStop) return e.message;
-  if (kind === "gone") return `the page or browser closed or crashed \u2014 ${pwFirstLine(e)}`;
-  return `the check could not run \u2014 ${firstLine(e)}`;
-};
 var park = async (page) => {
   await page.mouse.move(0, 0);
   await raf2(page);
@@ -4312,7 +4289,11 @@ async function runUnitInner(ctx, unit) {
       if (wait > 0) await sleep2(wait, void 0, { ref: false });
       await reached.context.close().catch(() => void 0);
     }
-  })().catch(unitEndWhy);
+  })().catch((e) => {
+    if (e instanceof UnitNavigated || NAVIGATED.test(errMsg(e))) return "the page loaded a new document";
+    if (e instanceof BatteryStop) return e.message;
+    return `the check could not run \u2014 ${firstLine(e)}`;
+  });
   const raced = await raceBudget(work, left, held, () => {
     closed = true;
     ctx.cut = true;
@@ -4346,7 +4327,7 @@ function a11yUnit(ctx) {
       try {
         yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(o.timeout, 1e4) });
       } catch (e) {
-        if (endsUnit(e, page)) throw e;
+        if (NAVIGATED.test(errMsg(e))) throw e;
       }
       const tree = yaml === null ? null : parseAriaLandmarkTree(yaml);
       ctx.landmarks = tree ? tree.landmarks : null;
@@ -4371,7 +4352,7 @@ function a11yUnit(ctx) {
             u.add({ id: "a11y.axe", status: st, detail: st === "pass" ? `axe-core ${parsed.version}: no violations (main frame; iframes not scanned)` : `axe-core ${parsed.version}: ${parsed.violations.length} violation(s) \u2014 ${list} (critical/serious = fail, moderate/minor = warn; main frame; iframes not scanned)`, evidence: { version: parsed.version, violations: parsed.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes, help: v.help, targets: v.targets })) } });
           }
         } catch (e) {
-          if (endsUnit(e, page)) throw e;
+          if (NAVIGATED.test(errMsg(e))) throw e;
           ctx.axe = { ran: false, why: e instanceof AxeTimeout ? e.message : `axe-core ${o.axe.version} failed in the page: ${firstLine(e)}` };
           u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${ctx.axe.why}` });
         }
@@ -4497,36 +4478,28 @@ function a11yUnit(ctx) {
       if (nStops === 0) u.add({ id: "keyboard.focus-visible", status: "not-run", detail: "not-run: Tab reached no focusable element" });
       u.phase("a11y.name");
       const nameRows = [];
-      let nameOk = 0, judged = 0;
-      const nameWhat = `Tab stop(s) have a role and an accessible name (${NAMES_COMPUTED_BY})`;
-      try {
-        for (const [i, s] of info.entries()) {
-          judged = i;
-          u.guard();
-          if (!s.connected) {
-            nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: "not-run: left the document during the walk" });
-            continue;
-          }
-          let snap = "";
-          try {
-            snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2e3 });
-          } catch (e) {
-            if (endsUnit(e, page)) throw e;
-            nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
-            continue;
-          }
-          const n = nameStatus(snap, s);
-          const ev = { snapshot: (snap.split("\n")[0] ?? "").slice(0, 120), tag: s.tag, stop: i, ...s.domName !== null ? { domName: s.domName } : {} };
-          if (n.status === "warn") nameRows.push({ id: "a11y.name", status: "warn", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `a focusable <${s.tag}> with no role \u2014 give it a role (or use a native control) and a name; names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
-          else if (n.status === "fail") nameRows.push({ id: "a11y.name", status: "fail", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `${n.role} with no accessible name \u2014 an icon-only control needs aria-label (or visible text); names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
-          else nameOk++;
+      let nameOk = 0;
+      for (const [i, s] of info.entries()) {
+        u.guard();
+        if (!s.connected) {
+          nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: "not-run: left the document during the walk" });
+          continue;
         }
-      } catch (e) {
-        for (const c of perElement("a11y.name", nameRows, nameOk, judged, nameWhat)) u.add(c);
-        u.add({ id: "a11y.name", status: "not-run", detail: `not-run: ${info.length - judged} of ${info.length} Tab stop(s) not checked \u2014 ${unitEndWhy(e)}`, evidence: { count: info.length - judged, of: info.length } });
-        throw e;
+        let snap = "";
+        try {
+          snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2e3 });
+        } catch (e) {
+          if (NAVIGATED.test(errMsg(e))) throw e;
+          nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
+          continue;
+        }
+        const n = nameStatus(snap, s);
+        const ev = { snapshot: (snap.split("\n")[0] ?? "").slice(0, 120), tag: s.tag, stop: i, ...s.domName !== null ? { domName: s.domName } : {} };
+        if (n.status === "warn") nameRows.push({ id: "a11y.name", status: "warn", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `a focusable <${s.tag}> with no role \u2014 give it a role (or use a native control) and a name; names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
+        else if (n.status === "fail") nameRows.push({ id: "a11y.name", status: "fail", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `${n.role} with no accessible name \u2014 an icon-only control needs aria-label (or visible text); names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
+        else nameOk++;
       }
-      for (const c of perElement("a11y.name", nameRows, nameOk, info.length, nameWhat)) u.add(c);
+      for (const c of perElement("a11y.name", nameRows, nameOk, info.length, `Tab stop(s) have a role and an accessible name (${NAMES_COMPUTED_BY})`)) u.add(c);
       if (info.length === 0) u.add({ id: "a11y.name", status: "not-run", detail: "not-run: Tab reached no focusable element" });
     }
   };
@@ -5426,41 +5399,36 @@ async function captureVisual(browser, o) {
       const notes = [];
       const fr = o.frame;
       const sel = fr && fr.via !== "viewport" ? fr.selector : null;
-      const read = await page.evaluate(readFrame, { selector: sel });
+      const read2 = await page.evaluate(readFrame, { selector: sel });
       let origin;
       if (!fr) {
         origin = { x: 0, y: 0 };
         notes.push("no frame root was measured \u2014 the capture starts at the page's origin");
       } else if (fr.via === "viewport") origin = { x: 0, y: 0 };
-      else if (read.rect !== null) origin = { x: read.rect.x, y: read.rect.y };
+      else if (read2.rect !== null) origin = { x: read2.rect.x, y: read2.rect.y };
       else {
         origin = { x: fr.rect.x, y: fr.rect.y };
-        notes.push(`the frame's selector matched ${read.count} element(s) on the capture page \u2014 the measurement pass's position was used`);
+        notes.push(`the frame's selector matched ${read2.count} element(s) on the capture page \u2014 the measurement pass's position was used`);
       }
-      const built0 = fr && fr.via !== "viewport" && read.rect !== null ? read.rect : fr ? fr.rect : null;
+      const built0 = fr && fr.via !== "viewport" && read2.rect !== null ? read2.rect : fr ? fr.rect : null;
       if (built0 !== null && fr && fr.via !== "viewport" && (Math.abs(built0.h - o.frameSize.h) > 1 || Math.abs(built0.w - o.frameSize.w) > 1)) {
         notes.push(`the built frame is ${Math.round(built0.w)}\xD7${Math.round(built0.h)} CSS px and the design ${o.frameSize.w}\xD7${o.frameSize.h} \u2014 only the design-size window at the built frame's top-left is compared`);
       }
       const clip = { x: Math.round(origin.x), y: Math.round(origin.y), w: Math.floor(o.frameSize.w), h: Math.floor(o.frameSize.h) };
       const x0 = Math.max(0, clip.x), y0 = Math.max(0, clip.y);
-      const shot = { x: x0, y: y0, w: Math.max(0, Math.min(clip.x + clip.w, read.doc.w) - x0), h: Math.max(0, Math.min(clip.y + clip.h, read.doc.h) - y0) };
-      if (shot.w < 1 || shot.h < 1) return { why: `the frame's window (${clip.w}\xD7${clip.h} at ${clip.x},${clip.y}) lies outside the ${read.doc.w}\xD7${read.doc.h} document` };
+      const shot = { x: x0, y: y0, w: Math.max(0, Math.min(clip.x + clip.w, read2.doc.w) - x0), h: Math.max(0, Math.min(clip.y + clip.h, read2.doc.h) - y0) };
+      if (shot.w < 1 || shot.h < 1) return { why: `the frame's window (${clip.w}\xD7${clip.h} at ${clip.x},${clip.y}) lies outside the ${read2.doc.w}\xD7${read2.doc.h} document` };
       const nodes = [];
       for (const n of o.nodes) if (n.selectorCount === 1 && typeof n.selector === "string" && n.selector && nodes.length < BUILT_CAP) nodes.push({ id: n.nodeId, selector: n.selector });
       const built = await page.evaluate(readBuilt, { nodes, frame: origin });
       const png = await page.screenshot({ clip: { x: shot.x, y: shot.y, width: shot.w, height: shot.h }, fullPage: true, animations: "disabled", caret: "hide", scale: "device" });
       const after = await page.evaluate(readFrame, { selector: null });
-      if (loads() !== loads0 || after.token !== read.token) return { why: "the page loaded a new document during the visual capture" };
+      if (loads() !== loads0 || after.token !== read2.token) return { why: "the page loaded a new document during the visual capture" };
       return { png, dsf: o.ref.scale, clip, shot, frame: fr ? { nodeId: fr.nodeId, via: fr.via, selector: fr.selector } : { nodeId: "", via: "none", selector: null }, built, notes };
     } finally {
       await context.close().catch(() => void 0);
     }
-  })().catch((e) => {
-    const kind = pwErrorKind(e);
-    if (kind === "navigated") return { why: "the page loaded a new document during the visual capture" };
-    if (kind === "gone") return { why: `the page or browser closed or crashed during the visual capture \u2014 ${pwFirstLine(e)}` };
-    return { why: `the visual capture failed \u2014 ${firstLine(e)}` };
-  });
+  })().catch((e) => ({ why: /Execution context was destroyed|frame was detached|navigation/i.test(errMsg(e)) ? "the page loaded a new document during the visual capture" : `the visual capture failed \u2014 ${firstLine(e)}` }));
   const r = await raceBudget(work, o.budgetMs, held);
   if (!r.cut) return r.value;
   return { why: `the visual capture did not finish within its budget (${Math.round(o.budgetMs / 1e3)} s)` };
@@ -5559,9 +5527,9 @@ function gitHead(cwd) {
 }
 
 // design-to-code/verify-run.ts
-import fs4 from "node:fs";
-import os from "node:os";
-import path6 from "node:path";
+import fs5 from "node:fs";
+import os2 from "node:os";
+import path7 from "node:path";
 
 // bridge/src/atomic-write.ts
 import crypto2 from "node:crypto";
@@ -5584,6 +5552,128 @@ function writeFileAtomic(file, data, opts = {}) {
   }
 }
 
+// bridge/src/file-lock.ts
+import crypto3 from "node:crypto";
+import fs4 from "node:fs";
+import os from "node:os";
+import path6 from "node:path";
+var STALE_MS = 3e4;
+var WAIT_MS = 1e4;
+var POLL_MS = 25;
+var lockFileOf = (file) => file + ".lock";
+var LockBusy = class extends Error {
+  lockFile;
+  constructor(lockFile, holder, waitedMs) {
+    super(`${lockFile} is held by ${holder} \u2014 another write was still in progress after ${Math.round(waitedMs / 100) / 10}s; retry once it is done`);
+    this.name = "LockBusy";
+    this.lockFile = lockFile;
+  }
+};
+function holderOf(text) {
+  try {
+    const v = JSON.parse(text);
+    if (v === null || typeof v !== "object" || !("pid" in v) || !("host" in v) || !("at" in v) || !("token" in v)) return null;
+    const { pid, host, at, token } = v;
+    return typeof pid === "number" && Number.isInteger(pid) && pid > 0 && typeof host === "string" && typeof at === "number" && typeof token === "string" ? { pid, host, at, token } : null;
+  } catch {
+    return null;
+  }
+}
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return errCode(e) === "EPERM";
+  }
+}
+var read = (file) => {
+  try {
+    return fs4.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+};
+var describeHolder = (text) => {
+  const h = text === null ? null : holderOf(text);
+  return h ? `process ${h.pid}${h.host !== os.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
+};
+function isStale(lockFile, text, staleMs) {
+  const h = holderOf(text);
+  let at;
+  if (h) at = h.at;
+  else {
+    try {
+      at = fs4.statSync(lockFile).mtimeMs;
+    } catch {
+      return false;
+    }
+  }
+  if (Math.abs(Date.now() - at) > staleMs) return true;
+  return h !== null && h.host === os.hostname() && !pidAlive(h.pid);
+}
+function breakStale(lockFile, seen) {
+  const aside = lockFile + ".stale" + tmpSuffix();
+  try {
+    fs4.renameSync(lockFile, aside);
+  } catch {
+    return;
+  }
+  if (read(aside) === seen) {
+    fs4.rmSync(aside, { force: true });
+    return;
+  }
+  try {
+    fs4.linkSync(aside, lockFile);
+  } catch {
+  }
+  fs4.rmSync(aside, { force: true });
+}
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+var sleepSync = (ms) => {
+  Atomics.wait(sleeper, 0, 0, ms);
+};
+function acquireFileLock(lockFile, opts = {}) {
+  const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
+  const token = crypto3.randomBytes(8).toString("hex");
+  fs4.mkdirSync(path6.dirname(path6.resolve(lockFile)), { recursive: true });
+  const t0 = Date.now();
+  for (; ; ) {
+    let fd = null;
+    try {
+      fd = fs4.openSync(lockFile, "wx");
+    } catch (e) {
+      if (errCode(e) !== "EEXIST") throw e;
+    }
+    if (fd !== null) {
+      const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token });
+      try {
+        fs4.writeSync(fd, mine);
+      } catch (e) {
+        fs4.closeSync(fd);
+        fs4.rmSync(lockFile, { force: true });
+        throw e;
+      }
+      fs4.closeSync(fd);
+      return () => {
+        if (read(lockFile) === mine) try {
+          fs4.rmSync(lockFile, { force: true });
+        } catch {
+        }
+      };
+    }
+    const text = read(lockFile);
+    if (text === null) continue;
+    if (isStale(lockFile, text, staleMs)) {
+      breakStale(lockFile, text);
+      continue;
+    }
+    const waited = Date.now() - t0;
+    if (waited >= waitMs) throw new LockBusy(lockFile, describeHolder(text), waited);
+    sleepSync(Math.min(POLL_MS, waitMs - waited));
+  }
+}
+
 // design-to-code/verify-run.ts
 var STATUS_SCHEMA = "designtwin/verify-status@2";
 var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
@@ -5599,55 +5689,55 @@ var CACHE_NAME = "designtwin-verify";
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
-    return fs4.statSync(p).isDirectory();
+    return fs5.statSync(p).isDirectory();
   } catch {
     return false;
   }
 };
-var exists = (p) => fs4.existsSync(p);
+var exists = (p) => fs5.existsSync(p);
 function realpath(p) {
-  if (typeof fs4.realpathSync.native === "function") {
+  if (typeof fs5.realpathSync.native === "function") {
     try {
-      return fs4.realpathSync.native(p);
+      return fs5.realpathSync.native(p);
     } catch {
     }
   }
-  return fs4.realpathSync(p);
+  return fs5.realpathSync(p);
 }
 function canonical2(p) {
-  const abs = path6.resolve(p);
+  const abs = path7.resolve(p);
   try {
     return realpath(abs);
   } catch {
-    const parent = path6.dirname(abs);
-    return parent === abs ? abs : path6.join(canonical2(parent), path6.basename(abs));
+    const parent = path7.dirname(abs);
+    return parent === abs ? abs : path7.join(canonical2(parent), path7.basename(abs));
   }
 }
-var hasPnp = (d) => exists(path6.join(d, ".pnp.cjs")) || exists(path6.join(d, ".pnp.js"));
+var hasPnp = (d) => exists(path7.join(d, ".pnp.cjs")) || exists(path7.join(d, ".pnp.js"));
 function isWorkspaceRoot(d) {
-  if (exists(path6.join(d, "pnpm-workspace.yaml"))) return true;
-  const r = readJson(path6.join(d, "package.json"), anyJson);
+  if (exists(path7.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path7.join(d, "package.json"), anyJson);
   return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
 }
 function installRootOf(dir) {
   let P = null;
-  for (let d = dir; ; d = path6.dirname(d)) {
-    if (exists(path6.join(d, "package.json"))) {
+  for (let d = dir; ; d = path7.dirname(d)) {
+    if (exists(path7.join(d, "package.json"))) {
       P = d;
       break;
     }
-    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) return null;
+    if (exists(path7.join(d, ".git")) || path7.dirname(d) === d) return null;
   }
-  if (isDir(path6.join(P, "node_modules"))) return P;
+  if (isDir(path7.join(P, "node_modules"))) return P;
   let ws = null;
-  for (let d = P; ; d = path6.dirname(d)) {
+  for (let d = P; ; d = path7.dirname(d)) {
     if (isWorkspaceRoot(d)) {
       ws = d;
       break;
     }
-    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) break;
+    if (exists(path7.join(d, ".git")) || path7.dirname(d) === d) break;
   }
-  if (ws !== null && isDir(path6.join(ws, "node_modules"))) return ws;
+  if (ws !== null && isDir(path7.join(ws, "node_modules"))) return ws;
   if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
   return P;
 }
@@ -5655,11 +5745,11 @@ function runCacheOf(verifyDir) {
   const v = canonical2(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
-    const cache = path6.join(root, "node_modules", ".cache", CACHE_NAME);
-    const rel = path6.relative(root, v).split(path6.sep).join("/");
-    return { dir: rel === VERIFY_DIR.split(path6.sep).join("/") ? cache : path6.join(cache, "dirs", shortSha(rel)), root };
+    const cache = path7.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path7.relative(root, v).split(path7.sep).join("/");
+    return { dir: rel === VERIFY_DIR.split(path7.sep).join("/") ? cache : path7.join(cache, "dirs", shortSha(rel)), root };
   }
-  return { dir: path6.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+  return { dir: path7.join(os2.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
 }
 function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
@@ -5689,8 +5779,9 @@ function inRunCache(verifyDir, fn) {
     throw e;
   }
 }
-var liveStatusFile = (base) => path6.join(runCacheDir(path6.dirname(base)), path6.basename(base) + ".status.json");
-var stageDirOf = (base, runId) => path6.join(runCacheDir(path6.dirname(base)), "stage", runId);
+var liveStatusFile = (base) => path7.join(runCacheDir(path7.dirname(base)), path7.basename(base) + ".status.json");
+var lockFileOfStatus = (base) => lockFileOf(liveStatusFile(base));
+var stageDirOf = (base, runId) => path7.join(runCacheDir(path7.dirname(base)), "stage", runId);
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
@@ -5714,42 +5805,54 @@ var RunEnded = class extends Error {
     this.name = "RunEnded";
   }
 };
-function writeStatus(base, p) {
-  const prev = readStatus(base);
-  const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
-  if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
-  const pick = (k) => {
-    const v = p[k] ?? (same ? same[k] : void 0);
-    return v !== void 0 ? { [k]: v } : {};
-  };
-  const published = p.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...p.published || []])].sort() : void 0;
-  const doc = {
-    schema: STATUS_SCHEMA,
-    screen: path6.basename(base),
-    runId: p.runId,
-    rev: same ? same.rev + 1 : 1,
-    phase: p.phase,
-    detail: p.detail ?? "",
-    at: (/* @__PURE__ */ new Date()).toISOString(),
-    by: p.by,
-    ...pick("expectationSha256"),
-    ...pick("measuredSha256"),
-    ...pick("evidenceSha256"),
-    ...published !== void 0 ? { published } : {}
-  };
-  const live = liveStatusFile(base);
-  inRunCache(path6.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
-  return doc;
+function endedRun(prev, runId) {
+  return prev && prev !== "v1" && prev.runId === runId && TERMINAL_PHASES.includes(prev.phase) ? new RunEnded(prev.runId, prev.phase, prev.detail) : null;
+}
+var STATUS_LOCK = { waitMs: 15e3 };
+function writeStatus(base, p, hooks = {}) {
+  const live = liveStatusFile(base), dir = path7.dirname(base);
+  const release = inRunCache(dir, () => acquireFileLock(lockFileOfStatus(base), STATUS_LOCK));
+  try {
+    const prev = readStatus(base);
+    const ended = endedRun(prev, p.runId);
+    if (ended) throw ended;
+    const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+    const w = hooks.before ? { ...p, ...hooks.before() } : p;
+    const pick = (k) => {
+      const v = w[k] ?? (same ? same[k] : void 0);
+      return v !== void 0 ? { [k]: v } : {};
+    };
+    const published = w.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...w.published || []])].sort() : void 0;
+    const doc = {
+      schema: STATUS_SCHEMA,
+      screen: path7.basename(base),
+      runId: w.runId,
+      rev: same ? same.rev + 1 : 1,
+      phase: w.phase,
+      detail: w.detail ?? "",
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      by: w.by,
+      ...pick("expectationSha256"),
+      ...pick("measuredSha256"),
+      ...pick("evidenceSha256"),
+      ...published !== void 0 ? { published } : {}
+    };
+    inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+    hooks.after?.(doc);
+    return doc;
+  } finally {
+    release();
+  }
 }
 
 // bridge/src/is-main.ts
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs5.realpathSync(argv1) === fs5.realpathSync(fileURLToPath2(metaUrl));
+    return fs6.realpathSync(argv1) === fs6.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -5763,24 +5866,24 @@ function isPlaywrightModule(x) {
   return typeof c === "object" && c !== null && "launch" in c && typeof c.launch === "function";
 }
 function installHint(dir) {
-  const has = (f) => fs6.existsSync(path7.join(dir, f));
+  const has = (f) => fs7.existsSync(path8.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm add -D playwright && pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn add -D playwright && yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bun add -d playwright && bunx playwright install chromium";
   return "npm i -D playwright && npx playwright install chromium";
 }
 function browserHint(dir) {
-  const has = (f) => fs6.existsSync(path7.join(dir, f));
+  const has = (f) => fs7.existsSync(path8.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bunx playwright install chromium";
   return "npx playwright install chromium";
 }
 function projectRequire(dir) {
-  return createRequire(path7.join(path7.resolve(dir), "package.json"));
+  return createRequire(path8.join(path8.resolve(dir), "package.json"));
 }
 function resolvePlaywright(dir) {
-  const abs = path7.resolve(dir);
+  const abs = path8.resolve(dir);
   const req = projectRequire(abs);
   const tried = [];
   for (const name of PLAYWRIGHT_PACKAGES) {
@@ -5810,8 +5913,8 @@ function resolvePlaywright(dir) {
     }
     return { ok: true, pkg: name, version, mod, file };
   }
-  const pnp = fs6.existsSync(path7.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
-  return { ok: false, reason: `no playwright package resolvable from ${path7.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
+  const pnp = fs7.existsSync(path8.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
+  return { ok: false, reason: `no playwright package resolvable from ${path8.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
 }
 function resolveAxe(dir) {
   const req = projectRequire(dir);
@@ -5858,8 +5961,8 @@ async function launch(r, dir, executablePath) {
 function browserPathError(p) {
   let ok = false;
   try {
-    ok = fs6.statSync(p).isFile();
-    if (ok) fs6.accessSync(p, fs6.constants.X_OK);
+    ok = fs7.statSync(p).isFile();
+    if (ok) fs7.accessSync(p, fs7.constants.X_OK);
   } catch {
     ok = false;
   }
@@ -5867,13 +5970,13 @@ function browserPathError(p) {
 }
 var SELF2 = fileURLToPath3(import.meta.url);
 function probeVersion() {
-  for (const p of [path7.join(path7.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path7.join(path7.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
+  for (const p of [path8.join(path8.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path8.join(path8.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
     const doc = readJsonOrNull(p, isJsonObject);
     if (doc && typeof doc.version === "string") return doc.version;
   }
   return null;
 }
-var selfSha256 = () => sha256Hex(fs6.readFileSync(SELF2));
+var selfSha256 = () => sha256Hex(fs7.readFileSync(SELF2));
 var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
 function buildFrom(url, served, viteClient, unhashed = 0) {
   const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
@@ -5901,10 +6004,10 @@ var INIT_SCRIPT = `(() => {
 })();`;
 var QUIET_MS = 500;
 var QUIET_CAP_MS = 1e4;
-var POLL_MS = 100;
-function errorKind(e, page) {
-  const kind = pwErrorKind(e, page);
-  return kind === "timeout" ? "other" : kind;
+var POLL_MS2 = 100;
+function errorKind(message, pageClosed) {
+  if (pageClosed || CLOSED.test(message)) return "gone";
+  return NAVIGATED.test(message) ? "navigated" : "other";
 }
 var NavigatedError = class extends Error {
 };
@@ -5912,7 +6015,7 @@ var StepStateLostError = class extends NavigatedError {
 };
 var BrowserGoneError = class extends Error {
 };
-var gone = (e) => new BrowserGoneError(`the page or browser closed or crashed during measurement (${pwFirstLine(e)})`);
+var gone = (e) => new BrowserGoneError(`the browser closed or crashed during measurement (${firstLine(e)})`);
 var KeptNavigatingError = class extends Error {
 };
 var UnreachableError = class extends Error {
@@ -5929,8 +6032,8 @@ async function docTokenOrNull(page) {
     const v = await page.evaluate("window.__dtProbeDoc || ''");
     return String(v);
   } catch (e) {
-    if (errorKind(e, page) === "gone") throw gone(e);
-    if (errorKind(e) === "navigated") return null;
+    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+    if (errorKind(errMsg(e), false) === "navigated") return null;
     throw e;
   }
 }
@@ -5964,7 +6067,7 @@ async function settle(page, log, ready, timeout) {
     try {
       state = await page.evaluate("document.readyState");
     } catch (e) {
-      if (errorKind(e, page) === "gone") throw gone(e);
+      if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
       return loadNote;
     }
     if (state !== "complete") return loadNote;
@@ -5982,8 +6085,8 @@ async function settle(page, log, ready, timeout) {
         try {
           await page.waitForLoadState("load", { timeout: Math.max(1, docDeadline - Date.now()) });
         } catch (e) {
-          if (errorKind(e, page) === "gone") throw gone(e);
-          if (errorKind(e) === "navigated") throw e;
+          if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+          if (errorKind(errMsg(e), false) === "navigated") throw e;
           loadNote = `the document had not finished loading after ${Math.round(cap / 1e3)}s (document.readyState "${String(state)}") \u2014 measured anyway`;
           const now = await docTokenOrNull(page);
           if (now !== null && now !== "" && (token === null || now === token)) {
@@ -5998,7 +6101,7 @@ async function settle(page, log, ready, timeout) {
       if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, docDeadline - Date.now()) : timeout });
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
-      if (errorKind(e, page) === "gone") throw gone(e);
+      if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
       const now = await docTokenOrNull(page);
       if (now !== null && token !== null && now !== token) {
         await newDocument();
@@ -6006,12 +6109,12 @@ async function settle(page, log, ready, timeout) {
       }
       if (token === null && now !== null) token = now;
       if (moved() && Date.now() < docDeadline) {
-        await sleep4(POLL_MS);
+        await sleep4(POLL_MS2);
         continue;
       }
       if (moved()) throw kept();
-      if (errorKind(e) === "navigated" && Date.now() < docDeadline) {
-        await sleep4(POLL_MS);
+      if (errorKind(errMsg(e), false) === "navigated" && Date.now() < docDeadline) {
+        await sleep4(POLL_MS2);
         continue;
       }
       throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${firstLine(e)}` : firstLine(e));
@@ -6019,7 +6122,7 @@ async function settle(page, log, ready, timeout) {
     let mark = log.docLoads;
     let last = "", since = Date.now();
     for (; ; ) {
-      await sleep4(POLL_MS);
+      await sleep4(POLL_MS2);
       let tok, sig;
       try {
         const v = await page.evaluate("[window.__dtProbeDoc || '', document.getElementsByTagName('*').length + ':' + (document.body && document.body.textContent || '').length]");
@@ -6027,8 +6130,8 @@ async function settle(page, log, ready, timeout) {
         tok = String(v[0]);
         sig = String(v[1]);
       } catch (e) {
-        if (errorKind(e, page) === "gone") throw gone(e);
-        if (errorKind(e) !== "navigated") throw e;
+        if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+        if (errorKind(errMsg(e), false) !== "navigated") throw e;
         if (Date.now() >= docDeadline) throw kept();
         continue;
       }
@@ -6065,14 +6168,14 @@ async function oneVisible(page, sel, wait, name, atLeastOne = false) {
       if (only !== void 0 && (vis.length === 1 || atLeastOne)) return only;
       last = { visible: vis.length, all };
     } catch (e) {
-      const kind = errorKind(e, page);
+      const kind = errorKind(errMsg(e), page.isClosed());
       if (kind === "gone") throw gone(e);
       if (kind === "other") throw new StepError(`${name}: ${firstLine(e)}`);
     }
     if (Date.now() >= deadline) {
       throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1e3)}s \u2014 ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
     }
-    await sleep4(POLL_MS);
+    await sleep4(POLL_MS2);
   }
 }
 function linkHref(el) {
@@ -6116,9 +6219,9 @@ async function ownGoto(page, log, url, timeout) {
   try {
     await page.goto(url, { waitUntil: "load", timeout });
   } catch (e) {
-    if (errorKind(e, page) === "gone") throw gone(e);
+    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
     if (/interrupted by another navigation/i.test(errMsg(e))) return;
-    if (!committed || pwErrorKind(e) !== "timeout") throw e;
+    if (!committed || !/Timeout \d+ms exceeded/i.test(errMsg(e))) throw e;
     let state = "unknown";
     try {
       state = await page.evaluate("document.readyState");
@@ -6190,7 +6293,7 @@ async function runSteps(page, log, o) {
           }
         } catch (e) {
           if (e instanceof StepError) throw e;
-          const kind = errorKind(e, page);
+          const kind = errorKind(errMsg(e), page.isClosed());
           if (kind === "gone") throw gone(e);
           if (kind === "other") throw new StepError(`${name} could not be clicked: ${firstLine(e)}`);
         }
@@ -6373,7 +6476,7 @@ async function pass(page, log, o) {
           node.states = { [state]: { styles: shaped.styles || {}, ...shaped.unmeasured ? { unmeasured: shaped.unmeasured } : {} } };
         }
       } catch (e) {
-        if (errorKind(e, page) !== "other") throw e;
+        if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
         node.note = `${state} state not measured: ${firstLine(e)}`;
       } finally {
         if (state === "hover") await page.mouse.move(0, 0).catch(() => void 0);
@@ -6407,8 +6510,8 @@ async function pass(page, log, o) {
     };
   } catch (e) {
     if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError || e instanceof StepError) throw e;
-    if (errorKind(e, page) === "gone") throw gone(e);
-    if (errorKind(e) === "navigated") throw new NavigatedError(firstLine(e));
+    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+    if (errorKind(errMsg(e), false) === "navigated") throw new NavigatedError(firstLine(e));
     throw e;
   }
 }
@@ -6429,7 +6532,7 @@ async function hoverDrawnState(page, spec, m, own, byTag) {
         await loc.hover({ position, timeout: 1e3 });
         return { hovered: c.path, note: null };
       } catch (e) {
-        if (errorKind(e, page) !== "other") throw e;
+        if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
         covered ??= `the free point on ${c.id} was covered (${firstLine(e)})`;
         await page.mouse.move(0, 0);
       }
@@ -6484,22 +6587,22 @@ async function runProbe(browser, o) {
     if (u.origin !== origin) return;
     if (u.pathname === "/@vite/client") viteClient = true;
     const g = gen;
-    const read = { path: u.pathname, state: "pending", done: Promise.resolve() };
+    const read2 = { path: u.pathname, state: "pending", done: Promise.resolve() };
     const body = res.body().then((b) => {
       if (g === gen) served.set(u.pathname, sha256Hex(b));
-      read.state = "hashed";
+      read2.state = "hashed";
     }, () => {
-      read.state = "no body";
+      read2.state = "no body";
     });
     const failed = res.finished().then((err) => {
       if (!err) return body;
-      read.state = "failed";
+      read2.state = "failed";
       return void 0;
     }, () => {
-      read.state = "failed";
+      read2.state = "failed";
     });
-    read.done = Promise.race([body, failed]);
-    bodies.push(read);
+    read2.done = Promise.race([body, failed]);
+    bodies.push(read2);
   });
   const log = attachNavLog(page);
   const consoleErrors = [];
@@ -6585,7 +6688,7 @@ var USAGE = `usage:
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
 exit: 0 wrote \xB7 2 usage \xB7 3 renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept
       navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time / a --steps step
-      failed / the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).`;
+      failed (nothing written).`;
 var MAX_TIME_DEFAULT = 18e4;
 async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS) {
   const cap = () => sleep4(capMs, void 0, { ref: false });
@@ -6635,7 +6738,7 @@ async function main(argv) {
     "browser-path": { type: "string" }
   };
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: false }));
-  const project = path7.resolve(f.project ?? ".");
+  const project = path8.resolve(f.project ?? ".");
   const timeout = f.timeout === void 0 ? 3e4 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) {
     console.error(`verify-probe: --timeout must be a positive number of milliseconds
@@ -6690,7 +6793,7 @@ ${USAGE}`);
       return 2;
     }
     steps = parsed.steps;
-    stepsSource = `--steps ${(path7.relative(process.cwd(), path7.resolve(f.steps)) || f.steps).split(path7.sep).join("/")}`;
+    stepsSource = `--steps ${(path8.relative(process.cwd(), path8.resolve(f.steps)) || f.steps).split(path8.sep).join("/")}`;
   }
   let expectation = null, expBytes = null;
   let viewport = { w: 1280, h: 800 };
@@ -6702,7 +6805,7 @@ ${USAGE}`);
       return 2;
     }
     expectation = r2.doc;
-    expBytes = fs6.readFileSync(f.expected);
+    expBytes = fs7.readFileSync(f.expected);
     const fr = expectation.frame || {};
     if (f.viewport !== void 0) {
       const m = /^(\d+)x(\d+)$/i.exec(f.viewport.trim());
@@ -6715,37 +6818,32 @@ ${USAGE}`);
     } else if (typeof fr.w === "number" && typeof fr.h === "number") viewport = { w: Math.round(fr.w), h: Math.round(fr.h) };
     else notes.push("the expectation states no frame size \u2014 measured at 1280x800; pass --viewport");
   }
-  const outBase = f.out ?? (f.expected ? path7.join(path7.dirname(f.expected), path7.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
-  const statusBase = f.expected ? path7.join(path7.dirname(f.expected), path7.basename(outBase)) : "";
+  const outBase = f.out ?? (f.expected ? path8.join(path8.dirname(f.expected), path8.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
+  const statusBase = f.expected ? path8.join(path8.dirname(f.expected), path8.basename(outBase)) : "";
   const expSha = expBytes ? sha256Hex(expBytes) : void 0;
   const runId = f.run !== void 0 && !f.check && statusBase ? f.run : void 0;
-  const endedRun = () => {
-    if (runId === void 0) return false;
-    const prev = readStatus(statusBase);
-    if (!prev || prev === "v1" || prev.runId !== runId || !TERMINAL_PHASES.includes(prev.phase)) return false;
-    console.error(`verify-probe: run ${runId} already ended at ${prev.phase}${prev.detail ? ` (${prev.detail})` : ""} \u2014 start a new run with --new-run`);
-    return true;
-  };
-  if (endedRun()) return 2;
-  let endedMeanwhile = false;
-  const status = (w) => {
+  const endedAtStart = runId !== void 0 ? endedRun(readStatus(statusBase), runId) : null;
+  if (endedAtStart) {
+    console.error(`verify-probe: ${endedAtStart.message}`);
+    return 2;
+  }
+  const status = (w, before) => {
     try {
-      writeStatus(statusBase, w);
-      return true;
+      writeStatus(statusBase, w, before ? { before } : {});
+      return "ok";
     } catch (e) {
       if (e instanceof RunEnded) {
-        endedMeanwhile = true;
-        console.error(`warning  ${e.message} \u2014 it ended while this probe ran; its status is left as it is`);
-        return true;
+        console.error(`verify-probe: ${e.message} \u2014 it ended while this probe ran; its status is left as it is`);
+        return "ended";
       }
-      if (!(e instanceof RunCacheUnwritable)) throw e;
+      if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
       console.error(`warning  ${e.message}`);
-      return false;
+      return "refused";
     }
   };
   const ended = (code) => {
     if (runId !== void 0 && (code === 3 || code === 4)) {
-      status({ runId, phase: "measuring", by: "verify-probe", detail: `probe exit ${code} \u2014 nothing written`, ...expSha ? { expectationSha256: expSha } : {} });
+      if (status({ runId, phase: "measuring", by: "verify-probe", detail: `probe exit ${code} \u2014 nothing written`, ...expSha ? { expectationSha256: expSha } : {} }) === "ended") return 2;
     }
     return code;
   };
@@ -6756,8 +6854,9 @@ ${USAGE}`);
   }
   const res = resolvePlaywright(project);
   if (!res.ok) return ended(rendererUnavailable(res.reason, res.hint));
-  const measuringRecorded = runId !== void 0 && status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...expSha ? { expectationSha256: expSha } : {} });
-  if (endedMeanwhile) return 2;
+  const measuring = runId !== void 0 ? status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...expSha ? { expectationSha256: expSha } : {} }) : "refused";
+  if (measuring === "ended") return 2;
+  const measuringRecorded = runId !== void 0 && measuring === "ok";
   if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
   const held = {};
   let timer;
@@ -6774,7 +6873,7 @@ ${USAGE}`);
     const browserLine = `chromium ${identity2.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`;
     if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
       await browser.close();
-      console.log(`ok  ${res.pkg} ${res.version} (from ${path7.relative(project, res.file) || res.file}) \xB7 ${browserLine} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
+      console.log(`ok  ${res.pkg} ${res.version} (from ${path8.relative(project, res.file) || res.file}) \xB7 ${browserLine} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
       return 0;
     }
     let run2;
@@ -6787,11 +6886,7 @@ ${USAGE}`);
         console.error(`verify-probe: ${e.message} \u2014 nothing written.`);
         return 4;
       }
-      if (pwErrorKind(e) === "gone") {
-        if (!held.timedOut) console.error(`verify-probe: the page or browser closed or crashed (${pwFirstLine(e)}) \u2014 nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.`);
-        return 4;
-      }
-      if (pwErrorKind(e) === "timeout") {
+      if (/Timeout .*exceeded/i.test(errMsg(e))) {
         console.error(`verify-probe: timed out \u2014 ${firstLine(e)} \u2014 nothing written.`);
         return 4;
       }
@@ -6867,7 +6962,7 @@ ${USAGE}`);
               await reachPage(page, attachNavLog(page), probeOpts);
             },
             axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
-            forcedPng: (outBase + ".forced-colors.png").split(path7.sep).join("/")
+            forcedPng: (outBase + ".forced-colors.png").split(path8.sep).join("/")
           });
           behaviour2 = r2.behaviour;
           forcedPng2 = r2.forcedPng;
@@ -6935,58 +7030,74 @@ ${USAGE}`);
   const diffPath = outBase + ".diff.png";
   let visual = { version: 1, ran: false, why: prep.ok ? "not captured" : prep.why };
   let diffPng = null;
-  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path7.sep).join("/"), captureMs }));
-  try {
-    if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
-    else if (fs6.existsSync(diffPath)) fs6.rmSync(diffPath, { force: true });
-  } catch (e) {
-    console.error(`warning  ${diffPath}: ${firstLine(e)} \u2014 the visual diff image is not written`);
-    if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
-  }
-  const measured = {
-    measuredAt: (/* @__PURE__ */ new Date()).toISOString(),
-    renderer: "playwright-chromium",
-    viewport: `${viewport.w}x${viewport.h}`,
-    artifacts: [png.split(path7.sep).join("/")],
-    expectationSha256: sha256Hex(expBytes),
-    probe: identity,
-    ...firstFrame ? { frame: frameOut(firstFrame) } : {},
-    ...r.frames.length > 1 ? { frames: r.frames.map(frameOut) } : {},
-    navigation: run.navigation,
-    matchedByCensus: { ...census(r.nodes, r.notMeasured) },
-    nodes: r.nodes,
-    notMeasured: r.notMeasured,
-    components: r.components,
-    tagsNotInExpectation: r.tagsNotInExpectation,
-    ...run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {},
-    ...f.run !== void 0 ? { runId: f.run } : {},
-    build: { ...run.build, ...gitState(project) },
-    ...stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {},
-    page: r.page,
-    ...driven ? { interactions: driven } : {},
-    behaviour,
-    visual
-  };
+  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path8.sep).join("/"), captureMs }));
   const allNotes = [...notes, ...r.notes, ...driveNote !== null ? [driveNote] : []];
-  const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
-  if (endedRun()) return 2;
-  writeFileAtomic(png, r.png);
-  const forcedPath = outBase + ".forced-colors.png";
-  try {
-    if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
-    else if (fs6.existsSync(forcedPath)) fs6.rmSync(forcedPath, { force: true });
-  } catch (e) {
-    console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
+  let written = false, statusRefused = false;
+  const writeFiles = () => {
+    try {
+      if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
+      else if (fs7.existsSync(diffPath)) fs7.rmSync(diffPath, { force: true });
+    } catch (e) {
+      console.error(`warning  ${diffPath}: ${firstLine(e)} \u2014 the visual diff image is not written`);
+      if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
+    }
+    const measured = {
+      measuredAt: (/* @__PURE__ */ new Date()).toISOString(),
+      renderer: "playwright-chromium",
+      viewport: `${viewport.w}x${viewport.h}`,
+      artifacts: [png.split(path8.sep).join("/")],
+      expectationSha256: sha256Hex(expBytes),
+      probe: identity,
+      ...firstFrame ? { frame: frameOut(firstFrame) } : {},
+      ...r.frames.length > 1 ? { frames: r.frames.map(frameOut) } : {},
+      navigation: run.navigation,
+      matchedByCensus: { ...census(r.nodes, r.notMeasured) },
+      nodes: r.nodes,
+      notMeasured: r.notMeasured,
+      components: r.components,
+      tagsNotInExpectation: r.tagsNotInExpectation,
+      ...run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {},
+      ...f.run !== void 0 ? { runId: f.run } : {},
+      build: { ...run.build, ...gitState(project) },
+      ...stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {},
+      page: r.page,
+      ...driven ? { interactions: driven } : {},
+      behaviour,
+      visual
+    };
+    const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
+    writeFileAtomic(png, r.png);
+    const forcedPath = outBase + ".forced-colors.png";
+    try {
+      if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
+      else if (fs7.existsSync(forcedPath)) fs7.rmSync(forcedPath, { force: true });
+    } catch (e) {
+      console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
+    }
+    writeFileAtomic(outBase + ".measured.json", measuredText);
+    written = true;
+    return { measuredSha256: sha256Hex(measuredText) };
+  };
+  if (runId === void 0) writeFiles();
+  else {
+    const wrote = status({
+      runId,
+      phase: "measured",
+      by: "verify-probe",
+      detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
+      ...expSha ? { expectationSha256: expSha } : {}
+    }, writeFiles);
+    if (wrote === "ended") return 2;
+    if (wrote === "refused") {
+      statusRefused = true;
+      const endedNow = written ? null : endedRun(readStatus(statusBase), runId);
+      if (endedNow) {
+        console.error(`verify-probe: ${endedNow.message}`);
+        return 2;
+      }
+      if (!written) writeFiles();
+    }
   }
-  writeFileAtomic(outBase + ".measured.json", measuredText);
-  const statusRefused = runId !== void 0 && !status({
-    runId,
-    phase: "measured",
-    by: "verify-probe",
-    detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
-    ...expSha ? { expectationSha256: expSha } : {},
-    measuredSha256: sha256Hex(measuredText)
-  });
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
   console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) \u2014 tag ${c.tag} \xB7 shared path ${c.sharedPath} \xB7 alias ${c.tagAlias} \xB7 text ${c.text} \xB7 ordinal ${c.textOrdinal} \xB7 position ${c.position} \xB7 frame ${c.frame} \xB7 not measured ${c.notMeasured} \xB7 frame root via ${firstFrame ? firstFrame.via : "none"} \xB7 navigations after load ${run.navigation.afterInitialLoad}, re-runs ${run.navigation.reruns}`);
@@ -7001,11 +7112,10 @@ ${USAGE}`);
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`);
   if (statusRefused && runId !== void 0) {
-    const outDir = path7.resolve(path7.dirname(outBase)), verifyDir = path7.resolve(path7.dirname(statusBase));
-    const findable = outDir === verifyDir || outDir === path7.resolve(stageDirOf(statusBase, runId));
-    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path7.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
+    const outDir = path8.resolve(path8.dirname(outBase)), verifyDir = path8.resolve(path8.dirname(statusBase));
+    const findable = outDir === verifyDir || outDir === path8.resolve(stageDirOf(statusBase, runId));
+    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path8.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
   }
-  if (endedMeanwhile) return 2;
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
   return 0;
 }

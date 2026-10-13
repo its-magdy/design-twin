@@ -23,6 +23,9 @@
 //     fall back to the published one (or an older v1 file there);
 //   - writeFileAtomic (bridge/src/atomic-write.ts): a tmp file BESIDE the target, then rename (same directory → same
 //     filesystem → atomic);
+//   - one status writer at a time: writeStatus holds `<live status>.lock` (bridge/src/file-lock.ts) from its read to
+//     its last step, so the ended-run check, the files the record stands for (the probe's measured file) and what
+//     follows it (a --publish commit) all see the status they act on;
 //   - publish: the agent stages its artefacts in the run cache (`stage/<runId>/`), and `--status … --publish
 //     <dir>` copies them in only after every page is closed — copy to a tmp name in the target dir, then
 //     rename, so a stage dir on another filesystem (EXDEV) works too;
@@ -42,6 +45,7 @@ import { isJsonObject } from "./types.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
 import { errCode, firstLine } from "../bridge/src/errmsg.ts";
 import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
+import { LockBusy, acquireFileLock, lockFileOf } from "../bridge/src/file-lock.ts";
 import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
 
 export const STATUS_SCHEMA = "designtwin/verify-status@2";
@@ -199,6 +203,8 @@ function inRunCache<T>(verifyDir: string, fn: () => T): T {
 export const EXIT_RUN_CACHE = 6;
 /** The LIVE status of `<base>` (design/verify/<S>): `<run cache>/<S>.status.json`. */
 export const liveStatusFile = (base: string): string => path.join(runCacheDir(path.dirname(base)), path.basename(base) + ".status.json");
+/** The lock every status write of `<base>` holds: `<live status>.lock`, beside it in the run cache. */
+export const lockFileOfStatus = (base: string): string => lockFileOf(liveStatusFile(base));
 /** Where a run stages its evidence and state screenshots until `--publish`: `<run cache>/stage/<runId>/`. */
 export const stageDirOf = (base: string, runId: string): string => path.join(runCacheDir(path.dirname(base)), "stage", runId);
 
@@ -246,31 +252,56 @@ export class RunEnded extends Error {
     this.name = "RunEnded";
   }
 }
+/** The refusal for a write of run `runId` over the status `prev` (readStatus's), or null when that run has not ended
+ *  (another run, a v1 file, no status). The one place the "already ended" sentence is built. */
+export function endedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): RunEnded | null {
+  return prev && prev !== "v1" && prev.runId === runId && TERMINAL_PHASES.includes(prev.phase) ? new RunEnded(prev.runId, prev.phase, prev.detail) : null;
+}
+/** What a status write does around the record itself, inside its lock (see writeStatus). */
+export interface StatusWriteHooks {
+  /** after the ended-run check, before the record: files the record stands for (the probe's measured file and
+   *  screenshots). A run that ended gets none of them; a throw writes no record. May return fields of the write
+   *  only known once those files exist (the measured file's sha). */
+  before?: () => Pick<StatusWrite, "measuredSha256">;
+  /** after the record: what must not land in a run that ended meanwhile (a --publish commit, the durable copy) */
+  after?: (doc: VerifyStatusV2) => void;
+}
+/** How long a status write waits for another one (the probe writes a measured file and its screenshots inside). */
+const STATUS_LOCK = { waitMs: 15_000 };
 /**
  * Write the LIVE status of `<base>` atomically (never into the project's watched tree). rev = the previous rev + 1
  * when it is the same run, else 1. Within one run the shas and the published list carry forward (a `driving`
  * write after the probe's `measured` still names the measured file the probe wrote; published is the run's union).
- * Throws RunCacheUnwritable when the run cache refuses the write (sandbox write scope, read-only mount), RunEnded when
- * the same run has already ended.
+ * Serialised by `<live status>.lock` (file-lock.ts): read → ended-run check → hooks.before → write → hooks.after
+ * happen with no other status write of this screen in between, so two writers never write the same rev and a run
+ * that ends is not reopened, published into or given files by a writer that checked it earlier.
+ * Throws RunCacheUnwritable when the run cache refuses the lock or the write (sandbox write scope, read-only mount),
+ * RunEnded when the same run has already ended, LockBusy when another status write holds the lock past 15 s; a
+ * hook's own error is thrown as it is.
  */
-export function writeStatus(base: string, p: StatusWrite): VerifyStatusV2 {
-  const prev = readStatus(base);
-  const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
-  // an ended run stays ended: checked HERE, at the write, not only by the caller at its start
-  if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
-  const pick = (k: "expectationSha256" | "measuredSha256" | "evidenceSha256"): { [K in typeof k]?: string } => {
-    const v = p[k] ?? (same ? same[k] : undefined);
-    return v !== undefined ? { [k]: v } : {};
-  };
-  const published = p.published !== undefined || (same && same.published) ? [...new Set([...(same && same.published) || [], ...(p.published || [])])].sort() : undefined;
-  const doc: VerifyStatusV2 = {
-    schema: STATUS_SCHEMA, screen: path.basename(base), runId: p.runId, rev: same ? same.rev + 1 : 1, phase: p.phase, detail: p.detail ?? "", at: new Date().toISOString(), by: p.by,
-    ...pick("expectationSha256"), ...pick("measuredSha256"), ...pick("evidenceSha256"),
-    ...(published !== undefined ? { published } : {}),
-  };
-  const live = liveStatusFile(base);
-  inRunCache(path.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
-  return doc;
+export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHooks = {}): VerifyStatusV2 {
+  const live = liveStatusFile(base), dir = path.dirname(base);
+  const release = inRunCache(dir, () => acquireFileLock(lockFileOfStatus(base), STATUS_LOCK));
+  try {
+    const prev = readStatus(base);
+    const ended = endedRun(prev, p.runId);
+    if (ended) throw ended;
+    const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+    const w: StatusWrite = hooks.before ? { ...p, ...hooks.before() } : p;
+    const pick = (k: "expectationSha256" | "measuredSha256" | "evidenceSha256"): { [K in typeof k]?: string } => {
+      const v = w[k] ?? (same ? same[k] : undefined);
+      return v !== undefined ? { [k]: v } : {};
+    };
+    const published = w.published !== undefined || (same && same.published) ? [...new Set([...(same && same.published) || [], ...(w.published || [])])].sort() : undefined;
+    const doc: VerifyStatusV2 = {
+      schema: STATUS_SCHEMA, screen: path.basename(base), runId: w.runId, rev: same ? same.rev + 1 : 1, phase: w.phase, detail: w.detail ?? "", at: new Date().toISOString(), by: w.by,
+      ...pick("expectationSha256"), ...pick("measuredSha256"), ...pick("evidenceSha256"),
+      ...(published !== undefined ? { published } : {}),
+    };
+    inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+    hooks.after?.(doc);
+    return doc;
+  } finally { release(); }
 }
 /** `done`: the live status, published as the durable record design/verify/<S>.status.json (every page is closed by now). */
 export function publishStatus(base: string, doc: VerifyStatusV2): void {
@@ -355,7 +386,7 @@ const short = (sha: string | null | undefined): string => (sha ? `${sha.slice(0,
 
 export interface StatusFlags { phase?: string | undefined; run?: string | undefined; "new-run"?: boolean | undefined; detail?: string | undefined; dir?: string | undefined; publish?: string | undefined; by?: string | undefined }
 /**
- * `--status <S> --phase <p> …` → exit 0 wrote / 1 refused / 2 usage (or a write to a run that already ended) / 6 the run cache is not writable (printed as
+ * `--status <S> --phase <p> …` → exit 0 wrote / 1 refused (a check, or another status write held the lock) / 2 usage (or a write to a run that already ended) / 6 the run cache is not writable (printed as
  * one sentence naming the cache and the project root — never a stack). Prints `run <id> rev <n>` on stdout and the
  * live status file + the run's stage dir on stderr. Writes only the live status (outside the watched tree); `done`
  * checks first, then writes the live status, then publishes (--publish) and writes its durable copy <dir>/<S>.status.json.
@@ -365,6 +396,7 @@ export function statusMain(screen: string | undefined, f: StatusFlags, usage: st
   try { return statusRun(screen, f, usage); } catch (e) {
     if (e instanceof RunCacheUnwritable) { console.error(e.message); return EXIT_RUN_CACHE; }
     if (e instanceof RunEnded) { console.error(e.message); return 2; } // it ended while this write was checked
+    if (e instanceof LockBusy) { console.error(`refused  ${e.message}`); return 1; } // another status write held the lock throughout
     throw e;
   }
 }
@@ -390,11 +422,11 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   }
   const sameRun = prevV2 && prevV2.runId === runId ? prevV2 : null;
   // an ended run stays ended: a later write would replace its phase and detail (a `done` over the verifier's
-  // `blocked` lost the block, and --compare saw a clean run) — the next attempt is a new run
-  if (sameRun && TERMINAL_PHASES.includes(sameRun.phase)) {
-    console.error(`run ${runId} already ended at ${sameRun.phase}${sameRun.detail ? ` (${sameRun.detail})` : ""} — start a new run with --new-run\n` + usage);
-    return 2;
-  }
+  // `blocked` lost the block, and --compare saw a clean run) — the next attempt is a new run. Said here, before the
+  // measured-file checks and the staging copy, so an ended run is not refused for something else; writeStatus
+  // checks again under its lock (a run that ends after this read)
+  const ended = endedRun(prev, runId);
+  if (ended) { console.error(ended.message); return 2; }
   const S = path.basename(base), dir = path.dirname(base);
   // the run cache must take a write BEFORE anything is checked or published (a `done` that publishes, then cannot
   // record itself, would leave design/verify changed and the run unfinished)
@@ -436,13 +468,13 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   }
   let doc: VerifyStatusV2;
   try {
-    doc = writeStatus(base, { runId, phase, by, ...(f.detail !== undefined ? { detail: f.detail } : {}), ...shas, ...(prep ? { published: prep.files } : {}) });
-  } catch (e) { prep?.abort(); throw e; } // refused (the run ended meanwhile, the cache is unwritable): nothing is published
-  if (prep) {
-    prep.commit();
-    console.error(`published ${prep.files.length} file(s) from ${f.publish} into ${dir}${prep.files.length ? `: ${prep.files.join(", ")}` : ""}`);
-  }
-  if (phase === "done") publishStatus(base, doc);
+    // the publish commit and the durable copy happen inside the status write's lock, after the record: a run that
+    // another writer ends meanwhile is ended before this write (refused, nothing published) or after the commit
+    doc = writeStatus(base, { runId, phase, by, ...(f.detail !== undefined ? { detail: f.detail } : {}), ...shas, ...(prep ? { published: prep.files } : {}) }, {
+      after: (d) => { prep?.commit(); if (phase === "done") publishStatus(base, d); },
+    });
+  } catch (e) { prep?.abort(); throw e; } // refused (the run ended meanwhile, the cache is unwritable, the lock is busy): nothing is published
+  if (prep) console.error(`published ${prep.files.length} file(s) from ${f.publish} into ${dir}${prep.files.length ? `: ${prep.files.join(", ")}` : ""}`);
   const stage = stageDirOf(base, runId);
   if (!TERMINAL_PHASES.includes(phase)) inRunCache(dir, () => fs.mkdirSync(stage, { recursive: true }));
   console.log(`run ${doc.runId} rev ${doc.rev}`);

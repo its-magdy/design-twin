@@ -16,6 +16,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const safe = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch (e) { console.log(`    (threw: ${e instanceof Error ? e.message : String(e)})`); } return check(name, r); };
 const VS_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+const LOCK_CHILD = path.join(import.meta.dirname, "lock-child.ts"); // another writer, in its own process
 const sha = (f: string): string => crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex");
 // The run cache keys by the on-disk spelling (fs.realpathSync.native); the JS resolver keeps what it was given — on Windows
 // the 8.3 short temp dir (RUNNER~1) stays short there and is the long name natively — so expectations use the native one.
@@ -405,6 +406,118 @@ await block("verify-screen --status after an ended run:", async () => {
   safe("writeStatus refuses a late write to an ended run (RunEnded naming the phase and detail); the failed status is unchanged",
     () => late instanceof VR.RunEnded && late.message.startsWith("run run-late already ended at failed (verifier gone)") && fs.readFileSync(live, "utf8") === failedDoc);
   safe("…a write for another run id still goes through", () => VR.writeStatus(base, { runId: "run-next", phase: "starting", by: "agent" }).rev === 1);
+});
+
+// ---------------------------------------------------------------- one status writer at a time (<live status>.lock)
+console.log("writeStatus — locked; before/after hooks; a run that ended gets no files:");
+await block("writeStatus locked:", async () => {
+  const { dir, base, live } = project();
+  VR.writeStatus(base, { runId: "run-h", phase: "measuring", by: "verify-probe" });
+  const order: string[] = [];
+  const doc = VR.writeStatus(base, { runId: "run-h", phase: "measured", by: "verify-probe" }, {
+    before: () => { order.push(`before:${fs.existsSync(VR.lockFileOfStatus(base)) ? "locked" : "unlocked"}`); fs.writeFileSync(path.join(dir, "Plots.measured.json"), "{}"); return { measuredSha256: "a".repeat(64) }; },
+    after: (d) => { order.push(`after:rev${d.rev}:${readStatusFile(live)?.phase ?? "?"}:${fs.existsSync(VR.lockFileOfStatus(base)) ? "locked" : "unlocked"}`); },
+  });
+  safe("before runs under the lock, ahead of the record; its measuredSha256 is recorded; after sees the written doc, still locked; the lock is gone after",
+    () => order.join(" ") === "before:locked after:rev2:measured:locked" && doc.measuredSha256 === "a".repeat(64) && readStatusFile(live)?.measuredSha256 === "a".repeat(64) && !fs.existsSync(VR.lockFileOfStatus(base)));
+  const unchanged = fs.readFileSync(live, "utf8");
+  const thrown = ((): unknown => { try { VR.writeStatus(base, { runId: "run-h", phase: "measured", by: "verify-probe" }, { before: () => { throw new Error("disk full"); } }); return null; } catch (e) { return e; } })();
+  safe("a throw in before → thrown as it is, no record written, the lock released", () => thrown instanceof Error && thrown.message === "disk full" && fs.readFileSync(live, "utf8") === unchanged && !fs.existsSync(VR.lockFileOfStatus(base)));
+  VR.writeStatus(base, { runId: "run-h", phase: "failed", by: "orchestrator", detail: "gave up" });
+  const failedDoc = fs.readFileSync(live, "utf8");
+  let beforeRan = false, afterRan = false;
+  const ended = ((): unknown => { try { VR.writeStatus(base, { runId: "run-h", phase: "measured", by: "verify-probe" }, { before: () => { beforeRan = true; return {}; }, after: () => { afterRan = true; } }); return null; } catch (e) { return e; } })();
+  safe("a run that ended → RunEnded before anything: before and after never run (the probe's files are not written), the status unchanged",
+    () => ended instanceof VR.RunEnded && !beforeRan && !afterRan && fs.readFileSync(live, "utf8") === failedDoc && !fs.existsSync(VR.lockFileOfStatus(base)));
+  safe("endedRun: the one refusal — for the same run at done/failed/blocked only", () => {
+    const st = VR.readStatus(base);
+    const e = VR.endedRun(st, "run-h");
+    return e instanceof VR.RunEnded && e.message === "run run-h already ended at failed (gave up) — start a new run with --new-run"
+      && VR.endedRun(st, "run-other") === null && VR.endedRun("v1", "run-h") === null && VR.endedRun(null, "run-h") === null;
+  });
+  // a lock left by a writer that was killed mid-write (its pid is gone) does not wedge the run
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999;
+  fs.writeFileSync(VR.lockFileOfStatus(base), JSON.stringify({ pid: deadPid, host: os.hostname(), at: Date.now(), token: "0123456789abcdef" }));
+  const s = spawnSync(process.execPath, [VS_TS, "--status", "Plots", "--phase", "starting", "--new-run"], { cwd: path.dirname(path.dirname(dir)), encoding: "utf8" });
+  safe("a lock left by a killed writer (dead pid) → the next --status breaks it and writes (exit 0), no lock left", () => s.status === 0 && readStatusFile(live)?.phase === "starting" && !fs.existsSync(VR.lockFileOfStatus(base)));
+});
+
+// writers in separate processes: every write gets its own rev (no two writers read the same previous status)
+console.log("status writers in separate processes:");
+await block("concurrent status writers:", async () => {
+  const { base, live } = project();
+  VR.writeStatus(base, { runId: "run-cc", phase: "starting", by: "agent" });
+  const N = 4, K = 15;
+  const outs = await Promise.all(Array.from({ length: N }, (_, w) => new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+    const p = spawn(process.execPath, [LOCK_CHILD, "status", base, `w${w}`, String(K)]);
+    let out = "", err = "";
+    p.stdout.on("data", (b: Buffer) => { out += b.toString(); });
+    p.stderr.on("data", (b: Buffer) => { err += b.toString(); });
+    p.on("close", (code) => resolve({ code, out, err }));
+  })));
+  const revs = outs.flatMap((o) => o.out.split(",").filter(Boolean).map(Number));
+  const final = readStatusFile(live);
+  safe(`${N} processes × ${K} writes of one run → revs 2…${N * K + 1}, each written once; the file ends at rev ${N * K + 1}`, () =>
+    outs.every((o) => o.code === 0) && revs.length === N * K && new Set(revs).size === N * K && Math.min(...revs) === 2 && Math.max(...revs) === N * K + 1 && final?.rev === N * K + 1);
+  if (!outs.every((o) => o.code === 0)) console.log(`    ${outs.map((o) => o.err.split("\n")[0]).join(" | ")}`);
+});
+
+// Another writer (a separate process) that holds the status lock of `base` once `ready` exists, and on end() ends the
+// run (failed, "gave up") under it and releases — so a writer started meanwhile waits on the lock, then sees the end.
+async function lockHolder(base: string): Promise<{ end(): void; done: Promise<number | null> }> {
+  const sig = mk("dt-run-race-sig-");
+  const ready = path.join(sig, "ready"), go = path.join(sig, "go");
+  const ender = spawn(process.execPath, [LOCK_CHILD, "end-run", base, ready, go]);
+  const done = new Promise<number | null>((resolve) => ender.on("close", resolve));
+  for (const t0 = Date.now(); !fs.existsSync(ready) && Date.now() - t0 < 10_000;) await sleep(20);
+  return { end: () => fs.writeFileSync(go, ""), done };
+}
+
+// the run ends while a `done --publish` waits for the status lock (after its own checks, its files staged beside
+// design/verify): the write is refused under the lock, nothing is published
+console.log("--status done --publish while another writer ends the run:");
+await block("done --publish vs an ending run:", async () => {
+  const { cwd, dir, base, live } = project();
+  VR.writeStatus(base, { runId: "run-race", phase: "driving", by: "agent" });
+  fs.writeFileSync(path.join(dir, "Plots.measured.json"), measuredFor(dir, { runId: "run-race" }));
+  const stage = mk("dt-run-race-stage-");
+  fs.writeFileSync(path.join(stage, "Plots.evidence.json"), JSON.stringify({ interactions: [] }));
+  const holder = await lockHolder(base);
+  let err = "";
+  const cli = spawn(process.execPath, [VS_TS, "--status", "Plots", "--phase", "done", "--run", "run-race", "--publish", stage], { cwd });
+  cli.stderr.on("data", (b: Buffer) => { err += b.toString(); });
+  const cliDone = new Promise<number | null>((resolve) => cli.on("close", resolve));
+  // the CLI has passed its checks and staged its copies beside design/verify: it now waits on the lock
+  let staged = false;
+  for (const t0 = Date.now(); !staged && Date.now() - t0 < 10_000;) { staged = fs.readdirSync(dir).some((f) => f.includes(".tmp-")); if (!staged) await sleep(10); }
+  holder.end();
+  const [code] = await Promise.all([cliDone, holder.done]);
+  safe("the CLI got past its own ended-run check and staged its copies before the run ended (the race is real here)", () => staged);
+  safe("…the run ended under the lock first → exit 2 'already ended at failed (gave up)'", () => code === 2 && err.includes("run run-race already ended at failed (gave up)"));
+  safe("…nothing published: no evidence, no durable status, no staged tmp left in design/verify; the status stays failed", () =>
+    !fs.existsSync(path.join(dir, "Plots.evidence.json")) && !fs.existsSync(path.join(dir, "Plots.status.json")) && !fs.readdirSync(dir).some((f) => f.includes(".tmp-")) && readStatusFile(live)?.phase === "failed");
+});
+
+// the probe's exit-3 status write waits on the lock while the run ends: the documented exit 2, not 3
+console.log("verify-probe --run — the run ends while the probe's own status write waits:");
+await block("probe exit 3 vs an ending run:", async () => {
+  const { dir, base, live } = project();
+  VR.writeStatus(base, { runId: "run-pe", phase: "renderer-ready", by: "agent" });
+  const noPw = mk("dt-run-nopw-race-");
+  fs.writeFileSync(path.join(noPw, "package.json"), "{}");
+  const holder = await lockHolder(base);
+  let err = "";
+  const p = spawn(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "verify-probe.ts"), "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-pe"]);
+  p.stderr.on("data", (b: Buffer) => { err += b.toString(); });
+  const pDone = new Promise<number | null>((resolve) => p.on("close", resolve));
+  // past its start check: it has said the renderer is unavailable and now records exit 3 — behind the lock
+  for (const t0 = Date.now(); !/renderer unavailable/.test(err) && Date.now() - t0 < 10_000;) await sleep(10);
+  const waiting = /renderer unavailable/.test(err);
+  holder.end();
+  const [code] = await Promise.all([pDone, holder.done]);
+  safe("the probe passed its start check and reached its exit-3 status write before the run ended", () => waiting);
+  safe("…the run ended under the lock first → exit 2 (not 3), 'already ended at failed (gave up)'; the failed status is kept", () =>
+    code === 2 && err.includes("run run-pe already ended at failed (gave up)") && readStatusFile(live)?.phase === "failed" && readStatusFile(live)?.detail === "gave up");
 });
 
 // ---------------------------------------------------------------- CLI --wait

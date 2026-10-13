@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { recordPlan } from "../design-to-code/plan-record.ts";
 import { checkPlan, computeStatus, isOpen, verificationContradictions } from "../design-to-code/verify-build.ts";
 import * as verifyBuild from "../design-to-code/verify-build.ts";
@@ -350,6 +350,33 @@ console.log("dotted import names resolve; a report reached through a symlink is 
     check("a report path through a symlink to the project is inside it (recorded project-relative)",
       written && planOf(root).verification?.recorded?.report === REPORT);
   } finally { try { fs.unlinkSync(link); } catch { /* never created */ } }
+}
+
+// Every tool plan write is a locked read-modify-write (plan-record.ts updatePlan): writers in separate processes —
+// waiver rows (--accept's write) and the Stop hook's record — never lose each other's keys.
+console.log("plan writers in separate processes — no lost update:");
+{
+  const root = project();
+  recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const child = path.join(import.meta.dirname, "lock-child.ts");
+  const N = 4, K = 8;
+  const run = (cmd: string[], cwd?: string): Promise<{ code: number | null; err: string }> => new Promise((resolve) => {
+    const p = spawn(process.execPath, cmd, cwd === undefined ? {} : { cwd });
+    let err = "";
+    p.stderr.on("data", (b: Buffer) => { err += b.toString(); });
+    p.on("close", (code) => resolve({ code, err }));
+  });
+  const results = await Promise.all([
+    ...Array.from({ length: N }, (_, w) => run([child, "waive", path.join(root, REL), `w${w}`, String(K)])),
+    run([HOOK, REL], root), run([HOOK, REL], root),
+  ]);
+  const after = planOf(root);
+  const rows = (after.waivers ?? []).filter((w) => isJsonObject(w) && typeof w.nodeId === "string" && /^w\d:\d+$/.test(w.nodeId));
+  check(`${N} processes × ${K} waiver writes and two Stop-hook runs at once → all ${N * K} rows, the original waiver, --record-plan's record and the hook's record are all there`,
+    results.slice(0, N).every((r) => r.code === 0) && rows.length === N * K && new Set(rows.map((w) => isJsonObject(w) ? w.nodeId : "")).size === N * K
+    && (after.waivers ?? []).some((w) => isJsonObject(w) && w.nodeId === "80:3") && after.verification?.recorded?.at === NOW && after.verification.hook?.result !== undefined);
+  if (rows.length !== N * K) console.log(`    rows ${rows.length}; ${results.map((r) => `${r.code}${r.err ? `: ${r.err.split("\n")[0]}` : ""}`).join(" | ")}`);
+  check("…no lock or tmp file is left in design/plan/", fs.readdirSync(path.join(root, "design", "plan")).join() === "Crates.json");
 }
 
 report();
