@@ -13,6 +13,16 @@ import * as daemon from "../bridge/src/daemon.ts";
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
+console.log("\nALLOWED_PORTS:");
+{
+  // The plugin may only open sockets to ports its manifest names, so the bridge's list is that list.
+  const manifest = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json"), "utf8")) as { networkAccess: { allowedDomains: string[]; devAllowedDomains: string[] } };
+  const ports = (domains: string[]): string => domains.map((d) => /^ws:\/\/localhost:(\d+)$/.exec(d)?.[1]).join(",");
+  check("the bridge's ports are exactly the plugin manifest's (allowed and dev-allowed)",
+    ALLOWED_PORTS.join(",") === "8787,8788,8789" && ports(manifest.networkAccess.allowedDomains) === ALLOWED_PORTS.join(",")
+    && ports(manifest.networkAccess.devAllowedDomains) === ALLOWED_PORTS.join(","));
+}
+
 console.log("\nparsePortEnv:");
 check("unset selects the first allowed port", same(parsePortEnv(undefined), { port: ALLOWED_PORTS[0] }));
 check("empty selects the first allowed port", same(parsePortEnv(""), { port: ALLOWED_PORTS[0] }));

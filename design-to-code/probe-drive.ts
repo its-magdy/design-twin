@@ -16,7 +16,7 @@
 // The page-side functions (readPageOverflow, openerState, armDetector, pollDetector, saveScroll, restoreScroll, scrollHeld, syntheticClick, submitGuard,
 // clickPointControl, and ownMark / ownShot / ownClear)
 // are handed to page.evaluate, so — as in probe-page.ts — each one is SELF-CONTAINED: no reference to anything
-// outside its own body, plain JSON in and out. The DOM is typed by the module-local declarations below (this layer
+// outside its own body, plain JSON in and out. The DOM is typed by page-dom.ts (types only; this layer
 // has no DOM lib); test/verify-probe-drive-e2e.test.ts runs the BUILT bundle in a real browser to prove it.
 //
 // Platform facts this relies on (Chromium 153 / Playwright 1.63, verified):
@@ -30,85 +30,19 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { InteractionEvidence, InteractionOutcome, PageOverflow, ProbeActivation, VerifyExpectation, VerifyInteraction } from "./types.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
-import { decodePng } from "./png.ts";
+import { decodePng } from "../bridge/src/png.ts";
+import type { DriveScroll, PageBox, PageDocument, PageElement, PageNode, PageShadowRoot, PageSheet, PageStyle, PageWindow } from "./page-dom.ts";
 
-// ---------------------------------------------------------------- the page, as far as these functions use it
-interface DRect { x: number; y: number; width: number; height: number; right: number; bottom: number }
-interface DStyle { getPropertyValue(prop: string): string }
-/** a child node, as far as the own-content check reads it (nodeType 3 = text) */
-interface DNode { nodeType: number; nodeValue: string | null; assignedSlot?: DElement | null }
-/** an open shadow root, as far as the click point and the own-content check read it */
-interface DShadow { children: ArrayLike<DElement>; childNodes: ArrayLike<DNode>; elementFromPoint?(x: number, y: number): DElement | null;
-  /** the probe's hiding sheet is adopted into each open shadow root inside the container */
-  adoptedStyleSheets: DSheet[] }
-interface DElement {
-  tagName: string;
-  children: ArrayLike<DElement>;
-  childNodes: ArrayLike<DNode>;
-  parentElement: DElement | null;
-  /** the slot a slotted element is shown in (the flat tree a click's event path follows) */
-  assignedSlot?: DElement | null;
-  shadowRoot?: DShadow | null;
-  getRootNode?(): { host?: DElement } | null;
-  /** a <label>'s control (HTMLLabelElement.control) */
-  control?: DElement | null;
-  form?: unknown;
-  scrollLeft: number;
-  scrollTop: number;
-  scrollTo(opts: { left: number; top: number; behavior: "instant" }): void;
-  getAttribute(name: string): string | null;
-  hasAttribute(name: string): boolean;
-  getBoundingClientRect(): DRect;
-  getClientRects(): ArrayLike<DRect>;
-  closest(selector: string): DElement | null;
-  matches(selector: string): boolean;
-  contains(other: DElement): boolean;
-  checkVisibility(opts?: { visibilityProperty?: boolean; checkVisibilityCSS?: boolean; opacityProperty?: boolean; contentVisibilityAuto?: boolean }): boolean;
-  querySelectorAll(selector: string): ArrayLike<DElement>;
-  click(): void;
-  /** the pixel check (ownMark / ownShot / ownClear) */
-  isConnected: boolean;
-  setAttribute(name: string, value: string): void;
-  removeAttribute(name: string): void;
-  scrollIntoView(opts: { block: string; inline: string; behavior: string }): void;
-  focus(opts: { preventScroll: boolean }): void;
-}
-interface DDocument {
-  activeElement: DElement | null;
-  /** the probe's own constructed sheet (a page's CSP style-src blocks an injected <style>, never CSSOM) */
-  adoptedStyleSheets: DSheet[];
-  body: DElement | null;
-  documentElement: DElement & { scrollWidth: number; clientWidth: number; clientHeight: number };
-  compatMode: string;
-  elementFromPoint(x: number, y: number): DElement | null;
-  /** the hit stack at a point (is a label from outside the container laid over it, or under it?) */
-  elementsFromPoint(x: number, y: number): DElement[];
-  querySelector(selector: string): DElement | null;
-  querySelectorAll(selector: string): ArrayLike<DElement>;
-  createRange(): { selectNodeContents(node: DNode): void; getClientRects(): ArrayLike<DRect> };
-}
-interface DriveState { before: DElement[]; destBefore: DElement[]; destPaths: string[]; roots?: DElement[] }
-/** the scroll the drive had before its click (saveScroll / restoreScroll) */
-interface DriveScroll { x: number; y: number; boxes: Array<{ el: DElement; left: number; top: number }> }
-/** the container and the control the pixel check compares (set by clickPointControl's and markOpener's own-control path), and the
- *  scroll ownMark had before it brought the container into view */
-interface OwnPair { box: DElement; ctl: DElement; saved?: DriveScroll; focus?: DElement; sheet?: DSheet;
-  /** the open shadow roots inside the container (inCtl: the control's own), and the sheet adopted into them */
-  roots?: Array<{ root: DShadow; inCtl: boolean }>; rootSheet?: DSheet;
-  /** every element of the container's flat tree (open shadow roots included) and whether it is the control's */
-  els?: Array<{ e: DElement; inCtl: boolean }> }
-interface DSheet { replaceSync(text: string): void }
-declare const document: DDocument;
-declare const window: { __dtDrive?: DriveState; __dtDriveScroll?: DriveScroll; __dtOwn?: OwnPair | null; __dtOwnWhy?: string | null;
-  /** (tipPreMark) the [role=tooltip] elements and the elements with an id already shown before the probe acted on the page */
-  __dtTipPre?: WeakSet<DElement> | null };
+// ---------------------------------------------------------------- the page, as far as these functions use it (page-dom.ts)
+declare const document: PageDocument;
+declare const window: PageWindow;
 declare const scrollX: number;
 declare const scrollY: number;
 declare const innerWidth: number;
 declare const innerHeight: number;
-declare function getComputedStyle(el: DElement, pseudo?: string | null): DStyle;
+declare function getComputedStyle(el: PageElement, pseudo?: string | null): PageStyle;
 declare function scrollTo(opts: { left: number; top: number; behavior: "instant" }): void;
-declare const CSSStyleSheet: new () => DSheet;
+declare const CSSStyleSheet: new () => PageSheet;
 
 // ---------------------------------------------------------------- the page's horizontal overflow
 /**
@@ -128,11 +62,11 @@ export function readPageOverflow(_arg: null): PageOverflow & { compatMode: strin
   const scrollable = scrollWidth > clientWidth + 1 && overflowX !== "hidden" && overflowX !== "clip";
   const offenders: PageOverflow["offenders"] = [];
   if (scrollWidth > clientWidth + 1 && body) {
-    const pathOf = (el: DElement): string => {
+    const pathOf = (el: PageElement): string => {
       const parts: string[] = [];
-      let cur: DElement | null = el;
+      let cur: PageElement | null = el;
       while (cur && cur !== document.documentElement) {
-        const parent: DElement | null = cur.parentElement;
+        const parent: PageElement | null = cur.parentElement;
         if (!parent) break;
         parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
         cur = parent;
@@ -146,18 +80,18 @@ export function readPageOverflow(_arg: null): PageOverflow & { compatMode: strin
     // filter / backdrop-filter / transform-style:preserve-3d / will-change of one of them create a containing block for
     // absolute AND fixed descendants — so a position:fixed element under one scrolls with the page like an absolute one;
     // contain: layout / paint / strict / content and content-visibility (not visible) keep everything inside.
-    const createsBlock = (cs: DStyle): boolean => {
+    const createsBlock = (cs: PageStyle): boolean => {
       const v = (k: string): string => cs.getPropertyValue(k);
       if (["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => { const x = v(k); return x !== "" && x !== "none"; })) return true;
       if (v("transform-style") === "preserve-3d") return true;
       return /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(v("will-change"));
     };
-    const containsAll = (cs: DStyle): boolean => /\b(layout|paint|strict|content)\b/.test(cs.getPropertyValue("contain"))
+    const containsAll = (cs: PageStyle): boolean => /\b(layout|paint|strict|content)\b/.test(cs.getPropertyValue("contain"))
       || ["auto", "hidden"].includes(cs.getPropertyValue("content-visibility"));
-    const contained = (el: DElement): boolean => {
+    const contained = (el: PageElement): boolean => {
       const own = getComputedStyle(el).getPropertyValue("position");
       let mode = own === "fixed" ? "fixed" : own === "absolute" ? "absolute" : "flow";
-      for (let p: DElement | null = el.parentElement; p && p !== body && p !== de; p = p.parentElement) {
+      for (let p: PageElement | null = el.parentElement; p && p !== body && p !== de; p = p.parentElement) {
         const cs = getComputedStyle(p);
         const pos = cs.getPropertyValue("position");
         const block = createsBlock(cs), all = containsAll(cs);
@@ -171,14 +105,14 @@ export function readPageOverflow(_arg: null): PageOverflow & { compatMode: strin
       if (mode !== "fixed") return false;
       return ![body, de].some((x) => { const cs = getComputedStyle(x); return createsBlock(cs) || containsAll(cs); });
     };
-    const past: Array<{ el: DElement; right: number }> = [];
+    const past: Array<{ el: PageElement; right: number }> = [];
     for (const el of Array.from(body.querySelectorAll("*"))) {
       const r = el.getBoundingClientRect();
       const right = r.right + scrollX;
       if (r.width > 0 && right > clientWidth + 1 && !contained(el)) past.push({ el, right });
     }
     past.sort((a, b) => b.right - a.right);
-    const chosen: DElement[] = [];
+    const chosen: PageElement[] = [];
     for (const p of past) {
       if (chosen.length >= 5) break;
       if (chosen.some((c) => c.contains(p.el))) continue;
@@ -206,11 +140,11 @@ export interface OpenerState {
 }
 /** In the page: find the opener, say whether a person can see it, and what to hover when not. SELF-CONTAINED. */
 export function openerState(arg: { id: string }): OpenerState {
-  const pathOf = (el: DElement): string => {
+  const pathOf = (el: PageElement): string => {
     const parts: string[] = [];
-    let cur: DElement | null = el;
+    let cur: PageElement | null = el;
     while (cur && cur !== document.documentElement) {
-      const parent: DElement | null = cur.parentElement;
+      const parent: PageElement | null = cur.parentElement;
       if (!parent) break;
       parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
       cur = parent;
@@ -218,8 +152,8 @@ export function openerState(arg: { id: string }): OpenerState {
     parts.unshift("html");
     return parts.join(" > ");
   };
-  const hasBox = (el: DElement): boolean => el.getClientRects().length > 0;
-  const sees = (el: DElement, opacity: boolean): boolean => {
+  const hasBox = (el: PageElement): boolean => el.getClientRects().length > 0;
+  const sees = (el: PageElement, opacity: boolean): boolean => {
     if (!hasBox(el)) return false;
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: opacity });
@@ -233,7 +167,7 @@ export function openerState(arg: { id: string }): OpenerState {
   const disabled = el.closest(":disabled, [disabled], [aria-disabled=\"true\" i]") !== null;
   let hoverPath: string | null = null, hoverDt: string | null = null;
   if (!visible) {
-    let plain: DElement | null = null;
+    let plain: PageElement | null = null;
     for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
       if (!sees(p, false)) continue;
       const dt = p.getAttribute("data-dt-node");
@@ -251,11 +185,11 @@ export const DIALOG_CONTRACT = [":modal", "dialog[open]", "[role=dialog]", "[rol
 
 /** In the page, BEFORE the click: remember every visible dialog-like element and destination tag. SELF-CONTAINED. */
 export function armDetector(arg: { destId: string | null; contract: readonly string[] }): boolean {
-  const pathOf = (el: DElement): string => {
+  const pathOf = (el: PageElement): string => {
     const parts: string[] = [];
-    let cur: DElement | null = el;
+    let cur: PageElement | null = el;
     while (cur && cur !== document.documentElement) {
-      const parent: DElement | null = cur.parentElement;
+      const parent: PageElement | null = cur.parentElement;
       if (!parent) break;
       parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
       cur = parent;
@@ -263,12 +197,12 @@ export function armDetector(arg: { destId: string | null; contract: readonly str
     parts.unshift("html");
     return parts.join(" > ");
   };
-  const seen = (el: DElement): boolean => {
+  const seen = (el: PageElement): boolean => {
     if (el.getClientRects().length === 0) return false;
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true });
   };
-  const before: DElement[] = [];
+  const before: PageElement[] = [];
   for (const s of arg.contract) {
     try { for (const el of Array.from(document.querySelectorAll(s))) if (seen(el)) before.push(el); } catch { /* a selector this browser does not parse */ }
   }
@@ -294,11 +228,11 @@ export interface DetectorRead {
 export function pollDetector(arg: { destId: string | null; contract: readonly string[] }): DetectorRead {
   const st = window.__dtDrive;
   if (!st) return { lost: true, detectedBy: null, opened: null, dest: null };
-  const pathOf = (el: DElement): string => {
+  const pathOf = (el: PageElement): string => {
     const parts: string[] = [];
-    let cur: DElement | null = el;
+    let cur: PageElement | null = el;
     while (cur && cur !== document.documentElement) {
-      const parent: DElement | null = cur.parentElement;
+      const parent: PageElement | null = cur.parentElement;
       if (!parent) break;
       parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
       cur = parent;
@@ -306,14 +240,14 @@ export function pollDetector(arg: { destId: string | null; contract: readonly st
     parts.unshift("html");
     return parts.join(" > ");
   };
-  const seen = (el: DElement): boolean => {
+  const seen = (el: PageElement): boolean => {
     if (el.getClientRects().length === 0) return false;
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true });
   };
-  let opened: DElement | null = null, detectedBy: string | null = null;
+  let opened: PageElement | null = null, detectedBy: string | null = null;
   for (const s of arg.contract) {
-    let hits: DElement[] = [];
+    let hits: PageElement[] = [];
     try { hits = Array.from(document.querySelectorAll(s)).filter((el) => seen(el) && !st.before.includes(el)); } catch { continue; }
     const first = hits[0];
     if (first) { opened = first; detectedBy = s; break; }
@@ -344,7 +278,7 @@ export function pollDetector(arg: { destId: string | null; contract: readonly st
 
 /** In the page: the scroll the drive has before its mouse click — the window's and every ancestor box's of the
  *  opener — kept for restoreScroll. SELF-CONTAINED. */
-export function saveScroll(el: DElement): void {
+export function saveScroll(el: PageElement): void {
   const boxes: DriveScroll["boxes"] = [];
   for (let p = el.parentElement; p; p = p.parentElement) boxes.push({ el: p, left: p.scrollLeft, top: p.scrollTop });
   window.__dtDriveScroll = { x: scrollX, y: scrollY, boxes };
@@ -426,7 +360,7 @@ export function ownMark(_arg: null): { ctl: string; keep: number; why: string | 
   // a shadow root would inherit the hidden host in every shot (A equals B whatever it shows): refused (openers are found by
   // document.querySelectorAll today, so none is in a shadow root — a guard for a later lookup)
   if ((box.getRootNode?.()?.host ?? null) !== null) return { ctl: "its sole control", keep: 0, why: "the opener lies inside a shadow root, where its pixels cannot be compared", scrolled: false };
-  const up = (n: DElement): DElement | null => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+  const up = (n: PageElement): PageElement | null => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
   // Chromium blurs a focused element once it is hidden: ownClear focuses it again (inside the container); one outside stays shown
   const active = document.activeElement;
   if (active && active !== document.body) o.focus = active;
@@ -439,7 +373,7 @@ export function ownMark(_arg: null): { ctl: string; keep: number; why: string | 
     o.saved = { x: scrollX, y: scrollY, boxes };
     box.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
   }
-  const css = (e: DElement, prop: string): string => getComputedStyle(e).getPropertyValue(prop).trim();
+  const css = (e: PageElement, prop: string): string => getComputedStyle(e).getPropertyValue(prop).trim();
   const px = (v: string): number => parseFloat(v) || 0;
   const b = box.getBoundingClientRect(), c = ctl.getBoundingClientRect();
   // the container's padding box: what a child covering it all hides of the container's own background
@@ -447,12 +381,12 @@ export function ownMark(_arg: null): { ctl: string; keep: number; why: string | 
   const x1 = b.right - px(css(box, "border-right-width")), y1 = b.bottom - px(css(box, "border-bottom-width"));
   // the CSS pre-filter: never a replaced or form element, a clip-path, a background clipped to its content box
   // (or to text), a list item (its marker) or a shadow host
-  const plainBox = (e: DElement): boolean => !/^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|FRAME|FENCEDFRAME|PROGRESS|METER|INPUT|SELECT|TEXTAREA)$/.test(e.tagName.toUpperCase())
+  const plainBox = (e: PageElement): boolean => !/^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|FRAME|FENCEDFRAME|PROGRESS|METER|INPUT|SELECT|TEXTAREA)$/.test(e.tagName.toUpperCase())
     && (css(e, "clip-path") === "" || css(e, "clip-path") === "none")
     && css(e, "background-clip").split(",").every((v) => /^(border-box|padding-box)$/.test(v.trim()))
     && !/list-item/.test(css(e, "display")) && !e.shadowRoot;
   // only a background colour: no image, mask, border, shadow, outline or filter of its own
-  const plainFill = (e: DElement): boolean => ["background-image", "mask-image", "box-shadow", "filter", "backdrop-filter"].every((k) => { const v = css(e, k); return v === "" || v === "none"; })
+  const plainFill = (e: PageElement): boolean => ["background-image", "mask-image", "box-shadow", "filter", "backdrop-filter"].every((k) => { const v = css(e, k); return v === "" || v === "none"; })
     && ["top", "right", "bottom", "left"].every((side) => px(css(e, `border-${side}-width`)) === 0 || css(e, `border-${side}-style`) === "none")
     && (px(css(e, "outline-width")) === 0 || css(e, "outline-style") === "none");
   box.setAttribute("data-dt-own", "");
@@ -465,9 +399,9 @@ export function ownMark(_arg: null): { ctl: string; keep: number; why: string | 
   if (active && active !== document.body && !box.contains(active)) active.setAttribute("data-dt-own-foc", "");
   // every open shadow root inside the container (the container itself as a host too), and whether its host
   // is the control or inside it (shot A hides those)
-  const roots: Array<{ root: DShadow; inCtl: boolean }> = [];
-  const els: Array<{ e: DElement; inCtl: boolean }> = [];
-  const todo: Array<{ e: DElement; inCtl: boolean }> = [{ e: box, inCtl: false }];
+  const roots: Array<{ root: PageShadowRoot; inCtl: boolean }> = [];
+  const els: Array<{ e: PageElement; inCtl: boolean }> = [];
+  const todo: Array<{ e: PageElement; inCtl: boolean }> = [{ e: box, inCtl: false }];
   for (let t = todo.pop(); t; t = todo.pop()) {
     if (els.length >= 20_000) { o.roots = roots; return { ctl: "", keep: 0, why: "more than 20000 boxes to hide", scrolled: !!o.saved }; }
     const inCtl = t.inCtl || t.e === ctl;
@@ -574,8 +508,8 @@ export function ownShot(arg: { shot: "A" | "B" | "K" | "N" }): { clip: { x: numb
   // pointer left) is hidden — by the page. Every element the shot hides is checked, and its ::before / ::after when
   // they have content — a page's inline !important, or an !important inside a cascade layer (which beats any unlayered one,
   // whatever its specificity), refuses instead of showing in both shots
-  const vis = (e: DElement, pseudo: string | null = null): string => getComputedStyle(e, pseudo).getPropertyValue("visibility");
-  const name = (e: DElement): string => `<${e.tagName.toLowerCase()}>`;
+  const vis = (e: PageElement, pseudo: string | null = null): string => getComputedStyle(e, pseudo).getPropertyValue("visibility");
+  const name = (e: PageElement): string => `<${e.tagName.toLowerCase()}>`;
   const beat = "against the probe's hiding rule (an inline or cascade-layer !important)";
   if (o.ctl.isConnected && o.ctl.getClientRects().length > 0 && vis(o.ctl) !== "hidden") return no(`the page kept its control showing ${beat}`);
   if (arg.shot !== "A" && vis(o.box, "::before") !== "hidden") return no(`the page kept the opener's own ::before showing ${beat}`);
@@ -583,9 +517,9 @@ export function ownShot(arg: { shot: "A" | "B" | "K" | "N" }): { clip: { x: numb
   if ((arg.shot === "K" || arg.shot === "N") && vis(o.box) !== "hidden") return no(`the page kept the opener showing ${beat}`);
   // the other pseudo-elements, where they can exist (a first letter of a box's own text, a field's placeholder, a
   // file input's button, a <details>' content, a scroll container's buttons, a scroll marker and its group)
-  const st = (e: DElement, prop: string, pseudo: string | null = null): string => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
-  const generated = (e: DElement, ps: string): boolean => !/^(none|normal)?$/.test(st(e, "content", ps));
-  const others = (e: DElement): string[] => ["::first-letter", ...EXTRA_PSEUDOS].filter((ps) => ps === "::first-letter" ? Array.from(e.childNodes).some((t) => t.nodeType === 3 && /\S/.test(t.nodeValue ?? ""))
+  const st = (e: PageElement, prop: string, pseudo: string | null = null): string => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
+  const generated = (e: PageElement, ps: string): boolean => !/^(none|normal)?$/.test(st(e, "content", ps));
+  const others = (e: PageElement): string[] => ["::first-letter", ...EXTRA_PSEUDOS].filter((ps) => ps === "::first-letter" ? Array.from(e.childNodes).some((t) => t.nodeType === 3 && /\S/.test(t.nodeValue ?? ""))
     : ps === "::placeholder" ? /^(INPUT|TEXTAREA)$/.test(e.tagName.toUpperCase()) && e.hasAttribute("placeholder")
     : ps === "::file-selector-button" ? e.tagName.toUpperCase() === "INPUT" && (e.getAttribute("type") ?? "").toLowerCase() === "file"
     : ps === "::details-content" ? e.tagName.toUpperCase() === "DETAILS"
@@ -612,7 +546,7 @@ export function ownShot(arg: { shot: "A" | "B" | "K" | "N" }): { clip: { x: numb
     // half the height down), and the rounded padding box of every box up to the container that clips it (overflow not visible;
     // in K the container's and its ancestors' clip-paths are off)
     const len = (t: string, size: number): number => (t.endsWith("%") ? ((parseFloat(t) || 0) / 100) * size : parseFloat(t) || 0);
-    const shape = (p: DElement, inner: boolean): KeptShape => {
+    const shape = (p: PageElement, inner: boolean): KeptShape => {
       const pr = p.getBoundingClientRect();
       const w = pr.width, h = pr.height;
       const r: number[] = [];
@@ -627,7 +561,7 @@ export function ownShot(arg: { shot: "A" | "B" | "K" | "N" }): { clip: { x: numb
     for (const e of Array.from(document.querySelectorAll("[data-dt-own-keep]"))) {
       const q = e.getBoundingClientRect();
       const shapes: KeptShape[] = [shape(e, false)];
-      for (let p: DElement | null = e === o.box ? null : e.parentElement; p; p = p === o.box ? null : p.parentElement) {
+      for (let p: PageElement | null = e === o.box ? null : e.parentElement; p; p = p === o.box ? null : p.parentElement) {
         if (st(p, "overflow-x") !== "visible" || st(p, "overflow-y") !== "visible") shapes.push(shape(p, true));
       }
       const bg = st(e, "background-color");
@@ -651,9 +585,9 @@ export function ownWhy(_arg: null): string | null {
  *  500,000 elements) = no tooltip is exempt. SELF-CONTAINED. */
 export function tipPreMark(_arg: null): boolean {
   if (window.__dtTipPre) return false;
-  const pre = new WeakSet<DElement>();
-  const vis = (e: DElement): boolean => e.checkVisibility({ opacityProperty: true, visibilityProperty: true });
-  const todo: DElement[] = [document.documentElement];
+  const pre = new WeakSet<PageElement>();
+  const vis = (e: PageElement): boolean => e.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+  const todo: PageElement[] = [document.documentElement];
   let n = 0;
   for (let e = todo.pop(); e; e = todo.pop()) {
     if (++n > 500_000) { window.__dtTipPre = null; return false; }
@@ -713,8 +647,8 @@ export function syntheticClick(path: string): boolean {
  *  (Playwright uses the true transformed quad; for a rotated/skewed element partly off screen this axis-aligned rect's
  *  centre can differ slightly.)
  *  SELF-CONTAINED. */
-export function submitGuard(el: DElement): string | null {
-  const why = (target: DElement): string | null => {
+export function submitGuard(el: PageElement): string | null {
+  const why = (target: PageElement): string | null => {
     const ctl = target.closest("button, input") || target;
     const tag = ctl.tagName.toLowerCase();
     const type = (ctl.getAttribute("type") || "").toLowerCase();
@@ -737,7 +671,7 @@ export function submitGuard(el: DElement): string | null {
     const y0 = Math.min(Math.max(q.y, 0), vh), y1 = Math.min(Math.max(q.bottom, 0), vh);
     if ((x1 - x0) * (y1 - y0) > 0.99) { onScreen = true; cx = (x0 + x1) / 2; cy = (y0 + y1) / 2; break; }
   }
-  const at: DElement[] = [];
+  const at: PageElement[] = [];
   const hit = onScreen ? document.elementFromPoint(cx, cy) : null;
   if (hit && hit !== el && el.contains(hit)) at.push(hit);
   else if (!hit) {
@@ -767,7 +701,7 @@ export function submitGuard(el: DElement): string | null {
  *  focusable (a role=button tabindex=0 card, an <a href> card) has no such inner control: an activating control at its point is
  *  refused. A text field there (a picker's readonly input) is clicked. null = nothing in the way.
  *  SELF-CONTAINED. */
-export function clickPointControl(el: DElement, arg?: { mark: boolean }): string | null {
+export function clickPointControl(el: PageElement, arg?: { mark: boolean }): string | null {
   // the drive asks for the pair its pixel check compares (ownPixels) — left in window.__dtOwn only on the own-control exemption
   const mark = !!arg && arg.mark;
   if (mark) { window.__dtOwn = null; window.__dtOwnWhy = null; }
@@ -814,15 +748,15 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
   // (the iframe itself counts). Bounded: past 20000 steps (elements walked, ancestor steps of the areas) it
   // answers "content". null = nothing of its own as far as the DOM shows — the caller's pixel check (probe-drive.ts
   // ownPixels) has the last word, content when EITHER says so; else what shows.
-  const ownContent = (box: DElement, ctl: DElement): string | null => {
-    const up = (n: DElement): DElement | null => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
-    const css = (e: DElement, prop: string, pseudo: string | null = null): string => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
-    const set = (e: DElement, prop: string, pseudo: string | null = null): boolean => { const v = css(e, prop, pseudo); return v !== "" && v !== "none"; };
+  const ownContent = (box: PageElement, ctl: PageElement): string | null => {
+    const up = (n: PageElement): PageElement | null => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+    const css = (e: PageElement, prop: string, pseudo: string | null = null): string => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
+    const set = (e: PageElement, prop: string, pseudo: string | null = null): boolean => { const v = css(e, prop, pseudo); return v !== "" && v !== "none"; };
     // does `test` hold for the element or an ancestor below the container? memoised per element
-    const chain = (test: (p: DElement) => boolean): ((e: DElement | null) => boolean) => {
-      const memo = new Map<DElement, boolean>();
-      return (e: DElement | null): boolean => {
-        const seen: DElement[] = [];
+    const chain = (test: (p: PageElement) => boolean): ((e: PageElement | null) => boolean) => {
+      const memo = new Map<PageElement, boolean>();
+      return (e: PageElement | null): boolean => {
+        const seen: PageElement[] = [];
         let hit = false;
         for (let p = e; p && p !== box; p = up(p)) {
           const m = memo.get(p);
@@ -840,15 +774,15 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
     const OWN_WORK_CAP = 20_000;
     const tick = (): boolean => ++work > OWN_WORK_CAP;
     const inCtl = chain((p) => p === ctl);
-    const outOfFlow = (e: DElement, pseudo: string | null = null): boolean => /^(absolute|fixed)$/.test(css(e, "position", pseudo));
+    const outOfFlow = (e: PageElement, pseudo: string | null = null): boolean => /^(absolute|fixed)$/.test(css(e, "position", pseudo));
     const faded = chain((p) => css(p, "opacity") === "0" && outOfFlow(p));
-    const boxed = (e: DElement): DElement | null => { let p: DElement | null = e; while (p && css(p, "display") === "contents") p = up(p); return p; };
-    const shown = (e: DElement): boolean => {
+    const boxed = (e: PageElement): PageElement | null => { let p: PageElement | null = e; while (p && css(p, "display") === "contents") p = up(p); return p; };
+    const shown = (e: PageElement): boolean => {
       const b = boxed(e);
       return !!b && b.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true }) && !/^(hidden|collapse)$/.test(css(e, "visibility")) && !faded(b);
     };
     // a containing block for fixed (and absolute) descendants
-    const holdsFixed = (p: DElement): boolean => ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => set(p, k))
+    const holdsFixed = (p: PageElement): boolean => ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => set(p, k))
       || css(p, "transform-style") === "preserve-3d" || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(css(p, "will-change"))
       || /\b(layout|paint|strict|content)\b/.test(css(p, "contain")) || /^(auto|hidden)$/.test(css(p, "content-visibility"));
     const de = document.documentElement;
@@ -856,13 +790,13 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
     // the start edge moves out by the scroll of the container and every box above it — in an app shell (a fixed
     // inset:0 scroller) what lies above the shell's top is reached by scrolling the shell, not the window
     let sx = scrollX, sy = scrollY;
-    for (let p: DElement | null = box; p && p !== de; p = up(p)) { sx += Math.abs(p.scrollLeft || 0); sy += Math.abs(p.scrollTop || 0); }
+    for (let p: PageElement | null = box; p && p !== de; p = up(p)) { sx += Math.abs(p.scrollLeft || 0); sy += Math.abs(p.scrollTop || 0); }
     const startX = horizontal && css(de, "direction") !== "rtl" ? -sx : -Infinity, startY = horizontal ? -sy : -Infinity;
     // the part of q (a box or text rect of e) left after that clipping (null: out of work — the caller answers "content")
-    const clipped = (e: DElement, q: DRect): { x0: number; y0: number; x1: number; y1: number } | null => {
+    const clipped = (e: PageElement, q: PageBox): { x0: number; y0: number; x1: number; y1: number } | null => {
       let x0 = Math.max(q.x, startX), y0 = Math.max(q.y, startY), x1 = q.right, y1 = q.bottom;
       let flow: "in" | "absolute" | "fixed" = "in";
-      for (let p: DElement | null = e; p; p = p === box ? null : up(p)) {
+      for (let p: PageElement | null = e; p; p = p === box ? null : up(p)) {
         if (tick()) return null;
         if (css(p, "display") === "contents") continue;
         const pr = p.getBoundingClientRect();
@@ -894,12 +828,12 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
       }
       return { x0, y0, x1, y1 };
     };
-    const area = (e: DElement, q: DRect): number => { const c = clipped(e, q); return c ? Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0) : Infinity; };
-    const els: DElement[] = [];
-    const texts: Array<{ t: DNode; e: DElement }> = [];
+    const area = (e: PageElement, q: PageBox): number => { const c = clipped(e, q); return c ? Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0) : Infinity; };
+    const els: PageElement[] = [];
+    const texts: Array<{ t: PageNode; e: PageElement }> = [];
     // an explicit stack, the same order as the recursion it replaces (an element, its text, its shadow root's
     // text and elements, then its light children)
-    const todo: DElement[] = [box];
+    const todo: PageElement[] = [box];
     for (let e = todo.pop(); e; e = todo.pop()) {
       if (tick()) return `more than ${OWN_WORK_CAP} boxes to check`;
       els.push(e);
@@ -914,7 +848,7 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
     }
     // the cell's own chrome: a box holding the control, or over its centre (a filled wrapper, a hover tint)
     const cr = ctl.getBoundingClientRect(), mx = cr.x + cr.width / 2, my = cr.y + cr.height / 2;
-    const chrome = (e: DElement): boolean => { if (e.contains(ctl)) return true; const r = e.getBoundingClientRect(); return mx >= r.x && mx <= r.right && my >= r.y && my <= r.bottom; };
+    const chrome = (e: PageElement): boolean => { if (e.contains(ctl)) return true; const r = e.getBoundingClientRect(); return mx >= r.x && mx <= r.right && my >= r.y && my <= r.bottom; };
     const clear = (v: string): boolean => v === "" || /^(transparent|rgba\(.*,\s*0\)|.*\/\s*0\))$/.test(v);
     for (const e of els) {
       if (inCtl(e) || !shown(e)) continue;
@@ -1002,18 +936,18 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
     // container's (a relative ::before shifted over it from a sibling lying elsewhere), an in-flow box under a parent that does not
     // meet it (text overflowing a 0-height wrapper). Bounded: past FOREIGN_CAP elements it answers "content".
     const br = box.getBoundingClientRect();
-    const anc = new Set<DElement>();
+    const anc = new Set<PageElement>();
     for (let p = up(box); p; p = up(p)) anc.add(p);
     const bg = css(box, "background-color");
     // "under it" is proven only when nothing of it shows through — its background opaque, and no opacity below 1
     // or blend mode on it or above it
     let opaque = /^rgb\(/.test(bg) || /^rgba\(.*,\s*1\)$/.test(bg);
-    for (let p: DElement | null = box; p && opaque; p = up(p)) {
+    for (let p: PageElement | null = box; p && opaque; p = up(p)) {
       const op = css(p, "opacity"), bm = css(p, "mix-blend-mode");
       if ((op !== "" && parseFloat(op) < 1) || (bm !== "" && bm !== "normal")) opaque = false;
     }
-    const meets = (q: DRect): boolean => q.right > br.x && q.x < br.right && q.bottom > br.y && q.y < br.bottom;
-    const over = (f: DElement, c: { x0: number; y0: number; x1: number; y1: number } | null, events: string): boolean => {
+    const meets = (q: PageBox): boolean => q.right > br.x && q.x < br.right && q.bottom > br.y && q.y < br.bottom;
+    const over = (f: PageElement, c: { x0: number; y0: number; x1: number; y1: number } | null, events: string): boolean => {
       if (!c) return true;
       const a = Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0);
       const ix0 = Math.max(c.x0, br.x), iy0 = Math.max(c.y0, br.y), ix1 = Math.min(c.x1, br.right), iy1 = Math.min(c.y1, br.bottom);
@@ -1030,7 +964,7 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
     // already on screen with role=tooltip, or that the control's aria-describedby names, is the card's own; no set, no exemption
     const tipIds = new Set((ctl.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean));
     const tipPre = window.__dtTipPre;
-    const tip = (f: DElement): boolean => !!tipPre && !tipPre.has(f) && !anc.has(f) && ((f.getAttribute("role") ?? "").trim().split(/\s+/)[0]?.toLowerCase() === "tooltip" || tipIds.has(f.getAttribute("id") ?? ""));
+    const tip = (f: PageElement): boolean => !!tipPre && !tipPre.has(f) && !anc.has(f) && ((f.getAttribute("role") ?? "").trim().split(/\s+/)[0]?.toLowerCase() === "tooltip" || tipIds.has(f.getAttribute("id") ?? ""));
     // a foreign label at effective opacity 0 (itself or an ancestor) shows nothing — never foreign content
     const gone = chain((p) => css(p, "opacity") === "0");
     // bounded at 500000 elements (a 150000-element table: about 0.3 s per check) — past it, "content" (refused)
@@ -1040,8 +974,8 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
     // parent's flow (positioned or transformed) — an in-flow box under a parent that does not meet the container is taken not to
     // meet it either (nested inline boxes make every getBoundingClientRect walk all below it: 8000 of them cost seconds)
     // (one computed style read per element: the walk visits every element of the page)
-    const moved = (f: DElement): boolean => { const s = getComputedStyle(f); return s.getPropertyValue("position") !== "static" || ["transform", "translate", "rotate", "scale"].some((k) => { const v = s.getPropertyValue(k); return v !== "" && v !== "none"; }); };
-    const ftodo: Array<{ f: DElement; near: boolean }> = [{ f: de, near: true }];
+    const moved = (f: PageElement): boolean => { const s = getComputedStyle(f); return s.getPropertyValue("position") !== "static" || ["transform", "translate", "rotate", "scale"].some((k) => { const v = s.getPropertyValue(k); return v !== "" && v !== "none"; }); };
+    const ftodo: Array<{ f: PageElement; near: boolean }> = [{ f: de, near: true }];
     for (let t = ftodo.pop(); t; t = ftodo.pop()) {
       if (++walked > FOREIGN_CAP) return `more than ${FOREIGN_CAP} boxes on the page to check for a label laid over it`;
       const f = t.f;
@@ -1070,10 +1004,10 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
         if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
         const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
         if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
-        let q: DRect = fr;
+        let q: PageBox = fr;
         if (pos === "absolute") {
           // its containing block: the closest box at or above it that is positioned or holds fixed boxes (its padding box), else the page
-          let cb: DElement | null = f;
+          let cb: PageElement | null = f;
           while (cb && css(cb, "position") === "static" && !holdsFixed(cb)) cb = up(cb);
           const cr0 = cb ? cb.getBoundingClientRect() : null;
           const n = (k: string): number => parseFloat(css(f, k, ps)) || 0;
@@ -1108,15 +1042,15 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
   // label inside a Delete is focusable, but the click still bubbles to the Delete) — the innermost activating one is named. A
   // nested browsing context there — <iframe>, <frame>, <object>, <embed>, <fencedframe> — is a control (what is inside it cannot
   // be seen). Not seen: a closed shadow root, a bare listener (an <svg onclick>, no role).
-  const up = (n: DElement): DElement | null => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
-  const framed = (e: DElement): boolean => /^(IFRAME|FRAME|OBJECT|EMBED|FENCEDFRAME)$/.test(e.tagName.toUpperCase());
-  const pick = (e: DElement): DElement | null => (e.tagName.toUpperCase() === "LABEL" ? e.control ?? null : e.matches(FOC) || e.matches(ACT) || framed(e) ? e : null);
-  const presses = (e: DElement | null): e is DElement => !!e && (e.matches(ACT) || framed(e));
-  let at: DElement | null = null;
+  const up = (n: PageElement): PageElement | null => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+  const framed = (e: PageElement): boolean => /^(IFRAME|FRAME|OBJECT|EMBED|FENCEDFRAME)$/.test(e.tagName.toUpperCase());
+  const pick = (e: PageElement): PageElement | null => (e.tagName.toUpperCase() === "LABEL" ? e.control ?? null : e.matches(FOC) || e.matches(ACT) || framed(e) ? e : null);
+  const presses = (e: PageElement | null): e is PageElement => !!e && (e.matches(ACT) || framed(e));
+  let at: PageElement | null = null;
   if (onScreen) {
     let hit = document.elementFromPoint(cx, cy), from = hit;
     for (let i = 0; hit && hit.shadowRoot && i < 32; i++) {
-      const host: DElement = hit, sr = hit.shadowRoot;
+      const host: PageElement = hit, sr = hit.shadowRoot;
       const deeper = sr.elementFromPoint ? sr.elementFromPoint(cx, cy) : null;
       let under = false;
       for (let p = deeper; p; p = up(p)) if (p === host) { under = true; break; }
@@ -1130,7 +1064,7 @@ export function clickPointControl(el: DElement, arg?: { mark: boolean }): string
       from = slotted && slotted.assignedSlot ? slotted.assignedSlot : host;
       break;
     }
-    let found: DElement | null = null;
+    let found: PageElement | null = null;
     for (let p = from; p; p = up(p)) {
       if (p === el) { at = found; break; }
       if (presses(found)) continue;

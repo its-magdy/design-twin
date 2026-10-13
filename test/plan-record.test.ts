@@ -11,7 +11,7 @@ import { recordPlan } from "../design-to-code/plan-record.ts";
 import { checkPlan, computeStatus, isOpen, verificationContradictions } from "../design-to-code/verify-build.ts";
 import * as verifyBuild from "../design-to-code/verify-build.ts";
 import type { ReportRef } from "../design-to-code/verify-build.ts";
-import { fileHashes, legacyPlanHash, planCodeFiles, planCodeSkipped } from "../design-to-code/content-hash.ts";
+import { fileHashes, legacyPlanHash, planCodeFiles, planCodeSkipped, planHash } from "../design-to-code/content-hash.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
@@ -277,7 +277,7 @@ console.log("recording a plan the old hook closed, project-relative paths only:"
   check(`after the first --record-plan: still closed, not pending (got ${st.status}: ${st.reasons.join(" | ").slice(0, 160)})`,
     r.written && !openOf(root) && !st.reasons.some((x) => /plan changed after the hook/.test(x)));
   check("…the hook's planHash is now the current formula's, the rest of the hook record is untouched, and a note says so",
-    after.verification?.hook?.planHash === verifyBuild.planHash(after) && after.verification.hook.result === "pass"
+    after.verification?.hook?.planHash === planHash(after) && after.verification.hook.result === "pass"
     && JSON.stringify(after.verification.hook.files) === JSON.stringify(hook.files) && r.notes.some((n) => /an older plan hash that also covered verification/.test(n) && /re-stamped/.test(n)));
   const quiet = spawnSync(process.execPath, [HOOK], { cwd: root, input: JSON.stringify({ cwd: root }), encoding: "utf8" });
   check("…and the Stop hook's fast path stays silent on it", quiet.status === 0 && quiet.stderr === "");

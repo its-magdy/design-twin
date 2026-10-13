@@ -8,7 +8,7 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { walkWithHidden } from "./hidden.ts";
 import { exportContentSha256 } from "./content-hash.ts";
 import { planInteractionsSha256 } from "./plan-waivers.ts";
-import { pngInfo } from "./png.ts";
+import { pngInfo } from "../bridge/src/png.ts";
 import { actionForExpect, isPlanExpect } from "./probe-steps.ts";
 import { isJsonObject } from "./types.ts";
 import { screenExportOf, screenRoots } from "./export-shape.ts";

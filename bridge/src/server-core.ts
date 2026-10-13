@@ -15,7 +15,7 @@ import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import { errCode, errMsg } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
-import { TIMEOUTS, exportTimeout, HEARTBEAT_MS } from "./timeouts.ts";
+import { TIMEOUTS, HEARTBEAT_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS, bridgePortOrExit } from "./ports.ts";
 import { daemonSupported, legacySock } from "./daemon.ts";
@@ -24,10 +24,9 @@ import { daemonSupported, legacySock } from "./daemon.ts";
 import { replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
 
-// Version reporting (BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote) lives in staleness.ts so
-// the CLI's pure helpers and doctor.ts can use it without loading this module; re-exported below so
-// this module's surface is unchanged.
-import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
+// Version reporting lives in staleness.ts so the CLI's pure helpers and doctor.ts can use it without
+// loading this module; callers import it from there.
+import { pluginStalenessNote } from "./staleness.ts";
 
 // The handshake check keeps ws's async (two-argument) verifyClient CALLBACK shape — done(ok, code,
 // message) — even though ws does not call it (the check runs in the HTTP server's 'upgrade'
@@ -74,12 +73,6 @@ const TOKEN = TOKEN_INFO.token;
 const TOKEN_FROM_ENV = TOKEN_INFO.source === "env";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
-
-// Per-COMMAND time budgets (TIMEOUTS) and the scope -> tier rule (exportTimeout) live in timeouts.ts,
-// so figma-pull.ts's pure parseArgs can read them without loading this module; re-exported below.
-
-// Thrown value -> message string. Re-exported (not redefined) so both front-ends and the plugin
-// bundle share the one definition in errmsg.ts.
 
 // Compare the SHA-256 digests, not the raw tokens. timingSafeEqual throws on unequal lengths, so the
 // previous `ba.length === bb.length && ...` guard short-circuited before the constant-time compare
@@ -999,4 +992,4 @@ export type { BridgeOptions };
 // verifyClientWith/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-export { createBridge, connectionFor, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore, BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote, portInUseMessage };
+export { createBridge, connectionFor, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, portInUseMessage };

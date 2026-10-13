@@ -29,14 +29,15 @@ import type { Browser, Page } from "playwright";
 import { StepError, holdContext, openReached, raceBudget, raf2 } from "./probe-drive.ts";
 import type { Held } from "./probe-drive.ts";
 import { BEHAVIOUR_RESERVE_MS } from "./probe-behaviour.ts";
-import { PngError, decodePng, encodePng } from "./png.ts";
-import type { Rgba } from "./png.ts";
-import { attribute, crop, diffOptionsFor, diffPixels, planGrid, referenceCrop, renderDiff, resampleBox } from "./visual-diff.ts";
+import { PngError, crop, decodePng, encodePng, resampleBox } from "../bridge/src/png.ts";
+import type { Rgba } from "../bridge/src/png.ts";
+import { attribute, diffOptionsFor, diffPixels, planGrid, referenceCrop, renderDiff } from "./visual-diff.ts";
 import type { MeasuredVisual, ProbeFrame, Rect4, VerifyExpectation, VerifyReferenceImage } from "./types.ts";
 import { isVerifyReferenceImage } from "./doc-guards.ts";
 import { pctText, resolveInside, scaleText } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
+import type { PageDocument, PageWindow } from "./page-dom.ts";
 
 // ---------------------------------------------------------------- budget
 /** The capture's own cap; what --max-time leaves is shared with behaviour, whose reserve (settle, capped close, write) it keeps. */
@@ -83,18 +84,10 @@ export function prepareVisual(exp: Partial<Pick<VerifyExpectation, "referenceIma
 }
 
 // ---------------------------------------------------------------- the capture (page side)
-interface VRect { left: number; top: number; width: number; height: number }
-interface VElement { getBoundingClientRect(): VRect }
-interface VDocument {
-  querySelectorAll(sel: string): { length: number; item(i: number): VElement | null };
-  documentElement: { scrollWidth: number; scrollHeight: number };
-  body: { scrollWidth: number; scrollHeight: number } | null;
-  fonts: { ready: Promise<unknown> };
-}
-declare const document: VDocument;
+declare const document: PageDocument;
 declare const scrollX: number;
 declare const scrollY: number;
-declare const window: { __dtProbeDoc?: string };
+declare const window: PageWindow;
 
 interface FrameRead { count: number; rect: Rect4 | null; doc: { w: number; h: number }; token: string }
 /** The frame's document rect (when its selector matches exactly one element), the document's scroll size, the doc token. */
