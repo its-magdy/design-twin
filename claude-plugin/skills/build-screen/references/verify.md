@@ -95,6 +95,27 @@ Work top-down; a structural miss makes pixel diffs meaningless.
    Inspector / VoiceOver labels, Dynamic Type at AX sizes. Android: accessibility scanner / semantics
    tree, font scale 2.0. Touch targets at platform minimums.
 
+**Numbers: what `--expect`, the probe and `--compare` do.** `--expect` emits the spec as data — font
+family/weight/size/line-height/colour, background, radius, padding, gap, size, and the literal text — one row per
+node, read straight off the export. Read those rows rather than retyping them into a code comment: one build's
+wrong text styles traced to exactly that — a component carrying the comment "heading 20/Semi Bold, subtitle
+16/Regular" which contradicted the export, and no later step re-read the node.
+
+`--compare` has **no browser**: it diffs the measured computed styles against the spec with explicit tolerances and
+grades the interaction results the probe recorded (in `measured.json`'s `interactions[]`, or a separate
+`--interactions <file>`), then writes `design/verify/<Screen>.report.json`. Driving each designed interaction is the
+probe's job (the `visual-verifier` agent drives the rest and records the selector it drove); anything nobody drove
+is reported `not-probed`, never `pass`. It exits non-zero unless the verdict is `pass` or `pass-with-deviations`
+(nothing open, and ≥1 delta the user accepted or interaction the user descoped — waivers and descopes are the user's
+word, recorded through the verify skill). That verdict is computed, and it is what you report.
+
+A probe without `--run` writes an **unbound** measured file (it names no run): `--compare` grades it as your evidence,
+and an ended run's `<Screen>.status.json` beside it (a `visual-verifier` or verify-skill run at `done`, `failed` or
+`blocked`) only adds a note — as long as you measured AFTER that run ended (an older measured file is still judged by
+the run: measure again). A run still in flight makes `--compare` `incomplete` — wait for it
+(`node "<scripts>/verify-screen.js" --wait <Screen> --run <id>`), or, only if nothing is running it any more (its agent
+stopped or crashed), end it: `node "<scripts>/verify-screen.js" --status <Screen> --phase failed --run <id>`.
+
 **Known approximations** (listed in the plan: shadow spread on iOS, blur radius conversions, diamond
 gradients, progressive blur, noise/glass, P3 colors, Figma-vs-platform text rasterizing) are excluded
 from "must match" — note their residual difference instead of iterating on them.
@@ -150,59 +171,12 @@ rendered frame is a legitimate result; an unstated one is not, because the repor
   probably misreading a unit or a sizing mode.
 
 ## Saying you're alive
-A full verify pass is minutes, not seconds, and every stack's render step is silent while it works —
-a dev server booting, a simulator coming up, a Gradle task compiling, a golden test warming. Observed
-in practice: a pass that ran ~25 minutes with the caller unable to distinguish progress from a hang.
-So **report status as you go**, through the tool, never by hand-writing the file:
-`node <scripts>/verify-screen.js --status <screen> --phase <p> --run <id> [--detail "<one line>"]`
-(first call `--new-run`; it prints `run <id> rev <n>`; without `--run` it only continues a run that has not ended).
-A run that already ended (`done`, `failed`, `blocked`) refuses further writes, from `--status` and from the probe's `--run` (exit 2): start a new run with `--new-run`.
-The tool owns the status (`designtwin/verify-status@2`: `runId`, `rev`, `phase`, `detail`, `at`, and the shas of
-the expectation, measured and evidence files), so `at` is never a hand-written clock. The LIVE status is in the run
-cache, `node_modules/.cache/designtwin-verify/<screen>.status.json` (the project's own, beside the nearest
-`package.json` at or above `design/verify` — the workspace root's in a hoisted monorepo, never past the repo's
-`.git`, created if missing; `--status` prints the path) — no dev server watches
-it, so heartbeats are free; `done` publishes the final status as `design/verify/<screen>.status.json`, the durable
-record. With no `package.json` (or Yarn PnP) the run cache is under the OS temp dir, which sandboxed and
-unsandboxed commands do not share: run every `--status`, `--wait`, probe and `--compare` of one run the same way. Exit 6 from `--status` or `--wait` means the run cache is not writable (or readable) from where you ran it —
-the sandbox's write scope is the current directory and the temp dir — so run from the project root, or allow
-writes there; the probe only prints the same as a warning and keeps its exit codes. `--status` and
-`--wait` resolve `--dir` (default `design/verify`) against the current directory; from elsewhere pass `--dir` (an
-absolute path works). Never reinstall dependencies (`npm ci`, `npm install`) during a verify run: it clears
-`node_modules/.cache`, the live status and staged artefacts with it. `phase` is
-
-`queued` → `starting` → `renderer-found` → `renderer-ready` → `measuring` → `measured` → `driving` → `done` (or `failed`, or `blocked`)
-
-`renderer-ready` is whatever "ready to capture" means on your stack — dev server answering, simulator
-booted, emulator up, test harness compiled. On web the probe writes `measuring`/`measured` itself with `--run <id>`. `measured` and `done` check
-the file: `<Screen>.measured.json` must exist and name the current expectation (on native, write it first).
-`blocked` means a permission denial stopped the run (detail = the denied command): hand back "blocked on
-permissions: done / remaining" and suggest a narrow allow rule; never `dangerouslyDisableSandbox`. Retry a
-transient no-verdict ("temporarily unavailable …, so auto mode cannot determine the safety of …") only twice,
-unchanged; "a safety check separate from auto mode blocked this request" is no verdict, and retrying will not fix it —
-finish other work, then `blocked`; a block naming a rule is never retried or rephrased.
-
-The caller waits with `node <scripts>/verify-screen.js --wait <screen> --run <id>` (exit 0 done, 1 failed or
-blocked, 5 timeout or no progress, 6 run cache not accessible; default `--timeout 1200` s, `--stall 300` s) instead of a poll loop: a changed `rev`
-means working, a `rev` that has not moved for minutes means genuinely stuck, and `phase` says which step to blame.
-Stage the other artefacts (`evidence.json`, state PNGs) in the run's stage dir,
-`node_modules/.cache/designtwin-verify/stage/<runId>/` (printed as `stage` by `--status`), and publish them with
-`--phase done --run <id> --publish <stageDir>` after closing the browser (`done` checks the measured file first,
-then copies): nothing is written into the project while a page of the app is open — on a Vite + Tailwind v4 app a
-rewrite under `design/` fully reloads it. The probe and `--compare` write into `design/verify/` as well, so close
-every page and browser of the app you opened BEFORE running the probe or `--compare` (the probe opens and closes its
-own browser and writes only after closing it). Close only what you opened; stop only a PID you started and recorded; never
-`pkill -f`, `killall` or a pattern kill. After a probe exit 4 (incl. `--max-time`), one re-run, then `failed`.
-Rebuild before measuring a preview/static build; the report prints the build identity and warns
-`SAME BUILD SERVED`.
-
-**On timings, so nobody chases a phantom:** the same verifier legitimately takes far longer inside a
-build than standalone, and that is not a bug. Standalone is one capture against finished code with
-the renderer often already warm. Inside a build it runs *once per fix round* — render → report
-deltas → the builder edits → re-render — each paying its own cold start, and cold start is the
-expensive part on every stack (a simulator boot or a Gradle build more so than a dev server). One
-observed run: ~25 min inside a build with two fix rounds, ~3.5 min standalone afterwards. Budget
-per-round, and treat a *phase* that stops advancing for minutes as the real hang.
+A full verify pass is minutes, not seconds, and every stack's render step is silent while it works — a dev server
+booting, a simulator coming up, a Gradle task compiling, a golden test warming. So report status as you go,
+through the tool, and wait on a run with the tool rather than a poll loop. The one copy of that protocol — the
+`--status` / `--wait` commands and exit codes, run ids, the run cache, staging and publishing, closing pages
+before the probe writes, rebuilding a preview, processes, permission denials, timings — is the verify skill's
+`references/run-protocol.md`, which the skill that sent you here links beside this file.
 
 ## When you can't render
 Rendering is the default, not an optional extra — check `package.json`/`node_modules` (or the
