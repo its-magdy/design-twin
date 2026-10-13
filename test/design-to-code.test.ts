@@ -1338,6 +1338,69 @@ console.log("map — SLOT props:");
     return /\\\.sizesTokens, \.mobile \/\* one of: \.desktop, \.mobile/.test(t) && /\\\.themeTokens, colorScheme == \.dark \? \.dark : \.light\)/.test(t) && !/sizesTokens, colorScheme/.test(t);
   })());
   check("[native] swiftui: a control character is escaped the Swift way (\\u{1}), not the JSON way", /"a\\u\{0001\}b"/.test(toNative(tokens({ collections: [{ name: "S", modes: ["M"], default: "M" }], variables: [{ name: "s", type: "STRING", collection: "S", values: { M: "a\u0001b" } }] }), "swiftui").text));
+  {
+    // Every string literal decoded by the target's DOCUMENTED escapes alone (Kotlin: kotlinlang.org/docs/characters.html;
+    // Swift: docs.swift.org, Strings and Characters) must give back the token's value — an escape the language lacks
+    // (Kotlin \f, Swift \b/\f), an unescaped $ (a Kotlin template), a raw control character or a mis-read backslash fails.
+    const values = [
+      ...Array.from({ length: 0x20 }, (_, c) => `a${String.fromCharCode(c)}b`),
+      "\\u1234", "\\u{1F}", "\\\\", "\\\\u1234", "end\\", "\\", "\\n", "\\$", "\\(x)", "\\\"",
+      "$", "$name", "${x}", "a$", "$$", "\"quoted\"", "'single'", "\u00a0nbsp", "\u007f", "\u2028",
+      "\u{1F600}", "\u{1D11E}", "\u{1F468}\u200d\u{1F469}\u200d\u{1F467}", "é\u0301", "\ud800", "x\udc00y",
+    ];
+    const doc = tokens({ collections: [{ name: "Str", modes: ["M"], default: "M" }], variables: values.map((v, i) => ({ name: `v${i}`, type: "STRING", collection: "Str", values: { M: v } })) });
+    type Decoder = (lit: string) => string;
+    const hexAt = (s: string, re: RegExp): string => { const m = re.exec(s); if (!m || m[1] === undefined) throw new Error(`bad unicode escape at ${s.slice(0, 12)}`); return m[1]; };
+    const kotlin: Decoder = (lit) => {
+      let out = "";
+      for (let i = 1; i < lit.length - 1; i++) {
+        const ch = lit.charAt(i);
+        if (ch === "\"" || ch === "$" || ch.charCodeAt(0) < 0x20 || ch === "\u007f") throw new Error(`raw ${JSON.stringify(ch)}`);
+        if (ch !== "\\") { out += ch; continue; }
+        const e = lit.charAt(++i);
+        const named: Record<string, string> = { t: "\t", b: "\b", n: "\n", r: "\r", "'": "'", "\"": "\"", "\\": "\\", $: "$" };
+        if (named[e] !== undefined) { out += named[e]; continue; }
+        if (e !== "u") throw new Error(`no Kotlin escape \\${e}`);
+        const h = hexAt(lit.slice(i + 1), /^([0-9a-fA-F]{4})/);
+        out += String.fromCharCode(parseInt(h, 16)); i += 4;
+      }
+      return out;
+    };
+    const swift: Decoder = (lit) => {
+      let out = "";
+      for (let i = 1; i < lit.length - 1; i++) {
+        const ch = lit.charAt(i);
+        if (ch === "\"" || ch.charCodeAt(0) < 0x20 || ch === "\u007f") throw new Error(`raw ${JSON.stringify(ch)}`);
+        if (ch !== "\\") { out += ch; continue; }
+        const e = lit.charAt(++i);
+        const named: Record<string, string> = { "0": "\0", t: "\t", n: "\n", r: "\r", "'": "'", "\"": "\"", "\\": "\\" };
+        if (named[e] !== undefined) { out += named[e]; continue; }
+        if (e !== "u") throw new Error(`no Swift escape \\${e}`);
+        const h = hexAt(lit.slice(i + 1), /^\{([0-9a-fA-F]{1,8})\}/);
+        const cp = parseInt(h, 16);
+        if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) throw new Error(`\\u{${h}} is not a Unicode scalar`);
+        out += String.fromCodePoint(cp); i += h.length + 2;
+      }
+      return out;
+    };
+    const lits = (text: string, decl: RegExp): Map<string, string> => new Map([...text.matchAll(decl)].map((m) => [m[1] ?? "", m[2] ?? ""]));
+    const kt = lits(toNative(doc, "android-compose").text, /val (v\d+): String = ("(?:[^"\\]|\\.)*")/g);
+    const sw = lits(toNative(doc, "swiftui").text, /static let (v\d+): String = ("(?:[^"\\]|\\.)*")/g);
+    const roundTrip = (m: Map<string, string>, dec: Decoder, expect: (v: string) => string): string[] => values.flatMap((v, i) => {
+      const lit = m.get(`v${i}`);
+      if (lit === undefined) return [`v${i}: no literal`];
+      try { const got = dec(lit); return got === expect(v) ? [] : [`v${i}: ${lit} decodes to ${JSON.stringify(got)}`]; } catch (e) { return [`v${i}: ${lit} — ${e instanceof Error ? e.message : String(e)}`]; }
+    });
+    const ktBad = roundTrip(kt, kotlin, (v) => v);
+    // Swift has no way to spell a lone surrogate (\u{n} names a scalar): it becomes U+FFFD, a pair is kept
+    const swBad = roundTrip(sw, swift, (v) => v.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "\ufffd"));
+    check(`[native] compose: every string token (all 32 control characters, backslash runs, $ and \${, quotes, astral, lone surrogates) decodes back by Kotlin's documented escapes${ktBad.length ? ` — ${ktBad.join("; ")}` : ""}`, ktBad.length === 0 && kt.size === values.length);
+    check(`[native] swiftui: every string token decodes back by Swift's documented escapes${swBad.length ? ` — ${swBad.join("; ")}` : ""}`, swBad.length === 0 && sw.size === values.length);
+    check("[native] the escapes the two languages lack are spelled as unicode escapes (Kotlin form feed \\u000c; Swift backspace \\u{0008}, form feed \\u{000c})",
+      kt.get("v12") === "\"a\\u000cb\"" && sw.get("v8") === "\"a\\u{0008}b\"" && sw.get("v12") === "\"a\\u{000c}b\"");
+    check("[native] an escaped backslash before u1234 stays a backslash and letters (Swift \"\\\\u1234\", not \\u{1234}); Kotlin keeps \\$ for every $",
+      sw.get(`v${0x20}`) === "\"\\\\u1234\"" && kt.get(`v${0x20}`) === "\"\\\\u1234\"" && kt.get(`v${0x20 + 12}`) === "\"\\${x}\"" && kt.get(`v${0x20 + 7}`) === "\"\\\\\\$\"");
+  }
   check("[native] compose: the JVM limit is counted in parameter UNITS (Color = 2) — 130 colors in a themed collection warns, 100 does not", (() => {
     const ds = (n: number) => tokens({ collections: [{ name: "Big", modes: ["Light", "Dark"], default: "Light" }], variables: Array.from({ length: n }, (_, i) => ({ name: "c/" + i, type: "COLOR", collection: "Big", values: { Light: "#fff", Dark: "#000" } })) });
     return toNative(ds(130), "android-compose").warnings.some((w) => /JVM parameter units/.test(w)) && !toNative(ds(100), "android-compose").warnings.some((w) => /JVM/.test(w));
