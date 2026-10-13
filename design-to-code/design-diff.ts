@@ -437,11 +437,26 @@ function markdown(d: DiffReport, label: string): string {
   return L.join("\n") + "\n";
 }
 
-// design/export/pages/Home/Login__1_2.json -> design/.sync/export__pages__Home__Login__1_2.json (relative to the project root)
+// The on-disk spelling of `p` (a symlinked /tmp and its /private/tmp target are one directory), resolving
+// the deepest part that exists for a path that does not.
+function realOf(p: string): string {
+  try { return fs.realpathSync(p); } catch { const d = path.dirname(p); return d === p ? p : path.join(realOf(d), path.basename(p)); }
+}
+// The project a file's snapshot belongs to: the cwd when the file is under its design/ (the usual run),
+// else the parent of the design/ directory the cwd itself is in (a run from design/ or below), so the
+// snapshot lands in the same design/.sync/ wherever it is run from. A file under neither keeps the cwd.
+function projectRoot(abs: string, cwd: string): string {
+  const inside = (dir: string): boolean => { const r = path.relative(dir, abs); return r !== "" && !r.startsWith("..") && !path.isAbsolute(r); };
+  if (inside(path.join(cwd, DESIGN_DIR))) return cwd;
+  for (let d = cwd; path.dirname(d) !== d; d = path.dirname(d)) if (path.basename(d) === DESIGN_DIR && inside(d)) return path.dirname(d);
+  return cwd;
+}
+// design/export/pages/Home/Login__1_2.json -> design/.sync/export__pages__Home__Login__1_2.json (under the project root)
 function snapshotPath(file: string, cwd: string = process.cwd()): string {
-  const rel = path.relative(path.join(cwd, DESIGN_DIR), path.resolve(cwd, file));
+  const realCwd = realOf(cwd), abs = realOf(path.resolve(cwd, file)), root = projectRoot(abs, realCwd);
+  const rel = path.relative(path.join(root, DESIGN_DIR), abs);
   const flat = (rel.startsWith("..") ? path.basename(file) : rel).split(path.sep).join("__");
-  return path.join(cwd, SNAPSHOT_DIR, flat);
+  return path.join(root, SNAPSHOT_DIR, flat);
 }
 
 // ---- asset bytes. A node's `asset` path is derived from its id, so a re-drawn icon keeps the same
@@ -497,7 +512,7 @@ function redrawnAssets(file: string, newDoc: ScreenDoc, prev: Baseline, cwd: str
   for (const [a, h] of Object.entries(now.hashes)) {
     let before: string | undefined;
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
-    else if (prev.kind === "git") { try { before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path.relative(cwd, path.join(now.root, a)).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 })); } catch { /* not committed */ } }
+    else if (prev.kind === "git") { try { before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path.relative(realOf(cwd), realOf(path.join(now.root, a))).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 })); } catch { /* not committed */ } }
     if (before && before !== h) out.add(a);
   }
   return out;
@@ -535,7 +550,7 @@ function previous(file: string, against: string | undefined, cwd: string = proce
     if ("doc" in r) { prevCopy = { doc: r.doc, source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets }; found.push(prevCopy); } // a corrupt .prev is ignored rather than failing the whole diff
   }
   try {
-    const rel = path.relative(cwd, path.resolve(cwd, file)).split(path.sep).join("/");
+    const rel = path.relative(realOf(cwd), realOf(path.resolve(cwd, file))).split(path.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
     const doc: unknown = JSON.parse(text);
     found.push({ doc, source: "git HEAD", kind: "git" });
@@ -765,13 +780,13 @@ function main(argv: string[]): number {
       for (const f of siblingFilesOf(r)) add(f, screenSiblings ? path.resolve(r) : undefined);
     }
     for (const r of requested) if (isDirectory(r) && !exportSetFiles(r).length) console.error(`design-diff: ${r} holds no ${MERGED_VARIABLES_FILE}, design-system or library files — nothing to snapshot there (first pull?)`);
-    // A refusal must not exit 0 — indistinguishable, to a script, from every file being
+    // A refusal, or a named file that is not there, must not exit 0 — indistinguishable, to a script, from every file being
     // snapshotted successfully. sync-design's own step 2 is meant to run unattended before a re-pull;
     // a refusal it can't see means the user finds out only later, when the diff is wrong.
-    let refused = 0;
+    let refused = 0, missing = 0;
     const refusedKeys = new Set<string>();
     for (const [key, { file: f, follows }] of entries) {
-      if (!fs.existsSync(f)) { console.error(`design-diff: ${f} not found — nothing to snapshot (first pull?)`); continue; }
+      if (!fs.existsSync(f)) { console.error(`design-diff: ${f} not found — nothing to snapshot (first pull?)`); missing++; continue; }
       const dest = snapshotPath(f);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       // Non-destructive: a snapshot is the only copy older than the export once the re-pull lands, so a
@@ -811,7 +826,7 @@ function main(argv: string[]): number {
       } catch { /* the sidecar could not be written — the copy is still the snapshot */ }
       console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : replacing ? " (replaced; the old one is kept as .prev)" : ""}`);
     }
-    return refused ? 1 : 0; // a returned code, not exit(): main's caller sets process.exitCode so every already-printed line flushes first
+    return refused || missing ? 1 : 0; // a returned code, not exit(): main's caller sets process.exitCode so every already-printed line flushes first
   }
   const { against, out } = flags;
   const json = !!flags.json;

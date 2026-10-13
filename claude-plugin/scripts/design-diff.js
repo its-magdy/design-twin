@@ -956,10 +956,28 @@ function markdown(d, label) {
   if (s.formatOnly) L.push(`_${s.formatOnly} other node(s) differ only by the exporter's format \u2014 not listed._`, "");
   return L.join("\n") + "\n";
 }
+function realOf(p) {
+  try {
+    return fs5.realpathSync(p);
+  } catch {
+    const d = path3.dirname(p);
+    return d === p ? p : path3.join(realOf(d), path3.basename(p));
+  }
+}
+function projectRoot(abs, cwd) {
+  const inside = (dir) => {
+    const r = path3.relative(dir, abs);
+    return r !== "" && !r.startsWith("..") && !path3.isAbsolute(r);
+  };
+  if (inside(path3.join(cwd, DESIGN_DIR))) return cwd;
+  for (let d = cwd; path3.dirname(d) !== d; d = path3.dirname(d)) if (path3.basename(d) === DESIGN_DIR && inside(d)) return path3.dirname(d);
+  return cwd;
+}
 function snapshotPath(file, cwd = process.cwd()) {
-  const rel = path3.relative(path3.join(cwd, DESIGN_DIR), path3.resolve(cwd, file));
+  const realCwd = realOf(cwd), abs = realOf(path3.resolve(cwd, file)), root = projectRoot(abs, realCwd);
+  const rel = path3.relative(path3.join(root, DESIGN_DIR), abs);
   const flat = (rel.startsWith("..") ? path3.basename(file) : rel).split(path3.sep).join("__");
-  return path3.join(cwd, SNAPSHOT_DIR, flat);
+  return path3.join(root, SNAPSHOT_DIR, flat);
 }
 function hashAssetBytes(fileName, buf) {
   return sha1Hex(normalizeForCompare(fileName, buf));
@@ -997,7 +1015,7 @@ function redrawnAssets(file, newDoc, prev, cwd) {
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
     else if (prev.kind === "git") {
       try {
-        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path3.relative(cwd, path3.join(now.root, a)).split(path3.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
+        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path3.relative(realOf(cwd), realOf(path3.join(now.root, a))).split(path3.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
       } catch {
       }
     }
@@ -1027,7 +1045,7 @@ function previous(file, against, cwd = process.cwd(), current = null) {
     }
   }
   try {
-    const rel = path3.relative(cwd, path3.resolve(cwd, file)).split(path3.sep).join("/");
+    const rel = path3.relative(realOf(cwd), realOf(path3.resolve(cwd, file))).split(path3.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
     const doc = JSON.parse(text);
     found.push({ doc, source: "git HEAD", kind: "git" });
@@ -1235,11 +1253,12 @@ function main(argv) {
       for (const f of siblingFilesOf(r)) add(f, screenSiblings ? path3.resolve(r) : void 0);
     }
     for (const r of requested) if (isDirectory(r) && !exportSetFiles(r).length) console.error(`design-diff: ${r} holds no ${MERGED_VARIABLES_FILE}, design-system or library files \u2014 nothing to snapshot there (first pull?)`);
-    let refused = 0;
+    let refused = 0, missing = 0;
     const refusedKeys = /* @__PURE__ */ new Set();
     for (const [key, { file: f, follows }] of entries) {
       if (!fs5.existsSync(f)) {
         console.error(`design-diff: ${f} not found \u2014 nothing to snapshot (first pull?)`);
+        missing++;
         continue;
       }
       const dest = snapshotPath(f);
@@ -1287,7 +1306,7 @@ function main(argv) {
       }
       console.log(`snapshot: ${f} -> ${path3.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : replacing ? " (replaced; the old one is kept as .prev)" : ""}`);
     }
-    return refused ? 1 : 0;
+    return refused || missing ? 1 : 0;
   }
   const { against, out } = flags;
   const json = !!flags.json;

@@ -556,10 +556,10 @@ check("a file named twice (a file AND its export dir, `./x` and `x`) is snapshot
   const lines = r.stdout.trim().split("\n");
   return r.status === 0 && lines.length === 4 && lines.filter((l) => /tokens\.json ->/.test(l)).length === 1;
 })());
-check("a file the caller NAMES that is not there is still reported", (() => {
+check("a file the caller NAMES that is not there is still reported, and the exit is 1 (no snapshot was taken of it)", (() => {
   const { root } = dirProject();
   const r = cli(root, "--snapshot", path.join("design", "export", "design-system", "styles.grid.json"));
-  return /styles\.grid\.json not found/.test(r.stderr);
+  return r.status === 1 && /styles\.grid\.json not found/.test(r.stderr);
 })());
 check("<export dir> diff: one report — a section per changed file, one line for the unchanged, a file not re-pulled is 'not compared' with the reason", (() => {
   const { root, exp } = dirProject();
@@ -706,6 +706,30 @@ check("the report has no doubled blank lines, and files unchanged against git HE
   const md = cli(root, exp).stdout;
   return !/\n\n\n/.test(md) && /^Nothing changed against an older copy .*tokens\.json` \(vs git HEAD\), `[^`]*hygiene\.json` \(vs git HEAD\)\.$/m.test(md)
     && (md.match(/^## What changed — /gm) ?? []).length === 1 && /#111111 → #222222/.test(md);
+})());
+
+
+console.log("CLI — where the snapshot lands:");
+check("an absolute path through a symlinked directory finds the same snapshot (real paths on both sides)", (() => {
+  const root = project();
+  const link = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-link-")), "proj");
+  fs.symlinkSync(root, link, "junction"); // a junction needs no privilege on Windows; elsewhere the type is ignored
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  const viaLink = path.join(link, LOGIN);
+  const s = cli(root, "--snapshot", viaLink);
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  const d = cli(root, viaLink, "--json");
+  return s.status === 0 && fs.existsSync(path.join(root, "design", ".sync", "export__pages__home__Login__1_1.json"))
+    && d.status === 0 && parseAs(d.stdout, isScreenResult, "design-diff --json").baseline === "snapshot";
+})());
+check("run from inside design/, a snapshot still lands in <project>/design/.sync/ (not design/design/.sync/) and a diff from the root finds it", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  const s = cli(path.join(root, "design"), "--snapshot", path.join("export", "pages", "home", "Login__1_1.json"));
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  const d = cli(root, LOGIN, "--json");
+  return s.status === 0 && !fs.existsSync(path.join(root, "design", "design")) && fs.existsSync(path.join(root, "design", ".sync", "export__pages__home__Login__1_1.json"))
+    && parseAs(d.stdout, isScreenResult, "design-diff --json").baseline === "snapshot";
 })());
 
 report();
