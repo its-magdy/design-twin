@@ -58,9 +58,10 @@ function visualMarkdown(v: ReportVisual): string[] {
 
 // behaviour text comes from the page (accessible names, text, element paths like "body > div > <span>") — escaped
 // for markdown AND inline HTML, so "focus went to <body>" never renders as "focus went to ", and a | or newline never
-// breaks the table. No code spans: a backtick inside one cannot be escaped.
+// breaks the table. No code spans: a backtick inside one cannot be escaped. A backslash is escaped first, so the
+// page's own "\|" cannot turn the added escape into an escaped backslash followed by a live pipe.
 export const mdText = (x: string | undefined): string => (x ?? "").replace(/\r?\n|\r/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-  .replace(/\|/g, "\\|").replace(/`/g, "\\`");
+  .replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/`/g, "\\`");
 const behaviourWhere = (c: BehaviourCheck): string => [c.nodeId ? mdText(c.nodeId) : "", c.trigger ? `(${mdText(c.trigger)})` : "", c.target ? mdText(c.target) : ""].filter(Boolean).join(" ");
 const BEHAVIOUR_MD_ROWS = 80;
 /** The md section "Behaviour and accessibility — not part of the verdict". */
