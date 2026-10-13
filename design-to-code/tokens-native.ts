@@ -26,7 +26,7 @@
 // https://developers.figma.com/docs/rest-api/variables-types/: VariableComposedColor.opacity is "An
 // opacity percentage from 0 to 100, or an alias to a FLOAT variable"; VariableScope "OPACITY corresponds
 // to layer opacity, while COLOR_OPACITY corresponds to the opacity channel of a color"). Every platform
-// below takes opacity as a 0–1 fraction, so an OPACITY / COLOR_OPACITY-scoped FLOAT (tokens.ts
+// below takes opacity as a 0–1 fraction, so an OPACITY / COLOR_OPACITY-scoped FLOAT (tokens-core.ts
 // percentOpacity — the same test that gives it `N%` in tokens.css and unit "percent" in DTCG) is written
 // as clamp(N)/100 (clamp: color.ts clampOpacityPct, as Figma clamps):
 //   swiftui       Double   — View.opacity(_ opacity: Double) / Color.opacity(_:), 0…1 (developer.apple.com/documentation/swiftui/view/opacity(_:))
@@ -38,35 +38,17 @@
 // clamp(opacity)/100 (color.ts composeAlpha — the multiply is an inference, see there), each half
 // resolved through the same alias resolution as a plain colour.
 import type { TokensDoc, Variable, VariableAlias, VariableCollection, VariableValue } from "./types.ts";
-import { NUMERIC_TEXT } from "./doc-guards.ts";
+import { NUMERIC_TEXT, isAlias } from "./doc-guards.ts";
 import { normHex, parseHex, formatHex, composeAlpha, clampOpacityPct } from "./color.ts";
 
-/** The px-vs-unitless override every emitter honours (tokens.ts unitDecision): the names a caller declared unitless. */
-export interface UnitOpts {
-  unitless?: { has: (name: string) => boolean };
-}
-/** tokens.ts unitDecision(): WHO decided a FLOAT's unit. */
-export type UnitDecision = "override" | "scopes" | "name" | "px";
+// Names, default modes, aliases and units must agree with the DTCG/CSS output, so they come from the
+// same readers tokens.ts uses (tokens-core.ts).
+import { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, type UnitOpts } from "./tokens-core.ts";
+
 /** What toNative takes beside the design system. */
 export interface NativeOpts extends UnitOpts {
   /** Kotlin package of the Compose file (default `design.tokens`). */
   package?: string;
-}
-
-// tokens.ts hands its helpers in (names, default modes, aliases, units must agree with the DTCG/CSS
-// output) rather than this file importing tokens.ts back: an import cycle makes the bundler wrap
-// tokens.ts as an inner module, and its `import.meta.main` CLI guard then never fires.
-// (Colour parsing is NOT one of them: color.ts imports nothing, so it is imported directly.)
-/** The seven tokens.ts helpers this emitter is built from — typed from their definitions there. */
-export interface NativeHelpers {
-  segs: (name: string | null | undefined) => string[];
-  isAlias: (v: unknown) => v is VariableAlias;
-  defaultModeName: (variable: Variable, collections: VariableCollection[] | undefined) => string | undefined;
-  baseValue: (variable: Variable, collections: VariableCollection[] | undefined, def?: string) => VariableValue | undefined;
-  unitDecision: (variable: Variable, opts?: UnitOpts) => UnitDecision;
-  isSentinel: (v: Variable | null | undefined, raw: unknown) => boolean;
-  /** an OPACITY / COLOR_OPACITY-scoped FLOAT (Figma's 0–100 percentage) — tokens.ts percentOpacity */
-  percentOpacity: (variable: Variable, opts?: UnitOpts) => boolean;
 }
 
 type NativeKind = "color" | "bool" | "string" | "fontSize" | "dimension" | "number";
@@ -81,11 +63,9 @@ interface Candidate { v: Variable; kind: NativeKind; values: Record<string, Conc
 type Emit = (cols: NativeCollection[], opts?: NativeOpts) => string;
 export interface NativeFile { file: string; text: string; warnings: string[] }
 
-// Figma's "fully rounded" corner exports as 1e9 (see isSentinel in tokens.ts). A field holding it is
+// Figma's "fully rounded" corner exports as 1e9 (see isSentinel in tokens-core.ts). A field holding it is
 // written as each platform's own idiom — never as the literal.
 const FULL = Object.freeze({ fullyRounded: true });
-
-export default function nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity }: NativeHelpers) {
 
 // A plain string-keyed object on purpose (as the JS was): `platformOf` looks a caller's word up in it
 // with a truthiness test, so an inherited name behaves exactly as it did.
@@ -206,7 +186,7 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
           values[m] = clamped / 100;
           continue;
         }
-        values[m] = isSentinel && isSentinel(v, r) ? FULL : r;
+        values[m] = isSentinel(v, r) ? FULL : r;
       }
       // A composed colour (colour + separate opacity) whose halves did not both resolve to a hex and a
       // number here (an alias to a variable that was not exported?) has no native literal.
@@ -423,5 +403,4 @@ function toNative(designSystem: TokensDoc | null | undefined, platform: unknown,
   return { file: target.file, text: emit(cols, opts), warnings };
 }
 
-return { toNative, platformOf, PLATFORMS };
-}
+export { toNative, platformOf, PLATFORMS };
