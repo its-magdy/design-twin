@@ -273,7 +273,7 @@ later `dtwin` commands. If another program is using the port, set `FIGMA_BRIDGE_
   - `design-system/`: tokens, styles, local and library components, and the hygiene report.
   - `libraries/<slug>-<fileKey8>/`: output of `--as-library` pulls.
 - **Everything else is yours.** This includes `target.json`, `tokens.json`,
-  `codeconnect.local.json`, and the `plan/`, `audit/`, `verify/` and `sync/` directories. Skills
+  `codeconnect.local.json`, and the `plan/`, `audit/`, `verify/` and `changes/` directories. Skills
   write these, and they can't be regenerated. Commit them.
 
 Projects set up before this split keep their export directly in `design/`. Everything still finds

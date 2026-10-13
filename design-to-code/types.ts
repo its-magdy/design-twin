@@ -1265,6 +1265,8 @@ export interface ManifestDiff { kind: "manifest"; summary: DiffSummary; warnings
 export type DiffReport = ScreenDiff | TokensDiff | CatalogDiff | StylesDiff | HygieneDiff | ManifestDiff;
 /** The CLI's --json result: the diff plus which baseline it was computed against. */
 export type DiffResult = DiffReport & { file: string; against: string; baseline: "file" | "snapshot" | "git"; warned: boolean };
+/** design-diff on an export directory: one result per file compared, and why each other file was not. */
+export interface DirDiffResult { dir: string; results: DiffResult[]; notCompared: Array<{ file: string; reason: string }> }
 
 // ================================================================ resolve-screen.ts
 

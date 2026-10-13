@@ -55,7 +55,7 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
-import { TAILWIND_SOURCE_NOT_NOTE } from "../bridge/src/project-layout.ts";
+import { MERGED_VARIABLES_FILE, TAILWIND_SOURCE_NOT_NOTE } from "../bridge/src/project-layout.ts";
 
 /** The options every emitter shares (opts.unitless is honoured by the ONE unitDecision, in tokens-core.ts). */
 export interface EmitOpts extends UnitOpts {
@@ -1493,7 +1493,7 @@ function main(args: string[]): number {
   // A screen's own slice (<Screen>.vars.json) or the merged variables.json of a consuming file is ALL
   // remote by nature and is the documented theme input there, so only a catalog file warns.
   const vars = ds.variables || [];
-  const slice = /\.vars\.json$/i.test(input) || path.basename(input) === "variables.json";
+  const slice = /\.vars\.json$/i.test(input) || path.basename(input) === MERGED_VARIABLES_FILE;
   if (!slice && vars.length && vars.every((v) => v.remote === true)) {
     warnings.push(`all ${vars.length} variable(s) in ${input} are remote:true — this is a design-system pull of a file that CONSUMES a library (only the library variables it references), not the library's catalog; open the library file and run \`dtwin pull --as-library "<name>"\` for the catalog`);
   }

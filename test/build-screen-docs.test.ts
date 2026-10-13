@@ -610,6 +610,18 @@ console.log("build-screen docs (quick keys + export docs):");
   const syncSkill = flat(read("claude-plugin/skills/sync-design/SKILL.md"));
   check("sync-design: a \"differ only by the exporter's format\" warning after a plugin update is not a design change; re-run --expect/--compare once",
     /differ only by the exporter's format" after a plugin update is not a design change/.test(syncSkill) && /Re-run `verify-screen --expect` \/ `--compare` once/.test(syncSkill));
+  // design-diff takes the export directory for variables.json + the design-system files, so the skill names
+  // the directory, not a hand-kept file list, and reports go to design/changes/ (design/.sync/ holds snapshots).
+  check("sync-design: snapshot and diff name the export directory (no per-file design-system list, no bridge/src path), reports land in design/changes/",
+    /design-diff\.js" --snapshot (\\ )?design\/export\/pages\/<Page>\/<Screen>__<id>\.json design\/export ```/.test(syncSkill)
+    && /design-diff\.js" design\/export --out design\/changes\/<screen>-shared\.md/.test(syncSkill)
+    && !/design-system\/(tokens|styles\.\w+|components\.\w+|hygiene)\.json/.test(syncSkill.replace(/drift-lint\.js"[^`]*`/g, ""))
+    && !/bridge\/src|design\/sync\/|not found/.test(syncSkill));
+  check("sync-design: the next sync re-runs step 2 (a spent snapshot is replaced), an unspent one is refused and --force is not the answer; syncs[] records both reports; no-export-set projects skip the shared diff",
+    /once step 4 has diffed against a snapshot, that snapshot is spent, and `--snapshot` replaces it/.test(syncSkill)
+    && /Do not reach for `--force` then; run step 4 first/.test(syncSkill) && !/always safe/.test(syncSkill)
+    && /diff:\["design\/changes\/<screen>\.md", "design\/changes\/<screen>-shared\.md"\]/.test(syncSkill)
+    && /unreadable — that one exits 2 with the report still written/.test(syncSkill) && /has nothing for the second command \(it exits 2 saying so\): skip it/.test(syncSkill));
   const readme21 = flat(read("bridge/README.md"));
   const extract21 = extractDocs;
   const verbs21 = read("bridge/src/verbs.ts");

@@ -23,6 +23,8 @@
 //     plan/<Screen>.json       <- build-screen's plan and decisions
 //     audit/<Screen>.{md,json} <- audit-design
 //     verify/<Screen>.{expected,report}.json  <- verify's machine-readable evidence
+//     .sync/                   <- design-diff --snapshot's pre-re-pull copies (tool-owned)
+//     changes/<name>.md        <- sync-design's diff reports
 //
 // Projects created before this split have their export directly in design/. Nothing rewrites them:
 // findExportDir() recognises the old shape and every consumer keeps working, while doctor says which
@@ -40,6 +42,10 @@ export const LEGACY_MAP_FILE = "codeconnect.local.json"; // the repo-root map of
 export const PLAN_DIR = path.join(DESIGN_DIR, "plan");
 export const AUDIT_DIR = path.join(DESIGN_DIR, "audit");
 export const VERIFY_DIR = path.join(DESIGN_DIR, "verify");
+/** Where design-diff --snapshot keeps the copy of an export file taken before a re-pull. */
+export const SNAPSHOT_DIR = path.join(DESIGN_DIR, ".sync");
+/** The merged token file at the export root: the union of every screen pull's variables slice. */
+export const MERGED_VARIABLES_FILE = "variables.json";
 
 // Tailwind v4's automatic source detection scans every file git does not ignore — Markdown
 // included (tailwindcss.com/docs/detecting-classes-in-source-files) — so class names quoted in design/
@@ -72,7 +78,7 @@ export const VERIFY_GITIGNORE_NOTE =
 // The marks of an export directory, in the order a pull creates them. Used to tell "this project uses
 // the old flat layout" from "this project has no export yet", which are different problems with
 // different fixes.
-const EXPORT_MARKERS = ["pages", "design-system", "design-system.json", "variables.json", "assets", "libraries"];
+const EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
 
 export function looksLikeExportDir(dir: string): boolean {
   try {
@@ -153,17 +159,17 @@ delete the whole directory and re-pull and you lose nothing.
 
 ## design/.sync/ — a working snapshot, not an export
 
-\`design-diff.ts --snapshot <file>\` copies a file here BEFORE you re-pull it, so the sync-design skill
-can diff the old export against the new one afterwards. It is non-destructive by default (a snapshot
-that would replace an existing, DIFFERENT one is refused unless you pass \`--force\`, which keeps the
-old copy as \`<name>.prev\`) — see \`claude-plugin/skills/sync-design/SKILL.md\`. It is not part of the
+\`design-diff.ts --snapshot <file or export dir>\` copies a file here BEFORE you re-pull it, so the sync-design skill
+can diff the old export against the new one afterwards. It is non-destructive: a snapshot that would
+replace an existing, DIFFERENT one is refused until a diff has used the old one (or you pass
+\`--force\`), and the old copy is kept as \`<name>.prev\` — see \`claude-plugin/skills/sync-design/SKILL.md\`. It is not part of the
 Figma-owned export above and not something a re-pull ever writes to; delete it any time, it only
 affects what the next diff compares against.
 
-## design/sync/ — where a diff report lands
+## design/changes/ — where a diff report lands
 
-\`design-diff.ts ... --out design/sync/<screen>.md\` writes its human-readable report here, per the
-sync-design skill's step 4. Also yours: it is evidence of what changed on a given sync, not something
+\`design-diff.ts ... --out design/changes/<name>.md\` writes its human-readable report here, per the
+sync-design skill. Also yours: it is evidence of what changed on a given sync, not something
 \`dtwin pull\` regenerates.
 
 ## Everything else here — you own it

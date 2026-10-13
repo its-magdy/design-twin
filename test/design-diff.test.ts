@@ -12,9 +12,10 @@ import { isTextStylesDoc } from "../design-to-code/doc-guards.ts";
 // design-diff --json: the diff result; only its kind/summary/warnings/against/changed are read here.
 const isDiffResult = (x: unknown): x is DiffResult => isJsonObject(x) && typeof x.kind === "string" && isJsonObject(x.summary) && Array.isArray(x.warnings);
 import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
+import { buildLibraryLayout, LIBRARY_FILE_NAMES } from "../bridge/src/library-layout.ts";
 import { bag, isJsonObject } from "../design-to-code/types.ts";
 import type {
-  Box, CatalogComponent, DesignSystemManifest, DiffResult, EffectStylesDoc, HygieneDoc, IrNode, LayerFile, Manifest, Paint,
+  Box, CatalogComponent, DesignSystemManifest, DiffResult, DirDiffResult, EffectStylesDoc, HygieneDoc, IrNode, LayerFile, Manifest, Paint,
   StylesDoc, TokensDoc, Variable,
 } from "../design-to-code/types.ts";
 
@@ -402,7 +403,7 @@ check("an unknown flag is an error, not a silently different command", (() => { 
 check("a file of an unknown kind exits 2 with the reason", (() => { const root = project(); fs.writeFileSync(path.join(root, "a.json"), "{}"); fs.writeFileSync(path.join(root, "b.json"), "{}"); const r = cli(root, "a.json", "--against", "b.json"); return r.status === 2 && /nothing here can be diffed/.test(r.stderr); })());
 
 // ---------------------------------------------------------------- style + hygiene diffs
-// sync-design step 4 lists a diff command for EVERY design-system file a --design-system pull writes,
+// The export-directory diff (sync-design) reads EVERY design-system file a --design-system pull writes,
 // including the four styles.*.json and hygiene.json — and all five used to exit 2 with "nothing here
 // can be diffed", so a typography-only or effect-only design-system change (or a new/resolved hygiene
 // warning) was exactly as undetectable as the skill warns it would be without them. Fixtures are the
@@ -467,7 +468,7 @@ check("markdown renders styles/hygiene kinds without throwing, and names the rig
   const md2 = markdown(diffHygiene(h, hb), "hygiene.json");
   return /Styles changed/.test(md1) && /New warning/.test(md2);
 })());
-check("CLI end to end: ALL NINE of sync-design step 4's design-system diff commands succeed on the real fixtures (incl. the manifest)", (() => {
+check("CLI end to end: ALL NINE design-system files diff one by one on the real fixtures (incl. the manifest)", (() => {
   const root = project();
   const dsDir = path.join(root, "design", "export", "design-system");
   fs.mkdirSync(dsDir, { recursive: true });
@@ -513,6 +514,198 @@ check("diffManifest: a counts/files change is a keyed field diff, exportedAt is 
   b.counts.hygiene = a.counts.hygiene + 3;
   const d = diffDocs(a, b);
   return d.kind === "manifest" && d.summary.changed === 1 && d.fields.length === 1 && d.fields[0]?.field === "counts.hygiene";
+})());
+
+// ---------------------------------------------------------------- export-directory mode
+// `design-diff <export dir>` diffs variables.json, every design-system file and every library export
+// present as one report, and `--snapshot <export dir>` snapshots that same set.
+console.log("CLI — an export directory:");
+// A partial export: variables.json, tokens.json, styles.text.json and hygiene.json — no manifest, no
+// other design-system part (a screen-only project, or an export from an older plugin).
+const dirProject = (): { root: string; exp: string } => {
+  const root = project(), exp = path.join(root, "design", "export"), ds = path.join(exp, "design-system");
+  fs.mkdirSync(ds, { recursive: true });
+  const at = "2026-01-01T00:00:00Z";
+  fs.writeFileSync(path.join(exp, "variables.json"), JSON.stringify(tokens({ exportedAt: at, variables: [{ name: "brand", type: "COLOR", values: { Light: "#111111" } }] })));
+  fs.writeFileSync(path.join(ds, "tokens.json"), JSON.stringify(tokens({ exportedAt: at, variables: [{ name: "space/md", type: "FLOAT", values: { M: 16 } }] })));
+  fs.writeFileSync(path.join(ds, "styles.text.json"), JSON.stringify({ exportedAt: at, ...readFix("styles.text.json", isTextStylesDoc) }));
+  fs.writeFileSync(path.join(ds, "hygiene.json"), JSON.stringify({ exportedAt: at, hygiene: ["first warning"] }));
+  return { root, exp: path.join("design", "export") };
+};
+const rewrite = (root: string, rel: string, edit: (doc: Record<string, unknown>) => void): void => {
+  const f = path.join(root, rel), raw: unknown = JSON.parse(fs.readFileSync(f, "utf8"));
+  if (!isJsonObject(raw)) throw new Error(`${rel} is not a JSON object`);
+  edit(raw); fs.writeFileSync(f, JSON.stringify(raw));
+};
+const isDirResult = (x: unknown): x is DirDiffResult => isJsonObject(x) && typeof x.dir === "string" && Array.isArray(x.results) && x.results.every(isDiffResult) && Array.isArray(x.notCompared);
+check("--snapshot <export dir> copies variables.json and every design-system file present, and says nothing about the absent ones", (() => {
+  const { root, exp } = dirProject();
+  const r = cli(root, "--snapshot", exp);
+  const sync = path.join(root, "design", ".sync");
+  const got = fs.readdirSync(sync).sort().join(",");
+  return r.status === 0 && r.stderr === "" && got === "export__design-system__hygiene.json,export__design-system__styles.text.json,export__design-system__tokens.json,export__variables.json";
+})());
+check("--snapshot of ONE design-system file in a partial export prints no 'not found' for a sibling that is not there", (() => {
+  const { root } = dirProject();
+  const r = cli(root, "--snapshot", path.join("design", "export", "design-system", "tokens.json"));
+  return r.status === 0 && !/not found/.test(r.stderr) && /styles\.text\.json/.test(r.stdout) && /hygiene\.json/.test(r.stdout);
+})());
+check("a file named twice (a file AND its export dir, `./x` and `x`) is snapshotted once", (() => {
+  const { root, exp } = dirProject();
+  const r = cli(root, "--snapshot", "." + path.sep + path.join(exp, "design-system", "tokens.json"), exp);
+  const lines = r.stdout.trim().split("\n");
+  return r.status === 0 && lines.length === 4 && lines.filter((l) => /tokens\.json ->/.test(l)).length === 1;
+})());
+check("a file the caller NAMES that is not there is still reported", (() => {
+  const { root } = dirProject();
+  const r = cli(root, "--snapshot", path.join("design", "export", "design-system", "styles.grid.json"));
+  return /styles\.grid\.json not found/.test(r.stderr);
+})());
+check("<export dir> diff: one report — a section per changed file, one line for the unchanged, a file not re-pulled is 'not compared' with the reason", (() => {
+  const { root, exp } = dirProject();
+  cli(root, "--snapshot", exp);
+  const later = "2026-02-01T00:00:00Z";
+  rewrite(root, path.join(exp, "variables.json"), (d) => { d.exportedAt = later; d.variables = [variable({ name: "brand", type: "COLOR", values: { Light: "#222222" } })]; });
+  rewrite(root, path.join(exp, "design-system", "hygiene.json"), (d) => { d.exportedAt = later; d.hygiene = ["first warning", "a new warning"]; });
+  rewrite(root, path.join(exp, "design-system", "tokens.json"), (d) => { d.exportedAt = later; }); // re-pulled, nothing changed
+  // styles.text.json is left as snapshotted: the design system's styles were not re-pulled
+  const out = path.join("design", "changes", "shared.md");
+  const r = cli(root, exp, "--out", out);
+  const md = fs.readFileSync(path.join(root, out), "utf8");
+  const j = parseAs(cli(root, exp, "--json").stdout, isDirResult, "design-diff <dir> --json");
+  return r.status === 0 && /2 changed/.test(r.stdout)
+    && md.startsWith(`# What changed — ${exp}\n`)
+    && /^## What changed — .*variables\.json vs /m.test(md) && /^### Token values changed/m.test(md) && /#111111 → #222222/.test(md)
+    && /^### New warning\(s\)/m.test(md) && /a new warning/.test(md)
+    && /^Nothing changed: `[^`]*tokens\.json`\.$/m.test(md)
+    && /^## Not compared\n- `[^`]*styles\.text\.json`: the same export as /m.test(md)
+    && j.results.length === 3 && j.notCompared.length === 1 && j.results.filter((x) => x.summary.changed + x.summary.added).length === 2;
+})());
+check("<export dir> diff with no baseline for any file exits 2 with the --snapshot hint, and writes nothing", (() => {
+  const { root, exp } = dirProject();
+  const out = path.join(root, "design", "changes", "shared.md");
+  const r = cli(root, exp, "--out", out);
+  return r.status === 2 && /--snapshot design[\\/]export` BEFORE re-pulling/.test(r.stderr) && !fs.existsSync(out);
+})());
+check("<export dir> diff: a file that cannot be read is named in the report and on stderr, and the exit is 2", (() => {
+  const { root, exp } = dirProject();
+  cli(root, "--snapshot", exp);
+  fs.writeFileSync(path.join(root, exp, "design-system", "hygiene.json"), "{ truncated");
+  const r = cli(root, exp);
+  return r.status === 2 && /hygiene\.json: .*not valid JSON/.test(r.stderr) && /^## Not compared\n(- .*\n)*- `[^`]*hygiene\.json`: .*not valid JSON/m.test(r.stdout);
+})());
+check("<export dir> refuses --against, and a directory with none of the files is said, not reported as unchanged", (() => {
+  const { root, exp } = dirProject();
+  const a = cli(root, exp, "--against", "x.json");
+  const empty = cli(root, path.join("design", "assets"));
+  return a.status === 2 && /--against takes one file/.test(a.stderr) && empty.status === 2 && /holds no variables\.json, design-system or library files/.test(empty.stderr);
+})());
+
+
+// Two syncs in a row: the second sync's step 2 must replace the snapshot the first sync's diff used
+// (no --force), so the second diff lists only the second change.
+console.log("CLI — a second sync:");
+const LOGIN = path.join("design", "export", "pages", "home", "Login__1_1.json");
+const putScreen = (root: string, text: string, at: string): void => {
+  const s = screen(); s.exportedAt = at; must(s.tree.children[0], "s.tree.children[0]").text = text;
+  fs.mkdirSync(path.join(root, "design", "export", "pages", "home"), { recursive: true });
+  fs.writeFileSync(path.join(root, LOGIN), JSON.stringify(s));
+  fs.writeFileSync(path.join(root, LOGIN.replace(/\.json$/, ".vars.json")), JSON.stringify({ exportedAt: at, variables: [] }));
+  fs.writeFileSync(path.join(root, "design", "export", "pages", "index.json"), JSON.stringify({ generatedAt: at, pageDirs: [] })); // rewritten by every pull
+};
+check("a screen synced twice: step 2 replaces the spent snapshot (and its siblings) without --force, and the 2nd diff shows only the 2nd change", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  const s1 = cli(root, "--snapshot", LOGIN);
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  const d1 = parseAs(cli(root, LOGIN, "--json").stdout, isScreenResult, "design-diff --json");
+  const s2 = cli(root, "--snapshot", LOGIN);
+  putScreen(root, "v3", "2026-03-01T00:00:00Z");
+  const d2 = parseAs(cli(root, LOGIN, "--json").stdout, isScreenResult, "design-diff --json");
+  const f1 = d1.changed[0]?.fields[0], f2 = d2.changed[0]?.fields[0];
+  return s1.status === 0 && s2.status === 0 && !/refusing/.test(s2.stderr) && (s2.stdout.match(/replaced/g) ?? []).length === 3
+    && f1?.before === "v1" && f1?.after === "v2" && d2.changed.length === 1 && f2?.before === "v2" && f2?.after === "v3" && !d2.warned;
+})());
+check("…but a snapshot whose export was re-pulled AGAIN after the diff still refuses without --force (that copy is the only older one)", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  cli(root, "--snapshot", LOGIN);
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  cli(root, LOGIN);
+  putScreen(root, "v3", "2026-03-01T00:00:00Z"); // re-pulled before step 2
+  const s2 = cli(root, "--snapshot", LOGIN);
+  return s2.status === 1 && /refusing to overwrite/.test(s2.stderr) && !/index\.json ->/.test(s2.stdout);
+})());
+check("…and a new snapshot is unspent: its old spent mark does not carry over (a --force snapshot, then the export reverts to the diffed bytes)", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  cli(root, "--snapshot", LOGIN);
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  cli(root, LOGIN); // spends the v1 snapshot against v2
+  const v2 = fs.readFileSync(path.join(root, LOGIN));
+  putScreen(root, "v3", "2026-03-01T00:00:00Z");
+  cli(root, "--snapshot", "--force", LOGIN); // the snapshot is now v3, never diffed
+  fs.writeFileSync(path.join(root, LOGIN), v2);
+  const s = cli(root, "--snapshot", LOGIN);
+  return s.status === 1 && /refusing to overwrite/.test(s.stderr);
+})());
+check("…and a --against diff does not spend the snapshot", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  cli(root, "--snapshot", LOGIN);
+  fs.copyFileSync(path.join(root, LOGIN), path.join(root, "old.json"));
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  cli(root, LOGIN, "--against", "old.json");
+  const s2 = cli(root, "--snapshot", LOGIN);
+  return s2.status === 1 && /refusing to overwrite/.test(s2.stderr);
+})());
+check("an export directory synced twice: the 2nd report lists only the 2nd change, not the 1st again", (() => {
+  const { root, exp } = dirProject();
+  cli(root, "--snapshot", exp);
+  rewrite(root, path.join(exp, "design-system", "tokens.json"), (d) => { d.exportedAt = "2026-02-01T00:00:00Z"; d.variables = [variable({ name: "space/md", type: "FLOAT", values: { M: 20 } })]; });
+  rewrite(root, path.join(exp, "design-system", "styles.text.json"), (d) => { d.exportedAt = "2026-02-01T00:00:00Z"; d.styles = []; });
+  const first = cli(root, exp).stdout;
+  const s2 = cli(root, "--snapshot", exp);
+  rewrite(root, path.join(exp, "design-system", "tokens.json"), (d) => { d.exportedAt = "2026-03-01T00:00:00Z"; d.variables = [variable({ name: "space/md", type: "FLOAT", values: { M: 24 } })]; });
+  rewrite(root, path.join(exp, "design-system", "styles.text.json"), (d) => { d.exportedAt = "2026-03-01T00:00:00Z"; });
+  const second = cli(root, exp).stdout;
+  return /M: 16 → 20/.test(first) && /Styles removed/.test(first) && s2.status === 0 && !/refusing/.test(s2.stderr)
+    && /M: 20 → 24/.test(second) && !/16/.test(second) && !/Styles removed/.test(second) && /^Nothing changed: .*styles\.text\.json/m.test(second);
+})());
+
+console.log("CLI — an export directory, edges:");
+check("a set member in the snapshot that left the export is 'Not compared', not dropped", (() => {
+  const { root, exp } = dirProject();
+  cli(root, "--snapshot", exp);
+  fs.rmSync(path.join(root, exp, "design-system", "hygiene.json"));
+  const r = cli(root, exp);
+  return r.status === 0 && /^- `[^`]*hygiene\.json`: in the snapshot, no longer in the export$/m.test(r.stdout);
+})());
+check("LIBRARY_FILE_NAMES is exactly the file set buildLibraryLayout writes", (() => {
+  const names = buildLibraryLayout({ file: "Lib", source: { role: "library", libraryName: "Lib", fileKey: "abcdefgh123" } }, "/").files.map((f) => path.basename(f.path));
+  return JSON.stringify(names) === JSON.stringify(LIBRARY_FILE_NAMES);
+})());
+check("an --as-library export (libraries/<dir>/) is part of the export directory's set — snapshotted and diffed; libraries/index.json is not", (() => {
+  const { root, exp } = dirProject();
+  const lib = path.join(root, exp, "libraries", "lib-abcdefgh");
+  fs.mkdirSync(lib, { recursive: true });
+  fs.writeFileSync(path.join(lib, "tokens.json"), JSON.stringify(tokens({ exportedAt: "2026-01-01T00:00:00Z", variables: [{ name: "radius", type: "FLOAT", values: { M: 4 } }] })));
+  fs.writeFileSync(path.join(root, exp, "libraries", "index.json"), JSON.stringify({ libraries: [], generatedAt: "x" }));
+  const s = cli(root, "--snapshot", exp);
+  rewrite(root, path.join(exp, "libraries", "lib-abcdefgh", "tokens.json"), (d) => { d.exportedAt = "2026-02-01T00:00:00Z"; d.variables = [variable({ name: "radius", type: "FLOAT", values: { M: 8 } })]; });
+  const r = cli(root, exp);
+  return s.status === 0 && fs.existsSync(path.join(root, "design", ".sync", "export__libraries__lib-abcdefgh__tokens.json")) && !/libraries[\\/]index\.json/.test(s.stdout)
+    && r.status === 0 && /^## What changed — .*lib-abcdefgh[\\/]tokens\.json vs /m.test(r.stdout) && /M: 4 → 8/.test(r.stdout);
+})());
+check("the report has no doubled blank lines, and files unchanged against git HEAD (each snapshot the same export) fold into one line", (() => {
+  const { root, exp } = dirProject();
+  git(root, "init", "-q"); git(root, "add", "-A"); git(root, "commit", "-qm", "v1");
+  for (const f of ["tokens.json", "hygiene.json"]) rewrite(root, path.join(exp, "design-system", f), (d) => { d.exportedAt = "2026-02-01T00:00:00Z"; });
+  rewrite(root, path.join(exp, "variables.json"), (d) => { d.exportedAt = "2026-02-01T00:00:00Z"; d.variables = [variable({ name: "brand", type: "COLOR", values: { Light: "#222222" } })]; });
+  cli(root, "--snapshot", exp); // taken AFTER the re-pull
+  const md = cli(root, exp).stdout;
+  return !/\n\n\n/.test(md) && /^Nothing changed against an older copy .*tokens\.json` \(vs git HEAD\), `[^`]*hygiene\.json` \(vs git HEAD\)\.$/m.test(md)
+    && (md.match(/^## What changed — /gm) ?? []).length === 1 && /#111111 → #222222/.test(md);
 })());
 
 report();

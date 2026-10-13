@@ -65,39 +65,23 @@ writes the real path here, not there).
 
 2. **Snapshot before anything is re-pulled.** A pull overwrites the export in place, and after that
    there is nothing left to compare against:
-   Snapshot whichever of these this project actually has — a screen-only project has no
-   `design-system/`, and `--snapshot` skips a file that isn't there with a one-line note rather than
-   failing:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" --snapshot \
-     design/export/pages/<Page>/<Screen>__<id>.json \
-     design/export/variables.json \
-     design/export/design-system.json \
-     design/export/design-system/tokens.json \
-     design/export/design-system/styles.paint.json \
-     design/export/design-system/styles.text.json \
-     design/export/design-system/styles.effect.json \
-     design/export/design-system/styles.grid.json \
-     design/export/design-system/components.local.json \
-     design/export/design-system/components.library.json \
-     design/export/design-system/hygiene.json
+     design/export/pages/<Page>/<Screen>__<id>.json design/export
    ```
-   That is all **nine** files a `--design-system` pull rewrites — the slim `design-system.json`
-   manifest at the export root, plus the eight files under `design-system/` — plus the screen and the
-   merged `variables.json`. A design system
-   re-pull that only changed `styles.text.json` (a typography change) or `hygiene.json` (a new quality
-   warning) is otherwise undetectable by this skill: with only `tokens.json`/`components.local.json`
-   snapshotted, nothing has a prior version to diff against. (Passing `design-system.json` prints a few
-   harmless `not found` lines for filenames it assumes live beside it — a known quirk, not a sign
-   anything is missing; every real file above still lands.)
+   The screen file brings its `.vars.json`, `.assets.json` and `pages/index.json` with it; the export
+   directory `design/export` stands for the merged `variables.json`, every design-system file a
+   `--design-system` pull rewrites (the `design-system.json` manifest and the eight files under
+   `design-system/`) and every `--as-library` export under `libraries/` — whichever of them this
+   project has. A typography-only or hygiene-only design
+   system change is only detectable if those files were snapshotted too, which is why the directory,
+   not a hand-picked file or two, is passed.
    Each copy lands in **`design/.sync/`** (a working directory this skill owns — see
    `design/README.md`), named after the file's path RELATIVE TO `design/` with every `/` folded to
    `__` — so `design/export/pages/<Page>/<Screen>__<id>.json` becomes
    `export__pages__<Page>__<Screen>__<id>.json`, not `pages__<Page>__<Screen>__<id>.json` — plus a
    `.assets.json` sidecar of asset content hashes beside it. It is **not** part of the Figma-owned
    export under `design/export/`, and a re-pull never touches it.
-   `design/export/variables.json` is the one to include on a `--node`-only project: it is the union of
-   every screen's tokens and diffs exactly like `tokens.json`.
    (It also records a hash per asset, which is how a re-drawn icon under an unchanged node id gets
    noticed — Figma's own SVG export has ≤0.01px of re-export noise, which the diff already tolerates,
    so a redrawn-icon warning here means the pixels genuinely moved.) If the user already re-pulled, skip this — the diff falls back to the copy in git `HEAD`
@@ -105,12 +89,12 @@ writes the real path here, not there).
    ignored rather than reported as "nothing changed". If it is neither snapshotted nor committed, say so plainly: the change list
    can't be computed, and the choices are an older copy passed with `--against`, or a careful manual
    comparison of the code against the new export. Only a computed diff is presented as a diff.
-   **Running this step twice does not destroy the first baseline**: `--snapshot` refuses to replace an
-   existing, DIFFERENT copy in `design/.sync/` unless you pass `--force` (which keeps the old one as
-   `<name>.prev`) — a snapshot identical to what's already there is a silent no-op. So re-running step 2
-   before a second, later re-pull is always safe; it is re-running it a second time for the SAME
-   re-pull (after step 3 already ran) that would need `--force`, and that almost never makes sense —
-   don't do it.
+   **The next sync just runs this step again**: once step 4 has diffed against a snapshot, that
+   snapshot is spent, and `--snapshot` replaces it (keeping the old one as `<name>.prev`) as long as
+   the export is still the one step 4 compared. A snapshot no diff has used yet — or one whose export
+   was re-pulled again since — is refused with exit 1 rather than replaced: it is the only copy older
+   than the export on disk. Do not reach for `--force` then; run step 4 first. An identical snapshot is a
+   silent no-op.
 
 3. **Re-pull the same scope**, not the whole file — `dtwin pull --node <root id>` (or
    `mcp__designtwin__figma_export_url` with `writeToDisk: true`). **Before re-pulling, prefer a running
@@ -122,7 +106,7 @@ writes the real path here, not there).
    re-pull a narrower scope rather than acting on those removals).
 
    **Also re-pull the design system when tokens, styles or components may have changed** —
-   `dtwin pull --design-system` writes all nine files snapshotted in step 2. **The design system
+   `dtwin pull --design-system` rewrites the design-system files snapshotted in step 2. **The design system
    almost always lives in a DIFFERENT Figma file than the screen** (a library file the screen's file
    only consumes), so this is not the same re-pull with a flag added: it needs that OTHER file open
    in Figma, connected, and named explicitly —
@@ -135,21 +119,18 @@ writes the real path here, not there).
    re-pull only when you have already confirmed nothing token/style/component-shaped changed.
 
 4. **Diff, and show it before editing.**
-   Run one per file you snapshotted — skip the ones this project doesn't have:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/pages/<Page>/<Screen>__<id>.json --out design/sync/<screen>.md
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/variables.json --out design/sync/variables.md
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/design-system/tokens.json --out design/sync/tokens.md
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/design-system/styles.text.json --out design/sync/styles-text.md
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/design-system/styles.effect.json --out design/sync/styles-effect.md
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/design-system/styles.paint.json --out design/sync/styles-paint.md
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/design-system/styles.grid.json --out design/sync/styles-grid.md
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/design-system/components.local.json --out design/sync/components.md
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/design-system/components.library.json --out design/sync/components-library.md
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/design-system/hygiene.json --out design/sync/hygiene.md
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/pages/<Page>/<Screen>__<id>.json --out design/changes/<screen>.md
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export --out design/changes/<screen>-shared.md
    ```
-   Only run the design-system rows when step 3 actually re-pulled the design system.
-   **Read any `Warning:` at the top of a report first** — it says when the baseline was not what you
+   The second is one report for `variables.json` and every design-system file: a section per file that
+   changed, one line for those that did not, and a **Not compared** list with the reason for each of
+   the rest: no older copy; not re-pulled since the snapshot (expected for the design-system files
+   when step 3 did not re-pull the design system); in the snapshot but no longer in the export; or
+   unreadable — that one exits 2 with the report still written, so read it before trusting the rest.
+   A project with no `variables.json`, `design-system/` or `libraries/` has nothing for the second
+   command (it exits 2 saying so): skip it.
+   **Read any `Warning:` at the top of a report (or of a file's section) first** — it says when the baseline was not what you
    assumed (snapshot taken after the re-pull, only one export to compare, a truncated re-pull), and
    a change list built on the wrong baseline is worse than none.
    A warning (or report line) that nodes "differ only by the exporter's format" after a plugin update is
@@ -208,7 +189,7 @@ writes the real path here, not there).
      - *reordered* — move the elements; check focus/tab order still follows the visual order.
    - **Keep the plan true:** update `files[]` and `anchors{}` if files or sections were added, moved
      or removed, and append the applied
-     changes to a `syncs[]` array (`{date, summary, diff:"design/sync/<screen>.md"}`) so the next
+     changes to a `syncs[]` array (`{date, summary, diff:["design/changes/<screen>.md", "design/changes/<screen>-shared.md"]}`) so the next
      sync — and the next reader — can see what happened.
    - **Verify the touched regions** per build-screen's `references/verify.md` (table above) against the new reference image, then
      record `verification` in the plan as build-screen's `references/hook-and-status.md` describes (table above). A patch that was not
