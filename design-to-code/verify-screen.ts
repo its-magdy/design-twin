@@ -55,6 +55,7 @@ import { ifDefined } from "../bridge/src/json-util.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
+import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
 import { TEXT_BOX_HEIGHT, fmt, resolveInside, samePlanFile, scaleText } from "./verify-shared.ts";
 import type { ChosenPlan } from "./verify-shared.ts";
 import { buildExpectation } from "./verify-expect.ts";
@@ -111,7 +112,7 @@ function plansFor(frameId: string | undefined, stem: string): Array<{ file: stri
     // a plan under design/plan/ (plan-skeleton.ts); one that is not a readable plan describes nothing
     const p = readJsonOrNull(path.join(PLAN_DIR, f), isPlan);
     if (!p) continue;
-    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path.basename(f, ".json")));
+    const byId = frameId && (p.nodeId === frameId || nodeIdFromStem(path.basename(f, ".json")) === frameId);
     const byName = path.basename(f, ".json") === stem || (p.file && path.basename(String(p.file), ".json") === stem);
     if (byId || byName) hits.push({ file: path.join(PLAN_DIR, f).split(path.sep).join("/"), plan: p });
   }

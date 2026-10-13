@@ -778,6 +778,61 @@ console.log("verify-probe — tag-alias, display, rings, foreign tags:");
   t("… and adds neither key (no null to explain) when the page read no stroke", () => noStroke !== null && noStroke.styles !== undefined && !("strokeFrom" in noStroke.styles) && !("strokeAlign" in noStroke.styles));
 }
 
+// ---------------------------------------------------------------- --position matching (collectCandidates, stand-in document)
+console.log("verify-probe — --position matching:");
+{
+  // A stand-in document (the e2e suite runs collectCandidates in a real chromium): the page is scrolled 50px down, so a
+  // page box is its viewport rect + 50 in y; every getBoundingClientRect call is counted.
+  let reads = 0;
+  const SCROLL_Y = 50;
+  interface FakeEl {
+    tagName: string; parentElement: FakeEl | null; children: FakeEl[]; childNodes: never[];
+    getBoundingClientRect(): { x: number; y: number; width: number; height: number };
+    getClientRects(): unknown[]; getAttribute(): null; checkVisibility(): boolean; closest(): null;
+    contains(o: FakeEl): boolean; querySelectorAll(): FakeEl[];
+  }
+  const descendants = (e: FakeEl): FakeEl[] => e.children.flatMap((c) => [c, ...descendants(c)]);
+  const mk = (tag: string, box: { x: number; y: number; w: number; h: number }, kids: FakeEl[] = []): FakeEl => {
+    const el: FakeEl = {
+      tagName: tag, parentElement: null, children: kids, childNodes: [],
+      getBoundingClientRect: () => { reads++; return { x: box.x, y: box.y - SCROLL_Y, width: box.w, height: box.h }; },
+      getClientRects: () => [{}], getAttribute: () => null, checkVisibility: () => true, closest: () => null,
+      contains: (o) => o === el || descendants(el).includes(o),
+      querySelectorAll: () => descendants(el),
+    };
+    for (const k of kids) k.parentElement = el;
+    return el;
+  };
+  const inner = mk("SPAN", { x: 10, y: 10, w: 200, h: 100 });
+  const outer = mk("DIV", { x: 10, y: 10, w: 200, h: 100 }, [inner]);
+  const near2 = mk("P", { x: 302, y: 22, w: 48, h: 52 });
+  const exact = mk("P", { x: 300, y: 20, w: 50, h: 50 });
+  // one edge 3px off each (x, y, w, h): no hit
+  const offX = mk("P", { x: 303, y: 20, w: 50, h: 50 });
+  const offY = mk("P", { x: 300, y: 23, w: 50, h: 50 });
+  const offW = mk("P", { x: 300, y: 20, w: 53, h: 50 });
+  const offH = mk("P", { x: 300, y: 20, w: 50, h: 47 });
+  const body = mk("BODY", { x: 0, y: 0, w: 1000, h: 2000 }, [outer, near2, exact, offX, offY, offW, offH]);
+  const html = mk("HTML", { x: 0, y: 0, w: 1000, h: 2000 }, [body]);
+  Object.assign(globalThis, { document: { body, documentElement: html, querySelectorAll: () => [] }, scrollX: 0, scrollY: SCROLL_Y, innerWidth: 1000, innerHeight: 800 });
+  const run = (positions: Array<{ nodeId: string; x: number; y: number; w: number; h: number }>): CollectOutput["positions"] | null => {
+    reads = 0;
+    try { return PP.collectCandidates({ frames: [], texts: [], positions }).positions; } catch { return null; }
+  };
+  const got = run([{ nodeId: "a", x: 10, y: 10, w: 200, h: 100 }, { nodeId: "b", x: 300, y: 20, w: 50, h: 50 }, { nodeId: "c", x: 0, y: 0, w: 1, h: 1 }]);
+  const readsAll = reads;
+  const paths = (k: string): string[] | null => got?.[k]?.map((c) => c.path) ?? null;
+  t("a box two elements share (a wrapper and its only child): the innermost only, its rect in page coordinates", () =>
+    JSON.stringify(paths("a")) === JSON.stringify(["html > body:nth-child(1) > div:nth-child(1) > span:nth-child(1)"]) && got?.a?.[0]?.rect.y === 10);
+  t("±2px on every edge is a hit (inclusive), 3px off in x, y, width or height is not; the hits keep document order", () =>
+    JSON.stringify(paths("b")) === JSON.stringify(["html > body:nth-child(1) > p:nth-child(2)", "html > body:nth-child(1) > p:nth-child(3)"]));
+  t("a box nothing lies at → no hits; every position id is a key, in input order", () => JSON.stringify(paths("c")) === "[]" && got !== null && Object.keys(got).join() === "a,b,c");
+  // 9 elements from <body> down: each rect read once for the matching, plus once per hit's own candidate (3 hits)
+  t("each element's rect is read once for all positions (9 + 3 = 12 reads, not 3 × 9 + 3)", () => readsAll === 12);
+  t("no positions → no rect read at all", () => { const none = run([]); return none !== null && Object.keys(none).length === 0 && reads === 0; });
+  Object.assign(globalThis, { scrollY: 0 });
+}
+
 // ---------------------------------------------------------------- owner hover, paintedBy / textTransform
 console.log("verify-probe — owner hover, paintedBy, textTransform:");
 {

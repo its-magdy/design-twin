@@ -27,7 +27,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { check as ok, report } from "./assert.ts";
-import { deriveTitle, collectTexts } from "../bridge/src/pages-layout.ts";
+import { buildPageLayout, collectTexts, deriveTitle, nodeIdFromSafe, nodeIdFromStem, safe, screenPaths } from "../bridge/src/pages-layout.ts";
 import { listPlans } from "../bridge/src/project-layout.ts";
 import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import type { ResolveScreenResult, PagesRootIndex } from "../design-to-code/types.ts";
@@ -359,6 +359,54 @@ console.log("\nresolve-screen — a non-root dir says so; <Layer>__<a>_<b> basen
     r.status === "resolved" && r.row.id === "7:8" && r.stage === "exact layer name");
   const b = resolveScreen(dir, "Home__1_2");
   ok("control: a basename no layer is named still resolves by its id", b.status === "resolved" && b.row.id === "1:2" && b.stage === "node id");
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ---------- the stem -> node id inverse of the writers' safe() naming ----------
+console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names the writers produce, instance sublayers included:");
+{
+  // Every id shape a pull can file under, named by the writers themselves (screenPaths for a --node/--selection
+  // pull, buildPageLayout for a page sweep), reads back to the id it was named from.
+  const IDS = ["12:34", "0:1", "7314:87192", "I12:34;56:78", "I1:2;3:4;5:6", "I20173:137670;72:3148"];
+  for (const id of IDS) {
+    const sp = screenPaths({ screenName: "Odd  name / ü_", page: "P", nodeId: id }, "/");
+    const pl = buildPageLayout({ layers: [{ name: "Odd  name / ü_", id, page: "P", pageId: "0:1", tree: { id, name: "x", type: "FRAME" } }], index: [{ name: "x", id }] }, "/");
+    const layerStem = path.basename(must(pl.layerFiles[0], "a layer file").path, ".json");
+    ok(`[stem] ${id}: screenPaths' base (${sp.base}) and the page layout's file stem (${layerStem}) both read back as ${id}`,
+      nodeIdFromStem(sp.base) === id && nodeIdFromStem(layerStem) === id && nodeIdFromSafe(safe(id)) === id);
+  }
+  const table: Array<[string, string | null]> = [
+    ["Foo__12_34", "12:34"], ["Foo____12_34", "12:34"], ["a__b__12_34", "12:34"], ["__12_34", "12:34"],
+    ["Foo__I12_34_56_78", "I12:34;56:78"], ["Foo___I12_34_56_78", "I12:34;56:78"],
+    // shapes safe() never makes of a Figma id: a lone "I" pair, an odd number count, several pairs without "I"
+    ["Foo__I12_34", null], ["Foo__I12_34_56", null], ["Foo__12_34_56_78", null], ["Foo__12", null], ["Foo__i12_34_56_78", null],
+    ["Foo_12_34", null], ["Foo", null], ["", null], ["Foo__12_34x", null], ["Foo__12_34_", null], ["Foo__12_34.json", null],
+  ];
+  const bad = table.filter(([s, want]) => nodeIdFromStem(s) !== want).map(([s, want]) => `${s}: want ${want}, got ${nodeIdFromStem(s)}`);
+  ok(`[stem] the stem table reads back as expected (wrong: ${JSON.stringify(bad)})`, bad.length === 0);
+  ok("[stem] a non-string reads as no id", nodeIdFromStem(undefined) === null && nodeIdFromStem(null) === null);
+
+  // A --node pull of a layer inside an instance files as `<Name>__I<a>_<b>_<c>_<d>.json`; that basename (or a
+  // path to it, with any tail) resolves to the row by its id.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rs-instance-"));
+  fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [
+    { name: "Chip", id: "I5:2;30:7", type: "INSTANCE", page: "P", file: "pages/P/Chip__I5_2_30_7.json" },
+    { name: "Chip", id: "5:2", type: "FRAME", page: "P", file: "pages/P/Chip__5_2.json" },
+  ] }));
+  const idOf = (q: string): string | null => { const r = resolveScreen(dir, q); return r.status === "resolved" && r.stage === "node id" ? r.row.id : null; };
+  ok("[stem] an instance sublayer's basename resolves by its id", idOf("Chip__I5_2_30_7") === "I5:2;30:7");
+  ok("[stem] …and so does a path to its .json / a .vars.json tail",
+    idOf("pages/P/Chip__I5_2_30_7.json") === "I5:2;30:7" && idOf("Chip__I5_2_30_7.vars.json") === "I5:2;30:7");
+  ok("[stem] control: the plain id beside it still resolves to its own row", idOf("Chip__5_2.json") === "5:2");
+  // The same id typed in colon form is stage 1; its dash and link forms (";" literal or %3B) are carried ids.
+  ok("[id] a typed instance-sublayer id 'I5:2;30:7' resolves", idOf("I5:2;30:7") === "I5:2;30:7");
+  ok("[id] its dash form 'I5-2;30-7' (and with ';' encoded) resolves", idOf("I5-2;30-7") === "I5:2;30:7" && idOf("I5-2%3B30-7") === "I5:2;30:7");
+  ok("[id] a link carrying it (?node-id=I5-2;30-7 / I5-2%3B30-7) resolves",
+    idOf("https://www.figma.com/design/KEY/Name?node-id=I5-2;30-7") === "I5:2;30:7" && idOf("https://www.figma.com/design/KEY/Name?node-id=I5-2%3B30-7&t=x") === "I5:2;30:7");
+  ok("[id] control: a typed / linked plain id still resolves to its own row",
+    idOf("5:2") === "5:2" && idOf("https://www.figma.com/design/KEY/Name?node-id=5-2") === "5:2");
+  ok("[id] an instance id no row has is not found (never a fuzzy pick)", resolveScreen(dir, "I5:2;30:8").status === "not-found");
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

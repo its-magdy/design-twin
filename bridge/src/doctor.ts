@@ -601,4 +601,4 @@ async function main(argv: string[]): Promise<void> {
   process.exitCode = report.ok ? 0 : 1;
 }
 
-export { ALLOWED_PORTS, checkNode, checkToken, checkDaemon, resolvePort, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };
+export { checkNode, checkToken, checkDaemon, resolvePort, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };

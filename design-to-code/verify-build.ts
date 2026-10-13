@@ -65,6 +65,7 @@ import { alnumKey, getOrInit } from "./map-util.ts";
 import { writePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { DESIGN_DIR, EXPORT_DIR, LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
+import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Screen>__<id>` stem (the exporter's own file naming)
 
 // ================================================================ input / timeouts
 
@@ -178,14 +179,13 @@ function fileHashes(plan: Plan | null | undefined, cwd: string, cached?: CachedB
   return contentHash.fileHashes(contentHash.planCodeFiles(plan || {}, cwd), cwd, cached); // the same hashes verify-screen --compare records
 }
 
-// The plan's own content, minus what the hook writes and what is not the plan's substance: status, the owner's
+// contentHash.planHash is the plan's own content, minus what the hook writes and what is not the plan's substance: status, the owner's
 // waivers[]/descopes[] (accepting a delta must not send the hook back to pending; a report records their hash instead,
 // inputs.waivers.sha256, and reportVerdict() compares that) and all of `verification` (every
 // verification check is a warning, so the hook result never depends on it; --compare --record-plan writes it).
-const planHash = (plan: Plan | null | undefined): string => contentHash.planHash(plan);
 // A hook record written under the older formula (verification minus hook) is still accepted, so no plan
 // reopens on upgrade. The hook's next write records the new one.
-const hookHashMatches = (hook: PlanHookRecord, plan: Plan): boolean => hook.planHash === planHash(plan) || hook.planHash === contentHash.legacyPlanHash(plan);
+const hookHashMatches = (hook: PlanHookRecord, plan: Plan): boolean => hook.planHash === contentHash.planHash(plan) || hook.planHash === contentHash.legacyPlanHash(plan);
 
 // The hook record against the files now: `changed` reopens the plan (stale); `unhashed` does not. A key the record never
 // hashed is a change when it is a files[] entry ("added to files[]"); a MAPPED module the record never hashed (a hook
@@ -421,9 +421,6 @@ function exportDirOf(cwd: string): string {
   return fs.existsSync(path.join(e, "pages")) ? e : path.join(cwd, DESIGN_DIR); // pre-split projects
 }
 
-// Node id from a `<Screen>__<a>_<b>` stem (the exporter's own file naming).
-const idFromStem = (s: unknown): string | null => { const m = /__(I?\d+)_(\d+)$/.exec(String(s || "")); return m ? `${m[1]}:${m[2]}` : null; };
-
 function indexRows(exportDir: string): IndexRow[] {
   const root = readJsonOrNull(path.join(exportDir, "pages", "index.json"), isPagesRootIndex);
   if (!root) return [];
@@ -454,7 +451,7 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
   const rows = indexRows(exportDir);
-  const ids = [plan.nodeId, idFromStem(plan.screen), planFile ? idFromStem(path.basename(planFile, ".json")) : null].filter((id): id is string => !!id);
+  const ids = [plan.nodeId, nodeIdFromStem(plan.screen), planFile ? nodeIdFromStem(path.basename(planFile, ".json")) : null].filter((id): id is string => !!id);
   let row: IndexRow | null = null;
   for (const id of ids) { row = rows.find((r) => r.id === id) || null; if (row) break; }
   if (!hit && row) hit = tryFile(row.file);
@@ -1257,7 +1254,7 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     planFile ? path.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null,
   ].filter((s): s is string => !!s));
-  const nodeId = plan.nodeId || (e && e.nodeId) || idFromStem(plan.screen) || (planFile ? idFromStem(path.basename(planFile, ".json")) : null);
+  const nodeId = plan.nodeId || (e && e.nodeId) || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path.basename(planFile, ".json")) : null);
   const layer = e ? e.layerName.trim() : null;
   const out: ReportRef[] = [];
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
@@ -1272,7 +1269,7 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     // Only the expectation's frame.nodeId is read here, so only that is required of the file.
     const expFrame = (): string | null => { const x = readJsonOrNull(expFile, isJsonObject); return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null; };
     if (stems.has(stem)) by = "name";
-    else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
+    else if (nodeId && (r.nodeId === nodeId || nodeIdFromStem(stem) === nodeId)) by = "nodeId";
     else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
@@ -1632,7 +1629,7 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
     checkedAt: new Date().toISOString(),
     blocking,
     warnings: warnings.length,
-    planHash: planHash(plan),
+    planHash: contentHash.planHash(plan),
     files: fileHashes(plan, cwd, cached),
     ...(tagCoverage ? { tagCoverage } : {}),
   };
@@ -1749,7 +1746,7 @@ async function main(argv: string[]): Promise<number> {
 export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
   verificationWarnings, recordedReportWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
-  colorLiterals, arbitraryPx, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
+  colorLiterals, arbitraryPx, colorKey, isStale, isOpen, fileHashes, readHookInput, main, USAGE,
   forEachLine, mayHoldToolUse, transcriptActions, buildGraph,
 };
 

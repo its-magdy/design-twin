@@ -2,7 +2,7 @@
 // pure, test-driven helpers (figma-pull.ts formatClients) and doctor.ts can use them WITHOUT loading
 // server-core, whose module load resolves the bridge token and exits the process on a bad
 // FIGMA_BRIDGE_PORT. This module's only load-time effect is reading bridge/package.json for
-// BRIDGE_VERSION. server-core.ts re-exports all three public names, so its surface is unchanged.
+// BRIDGE_VERSION. Every caller, server-core.ts included, imports the three public names from here.
 import fs from "node:fs";
 
 // The plugin reports a version so that a stale bundle in Figma (several fixes live only in

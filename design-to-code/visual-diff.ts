@@ -33,11 +33,8 @@
 // What is ours (NOT pixelmatch): the shift tolerance (a differing pixel whose colour each image has within `shiftPx` device px
 // of it is "absorbed" — a 1-CSS-px layout shift or a glyph placed a pixel over is not a region), the hot cells and regions, the
 // attribution to node ids, and the diff image.
-import { crop, resampleBox } from "./png.ts";
-import type { Rgba } from "./png.ts";
+import type { Rgba } from "../bridge/src/png.ts";
 import type { Rect4, VisualRegion } from "./types.ts";
-
-export { crop, resampleBox };
 
 // ---------------------------------------------------------------- pixelmatch v6.0.0 (ported verbatim, typed)
 const rgb2y = (r: number, g: number, b: number): number => r * 0.29889531 + g * 0.58662247 + b * 0.11448223;

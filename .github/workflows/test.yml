@@ -61,8 +61,9 @@ jobs:
         run: npm ci
 
       # Every leg runs browser suites (the probe e2e ones, and in `fast` verify-probe, verify-values, verify-own-pixels and
-      # the visual e2e); locally they skip when no browser is installed, in CI they must run (D3).
-      # https://playwright.dev/docs/ci — in the background, overlapping the checks below; its failure fails the `wait`.
+      # the visual e2e); locally they skip when no browser is installed, in CI they must run.
+      # https://playwright.dev/docs/ci — in the background, overlapping the checks below; its failure fails the `wait`. Not
+      # cached: that page advises against it (restoring takes about as long as downloading).
       - name: Install Playwright's chromium
         id: chromium
         background: true
@@ -81,10 +82,10 @@ jobs:
           npm run build
           git diff --exit-code -- figma-plugin/code.js claude-plugin/scripts
 
-      # The suites run the bridge from src/; smoke the tsc-emitted tree the npm package ships.
+      # The suites run the bridge from src/; smoke the tsc-emitted tree the npm package ships (`npm run build` above emitted it).
       - name: Emitted bridge runs
         if: matrix.leg == 'fast'
-        run: npm run build --workspace bridge && node bridge/dist/figma-pull.js --help && node bridge/dist/figma-pull.js --version
+        run: node bridge/dist/figma-pull.js --help && node bridge/dist/figma-pull.js --version
 
       - wait: chromium
 

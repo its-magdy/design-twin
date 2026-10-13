@@ -27,10 +27,9 @@ export type DocGuard<T> = ((x: unknown) => x is T) & { expected?: string };
 function optArrayOf<T>(x: unknown, each: (e: unknown) => e is T): x is T[] | undefined {
   return x === undefined || (Array.isArray(x) && x.every(each));
 }
-const isObj = isJsonObject;
-const optObj = (x: unknown): boolean => x === undefined || isObj(x);
+const optObj = (x: unknown): boolean => x === undefined || isJsonObject(x);
 const optStr = (x: unknown): boolean => x === undefined || typeof x === "string";
-const anyObject = (x: unknown): x is object => isObj(x);
+const anyObject = (x: unknown): x is object => isJsonObject(x);
 
 // ---------------------------------------------------------------- tokens.json / variables.json / <Screen>.vars.json
 /** A variable value that points at another variable: `{ aliasOf: "<name>" }`. */
@@ -49,45 +48,45 @@ export const isComposed = (v: unknown): v is VariableComposedColor => {
 /** A number written as text ("40", "-5", "12.5") — a string-number FLOAT value. */
 export const NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function isVariable(x: unknown): x is Variable {
-  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
+  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection);
 }
 function isVariableCollection(x: unknown): x is VariableCollection {
-  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
+  return isJsonObject(x) && typeof x.name === "string" && isStringArray(x.modes);
 }
 /** design-system/tokens.json, the merged variables.json, a <Screen>.vars.json slice. Every array optional. */
 export function isTokensDoc(x: unknown): x is TokensDoc {
-  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection)
+  return isJsonObject(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection)
     && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === undefined || isStringArray(x.hygiene));
 }
 isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
 
 // ---------------------------------------------------------------- components.local.json / components.library.json
 function isCatalogComponent(x: unknown): x is CatalogComponent {
-  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+  return isJsonObject(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
 }
 export function isComponentsCatalog(x: unknown): x is ComponentsCatalog {
-  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+  return isJsonObject(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
 }
 isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
 
 /** design-system/components/<name>__<id>.json */
 export function isComponentDetailFile(x: unknown): x is ComponentDetailFile {
-  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+  return isJsonObject(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
 }
 isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
 
 /** design-system/styles.text.json */
 export function isTextStylesDoc(x: unknown): x is TextStylesDoc {
-  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
+  return isJsonObject(x) && Array.isArray(x.styles) && x.styles.every((s) => isJsonObject(s) && typeof s.name === "string");
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, …}";
 
 // ---------------------------------------------------------------- <Screen>.assets.json (write-out.ts writeScreenAssets)
 export function isScreenAssetsDoc(x: unknown): x is ScreenAssetsDoc {
-  return isObj(x)
-    && optArrayOf(x.heavy, (h): h is { file: string; bytes: number } => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number"
+  return isJsonObject(x)
+    && optArrayOf(x.heavy, (h): h is { file: string; bytes: number } => isJsonObject(h) && typeof h.file === "string" && typeof h.bytes === "number"
       && (h.paths === undefined || typeof h.paths === "number") && (h.embeddedRaster === undefined || typeof h.embeddedRaster === "number"))
-    && optArrayOf(x.files, (f): f is { file: string } => isObj(f) && typeof f.file === "string" && optStr(f.node));
+    && optArrayOf(x.files, (f): f is { file: string } => isJsonObject(f) && typeof f.file === "string" && optStr(f.node));
 }
 isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
 
@@ -95,28 +94,28 @@ isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` (
 /** The two fields of one libraries/index.json row the audit reads. */
 export interface LibrariesIndexEntry { dir: string; libraryName?: string; collectionKeys?: string[] }
 export function isLibrariesIndex(x: unknown): x is { libraries: LibrariesIndexEntry[] } {
-  return isObj(x) && Array.isArray(x.libraries)
-    && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === undefined || isStringArray(r.collectionKeys)));
+  return isJsonObject(x) && Array.isArray(x.libraries)
+    && x.libraries.every((r) => isJsonObject(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === undefined || isStringArray(r.collectionKeys)));
 }
 isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
 
 // ---------------------------------------------------------------- design/audit/<screen>.overrides.json
 const SEVERITIES = ["blocker", "warning", "info"];
 export function isAuditOverridesDoc(x: unknown): x is AuditOverridesDoc {
-  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity)
+  return isJsonObject(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isJsonObject(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity)
     && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
 }
 isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
 
 // ---------------------------------------------------------------- design/audit/<screen>.json
 export function isAuditReport(x: unknown): x is AuditReport {
-  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
+  return isJsonObject(x) && isJsonObject(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isJsonObject(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
 isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 
 // ---------------------------------------------------------------- cross-check / audit report: componentProposals[]
 function isProposal(x: unknown): x is ComponentProposal {
-  return isObj(x) && typeof x.name === "string";
+  return isJsonObject(x) && typeof x.name === "string";
 }
 export function isProposalList(x: unknown): x is ComponentProposal[] {
   return Array.isArray(x) && x.every(isProposal);
@@ -125,53 +124,53 @@ isProposalList.expected = "a list of component proposals: an array of {name, cat
 
 // ---------------------------------------------------------------- pages/index.json, pages/<Page>/index.json
 function isIndexRowLike(x: unknown): boolean {
-  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
+  return isJsonObject(x) && typeof x.id === "string" && typeof x.name === "string";
 }
 export function isPagesRootIndex(x: unknown): x is PagesRootIndex {
-  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index))
+  return isJsonObject(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isJsonObject(d) && optStr(d.dir) && optStr(d.index))
     && (x.layers === undefined || (Array.isArray(x.layers) && x.layers.every(isIndexRowLike)));
 }
 isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
 export function isPageIndex(x: unknown): x is PageIndex {
-  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+  return isJsonObject(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
 }
 isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
 
 // ---------------------------------------------------------------- verify-screen's documents
 /** <Screen>.expected.json — what --expect wrote: a `frame` and the `nodes` specs (each with a nodeId). */
 export function isVerifyExpectation(x: unknown): x is Expectation {
-  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string")
+  return isJsonObject(x) && isJsonObject(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isJsonObject(n) && typeof n.nodeId === "string")
     && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
 isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, …}";
 
-const isNameVersion = (x: unknown): boolean => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+const isNameVersion = (x: unknown): boolean => isJsonObject(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
 /** measured.probe — the shipped probe's identity (verify-probe.ts). */
 export function isProbeIdentity(x: unknown): x is ProbeIdentity {
-  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string"
+  return isJsonObject(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string"
     && isNameVersion(x.playwright) && isNameVersion(x.browser);
 }
 /** measured.build — what the probe was served. */
 export function isBuildIdentity(x: unknown): x is BuildIdentity {
-  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number"
+  return isJsonObject(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number"
     && typeof x.assetsSha256 === "string" && (x.unhashed === undefined || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
 }
-const isProbeFrame = (x: unknown): x is ProbeFrame => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
-const isCountMap = (x: unknown): boolean => isObj(x) && Object.values(x).every((v) => typeof v === "number");
-const isNavigation = (x: unknown): boolean => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
-const isTagsNotInExpectation = (x: unknown): boolean => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids)
-  && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
-const isReasonMap = (x: unknown): boolean => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+const isProbeFrame = (x: unknown): x is ProbeFrame => isJsonObject(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isJsonObject(x.rect);
+const isCountMap = (x: unknown): boolean => isJsonObject(x) && Object.values(x).every((v) => typeof v === "number");
+const isNavigation = (x: unknown): boolean => isJsonObject(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+const isTagsNotInExpectation = (x: unknown): boolean => isJsonObject(x) && typeof x.count === "number" && Array.isArray(x.ids)
+  && x.ids.every((r) => isJsonObject(r) && typeof r.id === "string" && typeof r.elements === "number");
+const isReasonMap = (x: unknown): boolean => isJsonObject(x) && Object.values(x).every((v) => typeof v === "string");
 const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
 /** measured.reach: the steps the probe replayed. */
 export function isProbeReach(x: unknown): x is ProbeReach {
-  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+  return isJsonObject(x) && Array.isArray(x.steps) && x.steps.every(isJsonObject) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
 }
 /** measured.page: the document's horizontal overflow at the measured viewport. */
 export function isPageOverflow(x: unknown): x is PageOverflow {
-  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth)
+  return isJsonObject(x) && isJsonObject(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth)
     && typeof x.overflowX === "string" && typeof x.scrollable === "boolean"
-    && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right))
+    && Array.isArray(x.offenders) && x.offenders.every((o) => isJsonObject(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right))
     && optStr(x.compatMode);
 }
 // measured.behaviour — lenient (it never reaches the verdict, so a reader keeps what it can show): version 1 and a
@@ -180,38 +179,38 @@ export function isPageOverflow(x: unknown): x is PageOverflow {
 const BEHAVIOUR_STATUSES: readonly BehaviourStatus[] = ["pass", "fail", "warn", "not-run", "unsupported"];
 export const isBehaviourStatus = (x: unknown): x is BehaviourStatus => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
 export function isBehaviourCheck(x: unknown): x is BehaviourCheck {
-  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+  return isJsonObject(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
 }
 /** measured.behaviour: {version: 1, ran: false, why} or {version: 1, ran: true, checks: [{id, status, detail}, …], …}. */
 export function isMeasuredBehaviour(x: unknown): x is MeasuredBehaviour {
-  return isObj(x) && x.version === 1 && typeof x.ran === "boolean"
+  return isJsonObject(x) && x.version === 1 && typeof x.ran === "boolean"
     && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
 }
 // The visual diff. measured.visual is lenient like measured.behaviour (it never reaches the verdict): version 1
 // and a boolean `ran`; ran:false names why; ran:true carries the two percentages and a regions list. Every other field is
 // read one by one by verify-compare.ts (visualReport), so an older/newer probe still reports what it can.
-const isRect4 = (x: unknown): x is Rect4 => isObj(x) && isNum(x.x) && isNum(x.y) && isNum(x.w) && isNum(x.h);
+const isRect4 = (x: unknown): x is Rect4 => isJsonObject(x) && isNum(x.x) && isNum(x.y) && isNum(x.w) && isNum(x.h);
 /** measured.visual: {version: 1, ran: false, why} or {version: 1, ran: true, differingPct, shiftTolerantPct, regions: […], …}. */
 export function isMeasuredVisual(x: unknown): x is MeasuredVisual {
-  return isObj(x) && x.version === 1 && typeof x.ran === "boolean"
+  return isJsonObject(x) && x.version === 1 && typeof x.ran === "boolean"
     && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
 }
 /** One measured.visual.regions[] row as report.visual copies it (a malformed row is left out, with a note). */
 export function isVisualRegion(x: unknown): x is VisualRegion {
-  return isObj(x) && isRect4(x.rect) && isNum(x.pixels) && isNum(x.pct) && isStringArray(x.built) && isStringArray(x.designed);
+  return isJsonObject(x) && isRect4(x.rect) && isNum(x.pixels) && isNum(x.pct) && isStringArray(x.built) && isStringArray(x.designed);
 }
 /** expectation.referenceImage (--expect): usable with its geometry, or unusable with why. */
 export function isVerifyReferenceImage(x: unknown): x is VerifyReferenceImage | VerifyReferenceUnusable {
-  if (!isObj(x)) return false;
+  if (!isJsonObject(x)) return false;
   if (x.usable === false) return (x.path === null || typeof x.path === "string") && typeof x.why === "string";
-  return x.usable === true && typeof x.path === "string" && typeof x.sha256 === "string" && isObj(x.png) && isNum(x.png.w) && isNum(x.png.h)
-    && isNum(x.scale) && x.scale > 0 && isObj(x.offset) && isNum(x.offset.x) && isNum(x.offset.y) && (x.from === "index" || x.from === "export")
+  return x.usable === true && typeof x.path === "string" && typeof x.sha256 === "string" && isJsonObject(x.png) && isNum(x.png.w) && isNum(x.png.h)
+    && isNum(x.scale) && x.scale > 0 && isJsonObject(x.offset) && isNum(x.offset.x) && isNum(x.offset.y) && (x.from === "index" || x.from === "export")
     && isRect4(x.crop) && optStr(x.colorProfile);
 }
 /** report.behaviour, as verify-build reads it: ran, the status counts, and the check rows. */
 export function isReportBehaviour(x: unknown): x is ReportBehaviour {
-  return isObj(x) && typeof x.ran === "boolean" && isObj(x.summary)
-    && (["pass", "fail", "warn", "notRun", "unsupported"] as const).every((k) => isObj(x.summary) && isNum(x.summary[k]))
+  return isJsonObject(x) && typeof x.ran === "boolean" && isJsonObject(x.summary)
+    && (["pass", "fail", "warn", "notRun", "unsupported"] as const).every((k) => isJsonObject(x.summary) && isNum(x.summary[k]))
     && Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) && optStr(x.why) && optStr(x.headline);
 }
 
@@ -239,7 +238,7 @@ const MEASURED_EXTRAS: ReadonlyArray<readonly [key: string, ok: (x: unknown) => 
 ];
 /** What a compare cannot do without: nodes (each with a nodeId), and list-shaped components/interactions/artifacts. */
 function isMeasuredCore(x: unknown): x is JsonObject {
-  return isObj(x) && optArrayOf(x.nodes, (n): n is object => isObj(n) && typeof n.nodeId === "string")
+  return isJsonObject(x) && optArrayOf(x.nodes, (n): n is object => isJsonObject(n) && typeof n.nodeId === "string")
     && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === undefined || Array.isArray(x.artifacts))
     && optStr(x.mode) && optStr(x.expectationSha256);
 }
@@ -249,7 +248,7 @@ function isMeasuredCore(x: unknown): x is JsonObject {
  *  A hand-written file with a malformed extra: read it through readableMeasured(). */
 export function isVerifyMeasured(x: unknown): x is VerifyMeasured {
   return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === undefined || ok(x[k]))
-    && (x.nodes === undefined || (Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === undefined || isReasonMap(n.unmeasured))));
+    && (x.nodes === undefined || (Array.isArray(x.nodes) && x.nodes.every((n) => !isJsonObject(n) || n.unmeasured === undefined || isReasonMap(n.unmeasured))));
 }
 /**
  * A measured.json as --compare reads it: null when the measurements themselves are unreadable (not an object,
@@ -267,7 +266,7 @@ export function readableMeasured(x: unknown): { doc: VerifyMeasured; notes: stri
   if (Array.isArray(copy.nodes)) {
     let dropped = 0;
     copy.nodes = copy.nodes.map((n) => {
-      if (!isObj(n) || n.unmeasured === undefined || isReasonMap(n.unmeasured)) return n;
+      if (!isJsonObject(n) || n.unmeasured === undefined || isReasonMap(n.unmeasured)) return n;
       dropped++;
       const { unmeasured: _drop, ...rest } = n;
       return rest;
@@ -279,7 +278,7 @@ export function readableMeasured(x: unknown): { doc: VerifyMeasured; notes: stri
 isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
 
 function isEvidence(x: unknown): x is InteractionEvidence {
-  return isObj(x) && typeof x.nodeId === "string";
+  return isJsonObject(x) && typeof x.nodeId === "string";
 }
 /** An --interactions file's list: {nodeId, trigger, ok, …} rows. */
 export function isInteractionEvidenceList(x: unknown): x is InteractionEvidence[] {
@@ -289,13 +288,13 @@ isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nod
 
 /** An --interactions file's components[]: {setName|nodeId, present, …} rows (merged with measured.json's). */
 export function isMeasuredComponentList(x: unknown): x is MeasuredComponent[] {
-  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === undefined || typeof c.present === "boolean"));
+  return Array.isArray(x) && x.every((c) => isJsonObject(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === undefined || typeof c.present === "boolean"));
 }
 isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
 
 /** <Screen>.report.json (either schema): only the fields verify-build reads are checked. */
 export function isVerifyReport(x: unknown): x is VerifyReport {
-  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline)
+  return isJsonObject(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline)
     && (x.why === undefined || isStringArray(x.why)) && (x.integrity === undefined || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
@@ -309,24 +308,24 @@ const PLAN_OBJECTS = ["anchors", "verification", "counts"] as const;
 const PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"] as const;
 /** Why `x` is not a plan (one line, naming the field), or null when it is one. */
 function planProblem(x: unknown): string | null {
-  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  if (!isJsonObject(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
   for (const k of PLAN_ARRAYS) if (x[k] !== undefined && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
-  for (const k of PLAN_OBJECTS) if (x[k] !== undefined && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== undefined && !isJsonObject(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== undefined && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== undefined && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
   for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"] as const) {
     const list = x[k];
-    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+    if (Array.isArray(list) && !list.every(isJsonObject)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
   // (a token row's figmaName is optional: older plans, and raw unbound values, have none — or null)
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
-  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
-  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
-  if (x.auditGate !== undefined && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
-  if (x.target !== undefined && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
-  if (x.tagging !== undefined && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === undefined || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return "is not a valid plan: `tagging` must be {\"off\": true, \"reason\": \"…\"}";
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
-  if (isObj(x.verification) && x.verification.hook !== undefined && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isJsonObject(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isJsonObject(x.anchors) && !Object.values(x.anchors).every(isJsonObject)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== undefined && x.auditGate !== null && !isJsonObject(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== undefined && x.target !== null && typeof x.target !== "string" && !isJsonObject(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== undefined && x.tagging !== null && !(isJsonObject(x.tagging) && (x.tagging.off === undefined || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return "is not a valid plan: `tagging` must be {\"off\": true, \"reason\": \"…\"}";
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
+  if (isJsonObject(x.verification) && x.verification.hook !== undefined && !isJsonObject(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
   // navigate / interactions: only the lists' kind — rows are validated where used (probe-steps.ts parseSteps; --expect drops a bad interaction row with why)
   for (const k of ["navigate", "interactions"] as const) if (x[k] !== undefined && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
@@ -346,18 +345,18 @@ export function parsePlan(x: unknown): { plan: Plan } | { error: string } {
 const reqStr = (v: unknown): boolean => typeof v === "string" && v.trim() !== "";
 /** One plan.waivers[] row a --compare can apply: every binding field present. */
 export function isPlanWaiver(x: unknown): x is PlanWaiver {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== undefined && x.built !== undefined && reqStr(x.exportContentSha256)
+  return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== undefined && x.built !== undefined && reqStr(x.exportContentSha256)
     && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === undefined || (typeof x.tolerance === "number" && x.tolerance >= 0)) && optStr(x.cause);
 }
 isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
 /** One plan.descopes[] row a --compare can apply. */
 export function isPlanDescope(x: unknown): x is PlanDescope {
-  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+  return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
 
 /** A JSON object whose every value is a string (an asset-hash sidecar: path -> hash). */
 export function isStringRecord(x: unknown): x is Record<string, string> {
-  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
+  return isJsonObject(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";

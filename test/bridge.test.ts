@@ -27,7 +27,9 @@ import type {
   TextStylesDoc, TokensDoc, Asset,
 } from "../bridge/src/doc-types.ts";
 import type { ComponentsEntry } from "../bridge/src/seed-components.ts";
+import { writePages } from "../bridge/src/write-out.ts";
 import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
+import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "../bridge/src/staleness.ts";
 import type { SnapshotInfo, SnapshotParseError } from "../bridge/src/snapshot-meta.ts";
 import type { ClientRow, ProgressTick } from "../bridge/src/server-core.ts";
 import type { Cmd } from "../bridge/src/commands.ts";
@@ -1306,7 +1308,7 @@ void (async () => {
   // filename) is one edit, not twelve.
   const readJson = <T,>(...p: string[]): T => JSON.parse(fs.readFileSync(path.join(...p), "utf8")) as T;
   const pagesDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-pages-"));
-  pull.writePages(pagesDir, {
+  writePages(pagesDir, {
     exportedAt: "t",
     index: [{ name: "A", id: "1:1" }, { name: "B", id: "2:2" }, { name: "C", id: "3:3" }],
     layers: [
@@ -1354,7 +1356,7 @@ void (async () => {
     JSON.stringify(rootIndex.layers).indexOf("\"children\"") === -1);
   ok("[wp] pages/ exists even for a zero-layer run", (() => {
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), "figma-empty-"));
-    pull.writePages(empty, { exportedAt: "t", index: [], layers: [] });
+    writePages(empty, { exportedAt: "t", index: [], layers: [] });
     return fs.existsSync(path.join(empty, "pages"));
   })());
   ok("[wp] each page dir carries the page ID, so two entries are tellable apart by more than a dir name",
@@ -1367,7 +1369,7 @@ void (async () => {
   // pageDirs entry claiming both pages' layers), and uniqueDir never fired because only one bucket
   // was ever built. Identity is the page ID; the name is for display.
   const dupDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-duppage-"));
-  pull.writePages(dupDir, {
+  writePages(dupDir, {
     exportedAt: "t",
     index: [{ name: "A", id: "1:1" }, { name: "B", id: "2:2" }],
     layers: [
@@ -1389,7 +1391,7 @@ void (async () => {
 
   // Exports written before pageId existed must still lay out — fall back to the name as the key.
   const oldDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-oldpage-"));
-  pull.writePages(oldDir, {
+  writePages(oldDir, {
     exportedAt: "t",
     index: [{ name: "A", id: "1:1" }, { name: "B", id: "2:2" }],
     layers: [{ name: "A", id: "1:1", page: "Screens", tree: node({ type: "FRAME", id: "1:1", name: "A" }) }, { name: "B", id: "2:2", page: "Screens", tree: node({ type: "FRAME", id: "2:2", name: "B" }) }],
@@ -2934,8 +2936,6 @@ void (async () => {
   // ---------------------------------------------------------------- doctor
   console.log("\ndoctor — pure checks:");
   const doctor = await import("../bridge/src/doctor.ts");
-  ok("[doctor] its port list IS server-core's (both read bridge/src/ports.ts)",
-    doctor.ALLOWED_PORTS === core.ALLOWED_PORTS && JSON.stringify(doctor.ALLOWED_PORTS) === "[8787,8788,8789]");
   ok("[doctor] node: new enough is ok, too old is a failure, unreadable range is only a note",
     doctor.checkNode("v22.1.0", ">=18").status === "ok" && doctor.checkNode("v16.20.0", ">=18").status === "fail"
     && doctor.checkNode("v22.1.0", null).status === "warn");
@@ -2978,13 +2978,13 @@ void (async () => {
   ok("[doctor] plugin: a refused token reads as 'running, wrong token' with both fingerprints and the fix",
     wrongTok.status === "fail" && wrongTok.detail.includes("11111111") && wrongTok.detail.includes("22222222") && /--show-token/.test(wrongTok.next ?? ""));
   ok("[doctor] plugin: connected / nobody came / skipped",
-    doctor.checkPlugin({ clients: [{ file: "F", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok" && doctor.checkPlugin({ clients: [] }, 10).status === "fail"
+    doctor.checkPlugin({ clients: [{ file: "F", pluginVersion: BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok" && doctor.checkPlugin({ clients: [] }, 10).status === "fail"
     && doctor.checkPlugin({ skipped: "why" }, 10).status === "warn");
   // With two files connected, doctor must not report a plain ✓ when the very next command
   // refused with "say which one to use". Healthy AND ambiguous is one state, not two.
   (() => {
-    const one = doctor.checkPlugin({ clients: [{ file: "TideStack", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
-    const two = doctor.checkPlugin({ clients: [{ file: "TideStack", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }, { file: "NIMA", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
+    const one = doctor.checkPlugin({ clients: [{ file: "TideStack", pluginVersion: BRIDGE_VERSION, pluginStale: null }] }, 10);
+    const two = doctor.checkPlugin({ clients: [{ file: "TideStack", pluginVersion: BRIDGE_VERSION, pluginStale: null }, { file: "NIMA", pluginVersion: BRIDGE_VERSION, pluginStale: null }] }, 10);
     ok("[doctor] plugin: one connected file is a plain ✓ with no flag to add", one.status === "ok" && one.next === undefined);
     ok("[doctor] plugin: several connected files stay ✓ but warn that commands must disambiguate",
       two.status === "ok" && /2 files, so commands must say which/.test(two.detail) && /--client/.test(two.next ?? ""));
@@ -3252,12 +3252,12 @@ void (async () => {
   // and a plain ✓ from doctor — a MISSING version is exactly the one case guaranteed to predate this
   // feature, so it must warn, not pass silently as "nothing to compare".
   ok("[version] pluginStalenessNote WARNS on no plugin version reported (an older bundle) — 'no version at all' is itself the stale signal, not a free pass",
-    (() => { const n1 = core.pluginStalenessNote(null), n2 = core.pluginStalenessNote(undefined);
+    (() => { const n1 = pluginStalenessNote(null), n2 = pluginStalenessNote(undefined);
       return typeof n1 === "string" && /predates version reporting/.test(n1) && /restart `dtwin serve`/.test(n1) && n1 === n2; })());
   ok("[version] pluginStalenessNote is null for a plugin version equal to or newer than the bridge",
-    core.pluginStalenessNote(core.BRIDGE_VERSION) === null);
+    pluginStalenessNote(BRIDGE_VERSION) === null);
   ok("[version] pluginStalenessNote fires for a plugin version strictly older than the bridge, and names both",
-    (() => { const n = core.pluginStalenessNote("0.0.1"); return typeof n === "string" && /0\.0\.1/.test(n) && n.includes(String(core.BRIDGE_VERSION)) && /reload the plugin/.test(n); })());
+    (() => { const n = pluginStalenessNote("0.0.1"); return typeof n === "string" && /0\.0\.1/.test(n) && n.includes(String(BRIDGE_VERSION)) && /reload the plugin/.test(n); })());
   {
     // The fake client sends its version in `hello`, exactly like a real plugin's identity relay
     // (figma-plugin/src/bridge.ts's `pluginVersion` -> ui.html's `hello` -> here).
@@ -3285,30 +3285,30 @@ void (async () => {
 
   console.log("\ndoctor — plugin staleness surfaces as a warn, distinct from the multi-client ok:");
   ok("[doctor-version] one current-version client stays a plain ok",
-    doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok");
+    doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginVersion: BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok");
   ok("[doctor-version] one STALE client is a warn, naming the reload step",
     (() => {
       const c = doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginVersion: "0.0.1", pluginStale: "plugin v0.0.1 is older — reload the plugin in Figma" }] }, 10);
       return c.status === "warn" && /reload the plugin/.test(c.next || "");
     })());
   ok("[doctor-version] several CURRENT clients still stay ok (multi-client alone is not staleness)",
-    doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginVersion: core.BRIDGE_VERSION, pluginStale: null }, { file: "B", identified: true, pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok");
+    doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginVersion: BRIDGE_VERSION, pluginStale: null }, { file: "B", identified: true, pluginVersion: BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok");
   // daemonRowStalenessNote: a row with NO `pluginVersion` key at all (not merely `null`) — the shape a
   // NEWER `dtwin` CLI sees when reading client rows back from an OLDER `dtwin serve` daemon whose own
   // `describe()` predates this feature entirely. Distinct from `pluginStale` (which fires from a
   // CURRENT daemon relaying an old/version-less PLUGIN) — this one means the DAEMON PROCESS itself
   // needs restarting, which reloading the Figma plugin alone would not fix.
   ok("[version] daemonRowStalenessNote is null for a row that HAS the key (even if null)",
-    core.daemonRowStalenessNote({ pluginVersion: null }) === null && core.daemonRowStalenessNote({ pluginVersion: "1.2.3" }) === null);
+    daemonRowStalenessNote({ pluginVersion: null }) === null && daemonRowStalenessNote({ pluginVersion: "1.2.3" }) === null);
   ok("[version] daemonRowStalenessNote fires for a row with the key entirely ABSENT, naming a daemon restart",
-    (() => { const n = core.daemonRowStalenessNote({ file: "A" }); return typeof n === "string" && /dtwin serve/.test(n) && /restart/.test(n); })());
+    (() => { const n = daemonRowStalenessNote({ file: "A" }); return typeof n === "string" && /dtwin serve/.test(n) && /restart/.test(n); })());
   ok("[doctor-version] a daemon-sourced client row missing pluginVersion entirely still demotes doctor's daemon-plugin check to warn",
     (() => {
       // Mirrors the daemon branch of doctor.run() directly (that branch requires server-core lazily
       // the same way connectedDetail does), using a client shaped exactly like an old daemon's own
       // describe() output — no pluginVersion/pluginStale keys at all.
       const oldDaemonClients: Partial<ClientRow>[] = [{ connId: "c1", file: "TideStack (Copy)", identified: true }];
-      const stale = oldDaemonClients.some((cl) => cl.pluginStale || core.daemonRowStalenessNote(cl));
+      const stale = oldDaemonClients.some((cl) => cl.pluginStale || daemonRowStalenessNote(cl));
       return stale === true;
     })());
 

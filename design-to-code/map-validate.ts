@@ -14,7 +14,7 @@ import type { CodeConnectMap, MapValidationResult } from "./types.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { readJsonFile } from "./catalog-input.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
-import { isRecord as isObj, nullProto } from "../bridge/src/json-util.ts";
+import { isRecord, nullProto } from "../bridge/src/json-util.ts";
 
 const STATUSES = ["active", "deprecated", "needs-review"];
 // Allowed key sets per object (mirrors additionalProperties:false in the schema).
@@ -62,19 +62,19 @@ function validateMap(map: unknown): MapValidationResult {
   const errors: MapValidationResult["errors"] = [];
   const err: Err = (path, message) => errors.push({ path, message });
 
-  if (!isObj(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
   if (map.figmaFileKey !== undefined && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
-  if (!isObj(map.components)) { err("components", "must be an object"); return { ok: false, errors }; }
+  if (!isRecord(map.components)) { err("components", "must be an object"); return { ok: false, errors }; }
 
   for (const key of Object.keys(map.components)) {
     const e = map.components[key];
     const at = `components.${key}`;
-    if (!isObj(e)) { err(at, "entry must be an object"); continue; }
+    if (!isRecord(e)) { err(at, "entry must be an object"); continue; }
     noExtra(e, KEYS.entry, at, err);
 
-    if (!isObj(e.figma)) err(`${at}.figma`, "required object");
+    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
     else {
       noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
       if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
@@ -82,16 +82,16 @@ function validateMap(map: unknown): MapValidationResult {
       if (e.figma.unstable !== undefined && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
     }
 
-    if (!isObj(e.code)) err(`${at}.code`, "required object");
+    if (!isRecord(e.code)) err(`${at}.code`, "required object");
     else {
       noExtra(e.code, KEYS.code, `${at}.code`, err);
       if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
       if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
       if (e.code.targets !== undefined) {
-        if (!isObj(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
         else for (const t of Object.keys(e.code.targets)) {
           const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
-          if (!isObj(tv)) err(ta, "must be an object");
+          if (!isRecord(tv)) err(ta, "must be an object");
           else { noExtra(tv, KEYS.target, ta, err); optStrings(tv, ["module", "export"], ta, err); }
         }
       }
@@ -104,7 +104,7 @@ function validateMap(map: unknown): MapValidationResult {
     optStrings(e, ["note"], at, err);
 
     if (e.props !== undefined) {
-      if (!isObj(e.props)) err(`${at}.props`, "must be an object");
+      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
       else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
     }
 
@@ -112,17 +112,17 @@ function validateMap(map: unknown): MapValidationResult {
       if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
       else e.variantOverrides.forEach((vo: unknown, i: number) => {
         const va = `${at}.variantOverrides[${i}]`;
-        if (!isObj(vo)) { err(va, "must be an object"); return; }
+        if (!isRecord(vo)) { err(va, "must be an object"); return; }
         noExtra(vo, KEYS.vo, va, err);
-        if (!isObj(vo.when)) err(`${va}.when`, "required object");
+        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
         else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
-        if (!isObj(vo.code)) err(`${va}.code`, "required object");
+        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
         else { noExtra(vo.code, KEYS.voCode, `${va}.code`, err); if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string"); if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string"); }
       });
     }
 
     if (e.childrenByLayer !== undefined) {
-      if (!isObj(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
       else { noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err); optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err); }
     }
   }
@@ -130,7 +130,7 @@ function validateMap(map: unknown): MapValidationResult {
 }
 
 function validateProp(p: unknown, at: string, err: Err): void {
-  if (!isObj(p)) { err(at, "prop must be an object"); return; }
+  if (!isRecord(p)) { err(at, "prop must be an object"); return; }
   const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : undefined;
   if (!Array.isArray(allowed)) { err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`); return; }
   noExtra(p, allowed, at, err); // enforce the per-kind oneOf field set
@@ -138,8 +138,8 @@ function validateProp(p: unknown, at: string, err: Err): void {
   if (p.kind === "instance" && p.codeProp !== undefined && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
   if (p.kind === "instance" && p.slot !== undefined && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
   if (p.kind === "enum") {
-    if (p.values !== undefined && !isObj(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
-    else if (isObj(p.values)) for (const k of Object.keys(p.values)) { const t = typeof p.values[k]; if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null"); }
+    if (p.values !== undefined && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) { const t = typeof p.values[k]; if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null"); }
     if (p.default !== undefined && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
   }
   if (p.kind === "boolean" && p.default !== undefined && !isBool(p.default)) err(`${at}.default`, "must be a boolean");

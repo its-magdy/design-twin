@@ -25,9 +25,10 @@ import path from "node:path";
 // connected Figma file the command goes to — a connId, a fileKey, or part of the file name. Omitted
 // with one file connected, required with several (the bridge refuses rather than guessing; see
 // server-core's resolveClient).
-import { createBridge, connectionFor, TIMEOUTS, exportTimeout, errMsg } from "./server-core.ts";
+import { createBridge, connectionFor } from "./server-core.ts";
+import { TIMEOUTS, exportTimeout, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
+import { errMsg } from "./errmsg.ts";
 import { stampSource } from "./source-stamp.ts";
-import { NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
@@ -42,7 +43,7 @@ import type { Cmd, Commands, ExportReply, WriteOp } from "./commands.ts";
 // `exportTimeout` carries the scope -> tier RULE alongside the table, so this front-end cannot
 // restate (or omit) a tier the CLI has.
 // The ONE registry of read options (shared with the dtwin CLI and the plugin's runOpts).
-import { READ_OPTS } from "./read-opts.ts";
+import { READ_OPTS, readOptDefaults } from "./read-opts.ts";
 import { ifDefined, isStringArray } from "./json-util.ts";
 import type { ReadOptName } from "./read-opts.ts";
 import { parseNodeId, toNodeId } from "./node-id.ts";
@@ -573,11 +574,12 @@ const readOptsShape = Object.fromEntries(
   READ_OPTS.map((o) => [o.name, z.boolean().optional().describe(o.describe)]),
 ) as Record<ReadOptName, z.ZodOptional<z.ZodBoolean>>;
 
-// Local alias so the many call sites below stay short.
-type ReadOpt = ReadOptName;
-const READ_OPT_KEYS = Object.keys(readOptsShape) as ReadOpt[];
-const readOpts = (a: z.output<z.ZodObject<typeof readOptsShape>>): Record<ReadOpt, boolean> =>
-  Object.fromEntries(READ_OPT_KEYS.map((k) => [k, !!a[k]])) as Record<ReadOpt, boolean>;
+// Every option, in registry order, set to whether the tool call asked for it.
+const readOpts = (a: z.output<z.ZodObject<typeof readOptsShape>>): Record<ReadOptName, boolean> => {
+  const o = readOptDefaults();
+  for (const { name } of READ_OPTS) o[name] = !!a[name];
+  return o;
+};
 
 const READ_ONLY = { readOnlyHint: true } as const;
 

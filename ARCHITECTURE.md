@@ -148,7 +148,7 @@ Design decisions worth not re-litigating:
   Match patterns take **no port wildcard**, so every reachable port must be listed literally: we declare
   `ws://localhost:{8787,8788,8789}` and the plugin walks all three. Adding a fourth needs a new
   published version, which is why `FIGMA_BRIDGE_PORT` is validated against that set
-  (`bridge/src/server-core.ts` `ALLOWED_PORTS`) instead of accepting any number.
+  (`bridge/src/ports.ts` `ALLOWED_PORTS`) instead of accepting any number.
 - **Whole-document read (dynamic-page, required for new plugins):** `documentAccess: "dynamic-page"`;
   call `figma.loadAllPagesAsync()` before traversing other pages; `findAllWithCriteria` needs pages loaded.
   Under dynamic-page **all reads are async** — use `getMainComponentAsync`, `getLocalPaintStylesAsync`,

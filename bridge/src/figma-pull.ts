@@ -183,9 +183,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as LAYOUT from "./project-layout.ts";
-// TIMEOUTS is the per-command budget table both front-ends read (timeouts.ts, re-exported by
-// server-core.ts) — the tiers below pick from it rather than restating them, so the CLI and the MCP
-// tools cannot drift apart. Imported from timeouts.ts directly, like errMsg / tokenStore / the two
+// TIMEOUTS is the per-command budget table both front-ends read (timeouts.ts) — the tiers below pick
+// from it rather than restating them, so the CLI and the MCP tools cannot drift apart. Imported from timeouts.ts directly, like errMsg / tokenStore / the two
 // staleness notes: parseArgs and formatClients are pure and test-driven, and importing this module must
 // NOT load server-core (token resolution; a process.exit on a bad FIGMA_BRIDGE_PORT). cli() loads
 // server-core itself, after routing and the --token-file pre-scan.
@@ -212,7 +211,6 @@ import { toNodeId } from "./node-id.ts";
 import * as OUT from "./write-out.ts";
 import type { Stamped } from "./write-out.ts";
 import { stampSource } from "./source-stamp.ts";
-import type { LayersDoc } from "./doc-types.ts";
 // The ONE registry of read options, shared with the plugin's runOpts and the MCP tool schema.
 import { READ_OPTS } from "./read-opts.ts";
 import type { ReadOptName } from "./read-opts.ts";
@@ -242,10 +240,6 @@ function usageText(): string {
 
 const plog = (m: string) => console.error("[dtwin] " + m);
 const writeJson = (dir: string, name: string, obj: unknown, quiet?: boolean) => OUT.writeJson(dir, name, obj, quiet, plog);
-// Not called by main() (the full-export path goes through OUT.writeExport, which calls
-// OUT.writePages itself) — kept as an export because test/bridge.test.ts drives the pages/ LAYOUT
-// through this exact entry point.
-const writePages = (dir: string, layersDoc: LayersDoc | null | undefined) => OUT.writePages(dir, layersDoc, plog);
 const writeScreenshot = (dir: string, r: Commands["screenshot"]["reply"], scale?: number) => OUT.writeScreenshot(dir, r, plog, { scale });
 // hygiene.json persists every warning (see design-system-layout.ts), but writeJson's own log line is
 // just "wrote design-system/hygiene.json" — a caller watching stderr would never see a DUPLICATE
@@ -1358,7 +1352,7 @@ async function cli(argv: string[]): Promise<void> {
 
   // Parse once, turning a UsageError back into the message + exit 1 it replaced, then print the
   // validation's warnings and, after them, its refusal (exit 1). (When this file is IMPORTED — the test
-  // suite pulling in parseArgs/writePages — cli() never runs, so nothing is parsed: the runner's own
+  // suite pulling in parseArgs/writeJson — cli() never runs, so nothing is parsed: the runner's own
   // argv is not ours to interpret or exit over.)
   let parsed: ParsedArgs;
   try {
@@ -1382,7 +1376,7 @@ async function cli(argv: string[]): Promise<void> {
 }
 
 // Only actually pull when RUN. Importing this file (test/bridge.test.ts drives parseArgs and
-// writePages directly) must not open a WebSocket server and sit there waiting for Figma.
+// writeJson directly) must not open a WebSocket server and sit there waiting for Figma.
 if (import.meta.main ?? isMainFallback(import.meta.url)) await cli(process.argv.slice(2));
 
 // writeJson is exported for the test suite: it's the ONE place a design-system.json / screen.json
@@ -1392,4 +1386,4 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) await cli(process.argv.
 // formatLibraries is exported for the same reason parseArgs is: the case that MUST NOT look like a
 // failure (zero libraries — free plan, or none enabled in the UI) is unreachable from a test that
 // needs a live plugin, so the renderer is driven directly.
-export { parseArgs, readArgs, validateArgs, writePages, writeJson, formatLibraries, formatClients, formatDone, UsageError };
+export { parseArgs, readArgs, validateArgs, writeJson, formatLibraries, formatClients, formatDone, UsageError };

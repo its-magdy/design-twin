@@ -1,10 +1,11 @@
-// Unit tests of the visual diff's pure parts: the PNG codec (design-to-code/png.ts), the pixelmatch v6.0.0 port and
-// our shift tolerance / regions / attribution / grid (design-to-code/visual-diff.ts), and the capture's budget
-// (design-to-code/probe-visual.ts). No browser.  Run with:  node test/visual-diff.test.ts
+// Unit tests of the visual diff's pure parts: the PNG codec and the bridge's header-only pngSize
+// (bridge/src/png.ts), the pixelmatch v6.0.0 port and our shift tolerance / regions / attribution / grid
+// (design-to-code/visual-diff.ts), and the capture's budget (design-to-code/probe-visual.ts). No browser.
+// Run with:  node test/visual-diff.test.ts
 import { deflateSync, crc32 } from "node:zlib";
-import { PngError, decodePng, encodePng, pngInfo } from "../design-to-code/png.ts";
-import type { Rgba } from "../design-to-code/png.ts";
-import { MASK, attribute, colorDelta, crop, diffOptionsFor, diffPixels, maxDeltaOf, planGrid, referenceCrop, renderDiff, resampleBox } from "../design-to-code/visual-diff.ts";
+import { PngError, crop, decodePng, encodePng, pngInfo, pngSize, resampleBox } from "../bridge/src/png.ts";
+import type { Rgba } from "../bridge/src/png.ts";
+import { MASK, attribute, colorDelta, diffOptionsFor, diffPixels, maxDeltaOf, planGrid, referenceCrop, renderDiff } from "../design-to-code/visual-diff.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -97,6 +98,20 @@ const throwsMsg = (f: () => unknown): string => { try { f(); return ""; } catch 
   check("1 pngInfo reports sRGB + gAMA 45455 (a Figma reference)", fig !== null && fig.srgb && fig.gama === 45455 && fig.iccp === null && fig.w === w && fig.h === h && fig.colorType === 6);
   const p3 = pngInfo(handPng(w, h, 4, 6, rgbaPix, 0, [iccp]));
   check("1 pngInfo reports the iCCP profile's name", p3 !== null && p3.iccp === "Display P3" && !p3.srgb);
+  // pngSize reads the signature + IHDR header alone: it keeps a size where pngInfo (every chunk CRC-checked) gives up
+  const whole = handPng(w, h, 4, 6, rgbaPix, 0);
+  const sized = (b: Uint8Array): string => JSON.stringify(pngSize(b));
+  const want = JSON.stringify({ w, h });
+  check("1 pngSize of a whole PNG is its IHDR size", sized(whole) === want);
+  const badIdat = chunk("IDAT", Buffer.alloc(4)); badIdat[badIdat.length - 1] = (badIdat[badIdat.length - 1] ?? 0) ^ 0xff;
+  const badCrcPng = Buffer.concat([SIG, ihdr(w, h, 8, 6), badIdat, chunk("IEND", Buffer.alloc(0))]);
+  check("1 pngSize ignores a later chunk's bad CRC (pngInfo refuses it)", sized(badCrcPng) === want && pngInfo(badCrcPng) === null);
+  check("1 pngSize of a truncated file (header intact) is still the size", sized(whole.subarray(0, 48)) === want && pngInfo(whole.subarray(0, 48)) === null);
+  const bareHeader = Buffer.alloc(24); SIG.copy(bareHeader, 0); bareHeader.writeUInt32BE(13, 8); bareHeader.write("IHDR", 12, "latin1"); bareHeader.writeUInt32BE(w, 16); bareHeader.writeUInt32BE(h, 20);
+  check("1 pngSize reads a 24-byte header with no CRC", sized(bareHeader) === want);
+  check("1 pngSize of a header cut inside the height is null", pngSize(bareHeader.subarray(0, 23)) === null);
+  check("1 pngSize of non-PNG bytes, a bad signature or an IHDR chunk under 13 bytes is null", pngSize(Buffer.from("not a png at all, long enough to hold a header")) === null && pngSize(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]), bareHeader.subarray(8)])) === null && pngSize(Buffer.concat([bareHeader.subarray(0, 8), Buffer.from([0, 0, 0, 8]), bareHeader.subarray(12)])) === null);
+  check("1 pngSize reports the claimed size without bounding it (decodePng is what refuses a huge one)", sized(Buffer.concat([SIG, ihdr(0xffffffff, 0xfffffffe, 8, 6)])) === JSON.stringify({ w: 0xffffffff, h: 0xfffffffe }));
 }
 
 // ---------------------------------------------------------------- 2. colorDelta = pixelmatch v6's formula
