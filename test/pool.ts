@@ -49,11 +49,12 @@ export interface Run { status: number | null; stdout: string; stderr: string; ms
  *  would stop it answering). Never rejects and never hangs on a failed start: a spawn that throws synchronously or emits
  *  "error" (EAGAIN under load) resolves with status null and "spawn failed: <message>" appended to stderr.
  *  killAfterMs > 0: a run that has not closed by then is SIGKILLed (by its pid) and reported killed — a hung process fails the
- *  test instead of hanging it. `node` is the running binary (process.execPath), so a script path or `-e` source both work. */
-export const runNode = (cwd: string, script: string, args: string[], killAfterMs = 0): Promise<Run> => new Promise((resolve) => {
+ *  test instead of hanging it. `node` is the running binary (process.execPath), so a script path or `-e` source both work.
+ *  `env`: the child's whole environment (default: this process's). */
+export const runNode = (cwd: string, script: string, args: string[], killAfterMs = 0, env?: NodeJS.ProcessEnv): Promise<Run> => new Promise((resolve) => {
   const t0 = Date.now();
   let p: ChildProcessWithoutNullStreams;
-  try { p = spawn(process.execPath, [script, ...args], { cwd }); }
+  try { p = spawn(process.execPath, [script, ...args], { cwd, ...(env !== undefined ? { env } : {}) }); }
   catch (e) { resolve({ status: null, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}\n`, ms: Date.now() - t0, killed: false }); return; }
   let stdout = "", stderr = "", killed = false;
   const timer = killAfterMs > 0 ? setTimeout(() => { killed = true; p.kill("SIGKILL"); }, killAfterMs) : undefined;
