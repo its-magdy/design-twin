@@ -10,7 +10,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { reportToMarkdown, probeLine } from "../design-to-code/verify-report-md.ts";
+import { reportToMarkdown, probeLine, mdText } from "../design-to-code/verify-report-md.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS, resolveInside } from "../design-to-code/verify-shared.ts";
@@ -340,6 +340,12 @@ console.log("[13] --compare: report.visual from measured.visual, always written:
     && md.includes("Diff image: design/verify/Firings__90_1.diff.png (missing on disk)"));
   const evil = reportToMarkdown(compare(exp, base({ visual: ranVisual({ notes: ["frame <main> | a `tick`"] }) })));
   safe("[13] md: probe text is escaped (mdText)", () => evil.includes("- frame &lt;main&gt; \\| a \\`tick\\`"));
+  // a backslash in the page text is escaped too, before | and `: otherwise "\|" becomes "\\|" — an escaped
+  // backslash followed by a live pipe that splits the table cell — and a trailing "\" escapes the cell's own delimiter
+  safe("[13] md: mdText escapes a backslash before the | and ` it might otherwise un-escape", () =>
+    mdText("a\\|b") === "a\\\\\\|b" && mdText("a\\`b") === "a\\\\\\`b" && mdText("end\\") === "end\\\\" && mdText("a|b") === "a\\|b");
+  const bsMd = reportToMarkdown(compare(exp, base({ visual: ranVisual({ notes: ["path a\\|b c\\`d e\\"] }) })));
+  safe("[13] md: a note with \\| and \\` and a trailing \\ renders with every pipe and backtick escaped", () => bsMd.includes("- path a\\\\\\|b c\\\\\\`d e\\\\\n"));
   const noneMd = reportToMarkdown(compare(exp, base()));
   safe("[13] md: no block → 'Not run (…predates the visual diff).'", () => /## Visual diff — informational, not part of the verdict[\s\S]*Not run \(the measured file carries no visual diff \(hand-written, or a probe that predates the visual diff\)\)\./.test(noneMd));
   // against: only on the same reference sha and grid

@@ -719,7 +719,7 @@ const sandbox: Sandbox = context;
   ok("resolved box on auto-layout root", !!(tree.box && tree.box.w === 375));
   ok("strokesIncludedInLayout flagged", tree.strokesInLayout === true);
   const treeDevResource0 = tree.devResources?.[0];
-  ok("dev-resource links batched at root", Array.isArray(tree.devResources) && treeDevResource0 !== undefined && treeDevResource0.url.indexOf("sb.example.com") !== -1);
+  ok("dev-resource links batched at root", Array.isArray(tree.devResources) && treeDevResource0 !== undefined && treeDevResource0.url === "https://sb.example.com/list");
 
   ok("per-run textStyle resolved", txt.runs?.[1]?.textStyle === "Heading/H1");
   ok("per-run fillStyle resolved", txt.runs?.[1]?.fillStyle === "Brand/Primary");
@@ -744,7 +744,7 @@ const sandbox: Sandbox = context;
   ok("document file name", ds.file === "My File");
   ok("component publish key captured", btnComp !== undefined && btnComp.key === "compkey123");
   const btnCompDoc0 = btnComp?.docs?.[0];
-  ok("component documentationLinks captured", btnComp !== undefined && Array.isArray(btnComp.docs) && btnCompDoc0 !== undefined && btnCompDoc0.indexOf("docs.example.com") !== -1);
+  ok("component documentationLinks captured", btnComp !== undefined && Array.isArray(btnComp.docs) && btnCompDoc0 !== undefined && btnCompDoc0 === "https://docs.example.com/button");
 
   const tableNode = { type: "TABLE", name: "Data", visible: true, id: "20:0", numRows: 2, numColumns: 2,
     cellAt: (r: number, c: number) => ({ text: { characters: "r" + r + "c" + c }, fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 1, b: 1 }, opacity: 1 }], rowSpan: 1, columnSpan: 1 }) };

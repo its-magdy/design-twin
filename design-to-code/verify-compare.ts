@@ -148,6 +148,9 @@ function applyCssTransform(t: string, tt: string): string | null {
   if (v === "capitalize") return t.replace(/(^|[\s\-\u2010-\u2015])([^\p{L}\p{N}\s\-]*)([\p{L}\p{N}])/gu, (_m, b: string, punct: string, ch: string) => b + punct + ch.toUpperCase());
   return null;
 }
+/** A copy string as the text and placeholder compares read it: a non-breaking space (Figma's auto-substitution) is the
+ *  same copy as a plain space, and the ends are trimmed. Interior whitespace runs are kept as they are. */
+const nbspTrim = (t: string): string => t.replace(/\u00a0/g, " ").trim();
 /** The two strings a TEXT compare judges — ONE rule for the copy compare and the width gate, so they agree.
  *  want = the design as rendered (stored text + textCase); have = the build as rendered (its text + textTransform). A
  *  build whose transform is unknown (a hand-written probe reports none) passes with EITHER the stored or the rendered
@@ -682,7 +685,7 @@ function compareCtx(expectation: Expectation, measured: VerifyMeasured, opts: Co
     if (!s.repeatedTextGroup) continue;
     const mm = byId.get(String(s.nodeId));
     const t = mm ? (mm.styles || mm).text : undefined;
-    if (typeof t === "string") getOrInit(builtTexts, s.repeatedTextGroup, () => []).push(t.replace(/\u00a0/g, " ").trim());
+    if (typeof t === "string") getOrInit(builtTexts, s.repeatedTextGroup, () => []).push(nbspTrim(t));
   }
   // filled by the passes after the walk: the report's input notes (the caller's first), the waivers/descopes reopened or unused
   const inputNotes = [...(Array.isArray(opts.inputNotes) ? opts.inputNotes : [])];
@@ -983,7 +986,7 @@ function checkPlaceholderText(cx: CompareCtx, n: NodeCtx): void {
     else {
       cx.fieldsChecked++;
       // (a cased placeholder may be built with either the stored or the rendered string — its transform is not read)
-      if (!renderedText(String(spec.placeholderText), spec.textCase, String(got.placeholderText), undefined, (t) => t.trim()).same) push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
+      if (!renderedText(String(spec.placeholderText), spec.textCase, String(got.placeholderText), undefined, nbspTrim).same) push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
     }
   }
 }
@@ -1002,9 +1005,9 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
       cx.fieldsChecked++;
       // compare the RENDERED strings — the stored string with the design's text case against the build's
       // string with its computed text-transform (renderedText). Without a reported transform either design form passes.
-      const rt = renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, (t) => t.replace(/ /g, " ").trim());
-      const w = rt.want.replace(/ /g, " ").trim();
-      const g = rt.have.replace(/ /g, " ").trim();
+      const rt = renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, nbspTrim);
+      const w = nbspTrim(rt.want);
+      const g = nbspTrim(rt.have);
       // the stored strings behind the rendered ones, named when a case or a transform changed either side
       const caseShown = spec.textCase !== undefined || (rt.transform !== null && rt.transform.trim().toLowerCase() !== "none");
       const renderNote = !caseShown ? undefined
@@ -1033,14 +1036,18 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
           ...(note ? { note } : {}),
         });
       }
-      if (/ /.test(String(spec.text))) {
+      if (/\u00a0/.test(String(spec.text))) {
         // Show the escape, not the character. Printed raw, this row reads as two identical strings
         // flagged as a mismatch — the whole point is that the difference is INVISIBLE.
-        const show = (t: unknown): string => String(t).replace(/ /g, "\\u00a0");
+        const show = (t: unknown): string => String(t).replace(/\u00a0/g, "\\u00a0");
+        // Low either way — the design's NBSP may be there to stop a line break. The advice depends on what the build did.
+        const builtNbsp = /\u00a0/.test(String(got.text));
         deltas.push({
           severity: "low", nodeId: spec.nodeId, name: spec.name, field: "text (invisible character)",
           expected: show(spec.text), actual: show(got.text),
-          note: "the designed string contains a non-breaking space (U+00A0) — a Figma auto-substitution. Carrying it into the DOM verbatim is usually not what anyone meant; decide deliberately.",
+          note: builtNbsp
+            ? "the designed string contains a non-breaking space (U+00A0) — a Figma auto-substitution. Carrying it into the DOM verbatim is usually not what anyone meant; decide deliberately."
+            : "the designed string contains a non-breaking space (U+00A0) — a Figma auto-substitution; the build uses an ordinary space there, which is fine unless the non-breaking space was meant to keep the words on one line.",
         });
       }
     }

@@ -2422,6 +2422,7 @@ function applyCssTransform(t, tt) {
   if (v === "capitalize") return t.replace(/(^|[\s\-\u2010-\u2015])([^\p{L}\p{N}\s\-]*)([\p{L}\p{N}])/gu, (_m, b, punct, ch) => b + punct + ch.toUpperCase());
   return null;
 }
+var nbspTrim = (t) => t.replace(/\u00a0/g, " ").trim();
 function renderedText(stored, textCase, built, transform, norm) {
   const designed = applyFigmaCase(stored, textCase);
   const tt = typeof transform === "string" ? transform : null;
@@ -2891,7 +2892,7 @@ function compareCtx(expectation, measured, opts) {
     if (!s.repeatedTextGroup) continue;
     const mm = byId.get(String(s.nodeId));
     const t = mm ? (mm.styles || mm).text : void 0;
-    if (typeof t === "string") getOrInit(builtTexts, s.repeatedTextGroup, () => []).push(t.replace(/\u00a0/g, " ").trim());
+    if (typeof t === "string") getOrInit(builtTexts, s.repeatedTextGroup, () => []).push(nbspTrim(t));
   }
   const inputNotes = [...Array.isArray(opts.inputNotes) ? opts.inputNotes : []];
   const reopened = [];
@@ -3280,7 +3281,7 @@ function checkPlaceholderText(cx, n) {
     else if (got.placeholderText === null) gapNull("placeholder text", "placeholderText");
     else {
       cx.fieldsChecked++;
-      if (!renderedText(String(spec.placeholderText), spec.textCase, String(got.placeholderText), void 0, (t) => t.trim()).same) push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
+      if (!renderedText(String(spec.placeholderText), spec.textCase, String(got.placeholderText), void 0, nbspTrim).same) push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
     }
   }
 }
@@ -3295,9 +3296,9 @@ function checkText(cx, n) {
     } else if (got.text === void 0) absentGaps.add(`${spec.nodeId}\0text`);
     else if (got.text !== void 0) {
       cx.fieldsChecked++;
-      const rt = renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, (t) => t.replace(/ /g, " ").trim());
-      const w = rt.want.replace(/ /g, " ").trim();
-      const g = rt.have.replace(/ /g, " ").trim();
+      const rt = renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, nbspTrim);
+      const w = nbspTrim(rt.want);
+      const g = nbspTrim(rt.have);
       const caseShown = spec.textCase !== void 0 || rt.transform !== null && rt.transform.trim().toLowerCase() !== "none";
       const renderNote = !caseShown ? void 0 : `the design renders '${w}' (stored '${String(spec.text).trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
       if (!rt.same) {
@@ -3313,8 +3314,9 @@ function checkText(cx, n) {
           ...note ? { note } : {}
         });
       }
-      if (/ /.test(String(spec.text))) {
-        const show = (t) => String(t).replace(/ /g, "\\u00a0");
+      if (/\u00a0/.test(String(spec.text))) {
+        const show = (t) => String(t).replace(/\u00a0/g, "\\u00a0");
+        const builtNbsp = /\u00a0/.test(String(got.text));
         deltas.push({
           severity: "low",
           nodeId: spec.nodeId,
@@ -3322,7 +3324,7 @@ function checkText(cx, n) {
           field: "text (invisible character)",
           expected: show(spec.text),
           actual: show(got.text),
-          note: "the designed string contains a non-breaking space (U+00A0) \u2014 a Figma auto-substitution. Carrying it into the DOM verbatim is usually not what anyone meant; decide deliberately."
+          note: builtNbsp ? "the designed string contains a non-breaking space (U+00A0) \u2014 a Figma auto-substitution. Carrying it into the DOM verbatim is usually not what anyone meant; decide deliberately." : "the designed string contains a non-breaking space (U+00A0) \u2014 a Figma auto-substitution; the build uses an ordinary space there, which is fine unless the non-breaking space was meant to keep the words on one line."
         });
       }
     }
@@ -4451,7 +4453,7 @@ function visualMarkdown(v) {
   if (v.notes.length) L.push("");
   return L;
 }
-var mdText = (x) => (x ?? "").replace(/\r?\n|\r/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\|/g, "\\|").replace(/`/g, "\\`");
+var mdText = (x) => (x ?? "").replace(/\r?\n|\r/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/`/g, "\\`");
 var behaviourWhere = (c) => [c.nodeId ? mdText(c.nodeId) : "", c.trigger ? `(${mdText(c.trigger)})` : "", c.target ? mdText(c.target) : ""].filter(Boolean).join(" ");
 var BEHAVIOUR_MD_ROWS = 80;
 function behaviourMarkdown(b) {

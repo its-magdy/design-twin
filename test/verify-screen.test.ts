@@ -185,7 +185,7 @@ console.log("verify-screen — text:");
   const exp = buildExpectation([doc([
     textNode("2:1", "Back", "Back to Orders", { family: "Poppins", size: 14 }),
     textNode("2:2", "Header", "NO. of Employees", { family: "Poppins", size: 14 }),
-    textNode("2:3", "Empty", "No jet roles added yet.", { family: "Poppins", size: 14 }),
+    textNode("2:3", "Empty", "No jet roles\u00a0added yet.", { family: "Poppins", size: 14 }),
   ])]);
   const rep = compare(exp, measured([
     { nodeId: "2:1", styles: { text: "Back to List" } },
@@ -200,6 +200,41 @@ console.log("verify-screen — text:");
     rep.deltas.some((d) => d.nodeId === "2:3" && /non-breaking space/.test(d.note || "")));
   ok("[text] …and printed as an ESCAPE, so the row is not two identical-looking strings",
     (() => { const d = rep.deltas.find((x) => x.nodeId === "2:3" && /invisible/.test(x.field)); return d !== undefined && /\\u00a0/.test(String(d.expected)) && !/\\u00a0/.test(String(d.actual)); })());
+}
+{
+  // A non-breaking space and a plain space are the same copy, in either direction; only the invisible-character
+  // row marks the NBSP, and it marks NBSPs alone — the ordinary spaces in the same string stay spaces.
+  const exp = buildExpectation([doc([
+    textNode("2:4", "Save", "Save\u00a0changes now", { family: "Poppins", size: 14 }),
+    textNode("2:5", "Plain", "Save changes now", { family: "Poppins", size: 14 }),
+    textNode("2:6", "Both", "Pay\u00a0now", { family: "Poppins", size: 14 }),
+    // a layer named Placeholder is an input placeholder: its copy is compared as placeholderText
+    textNode("2:7", "Placeholder", "Search by\u00a0name", { family: "Poppins", size: 14 }),
+    textNode("2:8", "Placeholder plain", "Search by name", { family: "Poppins", size: 14 }),
+  ])]);
+  const rep = compare(exp, measured([
+    { nodeId: "2:4", styles: { text: "Save changes now" } },
+    { nodeId: "2:6", styles: { text: "Pay\u00a0now" } },
+    { nodeId: "2:7", styles: { tag: "input", placeholderText: "Search by name" } },
+    { nodeId: "2:8", styles: { tag: "input", placeholderText: "Search by\u00a0name" } },
+    { nodeId: "2:5", styles: { text: "Save\u00a0changes now" } },
+  ]));
+  ok("[text] a designed NBSP matches a built plain space (no text delta)", !rep.deltas.some((d) => d.nodeId === "2:4" && d.field === "text"));
+  ok("[text] a designed plain space matches a built NBSP (no text delta)", !rep.deltas.some((d) => d.nodeId === "2:5" && d.field === "text"));
+  ok("[text] the invisible-character row escapes the NBSP only, and only for the design that has one",
+    (() => {
+      const rows = rep.deltas.filter((x) => /invisible/.test(x.field) && (x.nodeId === "2:4" || x.nodeId === "2:5"));
+      const d = rows.find((x) => x.nodeId === "2:4");
+      return rows.length === 1 && d !== undefined && d.expected === "Save\\u00a0changes now" && d.actual === "Save changes now";
+    })());
+  const noteOf = (id: string): string => must(rep.deltas.find((x) => x.nodeId === id && /invisible/.test(x.field))?.note, `${id} invisible-character note`);
+  ok("[text] a designed NBSP the build carries too stays a low row and says to decide deliberately",
+    rep.deltas.some((x) => x.nodeId === "2:6" && /invisible/.test(x.field) && x.severity === "low") && /decide deliberately/.test(noteOf("2:6")) && !/ordinary space/.test(noteOf("2:6")));
+  ok("[text] a designed NBSP the build spells as a plain space stays a low row and says the ordinary space is fine unless it was meant to keep the words on one line",
+    rep.deltas.some((x) => x.nodeId === "2:4" && /invisible/.test(x.field) && x.severity === "low") && /ordinary space/.test(noteOf("2:4")) && /one line/.test(noteOf("2:4")) && !/decide deliberately/.test(noteOf("2:4")));
+  ok("[placeholder] the specs under test carry placeholderText", exp.nodes.filter((s) => s.placeholderText !== undefined).length === 2);
+  ok("[placeholder] a designed NBSP matches a built plain space, and the reverse (no placeholder text delta)",
+    !rep.deltas.some((d) => (d.nodeId === "2:7" || d.nodeId === "2:8") && d.field === "placeholder text"));
 }
 
 // ---------------------------------------------------------------- coverage and interactions
