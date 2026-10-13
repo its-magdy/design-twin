@@ -11,11 +11,12 @@ import http from "node:http";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import crypto from "node:crypto";
+import { EventEmitter } from "node:events";
 import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import { errCode, errMsg } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
-import { TIMEOUTS, HEARTBEAT_MS } from "./timeouts.ts";
+import { TIMEOUTS, HEARTBEAT_MS, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS, bridgePortOrExit } from "./ports.ts";
 import { daemonSupported, legacySock } from "./daemon.ts";
@@ -234,9 +235,15 @@ function parsePluginFrame(parsed: unknown): PluginFrame | null {
   return { type: "reply", id: m.id, ok: !!m.ok, result: m.result, error: m.error };
 }
 
+/** The part of a socket the registry reads: whether it is still open. A ws WebSocket in the bridge; the
+ *  test suite drives the registry with plain objects of this shape. */
+interface RegistrySocket {
+  readyState: number;
+}
+
 /** One registry entry: a connected plugin socket plus what its `hello` said. */
-interface ClientEntry {
-  ws: WebSocket;
+interface ClientEntry<S extends RegistrySocket = WebSocket> {
+  ws: S;
   connId: string;
   connectedAt: number;
   instanceId: string | null;
@@ -344,6 +351,229 @@ function portInUseMessage(port: number, platform: NodeJS.Platform = process.plat
   return `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. Stop it first, or ${others}${legacy}`;
 }
 
+// ---- the client registry: which plugin sockets are connected, what each `hello` said, and who addresses which.
+
+/** A connection id as the registry mints it ("c" + a per-bridge sequence number). A target of this form
+ *  names one socket, so it never depends on identification: waits for a client never hold it for a name. */
+export function isConnId(target: string): boolean {
+  return /^c\d+$/.test(target);
+}
+
+/** How long a connected client that has not sent its `hello` still holds an unaddressed wait for one that
+ *  has. The plugin sends it a beat after the socket opens (ui.html, on every open); a client that never does
+ *  (a bundle that predates `hello`) is taken as it is once this passes, so it cannot hold a whole connect window. */
+const IDENTIFY_GRACE_MS = 3000;
+
+// setTimeout runs a delay above this at once ("When delay is larger than 2147483647 … the delay will be set
+// to 1" — nodejs.org/api/timers.html#settimeoutcallback-delay-args), which would make a long wait spin.
+const MAX_TIMER_MS = 2147483647;
+
+/** What requestWithClient takes beyond the positional arguments. `waitMs` (> 0): first wait for the target
+ *  to be connected, with that connect window — see the registry's awaitClient. */
+export interface RequestOptions {
+  waitMs?: number;
+}
+
+type Hello = Extract<PluginFrame, { type: "hello" }>;
+
+/** Why a request the caller gave up on was rejected: its signal's reason when that is an Error of the
+ *  caller's own, else `fallback`. A bare abort() carries a DOMException "AbortError" (itself an Error in
+ *  Node), which names nothing, so it gets the fixed text. */
+function abortError(signal: AbortSignal, fallback: string): Error {
+  const r: unknown = signal.reason;
+  return r instanceof Error && !(r instanceof DOMException) ? r : new Error(fallback);
+}
+
+/**
+ * The client registry, kept apart from the sockets so the test suite can drive it with plain objects. Every
+ * change (a client added, identified or removed, the registry cleared) is announced on one event, which
+ * is what awaitClient waits on.
+ */
+function createRegistry<S extends RegistrySocket = WebSocket>() {
+  const clients = new Map<string, ClientEntry<S>>(); // connId -> { ws, connId, connectedAt, instanceId, file, fileKey, page }
+  const changes = new EventEmitter();
+  // One listener per waiting request; several tool calls can wait at once, which is not a leak.
+  changes.setMaxListeners(0);
+  let connSeq = 0;
+  let closed = false;
+  const changed = (): void => { changes.emit("change"); };
+
+  function add(ws: S): ClientEntry<S> {
+    const connId = "c" + ++connSeq;
+    const entry: ClientEntry<S> = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, frames: 0, isAlive: true };
+    clients.set(connId, entry);
+    changed();
+    return entry;
+  }
+
+  function identify(entry: ClientEntry<S>, hello: Hello): void {
+    entry.instanceId = hello.instanceId;
+    entry.file = hello.file;
+    entry.fileKey = hello.fileKey;
+    entry.page = hello.page;
+    // The plugin's own build version (figma-plugin/package.json, baked in at build
+    // time — see figma-plugin/build.ts). `null` for a plugin bundle old enough to predate this
+    // field entirely, which is itself a useful signal (definitely stale).
+    entry.pluginVersion = hello.pluginVersion;
+    changed();
+  }
+
+  // Only forget THIS entry. A connId is never reused, but the check keeps a late close of a socket the
+  // heartbeat already dropped from touching anything else.
+  function remove(entry: ClientEntry<S>): void {
+    if (clients.get(entry.connId) !== entry) return;
+    clients.delete(entry.connId);
+    changed();
+  }
+
+  // The bridge is closing: nothing will connect any more, so every wait ends now instead of at its window.
+  function clear(): void {
+    clients.clear();
+    closed = true;
+    changed();
+  }
+
+  const isLive = (e: ClientEntry<S> | undefined): e is ClientEntry<S> => !!e && !!e.ws && e.ws.readyState === WebSocket.OPEN;
+  const live = (): ClientEntry<S>[] => [...clients.values()].filter(isLive);
+
+  // One connection, described for a human or an agent choosing between them. `describe` is what a
+  // listing shows and what an ambiguity error quotes, so the two can never disagree about what a
+  // client is called.
+  const describe = (e: ClientEntry<S>): ClientRow => ({
+    connId: e.connId,
+    file: e.file,
+    fileKey: e.fileKey,
+    page: e.page,
+    instanceId: e.instanceId,
+    connectedAt: e.connectedAt,
+    uptimeMs: Date.now() - e.connectedAt,
+    identified: !!e.instanceId,
+    pluginVersion: e.pluginVersion || null,
+    pluginStale: e.instanceId ? pluginStalenessNote(e.pluginVersion) : null,
+  });
+
+  // Which connection does a command go to? The rules, in order:
+  //   no target + exactly one client  -> that one (the overwhelmingly common case: one file open)
+  //   no target + several clients     -> REFUSE, and list them. Silently picking one would send an
+  //                                      export to whichever file happened to connect first, write it
+  //                                      to the caller's outDir, and look completely successful. adb
+  //                                      makes the same call ("more than one device") for the same
+  //                                      reason: guessing is worse than asking.
+  //   target                          -> exact connId, then exact fileKey, then case-insensitive
+  //                                      substring of the file name. A substring matching several
+  //                                      files is refused rather than resolved to the first.
+  // The target rules above, as data: which live entries a target names. resolveClient turns the
+  // outcome into the routed entry or the error; awaitClient waits on it (a `none` may become a `one`
+  // while a second plugin window is still redialling).
+  function matchClient(entries: ClientEntry<S>[], t: string): ClientEntry<S>[] {
+    const byId = entries.find((e) => e.connId === t);
+    if (byId) return [byId];
+    const byKey = entries.find((e) => e.fileKey && e.fileKey === t);
+    if (byKey) return [byKey];
+    const lower = t.toLowerCase();
+    return entries.filter((e) => e.file && e.file.toLowerCase().includes(lower));
+  }
+  function resolveClient(target?: unknown): ClientEntry<S> {
+    const entries = live();
+    if (!entries.length) {
+      throw new Error("Figma plugin not connected. Open the file in Figma and run the plugin.");
+    }
+    const list = () => entries.map((e) => `  ${e.connId}  ${JSON.stringify(e.file || "(unidentified)")}${e.fileKey ? "  fileKey " + e.fileKey : ""}`).join("\n");
+    if (target === undefined || target === null || target === "") {
+      const [only] = entries;
+      if (entries.length === 1 && only !== undefined) return only; // only is always set when length is 1
+      throw new Error(
+        `${entries.length} Figma files are connected to the bridge — say which one to use.\n${list()}\n` +
+        `Pass the connId, the fileKey, or part of the file name (CLI: --client <id|name>; MCP: client: "<id|name>").`
+      );
+    }
+    const t = String(target);
+    const matched = matchClient(entries, t);
+    const [hit] = matched;
+    if (matched.length === 1 && hit !== undefined) return hit; // hit is always set when length is 1
+    if (matched.length > 1) {
+      throw new Error(
+        `'${t}' matches ${matched.length} connected files — be more specific, or use the connId.\n${list()}`
+      );
+    }
+    throw new Error(`no connected Figma file matches '${t}'. Connected:\n${list()}`);
+  }
+
+  /**
+   * Wait, bounded, until `target` can be routed — the one wait every front-end uses before a request
+   * (figma-pull's own bridge, the daemon for a request that carries a connect window, the MCP server for
+   * a named `client`). Resolves when:
+   *   - a NAMED target (file name or fileKey, not a connId) matches at least one live client — one OR
+   *     several: an ambiguity is resolveClient's to report. Every open plugin window redials on its own
+   *     3 s clock (figma-plugin ui.html), so with two files open whichever lands first is all there is for
+   *     a moment (seen live: `--client "Design System"` failed with only the other file listed, and that
+   *     file connected two seconds later). And a socket that is open is not yet identified: its `hello`,
+   *     which carries the file name, arrives a beat later ("one run in four failed").
+   *   - no target, or a connId: a live client has identified itself, or has been connected for
+   *     IDENTIFY_GRACE_MS without doing so;
+   *   - the window runs out: `waitMs` for a first live client; once one is live, a named target gets
+   *     min(waitMs, NAMED_CLIENT_WAIT_MS) from that moment, so a name that never matches fails with the
+   *     connected list instead of holding the whole connect window;
+   *   - `signal` aborts, or the registry is cleared (the bridge closed).
+   * Never rejects: resolveClient, run afterwards, says what is wrong with whatever is connected then.
+   * Woken by the registry's change event (a connect, a `hello`, a close) — no polling; the one timer is the
+   * window (or a client's identification grace), unref'd so a wait never keeps a process alive by itself,
+   * and cleared on every exit, as is the listener. `namedCapMs` is NAMED_CLIENT_WAIT_MS (the test suite
+   * shortens it).
+   */
+  function awaitClient(target: string | null | undefined, waitMs: number, signal?: AbortSignal, namedCapMs: number = NAMED_CLIENT_WAIT_MS): Promise<void> {
+    const t = target ?? "";
+    const named = t !== "" && !isConnId(t);
+    const windowMs = Number.isFinite(waitMs) && waitMs > 0 ? waitMs : 0;
+    const start = Date.now();
+    let firstLiveAt: number | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let done = false;
+    return new Promise<void>((resolve) => {
+      const finish = (): void => {
+        // emit() still calls a listener removed during that same emit (nodejs.org/api/events.html), hence `done`.
+        if (done) return;
+        done = true;
+        changes.off("change", check);
+        signal?.removeEventListener("abort", finish);
+        if (timer) clearTimeout(timer);
+        timer = null;
+        resolve();
+      };
+      function check(): void {
+        if (done) return;
+        if (closed || signal?.aborted) return finish();
+        const now = Date.now();
+        const entries = live();
+        if (entries.length && firstLiveAt === null) firstLiveAt = now;
+        const ready = named
+          ? matchClient(entries, t).length > 0
+          : entries.some((e) => !!e.instanceId || now - e.connectedAt >= IDENTIFY_GRACE_MS);
+        if (ready) return finish();
+        const deadline = named && firstLiveAt !== null ? firstLiveAt + Math.min(windowMs, namedCapMs) : start + windowMs;
+        if (now >= deadline) return finish();
+        // The next moment the answer can change without an event: the window, or an unidentified client's grace.
+        let wake = deadline;
+        if (!named) for (const e of entries) wake = Math.min(wake, e.connectedAt + IDENTIFY_GRACE_MS);
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(check, Math.min(Math.max(wake - now, 1), MAX_TIMER_MS));
+        timer.unref();
+      }
+      changes.on("change", check);
+      signal?.addEventListener("abort", finish, { once: true });
+      check();
+    });
+  }
+
+  return {
+    clients, add, identify, remove, clear, live, describe, resolveClient, awaitClient,
+    /** connections registered so far (bad-token sockets are never registered) */
+    connections: (): number => connSeq,
+    /** test seam: how many waits are listening for registry changes right now */
+    waiting: (): number => changes.listenerCount("change"),
+  };
+}
+
 /** createBridge options. `onListenError` is for a caller that must SURVIVE a failed bind (the MCP
  * server: a held port is a tool error there, not a reason to kill the stdio session). Without it, a
  * held port prints the fix and exits 1 — the CLI behaviour, unchanged. `heartbeatMs` overrides the
@@ -444,7 +674,8 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // Chrome DevTools Protocol shape — discover targets, then address a server-assigned id — rather than
   // the user-typed "channel name" other Figma bridges use, which has no uniqueness guarantee and
   // misroutes silently on a typo or a duplicate.
-  const clients = new Map<string, ClientEntry>(); // connId -> { ws, connId, connectedAt, instanceId, file, fileKey, page }
+  const registry = createRegistry();
+  const clients = registry.clients;
   const pending = new Map<string, PendingRequest>(); // requestId -> { resolve, reject, connId }
   // Request ids are `r<nonce>-<seq>`, the nonce minted once per bridge. A bare per-process counter
   // restarted at r1 in every bridge, so a plugin still finishing a run for a bridge that has since
@@ -455,7 +686,6 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // knows, and is dropped. Opaque to the plugin, which only ever echoes it back.
   const nonce = crypto.randomBytes(3).toString("hex");
   let seq = 0;
-  let connSeq = 0;
   let takeovers = 0; // kept ONLY for the historical whoami field; nothing displaces anything.
   let lastTakeoverAt = 0;
 
@@ -472,11 +702,10 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     // made two open Figma files fight: the displaced plugin's 3s auto-reconnect immediately stole the
     // bridge back, and the two ping-ponged forever (observed live). Admitting both removes the
     // contention rather than arbitrating it.
-    const connId = "c" + ++connSeq;
-    const entry: ClientEntry = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, frames: 0, isAlive: true };
+    const entry = registry.add(ws);
+    const connId = entry.connId;
     ws.on("pong", () => { entry.isAlive = true; });
     connIds.set(ws, connId);
-    clients.set(connId, entry);
     console.error(`[bridge] plugin connected: ${connId} (${clients.size} connected).`);
 
     ws.on("message", (data: RawData, isBinary: boolean) => {
@@ -525,14 +754,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       // correctly labelled without any resumable-session machinery. A `hello` carries no request id,
       // so it can never be confused with a reply.
       if (msg.type === "hello") {
-        entry.instanceId = msg.instanceId;
-        entry.file = msg.file;
-        entry.fileKey = msg.fileKey;
-        entry.page = msg.page;
-        // The plugin's own build version (figma-plugin/package.json, baked in at build
-        // time — see figma-plugin/build.ts). `null` for a plugin bundle old enough to predate this
-        // field entirely, which is itself a useful signal (definitely stale).
-        entry.pluginVersion = msg.pluginVersion;
+        registry.identify(entry, msg);
         const stalenessNote = pluginStalenessNote(entry.pluginVersion);
         console.error(`[bridge] ${connId} identified: ${JSON.stringify(entry.file || "(unnamed file)")}` +
           (entry.fileKey ? ` [fileKey ${entry.fileKey}]` : " [no fileKey — private-plugin API not in effect]") +
@@ -565,7 +787,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       // Only forget THIS connection. A single-socket guard (`socket === ws`)
       // would do the same job by accident; with a registry it has to be explicit, or one file closing
       // its plugin window would drop the entry a different file is actively using.
-      if (clients.get(connId) === entry) clients.delete(connId);
+      registry.remove(entry);
       const label = entry.file ? ` (${entry.file})` : "";
       console.error(`[bridge] plugin disconnected: ${connId}${label} (${clients.size} still connected).`);
       const reason = reasonBuf && reasonBuf.length ? reasonBuf.toString() : "";
@@ -604,7 +826,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   const heartbeatTick = (): void => {
     for (const [id, e] of clients) {
       if (!e.isAlive) {
-        clients.delete(id);
+        registry.remove(e);
         console.error(`[bridge] ${id} did not answer a heartbeat ping — terminating it.`);
         try { e.ws.terminate(); } catch { /* already gone */ }
         continue;
@@ -635,96 +857,17 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     console.error("[bridge] server error:", e.message);
   });
 
-  const isLive = (e: ClientEntry | undefined): e is ClientEntry => !!e && !!e.ws && e.ws.readyState === WebSocket.OPEN;
-  const liveClients = () => [...clients.values()].filter(isLive);
+  const liveClients = registry.live;
+  const describe = registry.describe;
+  const resolveClient = registry.resolveClient;
+  const awaitClient = registry.awaitClient;
 
   function isConnected(): boolean {
     return liveClients().length > 0;
   }
 
-  // One connection, described for a human or an agent choosing between them. `describe` is what a
-  // listing shows and what an ambiguity error quotes, so the two can never disagree about what a
-  // client is called.
-  const describe = (e: ClientEntry): ClientRow => ({
-    connId: e.connId,
-    file: e.file,
-    fileKey: e.fileKey,
-    page: e.page,
-    instanceId: e.instanceId,
-    connectedAt: e.connectedAt,
-    uptimeMs: Date.now() - e.connectedAt,
-    identified: !!e.instanceId,
-    pluginVersion: e.pluginVersion || null,
-    pluginStale: e.instanceId ? pluginStalenessNote(e.pluginVersion) : null,
-  });
-
   function listClients(): ClientRow[] {
     return liveClients().map(describe);
-  }
-
-  // Which connection does a command go to? The rules, in order:
-  //   no target + exactly one client  -> that one (the overwhelmingly common case: one file open)
-  //   no target + several clients     -> REFUSE, and list them. Silently picking one would send an
-  //                                      export to whichever file happened to connect first, write it
-  //                                      to the caller's outDir, and look completely successful. adb
-  //                                      makes the same call ("more than one device") for the same
-  //                                      reason: guessing is worse than asking.
-  //   target                          -> exact connId, then exact fileKey, then case-insensitive
-  //                                      substring of the file name. A substring matching several
-  //                                      files is refused rather than resolved to the first.
-  // The target rules above, as data: which live entries a target names. resolveClient turns the
-  // outcome into the routed entry or the error; waitForClient polls it (a `none` may become a `one`
-  // while a second plugin window is still redialling).
-  function matchClient(live: ClientEntry[], t: string): ClientEntry[] {
-    const byId = live.find((e) => e.connId === t);
-    if (byId) return [byId];
-    const byKey = live.find((e) => e.fileKey && e.fileKey === t);
-    if (byKey) return [byKey];
-    const lower = t.toLowerCase();
-    return live.filter((e) => e.file && e.file.toLowerCase().includes(lower));
-  }
-  function resolveClient(target?: unknown): ClientEntry {
-    const live = liveClients();
-    if (!live.length) {
-      throw new Error("Figma plugin not connected. Open the file in Figma and run the plugin.");
-    }
-    const list = () => live.map((e) => `  ${e.connId}  ${JSON.stringify(e.file || "(unidentified)")}${e.fileKey ? "  fileKey " + e.fileKey : ""}`).join("\n");
-    if (target === undefined || target === null || target === "") {
-      const [only] = live;
-      if (live.length === 1 && only !== undefined) return only; // only is always set when length is 1
-      throw new Error(
-        `${live.length} Figma files are connected to the bridge — say which one to use.\n${list()}\n` +
-        `Pass the connId, the fileKey, or part of the file name (CLI: --client <id|name>; MCP: client: "<id|name>").`
-      );
-    }
-    const t = String(target);
-    const matched = matchClient(live, t);
-    const [hit] = matched;
-    if (matched.length === 1 && hit !== undefined) return hit; // hit is always set when length is 1
-    if (matched.length > 1) {
-      throw new Error(
-        `'${t}' matches ${matched.length} connected files — be more specific, or use the connId.\n${list()}`
-      );
-    }
-    throw new Error(`no connected Figma file matches '${t}'. Connected:\n${list()}`);
-  }
-
-  // Wait for a target to name at least one live client. A named file's plugin window may not have
-  // redialled yet: every open window retries the bridge on its own 3 s clock (figma-plugin ui.html),
-  // so with two files open, whichever lands first is all resolveClient can see for a moment — observed
-  // live, `--client "Design System"` failed at once with only the other file listed, and that file
-  // connected two seconds later. Resolves as soon as the target matches (one OR several — an
-  // ambiguity is the caller's to hear about, from resolveClient) or when the window runs out; never
-  // throws, so the request path's own resolveClient still reports whatever is connected then.
-  function waitForClient(target: string, timeoutMs: number, pollMs = 100): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const start = Date.now();
-      (function poll() {
-        if (matchClient(liveClients(), target).length) return resolve();
-        if (Date.now() - start > timeoutMs) return resolve();
-        setTimeout(poll, pollMs);
-      })();
-    });
   }
 
   // Server-side half of the whoami probe. The plugin reports who IT is (instanceId, file, fileKey);
@@ -741,7 +884,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       connected: live.length > 0,
       connectedAt: first ? first.connectedAt : null,
       connectionUptimeMs: first ? Date.now() - first.connectedAt : 0,
-      connectionsThisRun: connSeq,
+      connectionsThisRun: registry.connections(),
       clientsConnected: live.length,
       clients: live.map(describe),
       takeovers,
@@ -776,10 +919,10 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // here is a promise the runtime keeps rather than a cast.
   // `onProgress` (optional, last) receives every progress tick the chosen connection sends while this
   // request is in flight — the plugin relays them during a bridge-triggered export.
-  // `signal` (optional, last): the caller's way to give up on the request — the daemon aborts it when
-  // ITS client disconnects. See requestWithClient for what an abort does on the wire.
-  function request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<Commands[C]["reply"]> {
-    return requestWithClient(cmd, args, timeoutMs, target, stallMs, onProgress, signal).then((o) => o.reply);
+  // `signal`: the caller's way to give up on the request — the daemon aborts it when
+  // ITS client disconnects. See requestWithClient for what an abort does on the wire, and for `opts`.
+  function request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal, opts: RequestOptions = {}): Promise<Commands[C]["reply"]> {
+    return requestWithClient(cmd, args, timeoutMs, target, stallMs, onProgress, signal, opts).then((o) => o.reply);
   }
 
   // CANCEL. Whenever this side gives up on a request it has already sent —
@@ -799,13 +942,28 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // picked for `target`, described exactly as listClients() would. figma-pull.ts stamps that onto a
   // screen export as `sourceFile` without re-implementing the matching rules.
   //
-  // `signal` (optional, last — every existing call site is unchanged): already aborted → rejects at once
-  // and nothing is sent; aborted while pending → the cancel frame goes to the plugin, the request is
-  // forgotten, and the promise rejects with the signal's reason when that is an Error of the caller's
-  // own (the daemon passes one naming its departed client), else "request aborted by the caller".
-  function requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<RequestOutcome<C>> {
+  // `opts.waitMs` (> 0): wait for `target` first, with that connect window (awaitClient) — the MCP server
+  // passes it for a named `client`, the daemon for a request that carries a connect window. Without it
+  // the target is resolved at once, against whatever is connected now.
+  //
+  // `signal`: already aborted → rejects at once and nothing is sent; aborted during the wait → rejects
+  // with the signal's reason when that is an Error of the caller's own, else "request aborted before it
+  // was sent", and nothing is sent; aborted while pending → the cancel frame goes to the plugin, the
+  // request is forgotten, and the promise rejects with the signal's reason when that is an Error of the
+  // caller's own (the daemon passes one naming its departed client), else "request aborted by the caller".
+  function requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal, opts: RequestOptions = {}): Promise<RequestOutcome<C>> {
+    if (signal?.aborted) return Promise.reject(new Error("request aborted before it was sent"));
+    const waitMs = opts.waitMs ?? 0;
+    if (!(waitMs > 0)) return dispatch(cmd, args, timeoutMs, target, stallMs, onProgress, signal);
+    return awaitClient(target, waitMs, signal).then(() => {
+      if (signal?.aborted) throw abortError(signal, "request aborted before it was sent");
+      return dispatch(cmd, args, timeoutMs, target, stallMs, onProgress, signal);
+    });
+  }
+
+  // requestWithClient after its wait: resolve the target now, send, and settle on the reply.
+  function dispatch<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number, target: string | null | undefined, stallMs: number | undefined, onProgress: ((tick: ProgressTick) => void) | undefined, signal: AbortSignal | undefined): Promise<RequestOutcome<C>> {
     return new Promise<RequestOutcome<C>>((resolve, reject) => {
-      if (signal?.aborted) return reject(new Error("request aborted before it was sent"));
       let client: ClientEntry;
       try {
         client = resolveClient(target);
@@ -890,45 +1048,11 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
           if (!p) return; // settled already
           pending.delete(id);
           cancelOnWire(client, id);
-          const r: unknown = sig.reason;
-          // A bare abort() carries a DOMException "AbortError" (itself an Error in Node) — that names
-          // nothing, so it gets the fixed text; an Error the caller built is passed through as-is.
-          p.reject(r instanceof Error && !(r instanceof DOMException) ? r : new Error("request aborted by the caller"));
+          p.reject(abortError(sig, "request aborted by the caller"));
         };
         sig.addEventListener("abort", onAbort, { once: true });
       }
       client.ws.send(JSON.stringify({ id, cmd, args }));
-    });
-  }
-
-  function waitForConnection(timeoutMs: number = TIMEOUTS.command, pollMs = 400): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const start = Date.now();
-      (function poll() {
-        if (isConnected()) return resolve();
-        if (Date.now() - start > timeoutMs) return reject(new Error("timed out waiting for the plugin to connect"));
-        setTimeout(poll, pollMs);
-      })();
-    });
-  }
-
-  // A socket being open is not the same as it being IDENTIFIED: the plugin's `hello` (which carries
-  // `file`, used by --client <name>) arrives a beat after the WebSocket handshake, not in the same
-  // tick. Resolving a name-based --client the instant waitForConnection settles was a coin flip
-  // ("one run in four failed ... the plugin's identified message has not arrived yet"),
-  // because `resolveClient` can only match `file` on entries that already have it. This waits (briefly
-  // — plugin identification is sub-second once connected) for at least one live client to be
-  // identified, OR for `timeoutMs` to elapse, whichever comes first; it never rejects — callers still
-  // get whatever resolveClient() decides afterwards, including its own honest error.
-  function waitForIdentified(timeoutMs = 3000, pollMs = 100): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const start = Date.now();
-      (function poll() {
-        const live = liveClients();
-        if (!live.length || live.some((e) => e.instanceId)) return resolve();
-        if (Date.now() - start > timeoutMs) return resolve();
-        setTimeout(poll, pollMs);
-      })();
     });
   }
 
@@ -958,14 +1082,14 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       try { e.ws.close(); } catch { /* already gone */ }
       setTimeout(() => { try { e.ws.terminate(); } catch { /* already gone */ } }, 2000).unref();
     }
-    clients.clear();
+    registry.clear(); // and every wait for a client ends now
     // noServer mode: wss.close() does not close an HTTP server of its own, so the listener goes too.
     try { wss.close(); } catch { /* already closing */ }
     try { server.close(); } catch { /* not listening */ }
   }
 
   return {
-    request, requestWithClient, isConnected, waitForConnection, waitForIdentified, waitForClient, connectionInfo, listClients, resolveClient, close, port, listening,
+    request, requestWithClient, isConnected, awaitClient, connectionInfo, listClients, resolveClient, close, port, listening,
     /** test seam: one heartbeat round, run by hand — with `heartbeatMs: 0` it is the only one. */
     heartbeatTick,
   };
@@ -992,4 +1116,4 @@ export type { BridgeOptions };
 // verifyClientWith/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-export { createBridge, connectionFor, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, portInUseMessage };
+export { createBridge, createRegistry, connectionFor, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, portInUseMessage, IDENTIFY_GRACE_MS };

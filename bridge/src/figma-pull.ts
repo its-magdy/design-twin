@@ -188,7 +188,7 @@ import * as LAYOUT from "./project-layout.ts";
 // staleness notes: parseArgs and formatClients are pure and test-driven, and importing this module must
 // NOT load server-core (token resolution; a process.exit on a bad FIGMA_BRIDGE_PORT). cli() loads
 // server-core itself, after routing and the --token-file pre-scan.
-import { TIMEOUTS, exportTimeout, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
+import { TIMEOUTS, exportTimeout } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
@@ -987,24 +987,20 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
     // ever showing up is this command's legitimate "none" answer, not an error, so the wait is capped
     // at `connectWaitMs` but a timeout falls through to the (possibly still empty) listClients() below
     // instead of throwing.
+    // One wait (server-core awaitClient) covers the connect window and the target: a name/fileKey target
+    // (not a bare c<N> connId, which never depends on identification) can lose the race against the
+    // plugin's `hello` and, with two files open, against the OTHER file's window — whichever redials
+    // first is the only one connected for a moment (seen live) — so once a plugin is connected a named
+    // target gets min(--timeout, NAMED_CLIENT_WAIT_MS) more to show up before the request resolves it.
     const tConnect = Date.now();
-    try { await b.waitForConnection(connectWaitMs); }
-    catch (e) {
-      if (!listClients) {
-        b.close();
-        throw new Error(`no Figma plugin connected within ${Math.round(connectWaitMs / 1000)}s. In Figma DESKTOP open the file and run Plugins → Development → Design Twin, then run this again (--timeout <seconds> waits longer; \`dtwin doctor\` says what is wrong if it still won't connect).`);
-      }
-      // listClients: no plugin ever connected within the window — a genuine "none", not a failure.
+    await b.awaitClient(client, connectWaitMs);
+    // "No plugin connected" means none ever did: one that connected and has gone again is the request's
+    // own resolveClient to report ("Figma plugin not connected. …").
+    if (b.connectionInfo().connectionsThisRun === 0 && !listClients) {
+      b.close();
+      throw new Error(`no Figma plugin connected within ${Math.round(connectWaitMs / 1000)}s. In Figma DESKTOP open the file and run Plugins → Development → Design Twin, then run this again (--timeout <seconds> waits longer; \`dtwin doctor\` says what is wrong if it still won't connect).`);
     }
-    // A name/fileKey target (not a bare c<N> connId, which never depends on identification) can lose
-    // the race against the plugin's `hello` — see waitForIdentified's comment — and,
-    // with two files open, against the OTHER file's window: whichever redials first is the only one
-    // connected when the wait above returns (seen live). So a named target is also given a bounded
-    // window to show up before the request resolves it.
-    if (client && !/^c\d+$/.test(client)) {
-      await b.waitForIdentified();
-      await b.waitForClient(client, Math.min(connectWaitMs, NAMED_CLIENT_WAIT_MS));
-    }
+    // listClients: no plugin ever connected within the window — a genuine "none", not a failure.
     timing.connectMs = Date.now() - tConnect;
     send = (cmd, args, timeoutMs) => b.requestWithClient(cmd, args, timeoutMs, client, isExportCmd ? STALL_MS : undefined, onTick);
   }

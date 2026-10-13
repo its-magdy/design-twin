@@ -579,28 +579,40 @@ void (async () => {
     ok("[multi] routes by file-name substring (case-insensitive)",
       (await bridge.request("ping", {}, 5000, "nima")).file === "lib");
 
-    // waitForClient: a NAMED target whose window has not redialled yet (two files open, the other
+    // awaitClient: a NAMED target whose window has not redialled yet (two files open, the other
     // one landed first — seen live) is waited for, bounded; an unknown name times out quietly and
     // the request path's own resolveClient still says what IS connected.
     const tw0 = Date.now();
-    await bridge.waitForClient("nobody-has-this-name", 300);
+    await bridge.awaitClient("nobody-has-this-name", 300);
     const tw = Date.now() - tw0;
-    ok("[multi] waitForClient for a name nobody has returns quietly after its window (no throw)", tw >= 280 && tw < 1500);
+    ok("[multi] awaitClient for a name nobody has returns quietly after its window (no throw)", tw >= 280 && tw < 1500);
     let stillErr: Error | undefined;
     try { await bridge.request("ping", {}, 5000, "nobody-has-this-name"); } catch (e) { stillErr = asErr(e); }
     ok("[multi] …and the request afterwards still gets the unchanged 'no connected Figma file matches' text",
       !!stillErr && stillErr.message.startsWith("no connected Figma file matches 'nobody-has-this-name'. Connected:\n  c1  \"App — Base\"  fileKey KEYBASE"));
-    const waited = bridge.waitForClient("Docs", 3000);
+    const waited = bridge.awaitClient("Docs", 3000);
     let lateWs: WebSocket | undefined;
     setTimeout(() => { void open().then((c) => { lateWs = c; identify(c, { instanceId: "fig-docs", file: "Docs File", fileKey: "KEYDOCS", page: "P" }); autoReply(c, { pong: true, page: "P", file: "docs" }); }); }, 200);
     const tl0 = Date.now();
     await waited;
     const tl = Date.now() - tl0;
-    ok("[multi] waitForClient resolves as soon as the late window identifies under that name (not at the timeout)", tl >= 150 && tl < 2500);
+    ok("[multi] awaitClient resolves as soon as the late window identifies under that name (not at the timeout)", tl >= 150 && tl < 2500);
     ok("[multi] …and the named request then routes to it", (await bridge.request("ping", {}, 5000, "Docs")).file === "docs");
     // Raced against a timer shorter than its own 3 s window: a wait that only ended at the window loses.
-    ok("[multi] waitForClient resolves at once for a name already connected",
-      await Promise.race([bridge.waitForClient("nima", 3000).then(() => "resolved"), new Promise((r) => setTimeout(() => r("window"), 2000))]) === "resolved");
+    ok("[multi] awaitClient resolves at once for a name already connected",
+      await Promise.race([bridge.awaitClient("nima", 3000).then(() => "resolved"), new Promise((r) => setTimeout(() => r("window"), 2000))]) === "resolved");
+    // The same wait through a request's `waitMs`: a late named window is waited for, then routed to.
+    const viaWait = bridge.request("ping", {}, 5000, "Late Named", undefined, undefined, undefined, { waitMs: 3000 });
+    let lateNamed: WebSocket | undefined;
+    setTimeout(() => { void open().then((c) => { lateNamed = c; identify(c, { instanceId: "fig-late", file: "Late Named File", fileKey: null, page: "P" }); autoReply(c, { pong: true, page: "P", file: "late-named" }); }); }, 200);
+    ok("[multi] a request with waitMs waits for its late named target, then routes to it", (await viaWait).file === "late-named");
+    lateNamed?.close();
+    // A caller that gives up during the wait: rejected at once with its own reason, and nothing is sent.
+    const acWait = new AbortController();
+    setTimeout(() => acWait.abort(new Error("the caller left during the wait")), 100);
+    const ta0 = Date.now();
+    const abandonedWait = await bridge.request("ping", {}, 5000, "Never Here", undefined, undefined, acWait.signal, { waitMs: 3000 }).then(() => "answered", (e: unknown) => asErr(e).message);
+    ok("[multi] a request aborted during its wait rejects at once with the caller's reason", abandonedWait === "the caller left during the wait" && Date.now() - ta0 < 1500);
     lateWs?.close();
     await sleep(80);
 
@@ -2082,9 +2094,6 @@ void (async () => {
       clientRow({ connId: "c2", file: "NIMA Library", fileKey: "KEYLIB", page: "Tokens", instanceId: "fig-b", connectedAt: 2, uptimeMs: 2000, identified: true }),
     ],
     close: () => calls.push("close"),
-    waitForConnection: async () => {},
-    // Records the bounded named-client wait the daemon asks for (target + window), see daemon.ts.
-    waitForClient: async (target: string, timeoutMs: number) => { calls.push(`wait:${target}:${timeoutMs}`); },
     // The daemon forwards a command frame's own fields; the fake answers each command with ITS real
     // reply shape (the daemon client checks replies against commands.ts before handing them back),
     // tagging `file` with the command so a round-trip can be told apart. It blows up on `write` (the
@@ -2207,32 +2216,11 @@ void (async () => {
     ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NIMA Library"));
     ok("[daemon] and the command itself still arrives", calls.includes("whoami"));
     ok("[daemon] a bridge that cannot name the client it used leaves `client` null — never a guess", routed.client === null);
-    ok("[daemon] a named client with no connect window asks for no wait", !calls.some((c) => c.startsWith("wait:")));
-    // With a connect window (the CLI behind a daemon passes its own), a NAMED client gets the bounded
-    // waitForClient before the request — min(window, 15 s) — so the second file's window has time to
-    // redial; a bare connId never waits (it does not depend on identification).
+    // A connect window on a bridge with no requestWithClient (the wait lives in server-core's): the
+    // request is still forwarded, at once — the window is not the daemon's to spend.
     calls.length = 0;
-    await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
-    ok("[daemon] a named client WITH a connect window is waited for, capped at 15 s", calls[0] === "wait:NIMA Library:15000" && calls.includes("client:NIMA Library"));
-    calls.length = 0;
-    await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 4000 }, 5000);
-    ok("[daemon] …and a shorter window is used as-is", calls[0] === "wait:NIMA Library:4000");
-    calls.length = 0;
-    await dcli.requestWithClient({ cmd: "whoami", client: "c2", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
-    ok("[daemon] a bare connId target never waits", !calls.some((c) => c.startsWith("wait:")) && calls.includes("client:c2"));
-    // A connect window that runs out with NOTHING connected is not the daemon's error to report: the
-    // request still runs, so the bridge's own resolveClient text ("Figma plugin not connected. Open the
-    // file in Figma and run the plugin.") is what every path prints — not waitForConnection's "timed out
-    // waiting for the plugin to connect" (the MCP's named `client` sends a window).
-    calls.length = 0;
-    const wasConnected = fakeBridge.isConnected, wasWait = fakeBridge.waitForConnection;
-    fakeBridge.isConnected = () => false;
-    fakeBridge.waitForConnection = async () => { calls.push("waitConn"); throw new Error("timed out waiting for the plugin to connect"); };
     const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
-    fakeBridge.isConnected = wasConnected;
-    fakeBridge.waitForConnection = wasWait;
-    ok("[daemon] a connect window that runs out falls through to the request (the bridge's own not-connected text), not the daemon's timeout text",
-      calls[0] === "waitConn" && calls[1] === "wait:NIMA Library:50" && calls.includes("whoami") && afterWindow === "answered");
+    ok("[daemon] a connect window on a bridge without requestWithClient still forwards the request", calls.includes("whoami") && afterWindow === "answered");
     // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
     const cstat = await daemon.status(D_PORT);
     ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
@@ -2283,14 +2271,15 @@ void (async () => {
       const TICK0 = must(TICKS[0], "TICKS[0]"), TICK1 = must(TICKS[1], "TICKS[1]");
       const row: ClientRow = { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true, pluginVersion: null, pluginStale: null };
       const listeners: string[] = []; // whether each forwarded request carried a listener
+      const waits: string[] = []; // each forwarded request's target and connect window (`waitMs`)
       const tickBridge: DaemonBridge = {
         port: P_PORT,
         isConnected: () => true,
-        waitForConnection: async () => {},
         close: () => {},
         request: async () => { throw new Error("a bridge with requestWithClient is never asked through request()"); },
-        requestWithClient: async (cmd, _args, _timeoutMs, _target, _stallMs, onProgress) => {
+        requestWithClient: async (cmd, _args, _timeoutMs, target, _stallMs, onProgress, _signal, opts) => {
           listeners.push(onProgress ? "yes" : "none");
+          waits.push(`${target ?? "-"}:${opts?.waitMs ?? "none"}`);
           // ping: both ticks, then the reply in the same turn (the tightest ordering case).
           if (cmd === "ping") { for (const t of TICKS) onProgress?.(t); return { reply: { pong: true, page: "P", file: "ticked" }, client: row }; }
           // whoami: 4 ticks 150 ms apart, reply at ~600 ms — longer than the client's 400 ms guard, so it
@@ -2333,6 +2322,13 @@ void (async () => {
       const noOpt = await pcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000);
       ok("[daemon-progress] the typed client without a listener does not opt in, and its reply is unchanged",
         noOpt.file === "ticked" && listeners.at(-1) === "none");
+      // The frame's connect window reaches the bridge as requestWithClient's `waitMs`, unchanged (the
+      // bridge's awaitClient caps a named target itself); a frame without one asks for no wait.
+      ok("[daemon] a request with no connect window forwards no waitMs", waits.at(-1) === "-:none");
+      await pcli.request({ cmd: "ping", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
+      ok("[daemon] a request's connect window is forwarded to the bridge as waitMs, with its target", waits.at(-1) === "NIMA Library:90000");
+      await pcli.request({ cmd: "ping", client: "c2", timeoutMs: 5000, waitForConnection: 4000 }, 5000);
+      ok("[daemon] …for a connId target too (the bridge decides it never waits for a name)", waits.at(-1) === "c2:4000");
 
       // Timeout: each tick re-arms the client's outer guard (a silence budget, like the CLI's stall check).
       let slowTicks = 0;
@@ -3221,26 +3217,27 @@ void (async () => {
     ok("[outdir-trap] no warning when the outDir does not already contain export/", !/already contains/.test(r2.stderr));
   }
 
-  // ---------------------------------------------------------------- server-core waitForIdentified
-  console.log("\nserver-core — waitForIdentified (--client name race):");
+  // ---------------------------------------------------------------- server-core awaitClient (identification)
+  console.log("\nserver-core — awaitClient waits for the hello (--client name race):");
   {
     const port = nextPort++;
     const b = core.createBridge(port);
-    await b.waitForIdentified(200); // no clients at all: resolves immediately, never hangs
-    ok("[identify] waitForIdentified with nobody connected resolves without hanging", true);
+    const t0 = Date.now();
+    await b.awaitClient(null, 200); // no clients at all: resolves at its window, never hangs
+    ok("[identify] awaitClient with nobody connected resolves at its window without hanging", Date.now() - t0 < 1500);
     b.close();
   }
   {
     const { bridge: b, client: ws1 } = await connectedBridge();
-    // Not yet identified (no `hello` sent) — waitForIdentified must wait for it rather than return
+    // Not yet identified (no `hello` sent) — awaitClient must wait for it rather than return
     // instantly, which is exactly the race ("the plugin's identified message
     // has not arrived yet").
     const before = must(b.listClients()[0], "freshly connected client row");
     ok("[identify] freshly connected client starts unidentified", before.identified === false);
     setTimeout(() => ws1.send(JSON.stringify({ type: "hello", instanceId: "i1", file: "App — Base" })), 60);
-    await b.waitForIdentified(2000);
-    const after = must(b.listClients()[0], "client row after waitForIdentified");
-    ok("[identify] waitForIdentified waits for the hello, then returns", after.identified === true && after.file === "App — Base");
+    await b.awaitClient(null, 2000);
+    const after = must(b.listClients()[0], "client row after awaitClient");
+    ok("[identify] awaitClient waits for the hello, then returns", after.identified === true && after.file === "App — Base");
     ws1.close();
     b.close();
   }
@@ -3263,7 +3260,7 @@ void (async () => {
     // (figma-plugin/src/bridge.ts's `pluginVersion` -> ui.html's `hello` -> here).
     const { bridge: b, client: ws1 } = await connectedBridge();
     ws1.send(JSON.stringify({ type: "hello", instanceId: "old-1", file: "Old Bundle File", pluginVersion: "0.0.1" }));
-    await b.waitForIdentified(1000);
+    await b.awaitClient(null, 1000);
     const row = must(b.listClients()[0], "old-plugin client row");
     ok("[version] a hello's pluginVersion is recorded and surfaced on the client row", row.pluginVersion === "0.0.1");
     ok("[version] an old plugin's row carries the staleness note", typeof row.pluginStale === "string" && /0\.0\.1/.test(row.pluginStale));
@@ -3275,7 +3272,7 @@ void (async () => {
     // unknown), and must not crash anything downstream.
     const { bridge: b, client: ws1 } = await connectedBridge();
     ws1.send(JSON.stringify({ type: "hello", instanceId: "noversion-1", file: "No Version File" }));
-    await b.waitForIdentified(1000);
+    await b.awaitClient(null, 1000);
     const row = must(b.listClients()[0], "no-version client row");
     ok("[version] a hello with no pluginVersion at all records null AND is treated as stale (not a crash)",
       row.pluginVersion === null && typeof row.pluginStale === "string" && /predates version reporting/.test(row.pluginStale));
@@ -3320,7 +3317,7 @@ void (async () => {
     // a bridge that IS connected, sitting silent for the full timeout.
     const { bridge: b, client: ws1 } = await connectedBridge();
     ws1.send(JSON.stringify({ type: "hello", instanceId: "silent-1", file: "Silent File" }));
-    await b.waitForIdentified(1000);
+    await b.awaitClient(null, 1000);
     const start = Date.now();
     let err: Error | undefined;
     try { await b.request("exportNode", { nodeId: "7314:87192" }, 60000, undefined, 300); }
@@ -3337,7 +3334,7 @@ void (async () => {
     // fires on ANY export slower than its window would be worse than the bug it fixes.
     const { bridge: b, client: ws1 } = await connectedBridge();
     ws1.send(JSON.stringify({ type: "hello", instanceId: "slow-1", file: "Slow File" }));
-    await b.waitForIdentified(1000);
+    await b.awaitClient(null, 1000);
     // stallMs=300, but a progress frame every 100ms — the request must survive well past 300ms of
     // WALL-CLOCK time without the stall timer firing, because activity never actually goes quiet.
     const ticker = setInterval(() => { try { ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); } catch {} }, 100);
@@ -3368,7 +3365,7 @@ void (async () => {
     // request must still stall.
     const { bridge: b, client: ws1 } = await connectedBridge();
     ws1.send(JSON.stringify({ type: "hello", instanceId: "silent-2", file: "Silent File 2" }));
-    await b.waitForIdentified(1000);
+    await b.awaitClient(null, 1000);
     ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); // life, but before the request below
     await sleep(50);
     let err: Error | undefined;
@@ -3428,7 +3425,7 @@ void (async () => {
       // Same setup as the [stall] blocks above: identified, then quiet. Sending in the SAME millisecond
       // as the connect would read the connect itself as "life since send" and disarm the check.
       ws1.send(JSON.stringify({ type: "hello", instanceId: "cancel-stall", file: "Cancel File" }));
-      await b.waitForIdentified(1000);
+      await b.awaitClient(null, 1000);
       await sleep(20);
       let err: Error | undefined;
       try { await b.request("exportNode", { nodeId: "1:2" }, 10000, undefined, 300); } catch (e) { err = asErr(e); }
@@ -3626,7 +3623,7 @@ void (async () => {
       let releaseA: (() => void) | undefined;
       const row = clientRow({ connId: "c1" });
       const blindBridge: DaemonBridge = {
-        port: 0, isConnected: () => true, waitForConnection: async () => {}, close: () => {},
+        port: 0, isConnected: () => true, close: () => {},
         request: async () => ({}),
         requestWithClient: (cmd) => {
           seenCmds.push(cmd);
@@ -3742,7 +3739,7 @@ void (async () => {
     {
       const { bridge: b, client: ws1 } = await connectedBridge();
       ws1.send(JSON.stringify({ type: "hello", instanceId: "stall-g14", file: "Sample App" }));
-      await b.waitForIdentified(1000);
+      await b.awaitClient(null, 1000);
       await sleep(20);
       let err: Error | undefined;
       try { await b.request("exportNode", { nodeId: "5:6" }, 10000, undefined, 300); } catch (e) { err = asErr(e); }
@@ -3758,7 +3755,7 @@ void (async () => {
       const { bridge: b, client: ws1 } = await connectedBridge();
       const seen = commandsOf(ws1);
       ws1.send(JSON.stringify({ type: "hello", instanceId: "stall2-" + phase, file: "Sample App" }));
-      await b.waitForIdentified(1000);
+      await b.awaitClient(null, 1000);
       await sleep(20);
       const ticks: ProgressTick[] = [];
       const req = settle(b.request("ping", {}, 10000, undefined, 300, (t) => ticks.push(t)));
@@ -3778,7 +3775,7 @@ void (async () => {
       const { bridge: b, client: ws1 } = await connectedBridge();
       const seen = commandsOf(ws1);
       ws1.send(JSON.stringify({ type: "hello", instanceId: "l8", file: "Sample App" }));
-      await b.waitForIdentified(1000);
+      await b.awaitClient(null, 1000);
       await sleep(20);
       const ticksA: string[] = [], ticksB: string[] = [];
       const pA = settle(b.request("ping", {}, 5000, undefined, undefined, (t) => ticksA.push(String(t.phase))));
@@ -3813,7 +3810,6 @@ void (async () => {
       const sigBridge: DaemonBridge = {
         port: S_PORT,
         isConnected: () => true,
-        waitForConnection: async () => {},
         close: () => {},
         request: async () => { throw new Error("never asked through request()"); },
         requestWithClient: (cmd, _args, _timeoutMs, _target, _stallMs, _onProgress, signal) => new Promise((resolve) => {

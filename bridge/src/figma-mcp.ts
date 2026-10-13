@@ -25,7 +25,7 @@ import path from "node:path";
 // connected Figma file the command goes to — a connId, a fileKey, or part of the file name. Omitted
 // with one file connected, required with several (the bridge refuses rather than guessing; see
 // server-core's resolveClient).
-import { createBridge, connectionFor } from "./server-core.ts";
+import { createBridge, connectionFor, isConnId } from "./server-core.ts";
 import { TIMEOUTS, exportTimeout, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import { stampSource } from "./source-stamp.ts";
@@ -145,12 +145,13 @@ const bridge = {
   // CLI (figma-pull.ts) and the daemon (daemon.ts) give `--client <name>`: every open plugin window
   // redials on its own 3 s clock (figma-plugin ui.html), so right after this process opened the bridge
   // only one of two open files may have landed yet, and resolving the name at once failed on the
-  // other file (seen live). Holding the bridge: waitForClient polls until the name matches
-  // or NAMED_CLIENT_WAIT_MS runs out, then resolveClient reports whatever IS connected — its error
-  // text is unchanged. Routed through a daemon: `waitForConnection` is the field the CLI sends for
-  // the same purpose; the daemon waits for a first connection and then for the name, capped at
-  // NAMED_CLIENT_WAIT_MS (daemon.ts). Either way a name that never lands fails after the window
-  // instead of at once; a bare connId never waits (it does not depend on identification).
+  // other file (seen live). Either way the bridge's own awaitClient (server-core) does the waiting, with
+  // NAMED_CLIENT_WAIT_MS as the connect window — holding the bridge it is requestWithClient's `waitMs`;
+  // routed through a daemon it is the frame's `waitForConnection`, the field the CLI sends for the same
+  // purpose. It waits for a first plugin connection and then, at most NAMED_CLIENT_WAIT_MS more, for the
+  // name; then resolveClient reports whatever IS connected — its error text is unchanged. So a name that
+  // never lands fails after the window instead of at once; a bare connId never waits (it does not depend
+  // on identification), and neither does a call with no `client`.
   //
   // `requestWithClient` also hands back WHICH connected file answered (null from a daemon too old to relay
   // it) — what the export tools stamp as `sourceFile` and whoami describes. `signal` is
@@ -159,11 +160,8 @@ const bridge = {
   // frame for the request.
   async requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void, signal?: AbortSignal): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }> {
     const h = await holder();
-    const named = target !== undefined && target !== "" && !/^c\d+$/.test(target);
-    if ("own" in h) {
-      if (named) await h.own.waitForClient(target, NAMED_CLIENT_WAIT_MS);
-      return h.own.requestWithClient(cmd, args, timeoutMs, target, undefined, onProgress, signal);
-    }
+    const named = target !== undefined && target !== "" && !isConnId(target);
+    if ("own" in h) return h.own.requestWithClient(cmd, args, timeoutMs, target, undefined, onProgress, signal, named ? { waitMs: NAMED_CLIENT_WAIT_MS } : {});
     // Through a daemon the signal closes this request's socket; the daemon then abandons the request and
     // its bridge sends the plugin the same cancel frame.
     return h.via.requestWithClient({ cmd, args, timeoutMs, ...ifDefined("client", target), ...(named ? { waitForConnection: NAMED_CLIENT_WAIT_MS } : {}) }, timeoutMs + 30000, onProgress, signal);
