@@ -12,8 +12,13 @@
 //   - a crashed page leaves page.isClosed() false and throws "<api>: Target crashed", "Page crashed" or
 //     "Navigation failed because page crashed!" — the page cannot be driven again, so a crash is "gone" too;
 //   - a document replaced under a call throws "Execution context was destroyed…", "frame was detached", "Cannot find
-//     context with specified id" or a goto "interrupted by another navigation".
-import { errMsg } from "../bridge/src/errmsg.ts";
+//     context with specified id" or a goto "interrupted by another navigation";
+//   - each of these is on the message's first line; the call log after it is never read.
+import { firstLine } from "../bridge/src/errmsg.ts";
+
+/** A Playwright error's first line for a message to the user, without the trailing space of a crash's "Target crashed "
+ *  (Playwright appends the browser log after a space, and it is empty here). */
+export const pwFirstLine = (e: unknown): string => firstLine(e).trimEnd();
 
 /** The page, its context or the browser closed or crashed. */
 const CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected|Target crashed|Page crashed/i;
@@ -32,7 +37,8 @@ export type PwErrorKind = "timeout" | "gone" | "navigated" | "other";
  */
 export function pwErrorKind(e: unknown, page?: { isClosed(): boolean }): PwErrorKind {
   const name = e instanceof Error ? e.name : "";
-  const m = errMsg(e);
+  // the first line only: the call log after it echoes selectors and URLs, which must not decide the kind
+  const m = firstLine(e);
   if ((page !== undefined && page.isClosed()) || name === "TargetClosedError" || CLOSED.test(m)) return "gone";
   if (name === "TimeoutError") return "timeout";
   if (NAVIGATED.test(m)) return "navigated";

@@ -36,7 +36,7 @@ import type { MeasuredVisual, ProbeFrame, Rect4, VerifyExpectation, VerifyRefere
 import { isVerifyReferenceImage } from "./doc-guards.ts";
 import { pctText, resolveInside, scaleText } from "./verify-shared.ts";
 import { firstLine } from "../bridge/src/errmsg.ts";
-import { pwErrorKind } from "./pw-errors.ts";
+import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import type { PageDocument, PageWindow } from "./page-dom.ts";
 
@@ -193,7 +193,7 @@ export async function captureVisual(browser: Browser, o: CaptureOptions): Promis
     // no page to ask: the context is closed by now, so the error alone says what happened
     const kind = pwErrorKind(e);
     if (kind === "navigated") return { why: "the page loaded a new document during the visual capture" };
-    if (kind === "gone") return { why: `the browser closed or crashed during the visual capture — ${firstLine(e)}` };
+    if (kind === "gone") return { why: `the page or browser closed or crashed during the visual capture — ${pwFirstLine(e)}` };
     return { why: `the visual capture failed — ${firstLine(e)}` };
   });
   // the context exists from before the screen was reached: closing it ends whatever the capture waits on — ≤ CUT_SETTLE_MS

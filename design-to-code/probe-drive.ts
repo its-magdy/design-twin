@@ -30,7 +30,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { InteractionEvidence, InteractionOutcome, PageOverflow, ProbeActivation, VerifyExpectation, VerifyInteraction } from "./types.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
-import { pwErrorKind } from "./pw-errors.ts";
+import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { decodePng } from "../bridge/src/png.ts";
 import type { DriveScroll, PageBox, PageDocument, PageElement, PageNode, PageShadowRoot, PageSheet, PageStyle, PageWindow } from "./page-dom.ts";
 
@@ -1496,7 +1496,7 @@ export async function driveInteractions(browser: Pick<Browser, "newContext">, o:
     if (left <= 0) { out.push(notRun(row, "time budget", { cut: "budget" })); continue; }
     const held: Held = {};
     const work = driveRow(browser, o, row, hooks, holdContext(held)).catch((e: unknown): InteractionEvidence => {
-      if (pwErrorKind(e) === "gone") return notRun(row, `the browser closed or crashed while driving — ${firstLine(e)}`);
+      if (pwErrorKind(e) === "gone") return notRun(row, `the page or browser closed or crashed while driving — ${pwFirstLine(e)}`);
       return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
     });
     // the context exists from before the screen was reached: closing it ends whatever the row was waiting on

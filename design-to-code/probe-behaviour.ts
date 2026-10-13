@@ -41,7 +41,7 @@ import type { BehaviourAxe, BehaviourCheck, BehaviourCheckId, BehaviourLandmark,
 import { CUT_SETTLE_MS, DIALOG_CONTRACT, StepError, armDetector, drivable, holdContext, openerState, ownPixels, pollDetector, raceBudget, raf2, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
 import type { DetectorRead, Held } from "./probe-drive.ts";
 import { firstLine } from "../bridge/src/errmsg.ts";
-import { pwErrorKind } from "./pw-errors.ts";
+import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { parseCssColor } from "./color.ts";
 import type { BehState, PageBox, PageDocument, PageElement, PageNode, PageStyle, PageWindow } from "./page-dom.ts";
 
@@ -1467,6 +1467,15 @@ class BatteryStop extends Error {}
 /** A replaced document or a closed / crashed page ends the unit: no later check can run on this page, so a step that
  *  otherwise records its own not-run row rethrows these. */
 const endsUnit = (e: unknown, page: Page): boolean => { const k = pwErrorKind(e, page); return k === "navigated" || k === "gone"; };
+/** Why a unit ended early, from what it threw — the reason its unfinished checks are not-run with. The page is not asked:
+ *  once the unit is over its context is closed, so the error alone says what happened. */
+const unitEndWhy = (e: unknown): string => {
+  const kind = pwErrorKind(e);
+  if (e instanceof UnitNavigated || kind === "navigated") return "the page loaded a new document";
+  if (e instanceof BatteryStop) return e.message;
+  if (kind === "gone") return `the page or browser closed or crashed — ${pwFirstLine(e)}`;
+  return `the check could not run — ${firstLine(e)}`;
+};
 const park = async (page: Page): Promise<void> => { await page.mouse.move(0, 0); await raf2(page); };
 /** markOpener, then — when it took a container's sole control that this page has not judged yet — the SAME
  *  pixel check as the drive's (probe-drive.ts ownPixels): content of the container's own drops the control (no key is
@@ -1791,14 +1800,7 @@ async function runUnitInner(ctx: UnitCtx, unit: Unit): Promise<void> {
       if (wait > 0) await sleep(wait, undefined, { ref: false });
       await reached.context.close().catch(() => undefined);
     }
-  })().catch((e: unknown): string => {
-    // no page to ask: the context is closed by now, so the error alone says what happened
-    const kind = pwErrorKind(e);
-    if (e instanceof UnitNavigated || kind === "navigated") return "the page loaded a new document";
-    if (e instanceof BatteryStop) return e.message;
-    if (kind === "gone") return `the browser closed or crashed — ${firstLine(e)}`;
-    return `the check could not run — ${firstLine(e)}`;
-  });
+  })().catch(unitEndWhy);
   // the context exists from before the screen was reached: closing it ends whatever the unit waits on — ≤ 5 s in all
   const raced = await raceBudget(work, left, held, () => { closed = true; ctx.cut = true; });
   if (raced.cut) {
@@ -1944,23 +1946,33 @@ function a11yUnit(ctx: UnitCtx): Unit {
       // a11y.name: the first line of each stop's aria snapshot
       u.phase("a11y.name");
       const nameRows: BehaviourCheck[] = [];
-      let nameOk = 0;
-      for (const [i, s] of info.entries()) {
-        u.guard();
-        if (!s.connected) { nameRows.push({ id: "a11y.name", status: "not-run", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: "not-run: left the document during the walk" }); continue; }
-        let snap = "";
-        try { snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2000 }); } catch (e) {
-          if (endsUnit(e, page)) throw e;
-          nameRows.push({ id: "a11y.name", status: "not-run", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
-          continue;
+      let nameOk = 0, judged = 0;
+      const nameWhat = `Tab stop(s) have a role and an accessible name (${NAMES_COMPUTED_BY})`;
+      try {
+        for (const [i, s] of info.entries()) {
+          judged = i;
+          u.guard();
+          if (!s.connected) { nameRows.push({ id: "a11y.name", status: "not-run", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: "not-run: left the document during the walk" }); continue; }
+          let snap = "";
+          try { snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2000 }); } catch (e) {
+            if (endsUnit(e, page)) throw e;
+            nameRows.push({ id: "a11y.name", status: "not-run", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
+            continue;
+          }
+          const n = nameStatus(snap, s);
+          const ev: JsonObject = { snapshot: (snap.split("\n")[0] ?? "").slice(0, 120), tag: s.tag, stop: i, ...(s.domName !== null ? { domName: s.domName } : {}) };
+          if (n.status === "warn") nameRows.push({ id: "a11y.name", status: "warn", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `a focusable <${s.tag}> with no role — give it a role (or use a native control) and a name; names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
+          else if (n.status === "fail") nameRows.push({ id: "a11y.name", status: "fail", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `${n.role} with no accessible name — an icon-only control needs aria-label (or visible text); names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
+          else nameOk++;
         }
-        const n = nameStatus(snap, s);
-        const ev: JsonObject = { snapshot: (snap.split("\n")[0] ?? "").slice(0, 120), tag: s.tag, stop: i, ...(s.domName !== null ? { domName: s.domName } : {}) };
-        if (n.status === "warn") nameRows.push({ id: "a11y.name", status: "warn", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `a focusable <${s.tag}> with no role — give it a role (or use a native control) and a name; names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
-        else if (n.status === "fail") nameRows.push({ id: "a11y.name", status: "fail", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `${n.role} with no accessible name — an icon-only control needs aria-label (or visible text); names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
-        else nameOk++;
+      } catch (e) {
+        // the unit ends here (a reload, a closed or crashed page): the stops judged so far keep their rows, the rest are
+        // one not-run row with the unit's reason — the unit's own fill then adds nothing more for a11y.name
+        for (const c of perElement("a11y.name", nameRows, nameOk, judged, nameWhat)) u.add(c);
+        u.add({ id: "a11y.name", status: "not-run", detail: `not-run: ${info.length - judged} of ${info.length} Tab stop(s) not checked — ${unitEndWhy(e)}`, evidence: { count: info.length - judged, of: info.length } });
+        throw e;
       }
-      for (const c of perElement("a11y.name", nameRows, nameOk, info.length, `Tab stop(s) have a role and an accessible name (${NAMES_COMPUTED_BY})`)) u.add(c);
+      for (const c of perElement("a11y.name", nameRows, nameOk, info.length, nameWhat)) u.add(c);
       if (info.length === 0) u.add({ id: "a11y.name", status: "not-run", detail: "not-run: Tab reached no focusable element" });
     },
   };

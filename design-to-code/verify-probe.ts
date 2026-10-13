@@ -67,7 +67,7 @@ import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite } from "./verify-run.ts";
 import type { Expectation } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
-import { pwErrorKind } from "./pw-errors.ts";
+import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts";
 
 // ---------------------------------------------------------------- resolving the project's Playwright
@@ -239,7 +239,7 @@ class NavigatedError extends Error {}
  *  re-run replays them; a second time is exit 4 with this step named, not the dev-server hint). */
 class StepStateLostError extends NavigatedError {}
 class BrowserGoneError extends Error {}
-const gone = (e: unknown): BrowserGoneError => new BrowserGoneError(`the browser closed or crashed during measurement (${firstLine(e)})`);
+const gone = (e: unknown): BrowserGoneError => new BrowserGoneError(`the page or browser closed or crashed during measurement (${pwFirstLine(e)})`);
 class KeptNavigatingError extends Error {}
 class UnreachableError extends Error {}
 
@@ -1037,7 +1037,7 @@ const USAGE =
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
   "exit: 0 wrote · 2 usage · 3 renderer unavailable (ask the user to install; never installed here) · 4 the page kept\n" +
   "      navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time / a --steps step\n" +
-  "      failed (nothing written).";
+  "      failed / the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).";
 
 const MAX_TIME_DEFAULT = 180_000;
 
@@ -1196,6 +1196,12 @@ export async function main(argv: string[]): Promise<number> {
     } catch (e) {
       await browser.close().catch(() => undefined);
       if (e instanceof UnreachableError) { console.error(`verify-probe: ${e.message} — nothing written.`); return 4; }
+      // runProbe answers a page gone during measurement with browser-gone itself; this is one gone outside it (the context
+      // or page could not be opened) — the same exit 4. After the watchdog's close it is that close, which said so itself.
+      if (pwErrorKind(e) === "gone") {
+        if (!held.timedOut) console.error(`verify-probe: the page or browser closed or crashed (${pwFirstLine(e)}) — nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.`);
+        return 4;
+      }
       if (pwErrorKind(e) === "timeout") { console.error(`verify-probe: timed out — ${firstLine(e)} — nothing written.`); return 4; }
       throw e;
     }

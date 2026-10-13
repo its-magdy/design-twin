@@ -1426,12 +1426,13 @@ function stepsSha256(steps) {
 import { setTimeout as sleep } from "node:timers/promises";
 
 // design-to-code/pw-errors.ts
+var pwFirstLine = (e) => firstLine(e).trimEnd();
 var CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected|Target crashed|Page crashed/i;
 var NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
 var TIMED_OUT = /Timeout \d+\s*ms exceeded/i;
 function pwErrorKind(e, page) {
   const name = e instanceof Error ? e.name : "";
-  const m = errMsg(e);
+  const m = firstLine(e);
   if (page !== void 0 && page.isClosed() || name === "TargetClosedError" || CLOSED.test(m)) return "gone";
   if (name === "TimeoutError") return "timeout";
   if (NAVIGATED.test(m)) return "navigated";
@@ -2807,7 +2808,7 @@ async function driveInteractions(browser, o, hooks) {
     }
     const held = {};
     const work = driveRow(browser, o, row, hooks, holdContext(held)).catch((e) => {
-      if (pwErrorKind(e) === "gone") return notRun(row, `the browser closed or crashed while driving \u2014 ${firstLine(e)}`);
+      if (pwErrorKind(e) === "gone") return notRun(row, `the page or browser closed or crashed while driving \u2014 ${pwFirstLine(e)}`);
       return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
     });
     const r = await raceBudget(work, left, held);
@@ -4029,6 +4030,13 @@ var endsUnit = (e, page) => {
   const k = pwErrorKind(e, page);
   return k === "navigated" || k === "gone";
 };
+var unitEndWhy = (e) => {
+  const kind = pwErrorKind(e);
+  if (e instanceof UnitNavigated || kind === "navigated") return "the page loaded a new document";
+  if (e instanceof BatteryStop) return e.message;
+  if (kind === "gone") return `the page or browser closed or crashed \u2014 ${pwFirstLine(e)}`;
+  return `the check could not run \u2014 ${firstLine(e)}`;
+};
 var park = async (page) => {
   await page.mouse.move(0, 0);
   await raf2(page);
@@ -4304,13 +4312,7 @@ async function runUnitInner(ctx, unit) {
       if (wait > 0) await sleep2(wait, void 0, { ref: false });
       await reached.context.close().catch(() => void 0);
     }
-  })().catch((e) => {
-    const kind = pwErrorKind(e);
-    if (e instanceof UnitNavigated || kind === "navigated") return "the page loaded a new document";
-    if (e instanceof BatteryStop) return e.message;
-    if (kind === "gone") return `the browser closed or crashed \u2014 ${firstLine(e)}`;
-    return `the check could not run \u2014 ${firstLine(e)}`;
-  });
+  })().catch(unitEndWhy);
   const raced = await raceBudget(work, left, held, () => {
     closed = true;
     ctx.cut = true;
@@ -4495,28 +4497,36 @@ function a11yUnit(ctx) {
       if (nStops === 0) u.add({ id: "keyboard.focus-visible", status: "not-run", detail: "not-run: Tab reached no focusable element" });
       u.phase("a11y.name");
       const nameRows = [];
-      let nameOk = 0;
-      for (const [i, s] of info.entries()) {
-        u.guard();
-        if (!s.connected) {
-          nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: "not-run: left the document during the walk" });
-          continue;
+      let nameOk = 0, judged = 0;
+      const nameWhat = `Tab stop(s) have a role and an accessible name (${NAMES_COMPUTED_BY})`;
+      try {
+        for (const [i, s] of info.entries()) {
+          judged = i;
+          u.guard();
+          if (!s.connected) {
+            nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: "not-run: left the document during the walk" });
+            continue;
+          }
+          let snap = "";
+          try {
+            snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2e3 });
+          } catch (e) {
+            if (endsUnit(e, page)) throw e;
+            nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
+            continue;
+          }
+          const n = nameStatus(snap, s);
+          const ev = { snapshot: (snap.split("\n")[0] ?? "").slice(0, 120), tag: s.tag, stop: i, ...s.domName !== null ? { domName: s.domName } : {} };
+          if (n.status === "warn") nameRows.push({ id: "a11y.name", status: "warn", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `a focusable <${s.tag}> with no role \u2014 give it a role (or use a native control) and a name; names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
+          else if (n.status === "fail") nameRows.push({ id: "a11y.name", status: "fail", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `${n.role} with no accessible name \u2014 an icon-only control needs aria-label (or visible text); names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
+          else nameOk++;
         }
-        let snap = "";
-        try {
-          snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2e3 });
-        } catch (e) {
-          if (endsUnit(e, page)) throw e;
-          nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
-          continue;
-        }
-        const n = nameStatus(snap, s);
-        const ev = { snapshot: (snap.split("\n")[0] ?? "").slice(0, 120), tag: s.tag, stop: i, ...s.domName !== null ? { domName: s.domName } : {} };
-        if (n.status === "warn") nameRows.push({ id: "a11y.name", status: "warn", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `a focusable <${s.tag}> with no role \u2014 give it a role (or use a native control) and a name; names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
-        else if (n.status === "fail") nameRows.push({ id: "a11y.name", status: "fail", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `${n.role} with no accessible name \u2014 an icon-only control needs aria-label (or visible text); names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
-        else nameOk++;
+      } catch (e) {
+        for (const c of perElement("a11y.name", nameRows, nameOk, judged, nameWhat)) u.add(c);
+        u.add({ id: "a11y.name", status: "not-run", detail: `not-run: ${info.length - judged} of ${info.length} Tab stop(s) not checked \u2014 ${unitEndWhy(e)}`, evidence: { count: info.length - judged, of: info.length } });
+        throw e;
       }
-      for (const c of perElement("a11y.name", nameRows, nameOk, info.length, `Tab stop(s) have a role and an accessible name (${NAMES_COMPUTED_BY})`)) u.add(c);
+      for (const c of perElement("a11y.name", nameRows, nameOk, info.length, nameWhat)) u.add(c);
       if (info.length === 0) u.add({ id: "a11y.name", status: "not-run", detail: "not-run: Tab reached no focusable element" });
     }
   };
@@ -5448,7 +5458,7 @@ async function captureVisual(browser, o) {
   })().catch((e) => {
     const kind = pwErrorKind(e);
     if (kind === "navigated") return { why: "the page loaded a new document during the visual capture" };
-    if (kind === "gone") return { why: `the browser closed or crashed during the visual capture \u2014 ${firstLine(e)}` };
+    if (kind === "gone") return { why: `the page or browser closed or crashed during the visual capture \u2014 ${pwFirstLine(e)}` };
     return { why: `the visual capture failed \u2014 ${firstLine(e)}` };
   });
   const r = await raceBudget(work, o.budgetMs, held);
@@ -5902,7 +5912,7 @@ var StepStateLostError = class extends NavigatedError {
 };
 var BrowserGoneError = class extends Error {
 };
-var gone = (e) => new BrowserGoneError(`the browser closed or crashed during measurement (${firstLine(e)})`);
+var gone = (e) => new BrowserGoneError(`the page or browser closed or crashed during measurement (${pwFirstLine(e)})`);
 var KeptNavigatingError = class extends Error {
 };
 var UnreachableError = class extends Error {
@@ -6575,7 +6585,7 @@ var USAGE = `usage:
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
 exit: 0 wrote \xB7 2 usage \xB7 3 renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept
       navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time / a --steps step
-      failed (nothing written).`;
+      failed / the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).`;
 var MAX_TIME_DEFAULT = 18e4;
 async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS) {
   const cap = () => sleep4(capMs, void 0, { ref: false });
@@ -6775,6 +6785,10 @@ ${USAGE}`);
       await browser.close().catch(() => void 0);
       if (e instanceof UnreachableError) {
         console.error(`verify-probe: ${e.message} \u2014 nothing written.`);
+        return 4;
+      }
+      if (pwErrorKind(e) === "gone") {
+        if (!held.timedOut) console.error(`verify-probe: the page or browser closed or crashed (${pwFirstLine(e)}) \u2014 nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.`);
         return 4;
       }
       if (pwErrorKind(e) === "timeout") {

@@ -1,9 +1,11 @@
 // pwErrorKind (design-to-code/pw-errors.ts): what a Playwright error means to the probe — a table of the errors
 // Playwright throws (real Error objects, the name set the way playwright-core sets it), then the same calls failing in a
-// real chromium (no server, no port: setContent, a data: URL, a CDP crash). Locally the chromium half is skipped when no
-// browser is installed; in CI (CI=true) it must run.
+// real chromium (no server, no port: setContent, a data: URL, chromium's chrome://crash URL). Locally the chromium half is
+// skipped when no browser is installed; in CI (CI=true) it must run. What it learns about Playwright's own internals (the
+// closed error's name, whether a crashed page reports itself closed) is printed, never failed on: a Playwright upgrade
+// that changes them must not fail the suite while the classifier still answers right.
 // Run with:  node test/pw-errors.test.ts
-import { pwErrorKind } from "../design-to-code/pw-errors.ts";
+import { pwErrorKind, pwFirstLine } from "../design-to-code/pw-errors.ts";
 import type { PwErrorKind } from "../design-to-code/pw-errors.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Page } from "playwright";
@@ -21,7 +23,13 @@ console.log("pwErrorKind — the table:");
 // timeouts: the name decides; the message is the fallback for a value that lost it
 is("a TimeoutError (name) with Playwright's message", named("TimeoutError", "locator.click: Timeout 2000ms exceeded.\nCall log:\n  - waiting for locator('#x')"), "timeout");
 is("a TimeoutError (name) whose message says nothing of a timeout", named("TimeoutError", "the operation timed out"), "timeout");
-is("a TimeoutError (name) whose call log mentions a detached frame — the name wins over the wording", named("TimeoutError", "locator.click: Timeout 2000ms exceeded.\nCall log:\n  - frame was detached"), "timeout");
+is("a TimeoutError (name) whose first line mentions a detached frame (invented) — the name wins over the wording", named("TimeoutError", "frame.waitForSelector: Timeout 2000ms exceeded while the frame was detached"), "timeout");
+// only the first line is read: a call log echoing a selector or URL never decides the kind
+is("a TimeoutError whose call log echoes 'Target closed' in a selector", named("TimeoutError", "locator.click: Timeout 2000ms exceeded.\nCall log:\n  - waiting for locator('text=Target closed')"), "timeout");
+is("a plain error whose call log echoes 'frame was detached' in a URL", new Error("locator.click: Element is not visible\nCall log:\n  - navigated to \"http://x/frame was detached\""), "other");
+is("the same with the timeout's name dropped: the first line still says timeout", new Error("locator.click: Timeout 2000ms exceeded.\nCall log:\n  - waiting for locator('text=Page crashed')"), "timeout");
+check("pwFirstLine: the first line without a crash's trailing space", pwFirstLine(new Error("page.evaluate: Target crashed \nBrowser logs: none")) === "page.evaluate: Target crashed"
+  && pwFirstLine("a  b ") === "a  b");
 is("a plain Error carrying only the timeout message", new Error("page.goto: Timeout 30000ms exceeded."), "timeout");
 is("the message as a string", "page.waitForFunction: Timeout 100ms exceeded.", "timeout");
 // gone: closed, disconnected, crashed — or a page that says it is closed
@@ -88,7 +96,7 @@ console.log("pwErrorKind — errors a real chromium throws:");
         await page.setContent("<p>x</p>");
         const e = await pending(page, () => page.close());
         is("a pending evaluate when the page closes (the page not asked)", e, "gone");
-        check("…the client's TargetClosedError keeps the name Error: the message decides", e instanceof Error && e.name === "Error");
+        console.log(`  · (info) the closed error's name: ${e instanceof Error ? e.name : typeof e} (Playwright 1.63: "Error" — the message decides)`);
         is("an evaluate on the closed page (asked)", await caught(page.evaluate("1")), "gone", page);
       }
       {
@@ -97,7 +105,9 @@ console.log("pwErrorKind — errors a real chromium throws:");
         // chromium's crash URL kills the renderer; the goto itself never settles cleanly, so it is not awaited
         const e = await pending(page, () => { void page.goto("chrome://crash").catch(() => undefined); return Promise.resolve(); });
         is("a pending evaluate when the page crashes", e, "gone", page);
-        check("…and the crashed page does not report itself closed (only the message tells)", !page.isClosed());
+        is("…the same, the page not asked (the message alone)", e, "gone");
+        check("…its user-facing line has no trailing space", (() => { const l = pwFirstLine(e); return l.length > 0 && l === l.trimEnd(); })());
+        console.log(`  · (info) the crashed page reports itself closed: ${String(page.isClosed())} (Playwright 1.63: false — only the message tells)`);
         is("an evaluate on the crashed page", await caught(page.evaluate("1")), "gone", page);
       }
       {
