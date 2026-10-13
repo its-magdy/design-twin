@@ -178,14 +178,13 @@ function fileHashes(plan: Plan | null | undefined, cwd: string, cached?: CachedB
   return contentHash.fileHashes(contentHash.planCodeFiles(plan || {}, cwd), cwd, cached); // the same hashes verify-screen --compare records
 }
 
-// The plan's own content, minus what the hook writes and what is not the plan's substance: status, the owner's
+// contentHash.planHash is the plan's own content, minus what the hook writes and what is not the plan's substance: status, the owner's
 // waivers[]/descopes[] (accepting a delta must not send the hook back to pending; a report records their hash instead,
 // inputs.waivers.sha256, and reportVerdict() compares that) and all of `verification` (every
 // verification check is a warning, so the hook result never depends on it; --compare --record-plan writes it).
-const planHash = (plan: Plan | null | undefined): string => contentHash.planHash(plan);
 // A hook record written under the older formula (verification minus hook) is still accepted, so no plan
 // reopens on upgrade. The hook's next write records the new one.
-const hookHashMatches = (hook: PlanHookRecord, plan: Plan): boolean => hook.planHash === planHash(plan) || hook.planHash === contentHash.legacyPlanHash(plan);
+const hookHashMatches = (hook: PlanHookRecord, plan: Plan): boolean => hook.planHash === contentHash.planHash(plan) || hook.planHash === contentHash.legacyPlanHash(plan);
 
 // The hook record against the files now: `changed` reopens the plan (stale); `unhashed` does not. A key the record never
 // hashed is a change when it is a files[] entry ("added to files[]"); a MAPPED module the record never hashed (a hook
@@ -1632,7 +1631,7 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
     checkedAt: new Date().toISOString(),
     blocking,
     warnings: warnings.length,
-    planHash: planHash(plan),
+    planHash: contentHash.planHash(plan),
     files: fileHashes(plan, cwd, cached),
     ...(tagCoverage ? { tagCoverage } : {}),
   };
@@ -1749,7 +1748,7 @@ async function main(argv: string[]): Promise<number> {
 export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
   verificationWarnings, recordedReportWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
-  colorLiterals, arbitraryPx, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
+  colorLiterals, arbitraryPx, colorKey, isStale, isOpen, fileHashes, readHookInput, main, USAGE,
   forEachLine, mayHoldToolUse, transcriptActions, buildGraph,
 };
 
