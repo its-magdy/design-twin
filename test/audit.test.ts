@@ -775,8 +775,10 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   put("design/export/pages/Main/Items__5_2.json", screenExport([{ id: "5:2", type: "FRAME", name: "Items", children: [nest(7, { id: "5:26", type: "TEXT", name: "Main Text", text: "No items added yet." })] }], { screen: "Items" }));
   put("design/export/pages/Main/Items__5_1.json", screenExport([{ id: "5:1", type: "FRAME", name: "Items" }], { screen: "Items" }));
   put("design/export/assets/5_1_ref.png", "png"); put("design/export/assets/7_1_ref.png", "png"); put("design/export/assets/7_2_shot@0.25x.png", "png");
+  // a screenshot of a layer inside an instance (an I… id) is a part of a component, not a frame left unexported
+  put("design/export/assets/I7_3_40_1_ref.png", "png");
   const out = parseAs(execFileSync(process.execPath, [cli, "design/export/pages/Main/Items__5_1.json", "--platform", "web", "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isAuditReport, "audit --json");
-  check("[CLI] the sibling sweep and orphan screenshots come from disk (the audited frame's own ref is not an orphan)",
+  check("[CLI] the sibling sweep and orphan screenshots come from disk (the audited frame's own ref is not an orphan, nor is an instance sublayer's)",
     out.findings.some((f) => f.code === "state-in-sibling" && f.candidates?.[0]?.id === "5:2") && JSON.stringify(out.findings.find((f) => f.code === "unexported-frames")?.ids) === JSON.stringify(["7:1", "7:2"]));
 }
 {

@@ -10,6 +10,7 @@ import { readOptionalDoc, readSplitFile } from "./catalog-input.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { isComponentsCatalog, isLibrariesIndex, isPageIndex, isPagesRootIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
 import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
+import { nodeIdFromSafe, safe } from "../bridge/src/pages-layout.ts";
 import { COMPONENTS as LIBRARY_COMPONENTS, INDEX as LIBRARIES_INDEX, ROOT as LIBRARIES_DIR } from "../bridge/src/library-layout.ts";
 
 const { TOKENS, STYLES_TEXT, COMPONENTS_LOCAL, COMPONENTS_LIBRARY } = DESIGN_SYSTEM_FILES;
@@ -201,14 +202,17 @@ function findExportNeighbours(screenFile: string): ExportNeighbours | null {
     if (!cache.has(f)) cache.set(f, readFrameTexts(path.join(root, f)));
     return cache.get(f) ?? null;
   };
-  const known = new Set(layers.map((l) => l.id.replace(/[:;]/g, "_")));
+  const known = new Set(layers.map((l) => safe(l.id)));
   const shots = new Set<string>();
   let files: string[] = [];
   try { files = fs.readdirSync(path.join(root, "assets")); } catch { files = []; }
   for (const f of files) {
-    // write-out.ts names: <safe id>_ref.png (or _ref-<hash>[_N].png when the name was taken), <safe id>_shot@<scale>x.png
+    // write-out.ts names: <safe id>_ref.png (or _ref-<hash>[_N].png when the name was taken), <safe id>_shot@<scale>x.png.
+    // A plain id only: what is collected is FRAMES screenshotted but never exported, and an instance
+    // sublayer (an `I…` id) is a part inside some component, never a frame of its own.
     const m = /^(\d+_\d+)(?:_ref(?:-[0-9A-Za-z]+(?:_\d+)?)?|_shot@[\d.]+x)\.png$/.exec(f);
-    if (m && m[1] && !known.has(m[1])) shots.add(m[1].replace("_", ":"));
+    const id = m && m[1] && !known.has(m[1]) ? nodeIdFromSafe(m[1]) : null;
+    if (id) shots.add(id);
   }
   // a prototype target is "exported" when ANY index lists it. Page rows are not added to `layers` (the
   // same-page state sweep above reads those, and a page index's rows would change what it offers).

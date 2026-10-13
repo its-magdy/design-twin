@@ -9,7 +9,8 @@
 // that decision gets made, so it is made the same way everywhere.
 //
 // Resolution order:
-//   1. node id            — the query IS a Figma node id (e.g. "7314:87192"); ids are unique, this
+//   1. node id            — the query IS a Figma node id in colon form ("7314:87192", or a layer inside an
+//                            instance, "I5:2;30:7"); ids are unique, this
 //                            either matches exactly one row or none exist for that id. Evaluated
 //                            ALONE and wins alone: a node id is never ambiguous with a name/title.
 //   2–4. the EXACT union   — exact layer name, indexed title and plan screenName/route (each
@@ -19,7 +20,9 @@
 //                            lists them (naming which field each one matched) — it does NOT resolve
 //                            on whichever field happened to be checked first.
 //   4b. a carried id      — only when the union is empty: the id a `<Layer>__<a>_<b>` basename (or a
-//                            path to its .json) or a dash/URL form carries (stage "node id").
+//                            path to its .json) or a dash/URL form ("7314-87192", "…?node-id=7314-87192")
+//                            carries (stage "node id"); for a layer inside an instance these are
+//                            `<Layer>__I<a>_<b>_<c>_<d>`, "I5-2;30-7" and "…?node-id=I5-2%3B30-7" (";" literal or encoded).
 //   4c. the folded union  — only when 2–4b found nothing: the same three fields compared with ALL
 //                            whitespace, "-" and "_" removed and case folded, after a directory part and a
 //                            file tail (`.json`, `.measured.json`, `.png`) are dropped from the query, so a
@@ -49,7 +52,8 @@ import type { IndexRow, ResolveScreenResult, ScreenCandidate } from "./types.ts"
 import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
-import { toNodeId } from "../bridge/src/node-id.ts";
+import { isNodeId, toNodeId } from "../bridge/src/node-id.ts";
+import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
 import { getOrInit } from "./map-util.ts";
 import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
@@ -58,24 +62,25 @@ import { EXPORT_DIR, EXPORT_SUBDIR, listPlans } from "../bridge/src/project-layo
 // Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
 // doc-guards.ts guard; one that is absent, unreadable or not that kind of document contributes no rows.
 
-// A Figma node id looks like "1234:5678" (also seen with an "I" instance prefix and ";" chains, e.g.
-// "I20173:137670;72:3148" — but a USER never types one of those; they type either a plain id or a
-// name). Treat only the plain "<digits>:<digits>" shape as an id query.
-const NODE_ID_RE = /^\d+:\d+$/;
+// A Figma node id looks like "1234:5678", or for a layer inside an instance "I20173:137670;72:3148" (what
+// a --node/--selection pull of such a layer files under). A query in either colon form is an id query
+// (node-id.ts isNodeId); its dash/URL forms are carried ids (queryIds).
 
-// The basename the skills pass, `<Layer>__<a>_<b>` (a screen file's name without its directory), with an
-// optional `.json` / `.vars.json` / `.expected.json` / `.png` tail -> the id "a:b"; undefined for anything else.
-const BASENAME_ID_RE = /__(\d+)_(\d+)(?:\.[A-Za-z0-9-]+)*$/;
+// The basename the skills pass is `<Layer>__<id>` (a screen file's name without its directory) with an
+// optional `.json` / `.vars.json` / `.expected.json` / `.png` tail; this is that tail. A stem never holds a
+// "." (safe() folds it to "_"), so dropping it leaves the stem nodeIdFromStem reads.
+const STEM_TAIL_RE = /(?:\.[A-Za-z0-9-]+)*$/;
 
 // The node ids a query could mean, most specific first: the basename form, then a dash/URL/percent form
-// ("10093-75273", "…?node-id=10093-75273"). A query that is already "a:b" needs no help (stage 1 takes it).
+// ("10093-75273", "…?node-id=10093-75273", "I5-2;30-7", "…?node-id=I5-2%3B30-7"). A query that is already
+// in colon form needs no help (stage 1 takes it).
 function queryIds(q: string): string[] {
   const out: string[] = [];
   const base = q.split(/[\\/]/).pop() ?? q;
-  const m = BASENAME_ID_RE.exec(base);
-  if (m) out.push(`${m[1]}:${m[2]}`);
+  const carried = nodeIdFromStem(base.replace(STEM_TAIL_RE, ""));
+  if (carried) out.push(carried);
   const t = toNodeId(q);
-  if (t !== q && NODE_ID_RE.test(t)) out.push(t);
+  if (t !== q && isNodeId(t)) out.push(t);
   return out;
 }
 
@@ -204,7 +209,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
     // through to the union below on the off chance the query is BOTH id-shaped and a real name.
     return idMatches.length === 1 ? idMatches[0] : undefined;
   };
-  const typed = NODE_ID_RE.test(q) ? byId(q) : undefined;
+  const typed = isNodeId(q) ? byId(q) : undefined;
   if (typed) return { status: "resolved", row: typed, stage: "node id" };
 
   // Stages 2–4, evaluated TOGETHER as one union: a row joins the pool if it matches on
@@ -242,7 +247,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   // Stage 4b: an id the query CARRIES — `<Layer>__<a>_<b>` (basename or a path to the .json) or a dash/URL
   // form. Only after the exact stages found nothing: a layer actually NAMED `Wizard__1_2` is that layer,
   // not whichever row has id 1:2.
-  for (const id of NODE_ID_RE.test(q) ? [] : queryIds(q)) {
+  for (const id of isNodeId(q) ? [] : queryIds(q)) {
     const hit = byId(id);
     if (hit) return { status: "resolved", row: hit, stage: "node id" };
   }
@@ -295,7 +300,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   return Object.assign<Extract<ResolveScreenResult, { status: "not-found" }>, { noTitles: true } | null>({ status: "not-found", candidates: rows.map((r) => describe(r)) }, noTitles ? { noTitles: true } : null);
 }
 
-export { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
+export { resolveScreen, allRows, planRows, describe };
 
 // CLI: node <plugin>/scripts/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]
 // (the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).

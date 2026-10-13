@@ -876,10 +876,11 @@
       return s;
     }
   }
+  var COLON_ID_RE = /^I?\d+:\d+(?:[;:]\d+:\d+)*$/;
   function normalizeNodeId(raw) {
     if (!raw) return void 0;
     const s = decode(String(raw).trim()).replace(/-/g, ":");
-    return /^I?\d+:\d+(?:[;:]\d+:\d+)*$/.test(s) || /^\d+$/.test(s) ? s : void 0;
+    return COLON_ID_RE.test(s) || /^\d+$/.test(s) ? s : void 0;
   }
   function parseNodeId(input) {
     if (!input) return void 0;

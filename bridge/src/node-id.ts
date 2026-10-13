@@ -22,12 +22,21 @@ function decode(s: string): string {
   try { return decodeURIComponent(s); } catch (e) { return s; } // malformed escape — use it verbatim
 }
 
+// The colon form: "1:2", or a nested-instance path "I1:2;3:4".
+const COLON_ID_RE = /^I?\d+:\d+(?:[;:]\d+:\d+)*$/;
+
+/** True when `s` already IS a node id in the Plugin API's colon form ("1:2", "I1:2;3:4") — what a query
+ *  typed as an id looks like, as opposed to a name. A bare number is not one here (it reads as a name). */
+export function isNodeId(s: string): boolean {
+  return COLON_ID_RE.test(s);
+}
+
 // A raw node-id token -> the Plugin API's colon form ("1:2"), or undefined when it isn't an id.
 function normalizeNodeId(raw: unknown): string | undefined {
   if (!raw) return undefined;
   const s = decode(String(raw).trim()).replace(/-/g, ":");
   // "1:2", "I1:2;3:4" (nested instance path), or a bare numeric id.
-  return /^I?\d+:\d+(?:[;:]\d+:\d+)*$/.test(s) || /^\d+$/.test(s) ? s : undefined;
+  return COLON_ID_RE.test(s) || /^\d+$/.test(s) ? s : undefined;
 }
 
 // A full Figma URL, a `…node-id=…` fragment, or a bare id -> colon form, or undefined when there's
@@ -55,5 +64,6 @@ export function toNodeId(raw: unknown): string {
 }
 
 // NODE_ID_RE/normalizeNodeId stay module-private: exporting them invited a consumer to re-derive
-// half the contract, which is the drift this file exists to prevent. ID is exported only because
-// seed-components.ts composes it into its own source-scanning regexes.
+// half the contract, which is the drift this file exists to prevent. isNodeId hands out the colon-form
+// grammar as a predicate, so a consumer asking "is this already an id?" needs no regex of its own. ID is
+// exported only because seed-components.ts composes it into its own source-scanning regexes.

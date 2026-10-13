@@ -70,6 +70,7 @@ import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main i
 import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule
 import { AUDIT_DIR, findMapFile } from "../bridge/src/project-layout.ts";
 import { OVERRIDE_CAP } from "../bridge/src/instance-overrides.ts";
+import { safe } from "../bridge/src/pages-layout.ts";
 
 
 
@@ -1155,7 +1156,7 @@ function prototypeLinks(ac: AuditCtx): void {
     }
   }
   for (const [label, rows] of unexportedTargets) {
-    const list = rows.map(({ n, id }) => `'${n.destination ?? "an unnamed frame"}' (${id}) opened by '${n.node.name}'${shotIds.has(id) ? ` — screenshotted only (assets/${id.replace(/:/g, "_")}_ref.png)` : ""}`);
+    const list = rows.map(({ n, id }) => `'${n.destination ?? "an unnamed frame"}' (${id}) opened by '${n.node.name}'${shotIds.has(id) ? ` — screenshotted only (assets/${safe(id)}_ref.png)` : ""}`);
     const first = rows[0];
     add("warning", "prototype-target-not-exported",
       `${rows.length} prototype target(s) this screen opens are in no index of the export: ${list.join("; ")} — pull them (\`dtwin pull --node <id>\`; MCP: \`figma_export_url\`) before building, or the builder has nothing to build the dialog from. ` +
