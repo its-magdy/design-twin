@@ -1470,7 +1470,7 @@ function walkWithHidden(root, fn, opts) {
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
-// design-to-code/png.ts
+// bridge/src/png.ts
 import { crc32, deflateSync, inflateSync } from "node:zlib";
 var PngError = class extends Error {
 };

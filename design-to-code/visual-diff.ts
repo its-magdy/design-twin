@@ -33,8 +33,8 @@
 // What is ours (NOT pixelmatch): the shift tolerance (a differing pixel whose colour each image has within `shiftPx` device px
 // of it is "absorbed" — a 1-CSS-px layout shift or a glyph placed a pixel over is not a region), the hot cells and regions, the
 // attribution to node ids, and the diff image.
-import { crop, resampleBox } from "./png.ts";
-import type { Rgba } from "./png.ts";
+import { crop, resampleBox } from "../bridge/src/png.ts";
+import type { Rgba } from "../bridge/src/png.ts";
 import type { Rect4, VisualRegion } from "./types.ts";
 
 export { crop, resampleBox };

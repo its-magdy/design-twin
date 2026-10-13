@@ -26,6 +26,7 @@ import type { AssetContext, AssetOwner, Graphic, ReuseResult } from "./asset-own
 import { EXPORT_DIR as DEFAULT_OUT_DIR } from "./project-layout.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { errMsg, errCode } from "./errmsg.ts";
+import { pngSize } from "./png.ts";
 import { QUICK_KEYS, SCHEMA_DOC_NAME, SCHEMA_MARKER } from "./quick-keys.ts";
 import type { Asset, DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, VariablesDoc, LibraryCounts } from "./doc-types.ts";
 import type { DesignSystemReply, ExportReply, FullExportReply, ScreenReply, ScreenshotReply } from "./commands.ts";
@@ -368,12 +369,6 @@ function rewireAssetPointers(tree: unknown, renamed: ReadonlyMap<string, string>
   };
   visit(tree);
   return moved;
-}
-
-// Width/height from a PNG's IHDR chunk (bytes 16–23, big-endian); null for anything that isn't a PNG.
-function pngSize(bytes: Buffer): { w: number; h: number } | null {
-  if (bytes.length < 24 || bytes.readUInt32BE(0) !== 0x89504e47 || bytes.toString("latin1", 12, 16) !== "IHDR") return null;
-  return { w: bytes.readUInt32BE(16), h: bytes.readUInt32BE(20) };
 }
 
 // Every `asset`/`reference` pointer in `tree` that names no file under `dir` — checked by EXACT name (a
