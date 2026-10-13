@@ -236,6 +236,34 @@ console.log("verify-screen — text:");
   ok("[placeholder] a designed NBSP matches a built plain space, and the reverse (no placeholder text delta)",
     !rep.deltas.some((d) => (d.nodeId === "2:7" || d.nodeId === "2:8") && d.field === "placeholder text"));
 }
+{
+  // Copy that differs only in whitespace runs is the same copy as rendered (HTML collapses a run unless white-space
+  // keeps it; the built-in probe reports textContent collapsed) — a LOW row naming the run, not a HIGH copy delta.
+  const exp = buildExpectation([doc([
+    textNode("2:9", "Double", "Save  changes", { family: "Poppins", size: 14 }),
+    textNode("2:10", "Break", "Line one\nLine two", { family: "Poppins", size: 14 }),
+    textNode("2:11", "Built run", "Pay now", { family: "Poppins", size: 14 }),
+    textNode("2:12", "Cased", "save  draft", { family: "Poppins", size: 14, case: "upper" }),
+    textNode("2:13", "Real change", "Save  changes", { family: "Poppins", size: 14 }),
+  ])]);
+  const rep = compare(exp, measured([
+    { nodeId: "2:9", styles: { text: "Save changes" } },
+    { nodeId: "2:10", styles: { text: "Line one Line two" } },
+    { nodeId: "2:11", styles: { text: "Pay \n  now" } },
+    { nodeId: "2:12", styles: { text: "SAVE DRAFT" } },
+    { nodeId: "2:13", styles: { text: "Save edits" } },
+  ]));
+  const row = (id: string) => rep.deltas.filter((d) => d.nodeId === id && d.field === "text");
+  const lowWith = (id: string, re: RegExp): boolean => { const r = row(id); const d = r[0]; return r.length === 1 && d !== undefined && d.severity === "low" && re.test(d.note || ""); };
+  ok("[text] a designed double space against a single built space is a LOW row naming the repeated spaces, white-space and &nbsp;",
+    lowWith("2:9", /repeated spaces/) && /pre-wrap/.test(row("2:9")[0]?.note || "") && /&nbsp;/.test(row("2:9")[0]?.note || ""));
+  ok("[text] a designed line break against a built space is a LOW row saying the design breaks the line",
+    lowWith("2:10", /breaks the line/) && /pre-line/.test(row("2:10")[0]?.note || ""));
+  ok("[text] a whitespace run only the build has is a LOW row saying it collapses when rendered", lowWith("2:11", /build's text has a run/));
+  ok("[text] the whitespace rule holds through a text case (UPPER 'save  draft' against 'SAVE DRAFT')", lowWith("2:12", /repeated spaces/));
+  ok("[text] a real copy change in a string with a double space stays HIGH",
+    row("2:13").length === 1 && row("2:13")[0]?.severity === "high" && !/whitespace/.test(row("2:13")[0]?.note || ""));
+}
 
 // ---------------------------------------------------------------- coverage and interactions
 console.log("verify-screen — a screen can match every pixel and still be a dead mockup:");

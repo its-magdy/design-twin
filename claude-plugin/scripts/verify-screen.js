@@ -2770,6 +2770,12 @@ function applyCssTransform(t, tt) {
   return null;
 }
 var nbspTrim = (t) => t.replace(/\u00a0/g, " ").trim();
+var LINE_BREAK = /[\n\r\u2028\u2029]/;
+function whitespaceWhy(want, have) {
+  if (LINE_BREAK.test(want) && !LINE_BREAK.test(have)) return "differs only in whitespace: the design breaks the line here and the build has a space \u2014 HTML renders a newline as a space unless white-space is pre, pre-wrap or pre-line (or a <br> breaks it); check the line breaks where the design does";
+  if (want !== normText(want)) return "differs only in whitespace: the design has repeated spaces (or a tab) where the build has one \u2014 HTML collapses a run of spaces to one unless white-space is pre, pre-wrap or break-spaces, or the extra ones are &nbsp; (the built-in probe reports the text collapsed either way). Keep the gap one of those ways if it is meant to show; otherwise it is a stray space in the design";
+  return "differs only in whitespace: the build's text has a run of whitespace where the design has one space \u2014 HTML collapses it to one space when rendered unless white-space is pre, pre-wrap or break-spaces, so it reads as designed unless one of those is set";
+}
 function renderedText(stored, textCase, built, transform, norm) {
   const designed = applyFigmaCase(stored, textCase);
   const tt = typeof transform === "string" ? transform : null;
@@ -3648,16 +3654,18 @@ function checkText(cx, n) {
       const g = nbspTrim(rt.have);
       const caseShown = spec.textCase !== void 0 || rt.transform !== null && rt.transform.trim().toLowerCase() !== "none";
       const renderNote = !caseShown ? void 0 : `the design renders '${w}' (stored '${String(spec.text).trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
+      const ws = rt.same ? null : renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, normText);
+      const wsOnly = ws !== null && ws.same;
       if (!rt.same) {
-        const caseOnly = w.toLowerCase() === g.toLowerCase();
+        const caseOnly = !wsOnly && w.toLowerCase() === g.toLowerCase();
         const extraGlyphs = !caseOnly && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
         const rowTexts = spec.repeatedText && spec.repeatedTextGroup ? builtTexts.get(spec.repeatedTextGroup) : void 0;
         const distinct = rowTexts ? new Set(rowTexts).size : 0;
         const asDesigned = rowTexts ? rowTexts.filter((t) => t === w).length : 0;
         const realData = !caseOnly && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
-        const why = caseOnly ? caseShown ? "differs only in case, as rendered" : "differs only in case \u2014 check for a text-transform, which Figma applies at render time while storing the original" : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) \u2014 check the copy is the data the design means` : void 0;
+        const why = ws !== null && wsOnly ? whitespaceWhy(nbspTrim(ws.want), nbspTrim(ws.have)) : caseOnly ? caseShown ? "differs only in case, as rendered" : "differs only in case \u2014 check for a text-transform, which Figma applies at render time while storing the original" : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) \u2014 check the copy is the data the design means` : void 0;
         const note = [why, renderNote].filter((x) => x !== void 0).join(" \u2014 ");
-        push(spec, "text", caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.textCase ? rt.want : spec.text, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null }, {
+        push(spec, "text", wsOnly || caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.textCase ? rt.want : spec.text, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null }, {
           ...note ? { note } : {}
         });
       }

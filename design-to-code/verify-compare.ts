@@ -151,6 +151,15 @@ function applyCssTransform(t: string, tt: string): string | null {
 /** A copy string as the text and placeholder compares read it: a non-breaking space (Figma's auto-substitution) is the
  *  same copy as a plain space, and the ends are trimmed. Interior whitespace runs are kept as they are. */
 const nbspTrim = (t: string): string => t.replace(/\u00a0/g, " ").trim();
+const LINE_BREAK = /[\n\r\u2028\u2029]/;
+/** The advice for copy that differs only in whitespace runs (want/have as the copy compare reads them), by which side
+ *  carries the run. CSS white-space (MDN): normal and pre-line collapse a run of spaces and tabs; pre, pre-wrap and
+ *  break-spaces keep it; normal turns a newline into a space, and pre, pre-wrap and pre-line keep it. */
+function whitespaceWhy(want: string, have: string): string {
+  if (LINE_BREAK.test(want) && !LINE_BREAK.test(have)) return "differs only in whitespace: the design breaks the line here and the build has a space \u2014 HTML renders a newline as a space unless white-space is pre, pre-wrap or pre-line (or a <br> breaks it); check the line breaks where the design does";
+  if (want !== normText(want)) return "differs only in whitespace: the design has repeated spaces (or a tab) where the build has one \u2014 HTML collapses a run of spaces to one unless white-space is pre, pre-wrap or break-spaces, or the extra ones are &nbsp; (the built-in probe reports the text collapsed either way). Keep the gap one of those ways if it is meant to show; otherwise it is a stray space in the design";
+  return "differs only in whitespace: the build's text has a run of whitespace where the design has one space \u2014 HTML collapses it to one space when rendered unless white-space is pre, pre-wrap or break-spaces, so it reads as designed unless one of those is set";
+}
 /** The two strings a TEXT compare judges — ONE rule for the copy compare and the width gate, so they agree.
  *  want = the design as rendered (stored text + textCase); have = the build as rendered (its text + textTransform). A
  *  build whose transform is unknown (a hand-written probe reports none) passes with EITHER the stored or the rendered
@@ -1012,8 +1021,13 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
       const caseShown = spec.textCase !== undefined || (rt.transform !== null && rt.transform.trim().toLowerCase() !== "none");
       const renderNote = !caseShown ? undefined
         : `the design renders '${w}' (stored '${String(spec.text).trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
+      // the same strings with every whitespace run read as one space — the width gate's rule (textDiffers). HTML
+      // collapses a run of spaces, tabs and newlines to one space unless white-space keeps it (and the built-in probe
+      // reports textContent collapsed), so a difference in runs alone is not a copy change.
+      const ws = rt.same ? null : renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, normText);
+      const wsOnly = ws !== null && ws.same;
       if (!rt.same) {
-        const caseOnly = w.toLowerCase() === g.toLowerCase();
+        const caseOnly = !wsOnly && w.toLowerCase() === g.toLowerCase();
         // "Name▲": the designed string plus glyphs that are not letters or digits (a sort caret,
         // an icon font) — the copy is intact; name the extra glyphs rather than calling it a copy bug.
         const extraGlyphs = !caseOnly && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
@@ -1027,12 +1041,13 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
         const distinct = rowTexts ? new Set(rowTexts).size : 0;
         const asDesigned = rowTexts ? rowTexts.filter((t) => t === w).length : 0;
         const realData = !caseOnly && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
-        const why = caseOnly ? (caseShown ? "differs only in case, as rendered" : "differs only in case — check for a text-transform, which Figma applies at render time while storing the original")
+        const why = ws !== null && wsOnly ? whitespaceWhy(nbspTrim(ws.want), nbspTrim(ws.have))
+          : caseOnly ? (caseShown ? "differs only in case, as rendered" : "differs only in case — check for a text-transform, which Figma applies at render time while storing the original")
           : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)`
           : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) — check the copy is the data the design means`
           : undefined;
         const note = [why, renderNote].filter((x): x is string => x !== undefined).join(" — ");
-        push(spec, "text", caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.textCase ? rt.want : spec.text, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null }, {
+        push(spec, "text", wsOnly || caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.textCase ? rt.want : spec.text, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null }, {
           ...(note ? { note } : {}),
         });
       }
