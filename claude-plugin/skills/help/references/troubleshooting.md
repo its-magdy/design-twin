@@ -118,6 +118,13 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   (also on `--check`) — the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`). A path that is
   not an executable file is exit 3 with one line saying so. Only guaranteed with the bundled Chromium (another
   version may not launch or may render differently); `measured.json` records `custom`, never the path.
+- **A verify run stops with "designtwin visual-verifier guard: …"** → the plugin's PreToolUse hook
+  (`hooks/hooks.json` → `scripts/verifier-guard.js`) refused one of the `visual-verifier` agent's own calls; it
+  applies to that agent only. It refuses a write outside `design/verify/` and the run cache
+  (`node_modules/.cache/designtwin-verify/`), or to a file the verify tools own; a pattern kill (`pkill`,
+  `killall`, `kill -1`, …); a dependency or Playwright browser install; and `dangerouslyDisableSandbox`. The reason
+  says what to do instead. This is by design, not a fault to work round: a needed install (e.g. the probe's exit 3)
+  is the user's to run, and the verifier stops its own server with `kill <pid>`, `kill -- -<pgid>` or `pkill -P <pid>`.
 - **Audit flags a lot of `small-touch-target` / `fixed-size-text`** → thresholds differ per platform
   (web 24px, iOS 44pt, Android 48dp) — make sure `--platform` matches the stack. Visual size can stay
   small if the hit area is padded; decorative static text can ignore the fixed-size warning.

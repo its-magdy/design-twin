@@ -52,11 +52,15 @@ console.log("build-screen docs (shipped web probe):");
 const verifier = flat(read("claude-plugin/agents/visual-verifier.md"));
 const verifySkill = flat(read("claude-plugin/skills/verify/SKILL.md"));
 const verifyRef = flat(read("claude-plugin/skills/build-screen/references/verify.md"));
+// The visual-verifier's write scope, pattern kills, installs and sandbox bypass are refused by its PreToolUse hook
+// (design-to-code/verifier-guard.ts, test/verifier-guard.test.ts), so its doc says so in one line instead of prose "never"s.
+const verifierGuarded = /\*\*Enforced by the plugin's hook\*\* \(`scripts\/verifier-guard\.js`, PreToolUse\), each refusal a real block with its reason: a write outside `design\/verify\/` and the run cache \(or to a tool-owned file there\), a pattern kill \(`pkill`, `killall`, …\), a dependency or Playwright browser install \(`npm install`\/`ci`, `npx playwright install`\) and `dangerouslyDisableSandbox`\./.test(verifier);
+check("the visual-verifier names its hook-enforced limits in one line (verifier-guard.js: writes, pattern kills, installs, dangerouslyDisableSandbox)", verifierGuarded);
 check("the verifier invokes scripts/verify-probe.js, with --check for the renderer and --expected/--url/--out to measure", /scripts\/verify-probe\.js" --check/.test(verifier) && /scripts\/verify-probe\.js".{0,200}--expected .{0,120}--url .{0,120}--out/.test(verifier));
 check("the verify skill invokes verify-probe.js --check (no inline Playwright script) and the probe for measuring", /scripts\/verify-probe\.js" --check/.test(verifySkill) && /verify-probe\.js".{0,200}--expected/.test(verifySkill) && !/node --input-type=module -e/.test(verifySkill));
 check("the verifier forbids writing its own probe and editing/rewriting the probe's measured.json", /never write your own probe/i.test(verifier) && /never (edit|.{0,20}edit).{0,80}(patch|rewrite).{0,40}`measured\.json`/i.test(verifier) && /interactions.{0,300}evidence\.json/.test(verifier) && /:focus-visible.{0,200}(keyboard Tab|Tab)/.test(verifier));
 check("the verifier: exit 3 asks the user, exit 4 reports the navigation log, untagged nodes are reported not matched by hand", /exit 3.{0,200}ask the user/i.test(verifier) && /exit 4.{0,300}navigation log/i.test(verifier) && /tag it.{0,200}do not match them by hand/i.test(verifier));
-check("no skill/agent doc tells the agent to run `npx playwright install` (only the user does; the agent asks)", /never run `npx playwright install`/i.test(verifier) && /never run either yourself/i.test(verifySkill) && !/playwright install[^.]{0,60}if the caller approves/i.test(verifier));
+check("no skill/agent doc tells the agent to run `npx playwright install` (only the user does; the agent asks)", verifierGuarded && /the user's to install, never yours/.test(verifier) &&/never run either yourself/i.test(verifySkill) && !/playwright install[^.]{0,60}if the caller approves/i.test(verifier));
 check("the verify skill: implicit baseline, --against, COVERAGE FELL, and a probe of `unknown` is not comparable", /--against/.test(verifySkill) && /COVERAGE FELL/.test(verifySkill) && /inputs\.probe.{0,40}unknown.{0,200}not comparable/i.test(verifySkill) && /\[--interactions design\/verify\/<Screen>\.evidence\.json\].{0,120}only when the verifier wrote that file/.test(verifySkill));
 check("build-screen step 5 names verify-probe.js and says web measurements are never hand-written", /verify-probe\.js/.test(step(5)) && /never a hand-written one/i.test(step(5)));
 check("references/verify.md: readiness on web is the probe's (fonts.ready, reduced motion, --ready), and networkidle is not used", /verify-probe\.js/.test(verifyRef) && /document\.fonts\.ready/.test(verifyRef) && /reduced motion/i.test(verifyRef) && /does not use `networkidle`/.test(verifyRef));
@@ -107,8 +111,9 @@ console.log("verify docs (run integrity + agent safety):");
     && /never write into the project tree while a page of the app is open/i.test(verifier) && /server\.watch\.ignored/.test(verifier) && /@source not/.test(verifier) && /suggestions, never edits/i.test(verifier));
   check("every non-measurement claim carries its evidence (command + count, path + stat mtime, navigation log) and unproven leads are listed separately and labelled (verifier and verify skill)",
     [verifier, verifySkill].every((t) => /not a measurement carries its evidence/i.test(t) && /stat` mtime/.test(t) && /navigation log/.test(t) && /unproven leads/.test(t)));
-  check("close only what you opened, stop only a PID you started and recorded, never pkill -f / killall / pattern kills, reuse the user's dev server",
-    [verifier, verifySkill].every((t) => /only what you opened/i.test(t) && /PID you started and recorded/.test(t) && /never `pkill -f`, `killall`/i.test(t) && /(reuse|reusing) a dev server the user/i.test(t)) && /never `pkill -f`/.test(verifyRef));
+  check("close only what you opened, stop only a PID you started and recorded, never pkill -f / killall / pattern kills (the verifier: refused by its hook), reuse the user's dev server",
+    [verifier, verifySkill].every((t) => /only what you opened/i.test(t) && /PID you started and recorded/.test(t) && /(reuse|reusing) a dev server the user/i.test(t))
+    && /never `pkill -f`, `killall`/i.test(verifySkill) && verifierGuarded && /never `pkill -f`/.test(verifyRef));
   check("the live status lives in the run cache (node_modules/.cache/designtwin-verify/), so heartbeats never touch the project; done publishes design/verify/<S>.status.json (verifier, verify skill, references/verify.md, build-screen)",
     [verifier, verifySkill, verifyRef].every((t) => /node_modules\/\.cache\/designtwin-verify\/<(Screen|screen)>\.status\.json/.test(t) && /heartbeats are free|status writes are free/i.test(ws(t)) && /publish\w* the final status/i.test(ws(t)))
     && /node_modules\/\.cache\/designtwin-verify/.test(skill) && /published as `design\/verify\/<screen>\.status\.json` at `done`/.test(ws(skill)));
@@ -117,8 +122,9 @@ console.log("verify docs (run integrity + agent safety):");
   check("'a safety check separate from auto mode blocked this request' is labelled a no-verdict denial that retrying will not fix (not a real block); the transient form is 'temporarily unavailable …, so auto mode cannot determine the safety of'",
     [verifier, verifySkill, verifyRef].every((t) => { const x = ws(t); return /safety check separate from auto mode blocked this request.{0,300}(retrying will not|do not retry)/i.test(x) && /temporarily unavailable.{0,20}so auto mode cannot determine the safety of/i.test(x); })
     && !/real\* block \(the classifier names a rule or reason, or "a safety check/.test(ws(verifier)));
-  check("a permission denial is not a sandbox violation: never dangerouslyDisableSandbox, transient no-verdict retried unchanged at most 2 times, a real block is neither retried nor rephrased, then status blocked + hand-back with a narrow allow rule",
-    [verifier, verifySkill].every((t) => /never (set|use) `dangerouslyDisableSandbox`/i.test(t) && /(at most 2 retries|at most twice)/i.test(t) && /(do not rephrase|do not retry or rephrase)/i.test(t) && /blocked on permissions: done \/ remaining/.test(t) && /narrow allow rule/.test(t))
+  check("a permission denial is not a sandbox violation: never dangerouslyDisableSandbox (the verifier: refused by its hook), transient no-verdict retried unchanged at most 2 times, a real block is neither retried nor rephrased, then status blocked + hand-back with a narrow allow rule",
+    /never (set|use) `dangerouslyDisableSandbox`/i.test(verifySkill) && verifierGuarded && /never ask the caller to approve a bypass/i.test(verifier)
+    && [verifier, verifySkill].every((t) => /(at most 2 retries|at most twice)/i.test(t) && /(do not rephrase|do not retry or rephrase)/i.test(t) && /blocked on permissions: done \/ remaining/.test(t) && /narrow allow rule/.test(t))
     && /`blocked`/.test(verifyRef) && /dangerouslyDisableSandbox/.test(verifyRef));
   check("the probe is bounded by --max-time (exit 4); one re-run after exit 4, then status failed — never a loop", [verifier, verifySkill].every((t) => /--max-time/.test(t) && /ONCE/.test(t) && /status `failed`/.test(t)) && /one re-run/.test(verifyRef));
   check("nodeId and trigger are copied VERBATIM from the expectation row; a pair that matches no row is reported", /VERBATIM from the\s+expectation row/.test(verifier) && /VERBATIM from the expectation row/.test(verifySkill) && /matched no designed interaction/.test(verifier + verifySkill));
@@ -159,8 +165,8 @@ console.log("verify docs (run integrity + agent safety):");
     !/judges absent, in `design\/verify\/<Screen>\.evidence\.json`/.test(verifySkill) && /in `<Screen>\.evidence\.json` — staged in the run's stage dir and published into `design\/verify\/` at `done`, never written there directly/.test(verifySkill));
   check("--wait exit 5 is 'timeout or no progress' everywhere (never 'no timeout/progress')",
     [verifier, verifySkill, verifyRef].every((t) => /5 timeout or no progress/.test(t) && !/no timeout\/progress/.test(t)));
-  check("never reinstall dependencies (npm ci / npm install) during a verify run — it clears node_modules/.cache (live status + staged files)",
-    [verifier, verifySkill, verifyRef].every((t) => /Never reinstall dependencies \(`npm ci`, `npm install`\) during a verify run/.test(t) && /clears `node_modules\/\.cache`/.test(t)));
+  check("never reinstall dependencies (npm ci / npm install) during a verify run — it clears node_modules/.cache (live status + staged files); the verifier's hook refuses it",
+    [verifySkill, verifyRef].every((t) => /Never reinstall dependencies \(`npm ci`, `npm install`\) during a verify run/.test(t) && /clears `node_modules\/\.cache`/.test(t)) && verifierGuarded);
   check("--status/--wait resolve --dir (default design/verify) against the current directory; from elsewhere pass --dir (absolute works)",
     [verifier, verifySkill, verifyRef].every((t) => /`--status` and `--wait` resolve `--dir` \(default `design\/verify`\) against the current directory/.test(t) && /an absolute path works/.test(t)));
   // integrity failures outrank the grades
@@ -757,6 +763,9 @@ console.log("build-screen docs:");
   check("troubleshooting: the probe's exit 3 (no usable browser) → --browser-path <executable> (also on --check; macOS inner binary; only guaranteed with the bundled Chromium; recorded as custom)",
     /`verify-probe` exits 3/.test(trouble) && /--browser-path <executable>/.test(trouble) && /also on `--check`/.test(trouble) && /Contents\/MacOS/.test(trouble)
     && /Only guaranteed with the bundled Chromium/.test(trouble) && /records `custom`, never the path/.test(trouble));
+  check("troubleshooting: a \"designtwin visual-verifier guard: …\" stop is the verifier's PreToolUse hook (verifier-guard.js), by design; installs are the user's, its own server stops by PID / group / pkill -P",
+    /"designtwin visual-verifier guard: …"/.test(trouble) && /`scripts\/verifier-guard\.js`/.test(trouble) && /applies to that agent only/.test(trouble)
+    && /`dangerouslyDisableSandbox`/.test(trouble) && /is the user's to run/.test(trouble) && /`kill -- -<pgid>`/.test(trouble) && /`pkill -P <pid>`/.test(trouble));
   check("verify skill: recording never reopens a plan — a hook record from before the hash change is re-stamped in the same write",
     /recording never reopens a plan \(the hook's hash does not cover `verification`; a hook record from before that change is re-stamped in the same write\)/.test(verifySkill));
   check("build-screen: the hook hashes files[] and every mapped module (extensionless resolves like an import; an alias or package is not hashed — --status and the report name it once)",

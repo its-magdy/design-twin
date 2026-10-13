@@ -1,5 +1,5 @@
 {
-  "description": "Gates the designtwin:screen-builder subagent with the same plan check build-screen runs. Claude Code ignores `hooks` in a plugin-shipped agent's frontmatter, so the gate has to be registered here. The script reads the hook JSON from stdin (only when stdin is not a terminal, never waiting on a silent pipe), exits immediately when design/plan/ has no open plan, checks only the plans the subagent's own tool calls wrote (Write/Edit, a shell redirect, --out, cp/mv, sed -i) and the plan that alone lists a file it wrote — nothing when it claimed none, e.g. it edited only files several plans share; every open plan when the payload carries no readable agent transcript — blocks only on an unexplained colour literal, an unanchored visible design node or (web profiles) no data-dt-node tag at all, never writes plan.status, and stops itself at 60 s — the timeout below is the harness's backstop.",
+  "description": "Claude Code ignores `hooks` in a plugin-shipped agent's frontmatter, so the plugin's two agents are gated here. (1) SubagentStop gates the designtwin:screen-builder subagent with the same plan check build-screen runs. The script reads the hook JSON from stdin (only when stdin is not a terminal, never waiting on a silent pipe), exits immediately when design/plan/ has no open plan, checks only the plans the subagent's own tool calls wrote (Write/Edit, a shell redirect, --out, cp/mv, sed -i) and the plan that alone lists a file it wrote — nothing when it claimed none, e.g. it edited only files several plans share; every open plan when the payload carries no readable agent transcript — blocks only on an unexplained colour literal, an unanchored visible design node or (web profiles) no data-dt-node tag at all, never writes plan.status, and stops itself at 60 s — the timeout below is the harness's backstop. (2) PreToolUse guards the designtwin:visual-verifier subagent's Bash and Write calls (the payload's agent_type; a call from anyone else gets no answer, so the normal permission flow applies): it refuses a write outside design/verify/ and the run cache node_modules/.cache/designtwin-verify/ (or to a tool-owned file there), a pattern kill (pkill, killall, …), a dependency or Playwright browser install, and dangerouslyDisableSandbox — a deny decision with the reason on stdout, exit 0; a payload it cannot read is allowed and logged to stderr.",
   "hooks": {
     "SubagentStop": [
       {
@@ -9,6 +9,18 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js\"",
             "timeout": 90
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/verifier-guard.js\"",
+            "timeout": 10
           }
         ]
       }
