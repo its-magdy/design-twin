@@ -30,7 +30,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { InteractionEvidence, InteractionOutcome, PageOverflow, ProbeActivation, VerifyExpectation, VerifyInteraction } from "./types.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
-import { decodePng } from "./png.ts";
+import { decodePng } from "../bridge/src/png.ts";
 
 // ---------------------------------------------------------------- the page, as far as these functions use it
 interface DRect { x: number; y: number; width: number; height: number; right: number; bottom: number }

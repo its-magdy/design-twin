@@ -1425,7 +1425,7 @@ function stepsSha256(steps) {
 // design-to-code/probe-drive.ts
 import { setTimeout as sleep } from "node:timers/promises";
 
-// design-to-code/png.ts
+// bridge/src/png.ts
 import { crc32, deflateSync, inflateSync } from "node:zlib";
 var PngError = class extends Error {
 };
