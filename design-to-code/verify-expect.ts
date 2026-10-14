@@ -6,6 +6,7 @@
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { walkWithHidden } from "./hidden.ts";
+import type { WalkContext } from "./hidden.ts";
 import { exportContentSha256 } from "./content-hash.ts";
 import { planInteractionsSha256 } from "./plan-waivers.ts";
 import { pngInfo } from "../bridge/src/png.ts";
@@ -14,7 +15,7 @@ import { isJsonObject } from "./types.ts";
 import { screenExportOf, screenRoots } from "./export-shape.ts";
 import { PAINT_TYPES, idSuffix } from "./probe-match.ts";
 import type {
-  Action, Box, DrawnState, IndexRow, IrNode, JsonValue, LayoutSpec, NotComparable, Paint, Plan, Reaction, ScreenDoc, SolidPaint, VerifyExpectation,
+  Action, Box, DrawnState, IndexRow, IrNode, JsonValue, LayoutSpec, NotComparable, Paint, Plan, Reaction, ScreenDoc, ScreenExport, SolidPaint, VerifyExpectation,
   VerifyInstance, VerifyInteraction, VerifyFrame, VerifyReferenceImage, VerifyReferenceUnusable, VerifyRootFrame, VerifySpec,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -208,7 +209,31 @@ function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; not
   const spec: VerifySpec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
   const notComparable: NotComparable[] = [];
   const skip = (field: string, value: JsonValue, why: string): number => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
+  const x: NodeSpecCtx = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [] };
+  expectText(x);
+  expectFont(x);
+  expectPaint(x);
+  expectPlaceholder(x);
+  expectStroke(x);
+  expectRadius(x);
+  expectLayout(x);
+  if (n.box) expectSize(x, n.box);
+  expectPosition(x, ctx.frame);
+  expectOpacity(x);
+  expectDrawnState(x, ctx.inheritedState);
 
+  // The token NAME, carried through for the report. A mismatch whose spec value is bound to a token is
+  // a token bug, not a number bug, and that distinction is what tells a reader where to look.
+  if (n.tokens && Object.keys(n.tokens).length) spec.tokens = n.tokens;
+  if (ctx.frameId) spec.frameId = ctx.frameId;
+  return { spec, notComparable };
+}
+/** expectNode()'s state: the node, the spec row being filled, `skip` (a design value the method cannot compare, with
+ *  why) and the node's fills (`paints`, [] when it states none). Each expect* step adds its fields in turn — the order of
+ *  the steps is the order of the spec's keys. */
+interface NodeSpecCtx { n: IrNode; spec: VerifySpec; skip: (field: string, value: JsonValue, why: string) => number; paints: Paint[] }
+/** the copy and how it renders (text, textCase) */
+function expectText({ n, spec, skip }: NodeSpecCtx): void {
   // `text` is where the producer writes a TEXT node's content (text.ts); the export never carries `characters`.
   if (n.text != null) spec.text = n.text;
   // Figma stores the typed string and applies the text case at render time (font.case) — `text` stays the
@@ -217,23 +242,27 @@ function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; not
   const fcase = n.font ? n.font.case : undefined;
   if (n.text != null && (fcase === "upper" || fcase === "lower" || fcase === "title")) spec.textCase = fcase;
   else if (n.text != null && (fcase === "small_caps" || fcase === "small_caps_forced")) skip("text case", fcase, "small caps (font-variant) not compared — Figma draws the stored characters as small capitals; the build's font-variant is not measured");
-
-  if (n.font) {
-    if (n.font.family !== undefined) spec.fontFamily = n.font.family;
-    if (typeof n.font.size === "number") spec.fontSize = n.font.size;
-    const w = normWeight(n.font.weight);
-    if (w != null) spec.fontWeight = w;
-    const lh = lineHeightPx(n.font.lineHeight, n.font.size);
-    if (lh != null) spec.lineHeight = lh;
-    const ls: { value?: number; unit?: string } | undefined = n.font.letterSpacing;
-    // Figma's percent letter-spacing is a share of the font size; the producer writes "percent" (an older
-    // export "PERCENT") — read as px, -2% on 20px text would be expected as -2px, not -0.4px.
-    if (ls && typeof ls.value === "number") {
-      if (String(ls.unit).toLowerCase() !== "percent") spec.letterSpacing = ls.value;
-      else if (typeof n.font.size === "number") spec.letterSpacing = r2((ls.value / 100) * n.font.size);
-    }
-    if (n.font.color) spec.color = normColor(n.font.color);
+}
+/** the typography: family, size, weight, line height, letter spacing and the font colour */
+function expectFont({ n, spec }: NodeSpecCtx): void {
+  if (!n.font) return;
+  if (n.font.family !== undefined) spec.fontFamily = n.font.family;
+  if (typeof n.font.size === "number") spec.fontSize = n.font.size;
+  const w = normWeight(n.font.weight);
+  if (w != null) spec.fontWeight = w;
+  const lh = lineHeightPx(n.font.lineHeight, n.font.size);
+  if (lh != null) spec.lineHeight = lh;
+  const ls: { value?: number; unit?: string } | undefined = n.font.letterSpacing;
+  // Figma's percent letter-spacing is a share of the font size; the producer writes "percent" (an older
+  // export "PERCENT") — read as px, -2% on 20px text would be expected as -2px, not -0.4px.
+  if (ls && typeof ls.value === "number") {
+    if (String(ls.unit).toLowerCase() !== "percent") spec.letterSpacing = ls.value;
+    else if (typeof n.font.size === "number") spec.letterSpacing = r2((ls.value / 100) * n.font.size);
   }
+  if (n.font.color) spec.color = normColor(n.font.color);
+}
+/** the first solid fill (a vector's fill, a box's background, a TEXT's colour) and whether other paint decorates it */
+function expectPaint({ n, spec, paints }: NodeSpecCtx): void {
   const fill = firstSolid(Array.isArray(n.fills) ? n.fills : null);
   // A TEXT node's fill is its TEXT colour, not a background — conflating the two is how a chip with a
   // missing background still looked "bound".
@@ -244,15 +273,18 @@ function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; not
   if (fill && n.type === "TEXT" && !spec.color) spec.color = normColor(fill.color);
   // Paint this method does not compare (a shadow, a blur, a gradient or image fill) is still paint: such a
   // wrapper is drawn, so a plan may never fold it away.
-  const paints = Array.isArray(n.fills) ? n.fills : [];
   if ((Array.isArray(n.effects) && n.effects.length > 0) || paints.some((p) => p && p.type !== "solid" && p.visible !== false)) spec.decorated = true;
-
+}
+/** an input placeholder's copy and colour move to placeholderText / placeholderColor */
+function expectPlaceholder({ n, spec }: NodeSpecCtx): void {
   if (isPlaceholder(n)) {
     spec.placeholder = true;
     if (spec.text !== undefined) { spec.placeholderText = spec.text; delete spec.text; }
     if (spec.color !== undefined) { spec.placeholderColor = spec.color; delete spec.color; }
   }
-
+}
+/** the border: colour, one width or per-side widths, and the stroke alignment */
+function expectStroke({ n, spec }: NodeSpecCtx): void {
   // `strokes` is an OBJECT, not an array of paints: `{colors:[…], weight | weights:{top,right,
   // bottom,left}, align, dash, …}` (figma-plugin/src/paint.ts simplifyStrokes). Treating it as an
   // array is how this blew up on the first real export it saw.
@@ -265,6 +297,10 @@ function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; not
     else if (st.weights && typeof st.weights === "object") { const ws = st.weights; spec.borderWidths = (["top", "right", "bottom", "left"] as const).map((k) => { const v = ws[k]; return typeof v === "number" ? v : 0; }); }
     if (st.align) spec.strokeAlign = st.align; // (after the weight/weights chain)
   }
+}
+/** the corner radius — one number or per corner, and not compared on a layer that draws nothing */
+function expectRadius({ n, spec, skip, paints }: NodeSpecCtx): void {
+  const st = n.strokes;
   // Radius: one number, or per-corner. A per-corner radius with UNEQUAL corners (a table header
   // rounded only at the top) is compared corner by corner — reading `radius.tl` only would give
   // a card rounded at the bottom ({bl,br}) no radius spec at all.
@@ -284,7 +320,10 @@ function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; not
     if (c.tr === c.tl && c.br === c.tl && c.bl === c.tl) spec.borderRadius = c.tl;
     else spec.radiusCorners = c;
   }
-
+}
+/** the auto-layout gap and padding — never compared on an exported asset leaf, whose inset is baked into the file */
+function expectLayout(x: NodeSpecCtx): void {
+  const { n, skip } = x;
   const L: LegacyLayout | undefined = n.layout;
   // an asset/geometry/assetSkipped leaf is one exported image — whatever padding/gap an older export inferred for it is
   // the inset already baked into the file (current exports carry no `layout` on such a leaf). Never compared.
@@ -295,99 +334,114 @@ function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; not
     const pad = Array.isArray(L.padding) ? L.padding.slice(0, 4) : PAD_KEYS.some((k) => typeof L[k] === "number") ? PAD_KEYS.map((k) => L[k]) : null;
     if (pad && pad.some((v) => typeof v === "number" && v !== 0)) skip("padding", pad.map((v) => (typeof v === "number" ? v : 0)), BAKED);
   } else if (L && typeof L === "object") {
-    const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : undefined;
-    if (g !== undefined) {
-      // A stored gap is only a GAP when it separates laid-out children. Three shapes where it is not
-      // (real pulls showed `gap 200 → 16`, `gap 146`, `gap 160` that were all Figma auto-layout slack):
-      const dir = L.flexDirection === "column" ? "column" : "row";
-      const flow = inFlowChildren(n);
-      if (flow.length < 2) skip("gap", g, `fewer than two laid-out children (${flow.length}) — a gap has nothing to separate`);
-      // primaryAxisAlignItems distribution modes (SPACE_BETWEEN/SPACE_EVENLY/SPACE_AROUND) all space
-      // children by dividing the frame's free space along the primary axis, ignoring itemSpacing
-      // (Figma Help Center, "Guide to auto layout", article 31289464393751: gap can be a number or
-      // "Auto — choose from Between, Around, and Evenly auto spacing options", which "match CSS
-      // property values space-between, space-evenly and space-around respectively") — so the stored
-      // value is slack for all three, not just space-between.
-      else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around") skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
-      else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g, "a child fills the main axis, so the stored gap and that child's size trade off — placement is checked through the children's positions and sizes instead");
-      else spec.gap = g;
-    }
-    let pad: Array<number | undefined> | null = null;
-    if (Array.isArray(L.padding)) pad = L.padding.slice(0, 4);
-    else if (PAD_KEYS.some((k) => typeof L[k] === "number")) pad = PAD_KEYS.map((k) => L[k]);
-    if (pad && pad.some((v) => typeof v === "number" && v !== 0)) {
-      const p4 = pad.map((v) => (typeof v === "number" ? v : 0));
-      // padding that cannot show on a FIXED axis is not compared there (paddingSkip + a notComparable row per axis)
-      const skipped: NonNullable<VerifySpec["paddingSkip"]> = [];
-      for (const ax of paddingNotShown(n, L, p4)) {
-        skipped.push(...ax.sides);
-        skip(`padding (${ax.sides.join("/")})`, ax.sides.map((sd) => p4[PAD_SIDES.indexOf(sd)] ?? 0), ax.why);
-      }
-      if (skipped.length < 4) spec.padding = p4;
-      if (skipped.length && skipped.length < 4) spec.paddingSkip = skipped;
-    }
+    expectGap(x, L);
+    expectPadding(x, L);
   }
-  if (n.box) {
-    if (n.type === "TEXT") {
-      // a TEXT's width. Hug text (autoResize width_and_height) IS its box — compared with
-      // the Range width, tolerance 1. Any other text box (fixed or fill width, height-auto) is wider than its words:
-      // the build's element hugs the text, so the design's INK width (renderBox.w) is compared, tolerance textInk.
-      // Truncation set (ellipsis / line clamp): a Range spans the full unclipped string (text-overflow keeps it), so a
-      // text the DESIGN truncates has no comparable width — but one whose ink ends well inside its box (a "12" in a
-      // 121px cell set to truncate) is not truncated, and its ink is its full width. Several lines: not compared.
-      // No height: neither a Range nor the element gives the line box Figma's text box has (see LIMITS).
-      // A placeholder's characters are not in the DOM (the input's placeholder attribute): no Range measures them.
-      const rb = n.renderBox;
-      const lines = typeof n.maxLines === "number" ? n.maxLines : 0;
-      const truncSet = n.autoResize === "truncate" || n.truncate === true || lines > 0;
-      const truncated = truncSet && (lines > 1 || !rb || !num(rb.w) || rb.w >= n.box.w - TOLERANCE.textInk);
-      const shadowed = Array.isArray(n.effects) && n.effects.length > 0;
-      if (isPlaceholder(n)) skip("width", n.box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
-      else if (truncated) skip("width", n.box.w, "truncated text (ellipsis / line clamp) the design truncates or wraps: a Range over it measures the full unclipped string, not the box");
-      else if (n.autoResize === "width_and_height") spec.width = n.box.w;
-      else if (shadowed) skip("width", n.box.w, "text with an effect (shadow/blur): its render bounds include the effect, so neither box nor ink width is the text's");
-      else if (rb && num(rb.w)) {
-        spec.width = rb.w;
-        spec.widthFrom = "renderBox";
-        skip("width (text box)", n.box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, so the ink width (renderBox) is compared instead`);
-      } else spec.width = n.box.w;
-      // a FIXED-height text box shorter than its line box (a 28px line in a 24px box). Figma lets the line
-      // overflow the box; CSS has no such box, so the build picks one — say so instead of letting a later height or
-      // line-height delta read as a bug. Where Figma puts the glyphs inside the overflowing line is unverified.
-      const lh = spec.lineHeight;
-      if (num(lh) && num(n.box.h) && lh > n.box.h + 0.5 && n.autoResize !== "width_and_height" && n.autoResize !== "height") {
-        skip(TEXT_BOX_HEIGHT, n.box.h, lineBoxWhy(lh, n.box.h));
-      }
-    } else {
-      if (typeof n.box.w === "number") spec.width = n.box.w;
-      if (typeof n.box.h === "number") spec.height = n.box.h;
-      // a hug axis may GROW in the build (more content) without the match being wrong
-      if (n.widthMode || n.heightMode) spec.sizing = { ...ifDefined("w", n.widthMode), ...ifDefined("h", n.heightMode) };
-    }
+}
+/** the stored gap, when it separates laid-out children (otherwise it is auto-layout slack, listed with why) */
+function expectGap({ n, spec, skip }: NodeSpecCtx, L: LegacyLayout): void {
+  const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : undefined;
+  if (g !== undefined) {
+    // A stored gap is only a GAP when it separates laid-out children. Three shapes where it is not
+    // (real pulls showed `gap 200 → 16`, `gap 146`, `gap 160` that were all Figma auto-layout slack):
+    const dir = L.flexDirection === "column" ? "column" : "row";
+    const flow = inFlowChildren(n);
+    if (flow.length < 2) skip("gap", g, `fewer than two laid-out children (${flow.length}) — a gap has nothing to separate`);
+    // primaryAxisAlignItems distribution modes (SPACE_BETWEEN/SPACE_EVENLY/SPACE_AROUND) all space
+    // children by dividing the frame's free space along the primary axis, ignoring itemSpacing
+    // (Figma Help Center, "Guide to auto layout", article 31289464393751: gap can be a number or
+    // "Auto — choose from Between, Around, and Evenly auto spacing options", which "match CSS
+    // property values space-between, space-evenly and space-around respectively") — so the stored
+    // value is slack for all three, not just space-between.
+    else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around") skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
+    else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g, "a child fills the main axis, so the stored gap and that child's size trade off — placement is checked through the children's positions and sizes instead");
+    else spec.gap = g;
   }
-  const pos = isPlaceholder(n) ? null : framePosition(n, ctx.frame); // (a placeholder: no Range, see width)
+}
+/** the padding (top, right, bottom, left), less the sides the design cannot show (paddingSkip) */
+function expectPadding({ n, spec, skip }: NodeSpecCtx, L: LegacyLayout): void {
+  let pad: Array<number | undefined> | null = null;
+  if (Array.isArray(L.padding)) pad = L.padding.slice(0, 4);
+  else if (PAD_KEYS.some((k) => typeof L[k] === "number")) pad = PAD_KEYS.map((k) => L[k]);
+  if (pad && pad.some((v) => typeof v === "number" && v !== 0)) {
+    const p4 = pad.map((v) => (typeof v === "number" ? v : 0));
+    // padding that cannot show on a FIXED axis is not compared there (paddingSkip + a notComparable row per axis)
+    const skipped: NonNullable<VerifySpec["paddingSkip"]> = [];
+    for (const ax of paddingNotShown(n, L, p4)) {
+      skipped.push(...ax.sides);
+      skip(`padding (${ax.sides.join("/")})`, ax.sides.map((sd) => p4[PAD_SIDES.indexOf(sd)] ?? 0), ax.why);
+    }
+    if (skipped.length < 4) spec.padding = p4;
+    if (skipped.length && skipped.length < 4) spec.paddingSkip = skipped;
+  }
+}
+/** the size: a TEXT's width (expectTextSize), any other node's width, height and hug/fill sizing */
+function expectSize(x: NodeSpecCtx, box: Box): void {
+  const { n, spec } = x;
+  if (n.type === "TEXT") expectTextSize(x, box);
+  else {
+    if (typeof box.w === "number") spec.width = box.w;
+    if (typeof box.h === "number") spec.height = box.h;
+    // a hug axis may GROW in the build (more content) without the match being wrong
+    if (n.widthMode || n.heightMode) spec.sizing = { ...ifDefined("w", n.widthMode), ...ifDefined("h", n.heightMode) };
+  }
+}
+/** a TEXT's width (its box or its ink, or not comparable with why) and a line box taller than a fixed text box */
+function expectTextSize({ n, spec, skip }: NodeSpecCtx, box: Box): void {
+  // a TEXT's width. Hug text (autoResize width_and_height) IS its box — compared with
+  // the Range width, tolerance 1. Any other text box (fixed or fill width, height-auto) is wider than its words:
+  // the build's element hugs the text, so the design's INK width (renderBox.w) is compared, tolerance textInk.
+  // Truncation set (ellipsis / line clamp): a Range spans the full unclipped string (text-overflow keeps it), so a
+  // text the DESIGN truncates has no comparable width — but one whose ink ends well inside its box (a "12" in a
+  // 121px cell set to truncate) is not truncated, and its ink is its full width. Several lines: not compared.
+  // No height: neither a Range nor the element gives the line box Figma's text box has (see LIMITS).
+  // A placeholder's characters are not in the DOM (the input's placeholder attribute): no Range measures them.
+  const rb = n.renderBox;
+  const lines = typeof n.maxLines === "number" ? n.maxLines : 0;
+  const truncSet = n.autoResize === "truncate" || n.truncate === true || lines > 0;
+  const truncated = truncSet && (lines > 1 || !rb || !num(rb.w) || rb.w >= box.w - TOLERANCE.textInk);
+  const shadowed = Array.isArray(n.effects) && n.effects.length > 0;
+  if (isPlaceholder(n)) skip("width", box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
+  else if (truncated) skip("width", box.w, "truncated text (ellipsis / line clamp) the design truncates or wraps: a Range over it measures the full unclipped string, not the box");
+  else if (n.autoResize === "width_and_height") spec.width = box.w;
+  else if (shadowed) skip("width", box.w, "text with an effect (shadow/blur): its render bounds include the effect, so neither box nor ink width is the text's");
+  else if (rb && num(rb.w)) {
+    spec.width = rb.w;
+    spec.widthFrom = "renderBox";
+    skip("width (text box)", box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, so the ink width (renderBox) is compared instead`);
+  } else spec.width = box.w;
+  // a FIXED-height text box shorter than its line box (a 28px line in a 24px box). Figma lets the line
+  // overflow the box; CSS has no such box, so the build picks one — say so instead of letting a later height or
+  // line-height delta read as a bug. Where Figma puts the glyphs inside the overflowing line is unverified.
+  const lh = spec.lineHeight;
+  if (num(lh) && num(box.h) && lh > box.h + 0.5 && n.autoResize !== "width_and_height" && n.autoResize !== "height") {
+    skip(TEXT_BOX_HEIGHT, box.h, lineBoxWhy(lh, box.h));
+  }
+}
+/** the frame-relative position (framePosition) */
+function expectPosition({ n, spec }: NodeSpecCtx, frame: ExpectContext["frame"]): void {
+  const pos = isPlaceholder(n) ? null : framePosition(n, frame); // (a placeholder: no Range, see width)
   if (pos) {
     spec.x = pos.x;
     if (pos.y !== undefined) spec.y = pos.y;
     spec.positionFrom = pos.source;
   }
+}
+/** the opacity — stated, or 1 on a node that paints or carries copy */
+function expectOpacity({ n, spec }: NodeSpecCtx): void {
   if (typeof n.opacity === "number" && n.opacity !== 1) spec.opacity = n.opacity;
   // the exporter omits opacity 1 — a node that paints or carries copy states it anyway, so a control
   // rendered at opacity 0.5 is a delta instead of passing unchecked
   else if (spec.text !== undefined || spec.placeholderText !== undefined || spec.color !== undefined || spec.backgroundColor !== undefined || spec.fill !== undefined || spec.borderColor !== undefined || spec.decorated) spec.opacity = 1;
-
+}
+/** the interaction state the node is drawn in — its own, else the one it inherits from an ancestor */
+function expectDrawnState({ n, spec }: NodeSpecCtx, inheritedState: InheritedState | undefined): void {
   const own = drawnStateOf(n);
   if (own) { spec.drawnState = own.state; spec.drawnStateWhy = own.why; spec.drawnStateOwn = true; }
-  else if (ctx.inheritedState) {
-    spec.drawnState = ctx.inheritedState.state; spec.drawnStateWhy = `inside '${ctx.inheritedState.from}', which ${ctx.inheritedState.why}`;
-    spec.drawnStateFrom = ctx.inheritedState.fromId; // the owner the probe puts in that state
+  else if (inheritedState) {
+    spec.drawnState = inheritedState.state; spec.drawnStateWhy = `inside '${inheritedState.from}', which ${inheritedState.why}`;
+    spec.drawnStateFrom = inheritedState.fromId; // the owner the probe puts in that state
   }
-
-  // The token NAME, carried through for the report. A mismatch whose spec value is bound to a token is
-  // a token bug, not a number bug, and that distinction is what tells a reader where to look.
-  if (n.tokens && Object.keys(n.tokens).length) spec.tokens = n.tokens;
-  if (ctx.frameId) spec.frameId = ctx.frameId;
-  return { spec, notComparable };
 }
 
 // Which nodes are worth a row. Everything visible that CARRIES a checkable value — a node with no
@@ -535,223 +589,44 @@ function markRepeatedText(root: IrNode, specById: Map<string, VerifySpec>): void
 }
 
 export function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): BuiltExpectation {
-  const nodes: VerifySpec[] = [];
-  const instances: VerifyInstance[] = [];
-  const interactions: VerifyInteraction[] = [];
-  const notComparable: NotComparable[] = [];
-  const hidden: { roots: Array<{ nodeId: string; name: string; path?: string }>; ids: string[]; specsSkipped: number; instancesSkipped: number; interactionsSkipped: number } =
-    { roots: [], ids: [], specsSkipped: 0, instancesSkipped: 0, interactionsSkipped: 0 };
-  const frames: Array<Partial<VerifyFrame>> = [];
-  const seen = new Set<string>();
-  let screen: string | undefined = undefined, exportedAt: string | undefined = undefined, reference: string | null = null;
+  const bx = expectBuildCtx(opts);
+  for (const input of docs) readInput(bx, input);
+  const planInteractions = mergePlanInteractions(bx, opts && opts.plan);
+  // repeated placeholder copy in sibling rows
+  const specById = new Map(bx.nodes.map((s) => [s.nodeId, s]));
+  for (const r of bx.roots) markRepeatedText(r, specById);
+  markUndesigned(bx);
+  if (bx.index && bx.readSibling) addAliases(bx, specById);
+  addOverlays(bx);
+  const referenceImage = firstReferenceImage(bx, opts);
+  return expectationOf(bx, docs, planInteractions, referenceImage);
+}
+
+/** the hidden layers the walk skipped: their roots, every id under them, and what they would have added */
+interface HiddenTally { roots: Array<{ nodeId: string; name: string; path?: string }>; ids: string[]; specsSkipped: number; instancesSkipped: number; interactionsSkipped: number }
+/** buildExpectation()'s state: the options, what the walk of the screen roots collects, and the indexes the passes after
+ *  the walk read. Every collection is filled in place; screen, exportedAt and reference are the only fields set after
+ *  expectBuildCtx() (the first input that states one wins). */
+interface ExpectBuild {
+  nodes: VerifySpec[]; instances: VerifyInstance[]; interactions: VerifyInteraction[]; notComparable: NotComparable[]; hidden: HiddenTally;
+  frames: Array<Partial<VerifyFrame>>; seen: Set<string>;
+  screen: string | undefined; exportedAt: string | undefined; reference: string | null;
   // every node id each Figma file's docs carry (ids are per FILE), and the file each interaction came from
-  const idsByFile = new Map<string, Set<string>>();
+  idsByFile: Map<string, Set<string>>;
   // each file's screen roots (id → name) — the index row that IS this screen ties it to its file
   // (names: the root's own and the export's title — a multi-frame selection pull is indexed as "selection")
-  const rootsByFile = new Map<string, Map<string, Set<string>>>();
-  const interactionFile = new Map<VerifyInteraction, string | undefined>();
-  const roots: IrNode[] = [];
-  const rootNodesByFile = new Map<string, IrNode[]>(); // each Figma file's input roots
-  const visibleById = new Map<string, { name: string; file: string }>(); // a plan row's node — its name and file
-
-  for (const { doc, label } of docs) {
-    const exp = screenExportOf(doc);
-    // (a screen export and a page-walk layer file both say which Figma file they came from; a bare node does not)
-    const sf: unknown = doc && "sourceFile" in doc ? doc.sourceFile : exp ? exp.sourceFile : undefined;
-    const sourceFile = typeof sf === "string" && sf ? sf : undefined;
-    const fileIds = getOrInit(idsByFile, sourceFile ?? "", () => new Set<string>());
-    if (!screen) screen = (exp && exp.screen) || label;
-    if (!exportedAt) exportedAt = exp ? exp.exportedAt : undefined;
-    for (const root of screenRoots(doc)) {
-      if (root.id) {
-        const names = getOrInit(getOrInit(rootsByFile, sourceFile ?? "", () => new Map<string, Set<string>>()), root.id, () => new Set<string>());
-        // (the title only for the frame the pull is filed under — the index row carries that one id)
-        for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : undefined]) if (typeof n === "string" && n) names.add(n);
-      }
-      getOrInit(rootNodesByFile, sourceFile ?? "", () => []).push(root);
-      if (!reference && root.reference) reference = root.reference;
-      const b: Partial<Box> = root.box || {};
-      const frame: Partial<VerifyFrame> = { nodeId: root.id, name: root.name, ...ifDefined("w", b.w), ...ifDefined("h", b.h), ...ifDefined("x", b.x), ...ifDefined("y", b.y), clip: root.clip === true,
-        ...ifDefined("scroll", root.scroll) }; // a frame designed to scroll sideways
-      frames.push(frame);
-      const frameId = frames.length > 1 ? root.id : undefined;
-      const stateOf = new WeakMap<IrNode, InheritedState>(); // node -> inherited drawn-state { state, why, from }
-      // node -> the ancestorIds its CHILDREN get: itself then its own ancestors (the frame root contributes none)
-      const chainOf = new WeakMap<IrNode, string[]>();
-      // a frame's fixed children (pinned while scrolling) and everything inside them. Figma keeps them "on
-      // top of scrolling children" (plugin typings, numberOfFixedChildren) — the LAST N of children[], which is bottom-to-top.
-      const fixedNodes = new WeakSet<IrNode>();
-      roots.push(root);
-      walkWithHidden(root, (n, c) => {
-        if (n.id) fileIds.add(n.id);
-        if (c.hidden) {
-          // Counted, never specified. The ids travel with the expectation so --compare can say "you
-          // drove a hidden layer" instead of crediting it.
-          if (!c.parentHidden) hidden.roots.push({ nodeId: n.id, name: n.name, path: c.path });
-          if (n.id) hidden.ids.push(n.id);
-          if (checkable(expectNode(n, { path: c.path }).spec)) hidden.specsSkipped++;
-          if (n.type === "INSTANCE" && n.mainComponent) hidden.instancesSkipped++;
-          for (const r of Array.isArray(n.reactions) ? n.reactions : []) hidden.interactionsSkipped += actionsOf(r).length;
-          return;
-        }
-        const inherited = c.parent ? stateOf.get(c.parent) : undefined;
-        // Every ancestor of a visible node is visible (hidden is inherited), so this is the visible chain,
-        // nearest first. The probe scopes a text match to a tagged ancestor with it; compare ignores it.
-        const ancestorIds = c.parent ? chainOf.get(c.parent) ?? [] : [];
-        chainOf.set(n, c.parent ? [...(n.id ? [n.id] : []), ...ancestorIds] : []);
-        if (n.id && seen.has(n.id)) return;
-        if (n.id) seen.add(n.id);
-        if (n.id) visibleById.set(n.id, { name: n.name, file: sourceFile ?? "" });
-        const { spec, notComparable: gaps } = expectNode(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
-        spec.ancestorIds = ancestorIds;
-        if (n.absolute) spec.absolute = true;
-        const par = c.parent;
-        const sibs = par && Array.isArray(par.children) ? par.children : [];
-        const nFixed = par && typeof par.fixedChildren === "number" ? par.fixedChildren : 0;
-        if (par && (fixedNodes.has(par) || (nFixed > 0 && sibs.indexOf(n) >= sibs.length - nFixed))) { fixedNodes.add(n); spec.fixed = true; }
-        if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id, fromId: n.id });
-        if (checkable(spec)) nodes.push(spec);
-        else {
-          // an exclusion (radius on a layer that draws nothing, padding the box cannot show) took the
-          // node's only checkable value — it is not a spec; say so rather than let it vanish
-          const g11 = gaps.filter((g) => g.field === "border-radius" || g.field.startsWith("padding ("));
-          if (g11.length) gaps.push({ nodeId: n.id, name: n.name, field: "node", value: null,
-            why: gaps.some((g) => g.field === "border-radius") ? "node not checked: it draws nothing (no fill, stroke, effect or clip) — its radius was its only stated value"
-              : `node not checked: every value it states is excluded by method (${g11.map((g) => g.field).join(", ")})` });
-        }
-        notComparable.push(...gaps);
-
-        if (n.type === "INSTANCE" && n.mainComponent) {
-          instances.push({
-            nodeId: n.id,
-            name: n.name,
-            setName: n.mainComponent.setName || n.mainComponent.name,
-            ...ifDefined("setKey", n.mainComponent.setKey || n.mainComponent.key),
-            ...ifDefined("variant", n.mainComponent.variant),
-            ...ifDefined("props", n.props || undefined),
-          });
-        }
-        // The interaction graph is already in the export, keyed by node id — the richest input in the
-        // whole IR and the one nothing verified. The real shape is
-        // `reactions[].actions[]` (plural on both), with `trigger` a plain string — see
-        // figma-plugin/src/prototype.ts.
-        for (const r of Array.isArray(n.reactions) ? n.reactions : []) {
-          const trigger = triggerOf(r);
-          for (const a of actionsOf(r)) {
-            const row: VerifyInteraction = {
-              nodeId: n.id,
-              name: n.name,
-              trigger,
-              ...ifDefined("action", a.navigation || a.type),
-              ...ifDefined("destinationId", a.destinationId),
-              ...ifDefined("destination", a.destination),
-            };
-            interactions.push(row);
-            interactionFile.set(row, sourceFile ?? "");
-          }
-        }
-      });
-    }
-  }
-
-  // ---- plan.interactions[] — interactions the export cannot carry (a control with no prototype
-  // reaction). Merged only when the row can be graded like an export row: a visible node of this export, a known
-  // `expect` (→ the action OUTCOMES_FOR_ACTION grades), a dialog naming the frame it opens, and no export row with
-  // the same nodeId + trigger (the export wins). Every other row is dropped with why. exportContentSha256 does not
-  // change (waivers bind the export, not the plan); only the rows' own hash binds (planInteractions.sha256).
-  const planIn = opts && opts.plan;
-  let planInteractions: VerifyExpectation["planInteractions"];
-  if (planIn && Array.isArray(planIn.plan.interactions)) {
-    const dropped: Array<{ nodeId: string; why: string }> = [];
-    const keys = new Set(interactions.map((r) => `${r.nodeId}|${r.trigger}`));
-    const hiddenIds = new Set(hidden.ids);
-    let merged = 0;
-    planIn.plan.interactions.forEach((raw, k) => {
-      const at = `interactions[${k}]`;
-      const o = isJsonObject(raw) ? raw : null;
-      const id = o && typeof o.nodeId === "string" && o.nodeId.trim() ? o.nodeId.trim() : null;
-      const drop = (why: string): void => { dropped.push({ nodeId: id ?? `(${at})`, why }); };
-      if (!o) return drop(`${at} is not an object`);
-      if (id === null) return drop(`${at} has no nodeId — a plan interaction is keyed by its node like an export reaction`);
-      if (typeof o.trigger !== "string" || !o.trigger.trim()) return drop("no trigger (on_click, on_press, …)");
-      if (!isPlanExpect(o.expect)) return drop(`expect ${JSON.stringify(o.expect ?? null)} is not dialog | url | selector:<css>`);
-      if (o.destinationId !== undefined && (typeof o.destinationId !== "string" || !o.destinationId.trim())) return drop("destinationId is not a node id");
-      if (o.expect === "dialog" && o.destinationId === undefined) return drop("expect dialog needs the destinationId of the frame it opens (its root is tagged with it)");
-      const node = visibleById.get(id);
-      if (!node) return drop(hiddenIds.has(id) ? "the node is a hidden layer — it is not built or driven" : "no visible node of this export has that id");
-      const trigger = o.trigger.trim().toLowerCase();
-      // the probe opens a dialog by clicking its opener — a dialog row on any other trigger (hover, key, drag…)
-      // could never be driven, so it would sit not-probed forever
-      if (o.expect === "dialog" && trigger !== "on_click" && trigger !== "on_press") return drop(`expect dialog needs trigger on_click or on_press (the probe opens a dialog by clicking its opener), not ${trigger}`);
-      if (keys.has(`${id}|${trigger}`)) return drop(`duplicates ${interactions.some((r) => r.nodeId === id && r.trigger === trigger && r.source !== "plan") ? "the export's own interaction" : "an earlier plan row"} for this node and trigger (${trigger})`);
-      keys.add(`${id}|${trigger}`);
-      const destinationId = typeof o.destinationId === "string" ? o.destinationId.trim() : undefined;
-      const row: VerifyInteraction = { nodeId: id, name: node.name, trigger, action: actionForExpect(o.expect), expect: o.expect, ...ifDefined("destinationId", destinationId), source: "plan" };
-      interactions.push(row);
-      interactionFile.set(row, node.file);
-      merged++;
-    });
-    planInteractions = { plan: planIn.file, sha256: planInteractionsSha256(planIn.plan), merged, dropped };
-  }
-
-  // repeated placeholder copy in sibling rows
-  const specById = new Map(nodes.map((s) => [s.nodeId, s]));
-  for (const r of roots) markRepeatedText(r, specById);
-
-  // a destination that is no node of the export FOR THE SAME FIGMA FILE was never designed here.
-  // Figma node ids are per file — a join across files would match unrelated nodes. So a row's file is only ever
-  // its OWN sourceFile stamp (never the index's top-level one: the CLI merges rows of several index files), and a
-  // destination is looked up among the rows that COULD be this screen's file: the rows naming it, plus every row
-  // naming none (an export written before the bridge stamped sourceFile — every field-test export, and the rest
-  // of such an index after one screen is re-pulled). Found in one of those, or among the ids of any
-  // unnamed input, it counts as exported (it may be this file's); found in none, it was never exported.
-  // The screen must be IN the index — a row with its root's id AND name (a bare id like 1:1 recurs across files),
-  // in its file or unnamed — or an index of another file would call every destination "never exported". A screen
-  // naming no file takes its file from that row: one named file → that file's rows + unnamed ones; any unnamed own
-  // row → every row; rows naming two files → nothing decided. Otherwise the row is left as it was.
-  // Known misses: sourceFile is the file's NAME — rows pulled before a rename name the old one and are excluded; a
-  // destination frame nested in an exported SECTION/GROUP is no index row of its own, so it reads as never exported.
-  const index = opts && opts.index;
-  const unnamedIds = idsByFile.get("");
-  const candidatesFor = (file: string): IndexRow[] | null => candidatesOf(file)?.rows ?? null;
-  // (resolved: the Figma file the candidate rows belong to — null when they may be any file's)
-  function candidatesOf(file: string): { rows: IndexRow[]; resolved: string | null } | null {
-    if (!index) return null;
-    const own = rootsByFile.get(file);
-    const sameName = (l: IndexRow): boolean => { const names = own?.get(l.id); return !!names && (!names.size || l.name === undefined || names.has(l.name)); };
-    const covering = own ? index.layers.filter((l) => sameName(l) && (file === "" || !l.sourceFile || l.sourceFile === file)) : [];
-    if (!covering.length) return null; // the index does not cover this screen
-    let f = file;
-    if (f === "") {
-      const named = new Set(covering.map((l) => l.sourceFile).filter((x): x is string => !!x));
-      if (named.size > 1) return null;
-      // an unnamed own row may be any file's (a duplicated file shares ids AND names) → every row
-      if (named.size === 0 || covering.some((l) => !l.sourceFile)) return { rows: index.layers, resolved: null };
-      f = [...named][0] ?? "";
-    }
-    return { rows: index.layers.filter((l) => !l.sourceFile || l.sourceFile === f), resolved: f || null };
-  }
-  for (const row of interactions) {
-    const file = interactionFile.get(row);
-    // a change_to's destination is a component VARIANT — a drawn state of this very instance, never a
-    // screen anyone exports — so it is never "undesigned"; undriven, it is not-probed like any other interaction.
-    if (!row.destinationId || file === undefined || String(row.action).toLowerCase() === "change_to") continue;
-    const known = idsByFile.get(file);
-    if (!known || known.has(row.destinationId) || (unnamedIds && unnamedIds.has(row.destinationId))) continue;
-    const candidates = candidatesFor(file);
-    if (candidates && !candidates.some((l) => l.id === row.destinationId)) row.destinationExported = false;
-  }
-
-  // ---- aliases. A shared shell (sidebar, header) is ONE component instance on every screen, but Figma re-mints
-  // the ids under each instance (`I<instance>;<path>`, nested instances re-mint the path too), so a build tagged
-  // with screen A's ids misses on screen B. For each outermost instance, the SAME node in a sibling export of the SAME
-  // Figma file (the candidate rows — never a join across files: ids and keys would match unrelated nodes) is
-  // the one at the same visible name path under an instance of the same main component key, when that key has exactly
-  // one outermost instance in both exports and the path is unique in both. Its id is an alias; an id whose `;` suffix
-  // equals the spec's own is left out (the probe's tag-shared-path finds it already). Rebuilt from the CURRENT
-  // siblings at every --expect (sublayer id stability is undocumented). Known misses: a renamed layer, a
-  // repeated name inside the instance (e.g. same-named menu items), a shell instantiated twice on one screen.
-  // Each sibling export is read from disk once per --expect: this pass and the overlay pass below share the memo.
+  rootsByFile: Map<string, Map<string, Set<string>>>;
+  interactionFile: Map<VerifyInteraction, string | undefined>;
+  roots: IrNode[];
+  rootNodesByFile: Map<string, IrNode[]>; // each Figma file's input roots
+  visibleById: Map<string, { name: string; file: string }>; // a plan row's node — its name and file
+  index: ExpectOptions["index"] | undefined;
+  readSibling: ExpectOptions["readSibling"] | undefined;
+  /** a sibling export by its index row's file, read from disk once per --expect (the alias and overlay passes share it) */
+  sibling: (file: string) => ScreenDoc | null;
+}
+/** buildExpectation()'s empty collections and the readers its options give */
+function expectBuildCtx(opts: ExpectOptions | null | undefined): ExpectBuild {
   const readSibling = opts && opts.readSibling;
   const siblingCache = new Map<string, ScreenDoc | null>();
   const sibling = (file: string): ScreenDoc | null => {
@@ -759,101 +634,346 @@ export function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | nul
     if (!siblingCache.has(file)) siblingCache.set(file, readSibling(file) ?? null);
     return siblingCache.get(file) ?? null;
   };
-  if (index && readSibling) {
-    const ownRootIds = new Set(roots.map((r) => r.id));
-    const specSuffixes = new Set(nodes.map((n) => idSuffix(n.nodeId)).filter((x): x is string => x !== null));
-    const aliases = new Map<string, Set<string>>();
-    for (const [file, fileRoots] of rootNodesByFile) {
-      const co = candidatesOf(file);
-      if (!co) continue;
-      const cands = co.rows;
-      const own = shellIndex(fileRoots);
-      if (!own.size) continue;
-      const read = new Set<string>();
-      for (const row of cands) {
-        if (ownRootIds.has(row.id) || !row.file || read.has(row.file)) continue;
-        read.add(row.file);
-        const sib = sibling(row.file);
-        if (!sib) continue;
-        // the sibling's own stamp must not name another file (a row may be unnamed while its export is stamped). An
-        // UNSTAMPED sibling is allowed for a stamped screen (a partly re-pulled export): the risk is small — an alias
-        // also needs the same component key, a unique name path, the same content and texted ancestor, and a tag-alias
-        // match is capped, so it cannot make a pass on its own.
-        const sx = screenExportOf(sib);
-        const sibFile: unknown = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : undefined;
-        // (an unstamped screen is checked against the file its index row resolved to)
-        if (co.resolved && typeof sibFile === "string" && sibFile && sibFile !== co.resolved) continue;
-        const theirs = shellIndex(screenRoots(sib));
-        for (const [key, mine] of own) {
-          const other = theirs.get(key);
-          const a = mine.length === 1 ? mine[0] : undefined, b = other && other.length === 1 ? other[0] : undefined;
-          if (!a || !b) continue;
-          for (const [p, mine1] of a) {
-            const their1 = b.get(p);
-            if (!mine1 || !their1 || mine1.sig !== their1.sig) continue; // same path, different content: another node
-            const id = mine1.id, sid = their1.id;
-            if (sid === id) continue;
-            // (an id whose `;` suffix is ANY expected spec's suffix is that spec's tag-shared-path match)
-            const s2 = idSuffix(sid);
-            if (s2 !== null && specSuffixes.has(s2)) continue;
-            getOrInit(aliases, id, () => new Set<string>()).add(sid);
-          }
-        }
-      }
-    }
-    for (const [id, set] of aliases) { const sp = specById.get(id); if (sp) sp.aliases = [...set].sort(); }
-  }
-
-  // ---- what an overlay/swap opens. The destination frame's own overlay block (serialize.ts writes it only when it
-  // differs from Figma's default: centred, no scrim, no close-on-click-outside) — read off the destination ROOT among the
-  // inputs of the same file, else off the sibling export its index row names (the candidate rows). A destination
-  // that is no exported root (never exported, or nested in another frame) gets no overlay.
-  const destinationRoot = (destId: string, file: string): IrNode | undefined => {
-    const own = [...(rootNodesByFile.get(file) ?? []), ...(file !== "" ? rootNodesByFile.get("") ?? [] : [])].find((r) => r.id === destId);
-    if (own) return own;
-    const co = candidatesOf(file);
-    for (const row of co ? co.rows : []) {
-      if (row.id !== destId || !row.file) continue;
-      const sib = sibling(row.file);
-      if (!sib) continue;
-      const sx = screenExportOf(sib);
-      const sibFile: unknown = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : undefined;
-      if (co && co.resolved && typeof sibFile === "string" && sibFile && sibFile !== co.resolved) continue;
-      const hit = screenRoots(sib).find((r) => r.id === destId);
-      if (hit) return hit;
-    }
-    return undefined;
+  return {
+    nodes: [], instances: [], interactions: [], notComparable: [], hidden: { roots: [], ids: [], specsSkipped: 0, instancesSkipped: 0, interactionsSkipped: 0 },
+    frames: [], seen: new Set<string>(), screen: undefined, exportedAt: undefined, reference: null,
+    idsByFile: new Map(), rootsByFile: new Map(), interactionFile: new Map(), roots: [], rootNodesByFile: new Map(), visibleById: new Map(),
+    index: opts && opts.index, readSibling, sibling,
   };
-  for (const row of interactions) {
+}
+
+/** one screen export: its file stamp, the screen's title and pull time (the first input's), then each of its roots */
+function readInput(bx: ExpectBuild, { doc, label }: ExpectInput): void {
+  const exp = screenExportOf(doc);
+  // (a screen export and a page-walk layer file both say which Figma file they came from; a bare node does not)
+  const sf: unknown = doc && "sourceFile" in doc ? doc.sourceFile : exp ? exp.sourceFile : undefined;
+  const sourceFile = typeof sf === "string" && sf ? sf : undefined;
+  const fileIds = getOrInit(bx.idsByFile, sourceFile ?? "", () => new Set<string>());
+  if (!bx.screen) bx.screen = (exp && exp.screen) || label;
+  if (!bx.exportedAt) bx.exportedAt = exp ? exp.exportedAt : undefined;
+  for (const root of screenRoots(doc)) readRoot(bx, root, exp, sourceFile, fileIds);
+}
+/** one root's walk: its frame, the drawn states and visible ancestors handed down, and the fixed children */
+interface RootWalk {
+  frame: Partial<VerifyFrame>; frameId: string | undefined; sourceFile: string | undefined;
+  stateOf: WeakMap<IrNode, InheritedState>; chainOf: WeakMap<IrNode, string[]>; fixedNodes: WeakSet<IrNode>;
+}
+/** one screen root: indexed by its file, its frame recorded, and every node under it walked (hiddenNode / visibleNode) */
+function readRoot(bx: ExpectBuild, root: IrNode, exp: ScreenExport | null, sourceFile: string | undefined, fileIds: Set<string>): void {
+  if (root.id) {
+    const names = getOrInit(getOrInit(bx.rootsByFile, sourceFile ?? "", () => new Map<string, Set<string>>()), root.id, () => new Set<string>());
+    // (the title only for the frame the pull is filed under — the index row carries that one id)
+    for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : undefined]) if (typeof n === "string" && n) names.add(n);
+  }
+  getOrInit(bx.rootNodesByFile, sourceFile ?? "", () => []).push(root);
+  if (!bx.reference && root.reference) bx.reference = root.reference;
+  const b: Partial<Box> = root.box || {};
+  const frame: Partial<VerifyFrame> = { nodeId: root.id, name: root.name, ...ifDefined("w", b.w), ...ifDefined("h", b.h), ...ifDefined("x", b.x), ...ifDefined("y", b.y), clip: root.clip === true,
+    ...ifDefined("scroll", root.scroll) }; // a frame designed to scroll sideways
+  bx.frames.push(frame);
+  const w: RootWalk = {
+    frame, frameId: bx.frames.length > 1 ? root.id : undefined, sourceFile,
+    stateOf: new WeakMap<IrNode, InheritedState>(), // node -> inherited drawn-state { state, why, from }
+    // node -> the ancestorIds its CHILDREN get: itself then its own ancestors (the frame root contributes none)
+    chainOf: new WeakMap<IrNode, string[]>(),
+    // a frame's fixed children (pinned while scrolling) and everything inside them. Figma keeps them "on
+    // top of scrolling children" (plugin typings, numberOfFixedChildren) — the LAST N of children[], which is bottom-to-top.
+    fixedNodes: new WeakSet<IrNode>(),
+  };
+  bx.roots.push(root);
+  walkWithHidden(root, (n, c) => {
+    if (n.id) fileIds.add(n.id);
+    if (c.hidden) hiddenNode(bx, n, c);
+    else visibleNode(bx, w, n, c);
+  });
+}
+/** a hidden layer: counted, never specified */
+function hiddenNode(bx: ExpectBuild, n: IrNode, c: WalkContext): void {
+  const { hidden } = bx;
+  // Counted, never specified. The ids travel with the expectation so --compare can say "you
+  // drove a hidden layer" instead of crediting it.
+  if (!c.parentHidden) hidden.roots.push({ nodeId: n.id, name: n.name, path: c.path });
+  if (n.id) hidden.ids.push(n.id);
+  if (checkable(expectNode(n, { path: c.path }).spec)) hidden.specsSkipped++;
+  if (n.type === "INSTANCE" && n.mainComponent) hidden.instancesSkipped++;
+  for (const r of Array.isArray(n.reactions) ? n.reactions : []) hidden.interactionsSkipped += actionsOf(r).length;
+}
+/** a visible node: its spec row (when it carries a checkable value), the values excluded by method, its instance row
+ *  and its designed interactions */
+function visibleNode(bx: ExpectBuild, w: RootWalk, n: IrNode, c: WalkContext): void {
+  const { stateOf, chainOf, fixedNodes } = w;
+  const inherited = c.parent ? stateOf.get(c.parent) : undefined;
+  // Every ancestor of a visible node is visible (hidden is inherited), so this is the visible chain,
+  // nearest first. The probe scopes a text match to a tagged ancestor with it; compare ignores it.
+  const ancestorIds = c.parent ? chainOf.get(c.parent) ?? [] : [];
+  chainOf.set(n, c.parent ? [...(n.id ? [n.id] : []), ...ancestorIds] : []);
+  if (n.id && bx.seen.has(n.id)) return;
+  if (n.id) bx.seen.add(n.id);
+  if (n.id) bx.visibleById.set(n.id, { name: n.name, file: w.sourceFile ?? "" });
+  const { spec, notComparable: gaps } = expectNode(n, { path: c.path, frame: w.frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", w.frameId) });
+  spec.ancestorIds = ancestorIds;
+  if (n.absolute) spec.absolute = true;
+  const par = c.parent;
+  const sibs = par && Array.isArray(par.children) ? par.children : [];
+  const nFixed = par && typeof par.fixedChildren === "number" ? par.fixedChildren : 0;
+  if (par && (fixedNodes.has(par) || (nFixed > 0 && sibs.indexOf(n) >= sibs.length - nFixed))) { fixedNodes.add(n); spec.fixed = true; }
+  if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id, fromId: n.id });
+  if (checkable(spec)) bx.nodes.push(spec);
+  else {
+    // an exclusion (radius on a layer that draws nothing, padding the box cannot show) took the
+    // node's only checkable value — it is not a spec; say so rather than let it vanish
+    const g11 = gaps.filter((g) => g.field === "border-radius" || g.field.startsWith("padding ("));
+    if (g11.length) gaps.push({ nodeId: n.id, name: n.name, field: "node", value: null,
+      why: gaps.some((g) => g.field === "border-radius") ? "node not checked: it draws nothing (no fill, stroke, effect or clip) — its radius was its only stated value"
+        : `node not checked: every value it states is excluded by method (${g11.map((g) => g.field).join(", ")})` });
+  }
+  bx.notComparable.push(...gaps);
+  addInstance(bx, n);
+  addReactions(bx, n, w.sourceFile);
+}
+/** an INSTANCE's row: its main component's set, key, variant and props */
+function addInstance(bx: ExpectBuild, n: IrNode): void {
+  if (n.type === "INSTANCE" && n.mainComponent) {
+    bx.instances.push({
+      nodeId: n.id,
+      name: n.name,
+      setName: n.mainComponent.setName || n.mainComponent.name,
+      ...ifDefined("setKey", n.mainComponent.setKey || n.mainComponent.key),
+      ...ifDefined("variant", n.mainComponent.variant),
+      ...ifDefined("props", n.props || undefined),
+    });
+  }
+}
+/** one interaction row per action of each of the node's reactions, tied to the node's file */
+function addReactions(bx: ExpectBuild, n: IrNode, sourceFile: string | undefined): void {
+  // The interaction graph is already in the export, keyed by node id — the richest input in the
+  // whole IR and the one nothing verified. The real shape is
+  // `reactions[].actions[]` (plural on both), with `trigger` a plain string — see
+  // figma-plugin/src/prototype.ts.
+  for (const r of Array.isArray(n.reactions) ? n.reactions : []) {
+    const trigger = triggerOf(r);
+    for (const a of actionsOf(r)) {
+      const row: VerifyInteraction = {
+        nodeId: n.id,
+        name: n.name,
+        trigger,
+        ...ifDefined("action", a.navigation || a.type),
+        ...ifDefined("destinationId", a.destinationId),
+        ...ifDefined("destination", a.destination),
+      };
+      bx.interactions.push(row);
+      bx.interactionFile.set(row, sourceFile ?? "");
+    }
+  }
+}
+
+// ---- plan.interactions[] — interactions the export cannot carry (a control with no prototype
+// reaction). Merged only when the row can be graded like an export row: a visible node of this export, a known
+// `expect` (→ the action OUTCOMES_FOR_ACTION grades), a dialog naming the frame it opens, and no export row with
+// the same nodeId + trigger (the export wins). Every other row is dropped with why. exportContentSha256 does not
+// change (waivers bind the export, not the plan); only the rows' own hash binds (planInteractions.sha256).
+function mergePlanInteractions(bx: ExpectBuild, planIn: ExpectOptions["plan"] | undefined): VerifyExpectation["planInteractions"] {
+  if (!(planIn && Array.isArray(planIn.plan.interactions))) return undefined;
+  const { interactions, interactionFile, visibleById } = bx;
+  const dropped: Array<{ nodeId: string; why: string }> = [];
+  const keys = new Set(interactions.map((r) => `${r.nodeId}|${r.trigger}`));
+  const hiddenIds = new Set(bx.hidden.ids);
+  let merged = 0;
+  planIn.plan.interactions.forEach((raw, k) => {
+    const at = `interactions[${k}]`;
+    const o = isJsonObject(raw) ? raw : null;
+    const id = o && typeof o.nodeId === "string" && o.nodeId.trim() ? o.nodeId.trim() : null;
+    const drop = (why: string): void => { dropped.push({ nodeId: id ?? `(${at})`, why }); };
+    if (!o) return drop(`${at} is not an object`);
+    if (id === null) return drop(`${at} has no nodeId — a plan interaction is keyed by its node like an export reaction`);
+    if (typeof o.trigger !== "string" || !o.trigger.trim()) return drop("no trigger (on_click, on_press, …)");
+    if (!isPlanExpect(o.expect)) return drop(`expect ${JSON.stringify(o.expect ?? null)} is not dialog | url | selector:<css>`);
+    if (o.destinationId !== undefined && (typeof o.destinationId !== "string" || !o.destinationId.trim())) return drop("destinationId is not a node id");
+    if (o.expect === "dialog" && o.destinationId === undefined) return drop("expect dialog needs the destinationId of the frame it opens (its root is tagged with it)");
+    const node = visibleById.get(id);
+    if (!node) return drop(hiddenIds.has(id) ? "the node is a hidden layer — it is not built or driven" : "no visible node of this export has that id");
+    const trigger = o.trigger.trim().toLowerCase();
+    // the probe opens a dialog by clicking its opener — a dialog row on any other trigger (hover, key, drag…)
+    // could never be driven, so it would sit not-probed forever
+    if (o.expect === "dialog" && trigger !== "on_click" && trigger !== "on_press") return drop(`expect dialog needs trigger on_click or on_press (the probe opens a dialog by clicking its opener), not ${trigger}`);
+    if (keys.has(`${id}|${trigger}`)) return drop(`duplicates ${interactions.some((r) => r.nodeId === id && r.trigger === trigger && r.source !== "plan") ? "the export's own interaction" : "an earlier plan row"} for this node and trigger (${trigger})`);
+    keys.add(`${id}|${trigger}`);
+    const destinationId = typeof o.destinationId === "string" ? o.destinationId.trim() : undefined;
+    const row: VerifyInteraction = { nodeId: id, name: node.name, trigger, action: actionForExpect(o.expect), expect: o.expect, ...ifDefined("destinationId", destinationId), source: "plan" };
+    interactions.push(row);
+    interactionFile.set(row, node.file);
+    merged++;
+  });
+  return { plan: planIn.file, sha256: planInteractionsSha256(planIn.plan), merged, dropped };
+}
+
+// a destination that is no node of the export FOR THE SAME FIGMA FILE was never designed here.
+// Figma node ids are per file — a join across files would match unrelated nodes. So a row's file is only ever
+// its OWN sourceFile stamp (never the index's top-level one: the CLI merges rows of several index files), and a
+// destination is looked up among the rows that COULD be this screen's file: the rows naming it, plus every row
+// naming none (an export written before the bridge stamped sourceFile — every field-test export, and the rest
+// of such an index after one screen is re-pulled). Found in one of those, or among the ids of any
+// unnamed input, it counts as exported (it may be this file's); found in none, it was never exported.
+// The screen must be IN the index — a row with its root's id AND name (a bare id like 1:1 recurs across files),
+// in its file or unnamed — or an index of another file would call every destination "never exported". A screen
+// naming no file takes its file from that row: one named file → that file's rows + unnamed ones; any unnamed own
+// row → every row; rows naming two files → nothing decided. Otherwise the row is left as it was.
+// Known misses: sourceFile is the file's NAME — rows pulled before a rename name the old one and are excluded; a
+// destination frame nested in an exported SECTION/GROUP is no index row of its own, so it reads as never exported.
+function markUndesigned(bx: ExpectBuild): void {
+  const { idsByFile, interactionFile } = bx;
+  const unnamedIds = idsByFile.get("");
+  for (const row of bx.interactions) {
+    const file = interactionFile.get(row);
+    // a change_to's destination is a component VARIANT — a drawn state of this very instance, never a
+    // screen anyone exports — so it is never "undesigned"; undriven, it is not-probed like any other interaction.
+    if (!row.destinationId || file === undefined || String(row.action).toLowerCase() === "change_to") continue;
+    const known = idsByFile.get(file);
+    if (!known || known.has(row.destinationId) || (unnamedIds && unnamedIds.has(row.destinationId))) continue;
+    const candidates = candidatesOf(bx, file)?.rows ?? null;
+    if (candidates && !candidates.some((l) => l.id === row.destinationId)) row.destinationExported = false;
+  }
+}
+/** the index rows that could be this file's screen (see markUndesigned); null when the index does not cover it.
+ *  (resolved: the Figma file the candidate rows belong to — null when they may be any file's) */
+function candidatesOf(bx: ExpectBuild, file: string): { rows: IndexRow[]; resolved: string | null } | null {
+  const { index } = bx;
+  if (!index) return null;
+  const own = bx.rootsByFile.get(file);
+  const sameName = (l: IndexRow): boolean => { const names = own?.get(l.id); return !!names && (!names.size || l.name === undefined || names.has(l.name)); };
+  const covering = own ? index.layers.filter((l) => sameName(l) && (file === "" || !l.sourceFile || l.sourceFile === file)) : [];
+  if (!covering.length) return null; // the index does not cover this screen
+  let f = file;
+  if (f === "") {
+    const named = new Set(covering.map((l) => l.sourceFile).filter((x): x is string => !!x));
+    if (named.size > 1) return null;
+    // an unnamed own row may be any file's (a duplicated file shares ids AND names) → every row
+    if (named.size === 0 || covering.some((l) => !l.sourceFile)) return { rows: index.layers, resolved: null };
+    f = [...named][0] ?? "";
+  }
+  return { rows: index.layers.filter((l) => !l.sourceFile || l.sourceFile === f), resolved: f || null };
+}
+/** whether a sibling export's own sourceFile stamp names another file than the one its index row resolved to (an
+ *  unstamped sibling, or no resolved file, never does) */
+function namesOtherFile(sib: ScreenDoc, resolved: string | null): boolean {
+  const sx = screenExportOf(sib);
+  const sibFile: unknown = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : undefined;
+  return !!resolved && typeof sibFile === "string" && !!sibFile && sibFile !== resolved;
+}
+
+// ---- aliases. A shared shell (sidebar, header) is ONE component instance on every screen, but Figma re-mints
+// the ids under each instance (`I<instance>;<path>`, nested instances re-mint the path too), so a build tagged
+// with screen A's ids misses on screen B. For each outermost instance, the SAME node in a sibling export of the SAME
+// Figma file (the candidate rows — never a join across files: ids and keys would match unrelated nodes) is
+// the one at the same visible name path under an instance of the same main component key, when that key has exactly
+// one outermost instance in both exports and the path is unique in both. Its id is an alias; an id whose `;` suffix
+// equals the spec's own is left out (the probe's tag-shared-path finds it already). Rebuilt from the CURRENT
+// siblings at every --expect (sublayer id stability is undocumented). Known misses: a renamed layer, a
+// repeated name inside the instance (e.g. same-named menu items), a shell instantiated twice on one screen.
+// Each sibling export is read from disk once per --expect: this pass and the overlay pass below share the memo.
+function addAliases(bx: ExpectBuild, specById: Map<string, VerifySpec>): void {
+  const ownRootIds = new Set(bx.roots.map((r) => r.id));
+  const specSuffixes = new Set(bx.nodes.map((n) => idSuffix(n.nodeId)).filter((x): x is string => x !== null));
+  const aliases = new Map<string, Set<string>>();
+  for (const [file, fileRoots] of bx.rootNodesByFile) {
+    const co = candidatesOf(bx, file);
+    if (!co) continue;
+    const cands = co.rows;
+    const own = shellIndex(fileRoots);
+    if (!own.size) continue;
+    const read = new Set<string>();
+    for (const row of cands) {
+      if (ownRootIds.has(row.id) || !row.file || read.has(row.file)) continue;
+      read.add(row.file);
+      const sib = bx.sibling(row.file);
+      if (!sib) continue;
+      // the sibling's own stamp must not name another file (a row may be unnamed while its export is stamped). An
+      // UNSTAMPED sibling is allowed for a stamped screen (a partly re-pulled export): the risk is small — an alias
+      // also needs the same component key, a unique name path, the same content and texted ancestor, and a tag-alias
+      // match is capped, so it cannot make a pass on its own.
+      // (an unstamped screen is checked against the file its index row resolved to)
+      if (namesOtherFile(sib, co.resolved)) continue;
+      shellAliases(own, shellIndex(screenRoots(sib)), specSuffixes, aliases);
+    }
+  }
+  for (const [id, set] of aliases) { const sp = specById.get(id); if (sp) sp.aliases = [...set].sort(); }
+}
+/** the aliases one sibling export gives: the node at the same name path, with the same content, under the one outermost
+ *  instance of each main component key the two exports share */
+function shellAliases(own: ShellIndex, theirs: ShellIndex, specSuffixes: Set<string>, aliases: Map<string, Set<string>>): void {
+  for (const [key, mine] of own) {
+    const other = theirs.get(key);
+    const a = mine.length === 1 ? mine[0] : undefined, b = other && other.length === 1 ? other[0] : undefined;
+    if (!a || !b) continue;
+    for (const [p, mine1] of a) {
+      const their1 = b.get(p);
+      if (!mine1 || !their1 || mine1.sig !== their1.sig) continue; // same path, different content: another node
+      const id = mine1.id, sid = their1.id;
+      if (sid === id) continue;
+      // (an id whose `;` suffix is ANY expected spec's suffix is that spec's tag-shared-path match)
+      const s2 = idSuffix(sid);
+      if (s2 !== null && specSuffixes.has(s2)) continue;
+      getOrInit(aliases, id, () => new Set<string>()).add(sid);
+    }
+  }
+}
+
+// ---- what an overlay/swap opens. The destination frame's own overlay block (serialize.ts writes it only when it
+// differs from Figma's default: centred, no scrim, no close-on-click-outside) — read off the destination ROOT among the
+// inputs of the same file, else off the sibling export its index row names (the candidate rows). A destination
+// that is no exported root (never exported, or nested in another frame) gets no overlay.
+function addOverlays(bx: ExpectBuild): void {
+  for (const row of bx.interactions) {
     const act = String(row.action).toLowerCase();
     if (!row.destinationId || (act !== "overlay" && act !== "swap") || row.destinationExported === false) continue;
-    const dest = destinationRoot(row.destinationId, interactionFile.get(row) ?? "");
+    const dest = destinationRoot(bx, row.destinationId, bx.interactionFile.get(row) ?? "");
     if (!dest) continue;
     const ov = dest.overlay;
     row.overlay = { position: ov && typeof ov.position === "string" ? ov.position : "center", closeOnClickOutside: !!ov && ov.closeOnClickOutside === true,
       background: ov && typeof ov.background === "string" ? ov.background : null, from: ov ? "export" : "default" };
   }
-
-  const f0: Partial<VerifyFrame> = frames[0] || {};
-  // the reference PNG's geometry over the first frame — only when the caller can read the PNG
-  const readReference = opts && opts.readReference;
-  let referenceImage: VerifyReferenceImage | VerifyReferenceUnusable | undefined;
-  if (readReference) {
-    const first = roots[0];
-    const firstFile = first ? [...rootNodesByFile].find(([, rs]) => rs.includes(first))?.[0] : undefined;
-    referenceImage = referenceImageFor({ reference, root: first, sourceFile: firstFile || undefined, rows: index ? index.layers : [],
-      readReference, colorProfile: opts && typeof opts.colorProfile === "string" ? opts.colorProfile : null });
+}
+/** the exported root a destination id names: among the inputs of the same file, else in a sibling export (addOverlays) */
+function destinationRoot(bx: ExpectBuild, destId: string, file: string): IrNode | undefined {
+  const own = [...(bx.rootNodesByFile.get(file) ?? []), ...(file !== "" ? bx.rootNodesByFile.get("") ?? [] : [])].find((r) => r.id === destId);
+  if (own) return own;
+  const co = candidatesOf(bx, file);
+  for (const row of co ? co.rows : []) {
+    if (row.id !== destId || !row.file) continue;
+    const sib = bx.sibling(row.file);
+    if (!sib) continue;
+    if (co && namesOtherFile(sib, co.resolved)) continue;
+    const hit = screenRoots(sib).find((r) => r.id === destId);
+    if (hit) return hit;
   }
-  // expectation.frame / frames[] row: the frame's id, name, size and clip (no x/y)
-  const rootFrame = (f: Partial<VerifyFrame>): Partial<VerifyRootFrame> => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
+  return undefined;
+}
+
+/** the reference PNG's geometry over the first frame — only when the caller can read the PNG */
+function firstReferenceImage(bx: ExpectBuild, opts: ExpectOptions | null | undefined): VerifyReferenceImage | VerifyReferenceUnusable | undefined {
+  const readReference = opts && opts.readReference;
+  if (!readReference) return undefined;
+  const first = bx.roots[0];
+  const firstFile = first ? [...bx.rootNodesByFile].find(([, rs]) => rs.includes(first))?.[0] : undefined;
+  const { index } = bx;
+  return referenceImageFor({ reference: bx.reference, root: first, sourceFile: firstFile || undefined, rows: index ? index.layers : [],
+    readReference, colorProfile: opts && typeof opts.colorProfile === "string" ? opts.colorProfile : null });
+}
+// expectation.frame / frames[] row: the frame's id, name, size and clip (no x/y)
+const rootFrame = (f: Partial<VerifyFrame>): Partial<VerifyRootFrame> => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
+/** the expectation document: what the walk and the passes collected, the counts, and the notes for its reader */
+function expectationOf(bx: ExpectBuild, docs: ExpectInput[], planInteractions: VerifyExpectation["planInteractions"],
+  referenceImage: VerifyReferenceImage | VerifyReferenceUnusable | undefined): BuiltExpectation {
+  const { nodes, instances, interactions, notComparable, hidden, frames } = bx;
+  const f0: Partial<VerifyFrame> = frames[0] || {};
   return {
     schema: EXPECTATION_SCHEMA,
-    ...ifDefined("screen", screen),
-    ...ifDefined("exportedAt", exportedAt),
+    ...ifDefined("screen", bx.screen),
+    ...ifDefined("exportedAt", bx.exportedAt),
     // the design's identity without the pull's timestamps, so a no-change
     // re-pull (only `exportedAt` differs) is recognised as the same design by content, not by clock.
     exportContentSha256: exportContentSha256(docs.map((d) => d.doc)),
-    reference,
+    reference: bx.reference,
     frame: rootFrame(f0),
     ...(frames.length > 1 ? { frames: frames.map(rootFrame) } : {}),
     coordinates: COORDINATES,
