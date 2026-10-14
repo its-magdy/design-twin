@@ -293,8 +293,8 @@ console.log("verify-screen — text:");
     lowWith("2:17", /differs only in the kind of space: the design has ordinary spaces where the build has \\u3000 \(ideographic space\)/) && !/collapses it to one/.test(noteOf("2:17")));
   ok("[text] a designed ideographic space against a plain built one is the kind of space, not 'repeated spaces'",
     lowWith("2:18", /the design has \\u3000 \(ideographic space\) where the build has ordinary spaces/) && !/repeated spaces/.test(noteOf("2:18")));
-  ok("[text] a designed run of non-breaking spaces against one built space is LOW (repeated spaces), and the NBSP row still shows",
-    lowWith("2:19", /repeated spaces/) && rep.deltas.some((d) => d.nodeId === "2:19" && /invisible/.test(d.field)));
+  ok("[text] a designed run of non-breaking spaces against one built space is HIGH (the gap is narrower in the build), and the NBSP row still shows",
+    row("2:19").length === 1 && row("2:19")[0]?.severity === "high" && /the design's is 2 spaces wide and the build's 1 space wide/.test(noteOf("2:19")) && rep.deltas.some((d) => d.nodeId === "2:19" && /invisible/.test(d.field)));
   ok("[text] a run only a hand-written probe reports for the build is LOW: it collapses when rendered", lowWith("2:20", /build's text has a run of spaces/));
   ok("[text] a designed line break the build keeps (\\n from the probe) is no text row at all", row("2:21").length === 0);
   // the report's markdown: a text row's cells show the whitespace (\n, · per extra space, escapes for other spaces)
@@ -325,6 +325,9 @@ console.log("verify-screen — text:");
     textNode("3:10", "Designed tab", "Name\tvalue", f),
     textNode("3:11", "Built tab", "Key  value", f),
     textNode("3:12", "Plain copy", "Save", f),
+    textNode("3:13", "Designed run", "Gap\u00a0\u00a0here", f),
+    textNode("3:14", "Designed single", "One\u00a0two", f),
+    textNode("3:15", "Designed spaces", "Hold  there", f),
   ])]);
   const rep = compare(exp, measured([
     { nodeId: "3:1", styles: { text: "log\ufeffin" } },
@@ -339,6 +342,9 @@ console.log("verify-screen — text:");
     { nodeId: "3:10", styles: { text: "Name  value" } },
     { nodeId: "3:11", styles: { text: "Key\tvalue" } },
     { nodeId: "3:12", styles: { text: "Save" } },
+    { nodeId: "3:13", styles: { text: "Gap  here" } },
+    { nodeId: "3:14", styles: { text: "One two" } },
+    { nodeId: "3:15", styles: { text: "Hold\u00a0\u00a0there" } },
   ]));
   const row = (id: string) => rep.deltas.filter((d) => d.nodeId === id && d.field === "text");
   const noteOf = (id: string): string => row(id)[0]?.note || "";
@@ -358,6 +364,12 @@ console.log("verify-screen — text:");
     sev("3:10") === "low" && /the build has no tabs|the design has 1 tab here and the build no tabs/.test(noteOf("3:10")) && !/another order/.test(noteOf("3:10")));
   ok("[text] a built tab against designed spaces names the build's tab", sev("3:11") === "low" && /the build has 1 tab here and the design no tabs/.test(noteOf("3:11")) && !/another order/.test(noteOf("3:11")));
   ok("[text] identical copy has no text row", row("3:12").length === 0);
+  ok("[text] a designed run of non-breaking spaces against built ordinary spaces is HIGH and names the gap widths (the mirror of a built run)",
+    sev("3:13") === "high" && /the design's is 2 spaces wide and the build's 1 space wide/.test(noteOf("3:13")));
+  ok("[text] designed ordinary spaces against a built non-breaking run of the same length are HIGH too (the build keeps the width the design collapses)",
+    sev("3:15") === "high" && /the design's is 1 space wide and the build's 2 spaces wide/.test(noteOf("3:15")));
+  ok("[text] a single designed non-breaking space against a built space is no text row (only the invisible-character row)",
+    row("3:14").length === 0 && rep.deltas.some((d) => d.nodeId === "3:14" && /invisible/.test(d.field)));
   const md = reportToMarkdown(rep);
   ok("[md] no raw U+2028 reaches the report", !md.includes("\u2028"));
 }

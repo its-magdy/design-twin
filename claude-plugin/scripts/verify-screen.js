@@ -2426,8 +2426,7 @@ var nbspTrim = (t) => t.replace(/\u00a0/g, " ").trim();
 var HTML_WS = /[ \t\n\r\f]+/g;
 var looseCollapse = (t) => nbspTrim(t).replace(HTML_WS, " ");
 var strictCollapse = (t) => t.trim().replace(HTML_WS, " ").replace(/\u00a0/g, " ");
-var collapseFor = (built) => built.includes("\xA0") ? strictCollapse : looseCollapse;
-var spaceNormFor = (collapse) => (t) => collapse(t).replace(/[^\S\ufeff]/g, " ");
+var spaceNorm = (t) => strictCollapse(t).replace(/[^\S\ufeff]/g, " ");
 var designBreaks = (t) => t.replace(/[\u2028\u2029]/g, "\n");
 var OTHER_SPACES = {
   "\v": "line tabulation",
@@ -3362,12 +3361,12 @@ function checkText(cx, n) {
       const g = nbspTrim(rt.have);
       const caseShown = spec.textCase !== void 0 || rt.transform !== null && rt.transform.trim().toLowerCase() !== "none";
       const renderNote = !caseShown ? void 0 : `the design renders '${w}' (stored '${designText.trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
-      const collapse = collapseFor(String(got.text));
-      const wsR = rt.same ? null : renderedText(designText, spec.textCase, String(got.text), got.textTransform, collapse);
+      const same = rt.same && strictCollapse(rt.want) === strictCollapse(rt.have);
+      const wsR = same ? null : renderedText(designText, spec.textCase, String(got.text), got.textTransform, strictCollapse);
       const wsOnly = wsR !== null && wsR.same;
-      const spaceKind = !rt.same && !wsOnly && renderedText(designText, spec.textCase, String(got.text), got.textTransform, spaceNormFor(collapse)).same;
-      if (!rt.same) {
-        const caseOnly = !wsOnly && !spaceKind && collapse(rt.want).toLowerCase() === collapse(rt.have).toLowerCase();
+      const spaceKind = !same && !wsOnly && renderedText(designText, spec.textCase, String(got.text), got.textTransform, spaceNorm).same;
+      if (!same) {
+        const caseOnly = !wsOnly && !spaceKind && strictCollapse(rt.want).toLowerCase() === strictCollapse(rt.have).toLowerCase();
         const caseWs = caseOnly && w.toLowerCase() !== g.toLowerCase();
         const nbspGap = !wsOnly && !spaceKind && !caseOnly && looseCollapse(rt.want).toLowerCase() === looseCollapse(rt.have).toLowerCase();
         const extraGlyphs = !wsOnly && !spaceKind && !caseOnly && !nbspGap && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
