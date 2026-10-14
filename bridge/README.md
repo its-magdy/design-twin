@@ -197,9 +197,12 @@ causes apart, marks each check ✓ / ! / ✗, and gives the one next step:
 
 ```
 dtwin doctor            # exit code 1 only if a check is ✗ (a note, !, is not a failure)
-dtwin doctor --wait 30  # wait longer for the plugin to connect (default 10s; it retries every 3s)
+dtwin doctor --wait 30  # wait longer for the plugin to connect (default 10s; it retries every second)
 dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next }] }
 ```
+
+Once a plugin connects, the probe can run up to ~6.5 s past `--wait`: the bridge's settle (so a second
+open file is seen), then each file's `hello` (so it is named).
 
 1. **Node.js** version against this package's `engines`.
 2. **Bridge token** — saved or not, where, loose file permissions, and whether `FIGMA_BRIDGE_TOKEN` is
@@ -232,7 +235,7 @@ plugin and disturb whoever owns that bridge.
 Every direct run ends with `done in 12.4s — waited 9.8s for the plugin to connect · export 2.4s · write 0.2s`
 (or `via the running daemon · export (incl. any wait for the plugin) 2.6s` when a daemon answered: the
 daemon waits for a not-yet-connected plugin inside the request, so that wait is in the export figure). A long "waited" figure is the plugin
-re-dialling a fresh one-shot bridge (it retries every 3 s, slower in a background window), not the export
+re-dialling a fresh one-shot bridge (it retries every second, one port at a time, slower in a background window), not the export
 itself; the line says so past 5 s. `dtwin serve` in another terminal keeps one bridge open and the plugin
 connected, so every later command skips that wait.
 
@@ -427,7 +430,7 @@ like `--list-clients`' own listing does. Under a running `dtwin serve` daemon, c
 once per plugin connection and stay stable until that plugin's window disconnects/reconnects.
 
 A named target (file name or fileKey) is **waited for**: each open plugin window redials on its own
-3 s clock, so right after a bridge starts only one of two open files may be connected yet. Once a
+clock (every second, one of the three allowed ports at a time), so right after a bridge starts only one of two open files may be connected yet. Once a
 first plugin is connected, `dtwin` gives the named file up to 15 s more (or `--timeout`, whichever is
 shorter) to land before resolving the name; a name that never matches then fails with the list of
 what *is* connected. A bare `c<N>` never waits for its file. The MCP `client` argument gets the same
@@ -435,18 +438,25 @@ wait on every tool: holding the bridge, up to 15 s for a first plugin to connect
 more for the name; routed through a daemon, the same two windows, spent by the daemon's bridge.
 
 **A fresh bridge settles before it guesses.** For 3.5 s after a bridge's first plugin connects (one
-redial interval plus a moment for the next window's hello), a command with **no** `--client`, or one
-whose `--client` is a file name — whole or partial: names repeat (two `Untitled`) and a name matches as
+walk of the three ports at a redial a second, plus a moment for the next window's hello), a command
+with **no** `--client`, or one whose `--client` is a file name — whole or partial: names repeat (two `Untitled`) and a name matches as
 a substring (`App` also matches `App (Copy)`) — is held: a second open file may still be redialling,
 and without it the command would silently go to whichever file landed first instead of being refused
 as ambiguous. The hold outlasts a shorter `--timeout`, which only bounds how long to wait for a first
 plugin. A connId or fileKey is routed at once. A bridge that has had its plugins connected for 3.5 s
 pays nothing — a `dtwin serve` daemon, a running MCP session — until one of them leaves while others
-stay: that window is probably redialling, so the 3.5 s start again. A partial file name is also held
-while another connected window has not yet said which file it is (a few milliseconds, at most 3 s).
+stay: that window is probably redialling, so the 3.5 s start again. Wherever a command waits like this
+— the one-shot CLI's own bridge, a daemon request that carries a connect window, any bridge still
+settling — a file name, no `--client` and `--list-clients` are also held, within the connect window (or
+the settle, when that ends later), while another connected window has not yet said which file it is
+(usually a few milliseconds; 3 s per window that never says), so a
+refusal or a listing names that file instead of showing it as unidentified; a window that never says is
+listed unidentified. Whatever the settle and those holds add up to, the wait ends at most 3 s past the
+longer of the settle and its window (the window capped at 15 s), counted from when a plugin went live —
+a window that keeps connecting and dropping without saying which file it is cannot hold a command.
 `--list-clients` on its own bridge waits the same 3.5 s, so it lists every window that redialled in
-that time; behind a running daemon it lists whatever is connected at that moment, with no wait. A window
-that is several redials behind (it walks the three allowed ports, 3 s each) can still land after that;
+that time; a settled MCP session or `dtwin serve` daemon reads its list directly, with no wait. A window
+that redials more slowly (Figma throttles a background window's timers) can still land after that;
 with two files open, address the one you mean.
 
 `--client` is an **address**, not a scope — it composes with every other flag:

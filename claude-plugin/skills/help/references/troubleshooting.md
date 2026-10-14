@@ -48,7 +48,7 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   - `not set up` — no token pasted. It won't dial until you paste one into **Bridge token** + Save.
   - `not running` — every allowed port was tried and nothing answered: no server is up. The plugin UI
     is a WS *client* — start one (`dtwin --serve`, any `dtwin` pull, or the MCP server); it
-    auto-connects (3s retry).
+    auto-connects (it retries every second).
   - `waiting` — it WAS connected and the bridge went away. Normal after a one-shot `dtwin` pull ends.
   - `token rejected` (red, and the section opens itself) — a bridge is running but refused the token;
     see the next entry.
@@ -62,7 +62,7 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 ## Slow or stalled pulls
 
 - **A pull took ~80 s but the export itself was ~3 s** → read the closing `done in …` line: `waited Ys for
-  the plugin to connect` is the plugin re-dialling a fresh one-shot bridge (3 s retry, slower in a
+  the plugin to connect` is the plugin re-dialling a fresh one-shot bridge (1 s retry per port, slower in a
   background window). `dtwin serve` keeps one bridge open and the plugin connected.
 - **A late or "abandoned" reply answered the wrong command** → request ids are unique per bridge
   and a reply only settles the connection it was sent to. A cancelled request stops in the plugin
@@ -91,11 +91,11 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   `design/lib`) so exports don't collide.
 - **A one-shot command waits ~3.5 s after the plugin connects** → the fresh bridge is settling: with no
   `--client`, or one that is a file name (whole or partial — names repeat and match as substrings), it
-  waits one plugin redial for a second open file before routing, so it refuses to guess instead of picking
+  waits one plugin walk of the three ports for a second open file before routing, so it refuses to guess instead of picking
   whichever file landed first; a shorter `--timeout` does not cut it short. A connId or fileKey skips it.
   A running `dtwin serve` daemon or MCP session pays nothing once its plugins have been connected for
   3.5 s, but waits again when one window leaves while others stay (it is probably redialling). A window
-  several redials behind can still land later — with two files open, always pass `--client`.
+  redialling slowly (a background window) can still land later — with two files open, always pass `--client`.
 - **A connection that sat idle came back as a different `instanceId`** → Figma restarted the plugin
   runtime. Don't leave the Figma window **minimized** (its renderer gets suspended); occluded is fine.
 

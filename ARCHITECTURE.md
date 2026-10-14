@@ -91,7 +91,7 @@ file and the library it draws on are both connected and separately addressable. 
 routing target as its optional 4th argument; the CLI passes `--client`, MCP passes `client`.
 
 This replaced a single-socket rule that terminated the incumbent on every new connection. That rule
-did not merely limit you to one file — it was actively unstable: the displaced plugin's 3-second
+did not merely limit you to one file — it was actively unstable: the displaced plugin's
 auto-reconnect immediately stole the bridge back, and two open files ping-ponged the connection
 indefinitely (observed live, which is how the bug was found). Admitting both connections removes the
 contention rather than arbitrating it.

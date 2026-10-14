@@ -143,7 +143,7 @@ const bridge = {
   // cut off by the daemonGuardMs guard; the daemon's own `timeoutMs` still bounds the command.
   // A NAMED `client` (file name / fileKey — not a bare c<N> connId) gets the same bounded wait the
   // CLI (figma-pull.ts) and the daemon (daemon.ts) give `--client <name>`: every open plugin window
-  // redials on its own 3 s clock (figma-plugin ui.html), so right after this process opened the bridge
+  // redials on its own clock (timeouts.ts PLUGIN_REDIAL_MS), so right after this process opened the bridge
   // only one of two open files may have landed yet, and resolving the name at once failed on the
   // other file (seen live). Either way the bridge's own awaitClient (server-core) does the waiting, with
   // NAMED_CLIENT_WAIT_MS as the connect window — holding the bridge it is requestWithClient's `waitMs`;

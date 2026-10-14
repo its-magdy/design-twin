@@ -7,6 +7,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { check, report } from "./assert.ts";
 import { must } from "./fixtures.ts";
+import { PLUGIN_REDIAL_MS } from "../bridge/src/timeouts.ts";
 
 const html = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "ui.html"), "utf8");
 const scriptMatch = must(/<script>([\s\S]*)<\/script>/.exec(html), "<script> in ui.html");
@@ -120,6 +121,11 @@ check("saving a new token after a rejection reconnects at once, not after the 15
   const before = w.sockets.length;
   w.el("token").value = "fresh"; w.el("save-token").onclick?.();
   return w.sockets.length === before + 1 && /token=fresh/.test(w.last().url) && w.posted.some((p) => p.type === "set-token" && p.token === "fresh");
+})());
+check("a missed dial redials after REDIAL_MS (1 s), the interval the bridge's settle window is built from", (() => {
+  const w = boot(); w.msg({ type: "token", token: "t" }); closeIt(w.last(), 1006);
+  const pending = w.timers.filter((t) => t.fn);
+  return pending.length === 1 && pending[0]?.ms === 1000 && pending[0].ms === PLUGIN_REDIAL_MS;
 })());
 check("only ONE reconnect is ever pending, however many closes arrive", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last();

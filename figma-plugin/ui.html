@@ -403,12 +403,17 @@
     // Reconnect discipline. Every handler below is guarded by `s === ws` so only the CURRENT socket
     // can drive state, and reconnects go through a single shared timer. Without both, each retired
     // socket kept its own live reconnect chain: saving the token closed a socket AND called connect()
-    // immediately, then 3s later the closed socket's onclose connected again — so sockets multiplied
+    // immediately, then a redial later the closed socket's onclose connected again — so sockets multiplied
     // with every save (and with every stale-socket terminate() from the bridge).
     var reconnectTimer = null;
+    // The redial delay, one port per attempt, so a window that keeps missing walks all of BRIDGE_PORTS
+    // in 3 s. A one-shot dtwin command opens its bridge at any moment and waits for this, so it is short;
+    // a refused dial to localhost costs next to nothing. The bridge reads it as timeouts.ts
+    // PLUGIN_REDIAL_MS (its settle window is built from it) — change both together.
+    var REDIAL_MS = 1000;
     function scheduleReconnect(ms) {
       if (reconnectTimer) return; // one pending reconnect at a time, ever
-      reconnectTimer = setTimeout(function () { reconnectTimer = null; connect(); }, ms || 3000);
+      reconnectTimer = setTimeout(function () { reconnectTimer = null; connect(); }, ms || REDIAL_MS);
     }
     // Nothing answered. Which sentence depends on history: a bridge that WAS here and went away is the
     // ordinary end of a one-shot `dtwin` pull; one that was never found (after every allowed port has

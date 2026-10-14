@@ -442,8 +442,8 @@ function probePort(port: number): Promise<PortProbe> {
 }
 
 // Open a real bridge on the (free) port and see whether a plugin shows up. The plugin retries every
-// 3s and may be walking three ports, hence the wait. The bridge's own stderr chatter is muted for the
-// duration: doctor reports the same facts itself, in one place. ALWAYS closes.
+// second, one of three ports at a time (slower in a background window), hence the wait. The bridge's own
+// stderr chatter is muted for the duration: doctor reports the same facts itself, in one place. ALWAYS closes.
 async function probePlugin(port: number, waitMs: number): Promise<PluginProbe> {
   const realError = console.error;
   console.error = () => {};
@@ -458,8 +458,13 @@ async function probePlugin(port: number, waitMs: number): Promise<PluginProbe> {
     const b = bridge;
     while (Date.now() - start < waitMs && !b.isConnected() && !refused()) await sleep(200);
     if (b.isConnected()) {
-      // The file name arrives in a hello just after the socket opens — give it a moment.
-      for (let i = 0; i < 10 && b.listClients().some((c) => !c.identified); i++) await sleep(150);
+      // The file name arrives in a hello just after the socket opens, and a second open file may be a
+      // redial behind: the bridge's own unaddressed wait (server-core awaitClient) covers both — the
+      // settle, then each socket's hello or its identification grace — so the files are listed by name.
+      // Not bounded by the wait: every window is stretched to the settle, so a probe whose plugin connects
+      // pays the settle (3.5 s) after it even with one file open; a window that leaves meanwhile restarts the
+      // settle, up to the bridge's cap. A diagnostic can afford that; naming a second open file is worth it.
+      await b.awaitClient(null, Math.max(1, waitMs - (Date.now() - start)));
       return { clients: b.listClients() };
     }
     return { clients: [], badToken: refused(), expected: core.authStats().expected };
@@ -582,7 +587,7 @@ async function main(argv: string[]): Promise<void> {
     if (a === undefined) continue; // cannot happen: i < argv.length
     if (a === "--json") json = true;
     else if (a === "--help" || a === "-h") {
-      console.log("dtwin doctor [--wait <seconds>] [--json]\n\n  Checks the whole setup and says what to do next: Node version, bridge token, daemon, port,\n  whether the Figma plugin can connect (and whether it has the right token), and the project in\n  the current directory. Changes nothing: no token is created, no file is written.\n  --wait N   seconds to wait for the plugin to connect (default 10; it retries every 3s)\n  --json     machine output: { ok, checks: [{ id, title, status, detail, next }] }\n\n  Exit code 1 only when a check is ✗ (a note, !, is not a failure).");
+      console.log("dtwin doctor [--wait <seconds>] [--json]\n\n  Checks the whole setup and says what to do next: Node version, bridge token, daemon, port,\n  whether the Figma plugin can connect (and whether it has the right token), and the project in\n  the current directory. Changes nothing: no token is created, no file is written.\n  --wait N   seconds to wait for the plugin to connect (default 10; it retries every second); once it has,\n             up to ~6.5 s more so every open file is seen and named\n  --json     machine output: { ok, checks: [{ id, title, status, detail, next }] }\n\n  Exit code 1 only when a check is ✗ (a note, !, is not a failure).");
       process.exit(0);
     } else if (a === "--wait" || a.startsWith("--wait=")) {
       const v = a === "--wait" ? argv[++i] : a.slice("--wait=".length);
@@ -594,7 +599,7 @@ async function main(argv: string[]): Promise<void> {
   const report = await run(json ? { waitSec } : {
     waitSec,
     onCheck: (c) => console.log(formatCheck(c)),
-    onWait: (sec) => console.log(`… waiting up to ${sec}s for the Figma plugin to connect (run it in Figma now; --wait 0 skips)`),
+    onWait: (sec) => console.log(`… waiting up to ${sec}s for the Figma plugin to connect, then a few seconds more for every open file to say its name (run it in Figma now; --wait 0 skips)`),
   });
   console.log(json ? JSON.stringify(report, null, 2) : "\n" + verdict(report));
   // exitCode, not exit(): let stdout drain (a piped --json would otherwise be cut short).
