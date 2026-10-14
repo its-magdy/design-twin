@@ -1960,32 +1960,53 @@ function expectNode(n, ctx = {}) {
   const spec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
   const notComparable = [];
   const skip = (field, value, why) => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
+  const x = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [] };
+  expectText(x);
+  expectFont(x);
+  expectPaint(x);
+  expectPlaceholder(x);
+  expectStroke(x);
+  expectRadius(x);
+  expectLayout(x);
+  if (n.box) expectSize(x, n.box);
+  expectPosition(x, ctx.frame);
+  expectOpacity(x);
+  expectDrawnState(x, ctx.inheritedState);
+  if (n.tokens && Object.keys(n.tokens).length) spec.tokens = n.tokens;
+  if (ctx.frameId) spec.frameId = ctx.frameId;
+  return { spec, notComparable };
+}
+function expectText({ n, spec, skip }) {
   if (n.text != null) spec.text = n.text;
   const fcase = n.font ? n.font.case : void 0;
   if (n.text != null && (fcase === "upper" || fcase === "lower" || fcase === "title")) spec.textCase = fcase;
   else if (n.text != null && (fcase === "small_caps" || fcase === "small_caps_forced")) skip("text case", fcase, "small caps (font-variant) not compared \u2014 Figma draws the stored characters as small capitals; the build's font-variant is not measured");
-  if (n.font) {
-    if (n.font.family !== void 0) spec.fontFamily = n.font.family;
-    if (typeof n.font.size === "number") spec.fontSize = n.font.size;
-    const w = normWeight(n.font.weight);
-    if (w != null) spec.fontWeight = w;
-    const lh = lineHeightPx(n.font.lineHeight, n.font.size);
-    if (lh != null) spec.lineHeight = lh;
-    const ls = n.font.letterSpacing;
-    if (ls && typeof ls.value === "number") {
-      if (String(ls.unit).toLowerCase() !== "percent") spec.letterSpacing = ls.value;
-      else if (typeof n.font.size === "number") spec.letterSpacing = r2(ls.value / 100 * n.font.size);
-    }
-    if (n.font.color) spec.color = normColor(n.font.color);
+}
+function expectFont({ n, spec }) {
+  if (!n.font) return;
+  if (n.font.family !== void 0) spec.fontFamily = n.font.family;
+  if (typeof n.font.size === "number") spec.fontSize = n.font.size;
+  const w = normWeight(n.font.weight);
+  if (w != null) spec.fontWeight = w;
+  const lh = lineHeightPx(n.font.lineHeight, n.font.size);
+  if (lh != null) spec.lineHeight = lh;
+  const ls = n.font.letterSpacing;
+  if (ls && typeof ls.value === "number") {
+    if (String(ls.unit).toLowerCase() !== "percent") spec.letterSpacing = ls.value;
+    else if (typeof n.font.size === "number") spec.letterSpacing = r2(ls.value / 100 * n.font.size);
   }
+  if (n.font.color) spec.color = normColor(n.font.color);
+}
+function expectPaint({ n, spec, paints }) {
   const fill = firstSolid(Array.isArray(n.fills) ? n.fills : null);
   if (fill && n.type !== "TEXT") {
     if (isPaintNode(n)) spec.fill = normColor(fill.color);
     else spec.backgroundColor = normColor(fill.color);
   }
   if (fill && n.type === "TEXT" && !spec.color) spec.color = normColor(fill.color);
-  const paints = Array.isArray(n.fills) ? n.fills : [];
   if (Array.isArray(n.effects) && n.effects.length > 0 || paints.some((p) => p && p.type !== "solid" && p.visible !== false)) spec.decorated = true;
+}
+function expectPlaceholder({ n, spec }) {
   if (isPlaceholder(n)) {
     spec.placeholder = true;
     if (spec.text !== void 0) {
@@ -1997,6 +2018,8 @@ function expectNode(n, ctx = {}) {
       delete spec.color;
     }
   }
+}
+function expectStroke({ n, spec }) {
   const st = n.strokes;
   if (st && typeof st === "object" && Array.isArray(st.colors) && st.colors.length) {
     spec.borderColor = normColor(st.colors[0]);
@@ -2010,6 +2033,9 @@ function expectNode(n, ctx = {}) {
     }
     if (st.align) spec.strokeAlign = st.align;
   }
+}
+function expectRadius({ n, spec, skip, paints }) {
+  const st = n.strokes;
   const drawsBox = paints.some((p) => p && p.visible !== false) || !!(st && (Array.isArray(st.colors) && st.colors.length > 0 || Array.isArray(st.paints) && st.paints.some((p) => p && p.visible !== false))) || Array.isArray(n.effects) && n.effects.length > 0 || n.clip === true;
   if (n.radius !== void 0 && n.radius !== null && !drawsBox && n.type !== "TEXT") {
     const r = n.radius;
@@ -2023,6 +2049,9 @@ function expectNode(n, ctx = {}) {
     if (c.tr === c.tl && c.br === c.tl && c.bl === c.tl) spec.borderRadius = c.tl;
     else spec.radiusCorners = c;
   }
+}
+function expectLayout(x) {
+  const { n, skip } = x;
   const L = n.layout;
   if (L && typeof L === "object" && (n.asset || n.geometry || n.assetSkipped)) {
     const BAKED = "inset baked into the exported asset";
@@ -2031,76 +2060,88 @@ function expectNode(n, ctx = {}) {
     const pad = Array.isArray(L.padding) ? L.padding.slice(0, 4) : PAD_KEYS.some((k) => typeof L[k] === "number") ? PAD_KEYS.map((k) => L[k]) : null;
     if (pad && pad.some((v) => typeof v === "number" && v !== 0)) skip("padding", pad.map((v) => typeof v === "number" ? v : 0), BAKED);
   } else if (L && typeof L === "object") {
-    const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : void 0;
-    if (g !== void 0) {
-      const dir = L.flexDirection === "column" ? "column" : "row";
-      const flow = inFlowChildren(n);
-      if (flow.length < 2) skip("gap", g, `fewer than two laid-out children (${flow.length}) \u2014 a gap has nothing to separate`);
-      else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around") skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
-      else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g, "a child fills the main axis, so the stored gap and that child's size trade off \u2014 placement is checked through the children's positions and sizes instead");
-      else spec.gap = g;
-    }
-    let pad = null;
-    if (Array.isArray(L.padding)) pad = L.padding.slice(0, 4);
-    else if (PAD_KEYS.some((k) => typeof L[k] === "number")) pad = PAD_KEYS.map((k) => L[k]);
-    if (pad && pad.some((v) => typeof v === "number" && v !== 0)) {
-      const p4 = pad.map((v) => typeof v === "number" ? v : 0);
-      const skipped = [];
-      for (const ax of paddingNotShown(n, L, p4)) {
-        skipped.push(...ax.sides);
-        skip(`padding (${ax.sides.join("/")})`, ax.sides.map((sd) => p4[PAD_SIDES.indexOf(sd)] ?? 0), ax.why);
-      }
-      if (skipped.length < 4) spec.padding = p4;
-      if (skipped.length && skipped.length < 4) spec.paddingSkip = skipped;
-    }
+    expectGap(x, L);
+    expectPadding(x, L);
   }
-  if (n.box) {
-    if (n.type === "TEXT") {
-      const rb = n.renderBox;
-      const lines = typeof n.maxLines === "number" ? n.maxLines : 0;
-      const truncSet = n.autoResize === "truncate" || n.truncate === true || lines > 0;
-      const truncated = truncSet && (lines > 1 || !rb || !num(rb.w) || rb.w >= n.box.w - TOLERANCE.textInk);
-      const shadowed = Array.isArray(n.effects) && n.effects.length > 0;
-      if (isPlaceholder(n)) skip("width", n.box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
-      else if (truncated) skip("width", n.box.w, "truncated text (ellipsis / line clamp) the design truncates or wraps: a Range over it measures the full unclipped string, not the box");
-      else if (n.autoResize === "width_and_height") spec.width = n.box.w;
-      else if (shadowed) skip("width", n.box.w, "text with an effect (shadow/blur): its render bounds include the effect, so neither box nor ink width is the text's");
-      else if (rb && num(rb.w)) {
-        spec.width = rb.w;
-        spec.widthFrom = "renderBox";
-        skip("width (text box)", n.box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words \u2014 the build's text hugs them, so the ink width (renderBox) is compared instead`);
-      } else spec.width = n.box.w;
-      const lh = spec.lineHeight;
-      if (num(lh) && num(n.box.h) && lh > n.box.h + 0.5 && n.autoResize !== "width_and_height" && n.autoResize !== "height") {
-        skip(TEXT_BOX_HEIGHT, n.box.h, lineBoxWhy(lh, n.box.h));
-      }
-    } else {
-      if (typeof n.box.w === "number") spec.width = n.box.w;
-      if (typeof n.box.h === "number") spec.height = n.box.h;
-      if (n.widthMode || n.heightMode) spec.sizing = { ...ifDefined("w", n.widthMode), ...ifDefined("h", n.heightMode) };
-    }
+}
+function expectGap({ n, spec, skip }, L) {
+  const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : void 0;
+  if (g !== void 0) {
+    const dir = L.flexDirection === "column" ? "column" : "row";
+    const flow = inFlowChildren(n);
+    if (flow.length < 2) skip("gap", g, `fewer than two laid-out children (${flow.length}) \u2014 a gap has nothing to separate`);
+    else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around") skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
+    else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g, "a child fills the main axis, so the stored gap and that child's size trade off \u2014 placement is checked through the children's positions and sizes instead");
+    else spec.gap = g;
   }
-  const pos = isPlaceholder(n) ? null : framePosition(n, ctx.frame);
+}
+function expectPadding({ n, spec, skip }, L) {
+  let pad = null;
+  if (Array.isArray(L.padding)) pad = L.padding.slice(0, 4);
+  else if (PAD_KEYS.some((k) => typeof L[k] === "number")) pad = PAD_KEYS.map((k) => L[k]);
+  if (pad && pad.some((v) => typeof v === "number" && v !== 0)) {
+    const p4 = pad.map((v) => typeof v === "number" ? v : 0);
+    const skipped = [];
+    for (const ax of paddingNotShown(n, L, p4)) {
+      skipped.push(...ax.sides);
+      skip(`padding (${ax.sides.join("/")})`, ax.sides.map((sd) => p4[PAD_SIDES.indexOf(sd)] ?? 0), ax.why);
+    }
+    if (skipped.length < 4) spec.padding = p4;
+    if (skipped.length && skipped.length < 4) spec.paddingSkip = skipped;
+  }
+}
+function expectSize(x, box) {
+  const { n, spec } = x;
+  if (n.type === "TEXT") expectTextSize(x, box);
+  else {
+    if (typeof box.w === "number") spec.width = box.w;
+    if (typeof box.h === "number") spec.height = box.h;
+    if (n.widthMode || n.heightMode) spec.sizing = { ...ifDefined("w", n.widthMode), ...ifDefined("h", n.heightMode) };
+  }
+}
+function expectTextSize({ n, spec, skip }, box) {
+  const rb = n.renderBox;
+  const lines = typeof n.maxLines === "number" ? n.maxLines : 0;
+  const truncSet = n.autoResize === "truncate" || n.truncate === true || lines > 0;
+  const truncated = truncSet && (lines > 1 || !rb || !num(rb.w) || rb.w >= box.w - TOLERANCE.textInk);
+  const shadowed = Array.isArray(n.effects) && n.effects.length > 0;
+  if (isPlaceholder(n)) skip("width", box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
+  else if (truncated) skip("width", box.w, "truncated text (ellipsis / line clamp) the design truncates or wraps: a Range over it measures the full unclipped string, not the box");
+  else if (n.autoResize === "width_and_height") spec.width = box.w;
+  else if (shadowed) skip("width", box.w, "text with an effect (shadow/blur): its render bounds include the effect, so neither box nor ink width is the text's");
+  else if (rb && num(rb.w)) {
+    spec.width = rb.w;
+    spec.widthFrom = "renderBox";
+    skip("width (text box)", box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words \u2014 the build's text hugs them, so the ink width (renderBox) is compared instead`);
+  } else spec.width = box.w;
+  const lh = spec.lineHeight;
+  if (num(lh) && num(box.h) && lh > box.h + 0.5 && n.autoResize !== "width_and_height" && n.autoResize !== "height") {
+    skip(TEXT_BOX_HEIGHT, box.h, lineBoxWhy(lh, box.h));
+  }
+}
+function expectPosition({ n, spec }, frame) {
+  const pos = isPlaceholder(n) ? null : framePosition(n, frame);
   if (pos) {
     spec.x = pos.x;
     if (pos.y !== void 0) spec.y = pos.y;
     spec.positionFrom = pos.source;
   }
+}
+function expectOpacity({ n, spec }) {
   if (typeof n.opacity === "number" && n.opacity !== 1) spec.opacity = n.opacity;
   else if (spec.text !== void 0 || spec.placeholderText !== void 0 || spec.color !== void 0 || spec.backgroundColor !== void 0 || spec.fill !== void 0 || spec.borderColor !== void 0 || spec.decorated) spec.opacity = 1;
+}
+function expectDrawnState({ n, spec }, inheritedState) {
   const own = drawnStateOf(n);
   if (own) {
     spec.drawnState = own.state;
     spec.drawnStateWhy = own.why;
     spec.drawnStateOwn = true;
-  } else if (ctx.inheritedState) {
-    spec.drawnState = ctx.inheritedState.state;
-    spec.drawnStateWhy = `inside '${ctx.inheritedState.from}', which ${ctx.inheritedState.why}`;
-    spec.drawnStateFrom = ctx.inheritedState.fromId;
+  } else if (inheritedState) {
+    spec.drawnState = inheritedState.state;
+    spec.drawnStateWhy = `inside '${inheritedState.from}', which ${inheritedState.why}`;
+    spec.drawnStateFrom = inheritedState.fromId;
   }
-  if (n.tokens && Object.keys(n.tokens).length) spec.tokens = n.tokens;
-  if (ctx.frameId) spec.frameId = ctx.frameId;
-  return { spec, notComparable };
 }
 function checkable(spec) {
   return ["text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderRadius", "radiusCorners", "gap", "padding", "borderColor", "x"].some((k) => spec[k] !== void 0);
@@ -2189,183 +2230,18 @@ function markRepeatedText(root, specById) {
   })(root);
 }
 function buildExpectation(docs, opts) {
-  const nodes = [];
-  const instances = [];
-  const interactions = [];
-  const notComparable = [];
-  const hidden = { roots: [], ids: [], specsSkipped: 0, instancesSkipped: 0, interactionsSkipped: 0 };
-  const frames = [];
-  const seen = /* @__PURE__ */ new Set();
-  let screen = void 0, exportedAt = void 0, reference = null;
-  const idsByFile = /* @__PURE__ */ new Map();
-  const rootsByFile = /* @__PURE__ */ new Map();
-  const interactionFile = /* @__PURE__ */ new Map();
-  const roots = [];
-  const rootNodesByFile = /* @__PURE__ */ new Map();
-  const visibleById = /* @__PURE__ */ new Map();
-  for (const { doc, label } of docs) {
-    const exp = screenExportOf(doc);
-    const sf = doc && "sourceFile" in doc ? doc.sourceFile : exp ? exp.sourceFile : void 0;
-    const sourceFile = typeof sf === "string" && sf ? sf : void 0;
-    const fileIds = getOrInit(idsByFile, sourceFile ?? "", () => /* @__PURE__ */ new Set());
-    if (!screen) screen = exp && exp.screen || label;
-    if (!exportedAt) exportedAt = exp ? exp.exportedAt : void 0;
-    for (const root of screenRoots(doc)) {
-      if (root.id) {
-        const names = getOrInit(getOrInit(rootsByFile, sourceFile ?? "", () => /* @__PURE__ */ new Map()), root.id, () => /* @__PURE__ */ new Set());
-        for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : void 0]) if (typeof n === "string" && n) names.add(n);
-      }
-      getOrInit(rootNodesByFile, sourceFile ?? "", () => []).push(root);
-      if (!reference && root.reference) reference = root.reference;
-      const b = root.box || {};
-      const frame = {
-        nodeId: root.id,
-        name: root.name,
-        ...ifDefined("w", b.w),
-        ...ifDefined("h", b.h),
-        ...ifDefined("x", b.x),
-        ...ifDefined("y", b.y),
-        clip: root.clip === true,
-        ...ifDefined("scroll", root.scroll)
-      };
-      frames.push(frame);
-      const frameId = frames.length > 1 ? root.id : void 0;
-      const stateOf = /* @__PURE__ */ new WeakMap();
-      const chainOf = /* @__PURE__ */ new WeakMap();
-      const fixedNodes = /* @__PURE__ */ new WeakSet();
-      roots.push(root);
-      walkWithHidden(root, (n, c) => {
-        if (n.id) fileIds.add(n.id);
-        if (c.hidden) {
-          if (!c.parentHidden) hidden.roots.push({ nodeId: n.id, name: n.name, path: c.path });
-          if (n.id) hidden.ids.push(n.id);
-          if (checkable(expectNode(n, { path: c.path }).spec)) hidden.specsSkipped++;
-          if (n.type === "INSTANCE" && n.mainComponent) hidden.instancesSkipped++;
-          for (const r of Array.isArray(n.reactions) ? n.reactions : []) hidden.interactionsSkipped += actionsOf(r).length;
-          return;
-        }
-        const inherited = c.parent ? stateOf.get(c.parent) : void 0;
-        const ancestorIds = c.parent ? chainOf.get(c.parent) ?? [] : [];
-        chainOf.set(n, c.parent ? [...n.id ? [n.id] : [], ...ancestorIds] : []);
-        if (n.id && seen.has(n.id)) return;
-        if (n.id) seen.add(n.id);
-        if (n.id) visibleById.set(n.id, { name: n.name, file: sourceFile ?? "" });
-        const { spec, notComparable: gaps } = expectNode(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
-        spec.ancestorIds = ancestorIds;
-        if (n.absolute) spec.absolute = true;
-        const par = c.parent;
-        const sibs = par && Array.isArray(par.children) ? par.children : [];
-        const nFixed = par && typeof par.fixedChildren === "number" ? par.fixedChildren : 0;
-        if (par && (fixedNodes.has(par) || nFixed > 0 && sibs.indexOf(n) >= sibs.length - nFixed)) {
-          fixedNodes.add(n);
-          spec.fixed = true;
-        }
-        if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id, fromId: n.id });
-        if (checkable(spec)) nodes.push(spec);
-        else {
-          const g11 = gaps.filter((g) => g.field === "border-radius" || g.field.startsWith("padding ("));
-          if (g11.length) gaps.push({
-            nodeId: n.id,
-            name: n.name,
-            field: "node",
-            value: null,
-            why: gaps.some((g) => g.field === "border-radius") ? "node not checked: it draws nothing (no fill, stroke, effect or clip) \u2014 its radius was its only stated value" : `node not checked: every value it states is excluded by method (${g11.map((g) => g.field).join(", ")})`
-          });
-        }
-        notComparable.push(...gaps);
-        if (n.type === "INSTANCE" && n.mainComponent) {
-          instances.push({
-            nodeId: n.id,
-            name: n.name,
-            setName: n.mainComponent.setName || n.mainComponent.name,
-            ...ifDefined("setKey", n.mainComponent.setKey || n.mainComponent.key),
-            ...ifDefined("variant", n.mainComponent.variant),
-            ...ifDefined("props", n.props || void 0)
-          });
-        }
-        for (const r of Array.isArray(n.reactions) ? n.reactions : []) {
-          const trigger = triggerOf(r);
-          for (const a of actionsOf(r)) {
-            const row = {
-              nodeId: n.id,
-              name: n.name,
-              trigger,
-              ...ifDefined("action", a.navigation || a.type),
-              ...ifDefined("destinationId", a.destinationId),
-              ...ifDefined("destination", a.destination)
-            };
-            interactions.push(row);
-            interactionFile.set(row, sourceFile ?? "");
-          }
-        }
-      });
-    }
-  }
-  const planIn = opts && opts.plan;
-  let planInteractions;
-  if (planIn && Array.isArray(planIn.plan.interactions)) {
-    const dropped = [];
-    const keys = new Set(interactions.map((r) => `${r.nodeId}|${r.trigger}`));
-    const hiddenIds = new Set(hidden.ids);
-    let merged = 0;
-    planIn.plan.interactions.forEach((raw, k) => {
-      const at = `interactions[${k}]`;
-      const o = isJsonObject(raw) ? raw : null;
-      const id = o && typeof o.nodeId === "string" && o.nodeId.trim() ? o.nodeId.trim() : null;
-      const drop = (why) => {
-        dropped.push({ nodeId: id ?? `(${at})`, why });
-      };
-      if (!o) return drop(`${at} is not an object`);
-      if (id === null) return drop(`${at} has no nodeId \u2014 a plan interaction is keyed by its node like an export reaction`);
-      if (typeof o.trigger !== "string" || !o.trigger.trim()) return drop("no trigger (on_click, on_press, \u2026)");
-      if (!isPlanExpect(o.expect)) return drop(`expect ${JSON.stringify(o.expect ?? null)} is not dialog | url | selector:<css>`);
-      if (o.destinationId !== void 0 && (typeof o.destinationId !== "string" || !o.destinationId.trim())) return drop("destinationId is not a node id");
-      if (o.expect === "dialog" && o.destinationId === void 0) return drop("expect dialog needs the destinationId of the frame it opens (its root is tagged with it)");
-      const node = visibleById.get(id);
-      if (!node) return drop(hiddenIds.has(id) ? "the node is a hidden layer \u2014 it is not built or driven" : "no visible node of this export has that id");
-      const trigger = o.trigger.trim().toLowerCase();
-      if (o.expect === "dialog" && trigger !== "on_click" && trigger !== "on_press") return drop(`expect dialog needs trigger on_click or on_press (the probe opens a dialog by clicking its opener), not ${trigger}`);
-      if (keys.has(`${id}|${trigger}`)) return drop(`duplicates ${interactions.some((r) => r.nodeId === id && r.trigger === trigger && r.source !== "plan") ? "the export's own interaction" : "an earlier plan row"} for this node and trigger (${trigger})`);
-      keys.add(`${id}|${trigger}`);
-      const destinationId = typeof o.destinationId === "string" ? o.destinationId.trim() : void 0;
-      const row = { nodeId: id, name: node.name, trigger, action: actionForExpect(o.expect), expect: o.expect, ...ifDefined("destinationId", destinationId), source: "plan" };
-      interactions.push(row);
-      interactionFile.set(row, node.file);
-      merged++;
-    });
-    planInteractions = { plan: planIn.file, sha256: planInteractionsSha256(planIn.plan), merged, dropped };
-  }
-  const specById = new Map(nodes.map((s) => [s.nodeId, s]));
-  for (const r of roots) markRepeatedText(r, specById);
-  const index = opts && opts.index;
-  const unnamedIds = idsByFile.get("");
-  const candidatesFor = (file) => candidatesOf(file)?.rows ?? null;
-  function candidatesOf(file) {
-    if (!index) return null;
-    const own = rootsByFile.get(file);
-    const sameName = (l) => {
-      const names = own?.get(l.id);
-      return !!names && (!names.size || l.name === void 0 || names.has(l.name));
-    };
-    const covering = own ? index.layers.filter((l) => sameName(l) && (file === "" || !l.sourceFile || l.sourceFile === file)) : [];
-    if (!covering.length) return null;
-    let f = file;
-    if (f === "") {
-      const named = new Set(covering.map((l) => l.sourceFile).filter((x) => !!x));
-      if (named.size > 1) return null;
-      if (named.size === 0 || covering.some((l) => !l.sourceFile)) return { rows: index.layers, resolved: null };
-      f = [...named][0] ?? "";
-    }
-    return { rows: index.layers.filter((l) => !l.sourceFile || l.sourceFile === f), resolved: f || null };
-  }
-  for (const row of interactions) {
-    const file = interactionFile.get(row);
-    if (!row.destinationId || file === void 0 || String(row.action).toLowerCase() === "change_to") continue;
-    const known = idsByFile.get(file);
-    if (!known || known.has(row.destinationId) || unnamedIds && unnamedIds.has(row.destinationId)) continue;
-    const candidates = candidatesFor(file);
-    if (candidates && !candidates.some((l) => l.id === row.destinationId)) row.destinationExported = false;
-  }
+  const bx = expectBuildCtx(opts);
+  for (const input of docs) readInput(bx, input);
+  const planInteractions = mergePlanInteractions(bx, opts && opts.plan);
+  const specById = new Map(bx.nodes.map((s) => [s.nodeId, s]));
+  for (const r of bx.roots) markRepeatedText(r, specById);
+  markUndesigned(bx);
+  if (bx.index && bx.readSibling) addAliases(bx, specById);
+  addOverlays(bx);
+  const referenceImage = firstReferenceImage(bx, opts);
+  return expectationOf(bx, docs, planInteractions, referenceImage);
+}
+function expectBuildCtx(opts) {
   const readSibling = opts && opts.readSibling;
   const siblingCache = /* @__PURE__ */ new Map();
   const sibling = (file) => {
@@ -2373,67 +2249,262 @@ function buildExpectation(docs, opts) {
     if (!siblingCache.has(file)) siblingCache.set(file, readSibling(file) ?? null);
     return siblingCache.get(file) ?? null;
   };
-  if (index && readSibling) {
-    const ownRootIds = new Set(roots.map((r) => r.id));
-    const specSuffixes = new Set(nodes.map((n) => idSuffix(n.nodeId)).filter((x) => x !== null));
-    const aliases = /* @__PURE__ */ new Map();
-    for (const [file, fileRoots] of rootNodesByFile) {
-      const co = candidatesOf(file);
-      if (!co) continue;
-      const cands = co.rows;
-      const own = shellIndex(fileRoots);
-      if (!own.size) continue;
-      const read2 = /* @__PURE__ */ new Set();
-      for (const row of cands) {
-        if (ownRootIds.has(row.id) || !row.file || read2.has(row.file)) continue;
-        read2.add(row.file);
-        const sib = sibling(row.file);
-        if (!sib) continue;
-        const sx = screenExportOf(sib);
-        const sibFile = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : void 0;
-        if (co.resolved && typeof sibFile === "string" && sibFile && sibFile !== co.resolved) continue;
-        const theirs = shellIndex(screenRoots(sib));
-        for (const [key, mine] of own) {
-          const other = theirs.get(key);
-          const a = mine.length === 1 ? mine[0] : void 0, b = other && other.length === 1 ? other[0] : void 0;
-          if (!a || !b) continue;
-          for (const [p, mine1] of a) {
-            const their1 = b.get(p);
-            if (!mine1 || !their1 || mine1.sig !== their1.sig) continue;
-            const id = mine1.id, sid = their1.id;
-            if (sid === id) continue;
-            const s2 = idSuffix(sid);
-            if (s2 !== null && specSuffixes.has(s2)) continue;
-            getOrInit(aliases, id, () => /* @__PURE__ */ new Set()).add(sid);
-          }
-        }
-      }
-    }
-    for (const [id, set] of aliases) {
-      const sp = specById.get(id);
-      if (sp) sp.aliases = [...set].sort();
+  return {
+    nodes: [],
+    instances: [],
+    interactions: [],
+    notComparable: [],
+    hidden: { roots: [], ids: [], specsSkipped: 0, instancesSkipped: 0, interactionsSkipped: 0 },
+    frames: [],
+    seen: /* @__PURE__ */ new Set(),
+    screen: void 0,
+    exportedAt: void 0,
+    reference: null,
+    idsByFile: /* @__PURE__ */ new Map(),
+    rootsByFile: /* @__PURE__ */ new Map(),
+    interactionFile: /* @__PURE__ */ new Map(),
+    roots: [],
+    rootNodesByFile: /* @__PURE__ */ new Map(),
+    visibleById: /* @__PURE__ */ new Map(),
+    index: opts && opts.index,
+    readSibling,
+    sibling
+  };
+}
+function readInput(bx, { doc, label }) {
+  const exp = screenExportOf(doc);
+  const sf = doc && "sourceFile" in doc ? doc.sourceFile : exp ? exp.sourceFile : void 0;
+  const sourceFile = typeof sf === "string" && sf ? sf : void 0;
+  const fileIds = getOrInit(bx.idsByFile, sourceFile ?? "", () => /* @__PURE__ */ new Set());
+  if (!bx.screen) bx.screen = exp && exp.screen || label;
+  if (!bx.exportedAt) bx.exportedAt = exp ? exp.exportedAt : void 0;
+  for (const root of screenRoots(doc)) readRoot(bx, root, exp, sourceFile, fileIds);
+}
+function readRoot(bx, root, exp, sourceFile, fileIds) {
+  if (root.id) {
+    const names = getOrInit(getOrInit(bx.rootsByFile, sourceFile ?? "", () => /* @__PURE__ */ new Map()), root.id, () => /* @__PURE__ */ new Set());
+    for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : void 0]) if (typeof n === "string" && n) names.add(n);
+  }
+  getOrInit(bx.rootNodesByFile, sourceFile ?? "", () => []).push(root);
+  if (!bx.reference && root.reference) bx.reference = root.reference;
+  const b = root.box || {};
+  const frame = {
+    nodeId: root.id,
+    name: root.name,
+    ...ifDefined("w", b.w),
+    ...ifDefined("h", b.h),
+    ...ifDefined("x", b.x),
+    ...ifDefined("y", b.y),
+    clip: root.clip === true,
+    ...ifDefined("scroll", root.scroll)
+  };
+  bx.frames.push(frame);
+  const w = {
+    frame,
+    frameId: bx.frames.length > 1 ? root.id : void 0,
+    sourceFile,
+    stateOf: /* @__PURE__ */ new WeakMap(),
+    // node -> inherited drawn-state { state, why, from }
+    // node -> the ancestorIds its CHILDREN get: itself then its own ancestors (the frame root contributes none)
+    chainOf: /* @__PURE__ */ new WeakMap(),
+    // a frame's fixed children (pinned while scrolling) and everything inside them. Figma keeps them "on
+    // top of scrolling children" (plugin typings, numberOfFixedChildren) — the LAST N of children[], which is bottom-to-top.
+    fixedNodes: /* @__PURE__ */ new WeakSet()
+  };
+  bx.roots.push(root);
+  walkWithHidden(root, (n, c) => {
+    if (n.id) fileIds.add(n.id);
+    if (c.hidden) hiddenNode(bx, n, c);
+    else visibleNode(bx, w, n, c);
+  });
+}
+function hiddenNode(bx, n, c) {
+  const { hidden } = bx;
+  if (!c.parentHidden) hidden.roots.push({ nodeId: n.id, name: n.name, path: c.path });
+  if (n.id) hidden.ids.push(n.id);
+  if (checkable(expectNode(n, { path: c.path }).spec)) hidden.specsSkipped++;
+  if (n.type === "INSTANCE" && n.mainComponent) hidden.instancesSkipped++;
+  for (const r of Array.isArray(n.reactions) ? n.reactions : []) hidden.interactionsSkipped += actionsOf(r).length;
+}
+function visibleNode(bx, w, n, c) {
+  const { stateOf, chainOf, fixedNodes } = w;
+  const inherited = c.parent ? stateOf.get(c.parent) : void 0;
+  const ancestorIds = c.parent ? chainOf.get(c.parent) ?? [] : [];
+  chainOf.set(n, c.parent ? [...n.id ? [n.id] : [], ...ancestorIds] : []);
+  if (n.id && bx.seen.has(n.id)) return;
+  if (n.id) bx.seen.add(n.id);
+  if (n.id) bx.visibleById.set(n.id, { name: n.name, file: w.sourceFile ?? "" });
+  const { spec, notComparable: gaps } = expectNode(n, { path: c.path, frame: w.frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", w.frameId) });
+  spec.ancestorIds = ancestorIds;
+  if (n.absolute) spec.absolute = true;
+  const par = c.parent;
+  const sibs = par && Array.isArray(par.children) ? par.children : [];
+  const nFixed = par && typeof par.fixedChildren === "number" ? par.fixedChildren : 0;
+  if (par && (fixedNodes.has(par) || nFixed > 0 && sibs.indexOf(n) >= sibs.length - nFixed)) {
+    fixedNodes.add(n);
+    spec.fixed = true;
+  }
+  if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id, fromId: n.id });
+  if (checkable(spec)) bx.nodes.push(spec);
+  else {
+    const g11 = gaps.filter((g) => g.field === "border-radius" || g.field.startsWith("padding ("));
+    if (g11.length) gaps.push({
+      nodeId: n.id,
+      name: n.name,
+      field: "node",
+      value: null,
+      why: gaps.some((g) => g.field === "border-radius") ? "node not checked: it draws nothing (no fill, stroke, effect or clip) \u2014 its radius was its only stated value" : `node not checked: every value it states is excluded by method (${g11.map((g) => g.field).join(", ")})`
+    });
+  }
+  bx.notComparable.push(...gaps);
+  addInstance(bx, n);
+  addReactions(bx, n, w.sourceFile);
+}
+function addInstance(bx, n) {
+  if (n.type === "INSTANCE" && n.mainComponent) {
+    bx.instances.push({
+      nodeId: n.id,
+      name: n.name,
+      setName: n.mainComponent.setName || n.mainComponent.name,
+      ...ifDefined("setKey", n.mainComponent.setKey || n.mainComponent.key),
+      ...ifDefined("variant", n.mainComponent.variant),
+      ...ifDefined("props", n.props || void 0)
+    });
+  }
+}
+function addReactions(bx, n, sourceFile) {
+  for (const r of Array.isArray(n.reactions) ? n.reactions : []) {
+    const trigger = triggerOf(r);
+    for (const a of actionsOf(r)) {
+      const row = {
+        nodeId: n.id,
+        name: n.name,
+        trigger,
+        ...ifDefined("action", a.navigation || a.type),
+        ...ifDefined("destinationId", a.destinationId),
+        ...ifDefined("destination", a.destination)
+      };
+      bx.interactions.push(row);
+      bx.interactionFile.set(row, sourceFile ?? "");
     }
   }
-  const destinationRoot = (destId, file) => {
-    const own = [...rootNodesByFile.get(file) ?? [], ...file !== "" ? rootNodesByFile.get("") ?? [] : []].find((r) => r.id === destId);
-    if (own) return own;
-    const co = candidatesOf(file);
-    for (const row of co ? co.rows : []) {
-      if (row.id !== destId || !row.file) continue;
-      const sib = sibling(row.file);
-      if (!sib) continue;
-      const sx = screenExportOf(sib);
-      const sibFile = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : void 0;
-      if (co && co.resolved && typeof sibFile === "string" && sibFile && sibFile !== co.resolved) continue;
-      const hit = screenRoots(sib).find((r) => r.id === destId);
-      if (hit) return hit;
-    }
-    return void 0;
+}
+function mergePlanInteractions(bx, planIn) {
+  if (!(planIn && Array.isArray(planIn.plan.interactions))) return void 0;
+  const { interactions, interactionFile, visibleById } = bx;
+  const dropped = [];
+  const keys = new Set(interactions.map((r) => `${r.nodeId}|${r.trigger}`));
+  const hiddenIds = new Set(bx.hidden.ids);
+  let merged = 0;
+  planIn.plan.interactions.forEach((raw, k) => {
+    const at = `interactions[${k}]`;
+    const o = isJsonObject(raw) ? raw : null;
+    const id = o && typeof o.nodeId === "string" && o.nodeId.trim() ? o.nodeId.trim() : null;
+    const drop = (why) => {
+      dropped.push({ nodeId: id ?? `(${at})`, why });
+    };
+    if (!o) return drop(`${at} is not an object`);
+    if (id === null) return drop(`${at} has no nodeId \u2014 a plan interaction is keyed by its node like an export reaction`);
+    if (typeof o.trigger !== "string" || !o.trigger.trim()) return drop("no trigger (on_click, on_press, \u2026)");
+    if (!isPlanExpect(o.expect)) return drop(`expect ${JSON.stringify(o.expect ?? null)} is not dialog | url | selector:<css>`);
+    if (o.destinationId !== void 0 && (typeof o.destinationId !== "string" || !o.destinationId.trim())) return drop("destinationId is not a node id");
+    if (o.expect === "dialog" && o.destinationId === void 0) return drop("expect dialog needs the destinationId of the frame it opens (its root is tagged with it)");
+    const node = visibleById.get(id);
+    if (!node) return drop(hiddenIds.has(id) ? "the node is a hidden layer \u2014 it is not built or driven" : "no visible node of this export has that id");
+    const trigger = o.trigger.trim().toLowerCase();
+    if (o.expect === "dialog" && trigger !== "on_click" && trigger !== "on_press") return drop(`expect dialog needs trigger on_click or on_press (the probe opens a dialog by clicking its opener), not ${trigger}`);
+    if (keys.has(`${id}|${trigger}`)) return drop(`duplicates ${interactions.some((r) => r.nodeId === id && r.trigger === trigger && r.source !== "plan") ? "the export's own interaction" : "an earlier plan row"} for this node and trigger (${trigger})`);
+    keys.add(`${id}|${trigger}`);
+    const destinationId = typeof o.destinationId === "string" ? o.destinationId.trim() : void 0;
+    const row = { nodeId: id, name: node.name, trigger, action: actionForExpect(o.expect), expect: o.expect, ...ifDefined("destinationId", destinationId), source: "plan" };
+    interactions.push(row);
+    interactionFile.set(row, node.file);
+    merged++;
+  });
+  return { plan: planIn.file, sha256: planInteractionsSha256(planIn.plan), merged, dropped };
+}
+function markUndesigned(bx) {
+  const { idsByFile, interactionFile } = bx;
+  const unnamedIds = idsByFile.get("");
+  for (const row of bx.interactions) {
+    const file = interactionFile.get(row);
+    if (!row.destinationId || file === void 0 || String(row.action).toLowerCase() === "change_to") continue;
+    const known = idsByFile.get(file);
+    if (!known || known.has(row.destinationId) || unnamedIds && unnamedIds.has(row.destinationId)) continue;
+    const candidates = candidatesOf(bx, file)?.rows ?? null;
+    if (candidates && !candidates.some((l) => l.id === row.destinationId)) row.destinationExported = false;
+  }
+}
+function candidatesOf(bx, file) {
+  const { index } = bx;
+  if (!index) return null;
+  const own = bx.rootsByFile.get(file);
+  const sameName = (l) => {
+    const names = own?.get(l.id);
+    return !!names && (!names.size || l.name === void 0 || names.has(l.name));
   };
-  for (const row of interactions) {
+  const covering = own ? index.layers.filter((l) => sameName(l) && (file === "" || !l.sourceFile || l.sourceFile === file)) : [];
+  if (!covering.length) return null;
+  let f = file;
+  if (f === "") {
+    const named = new Set(covering.map((l) => l.sourceFile).filter((x) => !!x));
+    if (named.size > 1) return null;
+    if (named.size === 0 || covering.some((l) => !l.sourceFile)) return { rows: index.layers, resolved: null };
+    f = [...named][0] ?? "";
+  }
+  return { rows: index.layers.filter((l) => !l.sourceFile || l.sourceFile === f), resolved: f || null };
+}
+function namesOtherFile(sib, resolved) {
+  const sx = screenExportOf(sib);
+  const sibFile = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : void 0;
+  return !!resolved && typeof sibFile === "string" && !!sibFile && sibFile !== resolved;
+}
+function addAliases(bx, specById) {
+  const ownRootIds = new Set(bx.roots.map((r) => r.id));
+  const specSuffixes = new Set(bx.nodes.map((n) => idSuffix(n.nodeId)).filter((x) => x !== null));
+  const aliases = /* @__PURE__ */ new Map();
+  for (const [file, fileRoots] of bx.rootNodesByFile) {
+    const co = candidatesOf(bx, file);
+    if (!co) continue;
+    const cands = co.rows;
+    const own = shellIndex(fileRoots);
+    if (!own.size) continue;
+    const read2 = /* @__PURE__ */ new Set();
+    for (const row of cands) {
+      if (ownRootIds.has(row.id) || !row.file || read2.has(row.file)) continue;
+      read2.add(row.file);
+      const sib = bx.sibling(row.file);
+      if (!sib) continue;
+      if (namesOtherFile(sib, co.resolved)) continue;
+      shellAliases(own, shellIndex(screenRoots(sib)), specSuffixes, aliases);
+    }
+  }
+  for (const [id, set] of aliases) {
+    const sp = specById.get(id);
+    if (sp) sp.aliases = [...set].sort();
+  }
+}
+function shellAliases(own, theirs, specSuffixes, aliases) {
+  for (const [key, mine] of own) {
+    const other = theirs.get(key);
+    const a = mine.length === 1 ? mine[0] : void 0, b = other && other.length === 1 ? other[0] : void 0;
+    if (!a || !b) continue;
+    for (const [p, mine1] of a) {
+      const their1 = b.get(p);
+      if (!mine1 || !their1 || mine1.sig !== their1.sig) continue;
+      const id = mine1.id, sid = their1.id;
+      if (sid === id) continue;
+      const s2 = idSuffix(sid);
+      if (s2 !== null && specSuffixes.has(s2)) continue;
+      getOrInit(aliases, id, () => /* @__PURE__ */ new Set()).add(sid);
+    }
+  }
+}
+function addOverlays(bx) {
+  for (const row of bx.interactions) {
     const act = String(row.action).toLowerCase();
     if (!row.destinationId || act !== "overlay" && act !== "swap" || row.destinationExported === false) continue;
-    const dest = destinationRoot(row.destinationId, interactionFile.get(row) ?? "");
+    const dest = destinationRoot(bx, row.destinationId, bx.interactionFile.get(row) ?? "");
     if (!dest) continue;
     const ov = dest.overlay;
     row.overlay = {
@@ -2443,30 +2514,48 @@ function buildExpectation(docs, opts) {
       from: ov ? "export" : "default"
     };
   }
-  const f0 = frames[0] || {};
-  const readReference = opts && opts.readReference;
-  let referenceImage;
-  if (readReference) {
-    const first = roots[0];
-    const firstFile = first ? [...rootNodesByFile].find(([, rs]) => rs.includes(first))?.[0] : void 0;
-    referenceImage = referenceImageFor({
-      reference,
-      root: first,
-      sourceFile: firstFile || void 0,
-      rows: index ? index.layers : [],
-      readReference,
-      colorProfile: opts && typeof opts.colorProfile === "string" ? opts.colorProfile : null
-    });
+}
+function destinationRoot(bx, destId, file) {
+  const own = [...bx.rootNodesByFile.get(file) ?? [], ...file !== "" ? bx.rootNodesByFile.get("") ?? [] : []].find((r) => r.id === destId);
+  if (own) return own;
+  const co = candidatesOf(bx, file);
+  for (const row of co ? co.rows : []) {
+    if (row.id !== destId || !row.file) continue;
+    const sib = bx.sibling(row.file);
+    if (!sib) continue;
+    if (co && namesOtherFile(sib, co.resolved)) continue;
+    const hit = screenRoots(sib).find((r) => r.id === destId);
+    if (hit) return hit;
   }
-  const rootFrame = (f) => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
+  return void 0;
+}
+function firstReferenceImage(bx, opts) {
+  const readReference = opts && opts.readReference;
+  if (!readReference) return void 0;
+  const first = bx.roots[0];
+  const firstFile = first ? [...bx.rootNodesByFile].find(([, rs]) => rs.includes(first))?.[0] : void 0;
+  const { index } = bx;
+  return referenceImageFor({
+    reference: bx.reference,
+    root: first,
+    sourceFile: firstFile || void 0,
+    rows: index ? index.layers : [],
+    readReference,
+    colorProfile: opts && typeof opts.colorProfile === "string" ? opts.colorProfile : null
+  });
+}
+var rootFrame = (f) => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
+function expectationOf(bx, docs, planInteractions, referenceImage) {
+  const { nodes, instances, interactions, notComparable, hidden, frames } = bx;
+  const f0 = frames[0] || {};
   return {
     schema: EXPECTATION_SCHEMA,
-    ...ifDefined("screen", screen),
-    ...ifDefined("exportedAt", exportedAt),
+    ...ifDefined("screen", bx.screen),
+    ...ifDefined("exportedAt", bx.exportedAt),
     // the design's identity without the pull's timestamps, so a no-change
     // re-pull (only `exportedAt` differs) is recognised as the same design by content, not by clock.
     exportContentSha256: exportContentSha256(docs.map((d) => d.doc)),
-    reference,
+    reference: bx.reference,
     frame: rootFrame(f0),
     ...frames.length > 1 ? { frames: frames.map(rootFrame) } : {},
     coordinates: COORDINATES,
@@ -4743,6 +4832,24 @@ function behaviourMarkdown(b) {
 }
 function reportToMarkdown(r) {
   const L = [];
+  L.push(...headMarkdown(r));
+  L.push(...coverageMarkdown(r));
+  L.push(...behaviourMarkdown(r.behaviour));
+  L.push(...visualMarkdown(r.visual));
+  if (r.against) L.push(...againstMarkdown(r, r.against));
+  L.push(...matchedMarkdown(r));
+  if (r.deltas.length) L.push(...deltasMarkdown(r.deltas));
+  L.push(...waiversMarkdown(r));
+  L.push(...nodeListsMarkdown(r));
+  L.push(...interactionsMarkdown(r));
+  L.push(...gapsMarkdown(r));
+  L.push(...probeInputMarkdown(r));
+  L.push("## Limits of this method", "");
+  for (const l of r.limits || []) L.push(`- ${l}`);
+  return L.join("\n") + "\n";
+}
+function headMarkdown(r) {
+  const L = [];
   L.push(`# Verify \u2014 ${r.screen}`, "");
   L.push(`**${r.headline || r.verdict.toUpperCase()}**`, "");
   L.push(`**${mdText(r.behaviour.headline)}**`, "");
@@ -4757,6 +4864,10 @@ function reportToMarkdown(r) {
     for (const w of r.why) L.push(`- ${w}`);
     L.push("");
   }
+  return L;
+}
+function coverageMarkdown(r) {
+  const L = [];
   const c = r.coverage;
   L.push("## What was actually checked", "");
   L.push("| | |", "|---|---|");
@@ -4773,65 +4884,82 @@ function reportToMarkdown(r) {
   if (c.pageOverflow !== void 0) L.push(`| page overflow at the design width (overflowX) | ${c.pageOverflow} |`);
   if (c.deltasAccepted) L.push(`| value mismatches accepted by a plan waiver (listed, out of the counts) | ${c.deltasAccepted} |`);
   L.push("");
-  L.push(...behaviourMarkdown(r.behaviour));
-  L.push(...visualMarkdown(r.visual));
-  if (r.against) {
-    const a = r.against;
-    L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} \u2192 ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} \u2192 ${a.nodesExpected.after}${a.probeChanged === true ? " \xB7 **the probe changed**" : a.probeChanged === null ? " \xB7 probe identity unknown on both rounds" : ""}${a.expectationChanged ? " \xB7 the expectation changed" : ""}. This never changes the verdict.`, "");
-    const d = a.deltas;
-    if (d && d.sameMeasured) {
-      const rc2 = d.reclassified || [];
-      L.push(`Previous deltas (node + field): **the same measured file as last round** \u2014 nothing about the build changed, so nothing is fixed, new or lost; ${d.unchanged} still open${rc2.length ? `, ${rc2.length} reclassified by the compare (or the expectation): ${rc2.filter((x) => x.change === "gone").length} no longer a delta, ${rc2.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
-      if (rc2.length) {
-        L.push(`## Reclassified (${rc2.length})`, "", "*Same measured file \u2014 the compare changed, not the build.*", "", "| Node | Field | Change | Was |", "|---|---|---|---|");
-        for (const x of rc2.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${x.change === "gone" ? "no longer a delta" : "newly a delta"} | ${x.change === "gone" ? fmt(x.was) : ""} |`);
-        if (rc2.length > 40) L.push(`| \u2026and ${rc2.length - 40} more | | | |`);
-        L.push("");
-      }
-    } else if (d) {
-      const nu = d.nowUnverifiable || [];
-      L.push(`Previous deltas (node + field): ${d.fixed} fixed \xB7 ${d.unchanged} still open \xB7 ${d.new} new \xB7 ${d.lostCoverage.length ? `**${d.lostCoverage.length} lost coverage** (gone only because they were not measured this round)` : "0 lost coverage"}${nu.length ? ` \xB7 ${nu.length} now unverifiable by method (measured, but the compare no longer reads it)` : ""}.`, "");
-      if (nu.length) {
-        L.push(`## Now unverifiable by method (${nu.length})`, "", "*A previous delta whose value was measured this round, but the compare now declines it \u2014 not lost coverage, not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
-        for (const x of nu.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
-        if (nu.length > 40) L.push(`| \u2026and ${nu.length - 40} more | | | |`);
-        L.push("");
-      }
-    }
-    if (a.sameBuild === true && r.headline.includes("SAME BUILD SERVED")) L.push("**The same build was served as last round although the code changed** \u2014 a stale preview or dist? Rebuild before measuring a preview.", "");
-    if (d && d.lostCoverage.length) {
-      L.push(`## Lost coverage (${d.lostCoverage.length})`, "", "*A previous delta that is gone only because its node or value was not measured \u2014 not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
-      for (const x of d.lostCoverage.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
-      if (d.lostCoverage.length > 40) L.push(`| \u2026and ${d.lostCoverage.length - 40} more | | | |`);
-      L.push("");
-    }
+  return L;
+}
+function againstMarkdown(r, a) {
+  const L = [];
+  L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} \u2192 ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} \u2192 ${a.nodesExpected.after}${a.probeChanged === true ? " \xB7 **the probe changed**" : a.probeChanged === null ? " \xB7 probe identity unknown on both rounds" : ""}${a.expectationChanged ? " \xB7 the expectation changed" : ""}. This never changes the verdict.`, "");
+  const d = a.deltas;
+  if (d && d.sameMeasured) L.push(...sameMeasuredMarkdown(d));
+  else if (d) L.push(...deltaChangesMarkdown(d));
+  if (a.sameBuild === true && r.headline.includes("SAME BUILD SERVED")) L.push("**The same build was served as last round although the code changed** \u2014 a stale preview or dist? Rebuild before measuring a preview.", "");
+  if (d && d.lostCoverage.length) {
+    L.push(`## Lost coverage (${d.lostCoverage.length})`, "", "*A previous delta that is gone only because its node or value was not measured \u2014 not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
+    for (const x of d.lostCoverage.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
+    if (d.lostCoverage.length > 40) L.push(`| \u2026and ${d.lostCoverage.length - 40} more | | | |`);
+    L.push("");
   }
+  return L;
+}
+function sameMeasuredMarkdown(d) {
+  const L = [];
+  const rc = d.reclassified || [];
+  L.push(`Previous deltas (node + field): **the same measured file as last round** \u2014 nothing about the build changed, so nothing is fixed, new or lost; ${d.unchanged} still open${rc.length ? `, ${rc.length} reclassified by the compare (or the expectation): ${rc.filter((x) => x.change === "gone").length} no longer a delta, ${rc.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
+  if (rc.length) {
+    L.push(`## Reclassified (${rc.length})`, "", "*Same measured file \u2014 the compare changed, not the build.*", "", "| Node | Field | Change | Was |", "|---|---|---|---|");
+    for (const x of rc.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${x.change === "gone" ? "no longer a delta" : "newly a delta"} | ${x.change === "gone" ? fmt(x.was) : ""} |`);
+    if (rc.length > 40) L.push(`| \u2026and ${rc.length - 40} more | | | |`);
+    L.push("");
+  }
+  return L;
+}
+function deltaChangesMarkdown(d) {
+  const L = [];
+  const nu = d.nowUnverifiable || [];
+  L.push(`Previous deltas (node + field): ${d.fixed} fixed \xB7 ${d.unchanged} still open \xB7 ${d.new} new \xB7 ${d.lostCoverage.length ? `**${d.lostCoverage.length} lost coverage** (gone only because they were not measured this round)` : "0 lost coverage"}${nu.length ? ` \xB7 ${nu.length} now unverifiable by method (measured, but the compare no longer reads it)` : ""}.`, "");
+  if (nu.length) {
+    L.push(`## Now unverifiable by method (${nu.length})`, "", "*A previous delta whose value was measured this round, but the compare now declines it \u2014 not lost coverage, not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
+    for (const x of nu.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
+    if (nu.length > 40) L.push(`| \u2026and ${nu.length - 40} more | | | |`);
+    L.push("");
+  }
+  return L;
+}
+function matchedMarkdown(r) {
+  const L = [];
+  const c = r.coverage;
   L.push("## How nodes were matched", "");
   const ip = r.inputs && r.inputs.probe;
   L.push(ip && ip !== "unknown" ? `Probe: ${ip.name} ${ip.version ?? "(no version)"} \xB7 sha256 ${ip.sha256.slice(0, 12)}\u2026 \xB7 ${ip.playwright.package} ${ip.playwright.version} \xB7 ${ip.browser.name} ${ip.browser.version}` : "Probe: unknown (a hand-written measured.json \u2014 its numbers are not comparable round to round).", "");
   L.push("| rule | node specs |", "|---|---|");
-  for (const b2 of MATCH_BUCKETS) if ((c.matchedBy[b2] ?? 0) > 0 || b2 === "tag") L.push(`| ${MATCH_LABEL[b2] ?? b2} | ${c.matchedBy[b2] ?? 0} |`);
+  for (const b of MATCH_BUCKETS) if ((c.matchedBy[b] ?? 0) > 0 || b === "tag") L.push(`| ${MATCH_LABEL[b] ?? b} | ${c.matchedBy[b] ?? 0} |`);
   L.push("");
-  if (r.deltas.length) {
-    const groups = /* @__PURE__ */ new Map();
-    for (const d of r.deltas) if (d.group) getOrInit(groups, d.group, () => []).push(d);
-    if (groups.size) {
-      L.push(`## Grouped causes (${groups.size})`, "", "*Presentational: every row still counts on its own.*", "");
-      for (const [g, list] of groups) {
-        const rootId = g.startsWith("placement:") ? g.slice("placement:".length) : null;
-        const root = rootId ? list.find((d) => d.nodeId === rootId) : void 0;
-        const open = list.filter((d) => !d.accepted);
-        L.push(`- \`${g}\` \u2014 ${list[0]?.field ?? ""}, **${list.length} rows**${root ? ` (${root.name || root.nodeId} and ${list.length - 1} inside it)` : ` (${fmt(list[0]?.expected)} \u2192 ${fmt(list[0]?.actual)})`}${open.length < list.length ? ` \xB7 ${list.length - open.length} accepted` : ""} \u2014 accept together: \`--accept <report> --group ${g} --reason \u2026 --by \u2026\``);
-      }
-      L.push("");
-    }
-    L.push(`## Value mismatches (${r.deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token | Group / accepted |", "|---|---|---|---|---|---|---|");
-    for (const d of r.deltas) {
-      const status = d.accepted ? `accepted \u2014 ${d.accepted.reason} (${d.accepted.decidedBy}, ${d.accepted.decidedAt})` : d.group ? `\`${d.group}\`` : "";
-      L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "\u2014"} | ${status} |`);
+  return L;
+}
+function deltasMarkdown(deltas) {
+  const L = [];
+  const groups = /* @__PURE__ */ new Map();
+  for (const d of deltas) if (d.group) getOrInit(groups, d.group, () => []).push(d);
+  if (groups.size) {
+    L.push(`## Grouped causes (${groups.size})`, "", "*Presentational: every row still counts on its own.*", "");
+    for (const [g, list] of groups) {
+      const rootId = g.startsWith("placement:") ? g.slice("placement:".length) : null;
+      const root = rootId ? list.find((d) => d.nodeId === rootId) : void 0;
+      const open = list.filter((d) => !d.accepted);
+      L.push(`- \`${g}\` \u2014 ${list[0]?.field ?? ""}, **${list.length} rows**${root ? ` (${root.name || root.nodeId} and ${list.length - 1} inside it)` : ` (${fmt(list[0]?.expected)} \u2192 ${fmt(list[0]?.actual)})`}${open.length < list.length ? ` \xB7 ${list.length - open.length} accepted` : ""} \u2014 accept together: \`--accept <report> --group ${g} --reason \u2026 --by \u2026\``);
     }
     L.push("");
   }
+  L.push(`## Value mismatches (${deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token | Group / accepted |", "|---|---|---|---|---|---|---|");
+  for (const d of deltas) {
+    const status = d.accepted ? `accepted \u2014 ${d.accepted.reason} (${d.accepted.decidedBy}, ${d.accepted.decidedAt})` : d.group ? `\`${d.group}\`` : "";
+    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "\u2014"} | ${status} |`);
+  }
+  L.push("");
+  return L;
+}
+function waiversMarkdown(r) {
+  const L = [];
   const wv = r.waivers;
   if (wv && (wv.reopened.length || wv.unused.length)) {
     L.push("## Plan waivers that no longer apply", "");
@@ -4839,6 +4967,10 @@ function reportToMarkdown(r) {
     for (const w of wv.unused) L.push(`- unused \`${w.nodeId}\` (${w.field})${w.why ? ` \u2014 ${w.why}` : ""}`);
     L.push("");
   }
+  return L;
+}
+function nodeListsMarkdown(r) {
+  const L = [];
   if (r.folded && r.folded.length) {
     L.push(`## Folded into a measured ancestor (${r.folded.length} node specs, out of the count)`, "");
     for (const f of r.folded) L.push(`- \`${f.nodeId}\` ${f.name || ""} \u2192 \`${f.into}\` \u2014 ${f.why}`);
@@ -4867,6 +4999,10 @@ function reportToMarkdown(r) {
     if (inShell.length > 40) L.push(`- \u2026and ${inShell.length - 40} more`);
     L.push("");
   }
+  return L;
+}
+function interactionsMarkdown(r) {
+  const L = [];
   const bad = r.interactions.filter((i) => i.result === "fail" || i.result === "not-probed");
   if (bad.length) {
     L.push(`## Designed interactions not confirmed (${bad.length})`, "");
@@ -4896,6 +5032,10 @@ function reportToMarkdown(r) {
     if (inf.length > 40) L.push(`- \u2026and ${inf.length - 40} more`);
     L.push("");
   }
+  return L;
+}
+function gapsMarkdown(r) {
+  const L = [];
   if (r.notMeasured.length) {
     L.push(`## Not measured (${r.notMeasured.length} node specs)`, "", "*Gaps in the probe, not clean results.*", "");
     for (const n of r.notMeasured.slice(0, 40)) L.push(`- \`${n.nodeId}\` ${n.name || ""} \u2014 ${n.why}`);
@@ -4914,6 +5054,10 @@ function reportToMarkdown(r) {
     if (r.notComparable.length + r.unverifiable.length > 40) L.push(`- \u2026and ${r.notComparable.length + r.unverifiable.length - 40} more`);
     L.push("");
   }
+  return L;
+}
+function probeInputMarkdown(r) {
+  const L = [];
   const p = r.probe || {};
   if (p.unknownKeys && p.unknownKeys.length || p.unknownTopLevelKeys && p.unknownTopLevelKeys.length || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || p.foreignTags || p.inputNotes && p.inputNotes.length) {
     L.push("## About the probe's input", "");
@@ -4928,9 +5072,7 @@ function reportToMarkdown(r) {
     if (ft) L.push(`- ${ft.total} tag(s)/id(s) on the page name no node of this expectation (informational): ${ft.prefixDrift} prefix drift (an expected node's \`;\` path under another instance id \u2014 a stale or other screen's id table?), ${ft.alias} another screen's id for one of these nodes (alias), ${ft.unknown} unknown${ft.sample.length ? ` \u2014 e.g. ${ft.sample.map((id) => `\`${id}\``).join(", ")}` : ""}`);
     L.push("");
   }
-  L.push("## Limits of this method", "");
-  for (const l of r.limits || []) L.push(`- ${l}`);
-  return L.join("\n") + "\n";
+  return L;
 }
 var withUnit = (v, unit) => {
   const t = fmt(v);
