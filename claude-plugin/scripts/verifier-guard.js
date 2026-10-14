@@ -305,6 +305,8 @@ var BUN_VALUED = /* @__PURE__ */ new Set(["--cwd", "--config", "-c"]);
 var NPX_VALUED = /* @__PURE__ */ new Set(["-p", "--package", "--call", "-c", "--cache", "--registry", "--userconfig"]);
 var PLAYWRIGHT_PKG = /^(@playwright\/test|playwright|playwright-core|playwright-chromium)(@.*)?$/;
 var PID_LOOKUPS = /* @__PURE__ */ new Set(["pgrep", "pidof", "lsof", "ps", "fuser"]);
+var PS_LOOKUPS = /* @__PURE__ */ new Set(["get-process", "gps", "get-nettcpconnection", "get-netudpconnection", "get-ciminstance", "get-wmiobject", "netstat", "tasklist"]);
+var POWERSHELLS = /* @__PURE__ */ new Set(["pwsh", "powershell"]);
 var PLAYWRIGHT_CLI = /(^|[\\/])(@playwright[\\/][^\\/]+|playwright[^\\/]*)[\\/]cli\.js$/i;
 function parentOnly(args) {
   let parent = false;
@@ -329,11 +331,30 @@ function parentOnly(args) {
   }
   return parent;
 }
-function lookupByPattern(text) {
-  return simpleCommands(text).some((w) => {
+function lookupByPattern(text, ps = false) {
+  return simpleCommands(text, { powershell: ps }).some((w) => {
     const p = prog(w[0] ?? "");
-    return PID_LOOKUPS.has(p) && !(p === "pgrep" && parentOnly(w.slice(1)));
+    if ((p === "get-process" || p === "gps") && /^-(id|pid)$/i.test(w[1] ?? "") && w.length === 3) return false;
+    return PID_LOOKUPS.has(p) || PS_LOOKUPS.has(p) ? !(p === "pgrep" && parentOnly(w.slice(1))) : false;
   });
+}
+function psStopIsPatternKill(args, line) {
+  if (args.some((a) => /^-(na|nam|name|pr|pro|proc|proce|proces|process|processn|processna|processnam|processname)(:.*)?$/i.test(a))) return true;
+  const ids = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (/^-(id|pid)$/i.test(a)) {
+      if (i + 1 < args.length) ids.push(args[++i] ?? "");
+      continue;
+    }
+    if (/^-(id|pid):/i.test(a)) {
+      ids.push(a);
+      continue;
+    }
+    if (!a.startsWith("-")) ids.push(a);
+  }
+  const fed = ids.length === 0 || ids.some((w) => (w.includes("$(") || w.includes("`")) && lookupByPattern(w, true));
+  return fed && lookupByPattern(line, true);
 }
 function killsEverything(args) {
   if (args.length === 1 && args[0] === "-1") return true;
@@ -359,7 +380,7 @@ function killsEverything(args) {
   return pids.some((p) => p === "-1" || p === "0" || p === "-0");
 }
 var REASON = {
-  kill: "pattern kills (pkill, killall, fuser -k, taskkill /IM, a kill fed by pgrep/pidof/lsof/ps, kill -1 / kill 0) take down the user's own servers and editors. Close only what you opened: stop only a PID you started and recorded (`kill <pid>`) \u2014 its whole tree with `kill -- -<pgid>` (the process group you started) or its children with `pkill -P <pid>` \u2014 and reuse a dev server the user already runs.",
+  kill: "pattern kills (pkill, killall, fuser -k, taskkill /IM, Stop-Process -Name / Get-Process \u2026 | Stop-Process, a kill fed by pgrep/pidof/lsof/ps, kill -1 / kill 0) take down the user's own servers and editors. Close only what you opened: stop only a PID you started and recorded (`kill <pid>`) \u2014 its whole tree with `kill -- -<pgid>` (the process group you started) or its children with `pkill -P <pid>` \u2014 and reuse a dev server the user already runs (PowerShell: `Stop-Process -Id <pid>`).",
   install: "installing or reinstalling dependencies is the user's call, never the verifier's \u2014 and `npm ci`/`npm install` clear node_modules/.cache, the live status and your staged evidence with it. Write status `blocked` with the command as the detail and hand it back to the caller.",
   playwright: `installing Playwright or its browsers is the user's call (it edits the project's dependencies and downloads ~150 MB). No usable renderer (\`${scriptCmd("verify-probe")} --check\` exit 3): stop and ask the user, with the install line the probe printed and its cost.`,
   sandbox: 'a permission denial is not a sandbox violation: never bypass the sandbox. Retry a transient no-verdict denial unchanged (at most twice); otherwise write status `blocked` and hand back "blocked on permissions: done / remaining" with a narrow allow rule for the owner to add.'
@@ -368,8 +389,8 @@ var playwrightInstall = (words, i) => {
   const sub = words[firstArg(words, i)] ?? "";
   return sub === "install" || sub === "install-deps";
 };
-function commandVerdict(cmd, line, depth) {
-  let words = cmd;
+function commandVerdict(cmd, line, depth, ps) {
+  let words = ps ? unbrace(cmd) : cmd;
   let viaXargs = false;
   for (let guard = 0; guard < 8; guard++) {
     let i = 0;
@@ -384,6 +405,7 @@ function commandVerdict(cmd, line, depth) {
     if (p2 === "timeout") j++;
     words = words.slice(j);
   }
+  if (ps) words = unbrace(words);
   const p = prog(words[0] ?? "");
   const args = words.slice(1);
   if (!p) return null;
@@ -393,10 +415,21 @@ function commandVerdict(cmd, line, depth) {
     return body !== void 0 && depth < 4 ? bashVerdict(body, depth + 1) : null;
   }
   if (p === "eval") return depth < 4 ? bashVerdict(args.join(" "), depth + 1) : null;
+  if (p === "iex" || p === "invoke-expression") return depth < 4 ? bashVerdict(args.join(" "), depth + 1, true) : null;
+  if (POWERSHELLS.has(p)) {
+    const body = psCommandBody(args);
+    return body && depth < 4 ? bashVerdict(body, depth + 1, true) : null;
+  }
+  if (p === "cmd") {
+    const c = args.findIndex((a) => /^\/[ck]$/i.test(a));
+    return c >= 0 && depth < 4 ? bashVerdict(args.slice(c + 1).join(" "), depth + 1, true) : null;
+  }
   if (p === "killall" || p === "pkill" && !parentOnly(args)) return REASON.kill;
   if (p === "fuser" && args.some((a) => /^-[a-z]*k/i.test(a))) return REASON.kill;
   if (p === "taskkill" && args.some((a) => /^(\/\/?|-)(im|fi)$/i.test(a))) return REASON.kill;
+  if (p === "stop-process" || p === "spps") return psStopIsPatternKill(args, line) ? REASON.kill : null;
   if (p === "kill") {
+    if (ps && psStopIsPatternKill(args, line)) return REASON.kill;
     if (killsEverything(args)) return REASON.kill;
     if (viaXargs && lookupByPattern(line)) return REASON.kill;
     if (args.some((a) => (a.includes("$(") || a.includes("`")) && lookupByPattern(a))) return REASON.kill;
@@ -452,12 +485,24 @@ function npxVerdict(words, from) {
   if (/^create-playwright(@.*)?$/.test(pkg)) return REASON.playwright;
   return PLAYWRIGHT_PKG.test(pkg) && playwrightInstall(words, s + 1) ? REASON.playwright : null;
 }
-function bashVerdict(command, depth = 0) {
-  for (const cmd of simpleCommands(command)) {
-    const v = commandVerdict(cmd, command, depth);
+function bashVerdict(command, depth = 0, ps = false) {
+  for (const cmd of simpleCommands(command, { powershell: ps })) {
+    const v = commandVerdict(cmd, command, depth, ps);
     if (v) return v;
   }
   return null;
+}
+function psCommandBody(args) {
+  const c = args.findIndex((a) => /^-c(o(m(m(a(nd?)?)?)?)?)?$/i.test(a));
+  return (c >= 0 ? args.slice(c + 1) : args.filter((a, k) => !a.startsWith("-") && !/^-(f|file)$/i.test(args[k - 1] ?? ""))).join(" ");
+}
+function unbrace(words) {
+  const out = words.filter((w) => w !== "{" && w !== "}");
+  if (out.length) {
+    out[0] = (out[0] ?? "").replace(/^\{+/, "");
+    out[out.length - 1] = (out[out.length - 1] ?? "").replace(/\}+$/, "");
+  }
+  return out;
 }
 var FILE_TOOLS = { Write: "file_path", Edit: "file_path", MultiEdit: "file_path", NotebookEdit: "notebook_path" };
 function decide(payload, ctx) {
@@ -469,10 +514,10 @@ function decide(payload, ctx) {
   if (typeof tool !== "string" || !isJsonObject(input)) return { malformed: `a ${agent} call with no tool_name/tool_input` };
   const cwd = typeof payload.cwd === "string" && payload.cwd ? payload.cwd : ctx.cwd;
   const here = { cwd, tmpRoots: ctx.tmpRoots };
-  if (tool === "Bash") {
+  if (tool === "Bash" || tool === "PowerShell") {
     if (input.dangerouslyDisableSandbox === true) return { deny: REASON.sandbox };
-    if (typeof input.command !== "string") return { malformed: "a Bash call with no command" };
-    const v = bashVerdict(input.command);
+    if (typeof input.command !== "string") return { malformed: `a ${tool} call with no command` };
+    const v = bashVerdict(input.command, 0, tool === "PowerShell");
     return v ? { deny: v } : null;
   }
   const key = FILE_TOOLS[tool];
@@ -501,7 +546,8 @@ var USAGE = [
   "",
   "Refuses, for the designtwin:visual-verifier subagent only: a file write outside design/verify/ and the run cache",
   "(node_modules/.cache/designtwin-verify/), or to a tool-owned file in design/verify/; a pattern kill (pkill, killall, \u2026);",
-  "a dependency install or a Playwright browser install; a Bash call with dangerouslyDisableSandbox.",
+  "a dependency install or a Playwright browser install; a Bash or PowerShell call with dangerouslyDisableSandbox.",
+  "(A PowerShell call is judged like a Bash one; as for Bash, the files a command writes are not read.)",
   'A refusal is {"hookSpecificOutput":{"permissionDecision":"deny",\u2026}} on stdout; every answer exits 0.',
   "A call from any other agent, or a payload it cannot read, is allowed (the latter logged to stderr)."
 ].join("\n");
