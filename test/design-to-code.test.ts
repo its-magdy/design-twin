@@ -879,6 +879,21 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   check("--web tailwind prints ONE @source not suggestion (stderr, beside the other notes) and does not write it into theme.css",
     note(tw.stderr).length === 1 && !/@source/.test(fs.readFileSync(path.join(dir, "tw", "theme.css"), "utf8")));
   check("without --web tailwind there is no such note", note(gen.stderr).length === 0);
+  // the provenance line is `<parent dir>/<file>`: a directory name with a newline, or ending in * (so that `*/` forms with the
+  // slash), stays inside the comment. A POSIX name may hold both; Windows forbids them in a name, so the check runs elsewhere.
+  if (process.platform !== "win32") {
+    const odd = path.join(dir, "pkg\ninjected()*");
+    fs.mkdirSync(odd);
+    const oddInput = path.join(odd, "variables.json");
+    fs.copyFileSync(input, oddInput);
+    const outs = ["css", "swift"].map((k) => {
+      const out = path.join(dir, "odd-" + k);
+      const r = spawnSync(process.execPath, k === "css" ? [TOK, oddInput, out] : [TOK, oddInput, out, "--native", "swiftui"], { encoding: "utf8" });
+      return r.status === 0 ? fs.readFileSync(path.join(out, k === "css" ? "tokens.css" : fs.readdirSync(out).find((f) => f.endsWith(".swift")) ?? "none"), "utf8") : "";
+    });
+    check("the provenance comment of tokens.css and a native file cannot be closed or ended by the input's directory name",
+      outs.every((t) => t.length > 0 && !t.split(/\r\n|[\r\n\u2028\u2029]/).some((l) => /^\s*injected\(\)/.test(l)) && (t.split(/\r\n|[\r\n]/)[0] ?? "").split("*/").length <= 2));
+  }
 })();
 
 // ---------- the design-system split: these CLIs must reject the slim manifest -----------------
@@ -1338,6 +1353,95 @@ console.log("map — SLOT props:");
     return /\\\.sizesTokens, \.mobile \/\* one of: \.desktop, \.mobile/.test(t) && /\\\.themeTokens, colorScheme == \.dark \? \.dark : \.light\)/.test(t) && !/sizesTokens, colorScheme/.test(t);
   })());
   check("[native] swiftui: a control character is escaped the Swift way (\\u{1}), not the JSON way", /"a\\u\{0001\}b"/.test(toNative(tokens({ collections: [{ name: "S", modes: ["M"], default: "M" }], variables: [{ name: "s", type: "STRING", collection: "S", values: { M: "a\u0001b" } }] }), "swiftui").text));
+  {
+    // Every string literal decoded by the target's DOCUMENTED escapes alone (Kotlin: kotlinlang.org/docs/characters.html;
+    // Swift: docs.swift.org, Strings and Characters) must give back the token's value — an escape the language lacks
+    // (Kotlin \f, Swift \b/\f), an unescaped $ (a Kotlin template), a raw control character or a mis-read backslash fails.
+    const values = [
+      ...Array.from({ length: 0x20 }, (_, c) => `a${String.fromCharCode(c)}b`),
+      "\\u1234", "\\u{1F}", "\\\\", "\\\\u1234", "end\\", "\\", "\\n", "\\$", "\\(x)", "\\\"",
+      "$", "$name", "${x}", "a$", "$$", "\"quoted\"", "'single'", "\u00a0nbsp", "\u007f", "\u2028",
+      "\u{1F600}", "\u{1D11E}", "\u{1F468}\u200d\u{1F469}\u200d\u{1F467}", "é\u0301", "\ud800", "x\udc00y",
+    ];
+    const doc = tokens({ collections: [{ name: "Str", modes: ["M"], default: "M" }], variables: values.map((v, i) => ({ name: `v${i}`, type: "STRING", collection: "Str", values: { M: v } })) });
+    type Decoder = (lit: string) => string;
+    const hexAt = (s: string, re: RegExp): string => { const m = re.exec(s); if (!m || m[1] === undefined) throw new Error(`bad unicode escape at ${s.slice(0, 12)}`); return m[1]; };
+    const kotlin: Decoder = (lit) => {
+      let out = "";
+      for (let i = 1; i < lit.length - 1; i++) {
+        const ch = lit.charAt(i);
+        if (ch === "\"" || ch === "$" || ch.charCodeAt(0) < 0x20 || ch === "\u007f") throw new Error(`raw ${JSON.stringify(ch)}`);
+        if (ch !== "\\") { out += ch; continue; }
+        const e = lit.charAt(++i);
+        const named: Record<string, string> = { t: "\t", b: "\b", n: "\n", r: "\r", "'": "'", "\"": "\"", "\\": "\\", $: "$" };
+        if (named[e] !== undefined) { out += named[e]; continue; }
+        if (e !== "u") throw new Error(`no Kotlin escape \\${e}`);
+        const h = hexAt(lit.slice(i + 1), /^([0-9a-fA-F]{4})/);
+        out += String.fromCharCode(parseInt(h, 16)); i += 4;
+      }
+      return out;
+    };
+    const swift: Decoder = (lit) => {
+      let out = "";
+      for (let i = 1; i < lit.length - 1; i++) {
+        const ch = lit.charAt(i);
+        if (ch === "\"" || ch.charCodeAt(0) < 0x20 || ch === "\u007f") throw new Error(`raw ${JSON.stringify(ch)}`);
+        if (ch !== "\\") { out += ch; continue; }
+        const e = lit.charAt(++i);
+        const named: Record<string, string> = { "0": "\0", t: "\t", n: "\n", r: "\r", "'": "'", "\"": "\"", "\\": "\\" };
+        if (named[e] !== undefined) { out += named[e]; continue; }
+        if (e !== "u") throw new Error(`no Swift escape \\${e}`);
+        const h = hexAt(lit.slice(i + 1), /^\{([0-9a-fA-F]{1,8})\}/);
+        const cp = parseInt(h, 16);
+        if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) throw new Error(`\\u{${h}} is not a Unicode scalar`);
+        out += String.fromCodePoint(cp); i += h.length + 2;
+      }
+      return out;
+    };
+    const lits = (text: string, decl: RegExp): Map<string, string> => new Map([...text.matchAll(decl)].map((m) => [m[1] ?? "", m[2] ?? ""]));
+    const kt = lits(toNative(doc, "android-compose").text, /val (v\d+): String = ("(?:[^"\\]|\\.)*")/g);
+    const sw = lits(toNative(doc, "swiftui").text, /static let (v\d+): String = ("(?:[^"\\]|\\.)*")/g);
+    const roundTrip = (m: Map<string, string>, dec: Decoder, expect: (v: string) => string): string[] => values.flatMap((v, i) => {
+      const lit = m.get(`v${i}`);
+      if (lit === undefined) return [`v${i}: no literal`];
+      try { const got = dec(lit); return got === expect(v) ? [] : [`v${i}: ${lit} decodes to ${JSON.stringify(got)}`]; } catch (e) { return [`v${i}: ${lit} — ${e instanceof Error ? e.message : String(e)}`]; }
+    });
+    const ktBad = roundTrip(kt, kotlin, (v) => v);
+    // Swift has no way to spell a lone surrogate (\u{n} names a scalar): it becomes U+FFFD, a pair is kept
+    const swBad = roundTrip(sw, swift, (v) => v.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "\ufffd"));
+    check(`[native] compose: every string token (all 32 control characters, backslash runs, $ and \${, quotes, astral, lone surrogates) decodes back by Kotlin's documented escapes${ktBad.length ? ` — ${ktBad.join("; ")}` : ""}`, ktBad.length === 0 && kt.size === values.length);
+    check(`[native] swiftui: every string token decodes back by Swift's documented escapes${swBad.length ? ` — ${swBad.join("; ")}` : ""}`, swBad.length === 0 && sw.size === values.length);
+    check("[native] the escapes the two languages lack are spelled as unicode escapes (Kotlin form feed \\u000c; Swift backspace \\u{0008}, form feed \\u{000c})",
+      kt.get("v12") === "\"a\\u000cb\"" && sw.get("v8") === "\"a\\u{0008}b\"" && sw.get("v12") === "\"a\\u{000c}b\"");
+    check("[native] an escaped backslash before u1234 stays a backslash and letters (Swift \"\\\\u1234\", not \\u{1234}); Kotlin keeps \\$ for every $",
+      sw.get(`v${0x20}`) === "\"\\\\u1234\"" && kt.get(`v${0x20}`) === "\"\\\\u1234\"" && kt.get(`v${0x20 + 12}`) === "\"\\${x}\"" && kt.get(`v${0x20 + 7}`) === "\"\\\\\\$\"");
+  }
+  check("[native] swiftui: a lone surrogate written as U+FFFD is a warning naming the token and mode; compose (\\uXXXX keeps it) does not warn", (() => {
+    const d = tokens({ collections: [{ name: "S", modes: ["M"], default: "M" }], variables: [{ name: "half", type: "STRING", collection: "S", values: { M: "a\ud800b" } }, { name: "pair", type: "STRING", collection: "S", values: { M: "\u{1F600}" } }] });
+    const sw = toNative(d, "swiftui").warnings, kt = toNative(d, "android-compose").warnings;
+    return sw.length === 1 && /^half \(mode M\): a lone UTF-16 surrogate .* U\+FFFD$/.test(sw[0] ?? "") && !kt.some((w) => /surrogate/.test(w));
+  })());
+  check("[native] a collection or variable name cannot break out of its generated comment (a newline, U+2028, */) on any platform", (() => {
+    const d = tokens({ collections: [{ name: "Brand\ninjected()", modes: ["M"], default: "M" }, { name: "Theme */ injected() /*", modes: ["Light", "Dark"], default: "Light" }],
+      variables: [{ name: "x\ninjected()", type: "FLOAT", collection: "Brand\ninjected()", values: { M: 1 } }, { name: "y\u2028injected()", type: "FLOAT", collection: "Brand\ninjected()", values: { M: 2 } },
+        { name: "z\r\ninjected()", type: "FLOAT", collection: "Theme */ injected() /*", values: { Light: 1, Dark: 2 } }] });
+    return ["android-compose", "swiftui", "flutter", "react-native"].every((p) => {
+      const t = toNative(d, p).text;
+      const lines = t.split(/\r\n|[\n\r\u2028\u2029]/);
+      // every "injected()" stays inside a comment: never at the start of a line, never after a closed block comment
+      return !lines.some((l) => /^\s*injected\(\)/.test(l)) && !/\*\/ injected\(\)/.test(t) && /Theme \* \/ injected\(\) \/\*/.test(t);
+    });
+  })());
+  check("[native] a NUL, a bidirectional control or another C0/C1 control in a name is a space in the generated comment on any platform (swiftc warns on a NUL; a bidi control reorders the code around it)", (() => {
+    const bad = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
+    const d = tokens({ collections: [{ name: "Brand\u0000kit", modes: ["M"], default: "M" }],
+      variables: [{ name: "a\u202eb", type: "FLOAT", collection: "Brand\u0000kit", values: { M: 1 } }, { name: "c\u2066d\u2069e", type: "FLOAT", collection: "Brand\u0000kit", values: { M: 2 } },
+        { name: "f\u001bg\u007fh\u0085i", type: "FLOAT", collection: "Brand\u0000kit", values: { M: 3 } }, { name: "tab\there", type: "FLOAT", collection: "Brand\u0000kit", values: { M: 4 } }] });
+    return ["android-compose", "swiftui", "flutter", "react-native"].every((p) => {
+      const t = toNative(d, p).text;
+      return !bad.test(t) && t.includes("Brand kit") && t.includes("a b") && t.includes("c d e") && t.includes("f g h i") && t.includes("tab\there");
+    });
+  })());
   check("[native] compose: the JVM limit is counted in parameter UNITS (Color = 2) — 130 colors in a themed collection warns, 100 does not", (() => {
     const ds = (n: number) => tokens({ collections: [{ name: "Big", modes: ["Light", "Dark"], default: "Light" }], variables: Array.from({ length: n }, (_, i) => ({ name: "c/" + i, type: "COLOR", collection: "Big", values: { Light: "#fff", Dark: "#000" } })) });
     return toNative(ds(130), "android-compose").warnings.some((w) => /JVM parameter units/.test(w)) && !toNative(ds(100), "android-compose").warnings.some((w) => /JVM/.test(w));

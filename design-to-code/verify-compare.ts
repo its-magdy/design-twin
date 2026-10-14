@@ -151,6 +151,95 @@ function applyCssTransform(t: string, tt: string): string | null {
 /** A copy string as the text and placeholder compares read it: a non-breaking space (Figma's auto-substitution) is the
  *  same copy as a plain space, and the ends are trimmed. Interior whitespace runs are kept as they are. */
 const nbspTrim = (t: string): string => t.replace(/\u00a0/g, " ").trim();
+/** HTML's collapsible whitespace — spaces, tabs and segment breaks (MDN white-space; a form feed is ASCII whitespace
+ *  too). The set the built-in probe collapses (probe-page.ts), and the one a whitespace-only copy difference is judged
+ *  by. Every other space character (U+3000, U+2009, …) is kept as written and renders its own width. */
+const HTML_WS = /[ \t\n\r\f]+/g;
+/** nbspTrim, then every run of whitespace — a non-breaking space in it too — one space: copy read as the same except
+ *  for the width of a gap that holds a non-breaking space (gapWidthWhy names that difference). */
+const looseCollapse = (t: string): string => nbspTrim(t).replace(HTML_WS, " ");
+/** The copy as the DOM spaces it: the ends trimmed, each run of HTML-collapsible whitespace one space, and every non-breaking
+ *  space kept as a space of its own — HTML never collapses U+00A0, so a run of them keeps its width on whichever side holds
+ *  it (a lone one still reads as a plain space, as nbspTrim has it). */
+const strictCollapse = (t: string): string => t.trim().replace(HTML_WS, " ").replace(/\u00a0/g, " ");
+/** strictCollapse, then each space character HTML keeps (U+3000, U+2009, …) read as one ordinary space, so only the kind of
+ *  space differs between two copies it makes equal. U+FEFF is left alone: it has no width, so "log\ufeffin" renders
+ *  "login" and is not "log in" in another kind of space. */
+const spaceNorm = (t: string): string => strictCollapse(t).replace(/[^\S\ufeff]/g, " ");
+/** A designed copy's spaces by their rendered width: Figma never collapses a space, so each space or non-breaking space in
+ *  a gap is one space wide. */
+const designRender = (t: string): string => t.trim().replace(/[ \u00a0]+/g, (r) => " ".repeat(r.length));
+/** A built copy's spaces by their rendered width: HTML collapses each run of plain spaces to one and never a non-breaking
+ *  space, so a gap is one space wide per non-breaking space plus one per run of plain spaces between them. */
+const buildRender = (t: string): string => t.trim().replace(/[ \u00a0]+/g, (r) => " ".repeat(r.split("\u00a0").filter(Boolean).length + (r.match(/\u00a0/g) || []).length));
+/** How the build's gaps compare to the design's in rendered width (designRender against buildRender), for copy with a
+ *  non-breaking space whose words are the same and whose only whitespace is spaces and non-breaking spaces; null for
+ *  any other difference. "wider" if any build gap is wider than the design's. */
+function gapCmp(want: string, have: string): "same" | "narrower" | "wider" | null {
+  if (/[\t\n\r\f]/.test(want + have)) return null;
+  const dw = designRender(want), bw = buildRender(have);
+  const wt = dw.split(/ +/), bt = bw.split(/ +/);
+  if (wt.length !== bt.length || wt.some((x, i) => x !== bt[i])) return null;
+  const dg = dw.match(/ +/g) || [], bg = bw.match(/ +/g) || [];
+  let wider = false, narrower = false;
+  dg.forEach((g, i) => { const b = bg[i]?.length ?? 0; if (b > g.length) wider = true; else if (b < g.length) narrower = true; });
+  return wider ? "wider" : narrower ? "narrower" : "same";
+}
+/** Figma stores a Shift+Enter soft line break as U+2028 (a paragraph separator as U+2029); in the design it is a line
+ *  break, so the copy compares read it as \n (HTML itself does not break at either character). */
+const designBreaks = (t: string): string => t.replace(/[\u2028\u2029]/g, "\n");
+/** The space characters JS's \s knows that HTML does not collapse (NBSP aside: nbspTrim reads it as a space; U+FEFF is no
+ *  space). A design's U+2028/U+2029 are line breaks (designBreaks); a build's stay a space character of their own. */
+const OTHER_SPACES: Record<string, string> = {
+  "\u000b": "line tabulation", "\u1680": "ogham space mark", "\u2000": "en quad", "\u2001": "em quad", "\u2002": "en space", "\u2003": "em space",
+  "\u2004": "three-per-em space", "\u2005": "four-per-em space", "\u2006": "six-per-em space", "\u2007": "figure space", "\u2008": "punctuation space",
+  "\u2009": "thin space", "\u200a": "hair space", "\u2028": "line separator", "\u2029": "paragraph separator", "\u202f": "narrow no-break space",
+  "\u205f": "medium mathematical space", "\u3000": "ideographic space",
+};
+const spaceName = (ch: string): string => `\\u${(ch.codePointAt(0) ?? 0).toString(16).padStart(4, "0")} (${OTHER_SPACES[ch] ?? "space"})`;
+/** For copy that is the same once each space character HTML keeps is read as one space (spaceNorm) but not once only
+ *  HTML's runs are: the space characters HTML keeps that one side has and the other does not, named as escapes (the row would read as two identical strings). */
+function spaceKindWhy(want: string, have: string): string {
+  const kinds = (t: string): Set<string> => new Set([...t].filter((ch) => OTHER_SPACES[ch] !== undefined));
+  const w = kinds(want), h = kinds(have);
+  const list = (s: Set<string>, other: Set<string>): string => [...s].filter((ch) => !other.has(ch)).map(spaceName).join(", ");
+  const wOnly = list(w, h), hOnly = list(h, w);
+  const where = wOnly || hOnly ? `the design has ${wOnly || "ordinary spaces"} where the build has ${hOnly || "ordinary spaces"}` : "the two use the same space characters in different places";
+  return `differs only in the kind of space: ${where} — HTML collapses only spaces, tabs and line breaks; any other space character is kept as written and renders its own width (U+3000 a full-width gap, U+200A a hair-thin one), so check which one the design means`;
+}
+const breaksIn = (t: string): number => (t.match(/\r\n|[\n\r]/g) || []).length;
+// Spaces beside a line break do not count (HTML drops them wherever it keeps the break, and collapses both otherwise).
+// A tab or form feed is counted apart from the plain spaces: one tab is not any number of spaces.
+function gapsIn(t: string): { spaces: number; tabs: number } {
+  const u = t.replace(/[ \t\f]*(\r\n|[\n\r])[ \t\f]*/g, "$1");
+  return { spaces: (u.match(/ /g) || []).length, tabs: (u.match(/[\t\f]/g) || []).length };
+}
+/** The advice for copy that differs only in HTML-collapsible whitespace (want/have as the copy compare reads them), by
+ *  which side has more of it: line breaks first, then tabs, then spaces. CSS white-space (MDN): a newline is kept by pre,
+ *  pre-wrap, pre-line and break-spaces (normal renders it as a space); a run of spaces and tabs is kept by pre, pre-wrap
+ *  and break-spaces (normal and pre-line collapse it to one space). */
+function whitespaceWhy(want: string, have: string): string {
+  const wb = breaksIn(want), hb = breaksIn(have);
+  const n = (k: number): string => `${k || "no"} line break${k === 1 ? "" : "s"}`;
+  if (wb > hb) return `the design has ${n(wb)} here and the build ${n(hb)} — HTML renders a newline as a space unless white-space is pre, pre-wrap, pre-line or break-spaces (or a <br> breaks the line); check the lines break where the design's do`;
+  if (hb > wb) return `the build has ${n(hb)} here and the design ${n(wb)} — a <br>, or a newline kept by white-space pre, pre-wrap, pre-line or break-spaces; check the design means the line to break there`;
+  const w = gapsIn(want), h = gapsIn(have);
+  const tabs = (k: number): string => `${k || "no"} tab${k === 1 ? "" : "s"}`;
+  if (w.tabs > h.tabs) return `the design has ${tabs(w.tabs)} here and the build ${tabs(h.tabs)} — HTML collapses a tab like a space (a run of spaces and tabs becomes one space) unless white-space is pre, pre-wrap or break-spaces, which keep it at its tab stop; use a space, or keep the gap one of those ways if it is meant to show`;
+  if (h.tabs > w.tabs) return `the build has ${tabs(h.tabs)} here and the design ${tabs(w.tabs)} — HTML collapses a tab like a space unless white-space is pre, pre-wrap or break-spaces, which keep it at its tab stop, so it reads as designed unless one of those is set`;
+  if (w.spaces > h.spaces) return "the design has repeated spaces where the build has fewer — HTML collapses a run of spaces and tabs to one space unless white-space is pre, pre-wrap or break-spaces, or the extra ones are &nbsp; (the built-in probe reports the build's spaces collapsed either way). Keep the gap one of those ways if it is meant to show; otherwise it is a stray space in the design";
+  if (h.spaces > w.spaces) return "the build's text has a run of spaces where the design has fewer — HTML collapses it to one space when rendered unless white-space is pre, pre-wrap or break-spaces, so it reads as designed unless one of those is set";
+  return "it sits beside a line break or in another order — it renders the same once HTML collapses it, unless white-space is pre, pre-wrap or break-spaces";
+}
+/** For copy that is the same except for the width of a gap that holds a non-breaking space and renders wider in the build:
+ *  HTML collapses ordinary spaces and tabs to one but never a U+00A0. The first gap that differs, by rendered width. */
+function gapWidthWhy(want: string, have: string): string {
+  const gaps = (t: string, render: (t: string) => string): number[] => (render(t).match(/ +/g) || []).map((g) => g.length);
+  const wg = gaps(want, designRender), hg = gaps(have, buildRender);
+  const k = wg.findIndex((len, i) => len !== hg[i]);
+  const wide = (len: number | undefined): string => `${len ?? 0} space${len === 1 ? "" : "s"} wide`;
+  return `differs only in the width of a gap: the design's is ${wide(wg[k])} and the build's ${wide(hg[k])} — HTML collapses ordinary spaces and tabs to one space but keeps every non-breaking space (&nbsp;, U+00A0), so the two render at different widths; make the gaps match`;
+}
 /** The two strings a TEXT compare judges — ONE rule for the copy compare and the width gate, so they agree.
  *  want = the design as rendered (stored text + textCase); have = the build as rendered (its text + textTransform). A
  *  build whose transform is unknown (a hand-written probe reports none) passes with EITHER the stored or the rendered
@@ -1005,18 +1094,37 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
       cx.fieldsChecked++;
       // compare the RENDERED strings — the stored string with the design's text case against the build's
       // string with its computed text-transform (renderedText). Without a reported transform either design form passes.
-      const rt = renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, nbspTrim);
+      // A soft line break the design stores as U+2028 is a line break (designBreaks).
+      const designText = designBreaks(String(spec.text));
+      const rt = renderedText(designText, spec.textCase, String(got.text), got.textTransform, nbspTrim);
       const w = nbspTrim(rt.want);
       const g = nbspTrim(rt.have);
       // the stored strings behind the rendered ones, named when a case or a transform changed either side
       const caseShown = spec.textCase !== undefined || (rt.transform !== null && rt.transform.trim().toLowerCase() !== "none");
       const renderNote = !caseShown ? undefined
-        : `the design renders '${w}' (stored '${String(spec.text).trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
-      if (!rt.same) {
-        const caseOnly = w.toLowerCase() === g.toLowerCase();
+        : `the design renders '${w}' (stored '${designText.trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
+      // Whitespace. With each run of HTML-collapsible whitespace read as one space (strictCollapse) the same: a difference
+      // in those runs alone, not a copy change — HTML collapses them unless white-space keeps them, and the built-in probe
+      // reports the build's spaces collapsed. The same once each space character HTML keeps is one space
+      // (spaceNorm): they differ in that kind of space (U+3000, U+2009, …).
+      // A non-breaking space on either side is judged by rendered width (gapCmp): the design's gaps are as wide as their
+      // spaces (Figma never collapses one), the build's collapse each run of plain spaces to one and keep every non-breaking
+      // space. The same width is the same copy; a narrower build gap is the whitespace case below (low); a wider one a real change.
+      const gc = (/\u00a0/.test(rt.want) || /\u00a0/.test(rt.have)) && rt.want !== rt.have ? gapCmp(rt.want, rt.have) : null;
+      const same = gc !== null ? gc === "same" : rt.same;
+      const wsR = same ? null : renderedText(designText, spec.textCase, String(got.text), got.textTransform, strictCollapse);
+      const wsOnly = gc !== null ? gc === "narrower" : wsR !== null && wsR.same;
+      const spaceKind = gc === null && !same && !wsOnly && renderedText(designText, spec.textCase, String(got.text), got.textTransform, spaceNorm).same;
+      if (!same) {
+        // case, judged with whitespace runs collapsed — a case change and a double space together are both named
+        const caseOnly = !wsOnly && !spaceKind && strictCollapse(rt.want).toLowerCase() === strictCollapse(rt.have).toLowerCase();
+        const caseWs = caseOnly && w.toLowerCase() !== g.toLowerCase();
+        // the same once a non-breaking space collapses like any space (looseCollapse), so the difference is the width of a
+        // gap holding a non-breaking space, which HTML does not collapse — a real change, never low
+        const nbspGap = gc === "wider" || (!wsOnly && !spaceKind && !caseOnly && looseCollapse(rt.want).toLowerCase() === looseCollapse(rt.have).toLowerCase());
         // "Name▲": the designed string plus glyphs that are not letters or digits (a sort caret,
         // an icon font) — the copy is intact; name the extra glyphs rather than calling it a copy bug.
-        const extraGlyphs = !caseOnly && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
+        const extraGlyphs = !wsOnly && !spaceKind && !caseOnly && !nbspGap && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
         // the design repeats this string in >=3 sibling rows (placeholder copy). Low ONLY when the build's
         // texts in those rows differ from each other (real data); one wrong string in every row stays high.
         const rowTexts = spec.repeatedText && spec.repeatedTextGroup ? builtTexts.get(spec.repeatedTextGroup) : undefined;
@@ -1026,13 +1134,17 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
         // a typo stays high. Trade-off: two-state data ({Active, Inactive}) stays high — too close to a copy bug.
         const distinct = rowTexts ? new Set(rowTexts).size : 0;
         const asDesigned = rowTexts ? rowTexts.filter((t) => t === w).length : 0;
-        const realData = !caseOnly && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
-        const why = caseOnly ? (caseShown ? "differs only in case, as rendered" : "differs only in case — check for a text-transform, which Figma applies at render time while storing the original")
+        const realData = !wsOnly && !spaceKind && !caseOnly && !nbspGap && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
+        const caseHead = caseWs ? "differs only in case and whitespace" : "differs only in case";
+        const why = wsR !== null && wsOnly ? `differs only in whitespace: ${gc !== null ? whitespaceWhy(designRender(rt.want), buildRender(rt.have)) : whitespaceWhy(nbspTrim(wsR.want), nbspTrim(wsR.have))}`
+          : spaceKind ? spaceKindWhy(w, g)
+          : nbspGap ? gapWidthWhy(rt.want, rt.have)
+          : caseOnly ? `${caseShown ? `${caseHead}, as rendered` : `${caseHead} — check for a text-transform, which Figma applies at render time while storing the original`}${caseWs ? ` — the whitespace: ${whitespaceWhy(w, g)}` : ""}`
           : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)`
           : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) — check the copy is the data the design means`
           : undefined;
         const note = [why, renderNote].filter((x): x is string => x !== undefined).join(" — ");
-        push(spec, "text", caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.textCase ? rt.want : spec.text, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null }, {
+        push(spec, "text", wsOnly || spaceKind || caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.textCase ? rt.want : designText, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null }, {
           ...(note ? { note } : {}),
         });
       }

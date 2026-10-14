@@ -187,9 +187,21 @@ export function collectCandidates(input: CollectInput): CollectOutput {
   for (const t of wanted) { const k = t.toLowerCase(); wantedLower.set(k, [...(wantedLower.get(k) || []), t]); }
   const exact = new Map<string, PageElement[]>(), caseless = new Map<string, PageElement[]>(), ph = new Map<string, PageElement[]>();
   const push = (m: Map<string, PageElement[]>, k: string, e: PageElement): void => { const l = m.get(k); if (l) l.push(e); else m.set(k, [e]); };
+  // A <br> is a line break, which textContent drops ("Line one<br>Line two" reads "Line oneLine two"): an element with
+  // one inside reads its text with each <br> as a space. (Its own walk: a page-side function shares no helper.)
+  const hasBr = new Set<PageElement>();
+  if (wanted.size && document.body) for (const br of Array.from(document.body.querySelectorAll("br"))) for (let p = br.parentElement; p && !hasBr.has(p); p = p.parentElement) hasBr.add(p);
+  const brText = (e: PageElement): string => {
+    let out = "", k = 0;
+    for (const n of Array.from(e.childNodes)) {
+      if (n.nodeType === 3) out += n.nodeValue || "";
+      else if (n.nodeType === 1) { const c = e.children[k++]; if (c) out += c.tagName.toLowerCase() === "br" ? " " : hasBr.has(c) ? brText(c) : c.textContent || ""; }
+    }
+    return out;
+  };
   if (wanted.size) {
     for (const el of all) {
-      const t = norm(el.textContent);
+      const t = norm(hasBr.has(el) ? brText(el) : el.textContent);
       if (t) {
         if (wanted.has(t)) push(exact, t, el);
         for (const orig of wantedLower.get(t.toLowerCase()) || []) push(caseless, orig, el);
@@ -257,7 +269,38 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
   const px = (v: string): number | null => { const n = parseFloat(v); return Number.isFinite(n) ? Math.round(n * 100) / 100 : null; };
   const r2 = (n: number): number => Math.round(n * 100) / 100;
   const pageRect = (r: PageRect): Rect => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
-  const collapse = (s: string | null): string => (s || "").replace(/[ \t\n\r\f]+/g, " ").trim();
+  // The text as a TEXT spec's `text`: textContent with each run of spaces, tabs and line breaks read as one space (HTML
+  // collapses them — MDN white-space), except a line break the page shows, which stays "\n": a <br>, or a newline in an
+  // element whose white-space keeps it (white-space-collapse preserve / preserve-breaks / break-spaces, i.e. white-space
+  // pre, pre-wrap, pre-line, break-spaces). Spaces beside a kept break are dropped, as pre-line renders them.
+  const keepsBreaks = (e: PageElement): boolean => {
+    const s = getComputedStyle(e);
+    const c = s.getPropertyValue("white-space-collapse").trim();
+    if (c) return c === "preserve" || c === "preserve-breaks" || c === "break-spaces";
+    return /^(pre|pre-wrap|pre-line|break-spaces)$/.test(s.getPropertyValue("white-space").trim());
+  };
+  const shownText = (root: PageElement): string => {
+    let out = "";
+    const walk = (e: PageElement): void => {
+      let keep: boolean | null = null;
+      let k = 0; // e.children lists the element nodes of e.childNodes, in the same order
+      for (const n of Array.from(e.childNodes)) {
+        if (n.nodeType === 3) {
+          const v = n.nodeValue || "";
+          if (!/[\n\r]/.test(v)) { out += v; continue; }
+          keep ??= keepsBreaks(e);
+          out += keep ? v.replace(/\r\n?/g, "\n") : v.replace(/[\n\r]/g, " ");
+        } else if (n.nodeType === 1) {
+          const c = e.children[k++];
+          if (!c) continue;
+          if (c.tagName.toLowerCase() === "br") out += "\n";
+          else walk(c);
+        }
+      }
+    };
+    walk(root);
+    return out.replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim();
+  };
   // Colours as rgba(): the browser may compute oklch()/color(srgb …) (Tailwind v4), which the compare's
   // colour normaliser does not read — so anything that is not already rgb()/rgba() is painted on a 1×1
   // canvas and read back as sRGB bytes.
@@ -551,7 +594,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
           break;
         }
         case "opacity": put(k, px(cs.getPropertyValue("opacity")), "no computed opacity"); break;
-        case "text": put(k, item.isText && !item.isPlaceholder ? collapse(el.textContent) : null, item.isPlaceholder ? "an input placeholder: see placeholderText" : "not a TEXT node"); break;
+        case "text": put(k, item.isText && !item.isPlaceholder ? shownText(el) : null, item.isPlaceholder ? "an input placeholder: see placeholderText" : "not a TEXT node"); break;
         case "tag": put(k, tag, ""); break;
         case "textBox": put(k, textBox, textBoxWhy); break;
         default: put(k, null, `verify-probe does not know how to read '${k}'`);
