@@ -519,7 +519,8 @@ var PERCENT_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY"]);
 function percentOpacity(variable, opts) {
   return variable.type === "FLOAT" && unitDecision(variable, opts) === "scopes" && (variable.scopes || []).every((s) => PERCENT_SCOPES.has(s));
 }
-var commentText = (s) => String(s).replace(/\r\n|[\r\n\u2028\u2029\u0085]/g, " ").replace(/\*\//g, "* /");
+var COMMENT_CONTROLS = /\r\n|[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+var commentText = (s) => String(s).replace(COMMENT_CONTROLS, " ").replace(/\*\//g, "* /");
 
 // design-to-code/tokens-native.ts
 var FULL = Object.freeze({ fullyRounded: true });
@@ -1874,7 +1875,7 @@ function checkGenerated(ds, input, generated, cmd) {
     return 0;
   }
   const here = sourceName(input);
-  if (m[1] !== (m[1]?.includes("/") ? here : path4.basename(input))) {
+  if (m[1] !== commentText(m[1]?.includes("/") ? here : path4.basename(input))) {
     console.error(`other source  ${generated} was generated from ${m[1]}, not ${here} \u2014 pass that file: ${scriptCmd("tokens")} <path to ${m[1]}> --check ${shellArg(generated)}`);
     return 2;
   }

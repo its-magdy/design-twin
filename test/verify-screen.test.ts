@@ -307,6 +307,74 @@ console.log("verify-screen — text:");
   ok("[md] the row carries its advice", /differs only in whitespace: the design has repeated spaces/.test(line("2:9")));
 }
 
+{
+  // A whitespace-only difference is LOW only when it renders alike: a zero-width no-break space or a non-breaking space the
+  // build holds changes what shows (the first merges two words, the second keeps a gap's width); a design's soft line
+  // break (U+2028) is a line break; a tab is not any number of spaces. A real copy change is never downgraded to LOW.
+  const f = { family: "Poppins", size: 14 };
+  const exp = buildExpectation([doc([
+    textNode("3:1", "Merged", "log in", f),
+    textNode("3:2", "Merged back", "sign\ufeffup", f),
+    textNode("3:3", "Wide built", "Pay now", f),
+    textNode("3:4", "Cased wide", "Sign In", f),
+    textNode("3:5", "Wide designed", "Pay\u00a0\u00a0later", f),
+    textNode("3:6", "Soft break", "Line one\u2028Line two", f),
+    textNode("3:7", "Soft break, built space", "Part one\u2028Part two", f),
+    textNode("3:8", "Paragraph", "Para one\u2029Para two", f),
+    textNode("3:9", "Built separator", "Side one Side two", f),
+    textNode("3:10", "Designed tab", "Name\tvalue", f),
+    textNode("3:11", "Built tab", "Key  value", f),
+    textNode("3:12", "Plain copy", "Save", f),
+  ])]);
+  const rep = compare(exp, measured([
+    { nodeId: "3:1", styles: { text: "log\ufeffin" } },
+    { nodeId: "3:2", styles: { text: "sign up" } },
+    { nodeId: "3:3", styles: { text: "Pay\u00a0\u00a0now" } },
+    { nodeId: "3:4", styles: { text: "SIGN\u00a0\u00a0IN" } },
+    { nodeId: "3:5", styles: { text: "Pay\u00a0later" } },
+    { nodeId: "3:6", styles: { text: "Line one\nLine two" } },
+    { nodeId: "3:7", styles: { text: "Part one Part two" } },
+    { nodeId: "3:8", styles: { text: "Para one\nPara two" } },
+    { nodeId: "3:9", styles: { text: "Side one\u2028Side two" } },
+    { nodeId: "3:10", styles: { text: "Name  value" } },
+    { nodeId: "3:11", styles: { text: "Key\tvalue" } },
+    { nodeId: "3:12", styles: { text: "Save" } },
+  ]));
+  const row = (id: string) => rep.deltas.filter((d) => d.nodeId === id && d.field === "text");
+  const noteOf = (id: string): string => row(id)[0]?.note || "";
+  const sev = (id: string): string => (row(id).length === 1 ? row(id)[0]?.severity ?? "" : `${row(id).length} rows`);
+  ok("[text] a zero-width no-break space that merges the built words is HIGH, not 'the kind of space'", sev("3:1") === "high" && !/kind of space/.test(noteOf("3:1")));
+  ok("[text] a designed zero-width no-break space against a built space is HIGH too", sev("3:2") === "high" && !/kind of space/.test(noteOf("3:2")));
+  ok("[text] a built run of non-breaking spaces against a designed single space is HIGH and names the gap widths, never 'collapses'",
+    sev("3:3") === "high" && /width of a gap: the design's is 1 space wide and the build's 2 spaces wide/.test(noteOf("3:3")) && !/collapses it to one/.test(noteOf("3:3")));
+  ok("[text] the same through a case change", sev("3:4") === "high" && /width of a gap/.test(noteOf("3:4")));
+  ok("[text] a designed non-breaking run against a built single non-breaking space is HIGH", sev("3:5") === "high" && /the design's is 2 spaces wide and the build's 1 space wide/.test(noteOf("3:5")));
+  ok("[text] a designed soft line break (U+2028) against a built newline is no text row", row("3:6").length === 0);
+  ok("[text] a designed soft line break against a built space is the line-break advice, not 'the kind of space'",
+    sev("3:7") === "low" && /the design has 1 line break here and the build no line breaks/.test(noteOf("3:7")) && !/kind of space/.test(noteOf("3:7")));
+  ok("[text] a designed paragraph separator (U+2029) against a built newline is no text row", row("3:8").length === 0);
+  ok("[text] a U+2028 the BUILD carries is still a space character named by its escape", sev("3:9") === "low" && /the build has \\u2028 \(line separator\)/.test(noteOf("3:9")));
+  ok("[text] a designed tab against built spaces says it is a tab, not 'another order'",
+    sev("3:10") === "low" && /the build has no tabs|the design has 1 tab here and the build no tabs/.test(noteOf("3:10")) && !/another order/.test(noteOf("3:10")));
+  ok("[text] a built tab against designed spaces names the build's tab", sev("3:11") === "low" && /the build has 1 tab here and the design no tabs/.test(noteOf("3:11")) && !/another order/.test(noteOf("3:11")));
+  ok("[text] identical copy has no text row", row("3:12").length === 0);
+  const md = reportToMarkdown(rep);
+  ok("[md] no raw U+2028 reaches the report", !md.includes("\u2028"));
+}
+{
+  // A layer name, a token, an accepted reason and a non-text value are all text the table prints: a | or a newline in one
+  // must not split the row.
+  const f = { family: "Poppins", size: 14 };
+  const exp = buildExpectation([doc([textNode("4:1", "Pipe | name\nnext", "Copy", f)])]);
+  const rep = compare(exp, measured([{ nodeId: "4:1", styles: { text: "Other", fontFamily: "Poppins | Sans" } }]));
+  const d = rep.deltas.find((x) => x.nodeId === "4:1");
+  if (d) { d.token = "color/a|b"; d.accepted = { reason: "kept | on purpose\nsecond line", decidedBy: "a|b", decidedAt: "2026-10-14" }; d.expected = "x | y"; }
+  const lines = reportToMarkdown(rep).split("\n").filter((l) => l.startsWith("| ") && l.includes("`4:1`"));
+  const pipes = (l: string): number => (l.match(/(?<!\\)\|/g) || []).length;
+  ok(`[md] a | or newline in the layer name, token, accepted reason or a value leaves the row one table line with 8 live pipes (got ${lines.map(pipes).join(",")})`,
+    lines.length >= 1 && lines.every((l) => pipes(l) === 8) && lines.some((l) => l.includes("Pipe \\| name next")) && lines.some((l) => l.includes("color/a\\|b")) && lines.some((l) => l.includes("kept \\| on purpose second line")));
+}
+
 // ---------------------------------------------------------------- coverage and interactions
 console.log("verify-screen — a screen can match every pixel and still be a dead mockup:");
 {

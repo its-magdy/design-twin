@@ -237,10 +237,12 @@ function deltasMarkdown(deltas: VerifyDelta[]): string[] {
   }
   L.push(`## Value mismatches (${deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token | Group / accepted |", "|---|---|---|---|---|---|---|");
   for (const d of deltas) {
-    const status = d.accepted ? `accepted — ${d.accepted.reason} (${d.accepted.decidedBy}, ${d.accepted.decidedAt})` : d.group ? `\`${d.group}\`` : "";
+    // every cell that carries a layer name, a measured value, a token or a free-text reason goes through mdText: a | or a
+    // newline in one would split the table row
+    const status = d.accepted ? `accepted — ${mdText(d.accepted.reason)} (${mdText(d.accepted.decidedBy)}, ${mdText(d.accepted.decidedAt)})` : d.group ? `\`${d.group}\`` : "";
     const tx = isTextRow(d.field);
-    const cell = (v: unknown): string => (tx ? mdText(showText(v)) : withUnit(v, d.unit));
-    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field}${tx && d.note ? ` — ${mdText(d.note)}` : ""} | ${cell(d.expected)} | ${cell(d.actual)} | ${d.token || "—"} | ${status} |`);
+    const cell = (v: unknown): string => mdText(tx ? showText(v) : withUnit(v, d.unit));
+    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${mdText(d.name)} \`${d.nodeId}\` | ${d.field}${tx && d.note ? ` — ${mdText(d.note)}` : ""} | ${cell(d.expected)} | ${cell(d.actual)} | ${d.token ? mdText(d.token) : "—"} | ${status} |`);
   }
   L.push("");
   return L;

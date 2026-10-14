@@ -1432,6 +1432,16 @@ console.log("map — SLOT props:");
       return !lines.some((l) => /^\s*injected\(\)/.test(l)) && !/\*\/ injected\(\)/.test(t) && /Theme \* \/ injected\(\) \/\*/.test(t);
     });
   })());
+  check("[native] a NUL, a bidirectional control or another C0/C1 control in a name is a space in the generated comment on any platform (swiftc warns on a NUL; a bidi control reorders the code around it)", (() => {
+    const bad = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
+    const d = tokens({ collections: [{ name: "Brand\u0000kit", modes: ["M"], default: "M" }],
+      variables: [{ name: "a\u202eb", type: "FLOAT", collection: "Brand\u0000kit", values: { M: 1 } }, { name: "c\u2066d\u2069e", type: "FLOAT", collection: "Brand\u0000kit", values: { M: 2 } },
+        { name: "f\u001bg\u007fh\u0085i", type: "FLOAT", collection: "Brand\u0000kit", values: { M: 3 } }, { name: "tab\there", type: "FLOAT", collection: "Brand\u0000kit", values: { M: 4 } }] });
+    return ["android-compose", "swiftui", "flutter", "react-native"].every((p) => {
+      const t = toNative(d, p).text;
+      return !bad.test(t) && t.includes("Brand kit") && t.includes("a b") && t.includes("c d e") && t.includes("f g h i") && t.includes("tab\there");
+    });
+  })());
   check("[native] compose: the JVM limit is counted in parameter UNITS (Color = 2) — 130 colors in a themed collection warns, 100 does not", (() => {
     const ds = (n: number) => tokens({ collections: [{ name: "Big", modes: ["Light", "Dark"], default: "Light" }], variables: Array.from({ length: n }, (_, i) => ({ name: "c/" + i, type: "COLOR", collection: "Big", values: { Light: "#fff", Dark: "#000" } })) });
     return toNative(ds(130), "android-compose").warnings.some((w) => /JVM parameter units/.test(w)) && !toNative(ds(100), "android-compose").warnings.some((w) => /JVM/.test(w));

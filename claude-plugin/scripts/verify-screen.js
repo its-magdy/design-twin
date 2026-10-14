@@ -2424,7 +2424,11 @@ function applyCssTransform(t, tt) {
 }
 var nbspTrim = (t) => t.replace(/\u00a0/g, " ").trim();
 var HTML_WS = /[ \t\n\r\f]+/g;
-var htmlCollapse = (t) => nbspTrim(t).replace(HTML_WS, " ");
+var looseCollapse = (t) => nbspTrim(t).replace(HTML_WS, " ");
+var strictCollapse = (t) => t.trim().replace(HTML_WS, " ").replace(/\u00a0/g, " ");
+var collapseFor = (built) => built.includes("\xA0") ? strictCollapse : looseCollapse;
+var spaceNormFor = (collapse) => (t) => collapse(t).replace(/[^\S\ufeff]/g, " ");
+var designBreaks = (t) => t.replace(/[\u2028\u2029]/g, "\n");
 var OTHER_SPACES = {
   "\v": "line tabulation",
   "\u1680": "ogham space mark",
@@ -2443,8 +2447,7 @@ var OTHER_SPACES = {
   "\u2029": "paragraph separator",
   "\u202F": "narrow no-break space",
   "\u205F": "medium mathematical space",
-  "\u3000": "ideographic space",
-  "\uFEFF": "zero width no-break space"
+  "\u3000": "ideographic space"
 };
 var spaceName = (ch) => `\\u${(ch.codePointAt(0) ?? 0).toString(16).padStart(4, "0")} (${OTHER_SPACES[ch] ?? "space"})`;
 function spaceKindWhy(want, have) {
@@ -2456,19 +2459,29 @@ function spaceKindWhy(want, have) {
   return `differs only in the kind of space: ${where} \u2014 HTML collapses only spaces, tabs and line breaks; any other space character is kept as written and renders its own width (U+3000 a full-width gap, U+200A a hair-thin one), so check which one the design means`;
 }
 var breaksIn = (t) => (t.match(/\r\n|[\n\r]/g) || []).length;
-var spacesIn = (t) => {
+function gapsIn(t) {
   const u = t.replace(/[ \t\f]*(\r\n|[\n\r])[ \t\f]*/g, "$1");
-  return (u.match(/ /g) || []).length + 2 * (u.match(/[\t\f]/g) || []).length;
-};
+  return { spaces: (u.match(/ /g) || []).length, tabs: (u.match(/[\t\f]/g) || []).length };
+}
 function whitespaceWhy(want, have) {
   const wb = breaksIn(want), hb = breaksIn(have);
   const n = (k) => `${k || "no"} line break${k === 1 ? "" : "s"}`;
   if (wb > hb) return `the design has ${n(wb)} here and the build ${n(hb)} \u2014 HTML renders a newline as a space unless white-space is pre, pre-wrap, pre-line or break-spaces (or a <br> breaks the line); check the lines break where the design's do`;
   if (hb > wb) return `the build has ${n(hb)} here and the design ${n(wb)} \u2014 a <br>, or a newline kept by white-space pre, pre-wrap, pre-line or break-spaces; check the design means the line to break there`;
-  const ws = spacesIn(want), hs = spacesIn(have);
-  if (ws > hs) return "the design has repeated spaces (or a tab) where the build has fewer \u2014 HTML collapses a run of spaces and tabs to one space unless white-space is pre, pre-wrap or break-spaces, or the extra ones are &nbsp; (the built-in probe reports the build's spaces collapsed either way). Keep the gap one of those ways if it is meant to show; otherwise it is a stray space in the design";
-  if (hs > ws) return "the build's text has a run of spaces (or a tab) where the design has fewer \u2014 HTML collapses it to one space when rendered unless white-space is pre, pre-wrap or break-spaces, so it reads as designed unless one of those is set";
+  const w = gapsIn(want), h = gapsIn(have);
+  const tabs = (k) => `${k || "no"} tab${k === 1 ? "" : "s"}`;
+  if (w.tabs > h.tabs) return `the design has ${tabs(w.tabs)} here and the build ${tabs(h.tabs)} \u2014 HTML collapses a tab like a space (a run of spaces and tabs becomes one space) unless white-space is pre, pre-wrap or break-spaces, which keep it at its tab stop; use a space, or keep the gap one of those ways if it is meant to show`;
+  if (h.tabs > w.tabs) return `the build has ${tabs(h.tabs)} here and the design ${tabs(w.tabs)} \u2014 HTML collapses a tab like a space unless white-space is pre, pre-wrap or break-spaces, which keep it at its tab stop, so it reads as designed unless one of those is set`;
+  if (w.spaces > h.spaces) return "the design has repeated spaces where the build has fewer \u2014 HTML collapses a run of spaces and tabs to one space unless white-space is pre, pre-wrap or break-spaces, or the extra ones are &nbsp; (the built-in probe reports the build's spaces collapsed either way). Keep the gap one of those ways if it is meant to show; otherwise it is a stray space in the design";
+  if (h.spaces > w.spaces) return "the build's text has a run of spaces where the design has fewer \u2014 HTML collapses it to one space when rendered unless white-space is pre, pre-wrap or break-spaces, so it reads as designed unless one of those is set";
   return "it sits beside a line break or in another order \u2014 it renders the same once HTML collapses it, unless white-space is pre, pre-wrap or break-spaces";
+}
+function gapWidthWhy(want, have) {
+  const gaps = (t) => (strictCollapse(t).match(/ +/g) || []).map((g) => g.length);
+  const wg = gaps(want), hg = gaps(have);
+  const k = wg.findIndex((len, i) => len !== hg[i]);
+  const wide = (len) => `${len ?? 0} space${len === 1 ? "" : "s"} wide`;
+  return `differs only in the width of a gap: the design's is ${wide(wg[k])} and the build's ${wide(hg[k])} \u2014 HTML collapses ordinary spaces and tabs to one space but keeps every non-breaking space (&nbsp;, U+00A0), so the two render at different widths; make the gaps match`;
 }
 function renderedText(stored, textCase, built, transform, norm) {
   const designed = applyFigmaCase(stored, textCase);
@@ -3343,26 +3356,29 @@ function checkText(cx, n) {
     } else if (got.text === void 0) absentGaps.add(`${spec.nodeId}\0text`);
     else if (got.text !== void 0) {
       cx.fieldsChecked++;
-      const rt = renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, nbspTrim);
+      const designText = designBreaks(String(spec.text));
+      const rt = renderedText(designText, spec.textCase, String(got.text), got.textTransform, nbspTrim);
       const w = nbspTrim(rt.want);
       const g = nbspTrim(rt.have);
       const caseShown = spec.textCase !== void 0 || rt.transform !== null && rt.transform.trim().toLowerCase() !== "none";
-      const renderNote = !caseShown ? void 0 : `the design renders '${w}' (stored '${String(spec.text).trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
-      const wsR = rt.same ? null : renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, htmlCollapse);
+      const renderNote = !caseShown ? void 0 : `the design renders '${w}' (stored '${designText.trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
+      const collapse = collapseFor(String(got.text));
+      const wsR = rt.same ? null : renderedText(designText, spec.textCase, String(got.text), got.textTransform, collapse);
       const wsOnly = wsR !== null && wsR.same;
-      const spaceKind = !rt.same && !wsOnly && renderedText(String(spec.text), spec.textCase, String(got.text), got.textTransform, normText).same;
+      const spaceKind = !rt.same && !wsOnly && renderedText(designText, spec.textCase, String(got.text), got.textTransform, spaceNormFor(collapse)).same;
       if (!rt.same) {
-        const caseOnly = !wsOnly && !spaceKind && htmlCollapse(w).toLowerCase() === htmlCollapse(g).toLowerCase();
+        const caseOnly = !wsOnly && !spaceKind && collapse(rt.want).toLowerCase() === collapse(rt.have).toLowerCase();
         const caseWs = caseOnly && w.toLowerCase() !== g.toLowerCase();
-        const extraGlyphs = !wsOnly && !spaceKind && !caseOnly && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
+        const nbspGap = !wsOnly && !spaceKind && !caseOnly && looseCollapse(rt.want).toLowerCase() === looseCollapse(rt.have).toLowerCase();
+        const extraGlyphs = !wsOnly && !spaceKind && !caseOnly && !nbspGap && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
         const rowTexts = spec.repeatedText && spec.repeatedTextGroup ? builtTexts.get(spec.repeatedTextGroup) : void 0;
         const distinct = rowTexts ? new Set(rowTexts).size : 0;
         const asDesigned = rowTexts ? rowTexts.filter((t) => t === w).length : 0;
-        const realData = !wsOnly && !spaceKind && !caseOnly && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
+        const realData = !wsOnly && !spaceKind && !caseOnly && !nbspGap && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
         const caseHead = caseWs ? "differs only in case and whitespace" : "differs only in case";
-        const why = wsR !== null && wsOnly ? `differs only in whitespace: ${whitespaceWhy(nbspTrim(wsR.want), nbspTrim(wsR.have))}` : spaceKind ? spaceKindWhy(w, g) : caseOnly ? `${caseShown ? `${caseHead}, as rendered` : `${caseHead} \u2014 check for a text-transform, which Figma applies at render time while storing the original`}${caseWs ? ` \u2014 the whitespace: ${whitespaceWhy(w, g)}` : ""}` : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) \u2014 check the copy is the data the design means` : void 0;
+        const why = wsR !== null && wsOnly ? `differs only in whitespace: ${whitespaceWhy(nbspTrim(wsR.want), nbspTrim(wsR.have))}` : spaceKind ? spaceKindWhy(w, g) : nbspGap ? gapWidthWhy(rt.want, rt.have) : caseOnly ? `${caseShown ? `${caseHead}, as rendered` : `${caseHead} \u2014 check for a text-transform, which Figma applies at render time while storing the original`}${caseWs ? ` \u2014 the whitespace: ${whitespaceWhy(w, g)}` : ""}` : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) \u2014 check the copy is the data the design means` : void 0;
         const note = [why, renderNote].filter((x) => x !== void 0).join(" \u2014 ");
-        push(spec, "text", wsOnly || spaceKind || caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.textCase ? rt.want : spec.text, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null }, {
+        push(spec, "text", wsOnly || spaceKind || caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.textCase ? rt.want : designText, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null }, {
           ...note ? { note } : {}
         });
       }
@@ -4621,10 +4637,10 @@ function reportToMarkdown(r) {
     }
     L.push(`## Value mismatches (${r.deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token | Group / accepted |", "|---|---|---|---|---|---|---|");
     for (const d of r.deltas) {
-      const status = d.accepted ? `accepted \u2014 ${d.accepted.reason} (${d.accepted.decidedBy}, ${d.accepted.decidedAt})` : d.group ? `\`${d.group}\`` : "";
+      const status = d.accepted ? `accepted \u2014 ${mdText(d.accepted.reason)} (${mdText(d.accepted.decidedBy)}, ${mdText(d.accepted.decidedAt)})` : d.group ? `\`${d.group}\`` : "";
       const tx = isTextRow(d.field);
-      const cell = (v) => tx ? mdText(showText(v)) : withUnit(v, d.unit);
-      L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field}${tx && d.note ? ` \u2014 ${mdText(d.note)}` : ""} | ${cell(d.expected)} | ${cell(d.actual)} | ${d.token || "\u2014"} | ${status} |`);
+      const cell = (v) => mdText(tx ? showText(v) : withUnit(v, d.unit));
+      L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${mdText(d.name)} \`${d.nodeId}\` | ${d.field}${tx && d.note ? ` \u2014 ${mdText(d.note)}` : ""} | ${cell(d.expected)} | ${cell(d.actual)} | ${d.token ? mdText(d.token) : "\u2014"} | ${status} |`);
     }
     L.push("");
   }

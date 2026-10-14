@@ -1381,9 +1381,10 @@ function checkGenerated(ds: TokensDoc, input: string, generated: string, cmd: st
   if (m[3] === now.sha) { console.log(`current  ${generated} was generated from ${m[1]} (${m[2]} variables, sha ${m[3]}) — same content as ${input}`); return 0; }
   // A different source is not "stale": regenerating from THIS input would narrow (or swap) the theme's catalog —
   // e.g. a theme made from the library tokens.json checked against the per-screen variables.json.
-  // The recorded name is `<parent dir>/<basename>`; a basename-only line (an earlier run) is compared by basename.
+  // The recorded name is `<parent dir>/<basename>`; a basename-only line (an earlier run) is compared by basename. The
+  // line carries the name as commentText wrote it, so the input's name is compared the same way.
   const here = sourceName(input);
-  if (m[1] !== (m[1]?.includes("/") ? here : path.basename(input))) {
+  if (m[1] !== commentText(m[1]?.includes("/") ? here : path.basename(input))) {
     console.error(`other source  ${generated} was generated from ${m[1]}, not ${here} — pass that file: ${scriptCmd("tokens")} <path to ${m[1]}> --check ${shellArg(generated)}`);
     return 2;
   }

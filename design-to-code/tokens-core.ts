@@ -139,8 +139,11 @@ function percentOpacity(variable: Variable, opts?: UnitOpts): boolean {
 }
 
 // A Figma name (a collection, a variable, a source file) inside a generated comment: a line terminator would end a `//`
-// comment and turn the rest of the name into code (JS/TS also end a line at U+2028/U+2029), and `*/` would close a
-// `/* */` or `/** */` one — so each line terminator is a space and `*/` is `* /`.
-const commentText = (s: unknown): string => String(s).replace(/\r\n|[\r\n\u2028\u2029\u0085]/g, " ").replace(/\*\//g, "* /");
+// comment and turn the rest of the name into code (JS/TS also end a line at U+2028/U+2029), `*/` would close a
+// `/* */` or `/** */` one, a NUL makes swiftc warn, and a bidirectional control reorders how an editor shows the code
+// around it (a Trojan Source line) — so each of those controls (and every other C0/C1 control but the tab) is a space
+// and `*/` is `* /`.
+const COMMENT_CONTROLS = /\r\n|[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+const commentText = (s: unknown): string => String(s).replace(COMMENT_CONTROLS, " ").replace(/\*\//g, "* /");
 
 export { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, commentText };

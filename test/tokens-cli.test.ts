@@ -91,6 +91,21 @@ console.log("tokens CLI — provenance line in every generated file, --check:");
   ok("control: another name with the SAME content is still current (the hash decides first)", run(dir, path.join(dir, "copy.json"), "--check", theme).status === 0);
 }
 
+if (process.platform !== "win32") {
+  // The provenance line carries the source name as commentText wrote it (a `*/` in a directory name becomes `* /`), so
+  // --check compares the input's name the same way: the same file with a changed catalog is "stale" (1), not "other source".
+  const dir = path.join(tmp, "star"); fs.mkdirSync(path.join(dir, "kit*"), { recursive: true });
+  const vars = path.join(dir, "kit*", "variables.json");
+  fs.writeFileSync(vars, catalog(BASE));
+  const g = run(dir, vars, "out", "--web", "tailwind");
+  const theme = path.join(dir, "out", "theme.css");
+  ok("a directory name ending in * is written into the provenance line as '* /'", g.status === 0 && readOr(theme).includes("kit* /variables.json"));
+  fs.writeFileSync(vars, catalog([...BASE, prim("Y/700", "#a07000", "k3")]));
+  const stale = run(dir, vars, "--check", theme);
+  ok(`--check on the same file with a changed catalog exits 1 'stale' though the recorded name was rewritten (got ${stale.status}: ${stale.err.trim()})`,
+    stale.status === 1 && /^stale/m.test(stale.err) && !/other source/.test(stale.err));
+}
+
 {
   // two files named tokens.json (the design-system's and a library's) are told apart by the recorded
   // parent directory, so a library theme checked against the design-system one is "other source", never "stale".
