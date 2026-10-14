@@ -6795,8 +6795,8 @@ var USAGE = `usage:
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
 exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the probe ran \u2014 also instead of a 3 or 4 \xB7 3
       renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept navigating / reloaded twice
-      during measurement / was unreachable / timed out / passed --max-time / a --steps step failed / the page or browser
-      closed or crashed (re-run once; if it recurs, run --check) (nothing written).`;
+      during measurement / was unreachable / timed out / passed --max-time / a --steps step failed /
+      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).`;
 var MAX_TIME_DEFAULT = 18e4;
 async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS) {
   const cap = () => sleep4(capMs, void 0, { ref: false });

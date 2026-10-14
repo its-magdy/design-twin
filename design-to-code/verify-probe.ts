@@ -1038,8 +1038,8 @@ const USAGE =
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
   "exit: 0 wrote · 2 usage, or (--run) the run already ended / ended while the probe ran — also instead of a 3 or 4 · 3\n" +
   "      renderer unavailable (ask the user to install; never installed here) · 4 the page kept navigating / reloaded twice\n" +
-  "      during measurement / was unreachable / timed out / passed --max-time / a --steps step failed / the page or browser\n" +
-  "      closed or crashed (re-run once; if it recurs, run --check) (nothing written).";
+  "      during measurement / was unreachable / timed out / passed --max-time / a --steps step failed /\n" +
+  "      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).";
 
 const MAX_TIME_DEFAULT = 180_000;
 
