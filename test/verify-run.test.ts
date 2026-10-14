@@ -300,7 +300,7 @@ await block("pre-publish write probe:", async () => {
   fs.writeFileSync(path.join(stage, "Plots-hover.png"), "hover");
   // file-write-create denied in the run cache: access(W_OK) on it still succeeds, creating a file there does not
   const profile = `(version 1)(allow default)(deny file-write-create (subpath ${JSON.stringify(fs.realpathSync(cache))}))`;
-  const probeAccess = spawnSync("/usr/bin/sandbox-exec", ["-p", profile, process.execPath, "-e", `require("fs").accessSync(${JSON.stringify(cache)}, 2)`], { encoding: "utf8" });
+  const probeAccess = spawnSync("/usr/bin/sandbox-exec", ["-p", profile, process.execPath, "-e", 'require("fs").accessSync(process.argv[1], 2)', cache], { encoding: "utf8" });
   if (probeAccess.status !== 0) { console.log(`  (skipped: sandbox-exec unavailable here or access() refused too: ${probeAccess.stderr.split("\n")[0]})`); return; }
   const r = spawnSync("/usr/bin/sandbox-exec", ["-p", profile, process.execPath, VS_TS, "--status", "Plots", "--phase", "done", "--run", "run-sb", "--publish", stage], { cwd, encoding: "utf8" });
   safe("[write probe] done --publish where the run cache refuses file creation (access(W_OK) still ok) → exit 6 BEFORE publishing: nothing copied into design/verify", () =>
