@@ -36,7 +36,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { fileHashes, gitHead, planCodeFiles, planCodeSkippedNote } from "./content-hash.ts";
-import { recordPlan, writePlan } from "./plan-record.ts";
+import { parsePlanText, recordPlan, updatePlan } from "./plan-record.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
 import {
   isInteractionEvidenceList, isMeasuredComponentList, isPageIndex, isPagesRootIndex, isPlan, isVerifyExpectation, isVerifyMeasured, isVerifyReport,
@@ -600,19 +600,28 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
   }
   const pr = readJson(planFile, isPlan);
   if (!("doc" in pr)) { console.error(`error  plan: '${planFile}' ${pr.error}`); return 1; }
-  const plan = pr.doc;
   const decidedAt = new Date().toISOString();
-  const waivers: PlanWaiver[] = Array.isArray(plan.waivers) ? [...plan.waivers] : [];
-  const wrote: string[] = [];
-  for (const d of sel.deltas) {
-    const row: PlanWaiver = { nodeId: d.nodeId, field: d.field, designed: d.expected, built: d.actual, exportContentSha256: exportSha, reason, decidedBy: by, decidedAt, ...ifDefined("cause", flags.group) };
-    // one row per node + field: a new decision replaces the old one
-    const at = waivers.findIndex((w) => isJsonObject(w) && w.nodeId === d.nodeId && w.field === d.field);
-    if (at >= 0) waivers[at] = row; else waivers.push(row);
-    wrote.push(`${at >= 0 ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
-  }
-  plan.waivers = waivers;
-  writePlan(planFile, plan); // atomic (a crash never leaves half a plan), in the plan file's own format
+  const target = planFile;
+  let wrote: string[] = [];
+  try {
+    // under the plan's lock, from its bytes at that moment (plan-record.ts updatePlan): a record or hook write since
+    // the read above is kept. Atomic (a crash never leaves half a plan), in the plan file's own format
+    updatePlan(target, (raw) => {
+      if (raw === null) throw new Error(`${target} does not exist`);
+      const plan = parsePlanText(raw, target);
+      const waivers: PlanWaiver[] = Array.isArray(plan.waivers) ? [...plan.waivers] : [];
+      wrote = [];
+      for (const d of sel.deltas) {
+        const row: PlanWaiver = { nodeId: d.nodeId, field: d.field, designed: d.expected, built: d.actual, exportContentSha256: exportSha, reason, decidedBy: by, decidedAt, ...ifDefined("cause", flags.group) };
+        // one row per node + field: a new decision replaces the old one
+        const at = waivers.findIndex((w) => isJsonObject(w) && w.nodeId === d.nodeId && w.field === d.field);
+        if (at >= 0) waivers[at] = row; else waivers.push(row);
+        wrote.push(`${at >= 0 ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
+      }
+      plan.waivers = waivers;
+      return plan;
+    });
+  } catch (e) { console.error(`error  plan: ${errMsg(e)} — no waiver written`); return 1; }
   console.error(`wrote ${wrote.length} waiver(s) to ${planFile} (decided by ${by}: ${reason})`);
   for (const w of wrote) console.error(`  ${w}`);
   console.error(`re-run --compare to apply ${wrote.length === 1 ? "it" : "them"}: an accepted delta stays listed, leaves the counts, and reopens if the design is re-exported or the built value moves.`);

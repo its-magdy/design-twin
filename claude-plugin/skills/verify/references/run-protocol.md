@@ -78,7 +78,10 @@ every `--status`, `--wait`, probe and `--compare` of one run the same way (all s
 
 Exit 6 from `--status` or `--wait` means the run cache is not writable (or readable) from where you ran it — the
 sandbox's write scope is the current directory and the temp dir — so run from the project root, or allow writes
-there; the probe only prints the same as a warning and keeps its exit codes. `--status` and `--wait` resolve
+there; the probe only prints the same as a warning and keeps its exit codes. Status writes of one screen take turns
+(a `<Screen>.status.json.lock` beside the live status, held for the moment of the write; one left by a killed
+command is cleared by the next write): a `--status` still waiting on another write after 15 s refuses with exit 1 —
+run it again. `--status` and `--wait` resolve
 `--dir` (default `design/verify`) against the current directory; from anywhere but the project root pass `--dir`
 (an absolute path works).
 
@@ -159,8 +162,9 @@ remaining", suggesting the user approve it or add a narrow allow rule for `node 
 ## Bounded runs
 
 The probe stops itself at `--max-time` (default 180000 ms) with exit 4 and nothing written. Re-run it ONCE after an
-exit 4 (with `--run` its exit 3/4 bumps the status, phase still `measuring`), then write status `failed` with the
-navigation log — one re-run, never a loop.
+exit 4 (with `--run` its exit 3/4 bumps the status, phase still `measuring` — unless the run ended meanwhile: then it
+leaves the status as it is and exits 2, like a probe of a run that had already ended), then write status `failed`
+with the navigation log — one re-run, never a loop.
 
 ## When a run ends `blocked` or `failed`
 

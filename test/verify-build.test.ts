@@ -26,6 +26,7 @@ import { isAuditReport, isPlan, isVerifyExpectation, isVerifyReport, parsePlan }
 import { isScreenExport } from "../design-to-code/export-shape.ts";
 import { isCodeConnectMap } from "../design-to-code/map-validate.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
+import { planLockFile } from "../design-to-code/run-cache.ts";
 
 const HOOK = path.join(import.meta.dirname, "..", "design-to-code", "verify-build.ts");
 
@@ -655,6 +656,29 @@ check("DTWIN_PLAN_STALE_HOURS=0 disables the cutoff", (() => {
   const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8", env: { ...process.env, DTWIN_PLAN_STALE_HOURS: "0" } });
   return r.status === 2 && isStale(path.join(root, "design", "plan", "login.json")) === true;
 })());
+
+// The hook's record must not reset the plan's mtime (the staleness clock): it puts the old one back right after its
+// write, still under the plan's lock — so a builder's edit landing once the lock is released keeps its own mtime.
+await (async () => {
+  const root = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  const planFile = path.join(root, "design", "plan", "login.json");
+  age(root, 5);
+  const was = fs.statSync(planFile).mtimeMs;
+  const lock = planLockFile(planFile);
+  const seen: string[] = [];
+  const utimes = fs.utimesSync;
+  Reflect.set(fs, "utimesSync", (p: string, a: Date, m: Date): void => {
+    if (path.resolve(String(p)) === planFile) seen.push(fs.existsSync(lock) ? "locked" : "unlocked");
+    utimes(p, a, m);
+  });
+  const logErr = console.error, logOut = console.log;
+  console.error = (): void => {};
+  console.log = (): void => {};
+  let code = -1;
+  try { code = await verifyBuild.main([planFile]); } finally { Reflect.set(fs, "utimesSync", utimes); console.error = logErr; console.log = logOut; }
+  check("the hook writes its record and restores the plan's mtime once, under the plan's lock (the 5 h old mtime kept)",
+    code === 2 && seen.join(" ") === "locked" && Math.abs(fs.statSync(planFile).mtimeMs - was) < 1_000 && planOf(root).verification?.hook?.result === "blocked");
+})();
 
 // ---------------------------------------------------------------- regressions on recorded plans
 // Driven by test/fixtures/livetest3/plan/ — the real plans, reports, export and app sources from the

@@ -2,8 +2,8 @@
 
 
 // design-to-code/verify-probe.ts
-import fs6 from "node:fs";
-import path7 from "node:path";
+import fs7 from "node:fs";
+import path9 from "node:path";
 
 // bridge/src/hash.ts
 import crypto from "node:crypto";
@@ -300,9 +300,9 @@ function measureElements(input) {
       const ring = distinct.length === 1 ? distinct[0] : insetOnes.length === 1 ? insetOnes[0] : void 0;
       if (ring) return strokeMemo = { width: ring.spread, color: ring.color, from: "box-shadow", align: ring.inset ? "inside" : "outside" };
       if (distinct.length > 1) return strokeMemo;
-      const os2 = cs.getPropertyValue("outline-style").trim(), ow = px(cs.getPropertyValue("outline-width")), oo = px(cs.getPropertyValue("outline-offset"));
+      const os3 = cs.getPropertyValue("outline-style").trim(), ow = px(cs.getPropertyValue("outline-width")), oo = px(cs.getPropertyValue("outline-offset"));
       const oc = rgba(cs.getPropertyValue("outline-color"));
-      if (!os2 || os2 === "none" || os2 === "auto" || ow === null || !(ow > 0) || oo === null || transparentColour(oc)) return strokeMemo;
+      if (!os3 || os3 === "none" || os3 === "auto" || ow === null || !(ow > 0) || oo === null || transparentColour(oc)) return strokeMemo;
       if (oo === -ow) return strokeMemo = { width: ow, color: oc, from: "outline", align: "inside" };
       if (oo === 0) return strokeMemo = { width: ow, color: oc, from: "outline", align: "outside" };
       return strokeMemo;
@@ -546,9 +546,9 @@ function freeHoverPoint(arg) {
   }
   return null;
 }
-function focusablePath(path8) {
+function focusablePath(path10) {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
-  const el = document.querySelector(path8);
+  const el = document.querySelector(path10);
   const f = el ? el.closest(FOCUSABLE) : null;
   if (!f) return null;
   const parts = [];
@@ -562,8 +562,8 @@ function focusablePath(path8) {
   parts.unshift("html");
   return parts.join(" > ");
 }
-function focusInfo(path8) {
-  const el = document.querySelector(path8);
+function focusInfo(path10) {
+  const el = document.querySelector(path10);
   const focused = !!el && document.activeElement === el;
   return { focused, focusVisible: focused && !!el && el.matches(":focus-visible") };
 }
@@ -2070,8 +2070,8 @@ function ownClear(_arg) {
   window.__dtOwn = null;
   return true;
 }
-function syntheticClick(path8) {
-  const el = document.querySelector(path8);
+function syntheticClick(path10) {
+  const el = document.querySelector(path10);
   if (!el) return false;
   el.click();
   return true;
@@ -2495,14 +2495,14 @@ var DRIVE_RESERVE_MS = 15e3;
 function driveBudget(now, deadline, capMs = DRIVE_CAP_MS, reserveMs = DRIVE_RESERVE_MS) {
   return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
 }
-function classifyOutcome(action, read) {
-  const destNew = !!(read.dest && read.dest.newly);
+function classifyOutcome(action, read2) {
+  const destNew = !!(read2.dest && read2.dest.newly);
   if (String(action).toLowerCase() === "swap") {
-    if (destNew) return { outcome: "selector-appeared", detectedBy: read.detectedBy ?? "destination-tag" };
-    return read.detectedBy ? { outcome: "dialog-opened", detectedBy: read.detectedBy } : { outcome: "none" };
+    if (destNew) return { outcome: "selector-appeared", detectedBy: read2.detectedBy ?? "destination-tag" };
+    return read2.detectedBy ? { outcome: "dialog-opened", detectedBy: read2.detectedBy } : { outcome: "none" };
   }
-  if (read.detectedBy) return { outcome: "dialog-opened", detectedBy: read.detectedBy };
-  if (destNew && read.opened) return { outcome: "selector-appeared", detectedBy: "destination-tag" };
+  if (read2.detectedBy) return { outcome: "dialog-opened", detectedBy: read2.detectedBy };
+  if (destNew && read2.opened) return { outcome: "selector-appeared", detectedBy: "destination-tag" };
   return { outcome: "none" };
 }
 var ALLOWED = { overlay: ["dialog-opened", "selector-appeared"], swap: ["state-changed", "selector-appeared"] };
@@ -2745,32 +2745,32 @@ async function driveRow(browser, o, row, hooks, onContext) {
       }
     }
     const t0 = Date.now();
-    let read = { lost: false, detectedBy: null, opened: null, dest: null };
+    let read2 = { lost: false, detectedBy: null, opened: null, dest: null };
     let detectedAt = null;
     for (; ; ) {
       try {
-        read = await page.evaluate(pollDetector, { destId, contract });
+        read2 = await page.evaluate(pollDetector, { destId, contract });
       } catch (e) {
         if (pwErrorKind(e, page) !== "navigated") throw e;
-        read = { lost: true, detectedBy: null, opened: null, dest: null };
+        read2 = { lost: true, detectedBy: null, opened: null, dest: null };
       }
-      if (read.lost) break;
-      if (read.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
-      const destDone = destId === null || read.dest !== null && read.dest.inside;
-      if (read.opened && destDone) break;
+      if (read2.lost) break;
+      if (read2.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
+      const destDone = destId === null || read2.dest !== null && read2.dest.inside;
+      if (read2.opened && destDone) break;
       if (detectedAt !== null && Date.now() - detectedAt >= 500) break;
       if (Date.now() - t0 >= 2e3) break;
       await sleep(100);
     }
-    if (read.lost) await page.waitForLoadState("load", { timeout: 2e3 }).catch(() => void 0);
+    if (read2.lost) await page.waitForLoadState("load", { timeout: 2e3 }).catch(() => void 0);
     let tokenAfter = "";
     try {
       tokenAfter = String(await page.evaluate("window.__dtProbeDoc || ''"));
     } catch {
       tokenAfter = "";
     }
-    const navEvents = Math.max(loads() - loadsBefore, tokenAfter !== tokenBefore || read.lost ? 1 : 0);
-    const { outcome, detectedBy } = read.lost ? { outcome: "none", detectedBy: void 0 } : classifyOutcome(action, read);
+    const navEvents = Math.max(loads() - loadsBefore, tokenAfter !== tokenBefore || read2.lost ? 1 : 0);
+    const { outcome, detectedBy } = read2.lost ? { outcome: "none", detectedBy: void 0 } : classifyOutcome(action, read2);
     const ev = {
       ...base,
       outcome,
@@ -2778,15 +2778,15 @@ async function driveRow(browser, o, row, hooks, onContext) {
       activation,
       ...detectedBy !== void 0 ? { detectedBy } : {},
       ...revealedBy !== void 0 ? { revealedBy } : {},
-      ...destId !== null ? { destination: { nodeId: destId, inside: !read.lost && !!read.dest && read.dest.inside, count: read.dest ? read.dest.count : 0 } } : {},
-      ...read.opened && !read.lost ? { opened: read.opened } : {}
+      ...destId !== null ? { destination: { nodeId: destId, inside: !read2.lost && !!read2.dest && read2.dest.inside, count: read2.dest ? read2.dest.count : 0 } } : {},
+      ...read2.opened && !read2.lost ? { opened: read2.opened } : {}
     };
     const j = judge(action, ev);
     const how = `${activation === "mouse" ? "clicked" : `synthetic click (${clickWhy})`}${revealedBy !== void 0 ? ` after hovering ${revealedBy}` : ""}`;
-    const saw = read.lost ? "the page loaded a new document" : detectedBy !== void 0 ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
+    const saw = read2.lost ? "the page loaded a new document" : detectedBy !== void 0 ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
     ev.ok = j.ok;
     ev.detail = j.ok ? `${how}: ${saw}, destination ${destId} inside` : `${how}: ${saw} \u2014 ${j.missing.join("; ")}`;
-    if (hooks && hooks.afterOpen && read.opened && !read.lost) await hooks.afterOpen(page, row, read.opened);
+    if (hooks && hooks.afterOpen && read2.opened && !read2.lost) await hooks.afterOpen(page, row, read2.opened);
     return ev;
   } finally {
     await context.close().catch(() => void 0);
@@ -5426,31 +5426,31 @@ async function captureVisual(browser, o) {
       const notes = [];
       const fr = o.frame;
       const sel = fr && fr.via !== "viewport" ? fr.selector : null;
-      const read = await page.evaluate(readFrame, { selector: sel });
+      const read2 = await page.evaluate(readFrame, { selector: sel });
       let origin;
       if (!fr) {
         origin = { x: 0, y: 0 };
         notes.push("no frame root was measured \u2014 the capture starts at the page's origin");
       } else if (fr.via === "viewport") origin = { x: 0, y: 0 };
-      else if (read.rect !== null) origin = { x: read.rect.x, y: read.rect.y };
+      else if (read2.rect !== null) origin = { x: read2.rect.x, y: read2.rect.y };
       else {
         origin = { x: fr.rect.x, y: fr.rect.y };
-        notes.push(`the frame's selector matched ${read.count} element(s) on the capture page \u2014 the measurement pass's position was used`);
+        notes.push(`the frame's selector matched ${read2.count} element(s) on the capture page \u2014 the measurement pass's position was used`);
       }
-      const built0 = fr && fr.via !== "viewport" && read.rect !== null ? read.rect : fr ? fr.rect : null;
+      const built0 = fr && fr.via !== "viewport" && read2.rect !== null ? read2.rect : fr ? fr.rect : null;
       if (built0 !== null && fr && fr.via !== "viewport" && (Math.abs(built0.h - o.frameSize.h) > 1 || Math.abs(built0.w - o.frameSize.w) > 1)) {
         notes.push(`the built frame is ${Math.round(built0.w)}\xD7${Math.round(built0.h)} CSS px and the design ${o.frameSize.w}\xD7${o.frameSize.h} \u2014 only the design-size window at the built frame's top-left is compared`);
       }
       const clip = { x: Math.round(origin.x), y: Math.round(origin.y), w: Math.floor(o.frameSize.w), h: Math.floor(o.frameSize.h) };
       const x0 = Math.max(0, clip.x), y0 = Math.max(0, clip.y);
-      const shot = { x: x0, y: y0, w: Math.max(0, Math.min(clip.x + clip.w, read.doc.w) - x0), h: Math.max(0, Math.min(clip.y + clip.h, read.doc.h) - y0) };
-      if (shot.w < 1 || shot.h < 1) return { why: `the frame's window (${clip.w}\xD7${clip.h} at ${clip.x},${clip.y}) lies outside the ${read.doc.w}\xD7${read.doc.h} document` };
+      const shot = { x: x0, y: y0, w: Math.max(0, Math.min(clip.x + clip.w, read2.doc.w) - x0), h: Math.max(0, Math.min(clip.y + clip.h, read2.doc.h) - y0) };
+      if (shot.w < 1 || shot.h < 1) return { why: `the frame's window (${clip.w}\xD7${clip.h} at ${clip.x},${clip.y}) lies outside the ${read2.doc.w}\xD7${read2.doc.h} document` };
       const nodes = [];
       for (const n of o.nodes) if (n.selectorCount === 1 && typeof n.selector === "string" && n.selector && nodes.length < BUILT_CAP) nodes.push({ id: n.nodeId, selector: n.selector });
       const built = await page.evaluate(readBuilt, { nodes, frame: origin });
       const png = await page.screenshot({ clip: { x: shot.x, y: shot.y, width: shot.w, height: shot.h }, fullPage: true, animations: "disabled", caret: "hide", scale: "device" });
       const after = await page.evaluate(readFrame, { selector: null });
-      if (loads() !== loads0 || after.token !== read.token) return { why: "the page loaded a new document during the visual capture" };
+      if (loads() !== loads0 || after.token !== read2.token) return { why: "the page loaded a new document during the visual capture" };
       return { png, dsf: o.ref.scale, clip, shot, frame: fr ? { nodeId: fr.nodeId, via: fr.via, selector: fr.selector } : { nodeId: "", via: "none", selector: null }, built, notes };
     } finally {
       await context.close().catch(() => void 0);
@@ -5559,42 +5559,204 @@ function gitHead(cwd) {
 }
 
 // design-to-code/verify-run.ts
+import path8 from "node:path";
+
+// design-to-code/run-cache.ts
 import fs4 from "node:fs";
-import os from "node:os";
+import os2 from "node:os";
 import path6 from "node:path";
 
-// bridge/src/atomic-write.ts
+// bridge/src/file-lock.ts
 import crypto2 from "node:crypto";
 import fs3 from "node:fs";
+import os from "node:os";
 import path5 from "node:path";
-var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
-function writeFileAtomic(file, data, opts = {}) {
-  fs3.mkdirSync(path5.dirname(path5.resolve(file)), { recursive: true });
-  const tmp = file + tmpSuffix();
+var STALE_MS = 3e4;
+var WAIT_MS = 1e4;
+var POLL_MS = 25;
+var LIVE_STALE_MS = 2 * 6e4;
+var UNWRITTEN_STALE_MS = 2e3;
+var TRANSIENT_MS = 2e3;
+var TRANSIENT_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
+var lockFileOf = (file) => file + ".lock";
+var breakGuardOf = (lockFile) => lockFile + ".break";
+var LockBusy = class extends Error {
+  lockFile;
+  constructor(lockFile, message) {
+    super(message);
+    this.name = "LockBusy";
+    this.lockFile = lockFile;
+  }
+};
+var LockLost = class extends LockBusy {
+  constructor(lockFile) {
+    super(lockFile, `${lockFile} was taken over by another writer while this one held it \u2014 nothing more written; retry`);
+    this.name = "LockLost";
+  }
+};
+var PID_NS = (() => {
+  if (process.platform !== "linux") return "";
   try {
-    fs3.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
-    if (opts.mode !== void 0) fs3.chmodSync(tmp, opts.mode);
-    fs3.renameSync(tmp, file);
+    return fs3.readlinkSync("/proc/self/ns/pid");
+  } catch {
+    return "";
+  }
+})();
+function holderOf(text) {
+  try {
+    const v = JSON.parse(text);
+    if (v === null || typeof v !== "object" || !("pid" in v) || !("host" in v) || !("at" in v) || !("token" in v)) return null;
+    const { pid, host, at, token } = v;
+    const ns = "ns" in v ? v.ns : "";
+    return typeof pid === "number" && Number.isInteger(pid) && pid > 0 && typeof host === "string" && typeof at === "number" && typeof token === "string" && typeof ns === "string" ? { pid, host, at, token, ns } : null;
+  } catch {
+    return null;
+  }
+}
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
   } catch (e) {
+    return errCode(e) === "EPERM";
+  }
+}
+var sameMachine = (h) => h.host === os.hostname() && h.ns === PID_NS;
+var read = (file) => {
+  try {
+    return fs3.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+};
+var ageOf = (t) => Math.abs(Date.now() - t);
+var describeHolder = (text) => {
+  const h = text === null ? null : holderOf(text);
+  return h ? `process ${h.pid}${h.host !== os.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
+};
+function isStale(file, text, staleMs) {
+  const h = holderOf(text);
+  if (h === null) {
     try {
-      fs3.rmSync(tmp, { force: true });
+      return ageOf(fs3.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
+    } catch {
+      return false;
+    }
+  }
+  if (sameMachine(h)) return !pidAlive(h.pid) || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
+  return ageOf(h.at) > staleMs;
+}
+var stampOf = (token) => JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...PID_NS ? { ns: PID_NS } : {} });
+function claim(file, token) {
+  const fd = fs3.openSync(file, "wx");
+  const mine = stampOf(token);
+  try {
+    fs3.writeSync(fd, mine);
+  } catch (e) {
+    fs3.closeSync(fd);
+    fs3.rmSync(file, { force: true });
+    throw e;
+  }
+  fs3.closeSync(fd);
+  return read(file) === mine ? mine : null;
+}
+function breakStale(lockFile, seen, staleMs = STALE_MS) {
+  const guard = breakGuardOf(lockFile);
+  let mine;
+  try {
+    mine = claim(guard, crypto2.randomBytes(8).toString("hex"));
+  } catch (e) {
+    if (errCode(e) !== "EEXIST") throw e;
+    const g = read(guard);
+    if (g !== null && isStale(guard, g, staleMs) && read(guard) === g) try {
+      fs3.unlinkSync(guard);
     } catch {
     }
-    throw e;
+    return false;
+  }
+  if (mine === null) return false;
+  try {
+    if (read(lockFile) !== seen || !isStale(lockFile, seen, staleMs)) return false;
+    if (read(guard) !== mine) return false;
+    try {
+      fs3.unlinkSync(lockFile);
+    } catch (e) {
+      if (errCode(e) === "ENOENT") return false;
+      throw e;
+    }
+    return true;
+  } finally {
+    if (read(guard) === mine) try {
+      fs3.rmSync(guard, { force: true });
+    } catch {
+    }
+  }
+}
+var maybeTransient = (code) => process.platform === "win32" && code !== void 0 && TRANSIENT_CODES.has(code);
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+var sleepSync = (ms) => {
+  Atomics.wait(sleeper, 0, 0, ms);
+};
+function acquireFileLock(lockFile, opts = {}) {
+  const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
+  const token = crypto2.randomBytes(8).toString("hex");
+  fs3.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
+  const t0 = Date.now();
+  let firstTransientAt = null;
+  const transientYet = (e) => {
+    if (!maybeTransient(errCode(e))) return false;
+    firstTransientAt ??= Date.now();
+    return Date.now() - firstTransientAt < TRANSIENT_MS;
+  };
+  for (; ; ) {
+    let mine = null, text = null, transient = false;
+    let refused = null;
+    try {
+      mine = claim(lockFile, token);
+    } catch (e) {
+      const code = errCode(e);
+      if (code === "EEXIST") {
+        text = read(lockFile);
+        if (text !== null && isStale(lockFile, text, staleMs)) {
+          try {
+            if (breakStale(lockFile, text, staleMs)) continue;
+          } catch (be) {
+            if (transientYet(be)) transient = true;
+            else refused = be;
+          }
+        }
+      } else if (transientYet(e)) transient = true;
+      else throw e;
+    }
+    if (!transient) firstTransientAt = null;
+    if (mine !== null) {
+      const held = mine;
+      const stillMine = () => read(lockFile) === held;
+      return {
+        // only our own lock: one broken as stale and taken by another holder is theirs now
+        release: () => {
+          if (stillMine()) try {
+            fs3.rmSync(lockFile, { force: true });
+          } catch {
+          }
+        },
+        stillMine,
+        assertMine: () => {
+          if (!stillMine()) throw new LockLost(lockFile);
+        }
+      };
+    }
+    const waited = Date.now() - t0;
+    if (waited >= waitMs) {
+      if (refused !== null) throw refused;
+      if (transient) throw new LockBusy(lockFile, `${lockFile} could not be created for ${Math.round((Date.now() - (firstTransientAt ?? t0)) / 100) / 10}s (a lock just released is still being removed, or a scan holds it); retry`);
+      throw new LockBusy(lockFile, `${lockFile} is held by ${describeHolder(text)} \u2014 another write was still in progress after ${Math.round(waited / 100) / 10}s; retry once it is done`);
+    }
+    sleepSync(Math.min(POLL_MS, waitMs - waited));
   }
 }
 
-// design-to-code/verify-run.ts
-var STATUS_SCHEMA = "designtwin/verify-status@2";
-var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
-var TERMINAL_PHASES = ["done", "failed", "blocked"];
-var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
-}
-isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var statusFile = (base) => base + ".status.json";
+// design-to-code/run-cache.ts
 var CACHE_NAME = "designtwin-verify";
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
@@ -5659,7 +5821,7 @@ function runCacheOf(verifyDir) {
     const rel = path6.relative(root, v).split(path6.sep).join("/");
     return { dir: rel === VERIFY_DIR.split(path6.sep).join("/") ? cache : path6.join(cache, "dirs", shortSha(rel)), root };
   }
-  return { dir: path6.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+  return { dir: path6.join(os2.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
 }
 function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
@@ -5677,6 +5839,39 @@ var RunCacheUnwritable = class extends Error {
     this.root = root;
   }
 };
+
+// bridge/src/atomic-write.ts
+import crypto3 from "node:crypto";
+import fs5 from "node:fs";
+import path7 from "node:path";
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto3.randomBytes(4).toString("hex")}`;
+function writeFileAtomic(file, data, opts = {}) {
+  fs5.mkdirSync(path7.dirname(path7.resolve(file)), { recursive: true });
+  const tmp = file + tmpSuffix();
+  try {
+    fs5.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.mode !== void 0) fs5.chmodSync(tmp, opts.mode);
+    fs5.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs5.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+
+// design-to-code/verify-run.ts
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var statusFile = (base) => base + ".status.json";
 function inRunCache(verifyDir, fn) {
   try {
     return fn();
@@ -5689,8 +5884,9 @@ function inRunCache(verifyDir, fn) {
     throw e;
   }
 }
-var liveStatusFile = (base) => path6.join(runCacheDir(path6.dirname(base)), path6.basename(base) + ".status.json");
-var stageDirOf = (base, runId) => path6.join(runCacheDir(path6.dirname(base)), "stage", runId);
+var liveStatusFile = (base) => path8.join(runCacheDir(path8.dirname(base)), path8.basename(base) + ".status.json");
+var lockFileOfStatus = (base) => lockFileOf(liveStatusFile(base));
+var stageDirOf = (base, runId) => path8.join(runCacheDir(path8.dirname(base)), "stage", runId);
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
@@ -5714,42 +5910,56 @@ var RunEnded = class extends Error {
     this.name = "RunEnded";
   }
 };
-function writeStatus(base, p) {
-  const prev = readStatus(base);
-  const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
-  if (same && TERMINAL_PHASES.includes(same.phase)) throw new RunEnded(same.runId, same.phase, same.detail);
-  const pick = (k) => {
-    const v = p[k] ?? (same ? same[k] : void 0);
-    return v !== void 0 ? { [k]: v } : {};
-  };
-  const published = p.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...p.published || []])].sort() : void 0;
-  const doc = {
-    schema: STATUS_SCHEMA,
-    screen: path6.basename(base),
-    runId: p.runId,
-    rev: same ? same.rev + 1 : 1,
-    phase: p.phase,
-    detail: p.detail ?? "",
-    at: (/* @__PURE__ */ new Date()).toISOString(),
-    by: p.by,
-    ...pick("expectationSha256"),
-    ...pick("measuredSha256"),
-    ...pick("evidenceSha256"),
-    ...published !== void 0 ? { published } : {}
-  };
-  const live = liveStatusFile(base);
-  inRunCache(path6.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
-  return doc;
+function endedRun(prev, runId) {
+  return prev && prev !== "v1" && prev.runId === runId && TERMINAL_PHASES.includes(prev.phase) ? new RunEnded(prev.runId, prev.phase, prev.detail) : null;
+}
+var STATUS_LOCK = { waitMs: 15e3 };
+function writeStatus(base, p, hooks = {}) {
+  const live = liveStatusFile(base), dir = path8.dirname(base);
+  const lock = inRunCache(dir, () => acquireFileLock(lockFileOfStatus(base), STATUS_LOCK));
+  try {
+    const prev = readStatus(base);
+    const ended = endedRun(prev, p.runId);
+    if (ended) throw ended;
+    const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+    lock.assertMine();
+    const w = hooks.before ? { ...p, ...hooks.before() } : p;
+    const pick = (k) => {
+      const v = w[k] ?? (same ? same[k] : void 0);
+      return v !== void 0 ? { [k]: v } : {};
+    };
+    const published = w.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...w.published || []])].sort() : void 0;
+    const doc = {
+      schema: STATUS_SCHEMA,
+      screen: path8.basename(base),
+      runId: w.runId,
+      rev: same ? same.rev + 1 : 1,
+      phase: w.phase,
+      detail: w.detail ?? "",
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      by: w.by,
+      ...pick("expectationSha256"),
+      ...pick("measuredSha256"),
+      ...pick("evidenceSha256"),
+      ...published !== void 0 ? { published } : {}
+    };
+    lock.assertMine();
+    inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+    hooks.after?.(doc);
+    return doc;
+  } finally {
+    lock.release();
+  }
 }
 
 // bridge/src/is-main.ts
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs5.realpathSync(argv1) === fs5.realpathSync(fileURLToPath2(metaUrl));
+    return fs6.realpathSync(argv1) === fs6.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -5763,24 +5973,24 @@ function isPlaywrightModule(x) {
   return typeof c === "object" && c !== null && "launch" in c && typeof c.launch === "function";
 }
 function installHint(dir) {
-  const has = (f) => fs6.existsSync(path7.join(dir, f));
+  const has = (f) => fs7.existsSync(path9.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm add -D playwright && pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn add -D playwright && yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bun add -d playwright && bunx playwright install chromium";
   return "npm i -D playwright && npx playwright install chromium";
 }
 function browserHint(dir) {
-  const has = (f) => fs6.existsSync(path7.join(dir, f));
+  const has = (f) => fs7.existsSync(path9.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bunx playwright install chromium";
   return "npx playwright install chromium";
 }
 function projectRequire(dir) {
-  return createRequire(path7.join(path7.resolve(dir), "package.json"));
+  return createRequire(path9.join(path9.resolve(dir), "package.json"));
 }
 function resolvePlaywright(dir) {
-  const abs = path7.resolve(dir);
+  const abs = path9.resolve(dir);
   const req = projectRequire(abs);
   const tried = [];
   for (const name of PLAYWRIGHT_PACKAGES) {
@@ -5810,8 +6020,8 @@ function resolvePlaywright(dir) {
     }
     return { ok: true, pkg: name, version, mod, file };
   }
-  const pnp = fs6.existsSync(path7.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
-  return { ok: false, reason: `no playwright package resolvable from ${path7.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
+  const pnp = fs7.existsSync(path9.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
+  return { ok: false, reason: `no playwright package resolvable from ${path9.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
 }
 function resolveAxe(dir) {
   const req = projectRequire(dir);
@@ -5858,8 +6068,8 @@ async function launch(r, dir, executablePath) {
 function browserPathError(p) {
   let ok = false;
   try {
-    ok = fs6.statSync(p).isFile();
-    if (ok) fs6.accessSync(p, fs6.constants.X_OK);
+    ok = fs7.statSync(p).isFile();
+    if (ok) fs7.accessSync(p, fs7.constants.X_OK);
   } catch {
     ok = false;
   }
@@ -5867,13 +6077,13 @@ function browserPathError(p) {
 }
 var SELF2 = fileURLToPath3(import.meta.url);
 function probeVersion() {
-  for (const p of [path7.join(path7.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path7.join(path7.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
+  for (const p of [path9.join(path9.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path9.join(path9.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
     const doc = readJsonOrNull(p, isJsonObject);
     if (doc && typeof doc.version === "string") return doc.version;
   }
   return null;
 }
-var selfSha256 = () => sha256Hex(fs6.readFileSync(SELF2));
+var selfSha256 = () => sha256Hex(fs7.readFileSync(SELF2));
 var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
 function buildFrom(url, served, viteClient, unhashed = 0) {
   const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
@@ -5901,7 +6111,7 @@ var INIT_SCRIPT = `(() => {
 })();`;
 var QUIET_MS = 500;
 var QUIET_CAP_MS = 1e4;
-var POLL_MS = 100;
+var POLL_MS2 = 100;
 function errorKind(e, page) {
   const kind = pwErrorKind(e, page);
   return kind === "timeout" ? "other" : kind;
@@ -6006,12 +6216,12 @@ async function settle(page, log, ready, timeout) {
       }
       if (token === null && now !== null) token = now;
       if (moved() && Date.now() < docDeadline) {
-        await sleep4(POLL_MS);
+        await sleep4(POLL_MS2);
         continue;
       }
       if (moved()) throw kept();
       if (errorKind(e) === "navigated" && Date.now() < docDeadline) {
-        await sleep4(POLL_MS);
+        await sleep4(POLL_MS2);
         continue;
       }
       throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${firstLine(e)}` : firstLine(e));
@@ -6019,7 +6229,7 @@ async function settle(page, log, ready, timeout) {
     let mark = log.docLoads;
     let last = "", since = Date.now();
     for (; ; ) {
-      await sleep4(POLL_MS);
+      await sleep4(POLL_MS2);
       let tok, sig;
       try {
         const v = await page.evaluate("[window.__dtProbeDoc || '', document.getElementsByTagName('*').length + ':' + (document.body && document.body.textContent || '').length]");
@@ -6072,7 +6282,7 @@ async function oneVisible(page, sel, wait, name, atLeastOne = false) {
     if (Date.now() >= deadline) {
       throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1e3)}s \u2014 ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
     }
-    await sleep4(POLL_MS);
+    await sleep4(POLL_MS2);
   }
 }
 function linkHref(el) {
@@ -6484,22 +6694,22 @@ async function runProbe(browser, o) {
     if (u.origin !== origin) return;
     if (u.pathname === "/@vite/client") viteClient = true;
     const g = gen;
-    const read = { path: u.pathname, state: "pending", done: Promise.resolve() };
+    const read2 = { path: u.pathname, state: "pending", done: Promise.resolve() };
     const body = res.body().then((b) => {
       if (g === gen) served.set(u.pathname, sha256Hex(b));
-      read.state = "hashed";
+      read2.state = "hashed";
     }, () => {
-      read.state = "no body";
+      read2.state = "no body";
     });
     const failed = res.finished().then((err) => {
       if (!err) return body;
-      read.state = "failed";
+      read2.state = "failed";
       return void 0;
     }, () => {
-      read.state = "failed";
+      read2.state = "failed";
     });
-    read.done = Promise.race([body, failed]);
-    bodies.push(read);
+    read2.done = Promise.race([body, failed]);
+    bodies.push(read2);
   });
   const log = attachNavLog(page);
   const consoleErrors = [];
@@ -6583,9 +6793,10 @@ var USAGE = `usage:
       file \u2192 exit 3. measured.probe.browser.executable says "custom"; the path is printed, never written to a file.
   ${scriptCmd("verify-probe")} --check [--project <dir>] [--browser-path <executable>]
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
-exit: 0 wrote \xB7 2 usage \xB7 3 renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept
-      navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time / a --steps step
-      failed / the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).`;
+exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the probe ran \u2014 also instead of a 3 or 4 \xB7 3
+      renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept navigating / reloaded twice
+      during measurement / was unreachable / timed out / passed --max-time / a --steps step failed /
+      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).`;
 var MAX_TIME_DEFAULT = 18e4;
 async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS) {
   const cap = () => sleep4(capMs, void 0, { ref: false });
@@ -6607,6 +6818,12 @@ function killBrowserChildren() {
     }
   } catch {
   }
+}
+var statusRefusalOf = (e) => e instanceof LockLost ? "lost" : e instanceof LockBusy ? "busy" : "cache";
+function measuredRefusedWhy(by, runId) {
+  if (by === "lost") return `another writer took over the status lock of run ${runId} while the probe's \`measured\` status write held it, so that write was not made`;
+  if (by === "busy") return `another status write held the status lock of run ${runId} for the whole wait, so the probe's \`measured\` status write was not made`;
+  return `the run cache refused the probe's \`measured\` status write for run ${runId}`;
 }
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) {
@@ -6635,7 +6852,7 @@ async function main(argv) {
     "browser-path": { type: "string" }
   };
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: false }));
-  const project = path7.resolve(f.project ?? ".");
+  const project = path9.resolve(f.project ?? ".");
   const timeout = f.timeout === void 0 ? 3e4 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) {
     console.error(`verify-probe: --timeout must be a positive number of milliseconds
@@ -6690,7 +6907,7 @@ ${USAGE}`);
       return 2;
     }
     steps = parsed.steps;
-    stepsSource = `--steps ${(path7.relative(process.cwd(), path7.resolve(f.steps)) || f.steps).split(path7.sep).join("/")}`;
+    stepsSource = `--steps ${(path9.relative(process.cwd(), path9.resolve(f.steps)) || f.steps).split(path9.sep).join("/")}`;
   }
   let expectation = null, expBytes = null;
   let viewport = { w: 1280, h: 800 };
@@ -6702,7 +6919,7 @@ ${USAGE}`);
       return 2;
     }
     expectation = r2.doc;
-    expBytes = fs6.readFileSync(f.expected);
+    expBytes = fs7.readFileSync(f.expected);
     const fr = expectation.frame || {};
     if (f.viewport !== void 0) {
       const m = /^(\d+)x(\d+)$/i.exec(f.viewport.trim());
@@ -6715,37 +6932,34 @@ ${USAGE}`);
     } else if (typeof fr.w === "number" && typeof fr.h === "number") viewport = { w: Math.round(fr.w), h: Math.round(fr.h) };
     else notes.push("the expectation states no frame size \u2014 measured at 1280x800; pass --viewport");
   }
-  const outBase = f.out ?? (f.expected ? path7.join(path7.dirname(f.expected), path7.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
-  const statusBase = f.expected ? path7.join(path7.dirname(f.expected), path7.basename(outBase)) : "";
+  const outBase = f.out ?? (f.expected ? path9.join(path9.dirname(f.expected), path9.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
+  const statusBase = f.expected ? path9.join(path9.dirname(f.expected), path9.basename(outBase)) : "";
   const expSha = expBytes ? sha256Hex(expBytes) : void 0;
   const runId = f.run !== void 0 && !f.check && statusBase ? f.run : void 0;
-  const endedRun = () => {
-    if (runId === void 0) return false;
-    const prev = readStatus(statusBase);
-    if (!prev || prev === "v1" || prev.runId !== runId || !TERMINAL_PHASES.includes(prev.phase)) return false;
-    console.error(`verify-probe: run ${runId} already ended at ${prev.phase}${prev.detail ? ` (${prev.detail})` : ""} \u2014 start a new run with --new-run`);
-    return true;
-  };
-  if (endedRun()) return 2;
-  let endedMeanwhile = false;
-  const status = (w) => {
+  const endedAtStart = runId !== void 0 ? endedRun(readStatus(statusBase), runId) : null;
+  if (endedAtStart) {
+    console.error(`verify-probe: ${endedAtStart.message}`);
+    return 2;
+  }
+  const refusal = { by: "cache" };
+  const status = (w, before) => {
     try {
-      writeStatus(statusBase, w);
-      return true;
+      writeStatus(statusBase, w, before ? { before } : {});
+      return "ok";
     } catch (e) {
       if (e instanceof RunEnded) {
-        endedMeanwhile = true;
-        console.error(`warning  ${e.message} \u2014 it ended while this probe ran; its status is left as it is`);
-        return true;
+        console.error(`verify-probe: ${e.message} \u2014 it ended while this probe ran; its status is left as it is`);
+        return "ended";
       }
-      if (!(e instanceof RunCacheUnwritable)) throw e;
+      if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
       console.error(`warning  ${e.message}`);
-      return false;
+      refusal.by = statusRefusalOf(e);
+      return "refused";
     }
   };
   const ended = (code) => {
     if (runId !== void 0 && (code === 3 || code === 4)) {
-      status({ runId, phase: "measuring", by: "verify-probe", detail: `probe exit ${code} \u2014 nothing written`, ...expSha ? { expectationSha256: expSha } : {} });
+      if (status({ runId, phase: "measuring", by: "verify-probe", detail: `probe exit ${code} \u2014 nothing written`, ...expSha ? { expectationSha256: expSha } : {} }) === "ended") return 2;
     }
     return code;
   };
@@ -6756,8 +6970,9 @@ ${USAGE}`);
   }
   const res = resolvePlaywright(project);
   if (!res.ok) return ended(rendererUnavailable(res.reason, res.hint));
-  const measuringRecorded = runId !== void 0 && status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...expSha ? { expectationSha256: expSha } : {} });
-  if (endedMeanwhile) return 2;
+  const measuring = runId !== void 0 ? status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...expSha ? { expectationSha256: expSha } : {} }) : "refused";
+  if (measuring === "ended") return 2;
+  const measuringRecorded = runId !== void 0 && measuring === "ok";
   if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
   const held = {};
   let timer;
@@ -6774,7 +6989,7 @@ ${USAGE}`);
     const browserLine = `chromium ${identity2.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`;
     if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
       await browser.close();
-      console.log(`ok  ${res.pkg} ${res.version} (from ${path7.relative(project, res.file) || res.file}) \xB7 ${browserLine} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
+      console.log(`ok  ${res.pkg} ${res.version} (from ${path9.relative(project, res.file) || res.file}) \xB7 ${browserLine} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
       return 0;
     }
     let run2;
@@ -6867,7 +7082,7 @@ ${USAGE}`);
               await reachPage(page, attachNavLog(page), probeOpts);
             },
             axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
-            forcedPng: (outBase + ".forced-colors.png").split(path7.sep).join("/")
+            forcedPng: (outBase + ".forced-colors.png").split(path9.sep).join("/")
           });
           behaviour2 = r2.behaviour;
           forcedPng2 = r2.forcedPng;
@@ -6935,19 +7150,13 @@ ${USAGE}`);
   const diffPath = outBase + ".diff.png";
   let visual = { version: 1, ran: false, why: prep.ok ? "not captured" : prep.why };
   let diffPng = null;
-  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path7.sep).join("/"), captureMs }));
-  try {
-    if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
-    else if (fs6.existsSync(diffPath)) fs6.rmSync(diffPath, { force: true });
-  } catch (e) {
-    console.error(`warning  ${diffPath}: ${firstLine(e)} \u2014 the visual diff image is not written`);
-    if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
-  }
-  const measured = {
+  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path9.sep).join("/"), captureMs }));
+  const allNotes = [...notes, ...r.notes, ...driveNote !== null ? [driveNote] : []];
+  const measuredBase = {
     measuredAt: (/* @__PURE__ */ new Date()).toISOString(),
     renderer: "playwright-chromium",
     viewport: `${viewport.w}x${viewport.h}`,
-    artifacts: [png.split(path7.sep).join("/")],
+    artifacts: [png.split(path9.sep).join("/")],
     expectationSha256: sha256Hex(expBytes),
     probe: identity,
     ...firstFrame ? { frame: frameOut(firstFrame) } : {},
@@ -6964,29 +7173,51 @@ ${USAGE}`);
     ...stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {},
     page: r.page,
     ...driven ? { interactions: driven } : {},
-    behaviour,
-    visual
+    behaviour
   };
-  const allNotes = [...notes, ...r.notes, ...driveNote !== null ? [driveNote] : []];
-  const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
-  if (endedRun()) return 2;
-  writeFileAtomic(png, r.png);
-  const forcedPath = outBase + ".forced-colors.png";
-  try {
-    if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
-    else if (fs6.existsSync(forcedPath)) fs6.rmSync(forcedPath, { force: true });
-  } catch (e) {
-    console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
+  let written = false, statusRefused = false;
+  const writeFiles = () => {
+    try {
+      if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
+      else if (fs7.existsSync(diffPath)) fs7.rmSync(diffPath, { force: true });
+    } catch (e) {
+      console.error(`warning  ${diffPath}: ${firstLine(e)} \u2014 the visual diff image is not written`);
+      if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
+    }
+    const measured = { ...measuredBase, visual };
+    const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
+    writeFileAtomic(png, r.png);
+    const forcedPath = outBase + ".forced-colors.png";
+    try {
+      if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
+      else if (fs7.existsSync(forcedPath)) fs7.rmSync(forcedPath, { force: true });
+    } catch (e) {
+      console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
+    }
+    writeFileAtomic(outBase + ".measured.json", measuredText);
+    written = true;
+    return { measuredSha256: sha256Hex(measuredText) };
+  };
+  if (runId === void 0) writeFiles();
+  else {
+    const wrote = status({
+      runId,
+      phase: "measured",
+      by: "verify-probe",
+      detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
+      ...expSha ? { expectationSha256: expSha } : {}
+    }, writeFiles);
+    if (wrote === "ended") return 2;
+    if (wrote === "refused") {
+      statusRefused = true;
+      const endedNow = written ? null : endedRun(readStatus(statusBase), runId);
+      if (endedNow) {
+        console.error(`verify-probe: ${endedNow.message}`);
+        return 2;
+      }
+      if (!written) writeFiles();
+    }
   }
-  writeFileAtomic(outBase + ".measured.json", measuredText);
-  const statusRefused = runId !== void 0 && !status({
-    runId,
-    phase: "measured",
-    by: "verify-probe",
-    detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
-    ...expSha ? { expectationSha256: expSha } : {},
-    measuredSha256: sha256Hex(measuredText)
-  });
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
   console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) \u2014 tag ${c.tag} \xB7 shared path ${c.sharedPath} \xB7 alias ${c.tagAlias} \xB7 text ${c.text} \xB7 ordinal ${c.textOrdinal} \xB7 position ${c.position} \xB7 frame ${c.frame} \xB7 not measured ${c.notMeasured} \xB7 frame root via ${firstFrame ? firstFrame.via : "none"} \xB7 navigations after load ${run.navigation.afterInitialLoad}, re-runs ${run.navigation.reruns}`);
@@ -7001,11 +7232,10 @@ ${USAGE}`);
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`);
   if (statusRefused && runId !== void 0) {
-    const outDir = path7.resolve(path7.dirname(outBase)), verifyDir = path7.resolve(path7.dirname(statusBase));
-    const findable = outDir === verifyDir || outDir === path7.resolve(stageDirOf(statusBase, runId));
-    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path7.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
+    const outDir = path9.resolve(path9.dirname(outBase)), verifyDir = path9.resolve(path9.dirname(statusBase));
+    const findable = outDir === verifyDir || outDir === path9.resolve(stageDirOf(statusBase, runId));
+    console.error(`warning  ${outBase}.measured.json is written, but ${measuredRefusedWhy(refusal.by, runId)}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it${refusal.by === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path9.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
   }
-  if (endedMeanwhile) return 2;
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
   return 0;
 }
@@ -7038,10 +7268,12 @@ export {
   linkHref,
   loadFailureWhy,
   main,
+  measuredRefusedWhy,
   projectRequire,
   resolveAxe,
   resolvePlaywright,
-  runProbe
+  runProbe,
+  statusRefusalOf
 };
 /*! visual-diff.ts — colorDelta, antialiased and hasManySiblings are a port of pixelmatch v6.0.0 (index.js,
  * https://github.com/mapbox/pixelmatch/tree/v6.0.0), under its licence:
