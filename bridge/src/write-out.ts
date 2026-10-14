@@ -25,7 +25,7 @@ import { collectGraphics, reuseHiddenAssets, usesByPointer } from "./asset-owner
 import { FileMemo } from "./file-memo.ts";
 import type { FileMemoOptions } from "./file-memo.ts";
 import type { AssetContext, AssetOwner, Graphic, ReuseResult } from "./asset-owners.ts";
-import { EXPORT_DIR as DEFAULT_OUT_DIR } from "./project-layout.ts";
+import { EXPORT_DIR as DEFAULT_OUT_DIR, MERGED_VARIABLES_FILE } from "./project-layout.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { errMsg, errCode } from "./errmsg.ts";
 import { pngSize } from "./png.ts";
@@ -1113,10 +1113,10 @@ function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | nu
 function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesDoc, log?: Log): { total: number; fromThisScreen: number; added: number; conflicts: number; screens: number } {
   writeJson(dir, paths.variables, slice, true);
 
-  const target = path.join(dir, "variables.json");
+  const target = path.join(dir, MERGED_VARIABLES_FILE);
   let prev: unknown = readJsonOr(target, null);
   const { doc, stats } = mergeVariablesDoc(prev, slice, { screen: paths.base, file: paths.screen });
-  writeJson(dir, "variables.json", doc, true);
+  writeJson(dir, MERGED_VARIABLES_FILE, doc, true);
 
   if (log) {
     const sliceN = Array.isArray(slice.variables) ? slice.variables.length : 0;

@@ -75,7 +75,8 @@ node test/verify-screen.test.ts        # expect: all checks pass, exit 0 — the
                                        # coverage, reactions and `--interactions` checks, and the rule that an
                                        # unmeasured expectation is not a passed one
 node test/design-diff.test.ts          # expect: all checks pass, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
-                                       # token diffs, baseline choice, re-drawn assets, --snapshot/--force CLI)
+                                       # token diffs, baseline choice, re-drawn assets, --snapshot/--force CLI, the
+                                       # export-directory report, a second sync replacing the spent snapshot)
 node test/identity.test.ts             # expect: all checks pass, exit 0 — token and component IDENTITY on livetest-3's
                                        # real export (test/fixtures/livetest3/): two variables sharing a name are both
                                        # emitted, diffed and attributed by KEY; theme.css cannot shadow Tailwind's scale;
