@@ -13,6 +13,12 @@
 //   node test/lock-child.ts worker <lockFile> <markerFile> <untilMs>        until untilMs: lock → create markerFile O_EXCL (EEXIST:
 //                                                                           another holder is inside) → nap 1 ms → remove → release;
 //                                                                           prints {"rounds", "overlaps"}
+//   node test/lock-child.ts transient <lockFile> <waitMs> <busyMs> <refuseMs> lock|guard
+//                                                                           reports as win32; "lock": a live lock (this pid)
+//                                                                           held busyMs, then released, and creating it refused
+//                                                                           (EPERM) refuseMs (-1: always); "guard": a dead
+//                                                                           holder's lock whose break guard is always refused;
+//                                                                           one acquire, printed like "try"
 import fs from "node:fs";
 import os from "node:os";
 import { acquireFileLock, withFileLock } from "../bridge/src/file-lock.ts";
@@ -87,6 +93,33 @@ if (mode === "counter") {
     rounds++;
   }
   process.stdout.write(JSON.stringify({ rounds, overlaps }));
+} else if (mode === "transient") {
+  const [, , , , refuseArg = "-1", kind = "lock"] = process.argv.slice(2);
+  const busyMs = Number(c), refuseMs = Number(refuseArg);
+  const guard = a + ".break";
+  // "guard": another host's lock a minute old — a dead holder's whatever pid it names
+  fs.writeFileSync(a, JSON.stringify(kind === "guard" ? { pid: process.pid, host: "another-host.invalid", at: Date.now() - 60_000, token: "child" }
+    : { pid: process.pid, host: os.hostname(), at: Date.now(), token: "child" }));
+  Object.defineProperty(process, "platform", { value: "win32" });
+  const t0 = Date.now();
+  let refusedFrom: number | null = null;
+  const openSync = fs.openSync;
+  const eperm = (p: string): Error => Object.assign(new Error(`EPERM: operation not permitted, open '${p}'`), { code: "EPERM" });
+  fs.openSync = (...args: Parameters<typeof fs.openSync>): number => {
+    const [p, flags] = args;
+    if (flags === "wx" && kind === "guard" && p === guard) throw eperm(guard);
+    if (flags === "wx" && kind === "lock" && p === a && Date.now() - t0 >= busyMs) {
+      if (refusedFrom === null) { refusedFrom = Date.now(); fs.rmSync(a, { force: true }); } // released, still delete-pending
+      if (refuseMs < 0 || Date.now() - refusedFrom < refuseMs) throw eperm(a);
+    }
+    return Reflect.apply(openSync, fs, args);
+  };
+  let name = "acquired", code = "";
+  try { acquireFileLock(a, { waitMs: Number(b) }).release(); } catch (e) {
+    name = e instanceof Error ? e.name : "?";
+    code = e !== null && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : "";
+  }
+  process.stdout.write(JSON.stringify({ ms: Date.now() - t0, name, code }));
 } else {
   console.error(`lock-child: unknown mode '${mode ?? ""}'`);
   process.exitCode = 2;

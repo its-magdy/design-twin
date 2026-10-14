@@ -5542,9 +5542,8 @@ import path5 from "node:path";
 var STALE_MS = 3e4;
 var WAIT_MS = 1e4;
 var POLL_MS = 25;
-var LIVE_STALE_MS = 10 * 6e4;
+var LIVE_STALE_MS = 2 * 6e4;
 var UNWRITTEN_STALE_MS = 2e3;
-var GUARD_STALE_MS = 5e3;
 var TRANSIENT_MS = 2e3;
 var TRANSIENT_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
 var lockFileOf = (file) => file + ".lock";
@@ -5603,11 +5602,11 @@ var describeHolder = (text) => {
   const h = text === null ? null : holderOf(text);
   return h ? `process ${h.pid}${h.host !== os.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
 };
-function isStale(lockFile, text, staleMs) {
+function isStale(file, text, staleMs) {
   const h = holderOf(text);
   if (h === null) {
     try {
-      return ageOf(fs3.statSync(lockFile).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
+      return ageOf(fs3.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
     } catch {
       return false;
     }
@@ -5615,22 +5614,38 @@ function isStale(lockFile, text, staleMs) {
   if (sameMachine(h)) return !pidAlive(h.pid) || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
   return ageOf(h.at) > staleMs;
 }
-function breakStale(lockFile, seen) {
-  const guard = breakGuardOf(lockFile);
-  let fd;
+var stampOf = (token) => JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...PID_NS ? { ns: PID_NS } : {} });
+function claim(file, token) {
+  const fd = fs3.openSync(file, "wx");
+  const mine = stampOf(token);
   try {
-    fd = fs3.openSync(guard, "wx");
+    fs3.writeSync(fd, mine);
+  } catch (e) {
+    fs3.closeSync(fd);
+    fs3.rmSync(file, { force: true });
+    throw e;
+  }
+  fs3.closeSync(fd);
+  return read(file) === mine ? mine : null;
+}
+function breakStale(lockFile, seen, staleMs = STALE_MS) {
+  const guard = breakGuardOf(lockFile);
+  let mine;
+  try {
+    mine = claim(guard, crypto2.randomBytes(8).toString("hex"));
   } catch (e) {
     if (errCode(e) !== "EEXIST") throw e;
-    try {
-      if (ageOf(fs3.statSync(guard).mtimeMs) > GUARD_STALE_MS) fs3.rmSync(guard, { force: true });
+    const g = read(guard);
+    if (g !== null && isStale(guard, g, staleMs) && read(guard) === g) try {
+      fs3.unlinkSync(guard);
     } catch {
     }
     return false;
   }
-  fs3.closeSync(fd);
+  if (mine === null) return false;
   try {
-    if (read(lockFile) !== seen) return false;
+    if (read(lockFile) !== seen || !isStale(lockFile, seen, staleMs)) return false;
+    if (read(guard) !== mine) return false;
     try {
       fs3.unlinkSync(lockFile);
     } catch (e) {
@@ -5639,12 +5654,13 @@ function breakStale(lockFile, seen) {
     }
     return true;
   } finally {
-    try {
+    if (read(guard) === mine) try {
       fs3.rmSync(guard, { force: true });
     } catch {
     }
   }
 }
+var maybeTransient = (code) => process.platform === "win32" && code !== void 0 && TRANSIENT_CODES.has(code);
 var sleeper = new Int32Array(new SharedArrayBuffer(4));
 var sleepSync = (ms) => {
   Atomics.wait(sleeper, 0, 0, ms);
@@ -5654,37 +5670,36 @@ function acquireFileLock(lockFile, opts = {}) {
   const token = crypto2.randomBytes(8).toString("hex");
   fs3.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
   const t0 = Date.now();
+  let firstTransientAt = null;
+  const transientYet = (e) => {
+    if (!maybeTransient(errCode(e))) return false;
+    firstTransientAt ??= Date.now();
+    return Date.now() - firstTransientAt < TRANSIENT_MS;
+  };
   for (; ; ) {
-    let fd = null, text = null;
+    let mine = null, text = null, transient = false;
     let refused = null;
     try {
-      fd = fs3.openSync(lockFile, "wx");
+      mine = claim(lockFile, token);
     } catch (e) {
       const code = errCode(e);
       if (code === "EEXIST") {
         text = read(lockFile);
         if (text !== null && isStale(lockFile, text, staleMs)) {
           try {
-            if (breakStale(lockFile, text)) continue;
+            if (breakStale(lockFile, text, staleMs)) continue;
           } catch (be) {
-            refused = be;
+            if (transientYet(be)) transient = true;
+            else refused = be;
           }
         }
-      } else if (process.platform === "win32" && code !== void 0 && TRANSIENT_CODES.has(code) && Date.now() - t0 < Math.min(waitMs, TRANSIENT_MS)) {
-        refused = e;
-      } else throw e;
+      } else if (transientYet(e)) transient = true;
+      else throw e;
     }
-    if (fd !== null) {
-      const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...PID_NS ? { ns: PID_NS } : {} });
-      try {
-        fs3.writeSync(fd, mine);
-      } catch (e) {
-        fs3.closeSync(fd);
-        fs3.rmSync(lockFile, { force: true });
-        throw e;
-      }
-      fs3.closeSync(fd);
-      const stillMine = () => read(lockFile) === mine;
+    if (!transient) firstTransientAt = null;
+    if (mine !== null) {
+      const held = mine;
+      const stillMine = () => read(lockFile) === held;
       return {
         // only our own lock: one broken as stale and taken by another holder is theirs now
         release: () => {
@@ -5702,6 +5717,7 @@ function acquireFileLock(lockFile, opts = {}) {
     const waited = Date.now() - t0;
     if (waited >= waitMs) {
       if (refused !== null) throw refused;
+      if (transient) throw new LockBusy(lockFile, `${lockFile} could not be created for ${Math.round((Date.now() - (firstTransientAt ?? t0)) / 100) / 10}s (a lock just released is still being removed, or a scan holds it); retry`);
       throw new LockBusy(lockFile, `${lockFile} is held by ${describeHolder(text)} \u2014 another write was still in progress after ${Math.round(waited / 100) / 10}s; retry once it is done`);
     }
     sleepSync(Math.min(POLL_MS, waitMs - waited));
@@ -5778,6 +5794,19 @@ function runCacheOf(verifyDir) {
 function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
 }
+var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
+var RunCacheUnwritable = class extends Error {
+  cacheDir;
+  root;
+  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
+   *  permission: a directory on the way was removed while the run wrote there */
+  constructor(cacheDir, root, code) {
+    super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
+    this.name = "RunCacheUnwritable";
+    this.cacheDir = cacheDir;
+    this.root = root;
+  }
+};
 
 // bridge/src/atomic-write.ts
 import crypto3 from "node:crypto";
@@ -5811,19 +5840,6 @@ function isVerifyStatusV2(x) {
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
-var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
-var RunCacheUnwritable = class extends Error {
-  cacheDir;
-  root;
-  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
-   *  permission: a directory on the way was removed while the run wrote there */
-  constructor(cacheDir, root, code) {
-    super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
-    this.name = "RunCacheUnwritable";
-    this.cacheDir = cacheDir;
-    this.root = root;
-  }
-};
 function inRunCache(verifyDir, fn) {
   try {
     return fn();
@@ -6770,6 +6786,12 @@ function killBrowserChildren() {
   } catch {
   }
 }
+var statusRefusalOf = (e) => e instanceof LockLost ? "lost" : e instanceof LockBusy ? "busy" : "cache";
+function measuredRefusedWhy(by, runId) {
+  if (by === "lost") return `another writer took over the status lock of run ${runId} while the probe's \`measured\` status write held it, so that write was not made`;
+  if (by === "busy") return `another status write held the status lock of run ${runId} for the whole wait, so the probe's \`measured\` status write was not made`;
+  return `the run cache refused the probe's \`measured\` status write for run ${runId}`;
+}
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
@@ -6886,6 +6908,7 @@ ${USAGE}`);
     console.error(`verify-probe: ${endedAtStart.message}`);
     return 2;
   }
+  const refusal = { by: "cache" };
   const status = (w, before) => {
     try {
       writeStatus(statusBase, w, before ? { before } : {});
@@ -6897,6 +6920,7 @@ ${USAGE}`);
       }
       if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
       console.error(`warning  ${e.message}`);
+      refusal.by = statusRefusalOf(e);
       return "refused";
     }
   };
@@ -7173,7 +7197,7 @@ ${USAGE}`);
   if (statusRefused && runId !== void 0) {
     const outDir = path9.resolve(path9.dirname(outBase)), verifyDir = path9.resolve(path9.dirname(statusBase));
     const findable = outDir === verifyDir || outDir === path9.resolve(stageDirOf(statusBase, runId));
-    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path9.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
+    console.error(`warning  ${outBase}.measured.json is written, but ${measuredRefusedWhy(refusal.by, runId)}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it${refusal.by === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path9.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
   }
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
   return 0;
@@ -7207,10 +7231,12 @@ export {
   linkHref,
   loadFailureWhy,
   main,
+  measuredRefusedWhy,
   projectRequire,
   resolveAxe,
   resolvePlaywright,
-  runProbe
+  runProbe,
+  statusRefusalOf
 };
 /*! visual-diff.ts — colorDelta, antialiased and hasManySiblings are a port of pixelmatch v6.0.0 (index.js,
  * https://github.com/mapbox/pixelmatch/tree/v6.0.0), under its licence:

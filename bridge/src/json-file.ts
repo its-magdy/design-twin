@@ -3,8 +3,8 @@
 import fs from "node:fs";
 import { writeFileAtomic } from "./atomic-write.ts";
 import { errCode } from "./errmsg.ts";
-import { lockFileOf, withFileLock } from "./file-lock.ts";
-import type { FileLockOpts } from "./file-lock.ts";
+import { acquireFileLock, lockFileOf } from "./file-lock.ts";
+import type { FileLockOpts, HeldLock } from "./file-lock.ts";
 
 // The file's own indentation: the first indented line's leading whitespace (2 spaces when the file has none).
 const indentOf = (text: string): string => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
@@ -41,6 +41,9 @@ export interface UpdateJsonOpts extends FileLockOpts {
   lockFile?: string;
   /** runs right after the write, still under the lock — only when the file was written */
   afterWrite?: () => void;
+  /** maps what taking the lock throws to what is thrown instead (returned unchanged: kept) — the lock may live somewhere
+   *  other than the file (a plan's, in the run cache), so its caller words a refusal there */
+  lockRefused?: (e: unknown) => unknown;
 }
 /**
  * Read-modify-write of a JSON file several writers share (a plan: --record-plan, --accept, plan-skeleton --out, the
@@ -52,11 +55,14 @@ export interface UpdateJsonOpts extends FileLockOpts {
  * write landing between that re-read and the rename is still lost. `fn` may run more than once, so it computes from
  * its argument only. Throws LockBusy (file-lock.ts) when another writer holds the lock past `opts.waitMs`, LockLost
  * when the lock was taken from this writer before its write (nothing written), and whatever reading the file throws
- * other than ENOENT (an unreadable plan is never treated as absent and overwritten).
+ * other than ENOENT (an unreadable plan is never treated as absent and overwritten); an error taking the lock as
+ * `opts.lockRefused` maps it.
  */
 export function updateJsonLike(file: string, fn: (raw: string | null) => unknown, opts: UpdateJsonOpts = {}): boolean {
-  const { lockFile = lockFileOf(file), afterWrite, ...lockOpts } = opts;
-  return withFileLock(lockFile, (lock) => {
+  const { lockFile = lockFileOf(file), afterWrite, lockRefused, ...lockOpts } = opts;
+  let lock: HeldLock;
+  try { lock = acquireFileLock(lockFile, lockOpts); } catch (e) { throw lockRefused ? lockRefused(e) : e; }
+  try {
     for (let tries = 1; ; tries++) {
       const raw = readIfThere(file);
       const out = formatJsonLike(fn(raw), raw);
@@ -69,5 +75,5 @@ export function updateJsonLike(file: string, fn: (raw: string | null) => unknown
       }
       if (tries >= UPDATE_TRIES) throw new Error(`${file} kept changing while it was being updated (${UPDATE_TRIES} tries) — retry once its other writer is done`);
     }
-  }, lockOpts);
+  } finally { lock.release(); }
 }

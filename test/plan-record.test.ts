@@ -406,6 +406,21 @@ console.log("the plan's lock lives in the run cache:");
   });
   check("an update holds that lock while it runs, and design/plan/ holds only the plan; released after",
     wrote && during.join(" ") === "held Crates.json" && !fs.existsSync(lock) && fs.readdirSync(path.dirname(plan)).join() === "Crates.json");
+  // a run cache this process may not write (a sandboxed command outside a hoisted workspace's write scope): the
+  // status writes' sentence, never a raw errno and never a lock beside the plan instead
+  if (process.platform !== "win32" && !(typeof process.getuid === "function" && process.getuid() === 0)) {
+    const nm = path.join(root, "node_modules");
+    const before = fs.readFileSync(plan, "utf8");
+    fs.rmSync(path.join(nm, ".cache"), { recursive: true, force: true });
+    fs.chmodSync(nm, 0o555);
+    let e: unknown = null;
+    try { updatePlan(plan, () => ({ screenName: "never" })); } catch (x) { e = x; } finally { fs.chmodSync(nm, 0o755); }
+    const msg = e instanceof Error ? e.message : String(e);
+    check("a run cache that refuses the plan's lock (EACCES) → RunCacheUnwritable naming the run cache and where to run from; the plan untouched, no lock beside it",
+      e instanceof Error && e.name === "RunCacheUnwritable" && msg.includes(path.join(fs.realpathSync.native(root), "node_modules", ".cache", "designtwin-verify"))
+      && /is not writable \(sandbox write scope\?\) — run from /.test(msg) && fs.readFileSync(plan, "utf8") === before && fs.readdirSync(path.dirname(plan)).join() === "Crates.json");
+    if (!(e instanceof Error && e.name === "RunCacheUnwritable")) console.log(`    threw: ${msg}`);
+  } else console.log("  (skipped: a read-only run cache — mode bits refuse nothing on Windows / as root)");
 }
 
 report();

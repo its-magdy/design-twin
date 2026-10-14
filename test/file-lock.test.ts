@@ -2,7 +2,8 @@
 // updateJsonLike): held and released, released on a throw, a live holder waited for then LockBusy (however long a
 // same-host one holds), a stale lock (another host's too old, a dead pid, never written) broken, a fresh one never
 // removed by a waiter or a releaser that lost it, a lost lock caught before the write, a wait that ends when the lock
-// cannot be broken or read, breakers taking turns, and real node processes contending for one counter and racing to
+// cannot be broken or read, breakers taking turns (a guard judged like a lock), a lock or guard changing between the
+// steps of a take or a break, Windows' transient create refusals, and real node processes contending for one counter and racing to
 // break dead holders' locks. Temp dirs only; binds no port.
 // Run with:  node test/file-lock.test.ts
 import fs from "node:fs";
@@ -93,8 +94,8 @@ console.log("a stale lock — broken and taken:");
   t("…a time far in the future (a clock that jumped back) → stale too", () => withFileLock(lock, () => true, { staleMs: 30_000, waitMs: 100 }));
   fs.writeFileSync(lock, holder(deadPid(), Date.now()));
   t("a fresh lock whose holder pid no longer exists (same host) → broken at once", () => withFileLock(lock, () => true, { waitMs: 100 }));
-  fs.writeFileSync(lock, holder(process.pid, Date.now() - 11 * 60_000));
-  t("a same-host lock whose pid is alive but 11 min old (a dead holder's pid reused) → broken", () => withFileLock(lock, () => true, { waitMs: 100 }));
+  fs.writeFileSync(lock, holder(process.pid, Date.now() - 3 * 60_000));
+  t("a same-host lock whose pid is alive but 3 min old (past the 2 min backstop: a dead holder's pid reused) → broken", () => withFileLock(lock, () => true, { waitMs: 100 }));
   fs.writeFileSync(lock, "");
   const old = new Date(Date.now() - 3_000);
   fs.utimesSync(lock, old, old);
@@ -112,6 +113,9 @@ console.log("a live same-host holder is never broken by age:");
   const live = holder(process.pid, Date.now() - 60_000);
   fs.writeFileSync(lock, live);
   t("a live pid on this host, 60 s old, staleMs 30 s → busy (LockBusy), the lock untouched", () => caught(() => withFileLock(lock, () => 0, { staleMs: 30_000, waitMs: 100 })) instanceof LockBusy && fs.readFileSync(lock, "utf8") === live);
+  const older = holder(process.pid, Date.now() - 110_000);
+  fs.writeFileSync(lock, older);
+  t("…110 s old (inside the 2 min backstop) → still busy, untouched", () => caught(() => withFileLock(lock, () => 0, { staleMs: 30_000, waitMs: 100 })) instanceof LockBusy && fs.readFileSync(lock, "utf8") === older);
   fs.rmSync(lock, { force: true });
   // another process holds the lock past the waiter's staleMs (300 ms) while the waiter waits
   const ready = path.join(d, "ready");
@@ -207,22 +211,109 @@ console.log("breakStale never removes a fresh lock; breakers take turns; a relea
   const b2 = breakStale(lock, stale);
   t("…still the one judged stale → true, removed, the guard gone", () => b2 && !fs.existsSync(lock) && fs.readdirSync(d).length === 0);
   // another breaker is inside its turn (its guard is fresh): this one waits its turn, the lock is left to it
+  const guard = breakGuardOf(lock);
   fs.writeFileSync(lock, stale);
-  fs.writeFileSync(breakGuardOf(lock), "");
+  fs.writeFileSync(guard, "");
   t("a guard held by another breaker → false, the lock left", () => !breakStale(lock, stale) && fs.readFileSync(lock, "utf8") === stale);
   const e = caught(() => withFileLock(lock, () => 0, { waitMs: 150 }));
   t("…and a waiter never breaks the lock while that guard is held (LockBusy after waitMs)", () => e instanceof LockBusy && fs.readFileSync(lock, "utf8") === stale);
-  // a breaker killed inside its turn leaves the guard: past 5 s it is cleared, and the next turn breaks the lock
-  const old = new Date(Date.now() - 6_000);
+  // a guard is judged like a lock: a live breaker keeps its turn however long it is descheduled
+  const minuteAgo = new Date(Date.now() - 60_000);
+  const liveBreaker = holder(process.pid, Date.now() - 60_000);
+  fs.writeFileSync(guard, liveBreaker);
+  fs.utimesSync(guard, minuteAgo, minuteAgo);
+  const eLive = caught(() => withFileLock(lock, () => 0, { waitMs: 150 }));
+  t("a guard a live breaker on this host wrote a minute ago (stalled inside its turn) → kept, the lock left, LockBusy", () =>
+    eLive instanceof LockBusy && fs.readFileSync(guard, "utf8") === liveBreaker && fs.readFileSync(lock, "utf8") === stale);
+  const remoteBreaker = holder(deadPid(), Date.now(), "another-host.invalid");
+  fs.writeFileSync(guard, remoteBreaker);
+  t("a fresh guard from another host → kept (its pid means nothing here)", () => !breakStale(lock, stale) && fs.readFileSync(guard, "utf8") === remoteBreaker);
+  // a breaker killed inside its turn leaves the guard: its dead pid clears it, and the next turn breaks the lock
+  fs.writeFileSync(guard, holder(deadPid(), Date.now()));
+  t("a fresh guard whose breaker pid is gone (same host) → cleared; the next waiter breaks the lock and takes it", () => withFileLock(lock, () => true, { waitMs: 500 }) && fs.readdirSync(d).length === 0);
   fs.writeFileSync(lock, stale);
-  fs.writeFileSync(breakGuardOf(lock), "");
-  fs.utimesSync(breakGuardOf(lock), old, old);
-  t("a guard 6 s old (its breaker died) → cleared; the next waiter breaks the lock and takes it", () => withFileLock(lock, () => true, { waitMs: 500 }) && fs.readdirSync(d).length === 0);
+  fs.writeFileSync(guard, holder(deadPid(), Date.now() - 60_000, "another-host.invalid"));
+  t("a guard from another host older than staleMs → cleared; the lock broken and taken", () => withFileLock(lock, () => true, { waitMs: 500 }) && fs.readdirSync(d).length === 0);
+  const old = new Date(Date.now() - 3_000);
+  fs.writeFileSync(lock, stale);
+  fs.writeFileSync(guard, "");
+  fs.utimesSync(guard, old, old);
+  t("an empty guard 3 s old (its breaker killed before writing it) → cleared; the lock broken and taken", () => withFileLock(lock, () => true, { waitMs: 500 }) && fs.readdirSync(d).length === 0);
   // a holder whose lock was broken (it ran past staleMs) and taken by another: its release leaves the new one
   const taken = holder(process.pid, Date.now());
   withFileLock(lock, () => { fs.writeFileSync(lock, taken); });
   t("a release whose lock was taken over by another holder leaves that holder's lock", () => fs.existsSync(lock) && fs.readFileSync(lock, "utf8") === taken);
   fs.rmSync(lock, { force: true });
+}
+
+// The instants between steps, made to happen: fs's own functions wrapped for one call (file-lock.ts calls them through
+// the same `fs` object), restored at once.
+console.log("a lock or guard that changes between the steps of a take or a break:");
+{
+  const d = mk();
+  const lock = path.join(d, "s.json.lock");
+  const other = holder(process.pid, Date.now());
+  // created, then removed as an unwritten dead lock and created again by another process before this one writes it
+  const writeSync = fs.writeSync;
+  let armed = true;
+  fs.writeSync = ((...args: Parameters<typeof fs.writeSync>) => {
+    if (armed) { armed = false; fs.rmSync(lock); fs.writeFileSync(lock, other); }
+    return Reflect.apply(writeSync, fs, args);
+  }) as typeof fs.writeSync;
+  let e: unknown;
+  try { e = caught(() => withFileLock(lock, () => 0, { waitMs: 150 })); } finally { fs.writeSync = writeSync; }
+  t("a lock removed while still empty and taken by another process → never taken for its own: LockBusy, the other's lock untouched", () =>
+    e instanceof LockBusy && !(e instanceof LockLost) && fs.readFileSync(lock, "utf8") === other);
+  fs.rmSync(lock);
+  // a breaker that judged an empty lock dead: by its turn the lock is a new one, still empty
+  fs.writeFileSync(lock, "");
+  t("breakStale of an empty lock that is fresh again under the guard (just created by another process) → false, left", () => !breakStale(lock, "") && fs.existsSync(lock) && !fs.existsSync(breakGuardOf(lock)));
+  fs.rmSync(lock);
+  // a breaker whose guard was cleared and claimed by another breaker while it read the lock
+  const stale = holder(deadPid(), Date.now());
+  const theirs = holder(process.pid, Date.now());
+  fs.writeFileSync(lock, stale);
+  const readFileSync = fs.readFileSync;
+  let reads = 0;
+  fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+    if (args[0] === lock && ++reads === 1) fs.writeFileSync(breakGuardOf(lock), theirs);
+    return Reflect.apply(readFileSync, fs, args);
+  }) as typeof fs.readFileSync;
+  let broke = true;
+  try { broke = breakStale(lock, stale); } finally { fs.readFileSync = readFileSync; }
+  t("a breaker whose guard became another breaker's inside its turn → false: the lock left, the other's guard left", () =>
+    !broke && fs.readFileSync(lock, "utf8") === stale && fs.readFileSync(breakGuardOf(lock), "utf8") === theirs);
+}
+
+// Windows refusals that can be transient (a lock still delete-pending after its release), in a child that reports as
+// win32 and refuses the create on cue — the timing is the point, so the four run side by side
+console.log("possibly transient create refusals (Windows) — retried from the first refusal:");
+{
+  const d = mk();
+  const run = (name: string, args: string[]): Promise<{ name: string; r: { ms: number; name: string; code: string } | null }> => new Promise((resolve) => {
+    const p = spawn(process.execPath, [CHILD, "transient", path.join(d, `${name}.lock`), ...args]);
+    let out = "";
+    p.stdout.on("data", (b: Buffer) => { out += b.toString(); });
+    p.on("close", () => {
+      try {
+        const v: unknown = JSON.parse(out);
+        resolve({ name, r: v !== null && typeof v === "object" && "ms" in v && "name" in v && "code" in v && typeof v.ms === "number" && typeof v.name === "string" && typeof v.code === "string" ? { ms: v.ms, name: v.name, code: v.code } : null });
+      } catch { resolve({ name, r: null }); }
+    });
+  });
+  // args: waitMs, how long the lock stays held (live), how long creating it is refused after (-1: always), lock|guard
+  const [late, endless, short, guardEarly] = await Promise.all([
+    run("late", ["6000", "2500", "300", "lock"]),
+    run("endless", ["6000", "500", "-1", "lock"]),
+    run("short", ["1000", "300", "-1", "lock"]),
+    run("guard", ["1000", "0", "-1", "guard"]),
+  ]);
+  const show = (x: { name: string; r: unknown }): string => `${x.name} ${JSON.stringify(x.r)}`;
+  t("a waiter 2.5 s in whose create is refused (EPERM) for 300 ms after the release → retried, the lock taken", () => late.r !== null && late.r.name === "acquired" && late.r.ms >= 2_700);
+  t("…refused for good → EPERM thrown once the refusals have lasted 2 s (≈2.5 s), not before", () => endless.r !== null && endless.r.code === "EPERM" && endless.r.ms >= 2_400 && endless.r.ms < 5_000);
+  t("…the wait (1 s) ends while the refusals are under 2 s old → LockBusy, not EPERM", () => short.r !== null && short.r.name === "LockBusy" && short.r.ms >= 900 && short.r.ms < 2_000);
+  t("a dead holder's lock whose break guard cannot be created (EPERM) for the whole 1 s wait → LockBusy, not EPERM", () => guardEarly.r !== null && guardEarly.r.name === "LockBusy" && guardEarly.r.ms >= 900 && guardEarly.r.ms < 2_000);
+  for (const x of [late, endless, short, guardEarly]) console.log(`    ${show(x)}`);
 }
 
 console.log("errors other than a held lock are thrown as they are:");

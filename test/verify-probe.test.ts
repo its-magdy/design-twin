@@ -32,6 +32,8 @@ import type * as PDT from "../design-to-code/probe-drive.ts";
 import type { VerifyExpectation, VerifyInteraction } from "../design-to-code/types.ts";
 import type * as PBT from "../design-to-code/probe-behaviour.ts";
 import { parseCssColor } from "../design-to-code/color.ts";
+import { LockBusy, LockLost } from "../bridge/src/file-lock.ts";
+import { RunCacheUnwritable } from "../design-to-code/run-cache.ts";
 import type { BehaviourCheck as BehaviourCheckRow, InteractionEvidence } from "../design-to-code/types.ts";
 // probe-behaviour.ts is loaded dynamically too (a tree without it: every behaviour check is a clean ✗)
 const PB: Partial<typeof PBT> = await import("../design-to-code/probe-behaviour.ts").then((m) => ({ ...m }), () => ({}));
@@ -1960,5 +1962,15 @@ if (process.platform !== "win32") {
 }
 
 check("[LAUNCH_ARGS] the probe's chromium flags include --disable-lcd-text (grayscale text AA; the e2e suites that render references import the same list)", VP.LAUNCH_ARGS.includes("--disable-lcd-text"));
+
+// a refused `measured` status write is worded by why: a lost lock or a busy one is not the run cache refusing it
+t("measuredRefusedWhy: a lock taken over (LockLost), a lock held throughout (LockBusy) and an unwritable run cache each get their own sentence", () => {
+  const lost = VP.measuredRefusedWhy(VP.statusRefusalOf(new LockLost("/x/S.status.json.lock")), "run-1");
+  const busy = VP.measuredRefusedWhy(VP.statusRefusalOf(new LockBusy("/x/S.status.json.lock", "held")), "run-1");
+  const cache = VP.measuredRefusedWhy(VP.statusRefusalOf(new RunCacheUnwritable("/p/node_modules/.cache/designtwin-verify", "/p", "EACCES")), "run-1");
+  return /took over the status lock of run run-1/.test(lost) && !/run cache/.test(lost)
+    && /held the status lock of run run-1 for the whole wait/.test(busy) && !/run cache/.test(busy)
+    && cache === "the run cache refused the probe's `measured` status write for run run-1";
+});
 
 report();

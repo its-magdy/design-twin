@@ -26,7 +26,7 @@ import type { UpdateJsonOpts } from "../bridge/src/json-file.ts";
 import { parsePlan } from "./doc-guards.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { isJsonObject } from "./types.ts";
-import { planLockFile } from "./run-cache.ts";
+import { planLockFile, planLockRefused } from "./run-cache.ts";
 import type { JsonObject, JsonValue, Plan, PlanVerification, PlanVerificationRecord, VerifyReportV2 } from "./types.ts";
 
 export interface RecordPlanResult { written: boolean; notes: string[] }
@@ -38,8 +38,10 @@ const slash = (p: string): string => p.split(path.sep).join("/").split("\\").joi
 // (BOM, indentation, line endings), written only when its bytes change. True when written. `fn` may run more than
 // once (the plan changed under it), so it computes from its argument only.
 const formatPlan = formatJsonLike;
+// A run cache that refuses the lock (a sandboxed command whose write scope does not reach a hoisted workspace's
+// node_modules) is said in the status writes' sentence — where it is and where to run from.
 const updatePlan = (file: string, fn: (raw: string | null) => unknown, opts: UpdateJsonOpts = {}): boolean =>
-  updateJsonLike(file, fn, { lockFile: planLockFile(file), ...opts });
+  updateJsonLike(file, fn, { lockFile: planLockFile(file), lockRefused: (e) => planLockRefused(file, e), ...opts });
 /** A plan's bytes (a UTF-8 BOM allowed) → the plan; throws naming `file` when it is not JSON or not a plan. */
 function parsePlanText(raw: string, file: string): Plan {
   const parsed: unknown = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);

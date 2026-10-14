@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { lockFileOf } from "../bridge/src/file-lock.ts";
+import { errCode } from "../bridge/src/errmsg.ts";
 import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { anyJson, readJson } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
@@ -93,12 +94,47 @@ export function runCacheDir(verifyDir: string): string {
  * the project that owns the plan (as for the run cache), key = a short sha256 of the plan's real path relative to
  * root — so a lock a killed writer leaves is never beside the plan, where it could be committed. With no such root
  * (no package.json, or Yarn PnP) it is `<plan>.lock` beside the plan: the temp-dir fallback is not shared between
- * sandboxed and unsandboxed commands, and the agent's plan writes and the Stop hook's must take the same lock.
+ * sandboxed and unsandboxed commands, and the agent's plan writes and the Stop hook's must take the same lock. There a
+ * writer killed while it held the lock, or inside its turn breaking a dead one, can leave `<plan>.lock` or
+ * `<plan>.lock.break` in the plan directory; dtwin init writes no .gitignore, so such a project ignores
+ * `design/plan/*.lock` and `design/plan/*.lock.break` itself.
+ * `cache` is the run cache the lock lives in (its dir and the root), null for the lock beside the plan.
  */
-export function planLockFile(planFile: string): string {
+export function planLockOf(planFile: string): { lockFile: string; cache: { dir: string; root: string } | null } {
   const abs = canonical(planFile);
   const root = installRootOf(path.dirname(abs));
-  if (root === null) return lockFileOf(planFile);
+  if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
   const rel = path.relative(root, abs).split(path.sep).join("/");
-  return path.join(root, "node_modules", ".cache", CACHE_NAME, "plan-locks", `${path.basename(abs)}.${shortSha(rel)}.lock`);
+  const dir = path.join(root, "node_modules", ".cache", CACHE_NAME);
+  return { lockFile: path.join(dir, "plan-locks", `${path.basename(abs)}.${shortSha(rel)}.lock`), cache: { dir, root } };
+}
+/** The write lock of a plan (planLockOf). */
+export const planLockFile = (planFile: string): string => planLockOf(planFile).lockFile;
+/** Refusals of a plan's lock in the run cache that are the run cache's (the sandbox's write scope, a read-only mount):
+ *  worded like a status write's. A plan write never falls back to a lock beside the plan — two writers would then
+ *  hold two different locks. */
+const PLAN_LOCK_UNWRITABLE = new Set(["EACCES", "EPERM", "EROFS"]);
+/** What taking the plan lock of `planFile` threw → RunCacheUnwritable when the run cache refused it, else as it is. */
+export function planLockRefused(planFile: string, e: unknown): unknown {
+  const code = errCode(e);
+  const { cache } = planLockOf(planFile);
+  return cache !== null && code !== undefined && PLAN_LOCK_UNWRITABLE.has(code) ? new RunCacheUnwritable(cache.dir, cache.root, code) : e;
+}
+
+/** Filesystem refusals that mean "this process may not write there" (the sandbox's write scope, a read-only mount). */
+export const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
+/** A write into the run cache was refused: the one sentence --status (exit 6), --wait (exit 6) and the probe (a warning) print. */
+export class RunCacheUnwritable extends Error {
+  readonly cacheDir: string;
+  readonly root: string;
+  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
+   *  permission: a directory on the way was removed while the run wrote there */
+  constructor(cacheDir: string, root: string, code: string) {
+    super(code === "ENOENT"
+      ? `run cache ${cacheDir} disappeared — was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) — start a new run once it is back`
+      : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) — run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
+    this.name = "RunCacheUnwritable";
+    this.cacheDir = cacheDir;
+    this.root = root;
+  }
 }

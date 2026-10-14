@@ -42,7 +42,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { anyJson, readJson } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
-import { canonical, runCacheDir, runCacheOf } from "./run-cache.ts";
+import { RunCacheUnwritable, UNWRITABLE_CODES, canonical, runCacheDir, runCacheOf } from "./run-cache.ts";
 import { errCode, firstLine } from "../bridge/src/errmsg.ts";
 import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { LockBusy, acquireFileLock, lockFileOf } from "../bridge/src/file-lock.ts";
@@ -96,24 +96,7 @@ function sha256File(file: string): string | null {
 }
 
 // ---- where a run's live files go — never under the tree a dev server watches (run-cache.ts)
-export { runCacheDir };
-/** Filesystem refusals that mean "this process may not write there" (the sandbox's write scope, a read-only mount). */
-const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
-/** A write into the run cache was refused: the one sentence --status (exit 6), --wait (exit 6) and the probe (a warning) print. */
-export class RunCacheUnwritable extends Error {
-  readonly cacheDir: string;
-  readonly root: string;
-  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
-   *  permission: a directory on the way was removed while the run wrote there */
-  constructor(cacheDir: string, root: string, code: string) {
-    super(code === "ENOENT"
-      ? `run cache ${cacheDir} disappeared — was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) — start a new run once it is back`
-      : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) — run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
-    this.name = "RunCacheUnwritable";
-    this.cacheDir = cacheDir;
-    this.root = root;
-  }
-}
+export { RunCacheUnwritable, runCacheDir };
 /** Run `fn` (a write into the run cache of `verifyDir`); a permission / read-only / missing-dir refusal becomes RunCacheUnwritable. */
 function inRunCache<T>(verifyDir: string, fn: () => T): T {
   try { return fn(); } catch (e) {

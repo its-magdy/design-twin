@@ -63,7 +63,7 @@ import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
 import { RunCacheUnwritable, RunEnded, endedRun, liveStatusFile, readStatus, stageDirOf, writeStatus } from "./verify-run.ts";
-import { LockBusy } from "../bridge/src/file-lock.ts";
+import { LockBusy, LockLost } from "../bridge/src/file-lock.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite } from "./verify-run.ts";
 import type { Expectation } from "./verify-shared.ts";
@@ -1073,6 +1073,17 @@ function killBrowserChildren(): void {
   } catch { /* no ps: nothing more to do */ }
 }
 
+/** Why a status write was refused: the run cache refused it, another status write held the lock for the whole wait,
+ *  or the lock was taken over from this write (it held it past the stale age). */
+export type StatusRefusal = "cache" | "busy" | "lost";
+export const statusRefusalOf = (e: RunCacheUnwritable | LockBusy): StatusRefusal => e instanceof LockLost ? "lost" : e instanceof LockBusy ? "busy" : "cache";
+/** The closing warning's account of a refused `measured` status write of run `runId`. */
+export function measuredRefusedWhy(by: StatusRefusal, runId: string): string {
+  if (by === "lost") return `another writer took over the status lock of run ${runId} while the probe's \`measured\` status write held it, so that write was not made`;
+  if (by === "busy") return `another status write held the status lock of run ${runId} for the whole wait, so the probe's \`measured\` status write was not made`;
+  return `the run cache refused the probe's \`measured\` status write for run ${runId}`;
+}
+
 export async function main(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); return 0; }
   if (!argv.length) { console.error(USAGE); return 2; }
@@ -1140,11 +1151,14 @@ export async function main(argv: string[]): Promise<number> {
   // wait, or whose lock another writer took over, is a warning — the probe keeps its exit contract (0/2/3/4) and never
   // crashes on it. A run ended meanwhile (the orchestrator's failed/blocked) keeps its status and exits 2: no files, no
   // next step.
+  // why the last refused write was refused — the closing warning names it (an object: set inside the closure)
+  const refusal: { by: StatusRefusal } = { by: "cache" };
   const status = (w: StatusWrite, before?: () => Pick<StatusWrite, "measuredSha256">): "ok" | "refused" | "ended" => {
     try { writeStatus(statusBase, w, before ? { before } : {}); return "ok"; } catch (e) {
       if (e instanceof RunEnded) { console.error(`verify-probe: ${e.message} — it ended while this probe ran; its status is left as it is`); return "ended"; }
       if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
       console.error(`warning  ${e.message}`);
+      refusal.by = statusRefusalOf(e);
       return "refused";
     }
   };
@@ -1423,10 +1437,10 @@ export async function main(argv: string[]): Promise<number> {
     // sha after the same checks `done` applies (it reads <verify dir>/<S>.measured.json, else the run's stage dir)
     const outDir = path.resolve(path.dirname(outBase)), verifyDir = path.resolve(path.dirname(statusBase));
     const findable = outDir === verifyDir || outDir === path.resolve(stageDirOf(statusBase, runId));
-    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` +
+    console.error(`warning  ${outBase}.measured.json is written, but ${measuredRefusedWhy(refusal.by, runId)}` +
       (measuringRecorded ? " — the live status still says measuring, so --compare reports the run incomplete"
         : " (its `measuring` write was refused too) — no live status of the run exists, so --compare will report the run as unrecorded") +
-      `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` +
+      `. Record it${refusal.by === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` +
       (findable ? "" : ` — after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
   }
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);

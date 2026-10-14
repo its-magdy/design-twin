@@ -804,9 +804,8 @@ import path5 from "node:path";
 var STALE_MS = 3e4;
 var WAIT_MS = 1e4;
 var POLL_MS = 25;
-var LIVE_STALE_MS = 10 * 6e4;
+var LIVE_STALE_MS = 2 * 6e4;
 var UNWRITTEN_STALE_MS = 2e3;
-var GUARD_STALE_MS = 5e3;
 var TRANSIENT_MS = 2e3;
 var TRANSIENT_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
 var lockFileOf = (file) => file + ".lock";
@@ -865,11 +864,11 @@ var describeHolder = (text) => {
   const h = text === null ? null : holderOf(text);
   return h ? `process ${h.pid}${h.host !== os.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
 };
-function isStale(lockFile, text, staleMs) {
+function isStale(file, text, staleMs) {
   const h = holderOf(text);
   if (h === null) {
     try {
-      return ageOf(fs6.statSync(lockFile).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
+      return ageOf(fs6.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
     } catch {
       return false;
     }
@@ -877,22 +876,38 @@ function isStale(lockFile, text, staleMs) {
   if (sameMachine(h)) return !pidAlive(h.pid) || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
   return ageOf(h.at) > staleMs;
 }
-function breakStale(lockFile, seen) {
-  const guard = breakGuardOf(lockFile);
-  let fd;
+var stampOf = (token) => JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...PID_NS ? { ns: PID_NS } : {} });
+function claim(file, token) {
+  const fd = fs6.openSync(file, "wx");
+  const mine = stampOf(token);
   try {
-    fd = fs6.openSync(guard, "wx");
+    fs6.writeSync(fd, mine);
+  } catch (e) {
+    fs6.closeSync(fd);
+    fs6.rmSync(file, { force: true });
+    throw e;
+  }
+  fs6.closeSync(fd);
+  return read(file) === mine ? mine : null;
+}
+function breakStale(lockFile, seen, staleMs = STALE_MS) {
+  const guard = breakGuardOf(lockFile);
+  let mine;
+  try {
+    mine = claim(guard, crypto3.randomBytes(8).toString("hex"));
   } catch (e) {
     if (errCode(e) !== "EEXIST") throw e;
-    try {
-      if (ageOf(fs6.statSync(guard).mtimeMs) > GUARD_STALE_MS) fs6.rmSync(guard, { force: true });
+    const g = read(guard);
+    if (g !== null && isStale(guard, g, staleMs) && read(guard) === g) try {
+      fs6.unlinkSync(guard);
     } catch {
     }
     return false;
   }
-  fs6.closeSync(fd);
+  if (mine === null) return false;
   try {
-    if (read(lockFile) !== seen) return false;
+    if (read(lockFile) !== seen || !isStale(lockFile, seen, staleMs)) return false;
+    if (read(guard) !== mine) return false;
     try {
       fs6.unlinkSync(lockFile);
     } catch (e) {
@@ -901,12 +916,13 @@ function breakStale(lockFile, seen) {
     }
     return true;
   } finally {
-    try {
+    if (read(guard) === mine) try {
       fs6.rmSync(guard, { force: true });
     } catch {
     }
   }
 }
+var maybeTransient = (code) => process.platform === "win32" && code !== void 0 && TRANSIENT_CODES.has(code);
 var sleeper = new Int32Array(new SharedArrayBuffer(4));
 var sleepSync = (ms) => {
   Atomics.wait(sleeper, 0, 0, ms);
@@ -916,37 +932,36 @@ function acquireFileLock(lockFile, opts = {}) {
   const token = crypto3.randomBytes(8).toString("hex");
   fs6.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
   const t0 = Date.now();
+  let firstTransientAt = null;
+  const transientYet = (e) => {
+    if (!maybeTransient(errCode(e))) return false;
+    firstTransientAt ??= Date.now();
+    return Date.now() - firstTransientAt < TRANSIENT_MS;
+  };
   for (; ; ) {
-    let fd = null, text = null;
+    let mine = null, text = null, transient = false;
     let refused = null;
     try {
-      fd = fs6.openSync(lockFile, "wx");
+      mine = claim(lockFile, token);
     } catch (e) {
       const code = errCode(e);
       if (code === "EEXIST") {
         text = read(lockFile);
         if (text !== null && isStale(lockFile, text, staleMs)) {
           try {
-            if (breakStale(lockFile, text)) continue;
+            if (breakStale(lockFile, text, staleMs)) continue;
           } catch (be) {
-            refused = be;
+            if (transientYet(be)) transient = true;
+            else refused = be;
           }
         }
-      } else if (process.platform === "win32" && code !== void 0 && TRANSIENT_CODES.has(code) && Date.now() - t0 < Math.min(waitMs, TRANSIENT_MS)) {
-        refused = e;
-      } else throw e;
+      } else if (transientYet(e)) transient = true;
+      else throw e;
     }
-    if (fd !== null) {
-      const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...PID_NS ? { ns: PID_NS } : {} });
-      try {
-        fs6.writeSync(fd, mine);
-      } catch (e) {
-        fs6.closeSync(fd);
-        fs6.rmSync(lockFile, { force: true });
-        throw e;
-      }
-      fs6.closeSync(fd);
-      const stillMine = () => read(lockFile) === mine;
+    if (!transient) firstTransientAt = null;
+    if (mine !== null) {
+      const held = mine;
+      const stillMine = () => read(lockFile) === held;
       return {
         // only our own lock: one broken as stale and taken by another holder is theirs now
         release: () => {
@@ -964,17 +979,10 @@ function acquireFileLock(lockFile, opts = {}) {
     const waited = Date.now() - t0;
     if (waited >= waitMs) {
       if (refused !== null) throw refused;
+      if (transient) throw new LockBusy(lockFile, `${lockFile} could not be created for ${Math.round((Date.now() - (firstTransientAt ?? t0)) / 100) / 10}s (a lock just released is still being removed, or a scan holds it); retry`);
       throw new LockBusy(lockFile, `${lockFile} is held by ${describeHolder(text)} \u2014 another write was still in progress after ${Math.round(waited / 100) / 10}s; retry once it is done`);
     }
     sleepSync(Math.min(POLL_MS, waitMs - waited));
-  }
-}
-function withFileLock(lockFile, fn, opts = {}) {
-  const lock = acquireFileLock(lockFile, opts);
-  try {
-    return fn(lock);
-  } finally {
-    lock.release();
   }
 }
 
@@ -997,8 +1005,14 @@ var readIfThere = (file) => {
   }
 };
 function updateJsonLike(file, fn, opts = {}) {
-  const { lockFile = lockFileOf(file), afterWrite, ...lockOpts } = opts;
-  return withFileLock(lockFile, (lock) => {
+  const { lockFile = lockFileOf(file), afterWrite, lockRefused, ...lockOpts } = opts;
+  let lock;
+  try {
+    lock = acquireFileLock(lockFile, lockOpts);
+  } catch (e) {
+    throw lockRefused ? lockRefused(e) : e;
+  }
+  try {
     for (let tries = 1; ; tries++) {
       const raw = readIfThere(file);
       const out = formatJsonLike(fn(raw), raw);
@@ -1011,7 +1025,9 @@ function updateJsonLike(file, fn, opts = {}) {
       }
       if (tries >= UPDATE_TRIES) throw new Error(`${file} kept changing while it was being updated (${UPDATE_TRIES} tries) \u2014 retry once its other writer is done`);
     }
-  }, lockOpts);
+  } finally {
+    lock.release();
+  }
 }
 
 // design-to-code/content-hash.ts
@@ -1177,16 +1193,36 @@ function installRootOf(dir) {
   if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
   return P;
 }
-function planLockFile(planFile) {
+function planLockOf(planFile) {
   const abs = canonical(planFile);
   const root = installRootOf(path7.dirname(abs));
-  if (root === null) return lockFileOf(planFile);
+  if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
   const rel = path7.relative(root, abs).split(path7.sep).join("/");
-  return path7.join(root, "node_modules", ".cache", CACHE_NAME, "plan-locks", `${path7.basename(abs)}.${shortSha(rel)}.lock`);
+  const dir = path7.join(root, "node_modules", ".cache", CACHE_NAME);
+  return { lockFile: path7.join(dir, "plan-locks", `${path7.basename(abs)}.${shortSha(rel)}.lock`), cache: { dir, root } };
 }
+var planLockFile = (planFile) => planLockOf(planFile).lockFile;
+var PLAN_LOCK_UNWRITABLE = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS"]);
+function planLockRefused(planFile, e) {
+  const code = errCode(e);
+  const { cache } = planLockOf(planFile);
+  return cache !== null && code !== void 0 && PLAN_LOCK_UNWRITABLE.has(code) ? new RunCacheUnwritable(cache.dir, cache.root, code) : e;
+}
+var RunCacheUnwritable = class extends Error {
+  cacheDir;
+  root;
+  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
+   *  permission: a directory on the way was removed while the run wrote there */
+  constructor(cacheDir, root, code) {
+    super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
+    this.name = "RunCacheUnwritable";
+    this.cacheDir = cacheDir;
+    this.root = root;
+  }
+};
 
 // design-to-code/plan-record.ts
-var updatePlan = (file, fn, opts = {}) => updateJsonLike(file, fn, { lockFile: planLockFile(file), ...opts });
+var updatePlan = (file, fn, opts = {}) => updateJsonLike(file, fn, { lockFile: planLockFile(file), lockRefused: (e) => planLockRefused(file, e), ...opts });
 function parsePlanText(raw, file) {
   const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
   const pp = parsePlan(parsed);

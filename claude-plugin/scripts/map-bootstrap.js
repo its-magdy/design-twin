@@ -733,7 +733,7 @@ function writeFileAtomic(file, data, opts = {}) {
 
 // bridge/src/file-lock.ts
 import fs5 from "node:fs";
-var LIVE_STALE_MS = 10 * 6e4;
+var LIVE_STALE_MS = 2 * 6e4;
 var PID_NS = (() => {
   if (process.platform !== "linux") return "";
   try {

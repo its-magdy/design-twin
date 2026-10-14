@@ -4,7 +4,9 @@
 //
 // The lock (`<file>.lock` beside it, or a path the caller names) is created with open(2)'s O_CREAT|O_EXCL (fs flag
 // "wx": "fails if the path exists"; on Windows the same flags map to CreateFileW's CREATE_NEW), so exactly one process
-// creates it. It holds {pid, host, at, token} (+ ns on Linux: the holder's pid namespace). A waiter polls every POLL_MS
+// creates it. It holds {pid, host, at, token} (+ ns on Linux: the holder's pid namespace), and the creator holds it
+// only once it reads those bytes back after writing them: a lock judged dead while still empty (the instant between
+// the create and the write) and removed is never taken for its own. A waiter polls every POLL_MS
 // with Atomics.wait on a private SharedArrayBuffer (a synchronous sleep: these writes are synchronous, and Node lets
 // the main thread block) and gives up after `waitMs` with LockBusy. Every turn of that loop that takes nothing sleeps
 // and counts against `waitMs` — only a turn that removed a dead holder's lock tries again at once.
@@ -17,13 +19,16 @@
 //   - another machine (its pid means nothing here): older than `staleMs`;
 //   - no readable holder (killed between the create and the write, which are microseconds apart): the file's mtime
 //     older than UNWRITTEN_STALE_MS.
-// Breaking one: waiters that judged the same lock dead take turns under a second exclusive file, `<lock>.break`;
-// under it the lock is read again and removed only when its bytes are still the ones judged dead. Nothing can take the
-// lock while those bytes are there, and only a breaker removes them, so no breaker ever removes a lock another waiter
-// has taken since. A breaker killed inside its turn (a read and an unlink) leaves the guard; one older than
-// GUARD_STALE_MS is cleared. A holder whose lock was nevertheless taken (it stalled past the stale age, or a holder on
-// another host past `staleMs`) finds out with stillMine() before its write; its release never removes the new
-// holder's lock.
+// Breaking one: waiters that judged the same lock dead take turns under a second exclusive file, `<lock>.break`,
+// claimed the same way as the lock (the breaker's stamp, read back); under it the lock is read and judged again and
+// removed only when its bytes are still the ones judged dead, it is still dead (an empty lock's mtime is new again
+// when another process has just created it) and the guard is still this breaker's. Nothing can take the lock while
+// those bytes are there, and only a breaker removes them, so no breaker removes a lock another waiter has taken since.
+// A breaker killed inside its turn leaves its guard, which is judged like a lock: cleared when its breaker is dead
+// (same machine), older than `staleMs` (another host) or never written past UNWRITTEN_STALE_MS — never for its age
+// alone while its breaker lives, so a breaker that is merely descheduled (stopped, swapped out, a sleeping laptop)
+// keeps its turn. A holder whose lock was nevertheless taken (it stalled past LIVE_STALE_MS, or a holder on another
+// host past `staleMs`) finds out with stillMine() before its write; its release never removes the new holder's lock.
 // Not re-entrant: a nested lock of the same file in one process waits for itself until LockBusy. The exclusive
 // flag might not work on a network filesystem (Node's fs docs) — there the lock narrows the window, not closes it.
 import crypto from "node:crypto";
@@ -40,13 +45,14 @@ export interface FileLockOpts {
   waitMs?: number;
 }
 const STALE_MS = 30_000, WAIT_MS = 10_000, POLL_MS = 25;
-/** A same-machine holder whose pid is alive is waited for up to this age; past it the pid is taken for a reused one. */
-const LIVE_STALE_MS = 10 * 60_000;
-/** A lock with no readable holder past this age was left by a process killed between its create and its write. */
+/** A same-machine holder whose pid is alive is waited for up to this age; past it the pid is taken for a reused one
+ *  (Windows reuses pids soon). A locked section is a few small file writes and a stalled holder is caught by
+ *  assertMine before its write, so minutes is ample. */
+const LIVE_STALE_MS = 2 * 60_000;
+/** A lock or guard with no readable holder past this age was left by a process killed between its create and its write. */
 const UNWRITTEN_STALE_MS = 2_000;
-/** A break guard past this age was left by a breaker killed inside its turn (a read and an unlink). */
-const GUARD_STALE_MS = 5_000;
-/** How long a Windows create refusal that can be transient (a lock still delete-pending, an antivirus scan) is retried. */
+/** How long a run of Windows create refusals that can be transient (a lock still delete-pending, an antivirus scan)
+ *  is retried, counted from the first refusal of the run. */
 const TRANSIENT_MS = 2_000;
 const TRANSIENT_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
 
@@ -115,39 +121,73 @@ const describeHolder = (text: string | null): string => {
   return h ? `process ${h.pid}${h.host !== os.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
 };
 
-/** Whether the lock whose bytes are `text` is a dead holder's (see the header). */
-function isStale(lockFile: string, text: string, staleMs: number): boolean {
+/** Whether the lock or break guard whose bytes are `text` is a dead holder's (see the header). */
+function isStale(file: string, text: string, staleMs: number): boolean {
   const h = holderOf(text);
   if (h === null) {
-    try { return ageOf(fs.statSync(lockFile).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS); } catch { return false; } // gone: the next open takes it
+    try { return ageOf(fs.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS); } catch { return false; } // gone: the next open takes it
   }
   if (sameMachine(h)) return !pidAlive(h.pid) || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
   return ageOf(h.at) > staleMs;
 }
 
+/** This process's stamp for a lock or guard it creates. `at` is the moment it is written: the age a waiter compares. */
+const stampOf = (token: string): string =>
+  JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...(PID_NS ? { ns: PID_NS } : {}) });
 /**
- * Remove the dead holder's lock `lockFile` whose bytes were `seen` — under its break guard, and only when the bytes are
- * still `seen` then. True when it removed it; false when the guard is another breaker's (a dead breaker's is cleared
- * for the next turn) or the lock changed since (released, or taken and released again). Throws what creating the
- * guard or removing the lock throws (EACCES in a directory this process may not write). Exported for its test.
+ * Create `file` exclusively and write this process's stamp into it. Returns the stamp when the file on disk holds it
+ * once written, null when it does not: the file was judged a dead holder's while still empty and removed (another
+ * process may have created it again since) — then it is not this process's and nothing is removed. Throws what the
+ * create throws (EEXIST: someone else's), and what the write throws (the file removed first: never one naming no one).
  */
-export function breakStale(lockFile: string, seen: string): boolean {
-  const guard = breakGuardOf(lockFile);
-  let fd: number;
-  try { fd = fs.openSync(guard, "wx"); } catch (e) {
-    if (errCode(e) !== "EEXIST") throw e;
-    try { if (ageOf(fs.statSync(guard).mtimeMs) > GUARD_STALE_MS) fs.rmSync(guard, { force: true }); } catch { /* gone, or cleared by another waiter */ }
-    return false;
+function claim(file: string, token: string): string | null {
+  const fd = fs.openSync(file, "wx");
+  const mine = stampOf(token);
+  try { fs.writeSync(fd, mine); } catch (e) {
+    fs.closeSync(fd);
+    fs.rmSync(file, { force: true });
+    throw e;
   }
   fs.closeSync(fd);
+  return read(file) === mine ? mine : null;
+}
+
+/**
+ * Remove the dead holder's lock `lockFile` whose bytes were `seen` — under its break guard, and only when the bytes are
+ * still `seen` then, still a dead holder's, and the guard still this breaker's. True when it removed it; false when the
+ * guard is another breaker's (a dead breaker's is cleared for the next turn) or the lock changed since (released, or
+ * taken and released again, or an empty one just created again). Throws what creating the guard or removing the lock
+ * throws (EACCES in a directory this process may not write). Exported for its test.
+ */
+export function breakStale(lockFile: string, seen: string, staleMs: number = STALE_MS): boolean {
+  const guard = breakGuardOf(lockFile);
+  let mine: string | null;
+  try { mine = claim(guard, crypto.randomBytes(8).toString("hex")); } catch (e) {
+    if (errCode(e) !== "EEXIST") throw e;
+    // another breaker's turn: cleared only when that breaker is dead, and only while the guard still holds the bytes
+    // judged dead (a guard cleared and claimed again by a live breaker meanwhile is left)
+    const g = read(guard);
+    if (g !== null && isStale(guard, g, staleMs) && read(guard) === g) try { fs.unlinkSync(guard); } catch { /* gone, or cleared by another waiter */ }
+    return false;
+  }
+  if (mine === null) return false; // the guard was cleared while still empty: not this breaker's turn
   try {
-    if (read(lockFile) !== seen) return false;
+    if (read(lockFile) !== seen || !isStale(lockFile, seen, staleMs)) return false;
+    // the guard is judged like a lock, so a breaker stalled past it may have lost its turn: then another breaker can
+    // be inside its own, and this one leaves the lock to it
+    if (read(guard) !== mine) return false;
     try { fs.unlinkSync(lockFile); } catch (e) { if (errCode(e) === "ENOENT") return false; throw e; }
     return true;
   } finally {
-    try { fs.rmSync(guard, { force: true }); } catch { /* left: cleared once older than GUARD_STALE_MS */ }
+    // only this breaker's own guard: one cleared and claimed by another breaker is theirs
+    if (read(guard) === mine) try { fs.rmSync(guard, { force: true }); } catch { /* left: cleared once its breaker is gone */ }
   }
 }
+
+/** Whether `code`, refusing a create, can be transient: on Windows a file removed while another process still has it
+ *  open stays delete-pending until that handle closes, and creating it again meanwhile is refused
+ *  (ERROR_ACCESS_DENIED → EPERM); an antivirus scan can do the same. */
+const maybeTransient = (code: string | undefined): boolean => process.platform === "win32" && code !== undefined && TRANSIENT_CODES.has(code);
 
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 const sleepSync = (ms: number): void => { Atomics.wait(sleeper, 0, 0, ms); };
@@ -155,41 +195,43 @@ const sleepSync = (ms: number): void => { Atomics.wait(sleeper, 0, 0, ms); };
 /**
  * Take the lock `lockFile` (its directory is created when missing). Throws LockBusy when a live holder keeps it for
  * `waitMs`; when the lock was a dead holder's that could not be removed for the whole wait, what removing it threw
- * (EACCES in a read-only directory…); any other error creating it (EACCES, EROFS…) as it is — on Windows only once a
- * refusal that can be transient has lasted TRANSIENT_MS.
+ * (EACCES in a read-only directory…); any other error creating it (EACCES, EROFS…) as it is — on Windows a refusal
+ * that can be transient only once a run of them has lasted TRANSIENT_MS (a wait that ends sooner is LockBusy).
  */
 export function acquireFileLock(lockFile: string, opts: FileLockOpts = {}): HeldLock {
   const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
   const token = crypto.randomBytes(8).toString("hex");
   fs.mkdirSync(path.dirname(path.resolve(lockFile)), { recursive: true });
   const t0 = Date.now();
+  /** when the current run of possibly transient refusals (creating the lock or its break guard) began */
+  let firstTransientAt: number | null = null;
+  /** true while a possibly transient refusal has not yet lasted TRANSIENT_MS: retried like a held lock */
+  const transientYet = (e: unknown): boolean => {
+    if (!maybeTransient(errCode(e))) return false;
+    firstTransientAt ??= Date.now();
+    return Date.now() - firstTransientAt < TRANSIENT_MS;
+  };
   for (;;) {
-    let fd: number | null = null, text: string | null = null;
+    let mine: string | null = null, text: string | null = null, transient = false;
     /** why this turn took nothing other than a live holder: thrown instead of LockBusy when the wait runs out */
     let refused: unknown = null;
-    try { fd = fs.openSync(lockFile, "wx"); } catch (e) {
+    try { mine = claim(lockFile, token); } catch (e) {
       const code = errCode(e);
       if (code === "EEXIST") {
         text = read(lockFile); // null: released since, or unreadable — waited on like a live holder
         if (text !== null && isStale(lockFile, text, staleMs)) {
-          try { if (breakStale(lockFile, text)) continue; } catch (be) { refused = be; }
+          try { if (breakStale(lockFile, text, staleMs)) continue; } catch (be) {
+            if (transientYet(be)) transient = true;
+            else refused = be;
+          }
         }
-      } else if (process.platform === "win32" && code !== undefined && TRANSIENT_CODES.has(code) && Date.now() - t0 < Math.min(waitMs, TRANSIENT_MS)) {
-        // a lock removed while another process still had it open stays delete-pending until that handle closes, and
-        // creating it again meanwhile is refused (ERROR_ACCESS_DENIED → EPERM); an antivirus scan can do the same
-        refused = e;
-      } else throw e;
+      } else if (transientYet(e)) transient = true;
+      else throw e;
     }
-    if (fd !== null) {
-      // `at` is the moment it was taken (not when the wait began): the age a waiter compares with staleMs
-      const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...(PID_NS ? { ns: PID_NS } : {}) });
-      try { fs.writeSync(fd, mine); } catch (e) {
-        fs.closeSync(fd);
-        fs.rmSync(lockFile, { force: true }); // never leave a lock that names no holder
-        throw e;
-      }
-      fs.closeSync(fd);
-      const stillMine = (): boolean => read(lockFile) === mine;
+    if (!transient) firstTransientAt = null;
+    if (mine !== null) {
+      const held = mine;
+      const stillMine = (): boolean => read(lockFile) === held;
       return {
         // only our own lock: one broken as stale and taken by another holder is theirs now
         release: () => { if (stillMine()) try { fs.rmSync(lockFile, { force: true }); } catch { /* left: stale once this process is gone */ } },
@@ -200,6 +242,7 @@ export function acquireFileLock(lockFile: string, opts: FileLockOpts = {}): Held
     const waited = Date.now() - t0;
     if (waited >= waitMs) {
       if (refused !== null) throw refused;
+      if (transient) throw new LockBusy(lockFile, `${lockFile} could not be created for ${Math.round((Date.now() - (firstTransientAt ?? t0)) / 100) / 10}s (a lock just released is still being removed, or a scan holds it); retry`);
       throw new LockBusy(lockFile, `${lockFile} is held by ${describeHolder(text)} — another write was still in progress after ${Math.round(waited / 100) / 10}s; retry once it is done`);
     }
     sleepSync(Math.min(POLL_MS, waitMs - waited));
