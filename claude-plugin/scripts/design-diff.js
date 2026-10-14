@@ -3,8 +3,8 @@
 
 
 // design-to-code/design-diff.ts
-import fs5 from "node:fs";
-import path2 from "node:path";
+import fs6 from "node:fs";
+import path3 from "node:path";
 import { execFileSync } from "node:child_process";
 
 // design-to-code/types.ts
@@ -574,14 +574,48 @@ var DESIGN_SYSTEM_FILES = {
   MANIFEST
 };
 
-// bridge/src/is-main.ts
+// bridge/src/project-layout.ts
 import fs4 from "node:fs";
+import path2 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path2.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path2.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path2.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path2.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path2.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path2.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path2.join(DESIGN_DIR, ".sync");
+var MERGED_VARIABLES_FILE = "variables.json";
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path2.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
+function looksLikeExportDir(dir) {
+  try {
+    if (!fs4.statSync(dir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return EXPORT_MARKERS.some((m) => fs4.existsSync(path2.join(dir, m)));
+}
+
+// bridge/src/library-layout.ts
+var ROOT = "libraries";
+var INDEX = "index.json";
+var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var COMPONENTS = "components.json";
+var LIBRARY_FILE_NAMES = [TOKENS2, STYLES_PAINT2, STYLES_TEXT2, STYLES_EFFECT2, STYLES_GRID2, COMPONENTS, HYGIENE2, INDEX];
+
+// bridge/src/is-main.ts
+import fs5 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs4.realpathSync(argv1) === fs4.realpathSync(fileURLToPath2(metaUrl));
+    return fs5.realpathSync(argv1) === fs5.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -932,10 +966,41 @@ function markdown(d, label) {
   if (s.formatOnly) L.push(`_${s.formatOnly} other node(s) differ only by the exporter's format \u2014 not listed._`, "");
   return L.join("\n") + "\n";
 }
+function realOf(p) {
+  try {
+    return fs6.realpathSync(p);
+  } catch {
+    const d = path3.dirname(p);
+    return d === p ? p : path3.join(realOf(d), path3.basename(p));
+  }
+}
+var escapes = (rel) => rel === "" || rel === ".." || rel.startsWith(".." + path3.sep) || path3.isAbsolute(rel);
+function relUnder(base, abs) {
+  const logical = path3.relative(base, abs);
+  if (!escapes(logical)) return logical;
+  const real = path3.relative(realOf(base), realOf(abs));
+  return escapes(real) ? null : real;
+}
+var ancestorsOf = (from) => {
+  const out = [];
+  for (let d = from; ; d = path3.dirname(d)) {
+    out.push(d);
+    if (path3.dirname(d) === d) return out;
+  }
+};
+var hasProjectDesign = (d) => looksLikeExportDir(path3.join(d, DESIGN_DIR)) || looksLikeExportDir(path3.join(d, EXPORT_DIR)) || fs6.existsSync(path3.join(d, SNAPSHOT_DIR));
 function snapshotPath(file, cwd = process.cwd()) {
-  const rel = path2.relative(path2.join(cwd, "design"), path2.resolve(cwd, file));
-  const flat = (rel.startsWith("..") ? path2.basename(file) : rel).split(path2.sep).join("__");
-  return path2.join(cwd, "design", ".sync", flat);
+  const abs = path3.resolve(cwd, file);
+  const placeUnder = (d) => {
+    const rel = relUnder(path3.join(d, DESIGN_DIR), abs);
+    return rel === null ? null : path3.join(d, SNAPSHOT_DIR, rel.split(path3.sep).join("__"));
+  };
+  const fromCwd = ancestorsOf(cwd);
+  for (const d of [...fromCwd.filter(hasProjectDesign), ...ancestorsOf(path3.dirname(abs)).filter(hasProjectDesign), ...fromCwd]) {
+    const p = placeUnder(d);
+    if (p !== null) return p;
+  }
+  return null;
 }
 function hashAssetBytes(fileName, buf) {
   return sha1Hex(normalizeForCompare(fileName, buf));
@@ -951,15 +1016,15 @@ function assetPaths(doc) {
   return [...out];
 }
 function assetRoot(file, assets) {
-  let dir = path2.dirname(path2.resolve(file));
-  for (let i = 0; i < 6; i++, dir = path2.dirname(dir)) if (assets.some((a) => fs5.existsSync(path2.join(dir, a)))) return dir;
+  let dir = path3.dirname(path3.resolve(file));
+  for (let i = 0; i < 6; i++, dir = path3.dirname(dir)) if (assets.some((a) => fs6.existsSync(path3.join(dir, a)))) return dir;
   return null;
 }
 function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
   if (root) for (const a of assets) {
     try {
-      out[a] = hashAssetBytes(a, fs5.readFileSync(path2.join(root, a)));
+      out[a] = hashAssetBytes(a, fs6.readFileSync(path3.join(root, a)));
     } catch {
     }
   }
@@ -973,7 +1038,7 @@ function redrawnAssets(file, newDoc, prev, cwd) {
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
     else if (prev.kind === "git") {
       try {
-        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path2.relative(cwd, path2.join(now.root, a)).split(path2.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
+        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + (relUnder(cwd, path3.join(now.root, a)) ?? path3.relative(cwd, path3.join(now.root, a))).split(path3.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
       } catch {
       }
     }
@@ -987,19 +1052,19 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   }
   const found = [];
   const snap = snapshotPath(file, cwd);
-  if (fs5.existsSync(snap)) {
+  if (snap !== null && fs6.existsSync(snap)) {
     const assets = readJsonOrNull(snap + ".assets.json", isStringRecord);
     const r = readJson(snap, anyJson);
-    if (!("doc" in r)) throw new Error(`the snapshot ${path2.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force, or pass --against <an older copy>`);
-    found.push({ doc: r.doc, source: path2.relative(cwd, snap), kind: "snapshot", assets });
+    if (!("doc" in r)) throw new Error(`the snapshot ${path3.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force if the export has not been re-pulled yet; after the re-pull the snapshot would be the new export, so the diff then uses git HEAD or --against <an older copy>`);
+    found.push({ doc: r.doc, source: path3.relative(cwd, snap), kind: "snapshot", assets });
   }
-  if (fs5.existsSync(snap + ".prev")) {
+  if (snap !== null && fs6.existsSync(snap + ".prev") && !fs6.existsSync(snap + ".prev" + DIFFED)) {
     const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord);
     const r = readJson(snap + ".prev", anyJson);
-    if ("doc" in r) found.push({ doc: r.doc, source: path2.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
+    if ("doc" in r) found.push({ doc: r.doc, source: path3.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
   }
   try {
-    const rel = path2.relative(cwd, path2.resolve(cwd, file)).split(path2.sep).join("/");
+    const rel = (relUnder(cwd, path3.resolve(cwd, file)) ?? path3.relative(cwd, path3.resolve(cwd, file))).split(path3.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
     const doc = JSON.parse(text);
     found.push({ doc, source: "git HEAD", kind: "git" });
@@ -1023,41 +1088,206 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   const [newest, older] = useful;
   if (newest === void 0) return { ...firstFound, notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
   if (older !== void 0 && at(newest.doc) !== at(older.doc)) notes.push(`${older.source} is older than ${newest.source} \u2014 used the newer one, so changes already applied are not listed again.`);
+  if (snap !== null && newest.source === path3.relative(cwd, snap) && diffedSince(file, snap)) notes.push(`${newest.source} was already diffed against an earlier export of ${file}, and the file was re-pulled since \u2014 this lists everything since that diff, including changes the earlier sync already applied.`);
   return { ...newest, notes };
 }
 var DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
+var dsFilePath = (exportRoot, name) => name === DESIGN_SYSTEM_FILES.MANIFEST ? path3.join(exportRoot, name) : path3.join(exportRoot, DESIGN_SYSTEM_DIR, name);
+function exportSetCandidates(exportRoot) {
+  const libRoot = path3.join(exportRoot, ROOT);
+  const onDisk = fs6.existsSync(libRoot) ? fs6.readdirSync(libRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
+  const libDirs = [.../* @__PURE__ */ new Set([...onDisk, ...snapshotLibraryDirs(libRoot)])].sort();
+  return [
+    path3.join(exportRoot, MERGED_VARIABLES_FILE),
+    ...DS_FILE_NAMES.map((n) => dsFilePath(exportRoot, n)),
+    ...libDirs.flatMap((d) => LIBRARY_FILE_NAMES.map((n) => path3.join(libRoot, d, n)))
+  ];
+}
+function snapshotLibraryDirs(libRoot) {
+  const probe = snapshotPath(path3.join(libRoot, "d", "f.json"));
+  if (probe === null) return [];
+  const prefix = path3.basename(probe).slice(0, -"d__f.json".length);
+  let names;
+  try {
+    names = fs6.readdirSync(path3.dirname(probe));
+  } catch {
+    return [];
+  }
+  const dirs = /* @__PURE__ */ new Set();
+  for (const n of names) {
+    if (!n.startsWith(prefix)) continue;
+    for (const f of LIBRARY_FILE_NAMES) if (n.endsWith("__" + f) && n.length > prefix.length + f.length + 2) dirs.add(n.slice(prefix.length, -(f.length + 2)));
+  }
+  return [...dirs];
+}
+function exportSetFiles(exportRoot) {
+  return exportSetCandidates(exportRoot).filter((f) => fs6.existsSync(f));
+}
 function siblingFilesOf(f) {
-  const abs = path2.resolve(f);
-  const dir = path2.dirname(abs);
-  const base = path2.basename(abs);
+  const abs = path3.resolve(f);
+  const dir = path3.dirname(abs);
+  const base = path3.basename(abs);
   const out = [];
   if (DS_FILE_NAMES.includes(base)) {
-    const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path2.dirname(dir);
+    const exportRoot = path3.relative(process.cwd(), base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path3.dirname(dir));
     for (const name of DS_FILE_NAMES) {
-      if (name === base) continue;
-      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path2.join(dsRoot, DESIGN_SYSTEM_DIR);
-      out.push(path2.relative(process.cwd(), path2.join(siblingDir, name)));
+      const p = dsFilePath(exportRoot, name);
+      if (name !== base && fs6.existsSync(p)) out.push(p);
     }
     return out;
   }
   const m = /\.json$/i.test(base) ? base.slice(0, -5) : null;
   if (m) {
     for (const suf of [".vars.json", ".assets.json"]) {
-      const p = path2.join(dir, m + suf);
-      if (fs5.existsSync(p)) out.push(path2.relative(process.cwd(), p));
+      const p = path3.join(dir, m + suf);
+      if (fs6.existsSync(p)) out.push(path3.relative(process.cwd(), p));
     }
   }
   const pageDir = dir;
-  const pagesDir = path2.dirname(pageDir);
-  if (path2.basename(pagesDir) === "pages") {
-    const idx = path2.join(pagesDir, "index.json");
-    if (fs5.existsSync(idx)) out.push(path2.relative(process.cwd(), idx));
+  const pagesDir = path3.dirname(pageDir);
+  if (path3.basename(pagesDir) === "pages") {
+    const idx = path3.join(pagesDir, "index.json");
+    if (fs6.existsSync(idx)) out.push(path3.relative(process.cwd(), idx));
   }
   return out;
 }
+var DIFFED = ".diffed";
+var fileHash = (f) => {
+  try {
+    return sha1Hex(fs6.readFileSync(f));
+  } catch {
+    return null;
+  }
+};
+function markDiffed(file, cwd) {
+  const snap = snapshotPath(file, cwd), h = fileHash(file);
+  if (h && snap !== null && fs6.existsSync(snap)) {
+    try {
+      fs6.writeFileSync(snap + DIFFED, h + "\n");
+    } catch {
+    }
+  }
+}
+var diffedHash = (snap) => {
+  try {
+    return fs6.readFileSync(snap + DIFFED, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+};
+var isSpent = (file, snap) => {
+  const m = diffedHash(snap);
+  return m !== null && m === fileHash(file);
+};
+var diffedSince = (file, snap) => {
+  const m = diffedHash(snap);
+  return m !== null && m !== fileHash(file) && m !== fileHash(snap);
+};
+var errorText = (e) => String(e && typeof e === "object" && "message" in e ? e.message : void 0);
+function compareFile(file, current, against, cwd) {
+  let prev;
+  try {
+    prev = previous(file, against, cwd, current);
+  } catch (e) {
+    return { error: errorText(e) };
+  }
+  if (!prev) return { none: true };
+  let diff;
+  try {
+    diff = diffDocs(prev.doc, current, { redrawn: isScreen(current) ? redrawnAssets(file, current, prev, cwd) : /* @__PURE__ */ new Set() });
+  } catch (e) {
+    return { error: errorText(e) };
+  }
+  diff.warnings = [...prev.notes, ...diff.warnings || []];
+  return { result: { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff }, same: !!prev.same };
+}
+function writeReport(out, text, summary) {
+  if (!out) {
+    process.stdout.write(text);
+    return true;
+  }
+  try {
+    fs6.mkdirSync(path3.dirname(path3.resolve(out)), { recursive: true });
+    fs6.writeFileSync(out, text);
+  } catch (e) {
+    console.error(`design-diff: cannot write ${out}: ${errorText(e)}`);
+    return false;
+  }
+  console.log(`wrote ${out} \u2014 ${summary()}`);
+  return true;
+}
+var changeCount = (r) => r.summary.added + r.summary.removed + r.summary.changed + (r.summary.reordered || 0);
+var noBaselineHint = (what) => `no snapshot in ${SNAPSHOT_DIR.split(path3.sep).join("/")}/, and it is not committed in git.
+Next time run \`${scriptCmd("design-diff")} --snapshot ${what}\` BEFORE re-pulling`;
+var SAME_EXPORT_NOTE = / is the SAME export as /;
+function directoryMarkdown(d) {
+  const L = [`# What changed \u2014 ${d.dir}`, ""];
+  const quiet = [], viaOther = [];
+  for (const r of d.results) {
+    if (!changeCount(r) && !r.warnings.length) {
+      quiet.push(r.file);
+      continue;
+    }
+    if (!changeCount(r) && r.warnings.every((w) => SAME_EXPORT_NOTE.test(w))) {
+      viaOther.push(`\`${r.file}\` (vs ${r.against})`);
+      continue;
+    }
+    L.push(markdown(r, `${r.file} vs ${r.against}`).replace(/^(#+) /gm, "#$1 ").replace(/\n+$/, ""), "");
+  }
+  if (quiet.length) L.push(`Nothing changed: ${quiet.map((f) => `\`${f}\``).join(", ")}.`, "");
+  if (viaOther.length) L.push(`Nothing changed against an older copy (each snapshot was the same export, so it was skipped): ${viaOther.join(", ")}.`, "");
+  if (d.notCompared.length) L.push("## Not compared", ...d.notCompared.map((n) => `- \`${n.file}\`: ${n.reason}`), "");
+  return L.join("\n").replace(/\n+$/, "") + "\n";
+}
+function diffDirectory(dir, json, out) {
+  const files = exportSetFiles(dir);
+  const gone = exportSetCandidates(dir).filter((f) => {
+    const snap = snapshotPath(f);
+    return !fs6.existsSync(f) && snap !== null && fs6.existsSync(snap);
+  });
+  if (!files.length && !gone.length) {
+    console.error(`design-diff: ${dir} holds no ${MERGED_VARIABLES_FILE}, design-system or library files \u2014 pass the export directory (the one with ${MERGED_VARIABLES_FILE}, ${DESIGN_SYSTEM_FILES.MANIFEST} and ${DESIGN_SYSTEM_DIR}/), or one file.`);
+    return 2;
+  }
+  const d = { dir, results: [], notCompared: [] };
+  const failed = [];
+  const compared = [];
+  let missing = 0;
+  for (const file of files) {
+    const r = readJson(file, anyJson);
+    const c = "doc" in r ? compareFile(file, r.doc, void 0, process.cwd()) : { error: r.error };
+    if ("error" in c) {
+      failed.push(`design-diff: ${file}: ${c.error}`);
+      d.notCompared.push({ file, reason: c.error });
+    } else if ("none" in c) {
+      missing++;
+      d.notCompared.push({ file, reason: `no snapshot and not committed in git \u2014 nothing older to compare against` });
+    } else {
+      compared.push(file);
+      if (c.same) d.notCompared.push({ file, reason: `the same export as ${c.result.against} \u2014 not re-pulled since it was snapshotted (or snapshotted after the re-pull)` });
+      else d.results.push(c.result);
+    }
+  }
+  for (const file of gone) d.notCompared.push({ file, reason: "in the snapshot, no longer in the export" });
+  if (files.length && missing === files.length) {
+    console.error(`design-diff: nothing to compare the files in ${dir} against \u2014 ${noBaselineHint(dir)}.`);
+    return 2;
+  }
+  const text = json ? JSON.stringify(d, null, 2) + "\n" : directoryMarkdown(d);
+  const wrote = writeReport(out, text, () => {
+    const changed = d.results.filter((r) => changeCount(r)).length, warned = d.results.filter((r) => r.warnings.length).length;
+    return `${d.results.length} file(s) compared, ${changed} changed, ${d.notCompared.length} not compared${warned ? ` \u2014 ${warned} with warning(s), read them` : ""}`;
+  });
+  if (!wrote) return 1;
+  for (const file of compared) markDiffed(file, process.cwd());
+  for (const line of failed) console.error(line);
+  return failed.length ? 2 : 0;
+}
+var isDirectory = (p) => fs6.statSync(p, { throwIfNoEntry: false })?.isDirectory() ?? false;
 function main(argv) {
-  const USAGE = `usage: ${scriptCmd("design-diff")} --snapshot <file.json>... [--force]
-       ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]`;
+  const USAGE = `usage: ${scriptCmd("design-diff")} --snapshot <file.json | export dir>... [--force]
+       ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]
+       ${scriptCmd("design-diff")} <export dir> [--json] [--out <file>]   (${MERGED_VARIABLES_FILE} + every design-system file present, one report)`;
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) {
     console.error(USAGE);
     return argv.length ? 0 : 2;
@@ -1071,51 +1301,104 @@ function main(argv) {
       console.error(USAGE);
       return 2;
     }
-    const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
-    let refused = 0;
-    for (const f of files) {
-      if (!fs5.existsSync(f)) {
+    const entries = /* @__PURE__ */ new Map();
+    const add = (file2, follows) => {
+      const key = path3.resolve(file2), had = entries.get(key);
+      if (!had) entries.set(key, { file: file2, ...ifDefined("follows", follows) });
+      else if (had.follows !== void 0 && follows === void 0) entries.set(key, { file: had.file });
+    };
+    for (const r of requested) {
+      if (isDirectory(r)) {
+        for (const f of exportSetFiles(r)) add(f);
+        continue;
+      }
+      add(r);
+      const screenSiblings = !DS_FILE_NAMES.includes(path3.basename(r));
+      for (const f of siblingFilesOf(r)) add(f, screenSiblings ? path3.resolve(r) : void 0);
+    }
+    for (const r of requested) if (isDirectory(r) && !exportSetFiles(r).length) console.error(`design-diff: ${r} holds no ${MERGED_VARIABLES_FILE}, design-system or library files \u2014 nothing to snapshot there (first pull?)`);
+    for (const { file: f } of entries.values()) {
+      if (fs6.existsSync(f) && snapshotPath(f) === null) {
+        console.error(`design-diff: ${f} is not under a design/ directory that holds an export (looked above the file and above ${process.cwd()}) \u2014 run this from the project root, or name the file by its path inside design/export/`);
+        return 2;
+      }
+    }
+    let refused = 0, missing = 0;
+    const refusedKeys = /* @__PURE__ */ new Set();
+    for (const [key, { file: f, follows }] of entries) {
+      if (!fs6.existsSync(f)) {
         console.error(`design-diff: ${f} not found \u2014 nothing to snapshot (first pull?)`);
+        missing++;
         continue;
       }
       const dest = snapshotPath(f);
-      fs5.mkdirSync(path2.dirname(dest), { recursive: true });
+      if (dest === null) continue;
+      fs6.mkdirSync(path3.dirname(dest), { recursive: true });
       let identical = false;
-      if (fs5.existsSync(dest)) {
+      if (fs6.existsSync(dest)) {
         try {
-          identical = Buffer.compare(fs5.readFileSync(dest), fs5.readFileSync(f)) === 0;
+          identical = Buffer.compare(fs6.readFileSync(dest), fs6.readFileSync(f)) === 0;
         } catch {
         }
       }
-      if (fs5.existsSync(dest) && !identical && !force) {
-        console.error(`design-diff: ${path2.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
-        refused++;
-        continue;
+      const replacing = fs6.existsSync(dest) && !identical;
+      const rel = path3.relative(process.cwd(), dest), prevOf = (p) => p + ".prev";
+      let spent = false, demoted = false;
+      if (identical && follows === void 0) {
+        const mark = diffedHash(dest);
+        if (mark !== null && fs6.existsSync(prevOf(dest)) && !fs6.existsSync(prevOf(dest) + DIFFED)) {
+          try {
+            fs6.writeFileSync(prevOf(dest) + DIFFED, mark + "\n");
+            demoted = true;
+          } catch {
+          }
+        }
+        fs6.rmSync(dest + DIFFED, { force: true });
       }
-      if (fs5.existsSync(dest) && !identical && force) {
-        try {
-          fs5.copyFileSync(dest, dest + ".prev");
-        } catch {
+      if (replacing) {
+        spent = follows === void 0 && isSpent(f, dest);
+        if (follows !== void 0 ? refusedKeys.has(follows) : !force && !spent) {
+          if (follows === void 0) {
+            const unreadable = readJson(dest, anyJson);
+            const shared = path3.basename(f) === MERGED_VARIABLES_FILE ? ` (every screen and design-system pull merges into ${MERGED_VARIABLES_FILE}, so a pull for another screen changes it too)` : "";
+            console.error(!("doc" in unreadable) ? `design-diff: ${rel} ${unreadable.error} \u2014 there is nothing in it to protect, and no diff can use it: re-take it with --snapshot --force.` : diffedSince(f, dest) ? `design-diff: ${rel} was already diffed against an earlier export, and ${f} was re-pulled since${shared} \u2014 refusing to overwrite it. Run the diff now (its report lists the earlier sync's changes again), then snapshot again.` : `design-diff: ${rel} already exists, would change, and no diff has used it yet${shared} \u2014 refusing to overwrite it. Run the diff now, then snapshot again (--force replaces it without a diff, the old one is kept as .prev).`);
+            refused++;
+            refusedKeys.add(key);
+          }
+          continue;
+        }
+        const keepPrev = follows === void 0;
+        for (const [from, to] of [[dest, prevOf(dest)], [dest + ".assets.json", prevOf(dest + ".assets.json")]]) {
+          try {
+            if (keepPrev && fs6.existsSync(from)) fs6.copyFileSync(from, to);
+            else if (!keepPrev) fs6.rmSync(to, { force: true });
+          } catch {
+          }
         }
         try {
-          if (fs5.existsSync(dest + ".assets.json")) fs5.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
+          if (spent) fs6.copyFileSync(dest + DIFFED, prevOf(dest) + DIFFED);
+          else fs6.rmSync(prevOf(dest) + DIFFED, { force: true });
         } catch {
         }
       }
-      if (!identical) fs5.copyFileSync(f, dest);
+      if (!identical) {
+        fs6.copyFileSync(f, dest);
+        fs6.rmSync(dest + DIFFED, { force: true });
+      }
       let n = 0;
       try {
         const parsed = readJsonOrNull(f, isScreen);
         if (parsed) {
           const h = assetHashes(f, parsed).hashes;
           n = Object.keys(h).length;
-          fs5.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
+          fs6.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
         }
       } catch {
       }
-      console.log(`snapshot: ${f} -> ${path2.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
+      console.log(`snapshot: ${f} -> ${path3.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : replacing ? " (replaced)" : ""}`);
+      if (spent || demoted) console.log(`  the old snapshot (spent by the last diff) is kept as ${rel}.prev, never used as a baseline \u2014 if the last sync was stopped before its report was applied, diff against it: --against ${rel}.prev`);
     }
-    return refused ? 1 : 0;
+    return refused || missing ? 1 : 0;
   }
   const { against, out } = flags;
   const json = !!flags.json;
@@ -1124,37 +1407,28 @@ function main(argv) {
     console.error(USAGE);
     return 2;
   }
+  if (isDirectory(file)) {
+    if (against) {
+      console.error(`design-diff: --against takes one file \u2014 a directory diffs each file against its own snapshot or git HEAD copy.
+${USAGE}`);
+      return 2;
+    }
+    return diffDirectory(file, json, out);
+  }
   const current = readJsonFile(file, "export");
-  const failed = (e) => {
-    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
-    console.error(`design-diff: ${file}: ${String(message)}`);
-    return 2;
-  };
-  let prev = null;
-  try {
-    prev = previous(file, against, process.cwd(), current);
-  } catch (e) {
-    return failed(e);
-  }
-  if (!prev) {
-    console.error(`design-diff: nothing to compare ${file} against \u2014 no snapshot in design/.sync/, and it is not committed in git.
-Next time run \`${scriptCmd("design-diff")} --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
+  const c = compareFile(file, current, against, process.cwd());
+  if ("error" in c) {
+    console.error(`design-diff: ${file}: ${c.error}`);
     return 2;
   }
-  let diff;
-  try {
-    diff = diffDocs(prev.doc, current, { redrawn: isScreen(current) ? redrawnAssets(file, current, prev, process.cwd()) : /* @__PURE__ */ new Set() });
-  } catch (e) {
-    return failed(e);
+  if ("none" in c) {
+    console.error(`design-diff: nothing to compare ${file} against \u2014 ${noBaselineHint(file)}; for now pass --against <an older copy>.`);
+    return 2;
   }
-  diff.warnings = [...prev.notes, ...diff.warnings || []];
-  const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
-  const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
-  if (out) {
-    fs5.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
-    fs5.writeFileSync(out, text);
-    console.log(`wrote ${out} \u2014 ${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`);
-  } else process.stdout.write(text);
+  const result = c.result;
+  const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${result.against}`);
+  if (!writeReport(out, text, () => `${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`)) return 1;
+  if (!against) markDiffed(file, process.cwd());
   return 0;
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
@@ -1167,6 +1441,8 @@ export {
   diffScreens,
   diffStyles,
   diffTokens,
+  directoryMarkdown,
+  exportSetFiles,
   markdown,
   previous,
   redrawnAssets,

@@ -911,8 +911,54 @@ function readDesignSystemDir(dir) {
 import { parseArgs as parseArgs2 } from "node:util";
 
 // design-to-code/slice-sources.ts
+import fs6 from "node:fs";
+import path4 from "node:path";
+
+// bridge/src/project-layout.ts
 import fs5 from "node:fs";
 import path3 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
+var LEGACY_MAP_FILE = "codeconnect.local.json";
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path3.join(DESIGN_DIR, ".sync");
+var MERGED_VARIABLES_FILE = "variables.json";
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path3.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
+function looksLikeExportDir(dir) {
+  try {
+    if (!fs5.statSync(dir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return EXPORT_MARKERS.some((m) => fs5.existsSync(path3.join(dir, m)));
+}
+function findExportDir(cwd) {
+  const modern = path3.join(cwd, EXPORT_DIR);
+  const legacy2 = path3.join(cwd, DESIGN_DIR);
+  const modernExists = looksLikeExportDir(modern);
+  const legacyExists = looksLikeExportDir(legacy2);
+  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
+  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
+  return { dir: modern, layout: "none", rel: EXPORT_DIR };
+}
+function findMapFile(cwd) {
+  const modern = path3.join(cwd, MAP_FILE);
+  if (fs5.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  const legacy2 = path3.join(cwd, LEGACY_MAP_FILE);
+  if (fs5.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
+  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
+}
+
+// design-to-code/slice-sources.ts
 function sourcesOf(doc, docPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
@@ -921,12 +967,12 @@ function sourcesOf(doc, docPath) {
     if (!list.includes(screen)) list.push(screen);
     out.set(key, list);
   };
-  const base = docPath ? path3.dirname(docPath) : ".";
+  const base = docPath ? path4.dirname(docPath) : ".";
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
     if (typeof sl.file === "string") {
-      const slice = readJsonOrNull(path3.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      const slice = readJsonOrNull(path4.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
       if (slice) {
         for (const v of slice.variables || []) add(v.key, sl.screen);
         read = true;
@@ -938,7 +984,7 @@ function sourcesOf(doc, docPath) {
     for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
   }
   if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v.key, path3.basename(docPath, ".vars.json"));
+    for (const v of doc && doc.variables || []) add(v.key, path4.basename(docPath, ".vars.json"));
   }
   return out;
 }
@@ -956,62 +1002,20 @@ function variablesContext(screenFiles, varsFile, opts) {
   let variablesPath = varsFile || null;
   const firstFile = files[0];
   if (!variablesPath && firstFile !== void 0) {
-    const exportRoot = path3.resolve(path3.dirname(firstFile), "..", "..");
-    const rootVars = path3.join(exportRoot, "variables.json");
-    const sibling = path3.join(path3.dirname(firstFile), "variables.json");
-    if (fs5.existsSync(rootVars)) variablesPath = rootVars;
-    else if (fs5.existsSync(sibling)) variablesPath = sibling;
+    const exportRoot = path4.resolve(path4.dirname(firstFile), "..", "..");
+    const rootVars = path4.join(exportRoot, MERGED_VARIABLES_FILE);
+    const sibling = path4.join(path4.dirname(firstFile), MERGED_VARIABLES_FILE);
+    if (fs6.existsSync(rootVars)) variablesPath = rootVars;
+    else if (fs6.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
   if (firstFile !== void 0) {
-    const legacy2 = path3.join(path3.resolve(path3.dirname(firstFile), "..", ".."), "..", "variables.json");
-    if (fs5.existsSync(legacy2) && path3.resolve(legacy2) !== path3.resolve(variablesPath || "")) staleLegacy = legacy2;
+    const legacy2 = path4.join(path4.resolve(path4.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
+    if (fs6.existsSync(legacy2) && path4.resolve(legacy2) !== path4.resolve(variablesPath || "")) staleLegacy = legacy2;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
-}
-
-// bridge/src/project-layout.ts
-import fs6 from "node:fs";
-import path4 from "node:path";
-var DESIGN_DIR = "design";
-var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path4.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path4.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path4.join(DESIGN_DIR, "codeconnect.local.json");
-var LEGACY_MAP_FILE = "codeconnect.local.json";
-var PLAN_DIR = path4.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path4.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path4.join(DESIGN_DIR, "verify");
-var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
-var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path4.sep).join("/");
-var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
-var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", "variables.json", "assets", "libraries"];
-function looksLikeExportDir(dir) {
-  try {
-    if (!fs6.statSync(dir).isDirectory()) return false;
-  } catch {
-    return false;
-  }
-  return EXPORT_MARKERS.some((m) => fs6.existsSync(path4.join(dir, m)));
-}
-function findExportDir(cwd) {
-  const modern = path4.join(cwd, EXPORT_DIR);
-  const legacy2 = path4.join(cwd, DESIGN_DIR);
-  const modernExists = looksLikeExportDir(modern);
-  const legacyExists = looksLikeExportDir(legacy2);
-  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
-  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
-  return { dir: modern, layout: "none", rel: EXPORT_DIR };
-}
-function findMapFile(cwd) {
-  const modern = path4.join(cwd, MAP_FILE);
-  if (fs6.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
-  const legacy2 = path4.join(cwd, LEGACY_MAP_FILE);
-  if (fs6.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
-  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
 }
 
 // design-to-code/cross-check.ts

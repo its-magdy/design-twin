@@ -14,6 +14,7 @@ import path from "node:path";
 import type { TokensDoc } from "./types.ts";
 import { isTokensDoc } from "./doc-guards.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
+import { MERGED_VARIABLES_FILE } from "../bridge/src/project-layout.ts";
 
 /** Map(variable key -> [screen label]) */
 export type SliceSources = Map<string, string[]>;
@@ -89,8 +90,8 @@ function variablesContext(screenFiles: readonly string[] | null | undefined, var
   const firstFile = files[0]; // set exactly when files.length
   if (!variablesPath && firstFile !== undefined) {
     const exportRoot = path.resolve(path.dirname(firstFile), "..", "..");
-    const rootVars = path.join(exportRoot, "variables.json");
-    const sibling = path.join(path.dirname(firstFile), "variables.json");
+    const rootVars = path.join(exportRoot, MERGED_VARIABLES_FILE);
+    const sibling = path.join(path.dirname(firstFile), MERGED_VARIABLES_FILE);
     if (fs.existsSync(rootVars)) variablesPath = rootVars;
     else if (fs.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
@@ -98,7 +99,7 @@ function variablesContext(screenFiles: readonly string[] | null | undefined, var
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy: string | null = null;
   if (firstFile !== undefined) {
-    const legacy = path.join(path.resolve(path.dirname(firstFile), "..", ".."), "..", "variables.json");
+    const legacy = path.join(path.resolve(path.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
     if (fs.existsSync(legacy) && path.resolve(legacy) !== path.resolve(variablesPath || "")) staleLegacy = legacy;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };

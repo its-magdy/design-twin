@@ -57,6 +57,8 @@ export const INDEX = "index.json"; // per-directory self-description; also the n
 // definitions are components.json (design-system/ splits local and library-sampled components).
 const { TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, HYGIENE } = DESIGN_SYSTEM_FILES;
 export const COMPONENTS = "components.json";
+/** Every file buildLibraryLayout writes in a libraries/<dir>/, in `files` order (the manifest, INDEX, last). */
+export const LIBRARY_FILE_NAMES: readonly string[] = [TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, COMPONENTS, HYGIENE, INDEX];
 
 // Filesystem-safe, stable, lowercase. Same spirit as pages-layout.ts's `safe`.
 function slug(s: unknown): string {
