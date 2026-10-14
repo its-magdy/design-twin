@@ -15,6 +15,7 @@
 // transparent layer; a panel that is only the destination tag; and a plan-only opener (plan.interactions). ?mode=wide
 // adds a 1700px strip to the Beds section only; ?mode=reload-on-first-hover reloads once on the hovered row.
 // plot-ledger-edge.html holds the edge-case repros, one ?mode= each.
+// The freeze repro says where a page stopped answering: froze lists the query of each page that began one.
 //
 // A write is charged to the run whose page made it (the POST's Referer query, when it is a launched --url's); any other write
 // (no Referer, an <object> / <embed> subframe's own URL) is charged to every run's check, and each suite's final check wants
@@ -31,6 +32,7 @@ import type { AddressInfo } from "node:net";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import type { InteractionEvidence, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
+import { readStatus, type VerifyStatusV2 } from "../design-to-code/verify-run.ts";
 import { check, report } from "./assert.ts";
 import { runNode, type Run } from "./pool.ts";
 
@@ -50,10 +52,30 @@ export const ix = (m: VerifyMeasured | null, id: string): InteractionEvidence | 
 /** the "had not finished loading after 10s" note of a document whose load timed out */
 export const loadNote = (m: VerifyMeasured | null): boolean => (m?.notes || []).some((n) => /the document had not finished loading after 10s/.test(n));
 
+export interface ProbeRunOptions { env?: NodeJS.ProcessEnv; killAfterMs?: number }
+
+/** The env that makes a run's Playwright log its browser process launcher on stderr (`pw:browser <launched> pid=N`, and when
+ *  that process ends while the run is alive `[pid=N] <process did exit: exitCode=…, signal=…>`) — the browsers a run started
+ *  and how each ended, without reading the process table. */
+export const BROWSER_LOG: NodeJS.ProcessEnv = { DEBUG: "pw:browser" };
+/** The browser pids a run under BROWSER_LOG launched. */
+export const launchedPids = (stderr: string): number[] => [...stderr.matchAll(/pw:browser <launched> pid=(\d+)/g)].map((m) => Number(m[1]));
+/** How the browser `pid` ended, as Playwright logged it: "exitCode=0, signal=null" when it quit on its own while the run was
+ *  alive (the probe closed it); a signal when it was killed (the probe's last-resort SIGKILL of its browser children); null
+ *  when no exit was logged (the run ended first and Playwright's exit hook killed it — that hook logs nothing). */
+export const browserExit = (stderr: string, pid: number): string | null => new RegExp(String.raw`\[pid=${pid}\] <process did exit: (exitCode=[^,]*, signal=[^>]*)>`).exec(stderr)?.[1] ?? null;
+/** SIGKILL the process group of each pid (POSIX: Playwright spawns the browser detached, so it leads its own group) — the
+ *  cleanup after a run the test had to kill, whose browser no exit hook ended. Windows has no process groups: nothing. */
+export const killGroups = (pids: number[]): void => {
+  if (process.platform === "win32") return;
+  for (const pid of pids) { try { process.kill(-pid, "SIGKILL"); } catch { /* gone already */ } }
+};
+
 export interface DriveFixture {
   url: (mode?: string) => string;
   edge: (mode: string) => string;
-  probe: (args: string[]) => Promise<Run>;
+  /** a verify-probe run; `o.env` adds to its environment, `o.killAfterMs` SIGKILLs a run still up then (runNode) */
+  probe: (args: string[], o?: ProbeRunOptions) => Promise<Run>;
   vs: (args: string[]) => Promise<Run>;
   read: (base: string) => VerifyMeasured | null;
   readReport: (base: string) => VerifyReport | null;
@@ -62,6 +84,11 @@ export interface DriveFixture {
   writes: string[];
   /** the writes charged to the runs on these --url values, plus the unattributed ones */
   writesOf: (...urls: string[]) => string[];
+  /** the query of every page that began a freeze (plot-ledger-edge.html?mode=freeze-drive's GET /plot-ledger-froze, by its Referer) */
+  froze: string[];
+  /** a path inside the temp project, and the run status the probe left for a verify dir base (the run cache's live file) */
+  abs: (rel: string) => string;
+  status: (base: string) => VerifyStatusV2 | "v1" | null;
   /** the expectation from the real --expect, and the same without interactions (nothing to drive) */
   EXPECTED: string;
   QUIET: string;
@@ -125,6 +152,7 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
   };
   const writesOf = (...urls: string[]): string[] => [...[...new Set(urls.map(searchOf))].flatMap((s) => writesBy.get(s) ?? []), ...(writesBy.get("?") ?? [])];
   const seen = new Map<string, number>();
+  const froze: string[] = [];
   const SLOW_JS = "document.body.insertAdjacentHTML(\"beforeend\", '<div class=\"app\" data-dt-node=\"70:1\"><h1 data-dt-node=\"70:2\">Beds</h1></div>');";
   const server = http.createServer((req, res) => {
     const u = new URL(req.url || "/", "http://x");
@@ -133,6 +161,11 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
       const what = u.search.slice(1), k = runOfPage(req.headers.referer);
       writes.push(what);
       writesBy.set(k, [...(writesBy.get(k) ?? []), what]);
+      res.writeHead(204); res.end(); return;
+    }
+    // the freeze began: charged to the page that said so (its Referer's query)
+    if (name === "plot-ledger-froze") {
+      try { froze.push(new URL(req.headers.referer ?? "").search); } catch { froze.push("?"); }
       res.writeHead(204); res.end(); return;
     }
     if (name === "plot-ledger-hang.png" || name === "plot-ledger-hangdoc") return; // an image that never loads (held until finish())
@@ -159,13 +192,14 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
 
   // async spawn (runNode in ./pool.ts): the server lives in THIS process, so a spawnSync would block it from answering. A spawn
   // that fails resolves as status null — run never rejects, never hangs the suite
-  const run = (script: string, args: string[]): Promise<Run> => runNode(proj, script, args);
+  const run = (script: string, args: string[], o?: ProbeRunOptions): Promise<Run> =>
+    runNode(proj, script, args, o?.killAfterMs ?? 0, o?.env !== undefined ? { ...process.env, ...o.env } : undefined);
   // These runs check reaching, measuring and driving — `--behaviour off` keeps them fast, except where a run says
   // `--behaviour on` (test/verify-probe-behaviour-e2e.test.ts runs the behaviour checks themselves)
-  const probe = (args: string[]): Promise<Run> => {
+  const probe = (args: string[], o?: ProbeRunOptions): Promise<Run> => {
     const at = args.indexOf("--url"), u = at >= 0 ? args[at + 1] : undefined;
     if (u !== undefined) launched.add(searchOf(u));
-    return run(PROBE, [...args, ...(args.includes("--check") || args.includes("--behaviour") ? [] : ["--behaviour", "off"]), "--project", ROOT]);
+    return run(PROBE, [...args, ...(args.includes("--check") || args.includes("--behaviour") ? [] : ["--behaviour", "off"]), "--project", ROOT], o);
   };
   const vs = (args: string[]): Promise<Run> => run(VS, args);
   const finish = (): void => { server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
@@ -192,5 +226,7 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
   const full = readJsonOrNull(path.join(proj, EXPECTED), isVerifyExpectation);
   if (full !== null) { const { interactions: _drop, ...quiet } = full; fs.writeFileSync(path.join(proj, QUIET), JSON.stringify(quiet, null, 2) + "\n"); }
 
-  return { url, edge, probe, vs, read, readReport, written, writes, writesOf, EXPECTED, QUIET, finish };
+  const abs = (rel: string): string => path.join(proj, rel);
+  const status = (base: string): VerifyStatusV2 | "v1" | null => readStatus(abs(base));
+  return { url, edge, probe, vs, read, readReport, written, writes, writesOf, froze, abs, status, EXPECTED, QUIET, finish };
 }

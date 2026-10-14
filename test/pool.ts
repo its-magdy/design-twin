@@ -6,7 +6,7 @@
 //
 // Each task is still its own `node verify-probe.js` process with its own chromium (process isolation is what the suites
 // test); this only bounds how many are alive at once.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import os from "node:os";
 
 /** A queue running at most `n` of its tasks at once, in the order they were queued. A task that throws synchronously rejects
@@ -45,20 +45,33 @@ export const poolSize = (env: NodeJS.ProcessEnv = process.env, cores: number = o
  *  output, spawn → close in ms (never the time a run waited in a pool queue), and whether killAfterMs fired. */
 export interface Run { status: number | null; stdout: string; stderr: string; ms: number; killed: boolean }
 
+/** Ends `p` and its descendants. POSIX: SIGKILL to the group `p` leads (runNode spawns it detached for that); Windows has no
+ *  groups, so taskkill /T walks the child tree by pid. Falls back to killing the child alone when the group is gone. */
+const killTree = (p: ChildProcessWithoutNullStreams): void => {
+  const pid = p.pid;
+  if (pid === undefined) { p.kill("SIGKILL"); return; }
+  if (process.platform === "win32") { try { spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore" }); } catch { p.kill("SIGKILL"); } return; }
+  try { process.kill(-pid, "SIGKILL"); } catch { p.kill("SIGKILL"); }
+};
+
 /** Runs `node <script> ...args` in `cwd` asynchronously (a suite's server lives in the test's own process, so a spawnSync
  *  would stop it answering). Never rejects and never hangs on a failed start: a spawn that throws synchronously or emits
  *  "error" (EAGAIN under load) resolves with status null and "spawn failed: <message>" appended to stderr.
- *  killAfterMs > 0: a run that has not closed by then is SIGKILLed (by its pid) and reported killed — a hung process fails the
- *  test instead of hanging it. `node` is the running binary (process.execPath), so a script path or `-e` source both work. */
-export const runNode = (cwd: string, script: string, args: string[], killAfterMs = 0): Promise<Run> => new Promise((resolve) => {
+ *  killAfterMs > 0: a run that has not closed by then is killed with everything it started (POSIX: the child leads its own
+ *  process group and the group gets SIGKILL; Windows: taskkill /T /F by pid) and reported killed — a hung process fails the
+ *  test instead of hanging it. `node` is the running binary (process.execPath), so a script path or `-e` source both work.
+ *  `env`: the child's WHOLE environment, passed to spawn as is — it replaces this process's, nothing is merged (a caller that
+ *  wants to add a variable spreads process.env itself); omitted, the child inherits this process's. */
+export const runNode = (cwd: string, script: string, args: string[], killAfterMs = 0, env?: NodeJS.ProcessEnv): Promise<Run> => new Promise((resolve) => {
   const t0 = Date.now();
   let p: ChildProcessWithoutNullStreams;
-  try { p = spawn(process.execPath, [script, ...args], { cwd }); }
+  try { p = spawn(process.execPath, [script, ...args], { cwd, ...(env !== undefined ? { env } : {}), ...(killAfterMs > 0 && process.platform !== "win32" ? { detached: true } : {}) }); }
   catch (e) { resolve({ status: null, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}\n`, ms: Date.now() - t0, killed: false }); return; }
   let stdout = "", stderr = "", killed = false;
-  const timer = killAfterMs > 0 ? setTimeout(() => { killed = true; p.kill("SIGKILL"); }, killAfterMs) : undefined;
+  const timer = killAfterMs > 0 ? setTimeout(() => { killed = true; killTree(p); }, killAfterMs) : undefined;
   p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
   p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
   p.on("error", (e) => { clearTimeout(timer); resolve({ status: null, stdout, stderr: `${stderr}spawn failed: ${e.message}\n`, ms: Date.now() - t0, killed }); });
-  p.on("close", (status) => { clearTimeout(timer); resolve({ status, stdout, stderr, ms: Date.now() - t0, killed }); });
+  // a killed run's status is null everywhere (Windows: a process ended by taskkill or TerminateProcess exits with code 1)
+  p.on("close", (status) => { clearTimeout(timer); resolve({ status: killed ? null : status, stdout, stderr, ms: Date.now() - t0, killed }); });
 });
