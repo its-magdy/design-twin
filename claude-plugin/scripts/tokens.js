@@ -519,6 +519,7 @@ var PERCENT_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY"]);
 function percentOpacity(variable, opts) {
   return variable.type === "FLOAT" && unitDecision(variable, opts) === "scopes" && (variable.scopes || []).every((s) => PERCENT_SCOPES.has(s));
 }
+var commentText = (s) => String(s).replace(/\r\n|[\r\n\u2028\u2029\u0085]/g, " ").replace(/\*\//g, "* /");
 
 // design-to-code/tokens-native.ts
 var FULL = Object.freeze({ fullyRounded: true });
@@ -720,6 +721,7 @@ var quoteWith = (raw, esc) => {
   return out + '"';
 };
 var isSurrogate = (c) => c >= 55296 && c <= 57343;
+var LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 var isControl = (c) => c < 32 || c === 127;
 var KOTLIN_ESC = { 34: '\\"', 92: "\\\\", 36: "\\$", 10: "\\n", 13: "\\r", 9: "\\t", 8: "\\b" };
 var kotlinStr = (raw) => quoteWith(raw, (c) => KOTLIN_ESC[c] ?? (isControl(c) || isSurrogate(c) ? `\\u${hex4(c)}` : void 0));
@@ -757,13 +759,13 @@ function compose(cols, opts) {
     "import androidx.compose.ui.unit.sp"
   ];
   for (const c of cols) {
-    L.push("", `// Figma collection "${c.name}"`);
+    L.push("", `// Figma collection "${commentText(c.name)}"`);
     const [m0, m1] = c.modes;
     if (m1 === void 0) {
-      L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, m0.name))} // ${f.source}`), "}");
+      L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, m0.name))} // ${commentText(f.source)}`), "}");
       continue;
     }
-    L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
+    L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${commentText(f.source)}`), ")");
     for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
     const active = c.modes.find((m) => m.name !== c.default) ?? m1;
     L.push(
@@ -792,14 +794,14 @@ function swiftui(cols) {
   };
   const L = [`// ${HEADER}`, "import SwiftUI"];
   for (const c of cols) {
-    L.push("", `// Figma collection "${c.name}"`);
+    L.push("", `// Figma collection "${commentText(c.name)}"`);
     if (c.modes.length === 1) {
-      L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${f.source}`), "}");
+      L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${commentText(f.source)}`), "}");
       continue;
     }
     L.push(
       `public struct ${c.type}: Sendable, Equatable {`,
-      ...c.fields.map((f) => `    public let ${f.id}: ${T[f.kind]} // ${f.source}`),
+      ...c.fields.map((f) => `    public let ${f.id}: ${T[f.kind]} // ${commentText(f.source)}`),
       "",
       `    public init(${c.fields.map((f) => `${f.id}: ${T[f.kind]}`).join(", ")}) {`,
       ...c.fields.map((f) => `        self.${f.id} = ${f.id}`),
@@ -829,9 +831,9 @@ function flutter(cols) {
   const lerp = (f) => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
   const L = [`// ${HEADER}`, "// ignore_for_file: constant_identifier_names", "import 'dart:ui' show lerpDouble;", "", "import 'package:flutter/material.dart';"];
   for (const c of cols) {
-    L.push("", `/// Figma collection "${c.name}"`);
+    L.push("", `/// Figma collection "${commentText(c.name)}"`);
     if (c.modes.length === 1) {
-      L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, valueIn(f, c.modes[0].name))}; // ${f.source}`), "}");
+      L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, valueIn(f, c.modes[0].name))}; // ${commentText(f.source)}`), "}");
       continue;
     }
     L.push(
@@ -842,7 +844,7 @@ function flutter(cols) {
       ...c.fields.map((f) => `    required this.${f.id},`),
       "  });",
       "",
-      ...c.fields.map((f) => `  final ${T[f.kind]} ${f.id}; // ${f.source}`)
+      ...c.fields.map((f) => `  final ${T[f.kind]} ${f.id}; // ${commentText(f.source)}`)
     );
     for (const m of c.modes) L.push("", `  static const ${m.id} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  );");
     L.push(
@@ -874,14 +876,14 @@ function reactNative(cols) {
   const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
   for (const c of cols) {
     const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
-    L.push("", `/** Figma collection "${c.name}" */`);
+    L.push("", `/** Figma collection "${commentText(c.name)}" */`);
     if (c.modes.length === 1) {
-      L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, valueIn(f, c.modes[0].name))}, // ${f.source}`), "} as const;");
+      L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, valueIn(f, c.modes[0].name))}, // ${commentText(f.source)}`), "} as const;");
       continue;
     }
     L.push(
       `export interface ${c.type} {`,
-      ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${f.source}`),
+      ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${commentText(f.source)}`),
       "}",
       "",
       `export type ${c.type}Mode = ${c.modes.map((m) => str(m.id)).join(" | ")};`,
@@ -905,6 +907,11 @@ function toNative(designSystem, platform, opts) {
   if (!p) throw new Error(`unknown native platform "${String(platform)}" \u2014 use one of: ${Object.keys(PLATFORMS).join(", ")}`);
   const warnings = [];
   const cols = model(designSystem, warnings, opts);
+  if (p === "swiftui") {
+    for (const c of cols) for (const f of c.fields) if (f.kind === "string") for (const [m, v] of Object.entries(f.values)) {
+      if (v !== FULL && LONE_SURROGATE.test(String(v))) warnings.push(`${f.source} (mode ${m}): a lone UTF-16 surrogate has no Swift spelling (\\u{n} takes Unicode scalars only), so it is written as U+FFFD`);
+    }
+  }
   const target = PLATFORMS[p], emit = EMIT[p];
   if (target === void 0 || emit === void 0) throw new Error(`tokens-native: platform "${p}" has no emitter`);
   return { file: target.file, text: emit(cols, opts), warnings };
@@ -1787,7 +1794,7 @@ function sourceName(input) {
 }
 function provenanceLine(input, ds, comment) {
   const { count, sha } = catalogProvenance(ds);
-  const body = `designtwin-source: ${sourceName(input)} \xB7 ${count} variables \xB7 sha256 ${sha}`;
+  const body = `designtwin-source: ${commentText(sourceName(input))} \xB7 ${count} variables \xB7 sha256 ${sha}`;
   return comment === "css" ? `/* ${body} */
 ` : `// ${body}
 `;

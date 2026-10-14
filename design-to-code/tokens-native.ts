@@ -43,7 +43,7 @@ import { normHex, parseHex, formatHex, composeAlpha, clampOpacityPct } from "./c
 
 // Names, default modes, aliases and units must agree with the DTCG/CSS output, so they come from the
 // same readers tokens.ts uses (tokens-core.ts).
-import { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, type UnitOpts } from "./tokens-core.ts";
+import { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, commentText, type UnitOpts } from "./tokens-core.ts";
 
 /** What toNative takes beside the design system. */
 export interface NativeOpts extends UnitOpts {
@@ -277,6 +277,7 @@ const quoteWith = (raw: unknown, esc: (c: number) => string | undefined): string
   return out + "\"";
 };
 const isSurrogate = (c: number): boolean => c >= 0xd800 && c <= 0xdfff;
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 /** C0 controls and DEL: swiftc rejects a raw DEL ("unprintable ASCII character"), so neither target gets one raw. */
 const isControl = (c: number): boolean => c < 0x20 || c === 0x7f;
 // Kotlin's escapes are \t \b \n \r \' \" \\ \$ and \uXXXX (kotlinlang.org/docs/characters.html) — no \f, so a form
@@ -308,13 +309,13 @@ function compose(cols: NativeCollection[], opts?: NativeOpts): string {
     "import androidx.compose.runtime.Immutable", "import androidx.compose.runtime.staticCompositionLocalOf", "import androidx.compose.ui.graphics.Color",
     "import androidx.compose.ui.unit.Dp", "import androidx.compose.ui.unit.TextUnit", "import androidx.compose.ui.unit.dp", "import androidx.compose.ui.unit.sp"];
   for (const c of cols) {
-    L.push("", `// Figma collection "${c.name}"`);
+    L.push("", `// Figma collection "${commentText(c.name)}"`);
     const [m0, m1] = c.modes;
     if (m1 === undefined) {
-      L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, m0.name))} // ${f.source}`), "}");
+      L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, m0.name))} // ${commentText(f.source)}`), "}");
       continue;
     }
-    L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
+    L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${commentText(f.source)}`), ")");
     for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
     // The first mode whose NAME is not the default's (the hint names a theme the way a designer would). If
     // every mode shares the default's name — a shape doc-guards.ts does not reject — fall back to the
@@ -345,16 +346,16 @@ function swiftui(cols: NativeCollection[]): string {
   };
   const L = [`// ${HEADER}`, "import SwiftUI"];
   for (const c of cols) {
-    L.push("", `// Figma collection "${c.name}"`);
+    L.push("", `// Figma collection "${commentText(c.name)}"`);
     if (c.modes.length === 1) {
-      L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${f.source}`), "}");
+      L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${commentText(f.source)}`), "}");
       continue;
     }
     // Sendable: the `static let` modes below are globals, which Swift 6 rejects for a non-Sendable type
     // (a PUBLIC struct is never inferred Sendable). Equatable: lets SwiftUI skip work when the
     // environment value did not change. The explicit init is public because the synthesized one is
     // internal — a DesignSystem package's consumer could not build a variant theme (preview, white-label).
-    L.push(`public struct ${c.type}: Sendable, Equatable {`, ...c.fields.map((f) => `    public let ${f.id}: ${T[f.kind]} // ${f.source}`), "",
+    L.push(`public struct ${c.type}: Sendable, Equatable {`, ...c.fields.map((f) => `    public let ${f.id}: ${T[f.kind]} // ${commentText(f.source)}`), "",
       `    public init(${c.fields.map((f) => `${f.id}: ${T[f.kind]}`).join(", ")}) {`, ...c.fields.map((f) => `        self.${f.id} = ${f.id}`), "    }");
     for (const m of c.modes) L.push("", `    public static let ${m.id} = ${c.type}(`, c.fields.map((f) => `        ${f.id}: ${lit(f.kind, valueIn(f, m.name))}`).join(",\n"), "    )");
     const env = c.type.charAt(0).toLowerCase() + c.type.slice(1);
@@ -373,14 +374,14 @@ function flutter(cols: NativeCollection[]): string {
   const lerp = (f: NativeField): string => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
   const L = [`// ${HEADER}`, "// ignore_for_file: constant_identifier_names", "import 'dart:ui' show lerpDouble;", "", "import 'package:flutter/material.dart';"];
   for (const c of cols) {
-    L.push("", `/// Figma collection "${c.name}"`);
+    L.push("", `/// Figma collection "${commentText(c.name)}"`);
     if (c.modes.length === 1) {
-      L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, valueIn(f, c.modes[0].name))}; // ${f.source}`), "}");
+      L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, valueIn(f, c.modes[0].name))}; // ${commentText(f.source)}`), "}");
       continue;
     }
     L.push(`/// Register per theme: ThemeData(extensions: [${c.type}.${c.modes[0].id}]); read: Theme.of(context).extension<${c.type}>()!`, "@immutable",
       `class ${c.type} extends ThemeExtension<${c.type}> {`, `  const ${c.type}({`, ...c.fields.map((f) => `    required this.${f.id},`), "  });", "",
-      ...c.fields.map((f) => `  final ${T[f.kind]} ${f.id}; // ${f.source}`));
+      ...c.fields.map((f) => `  final ${T[f.kind]} ${f.id}; // ${commentText(f.source)}`));
     for (const m of c.modes) L.push("", `  static const ${m.id} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  );");
     L.push("", "  @override", `  ${c.type} copyWith({`, ...c.fields.map((f) => `    ${T[f.kind]}? ${f.id},`), "  }) {", `    return ${c.type}(`,
       ...c.fields.map((f) => `      ${f.id}: ${f.id} ?? this.${f.id},`), "    );", "  }", "", "  @override",
@@ -397,12 +398,12 @@ function reactNative(cols: NativeCollection[]): string {
   const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
   for (const c of cols) {
     const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
-    L.push("", `/** Figma collection "${c.name}" */`);
+    L.push("", `/** Figma collection "${commentText(c.name)}" */`);
     if (c.modes.length === 1) {
-      L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, valueIn(f, c.modes[0].name))}, // ${f.source}`), "} as const;");
+      L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, valueIn(f, c.modes[0].name))}, // ${commentText(f.source)}`), "} as const;");
       continue;
     }
-    L.push(`export interface ${c.type} {`, ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${f.source}`), "}", "",
+    L.push(`export interface ${c.type} {`, ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${commentText(f.source)}`), "}", "",
       `export type ${c.type}Mode = ${c.modes.map((m) => str(m.id)).join(" | ")};`, `export const ${v}DefaultMode: ${c.type}Mode = ${str(c.defaultId)};`, "",
       `export const ${v}: Record<${c.type}Mode, ${c.type}> = {`);
     for (const m of c.modes) L.push(`  ${m.id}: {`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  },");
@@ -425,6 +426,10 @@ function toNative(designSystem: TokensDoc | null | undefined, platform: unknown,
   if (!p) throw new Error(`unknown native platform "${String(platform)}" — use one of: ${Object.keys(PLATFORMS).join(", ")}`);
   const warnings: string[] = [];
   const cols = model(designSystem, warnings, opts);
+  // Swift's \u{n} names a Unicode scalar, which a lone UTF-16 surrogate is not: swiftStr writes U+FFFD for it — said here
+  if (p === "swiftui") for (const c of cols) for (const f of c.fields) if (f.kind === "string") for (const [m, v] of Object.entries(f.values)) {
+    if (v !== FULL && LONE_SURROGATE.test(String(v))) warnings.push(`${f.source} (mode ${m}): a lone UTF-16 surrogate has no Swift spelling (\\u{n} takes Unicode scalars only), so it is written as U+FFFD`);
+  }
   // platformOf accepted p by a truthiness test on PLATFORMS, and EMIT has the same keys (and the same
   // inherited ones), so this never fires
   const target = PLATFORMS[p], emit = EMIT[p];

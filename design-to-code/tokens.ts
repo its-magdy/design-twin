@@ -48,7 +48,7 @@ import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { sourcesOf, type SliceSources } from "./slice-sources.ts";
 import { normHex, clampOpacityPct } from "./color.ts";
-import { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, type UnitOpts } from "./tokens-core.ts";
+import { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, commentText, type UnitOpts } from "./tokens-core.ts";
 import { toNative, platformOf } from "./tokens-native.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { sha256Hex } from "../bridge/src/hash.ts";
@@ -1292,7 +1292,7 @@ function sourceName(input: string): string {
 }
 function provenanceLine(input: string, ds: TokensDoc, comment: "css" | "line"): string {
   const { count, sha } = catalogProvenance(ds);
-  const body = `designtwin-source: ${sourceName(input)} · ${count} variables · sha256 ${sha}`;
+  const body = `designtwin-source: ${commentText(sourceName(input))} · ${count} variables · sha256 ${sha}`;
   return comment === "css" ? `/* ${body} */\n` : `// ${body}\n`;
 }
 

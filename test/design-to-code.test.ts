@@ -879,6 +879,21 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   check("--web tailwind prints ONE @source not suggestion (stderr, beside the other notes) and does not write it into theme.css",
     note(tw.stderr).length === 1 && !/@source/.test(fs.readFileSync(path.join(dir, "tw", "theme.css"), "utf8")));
   check("without --web tailwind there is no such note", note(gen.stderr).length === 0);
+  // the provenance line is `<parent dir>/<file>`: a directory name with a newline, or ending in * (so that `*/` forms with the
+  // slash), stays inside the comment. A POSIX name may hold both; Windows forbids them in a name, so the check runs elsewhere.
+  if (process.platform !== "win32") {
+    const odd = path.join(dir, "pkg\ninjected()*");
+    fs.mkdirSync(odd);
+    const oddInput = path.join(odd, "variables.json");
+    fs.copyFileSync(input, oddInput);
+    const outs = ["css", "swift"].map((k) => {
+      const out = path.join(dir, "odd-" + k);
+      const r = spawnSync(process.execPath, k === "css" ? [TOK, oddInput, out] : [TOK, oddInput, out, "--native", "swiftui"], { encoding: "utf8" });
+      return r.status === 0 ? fs.readFileSync(path.join(out, k === "css" ? "tokens.css" : fs.readdirSync(out).find((f) => f.endsWith(".swift")) ?? "none"), "utf8") : "";
+    });
+    check("the provenance comment of tokens.css and a native file cannot be closed or ended by the input's directory name",
+      outs.every((t) => t.length > 0 && !t.split(/\r\n|[\r\n\u2028\u2029]/).some((l) => /^\s*injected\(\)/.test(l)) && (t.split(/\r\n|[\r\n]/)[0] ?? "").split("*/").length <= 2));
+  }
 })();
 
 // ---------- the design-system split: these CLIs must reject the slim manifest -----------------
@@ -1401,6 +1416,22 @@ console.log("map — SLOT props:");
     check("[native] an escaped backslash before u1234 stays a backslash and letters (Swift \"\\\\u1234\", not \\u{1234}); Kotlin keeps \\$ for every $",
       sw.get(`v${0x20}`) === "\"\\\\u1234\"" && kt.get(`v${0x20}`) === "\"\\\\u1234\"" && kt.get(`v${0x20 + 12}`) === "\"\\${x}\"" && kt.get(`v${0x20 + 7}`) === "\"\\\\\\$\"");
   }
+  check("[native] swiftui: a lone surrogate written as U+FFFD is a warning naming the token and mode; compose (\\uXXXX keeps it) does not warn", (() => {
+    const d = tokens({ collections: [{ name: "S", modes: ["M"], default: "M" }], variables: [{ name: "half", type: "STRING", collection: "S", values: { M: "a\ud800b" } }, { name: "pair", type: "STRING", collection: "S", values: { M: "\u{1F600}" } }] });
+    const sw = toNative(d, "swiftui").warnings, kt = toNative(d, "android-compose").warnings;
+    return sw.length === 1 && /^half \(mode M\): a lone UTF-16 surrogate .* U\+FFFD$/.test(sw[0] ?? "") && !kt.some((w) => /surrogate/.test(w));
+  })());
+  check("[native] a collection or variable name cannot break out of its generated comment (a newline, U+2028, */) on any platform", (() => {
+    const d = tokens({ collections: [{ name: "Brand\ninjected()", modes: ["M"], default: "M" }, { name: "Theme */ injected() /*", modes: ["Light", "Dark"], default: "Light" }],
+      variables: [{ name: "x\ninjected()", type: "FLOAT", collection: "Brand\ninjected()", values: { M: 1 } }, { name: "y\u2028injected()", type: "FLOAT", collection: "Brand\ninjected()", values: { M: 2 } },
+        { name: "z\r\ninjected()", type: "FLOAT", collection: "Theme */ injected() /*", values: { Light: 1, Dark: 2 } }] });
+    return ["android-compose", "swiftui", "flutter", "react-native"].every((p) => {
+      const t = toNative(d, p).text;
+      const lines = t.split(/\r\n|[\n\r\u2028\u2029]/);
+      // every "injected()" stays inside a comment: never at the start of a line, never after a closed block comment
+      return !lines.some((l) => /^\s*injected\(\)/.test(l)) && !/\*\/ injected\(\)/.test(t) && /Theme \* \/ injected\(\) \/\*/.test(t);
+    });
+  })());
   check("[native] compose: the JVM limit is counted in parameter UNITS (Color = 2) — 130 colors in a themed collection warns, 100 does not", (() => {
     const ds = (n: number) => tokens({ collections: [{ name: "Big", modes: ["Light", "Dark"], default: "Light" }], variables: Array.from({ length: n }, (_, i) => ({ name: "c/" + i, type: "COLOR", collection: "Big", values: { Light: "#fff", Dark: "#000" } })) });
     return toNative(ds(130), "android-compose").warnings.some((w) => /JVM parameter units/.test(w)) && !toNative(ds(100), "android-compose").warnings.some((w) => /JVM/.test(w));

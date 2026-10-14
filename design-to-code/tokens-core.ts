@@ -138,4 +138,9 @@ function percentOpacity(variable: Variable, opts?: UnitOpts): boolean {
   return variable.type === "FLOAT" && unitDecision(variable, opts) === "scopes" && (variable.scopes || []).every((s) => PERCENT_SCOPES.has(s));
 }
 
-export { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity };
+// A Figma name (a collection, a variable, a source file) inside a generated comment: a line terminator would end a `//`
+// comment and turn the rest of the name into code (JS/TS also end a line at U+2028/U+2029), and `*/` would close a
+// `/* */` or `/** */` one — so each line terminator is a space and `*/` is `* /`.
+const commentText = (s: unknown): string => String(s).replace(/\r\n|[\r\n\u2028\u2029\u0085]/g, " ").replace(/\*\//g, "* /");
+
+export { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, commentText };
