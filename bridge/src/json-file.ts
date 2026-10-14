@@ -13,7 +13,7 @@ const indentOf = (text: string): string => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  
  *  `raw` is the file as read; null (no file yet) → 2 spaces, LF, a final newline. */
 export function formatJsonLike(value: unknown, raw: string | null): string {
   if (raw === null) return JSON.stringify(value, null, 2) + "\n";
-  const bom = raw.charCodeAt(0) === 0xfeff ? "﻿" : "";
+  const bom = raw.charCodeAt(0) === 0xfeff ? "\ufeff" : "";
   const text = raw.slice(bom.length);
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   return bom + JSON.stringify(value, null, indentOf(text)).split("\n").join(eol) + (/\n$/.test(text) ? eol : "");
@@ -36,25 +36,38 @@ const UPDATE_TRIES = 3;
 const readIfThere = (file: string): string | null => {
   try { return fs.readFileSync(file, "utf8"); } catch (e) { if (errCode(e) === "ENOENT") return null; throw e; }
 };
+export interface UpdateJsonOpts extends FileLockOpts {
+  /** the lock file to hold (default `<file>.lock` beside it) */
+  lockFile?: string;
+  /** runs right after the write, still under the lock — only when the file was written */
+  afterWrite?: () => void;
+}
 /**
  * Read-modify-write of a JSON file several writers share (a plan: --record-plan, --accept, plan-skeleton --out, the
- * verify-build hook). Under the lock `<file>.lock` (file-lock.ts) it reads the file (null when there is none), gives
- * the text to `fn`, which returns the new value, and writes it like writeJsonLike — formatted like the file, atomic,
- * only when the bytes change; true when written. Two tool writers never interleave: the second reads what the first
- * wrote. A writer that takes no lock (an agent's Edit/Write) is caught by reading the file again before the rename —
- * changed bytes start over from them (up to UPDATE_TRIES times, then it throws); its write landing between that
- * re-read and the rename is still lost. `fn` may run more than once, so it computes from its argument only. Throws
- * LockBusy (file-lock.ts) when another writer holds the lock past `opts.waitMs`, and whatever reading the file throws
+ * verify-build hook). Under the lock `opts.lockFile` (default `<file>.lock`; file-lock.ts) it reads the file (null
+ * when there is none), gives the text to `fn`, which returns the new value, and writes it like writeJsonLike —
+ * formatted like the file, atomic, only when the bytes change; true when written. Two tool writers never interleave:
+ * the second reads what the first wrote. A writer that takes no lock (an agent's Edit/Write) is caught by reading the
+ * file again before the rename — changed bytes start over from them (up to UPDATE_TRIES times, then it throws); its
+ * write landing between that re-read and the rename is still lost. `fn` may run more than once, so it computes from
+ * its argument only. Throws LockBusy (file-lock.ts) when another writer holds the lock past `opts.waitMs`, LockLost
+ * when the lock was taken from this writer before its write (nothing written), and whatever reading the file throws
  * other than ENOENT (an unreadable plan is never treated as absent and overwritten).
  */
-export function updateJsonLike(file: string, fn: (raw: string | null) => unknown, opts: FileLockOpts = {}): boolean {
-  return withFileLock(lockFileOf(file), () => {
+export function updateJsonLike(file: string, fn: (raw: string | null) => unknown, opts: UpdateJsonOpts = {}): boolean {
+  const { lockFile = lockFileOf(file), afterWrite, ...lockOpts } = opts;
+  return withFileLock(lockFile, (lock) => {
     for (let tries = 1; ; tries++) {
       const raw = readIfThere(file);
       const out = formatJsonLike(fn(raw), raw);
       if (out === raw) return false;
-      if (readIfThere(file) === raw) { writeFileAtomic(file, out); return true; }
+      if (readIfThere(file) === raw) {
+        lock.assertMine();
+        writeFileAtomic(file, out);
+        afterWrite?.();
+        return true;
+      }
       if (tries >= UPDATE_TRIES) throw new Error(`${file} kept changing while it was being updated (${UPDATE_TRIES} tries) — retry once its other writer is done`);
     }
-  }, opts);
+  }, lockOpts);
 }

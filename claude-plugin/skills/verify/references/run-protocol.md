@@ -162,8 +162,9 @@ remaining", suggesting the user approve it or add a narrow allow rule for `node 
 ## Bounded runs
 
 The probe stops itself at `--max-time` (default 180000 ms) with exit 4 and nothing written. Re-run it ONCE after an
-exit 4 (with `--run` its exit 3/4 bumps the status, phase still `measuring`), then write status `failed` with the
-navigation log — one re-run, never a loop.
+exit 4 (with `--run` its exit 3/4 bumps the status, phase still `measuring` — unless the run ended meanwhile: then it
+leaves the status as it is and exits 2, like a probe of a run that had already ended), then write status `failed`
+with the navigation log — one re-run, never a loop.
 
 ## When a run ends `blocked` or `failed`
 

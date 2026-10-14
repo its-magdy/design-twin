@@ -12,6 +12,7 @@ import { shellArg } from "../design-to-code/cli-args.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { check, report } from "./assert.ts";
 import { POSIX_SH } from "./posix-sh.ts";
+import { LockBusy, LockLost } from "../bridge/src/file-lock.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const safe = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch (e) { console.log(`    (threw: ${e instanceof Error ? e.message : String(e)})`); } return check(name, r); };
@@ -435,6 +436,14 @@ await block("writeStatus locked:", async () => {
     return e instanceof VR.RunEnded && e.message === "run run-h already ended at failed (gave up) — start a new run with --new-run"
       && VR.endedRun(st, "run-other") === null && VR.endedRun("v1", "run-h") === null && VR.endedRun(null, "run-h") === null;
   });
+  // the lock is broken and taken by another writer while this one runs its before hook: no record over theirs
+  VR.writeStatus(base, { runId: "run-lost", phase: "measuring", by: "verify-probe" });
+  const beforeLost = fs.readFileSync(live, "utf8");
+  const other = JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token: "0123456789abcdef" });
+  const lost = ((): unknown => { try { VR.writeStatus(base, { runId: "run-lost", phase: "measured", by: "verify-probe" }, { before: () => { fs.writeFileSync(VR.lockFileOfStatus(base), other); return {}; } }); return null; } catch (e) { return e; } })();
+  safe("the status lock taken by another writer during the write → LockLost (a LockBusy), no record written, the other writer's lock left",
+    () => lost instanceof LockLost && lost instanceof LockBusy && fs.readFileSync(live, "utf8") === beforeLost && fs.readFileSync(VR.lockFileOfStatus(base), "utf8") === other);
+  fs.rmSync(VR.lockFileOfStatus(base));
   // a lock left by a writer that was killed mid-write (its pid is gone) does not wedge the run
   const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999;
   fs.writeFileSync(VR.lockFileOfStatus(base), JSON.stringify({ pid: deadPid, host: os.hostname(), at: Date.now(), token: "0123456789abcdef" }));
@@ -496,6 +505,33 @@ await block("done --publish vs an ending run:", async () => {
   safe("…the run ended under the lock first → exit 2 'already ended at failed (gave up)'", () => code === 2 && err.includes("run run-race already ended at failed (gave up)"));
   safe("…nothing published: no evidence, no durable status, no staged tmp left in design/verify; the status stays failed", () =>
     !fs.existsSync(path.join(dir, "Plots.evidence.json")) && !fs.existsSync(path.join(dir, "Plots.status.json")) && !fs.readdirSync(dir).some((f) => f.includes(".tmp-")) && readStatusFile(live)?.phase === "failed");
+});
+
+// --publish moves its files into design/verify inside the status write's lock, after the record: a writer that takes
+// the lock next (another run starting) sees them already published, never published under its own run
+console.log("--status done --publish — the publish commit is inside the status lock, after the record:");
+await block("publish commit under the lock:", () => {
+  const { dir, base, live } = project();
+  VR.writeStatus(base, { runId: "run-pub", phase: "driving", by: "agent" });
+  fs.writeFileSync(path.join(dir, "Plots.measured.json"), measuredFor(dir, { runId: "run-pub" }));
+  const stage = mk("dt-run-pub-stage-");
+  fs.writeFileSync(path.join(stage, "Plots.evidence.json"), JSON.stringify({ interactions: [] }));
+  const dest = path.join(dir, "Plots.evidence.json");
+  const seen: string[] = [];
+  const rename = fs.renameSync;
+  Reflect.set(fs, "renameSync", (from: string, to: string): void => {
+    if (path.resolve(String(to)) === path.resolve(dest)) seen.push(`${fs.existsSync(VR.lockFileOfStatus(base)) ? "locked" : "unlocked"}:${readStatusFile(live)?.phase ?? "?"}`);
+    rename(from, to);
+  });
+  let code: number;
+  const errs: string[] = [];
+  const logErr = console.error, logOut = console.log;
+  console.error = (...a: unknown[]): void => { errs.push(a.map(String).join(" ")); };
+  console.log = (): void => {};
+  try { code = VR.statusMain("Plots", { phase: "done", run: "run-pub", publish: stage, dir }, "usage"); }
+  finally { Reflect.set(fs, "renameSync", rename); console.error = logErr; console.log = logOut; }
+  safe("the evidence file is moved in while the status lock is held and the live status already says done; exit 0", () => code === 0 && seen.join(" ") === "locked:done" && fs.existsSync(dest));
+  if (code !== 0 || seen.join(" ") !== "locked:done") console.log(`    exit ${code}; renames into design/verify: ${seen.join(" ") || "none"}; ${errs.join(" | ").slice(0, 300)}`);
 });
 
 // the probe's exit-3 status write waits on the lock while the run ends: the documented exit 2, not 3

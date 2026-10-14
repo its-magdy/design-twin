@@ -5,8 +5,18 @@
 //   node test/lock-child.ts end-run <base> <readyFile> <goFile>              holds base's status lock (then writes readyFile);
 //                                                                           on goFile, ends the run (failed, "gave up") and releases
 //   node test/lock-child.ts waive <plan> <who> <iterations>                  updatePlan(plan) adding one waiver row each time
+//   node test/lock-child.ts hold <lockFile> <readyFile> <ms>                takes the lock (staleMs 300), writes readyFile, holds
+//                                                                           it <ms>, writes <readyFile>.done, then releases
+//   node test/lock-child.ts try <lockFile> <waitMs>                         one acquire; prints {"ms", "name", "code"} of how it ended
+//   node test/lock-child.ts crasher <lockFile> <untilMs> <deadPid>          until untilMs, every 2 ms: when the lock is free, takes
+//                                                                           it as a holder that died at once (deadPid)
+//   node test/lock-child.ts worker <lockFile> <markerFile> <untilMs>        until untilMs: lock → create markerFile O_EXCL (EEXIST:
+//                                                                           another holder is inside) → nap 1 ms → remove → release;
+//                                                                           prints {"rounds", "overlaps"}
 import fs from "node:fs";
+import os from "node:os";
 import { acquireFileLock, withFileLock } from "../bridge/src/file-lock.ts";
+import type { HeldLock } from "../bridge/src/file-lock.ts";
 import { lockFileOfStatus, liveStatusFile, isVerifyStatusV2, writeStatus } from "../design-to-code/verify-run.ts";
 import { parsePlanText, updatePlan } from "../design-to-code/plan-record.ts";
 
@@ -26,13 +36,13 @@ if (mode === "counter") {
   process.stdout.write(revs.join(","));
 } else if (mode === "end-run") {
   const live = liveStatusFile(a);
-  const release = acquireFileLock(lockFileOfStatus(a));
+  const lock = acquireFileLock(lockFileOfStatus(a));
   fs.writeFileSync(b, "");
   for (const t0 = Date.now(); !fs.existsSync(c) && Date.now() - t0 < 20_000;) sleepSync(20);
   const prev: unknown = JSON.parse(fs.readFileSync(live, "utf8"));
   if (!isVerifyStatusV2(prev)) throw new Error(`${live} is not a status v2`);
   fs.writeFileSync(live, JSON.stringify({ ...prev, rev: prev.rev + 1, phase: "failed", detail: "gave up", by: "orchestrator" }, null, 2) + "\n");
-  release();
+  lock.release();
 } else if (mode === "waive") {
   for (let i = 0; i < Number(c); i++) updatePlan(a, (raw) => {
     if (raw === null) throw new Error(`${a} does not exist`);
@@ -41,6 +51,42 @@ if (mode === "counter") {
     p.waivers = [...(p.waivers ?? []), { nodeId: `${b}:${i}`, field: "width", designed: 1, built: 2, exportContentSha256: "x", reason: "r", decidedBy: "d", decidedAt: "t" }];
     return p;
   }, { waitMs: 60_000 });
+} else if (mode === "hold") {
+  const lock = acquireFileLock(a, { staleMs: 300 });
+  fs.writeFileSync(b, "");
+  sleepSync(Number(c));
+  fs.writeFileSync(b + ".done", "");
+  lock.release();
+} else if (mode === "try") {
+  const t0 = Date.now();
+  let name = "acquired", code = "";
+  try { acquireFileLock(a, { waitMs: Number(b) }).release(); } catch (e) {
+    name = e instanceof Error ? e.name : "?";
+    code = e !== null && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : "";
+  }
+  process.stdout.write(JSON.stringify({ ms: Date.now() - t0, name, code }));
+} else if (mode === "crasher") {
+  for (let n = 0; Date.now() < Number(b); n++) {
+    try {
+      const fd = fs.openSync(a, "wx");
+      fs.writeSync(fd, JSON.stringify({ pid: Number(c), host: os.hostname(), at: Date.now(), token: `dead${n}` }));
+      fs.closeSync(fd);
+    } catch { /* held */ }
+    sleepSync(2);
+  }
+} else if (mode === "worker") {
+  let rounds = 0, overlaps = 0;
+  while (Date.now() < Number(c)) {
+    let lock: HeldLock;
+    try { lock = acquireFileLock(a, { waitMs: 2_000 }); } catch { continue; }
+    let fd: number | null = null;
+    try { fd = fs.openSync(b, "wx"); } catch { overlaps++; }
+    sleepSync(1);
+    if (fd !== null) { fs.closeSync(fd); fs.rmSync(b, { force: true }); }
+    lock.release();
+    rounds++;
+  }
+  process.stdout.write(JSON.stringify({ rounds, overlaps }));
 } else {
   console.error(`lock-child: unknown mode '${mode ?? ""}'`);
   process.exitCode = 2;

@@ -1036,9 +1036,10 @@ const USAGE =
   "      file → exit 3. measured.probe.browser.executable says \"custom\"; the path is printed, never written to a file.\n" +
   `  ${scriptCmd("verify-probe")} --check [--project <dir>] [--browser-path <executable>]\n` +
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
-  "exit: 0 wrote · 2 usage · 3 renderer unavailable (ask the user to install; never installed here) · 4 the page kept\n" +
-  "      navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time / a --steps step\n" +
-  "      failed / the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).";
+  "exit: 0 wrote · 2 usage, or (--run) the run already ended / ended while the probe ran — also instead of a 3 or 4 · 3\n" +
+  "      renderer unavailable (ask the user to install; never installed here) · 4 the page kept navigating / reloaded twice\n" +
+  "      during measurement / was unreachable / timed out / passed --max-time / a --steps step failed / the page or browser\n" +
+  "      closed or crashed (re-run once; if it recurs, run --check) (nothing written).";
 
 const MAX_TIME_DEFAULT = 180_000;
 
@@ -1135,9 +1136,10 @@ export async function main(argv: string[]): Promise<number> {
   // written inside the `measured` one — a run ended while the page was measured gets none of them.
   const endedAtStart = runId !== undefined ? endedRun(readStatus(statusBase), runId) : null;
   if (endedAtStart) { console.error(`verify-probe: ${endedAtStart.message}`); return 2; }
-  // M-a: a status write the run cache refuses (the sandbox's write scope), or that another write keeps waiting past
-  // its lock's wait, is a warning — the probe keeps its exit contract (0/2/3/4) and never crashes on it. A run ended
-  // meanwhile (the orchestrator's failed/blocked) keeps its status and exits 2: no files, no next step.
+  // A status write the run cache refuses (the sandbox's write scope), that another write keeps waiting past its lock's
+  // wait, or whose lock another writer took over, is a warning — the probe keeps its exit contract (0/2/3/4) and never
+  // crashes on it. A run ended meanwhile (the orchestrator's failed/blocked) keeps its status and exits 2: no files, no
+  // next step.
   const status = (w: StatusWrite, before?: () => Pick<StatusWrite, "measuredSha256">): "ok" | "refused" | "ended" => {
     try { writeStatus(statusBase, w, before ? { before } : {}); return "ok"; } catch (e) {
       if (e instanceof RunEnded) { console.error(`verify-probe: ${e.message} — it ended while this probe ran; its status is left as it is`); return "ended"; }
@@ -1335,6 +1337,31 @@ export async function main(argv: string[]): Promise<number> {
   let diffPng: Buffer | null = null;
   if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path.sep).join("/"), captureMs }));
   const allNotes = [...notes, ...r.notes, ...(driveNote !== null ? [driveNote] : [])];
+  // The measured file but its visual part (which says whether the diff image got written), built before the status
+  // lock is taken: the git state spawns git (up to its timeout), and the lock is held only for the writes.
+  const measuredBase: Omit<VerifyMeasured, "visual"> = {
+    measuredAt: new Date().toISOString(),
+    renderer: "playwright-chromium",
+    viewport: `${viewport.w}x${viewport.h}`,
+    artifacts: [png.split(path.sep).join("/")],
+    expectationSha256: sha256Hex(expBytes),
+    probe: identity,
+    ...(firstFrame ? { frame: frameOut(firstFrame) } : {}),
+    ...(r.frames.length > 1 ? { frames: r.frames.map(frameOut) } : {}),
+    navigation: run.navigation,
+    matchedByCensus: { ...census(r.nodes, r.notMeasured) },
+    nodes: r.nodes,
+    notMeasured: r.notMeasured,
+    components: r.components,
+    tagsNotInExpectation: r.tagsNotInExpectation,
+    ...(run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {}),
+    ...(f.run !== undefined ? { runId: f.run } : {}),
+    build: { ...run.build, ...gitState(project) },
+    ...(stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {}),
+    page: r.page,
+    ...(driven ? { interactions: driven } : {}),
+    behaviour,
+  };
   // Every file of this measurement, written (or an earlier run's removed) in one step: with --run, inside the
   // `measured` status write's lock after its ended-run check, so a run ended while the page was measured gets none.
   // Returns the measured file's sha for that record; `written` says it got that far.
@@ -1347,30 +1374,7 @@ export async function main(argv: string[]): Promise<number> {
       console.error(`warning  ${diffPath}: ${firstLine(e)} — the visual diff image is not written`);
       if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
     }
-    const measured: VerifyMeasured = {
-      measuredAt: new Date().toISOString(),
-      renderer: "playwright-chromium",
-      viewport: `${viewport.w}x${viewport.h}`,
-      artifacts: [png.split(path.sep).join("/")],
-      expectationSha256: sha256Hex(expBytes),
-      probe: identity,
-      ...(firstFrame ? { frame: frameOut(firstFrame) } : {}),
-      ...(r.frames.length > 1 ? { frames: r.frames.map(frameOut) } : {}),
-      navigation: run.navigation,
-      matchedByCensus: { ...census(r.nodes, r.notMeasured) },
-      nodes: r.nodes,
-      notMeasured: r.notMeasured,
-      components: r.components,
-      tagsNotInExpectation: r.tagsNotInExpectation,
-      ...(run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {}),
-      ...(f.run !== undefined ? { runId: f.run } : {}),
-      build: { ...run.build, ...gitState(project) },
-      ...(stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {}),
-      page: r.page,
-      ...(driven ? { interactions: driven } : {}),
-      behaviour,
-      visual,
-    };
+    const measured: VerifyMeasured = { ...measuredBase, visual };
     // atomic, the picture first — a reader that sees measured.json sees the screenshot it lists
     const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
     writeFileAtomic(png, r.png);

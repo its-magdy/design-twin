@@ -35,7 +35,6 @@
 //   verify-screen.js --wait <S> --run <id> [--timeout <s>] [--stall <s>] [--dir design/verify]
 // (on verify-screen.js, so one script path covers every allow rule — the CLI glue is statusMain/waitMain here).
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { sha256Hex } from "../bridge/src/hash.ts";
@@ -43,6 +42,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { anyJson, readJson } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
+import { canonical, runCacheDir, runCacheOf } from "./run-cache.ts";
 import { errCode, firstLine } from "../bridge/src/errmsg.ts";
 import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { LockBusy, acquireFileLock, lockFileOf } from "../bridge/src/file-lock.ts";
@@ -95,85 +95,8 @@ function sha256File(file: string): string | null {
   try { return sha256Hex(fs.readFileSync(file)); } catch { return null; }
 }
 
-// ---- where a run's live files go — never under the tree a dev server watches
-const CACHE_NAME = "designtwin-verify";
-const shortSha = (s: string): string => sha256Hex(s).slice(0, 16);
-const isDir = (p: string): boolean => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
-const exists = (p: string): boolean => fs.existsSync(p);
-/** fs.realpathSync.native (the on-disk spelling: on a case-insensitive filesystem `Design/Verify` and `design/verify`
- *  are one directory, so they must be one key), else fs.realpathSync; throws when `p` does not exist. */
-function realpath(p: string): string {
-  if (typeof fs.realpathSync.native === "function") {
-    try { return fs.realpathSync.native(p); } catch { /* fall through: the JS resolver says whether it exists */ }
-  }
-  return fs.realpathSync(p);
-}
-/** The realpath of `p`, or of its nearest existing ancestor joined with the rest (the verify dir may not exist yet). */
-function canonical(p: string): string {
-  const abs = path.resolve(p);
-  try { return realpath(abs); } catch {
-    const parent = path.dirname(abs);
-    return parent === abs ? abs : path.join(canonical(parent), path.basename(abs));
-  }
-}
-const hasPnp = (d: string): boolean => exists(path.join(d, ".pnp.cjs")) || exists(path.join(d, ".pnp.js"));
-/** A workspace root: its package.json declares `workspaces`, or it has a pnpm-workspace.yaml. */
-function isWorkspaceRoot(d: string): boolean {
-  if (exists(path.join(d, "pnpm-workspace.yaml"))) return true;
-  const r = readJson(path.join(d, "package.json"), anyJson);
-  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== undefined;
-}
-/**
- * Where the run cache of `verifyDir` goes (M-a) — always inside the project, never an unrelated ancestor (a stray
- * ~/node_modules is outside the Claude Code sandbox's default write scope, cwd + the per-user temp dir):
- *   P = the nearest directory at or above it with a package.json (the walk stops at a `.git` boundary);
- *   P/node_modules exists → P;
- *   else the nearest workspace root at or above P (package.json `workspaces`, or pnpm-workspace.yaml — dependencies
- *   hoisted there), never past a `.git` boundary, when it has a node_modules → that root;
- *   else, unless P or that root is Yarn PnP (.pnp.cjs / .pnp.js) → P (its node_modules/.cache is created on write);
- * null (the OS temp dir) when there is no package.json at all, or PnP.
- */
-function installRootOf(dir: string): string | null {
-  let P: string | null = null;
-  for (let d = dir; ; d = path.dirname(d)) {
-    if (exists(path.join(d, "package.json"))) { P = d; break; }
-    if (exists(path.join(d, ".git")) || path.dirname(d) === d) return null;
-  }
-  if (isDir(path.join(P, "node_modules"))) return P;
-  let ws: string | null = null;
-  for (let d = P; ; d = path.dirname(d)) {
-    if (isWorkspaceRoot(d)) { ws = d; break; }
-    if (exists(path.join(d, ".git")) || path.dirname(d) === d) break;
-  }
-  if (ws !== null && isDir(path.join(ws, "node_modules"))) return ws;
-  if (hasPnp(P) || (ws !== null && hasPnp(ws))) return null;
-  return P;
-}
-/** The run cache of a verify directory and the directory it belongs to (the project root, or the verify dir itself
- *  for the temp-dir fallback) — see runCacheDir. */
-function runCacheOf(verifyDir: string): { dir: string; root: string } {
-  const v = canonical(verifyDir);
-  const root = installRootOf(v);
-  if (root !== null) {
-    const cache = path.join(root, "node_modules", ".cache", CACHE_NAME);
-    const rel = path.relative(root, v).split(path.sep).join("/");
-    return { dir: rel === VERIFY_DIR.split(path.sep).join("/") ? cache : path.join(cache, "dirs", shortSha(rel)), root };
-  }
-  return { dir: path.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
-}
-/**
- * The run cache of a verify directory: `<root>/node_modules/.cache/designtwin-verify/`, root = the project that owns
- * the verify dir (installRootOf: its package.json's directory, or the workspace root its dependencies are hoisted to;
- * a verify dir other than `<root>/design/verify` gets its own `dirs/<key>/` below it, key = a short sha256 of its
- * path relative to root); else — no package.json, or Yarn PnP — `<os tmpdir>/designtwin-verify/<key>/`, key = a
- * short sha256 of the verify dir's realpath. That fallback is NOT shared between sandboxed and unsandboxed commands
- * (the sandbox gives them different tmp dirs), so there every --status / --wait / probe of a run must run the same
- * way. The ONE resolver: --status, --wait, verify-probe --run and --compare all go through it, so every caller
- * finds the same file.
- */
-export function runCacheDir(verifyDir: string): string {
-  return runCacheOf(verifyDir).dir;
-}
+// ---- where a run's live files go — never under the tree a dev server watches (run-cache.ts)
+export { runCacheDir };
 /** Filesystem refusals that mean "this process may not write there" (the sandbox's write scope, a read-only mount). */
 const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
 /** A write into the run cache was refused: the one sentence --status (exit 6), --wait (exit 6) and the probe (a warning) print. */
@@ -276,17 +199,19 @@ const STATUS_LOCK = { waitMs: 15_000 };
  * happen with no other status write of this screen in between, so two writers never write the same rev and a run
  * that ends is not reopened, published into or given files by a writer that checked it earlier.
  * Throws RunCacheUnwritable when the run cache refuses the lock or the write (sandbox write scope, read-only mount),
- * RunEnded when the same run has already ended, LockBusy when another status write holds the lock past 15 s; a
- * hook's own error is thrown as it is.
+ * RunEnded when the same run has already ended, LockBusy when another status write holds the lock past 15 s (or
+ * LockLost, a LockBusy, when the lock was taken from this write before the hook's files or the record — neither is
+ * written then); a hook's own error is thrown as it is.
  */
 export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHooks = {}): VerifyStatusV2 {
   const live = liveStatusFile(base), dir = path.dirname(base);
-  const release = inRunCache(dir, () => acquireFileLock(lockFileOfStatus(base), STATUS_LOCK));
+  const lock = inRunCache(dir, () => acquireFileLock(lockFileOfStatus(base), STATUS_LOCK));
   try {
     const prev = readStatus(base);
     const ended = endedRun(prev, p.runId);
     if (ended) throw ended;
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+    lock.assertMine();
     const w: StatusWrite = hooks.before ? { ...p, ...hooks.before() } : p;
     const pick = (k: "expectationSha256" | "measuredSha256" | "evidenceSha256"): { [K in typeof k]?: string } => {
       const v = w[k] ?? (same ? same[k] : undefined);
@@ -298,10 +223,11 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
       ...pick("expectationSha256"), ...pick("measuredSha256"), ...pick("evidenceSha256"),
       ...(published !== undefined ? { published } : {}),
     };
+    lock.assertMine();
     inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
     hooks.after?.(doc);
     return doc;
-  } finally { release(); }
+  } finally { lock.release(); }
 }
 /** `done`: the live status, published as the durable record design/verify/<S>.status.json (every page is closed by now). */
 export function publishStatus(base: string, doc: VerifyStatusV2): void {

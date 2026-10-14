@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { recordPlan } from "../design-to-code/plan-record.ts";
+import { recordPlan, updatePlan } from "../design-to-code/plan-record.ts";
+import { planLockFile } from "../design-to-code/run-cache.ts";
 import { checkPlan, computeStatus, isOpen, verificationContradictions } from "../design-to-code/verify-build.ts";
 import * as verifyBuild from "../design-to-code/verify-build.ts";
 import type { ReportRef } from "../design-to-code/verify-build.ts";
@@ -377,6 +378,34 @@ console.log("plan writers in separate processes — no lost update:");
     && (after.waivers ?? []).some((w) => isJsonObject(w) && w.nodeId === "80:3") && after.verification?.recorded?.at === NOW && after.verification.hook?.result !== undefined);
   if (rows.length !== N * K) console.log(`    rows ${rows.length}; ${results.map((r) => `${r.code}${r.err ? `: ${r.err.split("\n")[0]}` : ""}`).join(" | ")}`);
   check("…no lock or tmp file is left in design/plan/", fs.readdirSync(path.join(root, "design", "plan")).join() === "Crates.json");
+}
+
+// A lock a killed writer leaves must never sit beside the plan, where it could be committed: with a project root (a
+// package.json) it lives in the run cache; with none, beside the plan (the temp dir is not shared with the sandbox).
+console.log("the plan's lock lives in the run cache:");
+{
+  const root = project();
+  const plan = path.join(root, REL);
+  check("no package.json → the lock is <plan>.lock beside it", planLockFile(plan) === plan + ".lock");
+  fs.writeFileSync(path.join(root, "package.json"), "{\"name\":\"crates-app\",\"private\":true}\n");
+  fs.mkdirSync(path.join(root, "node_modules"));
+  const lock = planLockFile(plan);
+  const cache = path.join(fs.realpathSync.native(root), "node_modules", ".cache", "designtwin-verify", "plan-locks");
+  check("a project with node_modules → <project>/node_modules/.cache/designtwin-verify/plan-locks/Crates.json.<key>.lock",
+    path.dirname(lock) === cache && /^Crates\.json\.[0-9a-f]{16}\.lock$/.test(path.basename(lock)));
+  const prevCwd = process.cwd();
+  process.chdir(path.join(root, "design"));
+  let fromSubdir = "";
+  try { fromSubdir = planLockFile(path.join("plan", path.basename(plan))); } finally { process.chdir(prevCwd); }
+  check("…the same lock from another working directory (a relative path)", fromSubdir === lock);
+  let during: string[] = [];
+  const wrote = updatePlan(plan, (raw) => {
+    during = [fs.existsSync(lock) ? "held" : "free", fs.readdirSync(path.dirname(plan)).join()];
+    const p: unknown = JSON.parse(raw ?? "{}");
+    return isJsonObject(p) ? { ...p, screenName: "Crates2" } : p;
+  });
+  check("an update holds that lock while it runs, and design/plan/ holds only the plan; released after",
+    wrote && during.join(" ") === "held Crates.json" && !fs.existsSync(lock) && fs.readdirSync(path.dirname(plan)).join() === "Crates.json");
 }
 
 report();

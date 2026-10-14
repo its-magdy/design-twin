@@ -22,19 +22,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { formatJsonLike, updateJsonLike } from "../bridge/src/json-file.ts";
+import type { UpdateJsonOpts } from "../bridge/src/json-file.ts";
 import { parsePlan } from "./doc-guards.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { isJsonObject } from "./types.ts";
+import { planLockFile } from "./run-cache.ts";
 import type { JsonObject, JsonValue, Plan, PlanVerification, PlanVerificationRecord, VerifyReportV2 } from "./types.ts";
 
 export interface RecordPlanResult { written: boolean; notes: string[] }
 
 const slash = (p: string): string => p.split(path.sep).join("/").split("\\").join("/");
-// The one plan writer — --record-plan, --accept, plan-skeleton --out and the verify-build hook: under `<plan>.lock`,
-// `fn` turns the plan's bytes as they are on disk (null: no plan yet) into the plan to write; atomic and in the plan
-// file's own format (BOM, indentation, line endings), written only when its bytes change. True when written. `fn`
-// may run more than once (the plan changed under it), so it computes from its argument only.
-const formatPlan = formatJsonLike, updatePlan = updateJsonLike;
+// The one plan writer — --record-plan, --accept, plan-skeleton --out and the verify-build hook: under the plan's lock
+// (run-cache.ts planLockFile: in the run cache, never beside the plan where it could be committed), `fn` turns the
+// plan's bytes as they are on disk (null: no plan yet) into the plan to write; atomic and in the plan file's own format
+// (BOM, indentation, line endings), written only when its bytes change. True when written. `fn` may run more than
+// once (the plan changed under it), so it computes from its argument only.
+const formatPlan = formatJsonLike;
+const updatePlan = (file: string, fn: (raw: string | null) => unknown, opts: UpdateJsonOpts = {}): boolean =>
+  updateJsonLike(file, fn, { lockFile: planLockFile(file), ...opts });
 /** A plan's bytes (a UTF-8 BOM allowed) → the plan; throws naming `file` when it is not JSON or not a plan. */
 function parsePlanText(raw: string, file: string): Plan {
   const parsed: unknown = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);

@@ -2,7 +2,7 @@
 
 
 // design-to-code/map-bootstrap.ts
-import fs6 from "node:fs";
+import fs7 from "node:fs";
 import { parseArgs as parseArgs2 } from "node:util";
 
 // design-to-code/types.ts
@@ -708,7 +708,7 @@ function unionCatalog(sources) {
 var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + sources.map((s) => `${s.file} [${s.role}, ${s.catalog.components.length} component(s)]`).join(", ");
 
 // bridge/src/json-file.ts
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 
 // bridge/src/atomic-write.ts
 import crypto from "node:crypto";
@@ -732,6 +732,16 @@ function writeFileAtomic(file, data, opts = {}) {
 }
 
 // bridge/src/file-lock.ts
+import fs5 from "node:fs";
+var LIVE_STALE_MS = 10 * 6e4;
+var PID_NS = (() => {
+  if (process.platform !== "linux") return "";
+  try {
+    return fs5.readlinkSync("/proc/self/ns/pid");
+  } catch {
+    return "";
+  }
+})();
 var sleeper = new Int32Array(new SharedArrayBuffer(4));
 
 // bridge/src/json-file.ts
@@ -746,7 +756,7 @@ function formatJsonLike(value, raw) {
 function writeJsonLike(file, value, raw) {
   let was = raw ?? null;
   if (raw === void 0) try {
-    was = fs5.readFileSync(file, "utf8");
+    was = fs6.readFileSync(file, "utf8");
   } catch {
     was = null;
   }
@@ -959,7 +969,7 @@ ${usage}`);
   const others = { components: unionCatalog(sources.slice(1)).components.filter((c) => !!c.key && !catalog.components.some((n) => n.key === c.key)).map(({ id: _foreignId, ...c }) => c) };
   if (screenFile || proposalsFile) console.error(`map-bootstrap: ${catalogSetLine(sources)}`);
   const existingFile = existingArg || outFile;
-  const existingRaw = existingFile && fs6.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  const existingRaw = existingFile && fs7.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
   let existing = null;
   if (existingRaw !== null) {
     const valid = validateMap(existingRaw);
@@ -983,7 +993,7 @@ ${usage}`);
       return 1;
     }
     const out = JSON.stringify(map, null, 2) + "\n";
-    if (outFile) fs6.writeFileSync(outFile, out);
+    if (outFile) fs7.writeFileSync(outFile, out);
     else process.stdout.write(out);
     for (const sk of report.skipped) console.error(`warn  ${sk}`);
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) \u2192 ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` \u2014 wrote ${outFile}` : ""}`);

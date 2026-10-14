@@ -1620,7 +1620,8 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
   try {
     // Under the plan's lock, onto the plan as it is on disk then (plan-record.ts updatePlan): only the hook record and
     // a stored computed status change, so an edit made while the checks ran is kept — and, its planHash differing
-    // from this record's, reads as not yet checked. The mtime is taken from those same bytes.
+    // from this record's, reads as not yet checked. The mtime is taken from those same bytes, and put back right after
+    // this write, still under the lock (an edit after the lock is released keeps its own mtime) — only when written.
     updatePlan(p.file, (raw) => {
       if (raw === null) throw new Error("it no longer exists");
       const fresh = parsePlanText(raw, p.file);
@@ -1629,7 +1630,7 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
       fresh.verification = { ...fresh.verification, hook };
       recorded = fresh;
       return fresh;
-    });
+    }, { afterWrite: () => { if (was.times) try { fs.utimesSync(p.file, was.times[0], was.times[1]); } catch { /* ignore */ } } });
   } catch (e) {
     // the checks above still stand (and still block); only their record is missing — the next stop checks again,
     // and the status printed now is the plan's without it
@@ -1638,7 +1639,6 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
     recorded = { ...plan, verification: v };
     warnings.push(`the hook record was not written into ${path.basename(p.file)} (${errMsg(e)}) — the plan stays pending until a check is recorded`);
   }
-  if (was.times) try { fs.utimesSync(p.file, was.times[0], was.times[1]); } catch { /* ignore */ }
   if (graph) graph().rewrote(p.file); // a later plan that lists this one reads it from disk
   const st = computeStatus(recorded, { cwd, planFile: p.file, export: exp, reports, ...(cached ? { cached } : {}) });
   return { blocking, warnings, cleared, status: st };

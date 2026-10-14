@@ -2,8 +2,8 @@
 
 
 // design-to-code/plan-skeleton.ts
-import fs8 from "node:fs";
-import path6 from "node:path";
+import fs9 from "node:fs";
+import path7 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -239,12 +239,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path7, parent, depth) {
+  (function go(node, parentHidden, path8, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path7, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path8, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path7 ? path7 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path8 ? path8 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -485,7 +485,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path7, message) => errors.push({ path: path7, message });
+  const err = (path8, message) => errors.push({ path: path8, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -893,14 +893,18 @@ function auditGateStatus(cwd, screenFile, screenName) {
 // design-to-code/plan-skeleton.ts
 import { parseArgs as parseArgs2 } from "node:util";
 
+// bridge/src/hash.ts
+import crypto from "node:crypto";
+var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
+
 // bridge/src/json-file.ts
 import fs7 from "node:fs";
 
 // bridge/src/atomic-write.ts
-import crypto from "node:crypto";
+import crypto2 from "node:crypto";
 import fs5 from "node:fs";
 import path4 from "node:path";
-var tmpSuffix = () => `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
 function writeFileAtomic(file, data, opts = {}) {
   fs5.mkdirSync(path4.dirname(path4.resolve(file)), { recursive: true });
   const tmp = file + tmpSuffix();
@@ -918,28 +922,49 @@ function writeFileAtomic(file, data, opts = {}) {
 }
 
 // bridge/src/file-lock.ts
-import crypto2 from "node:crypto";
+import crypto3 from "node:crypto";
 import fs6 from "node:fs";
 import os from "node:os";
 import path5 from "node:path";
 var STALE_MS = 3e4;
 var WAIT_MS = 1e4;
 var POLL_MS = 25;
+var LIVE_STALE_MS = 10 * 6e4;
+var UNWRITTEN_STALE_MS = 2e3;
+var GUARD_STALE_MS = 5e3;
+var TRANSIENT_MS = 2e3;
+var TRANSIENT_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
 var lockFileOf = (file) => file + ".lock";
+var breakGuardOf = (lockFile) => lockFile + ".break";
 var LockBusy = class extends Error {
   lockFile;
-  constructor(lockFile, holder, waitedMs) {
-    super(`${lockFile} is held by ${holder} \u2014 another write was still in progress after ${Math.round(waitedMs / 100) / 10}s; retry once it is done`);
+  constructor(lockFile, message) {
+    super(message);
     this.name = "LockBusy";
     this.lockFile = lockFile;
   }
 };
+var LockLost = class extends LockBusy {
+  constructor(lockFile) {
+    super(lockFile, `${lockFile} was taken over by another writer while this one held it \u2014 nothing more written; retry`);
+    this.name = "LockLost";
+  }
+};
+var PID_NS = (() => {
+  if (process.platform !== "linux") return "";
+  try {
+    return fs6.readlinkSync("/proc/self/ns/pid");
+  } catch {
+    return "";
+  }
+})();
 function holderOf(text) {
   try {
     const v = JSON.parse(text);
     if (v === null || typeof v !== "object" || !("pid" in v) || !("host" in v) || !("at" in v) || !("token" in v)) return null;
     const { pid, host, at, token } = v;
-    return typeof pid === "number" && Number.isInteger(pid) && pid > 0 && typeof host === "string" && typeof at === "number" && typeof token === "string" ? { pid, host, at, token } : null;
+    const ns = "ns" in v ? v.ns : "";
+    return typeof pid === "number" && Number.isInteger(pid) && pid > 0 && typeof host === "string" && typeof at === "number" && typeof token === "string" && typeof ns === "string" ? { pid, host, at, token, ns } : null;
   } catch {
     return null;
   }
@@ -952,6 +977,7 @@ function pidAlive(pid) {
     return errCode(e) === "EPERM";
   }
 }
+var sameMachine = (h) => h.host === os.hostname() && h.ns === PID_NS;
 var read = (file) => {
   try {
     return fs6.readFileSync(file, "utf8");
@@ -959,40 +985,52 @@ var read = (file) => {
     return null;
   }
 };
+var ageOf = (t) => Math.abs(Date.now() - t);
 var describeHolder = (text) => {
   const h = text === null ? null : holderOf(text);
   return h ? `process ${h.pid}${h.host !== os.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
 };
 function isStale(lockFile, text, staleMs) {
   const h = holderOf(text);
-  let at;
-  if (h) at = h.at;
-  else {
+  if (h === null) {
     try {
-      at = fs6.statSync(lockFile).mtimeMs;
+      return ageOf(fs6.statSync(lockFile).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
     } catch {
       return false;
     }
   }
-  if (Math.abs(Date.now() - at) > staleMs) return true;
-  return h !== null && h.host === os.hostname() && !pidAlive(h.pid);
+  if (sameMachine(h)) return !pidAlive(h.pid) || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
+  return ageOf(h.at) > staleMs;
 }
 function breakStale(lockFile, seen) {
-  const aside = lockFile + ".stale" + tmpSuffix();
+  const guard = breakGuardOf(lockFile);
+  let fd;
   try {
-    fs6.renameSync(lockFile, aside);
-  } catch {
-    return;
+    fd = fs6.openSync(guard, "wx");
+  } catch (e) {
+    if (errCode(e) !== "EEXIST") throw e;
+    try {
+      if (ageOf(fs6.statSync(guard).mtimeMs) > GUARD_STALE_MS) fs6.rmSync(guard, { force: true });
+    } catch {
+    }
+    return false;
   }
-  if (read(aside) === seen) {
-    fs6.rmSync(aside, { force: true });
-    return;
-  }
+  fs6.closeSync(fd);
   try {
-    fs6.linkSync(aside, lockFile);
-  } catch {
+    if (read(lockFile) !== seen) return false;
+    try {
+      fs6.unlinkSync(lockFile);
+    } catch (e) {
+      if (errCode(e) === "ENOENT") return false;
+      throw e;
+    }
+    return true;
+  } finally {
+    try {
+      fs6.rmSync(guard, { force: true });
+    } catch {
+    }
   }
-  fs6.rmSync(aside, { force: true });
 }
 var sleeper = new Int32Array(new SharedArrayBuffer(4));
 var sleepSync = (ms) => {
@@ -1000,18 +1038,31 @@ var sleepSync = (ms) => {
 };
 function acquireFileLock(lockFile, opts = {}) {
   const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
-  const token = crypto2.randomBytes(8).toString("hex");
+  const token = crypto3.randomBytes(8).toString("hex");
   fs6.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
   const t0 = Date.now();
   for (; ; ) {
-    let fd = null;
+    let fd = null, text = null;
+    let refused = null;
     try {
       fd = fs6.openSync(lockFile, "wx");
     } catch (e) {
-      if (errCode(e) !== "EEXIST") throw e;
+      const code = errCode(e);
+      if (code === "EEXIST") {
+        text = read(lockFile);
+        if (text !== null && isStale(lockFile, text, staleMs)) {
+          try {
+            if (breakStale(lockFile, text)) continue;
+          } catch (be) {
+            refused = be;
+          }
+        }
+      } else if (process.platform === "win32" && code !== void 0 && TRANSIENT_CODES.has(code) && Date.now() - t0 < Math.min(waitMs, TRANSIENT_MS)) {
+        refused = e;
+      } else throw e;
     }
     if (fd !== null) {
-      const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token });
+      const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...PID_NS ? { ns: PID_NS } : {} });
       try {
         fs6.writeSync(fd, mine);
       } catch (e) {
@@ -1020,30 +1071,35 @@ function acquireFileLock(lockFile, opts = {}) {
         throw e;
       }
       fs6.closeSync(fd);
-      return () => {
-        if (read(lockFile) === mine) try {
-          fs6.rmSync(lockFile, { force: true });
-        } catch {
+      const stillMine = () => read(lockFile) === mine;
+      return {
+        // only our own lock: one broken as stale and taken by another holder is theirs now
+        release: () => {
+          if (stillMine()) try {
+            fs6.rmSync(lockFile, { force: true });
+          } catch {
+          }
+        },
+        stillMine,
+        assertMine: () => {
+          if (!stillMine()) throw new LockLost(lockFile);
         }
       };
     }
-    const text = read(lockFile);
-    if (text === null) continue;
-    if (isStale(lockFile, text, staleMs)) {
-      breakStale(lockFile, text);
-      continue;
-    }
     const waited = Date.now() - t0;
-    if (waited >= waitMs) throw new LockBusy(lockFile, describeHolder(text), waited);
+    if (waited >= waitMs) {
+      if (refused !== null) throw refused;
+      throw new LockBusy(lockFile, `${lockFile} is held by ${describeHolder(text)} \u2014 another write was still in progress after ${Math.round(waited / 100) / 10}s; retry once it is done`);
+    }
     sleepSync(Math.min(POLL_MS, waitMs - waited));
   }
 }
 function withFileLock(lockFile, fn, opts = {}) {
-  const release = acquireFileLock(lockFile, opts);
+  const lock = acquireFileLock(lockFile, opts);
   try {
-    return fn();
+    return fn(lock);
   } finally {
-    release();
+    lock.release();
   }
 }
 
@@ -1066,22 +1122,92 @@ var readIfThere = (file) => {
   }
 };
 function updateJsonLike(file, fn, opts = {}) {
-  return withFileLock(lockFileOf(file), () => {
+  const { lockFile = lockFileOf(file), afterWrite, ...lockOpts } = opts;
+  return withFileLock(lockFile, (lock) => {
     for (let tries = 1; ; tries++) {
       const raw = readIfThere(file);
       const out = formatJsonLike(fn(raw), raw);
       if (out === raw) return false;
       if (readIfThere(file) === raw) {
+        lock.assertMine();
         writeFileAtomic(file, out);
+        afterWrite?.();
         return true;
       }
       if (tries >= UPDATE_TRIES) throw new Error(`${file} kept changing while it was being updated (${UPDATE_TRIES} tries) \u2014 retry once its other writer is done`);
     }
-  }, opts);
+  }, lockOpts);
+}
+
+// design-to-code/run-cache.ts
+import fs8 from "node:fs";
+import path6 from "node:path";
+var CACHE_NAME = "designtwin-verify";
+var shortSha = (s) => sha256Hex(s).slice(0, 16);
+var isDir = (p) => {
+  try {
+    return fs8.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var exists = (p) => fs8.existsSync(p);
+function realpath(p) {
+  if (typeof fs8.realpathSync.native === "function") {
+    try {
+      return fs8.realpathSync.native(p);
+    } catch {
+    }
+  }
+  return fs8.realpathSync(p);
+}
+function canonical(p) {
+  const abs = path6.resolve(p);
+  try {
+    return realpath(abs);
+  } catch {
+    const parent = path6.dirname(abs);
+    return parent === abs ? abs : path6.join(canonical(parent), path6.basename(abs));
+  }
+}
+var hasPnp = (d) => exists(path6.join(d, ".pnp.cjs")) || exists(path6.join(d, ".pnp.js"));
+function isWorkspaceRoot(d) {
+  if (exists(path6.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path6.join(d, "package.json"), anyJson);
+  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
+}
+function installRootOf(dir) {
+  let P = null;
+  for (let d = dir; ; d = path6.dirname(d)) {
+    if (exists(path6.join(d, "package.json"))) {
+      P = d;
+      break;
+    }
+    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) return null;
+  }
+  if (isDir(path6.join(P, "node_modules"))) return P;
+  let ws = null;
+  for (let d = P; ; d = path6.dirname(d)) {
+    if (isWorkspaceRoot(d)) {
+      ws = d;
+      break;
+    }
+    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) break;
+  }
+  if (ws !== null && isDir(path6.join(ws, "node_modules"))) return ws;
+  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
+  return P;
+}
+function planLockFile(planFile) {
+  const abs = canonical(planFile);
+  const root = installRootOf(path6.dirname(abs));
+  if (root === null) return lockFileOf(planFile);
+  const rel = path6.relative(root, abs).split(path6.sep).join("/");
+  return path6.join(root, "node_modules", ".cache", CACHE_NAME, "plan-locks", `${path6.basename(abs)}.${shortSha(rel)}.lock`);
 }
 
 // design-to-code/plan-record.ts
-var updatePlan = updateJsonLike;
+var updatePlan = (file, fn, opts = {}) => updateJsonLike(file, fn, { lockFile: planLockFile(file), ...opts });
 function parsePlanText(raw, file) {
   const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
   const pp = parsePlan(parsed);
@@ -1439,7 +1565,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };
   const nodeId = exp && exp.nodeId || root && root.id || null;
   const title = indexRow && indexRow.title;
-  const rel = screenFile ? path6.relative(cwd || process.cwd(), path6.resolve(screenFile)).split(path6.sep).join("/") : null;
+  const rel = screenFile ? path7.relative(cwd || process.cwd(), path7.resolve(screenFile)).split(path7.sep).join("/") : null;
   const screenName = String(title || exp && exp.screen || root && root.name || "").trim() || null;
   let auditGate = null;
   try {
@@ -1447,14 +1573,14 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     const g = auditGateStatus(base, screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
       const cross = g.auditFile.replace(/\.json$/, ".cross.json");
-      const crossCheckFile = cross !== g.auditFile && fs8.existsSync(path6.join(base, cross)) ? cross : null;
+      const crossCheckFile = cross !== g.auditFile && fs9.existsSync(path7.join(base, cross)) ? cross : null;
       auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
   } catch {
   }
   return {
     schema: "designtwin/plan@2",
-    screen: screenFile ? path6.basename(screenFile).replace(/\.json$/, "") : null,
+    screen: screenFile ? path7.basename(screenFile).replace(/\.json$/, "") : null,
     screenName,
     nodeId,
     route: route || null,
@@ -1574,8 +1700,8 @@ function seed(plan, from, label) {
 }
 var isIndexDoc = (x) => isPagesRootIndex(x) || isPageIndex(x);
 function findIndexRow(screenFile, nodeId) {
-  const dir = path6.dirname(path6.resolve(screenFile));
-  for (const idx of [path6.join(dir, "..", "index.json"), path6.join(dir, "index.json")]) {
+  const dir = path7.dirname(path7.resolve(screenFile));
+  for (const idx of [path7.join(dir, "..", "index.json"), path7.join(dir, "index.json")]) {
     const d = readJsonOrNull(idx, isIndexDoc);
     const hit = (d && d.layers || []).find((r) => r.id === nodeId);
     if (hit) return hit;
@@ -1605,18 +1731,18 @@ function main(argv) {
   const varsRead = readJson(varsFile, isTokensDoc);
   if (!("doc" in varsRead)) return cannotRead("the screen's variables", varsFile, varsRead.error);
   const doc = screen.doc, vars = varsRead.doc;
-  const hasDs = dsDir && fs8.existsSync(dsDir) && fs8.statSync(dsDir).isDirectory();
+  const hasDs = dsDir && fs9.existsSync(dsDir) && fs9.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const optional = (file, guard) => {
     if (!hasDs) return { doc: null };
-    const r = readJson(path6.join(dsDir, file), guard);
+    const r = readJson(path7.join(dsDir, file), guard);
     return "doc" in r ? r : r.missing ? { doc: null } : { error: r.error };
   };
   const { TOKENS: TOKENS4, COMPONENTS_LOCAL: COMPONENTS_LOCAL3, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY3 } = DESIGN_SYSTEM_FILES;
   const dsRead = optional(TOKENS4, isTokensDoc), catRead = optional(COMPONENTS_LOCAL3, isComponentsCatalog), libRead = optional(COMPONENTS_LIBRARY3, isComponentsCatalog);
-  if ("error" in dsRead) return cannotRead("the design system's tokens", path6.join(dsDir, TOKENS4), dsRead.error);
-  if ("error" in catRead) return cannotRead("the component catalog", path6.join(dsDir, COMPONENTS_LOCAL3), catRead.error);
-  if ("error" in libRead) return cannotRead("the library component catalog", path6.join(dsDir, COMPONENTS_LIBRARY3), libRead.error);
+  if ("error" in dsRead) return cannotRead("the design system's tokens", path7.join(dsDir, TOKENS4), dsRead.error);
+  if ("error" in catRead) return cannotRead("the component catalog", path7.join(dsDir, COMPONENTS_LOCAL3), catRead.error);
+  if ("error" in libRead) return cannotRead("the library component catalog", path7.join(dsDir, COMPONENTS_LIBRARY3), libRead.error);
   const mapAt = findMapFile(process.cwd());
   const mapFile = mapFlag || (mapAt.missing ? void 0 : mapAt.rel);
   let mapKeys = /* @__PURE__ */ new Map();
@@ -1633,7 +1759,7 @@ function main(argv) {
     seeds.push({ file: f, plan: parsed.plan });
   }
   const seedAll = (plan) => seeds.map((sd) => {
-    const n = seed(plan, sd.plan, path6.basename(sd.file));
+    const n = seed(plan, sd.plan, path7.basename(sd.file));
     return `plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " \u2014 review them (seededFrom)" : "");
   });
   const nodeId = screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id;
@@ -1660,7 +1786,7 @@ function main(argv) {
       });
       if (!changed) {
         const now = /* @__PURE__ */ new Date();
-        fs8.utimesSync(out, now, now);
+        fs9.utimesSync(out, now, now);
       }
     } catch (e) {
       console.error(`plan-skeleton: ${out}: ${errMsg(e)} \u2014 not written`);
