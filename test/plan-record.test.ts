@@ -6,8 +6,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
-import { recordPlan } from "../design-to-code/plan-record.ts";
+import { spawn, spawnSync } from "node:child_process";
+import { recordPlan, updatePlan } from "../design-to-code/plan-record.ts";
+import { planLockFile } from "../design-to-code/run-cache.ts";
 import { checkPlan, computeStatus, isOpen, verificationContradictions } from "../design-to-code/verify-build.ts";
 import * as verifyBuild from "../design-to-code/verify-build.ts";
 import type { ReportRef } from "../design-to-code/verify-build.ts";
@@ -350,6 +351,76 @@ console.log("dotted import names resolve; a report reached through a symlink is 
     check("a report path through a symlink to the project is inside it (recorded project-relative)",
       written && planOf(root).verification?.recorded?.report === REPORT);
   } finally { try { fs.unlinkSync(link); } catch { /* never created */ } }
+}
+
+// Every tool plan write is a locked read-modify-write (plan-record.ts updatePlan): writers in separate processes —
+// waiver rows (--accept's write) and the Stop hook's record — never lose each other's keys.
+console.log("plan writers in separate processes — no lost update:");
+{
+  const root = project();
+  recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const child = path.join(import.meta.dirname, "lock-child.ts");
+  const N = 4, K = 8;
+  const run = (cmd: string[], cwd?: string): Promise<{ code: number | null; err: string }> => new Promise((resolve) => {
+    const p = spawn(process.execPath, cmd, cwd === undefined ? {} : { cwd });
+    let err = "";
+    p.stderr.on("data", (b: Buffer) => { err += b.toString(); });
+    p.on("close", (code) => resolve({ code, err }));
+  });
+  const results = await Promise.all([
+    ...Array.from({ length: N }, (_, w) => run([child, "waive", path.join(root, REL), `w${w}`, String(K)])),
+    run([HOOK, REL], root), run([HOOK, REL], root),
+  ]);
+  const after = planOf(root);
+  const rows = (after.waivers ?? []).filter((w) => isJsonObject(w) && typeof w.nodeId === "string" && /^w\d:\d+$/.test(w.nodeId));
+  check(`${N} processes × ${K} waiver writes and two Stop-hook runs at once → all ${N * K} rows, the original waiver, --record-plan's record and the hook's record are all there`,
+    results.slice(0, N).every((r) => r.code === 0) && rows.length === N * K && new Set(rows.map((w) => isJsonObject(w) ? w.nodeId : "")).size === N * K
+    && (after.waivers ?? []).some((w) => isJsonObject(w) && w.nodeId === "80:3") && after.verification?.recorded?.at === NOW && after.verification.hook?.result !== undefined);
+  if (rows.length !== N * K) console.log(`    rows ${rows.length}; ${results.map((r) => `${r.code}${r.err ? `: ${r.err.split("\n")[0]}` : ""}`).join(" | ")}`);
+  check("…no lock or tmp file is left in design/plan/", fs.readdirSync(path.join(root, "design", "plan")).join() === "Crates.json");
+}
+
+// A lock a killed writer leaves must never sit beside the plan, where it could be committed: with a project root (a
+// package.json) it lives in the run cache; with none, beside the plan (the temp dir is not shared with the sandbox).
+console.log("the plan's lock lives in the run cache:");
+{
+  const root = project();
+  const plan = path.join(root, REL);
+  check("no package.json → the lock is <plan>.lock beside it", planLockFile(plan) === plan + ".lock");
+  fs.writeFileSync(path.join(root, "package.json"), "{\"name\":\"crates-app\",\"private\":true}\n");
+  fs.mkdirSync(path.join(root, "node_modules"));
+  const lock = planLockFile(plan);
+  const cache = path.join(fs.realpathSync.native(root), "node_modules", ".cache", "designtwin-verify", "plan-locks");
+  check("a project with node_modules → <project>/node_modules/.cache/designtwin-verify/plan-locks/Crates.json.<key>.lock",
+    path.dirname(lock) === cache && /^Crates\.json\.[0-9a-f]{16}\.lock$/.test(path.basename(lock)));
+  const prevCwd = process.cwd();
+  process.chdir(path.join(root, "design"));
+  let fromSubdir = "";
+  try { fromSubdir = planLockFile(path.join("plan", path.basename(plan))); } finally { process.chdir(prevCwd); }
+  check("…the same lock from another working directory (a relative path)", fromSubdir === lock);
+  let during: string[] = [];
+  const wrote = updatePlan(plan, (raw) => {
+    during = [fs.existsSync(lock) ? "held" : "free", fs.readdirSync(path.dirname(plan)).join()];
+    const p: unknown = JSON.parse(raw ?? "{}");
+    return isJsonObject(p) ? { ...p, screenName: "Crates2" } : p;
+  });
+  check("an update holds that lock while it runs, and design/plan/ holds only the plan; released after",
+    wrote && during.join(" ") === "held Crates.json" && !fs.existsSync(lock) && fs.readdirSync(path.dirname(plan)).join() === "Crates.json");
+  // a run cache this process may not write (a sandboxed command outside a hoisted workspace's write scope): the
+  // status writes' sentence, never a raw errno and never a lock beside the plan instead
+  if (process.platform !== "win32" && !(typeof process.getuid === "function" && process.getuid() === 0)) {
+    const nm = path.join(root, "node_modules");
+    const before = fs.readFileSync(plan, "utf8");
+    fs.rmSync(path.join(nm, ".cache"), { recursive: true, force: true });
+    fs.chmodSync(nm, 0o555);
+    let e: unknown = null;
+    try { updatePlan(plan, () => ({ screenName: "never" })); } catch (x) { e = x; } finally { fs.chmodSync(nm, 0o755); }
+    const msg = e instanceof Error ? e.message : String(e);
+    check("a run cache that refuses the plan's lock (EACCES) → RunCacheUnwritable naming the run cache and where to run from; the plan untouched, no lock beside it",
+      e instanceof Error && e.name === "RunCacheUnwritable" && msg.includes(path.join(fs.realpathSync.native(root), "node_modules", ".cache", "designtwin-verify"))
+      && /is not writable \(sandbox write scope\?\) — run from /.test(msg) && fs.readFileSync(plan, "utf8") === before && fs.readdirSync(path.dirname(plan)).join() === "Crates.json");
+    if (!(e instanceof Error && e.name === "RunCacheUnwritable")) console.log(`    threw: ${msg}`);
+  } else console.log("  (skipped: a read-only run cache — mode bits refuse nothing on Windows / as root)");
 }
 
 report();

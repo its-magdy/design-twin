@@ -45,6 +45,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { sha256Hex } from "../bridge/src/hash.ts";
+import { errMsg } from "../bridge/src/errmsg.ts";
 import { visibility } from "./plan-skeleton.ts";
 import { screenExportOf, screenRoots } from "./export-shape.ts";
 import * as contentHash from "./content-hash.ts";
@@ -62,7 +63,7 @@ import type {
   PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyReport,
 } from "./types.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
-import { writePlan } from "./plan-record.ts";
+import { parsePlanText, updatePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { DESIGN_DIR, EXPORT_DIR, LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Screen>__<id>` stem (the exporter's own file naming)
@@ -1595,13 +1596,14 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
   setPhase(`checking ${path.basename(p.file)}`);
   const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...(graph ? { graph } : {}) });
   const plan = p.plan;
-  const cleared = COMPUTED_STORED.has(String(plan.status || "").toLowerCase()) ? plan.status : null;
+  const isComputed = (x: Plan): boolean => COMPUTED_STORED.has(String(x.status || "").toLowerCase());
+  const cleared = isComputed(plan) ? plan.status : null;
   if (cleared) delete plan.status;
   if (!plan.verification) plan.verification = {};
   setPhase(`hashing files[] of ${path.basename(p.file)}`);
   // checkPlan has built the graph by now: the files it read are hashed from those bytes, not read again
   const cached = graph ? graph().cached : undefined;
-  plan.verification.hook = {
+  const hook: PlanHookRecord = {
     result: blocking.length ? "blocked" : "pass",
     checkedAt: new Date().toISOString(),
     blocking,
@@ -1610,14 +1612,35 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
     files: fileHashes(plan, cwd, cached),
     ...(tagCoverage ? { tagCoverage } : {}),
   };
+  plan.verification.hook = hook;
   // The plan's mtime is the staleness clock — it measures the BUILDER's last edit. The hook's own
   // write must not reset it, or a blocked leftover plan would stay "fresh" (and nag) forever.
-  let times: [Date, Date] | null = null;
-  try { const s = fs.statSync(p.file); times = [s.atime, s.mtime]; } catch { /* new file */ }
-  writePlan(p.file, plan); // atomic, in the plan file's own format (BOM, indentation, line endings)
-  if (times) try { fs.utimesSync(p.file, times[0], times[1]); } catch { /* ignore */ }
+  const was: { times?: [Date, Date] } = {};
+  let recorded: Plan = plan;
+  try {
+    // Under the plan's lock, onto the plan as it is on disk then (plan-record.ts updatePlan): only the hook record and
+    // a stored computed status change, so an edit made while the checks ran is kept — and, its planHash differing
+    // from this record's, reads as not yet checked. The mtime is taken from those same bytes, and put back right after
+    // this write, still under the lock (an edit after the lock is released keeps its own mtime) — only when written.
+    updatePlan(p.file, (raw) => {
+      if (raw === null) throw new Error("it no longer exists");
+      const fresh = parsePlanText(raw, p.file);
+      try { const s = fs.statSync(p.file); was.times = [s.atime, s.mtime]; } catch { delete was.times; }
+      if (isComputed(fresh)) delete fresh.status;
+      fresh.verification = { ...fresh.verification, hook };
+      recorded = fresh;
+      return fresh;
+    }, { afterWrite: () => { if (was.times) try { fs.utimesSync(p.file, was.times[0], was.times[1]); } catch { /* ignore */ } } });
+  } catch (e) {
+    // the checks above still stand (and still block); only their record is missing — the next stop checks again,
+    // and the status printed now is the plan's without it
+    const v = { ...plan.verification };
+    delete v.hook;
+    recorded = { ...plan, verification: v };
+    warnings.push(`the hook record was not written into ${path.basename(p.file)} (${errMsg(e)}) — the plan stays pending until a check is recorded`);
+  }
   if (graph) graph().rewrote(p.file); // a later plan that lists this one reads it from disk
-  const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports, ...(cached ? { cached } : {}) });
+  const st = computeStatus(recorded, { cwd, planFile: p.file, export: exp, reports, ...(cached ? { cached } : {}) });
   return { blocking, warnings, cleared, status: st };
 }
 

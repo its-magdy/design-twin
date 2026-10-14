@@ -165,7 +165,7 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
     again.status === 0 && /merged into/.test(again.stderr) && m.tokens.find((t) => t.figmaName === "Space 4")?.codeToken === "spacing-figma-space-4"
     && m.components[0]?.mapModule === "app/src/layout/Sidebar.tsx" && mAnchor?.mapModule?.endsWith("JetRolesScreen.tsx") === true
     && m.files?.length === 1 && m.route === "/jet-roles" && m.verification?.mode === "static-only" && m.tokens.length === 45);
-  // --out merges through the one plan writer (plan-record.ts writePlan) — atomic, in the file's own format
+  // --out merges through the one plan writer (plan-record.ts updatePlan) — atomic, in the file's own format
   fs.writeFileSync(out, JSON.stringify(m, null, 4).split("\n").join("\r\n") + "\r\n");
   const crlf = run([screen(JR), vars(JR), DS, "--out", out]);
   const crlfText = fs.readFileSync(out, "utf8");

@@ -57,8 +57,9 @@ import type {
 } from "./types.ts";
 import { parseHex, formatHex, composeAlpha } from "./color.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { errMsg } from "../bridge/src/errmsg.ts";
 import { getOrInit } from "./map-util.ts";
-import { writePlan } from "./plan-record.ts";
+import { parsePlanText, updatePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { findMapFile } from "../bridge/src/project-layout.ts";
 import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
@@ -703,17 +704,16 @@ function main(argv: string[]): number {
     if (!parsed || "error" in parsed) return cannotRead("the --seed-from plan", f, !("doc" in r) ? r.error : parsed && "error" in parsed ? parsed.error : "is not a plan");
     seeds.push({ file: f, plan: parsed.plan });
   }
-  const seedAll = (plan: Plan): void => {
-    for (const sd of seeds) {
-      const n = seed(plan, sd.plan, path.basename(sd.file));
-      console.error(`plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " — review them (seededFrom)" : ""));
-    }
-  };
+  // seeds `plan` in place; returns the lines that say what each seed gave
+  const seedAll = (plan: Plan): string[] => seeds.map((sd) => {
+    const n = seed(plan, sd.plan, path.basename(sd.file));
+    return `plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " — review them (seededFrom)" : "");
+  });
   const nodeId = screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id;
   const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow: findIndexRow(screenFile, nodeId) });
   const c = fresh.counts;
   if (!out) {
-    seedAll(fresh);
+    for (const l of seedAll(fresh)) console.error(l);
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");
   } else {
     // An existing plan is MERGED into — so one that cannot be read (or is not a plan) is refused, untouched.
@@ -721,13 +721,23 @@ function main(argv: string[]): number {
     const parsed = "doc" in prevRead ? parsePlan(prevRead.doc) : null; // parsePlan names the field that is wrong
     const why = !("doc" in prevRead) ? (prevRead.missing ? null : prevRead.error) : parsed && "error" in parsed ? parsed.error : null;
     if (why) { console.error(`plan-skeleton: ${out} exists but ${why} — refusing to overwrite it`); return 1; }
-    const prev = parsed && "plan" in parsed ? parsed.plan : null;
-    const { plan, dropped } = merge(fresh, prev);
-    seedAll(plan); // after the own-plan merge: this plan's own answers always win
-    // the one plan writer (plan-record.ts): atomic, so a kill mid-write cannot truncate a hand-answered plan, and in
-    // the file's own format (indent, CRLF, BOM), so a merge is not a whole-file diff. It skips identical bytes, so an
-    // unchanged plan is touched: verify-build treats a plan untouched for 12 h as a leftover and skips it.
-    if (!writePlan(out, plan)) { const now = new Date(); fs.utimesSync(out, now, now); }
+    // the one plan writer (plan-record.ts updatePlan): under the plan's lock, merged into the plan as it is on disk
+    // then (a record or hook write since the check above is kept); atomic, so a kill mid-write cannot truncate a
+    // hand-answered plan, and in the file's own format (indent, CRLF, BOM), so a merge is not a whole-file diff. It
+    // skips identical bytes, so an unchanged plan is touched: verify-build treats a plan untouched for 12 h as a
+    // leftover and skips it. The merge may run again (the plan changed under it), so it starts from a copy of `fresh`.
+    let done: { prev: Plan | null; dropped: MergeResult["dropped"]; seeded: string[] } = { prev: null, dropped: { tokens: 0, components: 0, anchors: 0 }, seeded: [] };
+    try {
+      const changed = updatePlan(out, (raw) => {
+        const prev = raw === null ? null : parsePlanText(raw, out);
+        const { plan, dropped } = merge(structuredClone(fresh), prev);
+        done = { prev, dropped, seeded: seedAll(plan) }; // after the own-plan merge: this plan's own answers always win
+        return plan;
+      });
+      if (!changed) { const now = new Date(); fs.utimesSync(out, now, now); }
+    } catch (e) { console.error(`plan-skeleton: ${out}: ${errMsg(e)} — not written`); return 1; }
+    for (const l of done.seeded) console.error(l);
+    const { prev, dropped } = done;
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }
   console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded, ${fresh.anchorsSuggested.length} suggested anchor root(s) (anchorsSuggested)`);
