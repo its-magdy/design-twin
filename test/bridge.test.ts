@@ -275,7 +275,7 @@ fs.rmSync(tmp, { recursive: true, force: true });
 let nextPort = 8797;
 async function connectedBridge() {
   const port = nextPort++;
-  const bridge = core.createBridge(port);
+  const bridge = core.createBridge(port, { settleMs: 0 });
   const client = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
   await new Promise((res, rej) => { client.on("open", res); client.on("error", rej); });
   return { bridge, client };
@@ -378,7 +378,7 @@ void (async () => {
   // make that safe are what is tested: it is never a client, and everyone else still gets the 401.
   {
     const port = nextPort++;
-    const bridge = core.createBridge(port);
+    const bridge = core.createBridge(port, { settleMs: 0 });
     const closed = (url: string, opts: ClientOptions) => new Promise<{ opened: boolean; http?: number; code?: number; clients?: number }>((res) => {
       const c = new WebSocket(url, opts);
       let opened = false;
@@ -409,7 +409,7 @@ void (async () => {
   // bad Host is still a 403 at the HTTP layer.
   {
     const port = nextPort++;
-    const bridge = core.createBridge(port);
+    const bridge = core.createBridge(port, { settleMs: 0 });
     await bridge.listening;
     const plain = await new Promise<number | undefined>((res) => {
       http.get({ host: "127.0.0.1", port, path: "/" }, (r) => { r.resume(); res(r.statusCode); }).on("error", () => res(undefined));
@@ -435,7 +435,7 @@ void (async () => {
   // before the alive client's pong was read, and terminated it.
   {
     const port = nextPort++;
-    const bridge = core.createBridge(port, { heartbeatMs: 0 });
+    const bridge = core.createBridge(port, { heartbeatMs: 0, settleMs: 0 });
     const open = (autoPong: boolean) => new Promise<WebSocket>((res, rej) => {
       const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", autoPong });
       c.on("open", () => res(c));
@@ -489,7 +489,7 @@ void (async () => {
   // bound — a loaded machine may run it late, which is not the bug this guards).
   {
     const port = nextPort++;
-    const bridge = core.createBridge(port, { heartbeatMs: 50 });
+    const bridge = core.createBridge(port, { heartbeatMs: 50, settleMs: 0 });
     const dead = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", autoPong: false });
     let deadClosed = false;
     dead.on("close", () => { deadClosed = true; });
@@ -532,7 +532,7 @@ void (async () => {
   // no single-socket test could reach.
   {
     const port = nextPort++;
-    const bridge = core.createBridge(port);
+    const bridge = core.createBridge(port, { settleMs: 0 });
     const open = () => new Promise<WebSocket>((res, rej) => {
       const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
       c.on("open", () => res(c));
@@ -607,12 +607,21 @@ void (async () => {
     setTimeout(() => { void open().then((c) => { lateNamed = c; identify(c, { instanceId: "fig-late", file: "Late Named File", fileKey: null, page: "P" }); autoReply(c, { pong: true, page: "P", file: "late-named" }); }); }, 200);
     ok("[multi] a request with waitMs waits for its late named target, then routes to it", (await viaWait).file === "late-named");
     lateNamed?.close();
-    // A caller that gives up during the wait: rejected at once with its own reason, and nothing is sent.
+    // A caller that gives up during the wait: rejected at once with its own reason, and nothing is sent —
+    // not even to the file it named, whose hello lands just after the abort.
+    const pendingMatch = await open();
+    const sentToPending: string[] = [];
+    pendingMatch.on("message", (b: RawData) => { sentToPending.push(b.toString()); });
     const acWait = new AbortController();
     setTimeout(() => acWait.abort(new Error("the caller left during the wait")), 100);
+    setTimeout(() => identify(pendingMatch, { instanceId: "fig-pending", file: "Pending Match File", fileKey: null, page: "P" }), 200);
     const ta0 = Date.now();
-    const abandonedWait = await bridge.request("ping", {}, 5000, "Never Here", undefined, undefined, acWait.signal, { waitMs: 3000 }).then(() => "answered", (e: unknown) => asErr(e).message);
-    ok("[multi] a request aborted during its wait rejects at once with the caller's reason", abandonedWait === "the caller left during the wait" && Date.now() - ta0 < 1500);
+    const abandonedWait = await bridge.request("ping", {}, 5000, "Pending Match", undefined, undefined, acWait.signal, { waitMs: 3000 }).then(() => "answered", (e: unknown) => asErr(e).message);
+    const abandonedMs = Date.now() - ta0;
+    await sleep(250); // past the hello: a request that survived its abort would be sent now
+    ok("[multi] a request aborted during its wait rejects at once with the caller's reason", abandonedWait === "the caller left during the wait" && abandonedMs < 1500);
+    ok("[multi] …and the file it named, identifying just after, is sent nothing", sentToPending.length === 0 && bridge.listClients().some((c) => c.file === "Pending Match File"));
+    pendingMatch.close();
     lateWs?.close();
     await sleep(80);
 
@@ -3221,10 +3230,11 @@ void (async () => {
   console.log("\nserver-core — awaitClient waits for the hello (--client name race):");
   {
     const port = nextPort++;
-    const b = core.createBridge(port);
+    const b = core.createBridge(port, { settleMs: 0 });
     const t0 = Date.now();
     await b.awaitClient(null, 200); // no clients at all: resolves at its window, never hangs
-    ok("[identify] awaitClient with nobody connected resolves at its window without hanging", Date.now() - t0 < 1500);
+    const waited = Date.now() - t0;
+    ok("[identify] awaitClient with nobody connected resolves at its window (not before) without hanging", waited >= 180 && waited < 1500);
     b.close();
   }
   {
@@ -3520,6 +3530,13 @@ void (async () => {
       await sleep(100);
       ok("[cancel] a signal aborted before the call rejects \"request aborted before it was sent\" and sends no command frame",
         err3?.message === "request aborted before it was sent" && cmdFrames(seen).length === before);
+      // …and one aborted with a reason of the caller's own rejects with that reason, as during a wait.
+      const preWhy = new AbortController();
+      preWhy.abort(new Error("the caller had already left"));
+      let err4: Error | undefined;
+      try { await b.request("exportFull", {}, 20000, undefined, undefined, undefined, preWhy.signal); } catch (e) { err4 = asErr(e); }
+      ok("[cancel] a signal aborted before the call with the caller's own Error rejects with that Error, sending nothing",
+        err4?.message === "the caller had already left" && cmdFrames(seen).length === before);
       ws1.close();
       b.close();
     }
@@ -3533,7 +3550,7 @@ void (async () => {
         'process.env.FIGMA_BRIDGE_TOKEN = "t";',
         `const { createBridge } = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/server-core.ts")).href)});`,
         `const { default: WebSocket } = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../node_modules/ws/wrapper.mjs")).href)});`,
-        `const bridge = createBridge(${port});`,
+        `const bridge = createBridge(${port}, { settleMs: 0 });`,
         `const ws = new WebSocket("ws://127.0.0.1:${port}/?token=t", { origin: "null" });`,
         'await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });',
         "const ac = new AbortController();",

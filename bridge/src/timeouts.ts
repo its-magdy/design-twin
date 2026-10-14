@@ -35,3 +35,32 @@ export const HEARTBEAT_MS = 30000;
 // that is open lands within one or two cycles; 15 s is five, and a name that never matches fails
 // with the connected list instead of holding the terminal for the whole connect window.
 export const NAMED_CLIENT_WAIT_MS = 15000;
+
+// The longest delay one setTimeout holds: "When delay is larger than 2147483647 or less than 1, the delay
+// will be set to 1" (nodejs.org/api/timers.html#settimeoutcallback-delay-args), so a longer wait would
+// fire at once — or, re-armed, spin. Every wait or guard built from a caller's number stays within it.
+export const MAX_TIMER_MS = 2147483647;
+
+// How often an open plugin window redials a bridge it has lost or not found yet: figma-plugin ui.html
+// scheduleReconnect (`ms || 3000`), one port of the three per attempt (connect() walks BRIDGE_PORTS on
+// every failed dial), so a window that keeps missing comes back to the same port every 9 s.
+export const PLUGIN_REDIAL_MS = 3000;
+
+// How long a bridge whose plugins have only just started connecting holds a request that does not name
+// one file exactly (no target, or part of a file name) before routing it. Two open files redial on their
+// own clocks, so right after a bridge starts, whichever lands first is all there is for a moment — and an
+// unaddressed (or half-addressed) command would silently go to that file instead of being refused as
+// ambiguous. One redial interval plus a margin for the second window's `hello` covers windows a step
+// apart on the same port; windows a port or two apart (up to 2 × PLUGIN_REDIAL_MS later still) are not
+// waited for — that would cost every one-shot command a further 6 s. Counted from the moment the bridge
+// went from no plugin to one, so a bridge whose plugins have been connected for longer (a daemon, a long
+// MCP session) pays nothing; an exact connId, fileKey or file name is routed at once.
+export const SETTLE_MS = PLUGIN_REDIAL_MS + 500;
+
+// The client-side guard on a request sent through a daemon: the daemon's own command timeout plus every
+// wait the daemon may spend before sending — the connect window, then at most NAMED_CLIENT_WAIT_MS for a
+// named target (server-core awaitClient) — and a margin, so the daemon's own, clearer error always lands
+// before the guard does.
+// Capped at MAX_TIMER_MS: the guard is one setTimeout, which runs a longer delay after 1 ms.
+export const daemonGuardMs = (timeoutMs: number, connectWaitMs: number = 0): number =>
+  Math.min(timeoutMs + connectWaitMs + Math.min(connectWaitMs, NAMED_CLIENT_WAIT_MS) + 30000, MAX_TIMER_MS);

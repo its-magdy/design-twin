@@ -26,7 +26,7 @@ import path from "node:path";
 // with one file connected, required with several (the bridge refuses rather than guessing; see
 // server-core's resolveClient).
 import { createBridge, connectionFor, isConnId } from "./server-core.ts";
-import { TIMEOUTS, exportTimeout, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
+import { TIMEOUTS, exportTimeout, NAMED_CLIENT_WAIT_MS, daemonGuardMs } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import { stampSource } from "./source-stamp.ts";
 import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
@@ -140,7 +140,7 @@ const bridge = {
   // notifications/progress (MCP spec 2025-06-18, basic/utilities/progress) before the tool result. A
   // daemon from before progress frames sends none — that export simply reports no progress. Each
   // relayed tick also re-arms the socket's outer timeout, so a long export that keeps ticking is not
-  // cut off by the `timeoutMs + 30000` guard; the daemon's own `timeoutMs` still bounds the command.
+  // cut off by the daemonGuardMs guard; the daemon's own `timeoutMs` still bounds the command.
   // A NAMED `client` (file name / fileKey — not a bare c<N> connId) gets the same bounded wait the
   // CLI (figma-pull.ts) and the daemon (daemon.ts) give `--client <name>`: every open plugin window
   // redials on its own 3 s clock (figma-plugin ui.html), so right after this process opened the bridge
@@ -164,7 +164,8 @@ const bridge = {
     if ("own" in h) return h.own.requestWithClient(cmd, args, timeoutMs, target, undefined, onProgress, signal, named ? { waitMs: NAMED_CLIENT_WAIT_MS } : {});
     // Through a daemon the signal closes this request's socket; the daemon then abandons the request and
     // its bridge sends the plugin the same cancel frame.
-    return h.via.requestWithClient({ cmd, args, timeoutMs, ...ifDefined("client", target), ...(named ? { waitForConnection: NAMED_CLIENT_WAIT_MS } : {}) }, timeoutMs + 30000, onProgress, signal);
+    const waitForConnection = named ? NAMED_CLIENT_WAIT_MS : 0;
+    return h.via.requestWithClient({ cmd, args, timeoutMs, ...ifDefined("client", target), ...(named ? { waitForConnection } : {}) }, daemonGuardMs(timeoutMs, waitForConnection), onProgress, signal);
   },
   async request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void, signal?: AbortSignal): Promise<Commands[C]["reply"]> {
     return (await bridge.requestWithClient(cmd, args, timeoutMs, target, onProgress, signal)).reply;

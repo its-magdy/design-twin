@@ -188,7 +188,7 @@ import * as LAYOUT from "./project-layout.ts";
 // staleness notes: parseArgs and formatClients are pure and test-driven, and importing this module must
 // NOT load server-core (token resolution; a process.exit on a bad FIGMA_BRIDGE_PORT). cli() loads
 // server-core itself, after routing and the --token-file pre-scan.
-import { TIMEOUTS, exportTimeout } from "./timeouts.ts";
+import { TIMEOUTS, exportTimeout, daemonGuardMs, MAX_TIMER_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
@@ -434,10 +434,14 @@ function readArgs(args: string[]) {
   // and you got the default, the one outcome an explicit timeout exists to prevent, invisible until the
   // export died at a limit you thought you had raised.
   // One message for both failures (absent value, unusable value) so they cannot drift apart.
-  const BAD_TIMEOUT = "--timeout expects a positive number of seconds";
+  // At most what one timer can hold: setTimeout runs a longer delay (and Infinity) after 1 ms
+  // (nodejs.org/api/timers.html), so a request would time out at once; and a daemon frame cannot carry
+  // Infinity at all (JSON writes it as null).
+  const MAX_TIMEOUT_SEC = Math.floor(MAX_TIMER_MS / 1000);
+  const BAD_TIMEOUT = `--timeout expects a positive number of seconds (at most ${MAX_TIMEOUT_SEC}, about 24 days)`;
   const timeoutArg = takeValues(args, "--timeout", BAD_TIMEOUT, consumedIdx)[0];
   const timeoutSec = Number(timeoutArg);
-  if (timeoutArg !== undefined && !(timeoutSec > 0)) throw new UsageError(`${BAD_TIMEOUT}, got '${timeoutArg}'`);
+  if (timeoutArg !== undefined && !(timeoutSec > 0 && timeoutSec <= MAX_TIMEOUT_SEC)) throw new UsageError(`${BAD_TIMEOUT}, got '${timeoutArg}'`);
   // One override, applied to every budget below — spelling the `--timeout` conversion per budget is how
   // the list ops came to be missed by the flag in the first place.
   const overrideMs = timeoutSec > 0 ? timeoutSec * 1000 : undefined;
@@ -971,7 +975,7 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
     // below, so a long walk that is still reporting is not cut off by a budget sized for silence —
     // the daemon's own per-command `timeoutMs` still bounds the whole command, as the bridge path's
     // does. The ticks themselves are not printed (the plugin window shows them); this is liveness only.
-    send = (cmd, args, timeoutMs) => d.requestWithClient({ cmd, args, timeoutMs, client, waitForConnection: connectWaitMs }, timeoutMs + connectWaitMs + 30000, isExportCmd ? onTick : undefined);
+    send = (cmd, args, timeoutMs) => d.requestWithClient({ cmd, args, timeoutMs, client, waitForConnection: connectWaitMs }, daemonGuardMs(timeoutMs, connectWaitMs), isExportCmd ? onTick : undefined);
   } else {
     const b = createBridge();
     bridge = b;
@@ -992,6 +996,9 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
     // plugin's `hello` and, with two files open, against the OTHER file's window — whichever redials
     // first is the only one connected for a moment (seen live) — so once a plugin is connected a named
     // target gets min(--timeout, NAMED_CLIENT_WAIT_MS) more to show up before the request resolves it.
+    // With no target (this includes --list-clients) or a partial name, the fresh bridge also settles
+    // first (timeouts.ts SETTLE_MS), so a second open file a redial behind is connected — and the command
+    // refused as ambiguous, or listed — instead of the first file to land being taken silently.
     const tConnect = Date.now();
     await b.awaitClient(client, connectWaitMs);
     // "No plugin connected" means none ever did: one that connected and has gone again is the request's

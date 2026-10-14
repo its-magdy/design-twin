@@ -26,6 +26,7 @@ import os from "node:os";
 import path from "node:path";
 import { errMsg, errCode } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
+import { abortReason } from "./abort-reason.ts";
 import { bridgePortOrExit } from "./ports.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
@@ -757,7 +758,7 @@ export function probe(sock: string, timeoutMs = 1500): Promise<boolean> {
 // is connected or sent.
 function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | DaemonControlRequest, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<{ result: unknown; client: ClientRow | null }> {
   return new Promise<{ result: unknown; client: ClientRow | null }>((resolve, reject) => {
-    if (signal?.aborted) return reject(new Error("request aborted before it was sent"));
+    if (signal?.aborted) return reject(abortReason(signal, "request aborted before it was sent"));
     const c = net.createConnection(sock);
     c.setEncoding("utf8");
     let settled = false;
@@ -802,10 +803,7 @@ function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | Dae
       onAbort = () => {
         if (settled) return;
         disarm();
-        const r: unknown = sig.reason;
-        // A bare abort() carries a DOMException "AbortError" (itself an Error in Node) — that names
-        // nothing, so it gets the fixed text; an Error the caller built is passed through as-is.
-        done(reject, r instanceof Error && !(r instanceof DOMException) ? r : new Error("request aborted by the caller"));
+        done(reject, abortReason(sig, "request aborted by the caller"));
         try { c.destroy(); } catch { /* already gone */ }
       };
       sig.addEventListener("abort", onAbort, { once: true });

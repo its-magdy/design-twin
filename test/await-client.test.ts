@@ -23,6 +23,8 @@ const connect = (r: Registry, file?: string, fileKey?: string): Entry => {
   return e;
 };
 const disconnect = (r: Registry, e: Entry): void => { e.ws.readyState = CLOSED; r.remove(e); };
+// A registry with no settle window unless a test is about it (the sections below that are pass their own).
+const reg = (settleMs = 0): Registry => core.createRegistry<FakeSock>({ settleMs });
 
 // Every timer created while a wait runs is tracked: none may keep the process alive (unref'd), and none
 // may still be armed once the wait has settled (cleared, or fired). The suite holds the event loop open
@@ -66,7 +68,7 @@ ok("[connId] a file name, an upper-case C, a suffix, a bare c and the empty stri
 // ------------------------------------------------------------------ nothing connected
 console.log("\nawaitClient — nothing connected:");
 {
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   const a = await timed(r, () => r.awaitClient(null, 150));
   ok("[none] no target: resolves at its window, not before and not long after", a.ms >= 140 && a.ms < 400);
   ok("[none] …and leaves no listener, no armed timer, and never held the event loop", clean(a));
@@ -84,7 +86,7 @@ console.log("\nawaitClient — nothing connected:");
 // ------------------------------------------------------------------ a plugin connects during the wait
 console.log("\nawaitClient — a plugin connects and identifies while waiting:");
 {
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   let helloAt = 0;
   realSetTimeout(() => { const e = connect(r); realSetTimeout(() => { helloAt = Date.now(); r.identify(e, hello("App — Base")); }, 60); }, 60);
   const wait = r.awaitClient(null, 5000);
@@ -97,9 +99,9 @@ console.log("\nawaitClient — a plugin connects and identifies while waiting:")
 }
 {
   // A client that never says hello (a bundle that predates it) is taken once its grace has passed.
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   const e = connect(r);
-  e.connectedAt = Date.now() - (core.IDENTIFY_GRACE_MS - 120); // connected just under the grace ago
+  e.connectedMono = performance.now() - (core.IDENTIFY_GRACE_MS - 120); // connected just under the grace ago (the monotonic clock the grace runs on)
   const a = await timed(r, () => r.awaitClient(null, 10000));
   ok("[grace] an unidentified client holds an unaddressed wait only until its identification grace", a.ms >= 100 && a.ms < 600 && clean(a));
   const b = await timed(r, () => r.awaitClient(null, 10000));
@@ -111,7 +113,7 @@ console.log("\nawaitClient — a plugin connects and identifies while waiting:")
 // ------------------------------------------------------------------ named target
 console.log("\nawaitClient — a named target:");
 {
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   connect(r, "App — Base", "KEYBASE");
   const now = await timed(r, () => r.awaitClient("app", 5000));
   ok("[named] already connected (case-insensitive substring): resolves at once", now.ms < 20 && clean(now));
@@ -141,7 +143,7 @@ console.log("\nawaitClient — a named target:");
 {
   // The name cap counts from the first live client, not from the start: a plugin that takes most of the
   // connect window to land still gives the name its full cap after it (the CLI's cold reconnect).
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   realSetTimeout(() => connect(r, "Other File"), 250);
   const a = await timed(r, () => r.awaitClient("Target File", 300, undefined, 300));
   ok("[named] the name cap starts when the first plugin connects (~250 + 300 ms), not at the call (300 ms)", a.ms >= 500 && a.ms < 900 && clean(a));
@@ -150,14 +152,14 @@ console.log("\nawaitClient — a named target:");
 // ------------------------------------------------------------------ connId target
 console.log("\nawaitClient — a connection id:");
 {
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   connect(r, "Late File");
   const a = await timed(r, () => r.awaitClient("c9", 5000));
   ok("[connId] an absent connId does not wait for that id — an identified client is enough", a.ms < 20 && clean(a));
   let caught = "";
   try { r.resolveClient("c9"); } catch (e) { caught = e instanceof Error ? e.message : String(e); }
   ok("[connId] …and the request then fails fast, listing the connected file", /^no connected Figma file matches 'c9'/.test(caught) && /Late File/.test(caught));
-  const r2 = core.createRegistry<FakeSock>();
+  const r2 = reg();
   realSetTimeout(() => connect(r2, "Some File"), 80);
   const b = await timed(r2, () => r2.awaitClient("c1", 5000));
   ok("[connId] with nothing connected it waits for a first identified client (the connect window)", b.ms >= 70 && b.ms < 600 && clean(b));
@@ -166,18 +168,18 @@ console.log("\nawaitClient — a connection id:");
 // ------------------------------------------------------------------ disconnects, aborts, close
 console.log("\nawaitClient — a client leaves, the caller gives up, the bridge closes:");
 {
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   const other = connect(r, "Other File");
   realSetTimeout(() => disconnect(r, other), 60);
   realSetTimeout(() => connect(r, "Target File"), 160);
   const a = await timed(r, () => r.awaitClient("Target", 5000, undefined, 2000));
   ok("[leave] a client leaving does not end a named wait; the target arriving afterwards does", a.ms >= 150 && a.ms < 800 && clean(a));
-  const r2 = core.createRegistry<FakeSock>();
+  const r2 = reg();
   const only = connect(r2, "Other File");
   realSetTimeout(() => disconnect(r2, only), 50);
   const b = await timed(r2, () => r2.awaitClient("Target", 5000, undefined, 250));
   ok("[leave] …and with nothing arriving it still ends at the name cap (from when the first plugin was live)", b.ms >= 240 && b.ms < 600 && clean(b));
-  const r3 = core.createRegistry<FakeSock>();
+  const r3 = reg();
   const gone = connect(r3);
   realSetTimeout(() => disconnect(r3, gone), 40);
   realSetTimeout(() => connect(r3, "Back Again"), 120);
@@ -185,7 +187,7 @@ console.log("\nawaitClient — a client leaves, the caller gives up, the bridge 
   ok("[leave] no target: an unidentified client that leaves is waited past, to the one that comes back", c.ms >= 110 && c.ms < 800 && clean(c));
 }
 {
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   connect(r, "Other File");
   const ac = new AbortController();
   realSetTimeout(() => ac.abort(new Error("the caller left")), 80);
@@ -204,7 +206,7 @@ console.log("\nawaitClient — a client leaves, the caller gives up, the bridge 
   ok("[abort] an already-aborted signal does not wait", d.ms < 20 && clean(d) && getEventListeners(pre.signal, "abort").length === 0);
 }
 {
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   realSetTimeout(() => r.clear(), 60);
   const a = await timed(r, () => r.awaitClient("Target", 5000));
   ok("[close] clearing the registry (the bridge closing) ends every wait at once", a.ms >= 50 && a.ms < 400 && clean(a));
@@ -212,10 +214,112 @@ console.log("\nawaitClient — a client leaves, the caller gives up, the bridge 
   ok("[close] …and a wait started after it does not wait", b.ms < 20 && clean(b));
 }
 
+// ------------------------------------------------------------------ the settle window
+// A fresh bridge's windows redial on their own clocks: whichever file lands first must not be taken for a
+// command that does not name one file exactly while a second is a redial behind (a silent wrong-file export).
+console.log("\nawaitClient — a fresh bridge settles before it routes a vague target:");
+const SETTLE = 600; // stands in for SETTLE_MS (3.5 s): the rule, not the constant, is under test here
+const errOf = (fn: () => unknown): string => { try { fn(); return "routed"; } catch (e) { return e instanceof Error ? e.message.split("\n")[0] ?? "" : String(e); } };
+{
+  const r = reg(SETTLE);
+  realSetTimeout(() => connect(r, "File A"), 50);
+  realSetTimeout(() => connect(r, "File B"), 250);
+  const a = await timed(r, () => r.awaitClient(null, 5000));
+  ok("[settle] no target, a second file a moment behind: the wait lasts until it lands (not the first hello)", a.ms >= 240 && a.ms < SETTLE && clean(a));
+  ok("[settle] …so the request is refused as ambiguous instead of going to the first file", errOf(() => r.resolveClient(null)) === "2 Figma files are connected to the bridge — say which one to use.");
+}
+for (const [first, second] of [["App Base", "App Docs"], ["App Docs", "App Base"]]) {
+  const r = reg(SETTLE);
+  realSetTimeout(() => connect(r, first), 50);
+  realSetTimeout(() => connect(r, second), 250);
+  const a = await timed(r, () => r.awaitClient("App", 5000));
+  ok(`[settle] a partial name matching both (${first} first): the wait lasts until the second lands`, a.ms >= 240 && a.ms < SETTLE && clean(a));
+  ok(`[settle] …and the request is refused as ambiguous (${first} first)`, errOf(() => r.resolveClient("App")) === "'App' matches 2 connected files — be more specific, or use the connId.");
+}
+{
+  const r = reg(SETTLE);
+  realSetTimeout(() => connect(r, "App Base"), 50);
+  const a = await timed(r, () => r.awaitClient("Base", 5000));
+  ok("[settle] a partial name with one match on a fresh bridge resolves at the settle, not on the hello", a.ms >= SETTLE + 30 && a.ms < SETTLE + 400 && clean(a));
+  const r2 = reg(SETTLE);
+  realSetTimeout(() => connect(r2, "Only File"), 50);
+  const b = await timed(r2, () => r2.awaitClient(null, 5000));
+  ok("[settle] no target with one file: the same (the one-shot cost)", b.ms >= SETTLE + 30 && b.ms < SETTLE + 400 && clean(b));
+}
+{
+  const r = reg(SETTLE);
+  realSetTimeout(() => connect(r, "App Base", "KEYBASE"), 50);
+  const byName = await timed(r, () => r.awaitClient("App Base", 5000));
+  const byKey = await timed(r, () => r.awaitClient("KEYBASE", 5000));
+  const byId = await timed(r, () => r.awaitClient("c1", 5000));
+  ok("[settle] an EXACT file name, fileKey or connId is routed at once on a fresh bridge", byName.ms < 150 && byKey.ms < 20 && byId.ms < 20 && clean(byName) && clean(byKey) && clean(byId));
+  ok("[settle] settleLeft says how much of the window is left", r.settleLeft() > SETTLE - 200 && r.settleLeft() <= SETTLE);
+}
+{
+  const r = reg(SETTLE);
+  ok("[settle] nothing connected: nothing to settle", r.settleLeft() === 0);
+  connect(r, "Long Lived");
+  await sleep(SETTLE + 20);
+  connect(r, "Joined Later");
+  const a = await timed(r, () => r.awaitClient("Lived", 5000));
+  const b = await timed(r, () => r.awaitClient(null, 5000));
+  ok("[settle] a bridge connected longer than the window (a daemon) pays nothing — a client joining does not restart it",
+    a.ms < 20 && b.ms < 20 && r.settleLeft() === 0 && clean(a) && clean(b));
+  for (const e of [...r.clients.values()]) disconnect(r, e);
+  connect(r, "Back After Restart");
+  ok("[settle] …but once every plugin has gone, the next one to connect starts a new window", r.settleLeft() > SETTLE - 100);
+  const c = await timed(r, () => r.awaitClient(null, 5000));
+  ok("[settle] …which the next unaddressed wait sits out", c.ms >= SETTLE - 100 && clean(c));
+}
+{
+  // The connect window still bounds the settle: a --timeout shorter than it ends the wait.
+  const r = reg(SETTLE);
+  connect(r, "Only File");
+  const a = await timed(r, () => r.awaitClient(null, 150));
+  ok("[settle] a window shorter than the settle ends the wait at the window", a.ms >= 140 && a.ms < 400 && clean(a));
+}
+
+// ------------------------------------------------------------------ odd windows
+console.log("\nawaitClient — Infinity and non-numeric bounds:");
+{
+  const r = reg();
+  const ac = new AbortController();
+  realSetTimeout(() => ac.abort(), 200);
+  const a = await timed(r, () => r.awaitClient(null, Number.POSITIVE_INFINITY, ac.signal));
+  ok("[odd] an Infinity window waits (until the abort here), with one clamped timer, not one per millisecond", a.ms >= 190 && a.made <= 2 && clean(a));
+  const r2 = reg();
+  realSetTimeout(() => connect(r2, "Late"), 100);
+  const b = await timed(r2, () => r2.awaitClient(null, Number.POSITIVE_INFINITY));
+  ok("[odd] …and ends on the client it waited for", b.ms >= 90 && b.ms < 600 && clean(b));
+  connect(r2, "Other");
+  const c = await timed(r2, () => r2.awaitClient("Missing", 300, undefined, Number.NaN));
+  ok("[odd] a NaN name cap falls back to NAMED_CLIENT_WAIT_MS (here the 300 ms window is shorter) without spinning", c.ms >= 290 && c.ms < 700 && c.made <= 2 && clean(c));
+}
+{
+  // Deadlines run on the monotonic clock: a wall-clock step (NTP, a resumed laptop) neither ends a wait
+  // early nor stretches it.
+  const r = reg();
+  const realNow = Date.now;
+  const t0 = performance.now();
+  realSetTimeout(() => { Date.now = (): number => realNow() + 3600_000; }, 50);
+  try {
+    await r.awaitClient(null, 300);
+  } finally { Date.now = realNow; }
+  const ms = performance.now() - t0;
+  ok("[mono] a wall clock that jumps an hour forward mid-wait does not cut a 300 ms wait short", ms >= 290 && ms < 700);
+  const r2 = reg();
+  Date.now = (): number => realNow() - 3600_000;
+  const t1 = performance.now();
+  try {
+    await r2.awaitClient(null, 200);
+  } finally { Date.now = realNow; }
+  ok("[mono] …nor does one that jumps back stretch a 200 ms wait", performance.now() - t1 < 600);
+}
+
 // ------------------------------------------------------------------ many waits, long windows
 console.log("\nawaitClient — many waits at once, and a window past setTimeout's limit:");
 {
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   const warnings: string[] = [];
   const onWarning = (w: Error): void => { warnings.push(w.name); };
   process.on("warning", onWarning);
@@ -227,14 +331,57 @@ console.log("\nawaitClient — many waits at once, and a window past setTimeout'
   process.off("warning", onWarning);
   ok("[many] …all resolve on the one hello, leave no listener behind, and raise no MaxListenersExceededWarning",
     a.ms < 400 && r.waiting() === 0 && !warnings.includes("MaxListenersExceededWarning"));
+  // The bound is a tripwire, not a ceiling: far more concurrent waits than any caller makes still warns.
+  const leaky: string[] = [];
+  const onLeak = (w: Error): void => { leaky.push(w.name); };
+  process.on("warning", onLeak);
+  const ac = new AbortController();
+  const many = Array.from({ length: 70 }, () => r.awaitClient("Nobody", 5000, ac.signal));
+  await sleep(10);
+  ac.abort();
+  await Promise.all(many);
+  await sleep(10);
+  process.off("warning", onLeak);
+  ok("[many] 70 concurrent waits do trip the MaxListenersExceededWarning (the leak tripwire stays armed)", leaky.includes("MaxListenersExceededWarning") && r.waiting() === 0);
 }
 {
   // Above 2147483647 ms setTimeout fires after 1 ms; unclamped, a long wait would re-arm every millisecond.
-  const r = core.createRegistry<FakeSock>();
+  const r = reg();
   const ac = new AbortController();
   realSetTimeout(() => ac.abort(), 100);
   const a = await timed(r, () => r.awaitClient(null, 3e9, ac.signal));
   ok("[long] a window longer than setTimeout's limit does not spin (one timer, not one per millisecond)", a.made <= 2 && clean(a));
+}
+
+// ------------------------------------------------------------------ the guard on a daemon-routed request
+console.log("\ndaemonGuardMs — the client-side guard outlasts every wait the daemon may spend:");
+{
+  const { daemonGuardMs, NAMED_CLIENT_WAIT_MS, SETTLE_MS } = await import("../bridge/src/timeouts.ts");
+  // The most the daemon's bridge can spend before sending: the connect window, then the name cap after
+  // the first plugin, and the settle (inside those windows, or on its own with no window at all).
+  const worst = (w: number): number => w + Math.min(w, NAMED_CLIENT_WAIT_MS) + SETTLE_MS;
+  ok("[guard] the MCP's named client (a 15 s window): more than the command timeout plus the worst wait, with margin",
+    daemonGuardMs(120000, NAMED_CLIENT_WAIT_MS) - 120000 >= worst(NAMED_CLIENT_WAIT_MS) + 20000);
+  const { MAX_TIMER_MS } = await import("../bridge/src/timeouts.ts");
+  ok("[guard] never more than one setTimeout holds (a --timeout at its ceiling would otherwise fire the guard at once)",
+    daemonGuardMs(MAX_TIMER_MS, MAX_TIMER_MS) === MAX_TIMER_MS && daemonGuardMs(2147483000, 2147483000) === MAX_TIMER_MS);
+  ok("[guard] the CLI's 90 s window, and no window at all: the same", daemonGuardMs(300000, 90000) - 300000 >= worst(90000) + 20000 && daemonGuardMs(120000) - 120000 >= worst(0) + 20000);
+}
+
+// ------------------------------------------------------------------ the abort text
+console.log("\nabortReason — what a caller that gave up is told:");
+{
+  const { abortReason } = await import("../bridge/src/abort-reason.ts");
+  const own = new Error("the caller left");
+  const a = new AbortController();
+  a.abort(own);
+  ok("[abort-text] an Error of the caller's own is passed through", abortReason(a.signal, "fallback") === own);
+  const bare = new AbortController();
+  bare.abort();
+  ok("[abort-text] a bare abort() (a DOMException AbortError) gets the fixed text", abortReason(bare.signal, "request aborted before it was sent").message === "request aborted before it was sent");
+  const str = new AbortController();
+  str.abort("because");
+  ok("[abort-text] a non-Error reason gets the fixed text too", abortReason(str.signal, "fixed").message === "fixed");
 }
 
 clearInterval(keepAlive);

@@ -16,7 +16,8 @@ import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import { errCode, errMsg } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
-import { TIMEOUTS, HEARTBEAT_MS, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
+import { abortReason } from "./abort-reason.ts";
+import { TIMEOUTS, HEARTBEAT_MS, NAMED_CLIENT_WAIT_MS, SETTLE_MS, MAX_TIMER_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS, bridgePortOrExit } from "./ports.ts";
 import { daemonSupported, legacySock } from "./daemon.ts";
@@ -245,7 +246,10 @@ interface RegistrySocket {
 interface ClientEntry<S extends RegistrySocket = WebSocket> {
   ws: S;
   connId: string;
+  /** wall clock (Date.now), for display: the rows' connectedAt / uptimeMs */
   connectedAt: number;
+  /** monotonic clock (performance.now), for the waits: the identification grace counts from it */
+  connectedMono: number;
   instanceId: string | null;
   file: string | null;
   fileKey: string | null;
@@ -364,10 +368,6 @@ export function isConnId(target: string): boolean {
  *  (a bundle that predates `hello`) is taken as it is once this passes, so it cannot hold a whole connect window. */
 const IDENTIFY_GRACE_MS = 3000;
 
-// setTimeout runs a delay above this at once ("When delay is larger than 2147483647 … the delay will be set
-// to 1" — nodejs.org/api/timers.html#settimeoutcallback-delay-args), which would make a long wait spin.
-const MAX_TIMER_MS = 2147483647;
-
 /** What requestWithClient takes beyond the positional arguments. `waitMs` (> 0): first wait for the target
  *  to be connected, with that connect window — see the registry's awaitClient. */
 export interface RequestOptions {
@@ -376,31 +376,35 @@ export interface RequestOptions {
 
 type Hello = Extract<PluginFrame, { type: "hello" }>;
 
-/** Why a request the caller gave up on was rejected: its signal's reason when that is an Error of the
- *  caller's own, else `fallback`. A bare abort() carries a DOMException "AbortError" (itself an Error in
- *  Node), which names nothing, so it gets the fixed text. */
-function abortError(signal: AbortSignal, fallback: string): Error {
-  const r: unknown = signal.reason;
-  return r instanceof Error && !(r instanceof DOMException) ? r : new Error(fallback);
+/** createRegistry options. `settleMs` is timeouts.ts SETTLE_MS (the test suites shorten it, or pass 0). */
+interface RegistryOptions {
+  settleMs?: number;
 }
 
 /**
  * The client registry, kept apart from the sockets so the test suite can drive it with plain objects. Every
  * change (a client added, identified or removed, the registry cleared) is announced on one event, which
- * is what awaitClient waits on.
+ * is what awaitClient waits on. Its waits run on the monotonic clock (performance.now), so a wall-clock
+ * step cannot end or stretch one.
  */
-function createRegistry<S extends RegistrySocket = WebSocket>() {
+function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOptions = {}) {
   const clients = new Map<string, ClientEntry<S>>(); // connId -> { ws, connId, connectedAt, instanceId, file, fileKey, page }
+  const settleMs = opts.settleMs !== undefined && Number.isFinite(opts.settleMs) && opts.settleMs >= 0 ? opts.settleMs : SETTLE_MS;
   const changes = new EventEmitter();
-  // One listener per waiting request; several tool calls can wait at once, which is not a leak.
-  changes.setMaxListeners(0);
+  // One listener per waiting request. Several tool calls can wait at once, which is not a leak — but
+  // hundreds would be, so the warning stays armed above any plausible number of concurrent waits.
+  changes.setMaxListeners(64);
   let connSeq = 0;
   let closed = false;
+  // When the registry last went from no live client to one (monotonic): the settle window counts from it.
+  let liveSince: number | null = null;
   const changed = (): void => { changes.emit("change"); };
 
   function add(ws: S): ClientEntry<S> {
     const connId = "c" + ++connSeq;
-    const entry: ClientEntry<S> = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, frames: 0, isAlive: true };
+    const now = performance.now();
+    if (!live().length) liveSince = now;
+    const entry: ClientEntry<S> = { ws, connId, connectedAt: Date.now(), connectedMono: now, instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, frames: 0, isAlive: true };
     clients.set(connId, entry);
     changed();
     return entry;
@@ -499,33 +503,50 @@ function createRegistry<S extends RegistrySocket = WebSocket>() {
     throw new Error(`no connected Figma file matches '${t}'. Connected:\n${list()}`);
   }
 
+  // How much of the settle window is left: 0 once it has passed, and 0 with nothing connected (there is
+  // nothing to route yet, so nothing to hold — the request's own error says so at once).
+  function settleLeft(): number {
+    if (liveSince === null || !live().length) return 0;
+    return Math.max(0, liveSince + settleMs - performance.now());
+  }
+
   /**
    * Wait, bounded, until `target` can be routed — the one wait every front-end uses before a request
    * (figma-pull's own bridge, the daemon for a request that carries a connect window, the MCP server for
-   * a named `client`). Resolves when:
-   *   - a NAMED target (file name or fileKey, not a connId) matches at least one live client — one OR
-   *     several: an ambiguity is resolveClient's to report. Every open plugin window redials on its own
-   *     3 s clock (figma-plugin ui.html), so with two files open whichever lands first is all there is for
-   *     a moment (seen live: `--client "Design System"` failed with only the other file listed, and that
-   *     file connected two seconds later). And a socket that is open is not yet identified: its `hello`,
-   *     which carries the file name, arrives a beat later ("one run in four failed").
+   * a named `client`, and any request while the bridge is still settling). Resolves when:
+   *   - a NAMED target (file name or fileKey, not a connId) matches: at once for a single EXACT match
+   *     (its connId, fileKey or whole file name), or for several matches (the ambiguity is resolveClient's
+   *     to report); a single partial match only once the bridge has settled (below). Every open plugin
+   *     window redials on its own clock (figma-plugin ui.html), so with two files open whichever lands
+   *     first is all there is for a moment (seen live: `--client "Design System"` failed with only the
+   *     other file listed, and that file connected two seconds later). And a socket that is open is not
+   *     yet identified: its `hello`, which carries the file name, arrives a beat later ("one run in four
+   *     failed").
    *   - no target, or a connId: a live client has identified itself, or has been connected for
-   *     IDENTIFY_GRACE_MS without doing so;
-   *   - the window runs out: `waitMs` for a first live client; once one is live, a named target gets
-   *     min(waitMs, NAMED_CLIENT_WAIT_MS) from that moment, so a name that never matches fails with the
-   *     connected list instead of holding the whole connect window;
+   *     IDENTIFY_GRACE_MS without doing so — and, with no target, the bridge has settled or several
+   *     clients are already connected (resolveClient then refuses to guess);
+   *   - the window runs out: `waitMs` (Infinity: no end) for a first live client; once one is live, a
+   *     named target gets min(waitMs, NAMED_CLIENT_WAIT_MS) from that moment, so a name that never
+   *     matches fails with the connected list instead of holding the whole connect window;
    *   - `signal` aborts, or the registry is cleared (the bridge closed).
+   * SETTLED: settleMs (timeouts.ts SETTLE_MS) have passed since the registry went from no live client to
+   * one. Until then a target that is not exact could be routed to the first file to land while another
+   * open file's window is a redial behind — a silent wrong-file export — so it waits; the window still
+   * bounds that wait. A bridge whose plugins have been connected longer pays nothing.
    * Never rejects: resolveClient, run afterwards, says what is wrong with whatever is connected then.
    * Woken by the registry's change event (a connect, a `hello`, a close) — no polling; the one timer is the
-   * window (or a client's identification grace), unref'd so a wait never keeps a process alive by itself,
-   * and cleared on every exit, as is the listener. `namedCapMs` is NAMED_CLIENT_WAIT_MS (the test suite
-   * shortens it).
+   * next moment the answer can change without an event (the window, the settle, an identification grace),
+   * unref'd so a wait never keeps a process alive by itself, and cleared on every exit, as is the listener.
+   * `namedCapMs` is NAMED_CLIENT_WAIT_MS (the test suite shortens it).
    */
   function awaitClient(target: string | null | undefined, waitMs: number, signal?: AbortSignal, namedCapMs: number = NAMED_CLIENT_WAIT_MS): Promise<void> {
     const t = target ?? "";
-    const named = t !== "" && !isConnId(t);
-    const windowMs = Number.isFinite(waitMs) && waitMs > 0 ? waitMs : 0;
-    const start = Date.now();
+    const connId = t !== "" && isConnId(t);
+    const named = t !== "" && !connId;
+    const windowMs = waitMs > 0 ? waitMs : 0; // NaN, 0 and below: no wait; Infinity: no end
+    const capMs = namedCapMs >= 0 ? namedCapMs : NAMED_CLIENT_WAIT_MS; // NaN or negative: the default, not a timer that never settles
+    const exact = (e: ClientEntry<S>): boolean => e.connId === t || (e.fileKey !== null && e.fileKey === t) || e.file === t;
+    const start = performance.now();
     let firstLiveAt: number | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let done = false;
@@ -543,20 +564,30 @@ function createRegistry<S extends RegistrySocket = WebSocket>() {
       function check(): void {
         if (done) return;
         if (closed || signal?.aborted) return finish();
-        const now = Date.now();
+        const now = performance.now();
         const entries = live();
         if (entries.length && firstLiveAt === null) firstLiveAt = now;
-        const ready = named
-          ? matchClient(entries, t).length > 0
-          : entries.some((e) => !!e.instanceId || now - e.connectedAt >= IDENTIFY_GRACE_MS);
+        const settleAt = liveSince === null ? now : liveSince + settleMs;
+        const settled = now >= settleAt;
+        let ready: boolean;
+        if (named) {
+          const matched = matchClient(entries, t);
+          const [only] = matched;
+          ready = matched.length > 1 || (only !== undefined && (exact(only) || settled));
+        } else {
+          const someone = entries.some((e) => !!e.instanceId || now - e.connectedMono >= IDENTIFY_GRACE_MS);
+          ready = someone && (connId || settled || entries.length > 1);
+        }
         if (ready) return finish();
-        const deadline = named && firstLiveAt !== null ? firstLiveAt + Math.min(windowMs, namedCapMs) : start + windowMs;
+        const deadline = named && firstLiveAt !== null ? firstLiveAt + Math.min(windowMs, capMs) : start + windowMs;
         if (now >= deadline) return finish();
-        // The next moment the answer can change without an event: the window, or an unidentified client's grace.
+        // The next moment the answer can change without an event: the window, the settle, or an
+        // unidentified client's grace.
         let wake = deadline;
-        if (!named) for (const e of entries) wake = Math.min(wake, e.connectedAt + IDENTIFY_GRACE_MS);
+        if (!connId && entries.length && !settled) wake = Math.min(wake, settleAt);
+        if (!named) for (const e of entries) if (!e.instanceId) wake = Math.min(wake, e.connectedMono + IDENTIFY_GRACE_MS);
         if (timer) clearTimeout(timer);
-        timer = setTimeout(check, Math.min(Math.max(wake - now, 1), MAX_TIMER_MS));
+        timer = setTimeout(check, Math.min(Math.max(Math.ceil(wake - now), 1), MAX_TIMER_MS));
         timer.unref();
       }
       changes.on("change", check);
@@ -566,7 +597,7 @@ function createRegistry<S extends RegistrySocket = WebSocket>() {
   }
 
   return {
-    clients, add, identify, remove, clear, live, describe, resolveClient, awaitClient,
+    clients, add, identify, remove, clear, live, describe, resolveClient, awaitClient, settleLeft,
     /** connections registered so far (bad-token sockets are never registered) */
     connections: (): number => connSeq,
     /** test seam: how many waits are listening for registry changes right now */
@@ -582,6 +613,8 @@ function createRegistry<S extends RegistrySocket = WebSocket>() {
 interface BridgeOptions {
   onListenError?: (e: Error) => void;
   heartbeatMs?: number;
+  /** the registry's settle window (timeouts.ts SETTLE_MS); the test suite passes 0 where it is not under test */
+  settleMs?: number;
 }
 
 function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
@@ -674,7 +707,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // Chrome DevTools Protocol shape — discover targets, then address a server-assigned id — rather than
   // the user-typed "channel name" other Figma bridges use, which has no uniqueness guarantee and
   // misroutes silently on a typo or a duplicate.
-  const registry = createRegistry();
+  const registry = createRegistry(ifDefined("settleMs", opts.settleMs));
   const clients = registry.clients;
   const pending = new Map<string, PendingRequest>(); // requestId -> { resolve, reject, connId }
   // Request ids are `r<nonce>-<seq>`, the nonce minted once per bridge. A bare per-process counter
@@ -944,19 +977,21 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   //
   // `opts.waitMs` (> 0): wait for `target` first, with that connect window (awaitClient) — the MCP server
   // passes it for a named `client`, the daemon for a request that carries a connect window. Without it
-  // the target is resolved at once, against whatever is connected now.
+  // the target is resolved against whatever is connected now — once the bridge has settled (awaitClient).
   //
-  // `signal`: already aborted → rejects at once and nothing is sent; aborted during the wait → rejects
-  // with the signal's reason when that is an Error of the caller's own, else "request aborted before it
-  // was sent", and nothing is sent; aborted while pending → the cancel frame goes to the plugin, the
-  // request is forgotten, and the promise rejects with the signal's reason when that is an Error of the
+  // `signal`: already aborted, or aborted during the wait → rejects with the signal's reason when that is
+  // an Error of the caller's own, else "request aborted before it was sent", and nothing is sent;
+  // aborted while pending → the cancel frame goes to the plugin, the request is forgotten, and the promise rejects with the signal's reason when that is an Error of the
   // caller's own (the daemon passes one naming its departed client), else "request aborted by the caller".
   function requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal, opts: RequestOptions = {}): Promise<RequestOutcome<C>> {
-    if (signal?.aborted) return Promise.reject(new Error("request aborted before it was sent"));
-    const waitMs = opts.waitMs ?? 0;
+    if (signal?.aborted) return Promise.reject(abortReason(signal, "request aborted before it was sent"));
+    // A bridge that is still settling holds every request for the rest of that window (awaitClient routes
+    // an exact target at once), so a fresh bridge never routes a vague one to the first file to land.
+    const asked = opts.waitMs ?? 0;
+    const waitMs = Math.max(asked > 0 ? asked : 0, registry.settleLeft());
     if (!(waitMs > 0)) return dispatch(cmd, args, timeoutMs, target, stallMs, onProgress, signal);
     return awaitClient(target, waitMs, signal).then(() => {
-      if (signal?.aborted) throw abortError(signal, "request aborted before it was sent");
+      if (signal?.aborted) throw abortReason(signal, "request aborted before it was sent");
       return dispatch(cmd, args, timeoutMs, target, stallMs, onProgress, signal);
     });
   }
@@ -1048,7 +1083,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
           if (!p) return; // settled already
           pending.delete(id);
           cancelOnWire(client, id);
-          p.reject(abortError(sig, "request aborted by the caller"));
+          p.reject(abortReason(sig, "request aborted by the caller"));
         };
         sig.addEventListener("abort", onAbort, { once: true });
       }
