@@ -35,7 +35,8 @@ import { attribute, diffOptionsFor, diffPixels, planGrid, referenceCrop, renderD
 import type { MeasuredVisual, ProbeFrame, Rect4, VerifyExpectation, VerifyReferenceImage } from "./types.ts";
 import { isVerifyReferenceImage } from "./doc-guards.ts";
 import { pctText, resolveInside, scaleText } from "./verify-shared.ts";
-import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
+import { firstLine } from "../bridge/src/errmsg.ts";
+import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import type { PageDocument, PageWindow } from "./page-dom.ts";
 
@@ -188,7 +189,13 @@ export async function captureVisual(browser: Browser, o: CaptureOptions): Promis
     } finally {
       await context.close().catch(() => undefined);
     }
-  })().catch((e: unknown): { why: string } => ({ why: /Execution context was destroyed|frame was detached|navigation/i.test(errMsg(e)) ? "the page loaded a new document during the visual capture" : `the visual capture failed — ${firstLine(e)}` }));
+  })().catch((e: unknown): { why: string } => {
+    // no page to ask: the context is closed by now, so the error alone says what happened
+    const kind = pwErrorKind(e);
+    if (kind === "navigated") return { why: "the page loaded a new document during the visual capture" };
+    if (kind === "gone") return { why: `the page or browser closed or crashed during the visual capture — ${pwFirstLine(e)}` };
+    return { why: `the visual capture failed — ${firstLine(e)}` };
+  });
   // the context exists from before the screen was reached: closing it ends whatever the capture waits on — ≤ CUT_SETTLE_MS
   const r = await raceBudget(work, o.budgetMs, held);
   if (!r.cut) return r.value;

@@ -130,9 +130,11 @@ spec with a drawn state; with `--run <id>` it writes the `measuring` / `measured
   identity: a changed probe (or a hand-edited file) makes rounds incomparable, so it is a full re-run.
 - **Exit 3** (renderer unavailable) → stop and ask the user; never install anything yourself.
   **Exit 4** (the page kept navigating, reloaded twice during measurement, was unreachable, or `--ready` timed
-  out, or a `--steps` step failed, or a reload undid an in-place `--steps` click on both passes, or `--max-time`;
-  nothing written) → re-run once, then report the navigation log it printed — never a retry loop. Only the
-  reload-during-measurement message points at the dev-server watch; the in-place-click one names the step to change.
+  out, or a `--steps` step failed, or a reload undid an in-place `--steps` click on both passes, or `--max-time`, or
+  the page or browser closed or crashed; nothing written) → re-run once, then report the navigation log it printed —
+  never a retry loop. Only the reload-during-measurement message points at the dev-server watch; the in-place-click one
+  names the step to change. A closed or crashed page or browser prints no navigation log: if it recurs on the re-run,
+  run `--check` and report its output.
 - **Untagged nodes** come back in `notMeasured` with the reason "tag it". Report them for the builder to tag
   with `data-dt-node`; do not match them by hand. A `null` style with an `unmeasured[key]` reason is "not
   measured", never a pass.

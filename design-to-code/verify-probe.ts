@@ -56,7 +56,7 @@ import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
 import type { BuildIdentity, InteractionEvidence, MeasuredBehaviour, MeasuredComponent, MeasuredVisual, MeasuredNode, PageOverflow, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, ProbeStep, VerifyMeasured, VerifySpec } from "./types.ts";
 import { describeStep, parseSteps, stepsSha256 } from "./probe-steps.ts";
-import { CLOSED, NAVIGATED, StepError, drivable, driveBudget, driveInteractions, raf2, readPageOverflow, submitGuard } from "./probe-drive.ts";
+import { StepError, drivable, driveBudget, driveInteractions, raf2, readPageOverflow, submitGuard } from "./probe-drive.ts";
 import type { DriveResult } from "./probe-drive.ts";
 import { CLOSE_STEP_CAP_MS, PS_CAP_MS, behaviourBudget, runBehaviour } from "./probe-behaviour.ts";
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
@@ -67,6 +67,7 @@ import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite } from "./verify-run.ts";
 import type { Expectation } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
+import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts";
 
 // ---------------------------------------------------------------- resolving the project's Playwright
@@ -226,10 +227,11 @@ export const INIT_SCRIPT = `(() => {
 const QUIET_MS = 500, QUIET_CAP_MS = 10_000, POLL_MS = 100;
 
 /** What a Playwright error during measurement means: the document was replaced (a reload → re-run), the
- *  browser/page is gone (a crash → exit 4, never read as a reload), or something else. */
-export function errorKind(message: string, pageClosed: boolean): "gone" | "navigated" | "other" {
-  if (pageClosed || CLOSED.test(message)) return "gone";
-  return NAVIGATED.test(message) ? "navigated" : "other";
+ *  browser/page is gone (a crash → exit 4, never read as a reload), or something else — a timeout included (the
+ *  callers that wait on one ask pwErrorKind). `page` given: a closed page is gone whatever the message says. */
+export function errorKind(e: unknown, page?: { isClosed(): boolean }): "gone" | "navigated" | "other" {
+  const kind = pwErrorKind(e, page);
+  return kind === "timeout" ? "other" : kind;
 }
 
 class NavigatedError extends Error {}
@@ -237,7 +239,7 @@ class NavigatedError extends Error {}
  *  re-run replays them; a second time is exit 4 with this step named, not the dev-server hint). */
 class StepStateLostError extends NavigatedError {}
 class BrowserGoneError extends Error {}
-const gone = (e: unknown): BrowserGoneError => new BrowserGoneError(`the browser closed or crashed during measurement (${firstLine(e)})`);
+const gone = (e: unknown): BrowserGoneError => new BrowserGoneError(`the page or browser closed or crashed during measurement (${pwFirstLine(e)})`);
 class KeptNavigatingError extends Error {}
 class UnreachableError extends Error {}
 
@@ -286,8 +288,8 @@ interface NavLog {
 /** The current document's token (INIT_SCRIPT) — null while a navigation has no document to evaluate in. */
 async function docTokenOrNull(page: Page): Promise<string | null> {
   try { const v: unknown = await page.evaluate("window.__dtProbeDoc || ''"); return String(v); } catch (e) {
-    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-    if (errorKind(errMsg(e), false) === "navigated") return null;
+    if (errorKind(e, page) === "gone") throw gone(e);
+    if (errorKind(e) === "navigated") return null;
     throw e;
   }
 }
@@ -342,7 +344,7 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
     if (loadNote === null) return null;
     let state: unknown = null;
     try { state = await page.evaluate("document.readyState"); } catch (e) {
-      if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+      if (errorKind(e, page) === "gone") throw gone(e);
       return loadNote;
     }
     if (state !== "complete") return loadNote;
@@ -363,8 +365,8 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
         try {
           await page.waitForLoadState("load", { timeout: Math.max(1, docDeadline - Date.now()) });
         } catch (e) {
-          if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-          if (errorKind(errMsg(e), false) === "navigated") throw e;
+          if (errorKind(e, page) === "gone") throw gone(e);
+          if (errorKind(e) === "navigated") throw e;
           loadNote = `the document had not finished loading after ${Math.round(cap / 1000)}s (document.readyState "${String(state)}") — measured anyway`;
           // remembered for THIS document (the token it has now): no later settle waits for its load again
           const now = await docTokenOrNull(page);
@@ -383,13 +385,13 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
       if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, docDeadline - Date.now()) : timeout });
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
-      if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+      if (errorKind(e, page) === "gone") throw gone(e);
       const now = await docTokenOrNull(page);
       if (now !== null && token !== null && now !== token) { await newDocument(); continue; }
       if (token === null && now !== null) token = now;
       if (moved() && Date.now() < docDeadline) { await sleep(POLL_MS); continue; }
       if (moved()) throw kept();
-      if (errorKind(errMsg(e), false) === "navigated" && Date.now() < docDeadline) { await sleep(POLL_MS); continue; }
+      if (errorKind(e) === "navigated" && Date.now() < docDeadline) { await sleep(POLL_MS); continue; }
       throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${firstLine(e)}` : firstLine(e));
     }
     let mark = log.docLoads;
@@ -402,8 +404,8 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
         if (!Array.isArray(v)) throw new Error("the page returned no settle signature");
         tok = String(v[0]); sig = String(v[1]);
       } catch (e) {
-        if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-        if (errorKind(errMsg(e), false) !== "navigated") throw e;
+        if (errorKind(e, page) === "gone") throw gone(e);
+        if (errorKind(e) !== "navigated") throw e;
         if (Date.now() >= docDeadline) throw kept();
         continue;
       }
@@ -453,7 +455,7 @@ async function oneVisible(page: Page, sel: string, wait: number, name: string, a
       if (only !== undefined && (vis.length === 1 || atLeastOne)) return only;
       last = { visible: vis.length, all };
     } catch (e) {
-      const kind = errorKind(errMsg(e), page.isClosed());
+      const kind = errorKind(e, page);
       if (kind === "gone") throw gone(e);
       if (kind === "other") throw new StepError(`${name}: ${firstLine(e)}`);
     }
@@ -517,9 +519,9 @@ async function ownGoto(page: Page, log: NavLog, url: string, timeout: number): P
   try {
     await page.goto(url, { waitUntil: "load", timeout });
   } catch (e) {
-    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+    if (errorKind(e, page) === "gone") throw gone(e);
     if (/interrupted by another navigation/i.test(errMsg(e))) return;
-    if (!committed || !/Timeout \d+ms exceeded/i.test(errMsg(e))) throw e;
+    if (!committed || pwErrorKind(e) !== "timeout") throw e;
     let state: unknown = "unknown";
     try { state = await page.evaluate("document.readyState"); } catch { /* the settle reads it again */ }
     // what happened — the goto stopped waiting (the document measured may have arrived later in a chain); the
@@ -603,7 +605,7 @@ async function runSteps(page: Page, log: NavLog, o: ProbeOptions): Promise<void>
           }
         } catch (e) {
           if (e instanceof StepError) throw e;
-          const kind = errorKind(errMsg(e), page.isClosed());
+          const kind = errorKind(e, page);
           if (kind === "gone") throw gone(e);
           // a click that started a document load is a step's navigation (settled below); anything else failed the step
           if (kind === "other") throw new StepError(`${name} could not be clicked: ${firstLine(e)}`);
@@ -804,7 +806,7 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
           node.states = { [state]: { styles: shaped.styles || {}, ...(shaped.unmeasured ? { unmeasured: shaped.unmeasured } : {}) } };
         }
       } catch (e) {
-        if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
+        if (errorKind(e, page) !== "other") throw e;
         node.note = `${state} state not measured: ${firstLine(e)}`;
       } finally {
         if (state === "hover") await page.mouse.move(0, 0).catch(() => undefined);
@@ -841,8 +843,8 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
     };
   } catch (e) {
     if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError || e instanceof StepError) throw e;
-    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-    if (errorKind(errMsg(e), false) === "navigated") throw new NavigatedError(firstLine(e));
+    if (errorKind(e, page) === "gone") throw gone(e);
+    if (errorKind(e) === "navigated") throw new NavigatedError(firstLine(e));
     throw e;
   }
 }
@@ -867,7 +869,7 @@ async function hoverDrawnState(page: Page, spec: VerifySpec, m: Match, own: stri
       if (position === null) continue;
       // a covered point is retried until the timeout — elementFromPoint said it is free, so a short one
       try { await loc.hover({ position, timeout: 1000 }); return { hovered: c.path, note: null }; } catch (e) {
-        if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
+        if (errorKind(e, page) !== "other") throw e;
         covered ??= `the free point on ${c.id} was covered (${firstLine(e)})`;
         await page.mouse.move(0, 0);
       }
@@ -1035,7 +1037,7 @@ const USAGE =
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
   "exit: 0 wrote · 2 usage · 3 renderer unavailable (ask the user to install; never installed here) · 4 the page kept\n" +
   "      navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time / a --steps step\n" +
-  "      failed (nothing written).";
+  "      failed / the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).";
 
 const MAX_TIME_DEFAULT = 180_000;
 
@@ -1194,7 +1196,13 @@ export async function main(argv: string[]): Promise<number> {
     } catch (e) {
       await browser.close().catch(() => undefined);
       if (e instanceof UnreachableError) { console.error(`verify-probe: ${e.message} — nothing written.`); return 4; }
-      if (/Timeout .*exceeded/i.test(errMsg(e))) { console.error(`verify-probe: timed out — ${firstLine(e)} — nothing written.`); return 4; }
+      // runProbe answers a page gone during measurement with browser-gone itself; this is one gone outside it (the context
+      // or page could not be opened) — the same exit 4. After the watchdog's close it is that close, which said so itself.
+      if (pwErrorKind(e) === "gone") {
+        if (!held.timedOut) console.error(`verify-probe: the page or browser closed or crashed (${pwFirstLine(e)}) — nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.`);
+        return 4;
+      }
+      if (pwErrorKind(e) === "timeout") { console.error(`verify-probe: timed out — ${firstLine(e)} — nothing written.`); return 4; }
       throw e;
     }
     // drive the overlay interactions, each on a fresh page, after the measurement pass and before the

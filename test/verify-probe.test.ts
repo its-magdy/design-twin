@@ -405,6 +405,18 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     && !fs.existsSync(path.join(none, "node_modules")) && !fs.existsSync(path.join(none, "package-lock.json")));
   const launchFails = spawnSync(process.execPath, [PROBE_CLI, "--check", "--project", onlyTest], { encoding: "utf8" });
   t("a launch failure → exit 3 with the browser install command", () => launchFails.status === 3 && /chromium did not launch: fake/.test(launchFails.stderr) && /npx playwright install chromium/.test(launchFails.stderr));
+  // a browser that is gone before measuring (its context cannot be opened) → exit 4 with the closed-or-crashed line, not
+  // exit 1 with a stack; the URL is never contacted
+  const GONE_PW = "module.exports = { chromium: { async launch() { return { version: () => '1.0', close: async () => {}, newContext: async () => { throw new Error('browser.newContext: Target page, context or browser has been closed'); } }; } } };\n";
+  const goneProj = project("gone-before-measuring", [["playwright", "1.63.0", GONE_PW]]);
+  fs.mkdirSync(path.join(goneProj, "design", "verify"), { recursive: true });
+  const goneExp = path.join(goneProj, "design", "verify", "Orders.expected.json");
+  fs.writeFileSync(goneExp, JSON.stringify(exp()));
+  const goneRun = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj], { encoding: "utf8" });
+  t("a browser gone before measuring → exit 4, the page-or-browser line with --check advice, no stack, nothing written", () =>
+    goneRun.status === 4
+    && goneRun.stderr.includes("verify-probe: the page or browser closed or crashed (browser.newContext: Target page, context or browser has been closed) — nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.")
+    && !/\n\s+at /.test(goneRun.stderr) && !fs.existsSync(path.join(goneProj, "design", "verify", "Orders.measured.json")));
   const usage = spawnSync(process.execPath, [PROBE_CLI, "--url", "http://127.0.0.1:1/"], { encoding: "utf8" });
   t("[CLI] --url without --expected → exit 2 (usage)", () => usage.status === 2);
   const badVp = spawnSync(process.execPath, [PROBE_CLI, "--expected", path.join(tmp, "missing.expected.json"), "--url", "http://127.0.0.1:1/"], { encoding: "utf8" });
@@ -594,9 +606,11 @@ const whyOf = (m: Match | NoMatch): string => (isMatch(m) ? "" : m.why);
 
 // a dead browser is not a reload
 t("'Target page, context or browser has been closed' (or a closed page) → gone, never 'navigated'", () =>
-  errorKind("page.evaluate: Target page, context or browser has been closed", false) === "gone" && errorKind("anything", true) === "gone");
-t("a destroyed execution context → navigated", () => errorKind("page.evaluate: Execution context was destroyed, most likely because of a navigation", false) === "navigated");
-t("an unrelated message that merely says 'navigating' is not a reload", () => errorKind("locator.hover: element is navigating away? (invented)", false) === "other");
+  errorKind("page.evaluate: Target page, context or browser has been closed") === "gone" && errorKind("anything", { isClosed: () => true }) === "gone");
+t("a destroyed execution context → navigated", () => errorKind("page.evaluate: Execution context was destroyed, most likely because of a navigation") === "navigated");
+t("an unrelated message that merely says 'navigating' is not a reload", () => errorKind("locator.hover: element is navigating away? (invented)") === "other");
+t("a timeout is 'other' to errorKind (its callers that wait on one ask pwErrorKind)", () =>
+  errorKind(Object.assign(new Error("locator.click: Timeout 2000ms exceeded."), { name: "TimeoutError" })) === "other");
 // a failed load's cause in plain words — a 204 and a download both end net::ERR_ABORTED; the thrown message
 // tells them apart; another cause is Playwright's first line, as before
 t("loadFailureWhy: net::ERR_ABORTED → no document (e.g. 204 No Content) or the page stopped its own load",

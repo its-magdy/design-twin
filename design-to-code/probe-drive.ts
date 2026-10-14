@@ -30,6 +30,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { InteractionEvidence, InteractionOutcome, PageOverflow, ProbeActivation, VerifyExpectation, VerifyInteraction } from "./types.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
+import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { decodePng } from "../bridge/src/png.ts";
 import type { DriveScroll, PageBox, PageDocument, PageElement, PageNode, PageShadowRoot, PageSheet, PageStyle, PageWindow } from "./page-dom.ts";
 
@@ -1172,8 +1173,6 @@ export interface DriveHooks {
 /** Two animation frames: whatever the last action changed has been laid out and painted. The expression is a string, so
  *  nothing from this module's scope is serialised into the page. */
 export const raf2 = (page: Page): Promise<unknown> => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
-export const CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i;
-export const NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
 /** What a cut unit may still take to settle after its context is closed. */
 export const CUT_SETTLE_MS = 5_000;
 /** What raceBudget saw: work's value, or a cut — `settled` false when the settle window ran out before the context
@@ -1425,8 +1424,9 @@ async function driveRow(browser: Pick<Browser, "newContext">, o: DriveOptions, r
       await page.locator(openerPath).first().click({ timeout: 2000 });
     } catch (e) {
       const m = errMsg(e);
-      if (CLOSED.test(m)) throw e;
-      if (!NAVIGATED.test(m)) {
+      const kind = pwErrorKind(e, page);
+      if (kind === "gone") throw e;
+      if (kind !== "navigated") {
         // hidden or covered (TimeoutError after the full 2 s): click in the page — never a user activation
         clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
         activation = "synthetic";
@@ -1442,8 +1442,8 @@ async function driveRow(browser: Pick<Browser, "newContext">, o: DriveOptions, r
     let detectedAt: number | null = null;
     for (;;) {
       try { read = await page.evaluate(pollDetector, { destId, contract }); } catch (e) {
-        if (CLOSED.test(errMsg(e))) throw e;
-        if (!NAVIGATED.test(errMsg(e))) throw e;
+        // a closed or crashed page, or any other failure, ends the row; only a replaced document is read as "lost"
+        if (pwErrorKind(e, page) !== "navigated") throw e;
         read = { lost: true, detectedBy: null, opened: null, dest: null };
       }
       if (read.lost) break;
@@ -1496,7 +1496,7 @@ export async function driveInteractions(browser: Pick<Browser, "newContext">, o:
     if (left <= 0) { out.push(notRun(row, "time budget", { cut: "budget" })); continue; }
     const held: Held = {};
     const work = driveRow(browser, o, row, hooks, holdContext(held)).catch((e: unknown): InteractionEvidence => {
-      if (CLOSED.test(errMsg(e))) return notRun(row, `the browser closed while driving — ${firstLine(e)}`);
+      if (pwErrorKind(e) === "gone") return notRun(row, `the page or browser closed or crashed while driving — ${pwFirstLine(e)}`);
       return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
     });
     // the context exists from before the screen was reached: closing it ends whatever the row was waiting on
