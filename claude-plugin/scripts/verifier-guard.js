@@ -70,7 +70,8 @@ function readHookInput(opts) {
 }
 
 // design-to-code/shell-words.ts
-function simpleCommands(src) {
+function simpleCommands(src, opts = {}) {
+  const ps = opts.powershell === true;
   const cmds = [];
   const stack = [];
   let words = [], word = "", inWord = false, quote = null;
@@ -107,6 +108,13 @@ function simpleCommands(src) {
       continue;
     }
     const top = stack[stack.length - 1];
+    if (c === "`" && ps) {
+      if (i + 1 < src.length) {
+        word += src.charAt(++i);
+        inWord = true;
+      }
+      continue;
+    }
     if (c === "`") {
       if (top?.closer === "`") close(i);
       else open("`", i);
@@ -119,7 +127,7 @@ function simpleCommands(src) {
     }
     if (quote === '"') {
       if (c === '"') quote = null;
-      else if (c === "\\" && '$`"\\\n'.includes(src.charAt(i + 1)) && i + 1 < src.length) word += src.charAt(++i);
+      else if (c === "\\" && !ps && '$`"\\\n'.includes(src.charAt(i + 1)) && i + 1 < src.length) word += src.charAt(++i);
       else word += c;
       continue;
     }
@@ -132,7 +140,7 @@ function simpleCommands(src) {
       inWord = true;
       continue;
     }
-    if (c === "\\") {
+    if (c === "\\" && !ps) {
       if (i + 1 < src.length && src.charAt(i + 1) !== "\n") {
         word += src.charAt(i + 1);
         inWord = true;

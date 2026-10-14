@@ -32,7 +32,8 @@ The `Stop` hook (`verify-build.js`, as your turn ends) checks the plans your ses
 plan-skeleton's `--out`) and the plan whose `files[]` alone lists a file you wrote with Write/Edit — it does not
 read other shell commands, so edit the plan and the code with Write/Edit, not `sed`/`cp`/a redirect. A session that claims no
 plan checks nothing — an orchestrator that only delegated, or one that edited only files several plans share; the
-screen-builder's own hook still gates each delegated build.
+screen-builder's own hook still gates each delegated build, and tells the user which open plans went unchecked when
+a builder claimed none.
 
 It **blocks** on: a raw colour in a source file of `files[]` whose value the plan resolved to a real token (`#hex`,
 `0xFF…`, `rgb()`; comments, prose strings and `.svg`/`.json` files are not scanned, and a line that *defines* a

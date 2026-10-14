@@ -466,7 +466,7 @@ check("a plan paused on a user question (awaiting-user) does not block the stop,
 })());
 // A sibling plan with a real (blocking) problem: an agent that did not write it must not be blocked on it.
 const SIBLING = { status: "pending", files: ["b.tsx"], tokens: [brand], verification: STATIC };
-check("fan-out: an agent is judged on the plan ITS transcript mentions, not a sibling's half-written one — which stays unchecked", (() => {
+check("fan-out: an agent is judged on the plan ITS transcript claims, not a sibling's half-written one — which stays unchecked", (() => {
   const root = project({ "a.tsx": "text-brand-600", "b.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   const sibling = path.join(root, "design", "plan", "settings.json");
   fs.writeFileSync(sibling, JSON.stringify(SIBLING));
@@ -1343,9 +1343,13 @@ console.log("field-test fixes:");
     check("`--seed-from <sibling plan>` on plan-skeleton claims only the --out plan, not the sibling it seeds from", onlyLogin(five(() => [toolUse("Bash", { command: `${SKEL} --out design/plan/login.json --seed-from design/plan/screen-1.json --seed-from design/plan/screen-2.json` })])));
     check("`cd design && plan-skeleton … --out plan/<x>.json` follows the cd", onlyLogin(five(() => [toolUse("Bash", { command: `cd design && ${SKEL} --out plan/login.json` })])));
     check("`cd /elsewhere && plan-skeleton … --out design/plan/<x>.json` is another tree's plan: claims none", none(five(() => [toolUse("Bash", { command: `cd /elsewhere && ${SKEL} --out design/plan/login.json` })])));
-    check("after a cd it cannot follow (`cd -`, `cd $X`), a relative --out claims none, an absolute one still claims",
-      none(five(() => [toolUse("Bash", { command: `cd - && ${SKEL} --out design/plan/login.json` })])) && none(five(() => [toolUse("Bash", { command: `cd "$D" && ${SKEL} --out design/plan/login.json` })]))
+    check("after a cd it cannot follow (`cd -`, `cd \"$ROOT\"`, `cd ~/proj`, `cd $(git rev-parse …)`), a relative --out is tried against the entry's cwd; an absolute one still claims",
+      ["cd -", "cd \"$ROOT\"", "cd ~/proj", "cd $(git rev-parse --show-toplevel)"].every((cd) => onlyLogin(five(() => [toolUse("Bash", { command: `${cd} && ${SKEL} --out design/plan/login.json` })])))
       && onlyLogin(five((root) => [toolUse("Bash", { command: `cd ~ && ${SKEL} --out "${path.join(root, "design", "plan", "login.json")}"` })])));
+    check("the PowerShell tool's command is read like Bash's: `& node \"C:\\…\\plan-skeleton.js\" … --out <plan>` claims, a PowerShell redirect does not",
+      onlyLogin(five(() => [toolUse("PowerShell", { command: "& node \"C:\\work\\plugin\\scripts\\plan-skeleton.js\" a.json a.vars.json ds --out design/plan/login.json" })]))
+      && onlyLogin(five(() => [toolUse("PowerShell", { command: "Set-Location design; & node \"C:\\work\\plugin\\scripts\\plan-skeleton.js\" a.json a.vars.json ds --out plan\\login.json" })]))
+      && none(five(() => [toolUse("PowerShell", { command: "'{}' | Out-File design/plan/login.json" })])));
     check("a MultiEdit of the plan, and a NotebookEdit of a file only it lists, claim it",
       onlyLogin(five(() => [toolUse("MultiEdit", { file_path: "design/plan/login.json", edits: [] })])) && onlyLogin(five(() => [toolUse("NotebookEdit", { notebook_path: "src/OnlyX.tsx", new_source: "x" })])));
     check("a relative path resolves against the transcript entry's own cwd", onlyLogin(five((root) => [JSON.stringify({ type: "assistant", cwd: path.join(root, "design"), message: { role: "assistant", content: [{ type: "tool_use", id: "t", name: "Write", input: { file_path: "plan/login.json", content: "{}" } }] } })])));
@@ -1363,13 +1367,49 @@ console.log("field-test fixes:");
     const ra = runHook(root, { cwd: root, hook_event_name: "SubagentStop", agent_id: "a", agent_type: "designtwin:screen-builder", agent_transcript_path: a, transcript_path: path.join(root, "main.jsonl") });
     return rb.status === 0 && bOnly && ra.status === 0 && planAt(root, "login").verification?.hook?.result === "blocked" && /"decision":"block"/.test(ra.stdout);
   })());
+  {
+    // A screen-builder that claims no plan: the user is told (systemMessage on stdout), the stop is not blocked, no plan is touched.
+    const noClaim = (payload: object) => {
+      const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
+      addPlan(root, "settings", { ...BLOCKING, files: ["b.tsx"] });
+      const t = path.join(root, "agent.jsonl");
+      fs.writeFileSync(t, toolUse("Bash", { command: "sed -i '' 's/a/b/' design/plan/login.json" }));
+      const r = runHook(root, { cwd: root, agent_id: "b1", agent_transcript_path: t, ...payload });
+      const out: unknown = JSON.parse(r.stdout.trim() || "null");
+      return { r, out, untouched: !planOf(root).verification?.hook && !planAt(root, "settings").verification?.hook };
+    };
+    check("a screen-builder SubagentStop that claims no plan: a systemMessage naming the unchecked open plans and how to get them checked — exit 0, no decision, nothing written", ["designtwin:screen-builder", "screen-builder"].every((agent_type) => {
+      const { r, out, untouched } = noClaim({ hook_event_name: "SubagentStop", agent_type });
+      return r.status === 0 && untouched && isJsonObject(out) && Object.keys(out).join() === "systemMessage" && typeof out.systemMessage === "string"
+        && /NOT checked/.test(out.systemMessage) && /design\/plan\/login\.json, design\/plan\/settings\.json/.test(out.systemMessage)
+        && /Write\/Edit/.test(out.systemMessage) && /plan-skeleton --out/.test(out.systemMessage) && /verify-build/.test(out.systemMessage);
+    }));
+    check("…no message for another agent, for the skill's Stop in an orchestrator session, or for a hand-piped payload",
+      [{ hook_event_name: "SubagentStop", agent_type: "Explore" }, { hook_event_name: "Stop" }, {}].every((p) => { const { r, untouched } = noClaim(p); return r.status === 0 && untouched && r.stdout.trim() === ""; }));
+  }
   check("planSkeletonOuts: the --out of a plan-skeleton call only, past a followed cd, heredoc bodies dropped", (() => {
     const o = verifyBuild.planSkeletonOuts;
     const eq = (got: string[], want: string[]) => JSON.stringify(got) === JSON.stringify(want);
     return eq(o("node plan-skeleton.js s.json v.json ds --out design/plan/a.json --seed-from design/plan/b.json"), ["design/plan/a.json"])
       && eq(o("node \"C:\\p\\scripts\\plan-skeleton.js\" s v ds --out=\"design\\plan\\a.json\""), ["design\\plan\\a.json"])
       && eq(o("cd app/ && cd design; node plan-skeleton.mjs s v ds --out plan/a.json"), ["app/design/plan/a.json"])
-      && eq(o("cd /x && node plan-skeleton.js s v ds --out plan/a.json && cd && node plan-skeleton.js s v ds --out b.json"), ["/x/plan/a.json"])
+      && eq(o("cd /x && node plan-skeleton.js s v ds --out plan/a.json && cd && node plan-skeleton.js s v ds --out b.json"), ["/x/plan/a.json", "b.json"])
+      // a cd inside a subshell or a substitution does not move the commands after it: on such a line a cd only makes the dir unknown
+      && eq(o("(cd sub && make); node plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
+      && eq(o("x=$(cd sub && pwd); node plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
+      && eq(o("x=`cd sub; pwd`; node plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
+      // pushd, chdir, `builtin cd` and PowerShell's Set-Location move like cd; popd leaves the dir unknown
+      && eq(o("pushd design && node plan-skeleton.js s v ds --out plan/a.json"), ["design/plan/a.json"])
+      && eq(o("builtin cd design && node plan-skeleton.js s v ds --out plan/a.json"), ["design/plan/a.json"])
+      && eq(o("Set-Location -Path design; node plan-skeleton.js s v ds --out plan/a.json"), ["design/plan/a.json"])
+      && eq(o("pushd sub && popd && node plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
+      && eq(o("pushd sub && popd +1 && node plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
+      // PowerShell quoting: unquoted backslash paths stay whole, a backtick escapes (here a space in a path)
+      && eq(o("Set-Location design\\sub; & node C:\\My` Plugin\\plan-skeleton.js s v ds --out plan\\a.json", true), ["design\\sub/plan\\a.json"])
+      && eq(o("& node C:\\p\\plan-skeleton.js s v ds --out plan\\my` a.json", true), ["plan\\my a.json"])
+      && eq(o("node C:\\p\\plan-skeleton.js s v ds --out plan\\a.json"), [])
+      // a `<<<word` here-string is not a heredoc: the next line is a command
+      && eq(o("grep x <<<bar\nnode plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
       && eq(o("node plan-skeleton.js s v ds > design/plan/a.json"), [])
       && eq(o("node other.js --out design/plan/a.json"), [])
       && eq(o("cat > run.sh <<'EOF'\nnode plan-skeleton.js s v ds --out design/plan/a.json\nEOF\nnode plan-skeleton.js s v ds --out design/plan/c.json"), ["design/plan/c.json"]);

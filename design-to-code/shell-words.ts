@@ -8,7 +8,11 @@ export type Words = string[];
 // `$( … )` / backtick substitution out as commands of its own (inside double quotes too) while its raw text
 // stays in the word it sits in — `kill $(pgrep x)` is the command `kill $(pgrep x)` plus the command `pgrep x`.
 // Not a full shell grammar: what it gets wrong errs towards reading text as a command, never towards hiding one.
-export function simpleCommands(src: string): Words[] {
+// `powershell` reads PowerShell's quoting instead of bash's: a backslash is an ordinary character (Windows paths
+// go unquoted) and a backtick escapes the next character rather than opening a substitution; `$( … )` is a
+// subexpression either way.
+export function simpleCommands(src: string, opts: { powershell?: boolean } = {}): Words[] {
+  const ps = opts.powershell === true;
   const cmds: Words[] = [];
   interface Frame { words: Words; word: string; inWord: boolean; quote: string | null; closer: string; start: number }
   const stack: Frame[] = [];
@@ -30,18 +34,19 @@ export function simpleCommands(src: string): Words[] {
     const c = src.charAt(i);
     if (quote === "'") { if (c === "'") quote = null; else word += c; continue; }
     const top = stack[stack.length - 1];
+    if (c === "`" && ps) { if (i + 1 < src.length) { word += src.charAt(++i); inWord = true; } continue; }
     if (c === "`") { if (top?.closer === "`") close(i); else open("`", i); continue; }
     if (c === "$" && src.charAt(i + 1) === "(") { open(")", i); i++; continue; }
     if (quote === "\"") {
       if (c === "\"") quote = null;
       // inside double quotes a backslash escapes only $ ` " \ and a newline (bash); before any other character it stays, as in a quoted Windows path
-      else if (c === "\\" && "$`\"\\\n".includes(src.charAt(i + 1)) && i + 1 < src.length) word += src.charAt(++i);
+      else if (c === "\\" && !ps && "$`\"\\\n".includes(src.charAt(i + 1)) && i + 1 < src.length) word += src.charAt(++i);
       else word += c;
       continue;
     }
     if (c === ")" && top?.closer === ")") { close(i); continue; }
     if (c === "'" || c === "\"") { quote = c; inWord = true; continue; }
-    if (c === "\\") { if (i + 1 < src.length && src.charAt(i + 1) !== "\n") { word += src.charAt(i + 1); inWord = true; } i++; continue; }
+    if (c === "\\" && !ps) { if (i + 1 < src.length && src.charAt(i + 1) !== "\n") { word += src.charAt(i + 1); inWord = true; } i++; continue; }
     if (c === "#" && !inWord) { while (i + 1 < src.length && src.charAt(i + 1) !== "\n") i++; continue; }
     if (";&|\n()".includes(c)) { endCmd(); continue; }
     if (/\s/.test(c)) { endWord(); continue; }
@@ -53,14 +58,15 @@ export function simpleCommands(src: string): Words[] {
 }
 
 // The command line without its heredoc bodies: a body is data fed to a command — most often the text of a file
-// being written — so it is not read as commands (a script fed to `sh <<EOF` this way goes unread).
+// being written — so it is not read as commands (a script fed to `sh <<EOF` this way goes unread). A `<<<word`
+// here-string is one word of input on its own line, not a heredoc: the lines after it are commands.
 export function dropHeredocBodies(cmd: string): string {
   const kept: string[] = [];
   let delim: string | null = null;
   for (const line of cmd.split("\n")) {
     if (delim !== null) { if (line.trim() === delim) delim = null; continue; }
     kept.push(line);
-    const h = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
+    const h = /(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
     if (h && h[2]) delim = h[2];
   }
   return kept.join("\n");

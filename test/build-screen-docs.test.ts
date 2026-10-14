@@ -104,6 +104,8 @@ console.log("verify docs (pass-with-deviations and waivers):");
     return [builder, hook].every((t) => /\(Write\/Edit, (or )?plan-skeleton's `--out`\)/.test(t) && /not `sed`\/`cp`\/a redirect/.test(t))
       && !/Write\/Edit, a redirect/.test(builder + hook);
   })());
+  check("sync-design: its patch is made with Write/Edit, not sed/cp/a redirect, which the Stop hook does not read",
+    /Write\/Edit, not `sed`\/`cp`\/a redirect, which it does not read/.test(flat(read("claude-plugin/skills/sync-design/SKILL.md"))));
   check("build-screen names verified-with-deviations; sync-design says a re-export reopens waivers",
     /`verified-with-deviations`/.test(skill) && /reopens every waiver/.test(flat(read("claude-plugin/skills/sync-design/SKILL.md"))));
 }

@@ -1069,7 +1069,8 @@ function readHookInput(opts) {
 }
 
 // design-to-code/shell-words.ts
-function simpleCommands(src) {
+function simpleCommands(src, opts = {}) {
+  const ps = opts.powershell === true;
   const cmds = [];
   const stack = [];
   let words = [], word = "", inWord = false, quote = null;
@@ -1106,6 +1107,13 @@ function simpleCommands(src) {
       continue;
     }
     const top = stack[stack.length - 1];
+    if (c === "`" && ps) {
+      if (i + 1 < src.length) {
+        word += src.charAt(++i);
+        inWord = true;
+      }
+      continue;
+    }
     if (c === "`") {
       if (top?.closer === "`") close(i);
       else open("`", i);
@@ -1118,7 +1126,7 @@ function simpleCommands(src) {
     }
     if (quote === '"') {
       if (c === '"') quote = null;
-      else if (c === "\\" && '$`"\\\n'.includes(src.charAt(i + 1)) && i + 1 < src.length) word += src.charAt(++i);
+      else if (c === "\\" && !ps && '$`"\\\n'.includes(src.charAt(i + 1)) && i + 1 < src.length) word += src.charAt(++i);
       else word += c;
       continue;
     }
@@ -1131,7 +1139,7 @@ function simpleCommands(src) {
       inWord = true;
       continue;
     }
-    if (c === "\\") {
+    if (c === "\\" && !ps) {
       if (i + 1 < src.length && src.charAt(i + 1) !== "\n") {
         word += src.charAt(i + 1);
         inWord = true;
@@ -1167,7 +1175,7 @@ function dropHeredocBodies(cmd) {
       continue;
     }
     kept.push(line);
-    const h = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
+    const h = /(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
     if (h && h[2]) delim = h[2];
   }
   return kept.join("\n");
@@ -2311,6 +2319,7 @@ function computeStatus(plan, opts) {
   return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons, unhashedWhy), reports };
 }
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+var BUILDER_AGENT = /^(designtwin:)?screen-builder$/;
 function lineActions(line, ownOnly, out) {
   if (!line.trim()) return;
   let v = null;
@@ -2330,7 +2339,7 @@ function lineActions(line, ownOnly, out) {
         const f = inp[k];
         if (typeof f === "string") out.push({ path: f, base });
       }
-    } else if (item.name === "Bash" && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command)) out.push({ path: f, base });
+    } else if (SHELL_TOOLS.has(item.name) && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command, item.name === "PowerShell")) out.push({ path: f, base });
   }
 }
 var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:_|\\u005f)(?:u|\\u0075)(?:s|\\u0073)(?:e|\\u0065)"/i;
@@ -2366,25 +2375,29 @@ function transcriptActions(file, ownOnly) {
   });
   return out;
 }
+var SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var PLAN_SKELETON = /^plan-skeleton(\.[cm]?[jt]s)?$/i;
+var CHANGE_DIR = /^(cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)$/i;
 var isAbsPath = (p) => /^(?:[A-Za-z]:)?[\\/]/.test(p);
-function planSkeletonOuts(cmd) {
+function planSkeletonOuts(cmd, powershell = false) {
   const out = [];
+  const text = powershell ? cmd : dropHeredocBodies(cmd);
+  const nested = (powershell ? /\(/ : /[(`]/).test(text);
   let dir = "";
   const under = (d, p) => d && !isAbsPath(p) ? `${d.replace(/[\\/]+$/, "")}/${p}` : p;
-  for (const words of simpleCommands(dropHeredocBodies(cmd))) {
-    if (words[0] === "cd") {
-      const to = words.slice(1).find((w) => w === "-" || !w.startsWith("-"));
-      dir = to === void 0 || to === "-" || /^~|\$|`/.test(to) ? null : isAbsPath(to) ? to : dir === null ? null : under(dir, to);
+  for (const all of simpleCommands(text, { powershell })) {
+    const words = all[0] === "builtin" || all[0] === "command" ? all.slice(1) : all;
+    const head = words[0] ?? "";
+    if (CHANGE_DIR.test(head)) {
+      const to = /^pop/i.test(head) ? void 0 : words.slice(1).find((w) => w === "-" || !w.startsWith("-"));
+      dir = nested || to === void 0 || to === "-" || /^~|\$|`/.test(to) ? null : isAbsPath(to) ? to : dir === null ? null : under(dir, to);
       continue;
     }
     if (!words.some((w) => PLAN_SKELETON.test(w.split(/[\\/]/).pop() ?? ""))) continue;
     words.forEach((w, k) => {
       const eq = /^--out=(.+)$/.exec(w);
       const target = w === "--out" ? words[k + 1] : eq?.[1];
-      if (!target) return;
-      if (isAbsPath(target)) out.push(target);
-      else if (dir !== null) out.push(under(dir, target));
+      if (target) out.push(dir === null ? target : under(dir, target));
     });
   }
   return out;
@@ -2430,7 +2443,8 @@ var USAGE2 = [
   'A Claude Code hook payload (it has hook_event_name) gets a block as {"decision":"block","reason":\u2026} on stdout',
   "and exit 0 instead \u2014 a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
   "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",
-  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing.",
+  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing (a screen-builder's",
+  'SubagentStop then prints {"systemMessage":\u2026} naming the open plans left unchecked \u2014 a notice, not a block).',
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<\u2026>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
@@ -2563,6 +2577,10 @@ async function main(argv) {
     const own = ownPlans(open, input, plans, cwd);
     if (own.scope === "none-named") {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
+      if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type)) {
+        const names = open.map((p) => path6.relative(cwd, p.file).replace(/\\/g, "/"));
+        console.log(JSON.stringify({ systemMessage: `verify-build: the ${input.agent_type} agent stopped without claiming a plan, so its build was NOT checked. Open plan(s) left unchecked: ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); shell edits (sed, cp, a redirect) are not read. Check one now: ${scriptCmd("verify-build")} <plan.json>` }));
+      }
       return 0;
     }
     for (const p of own.plans) all.push({ p, cwd });

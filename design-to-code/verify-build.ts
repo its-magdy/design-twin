@@ -1381,7 +1381,7 @@ export type PlanScope = "unscoped" | "none-named" | "named";
 //   (a) WRITE the plan; or
 //   (b) WRITE a file that exactly ONE open plan lists in files[] — a builder or fixer editing that
 //       screen's code. A file several plans list (a shared component) claims none of them.
-// "Write" = a structured write only: a Write/Edit/MultiEdit/NotebookEdit of the path, or a Bash call that runs
+// "Write" = a structured write only: a Write/Edit/MultiEdit/NotebookEdit of the path, or a Bash/PowerShell call that runs
 // the plan-skeleton script with `--out <path>` (build-screen's step 2, the call that creates the plan — see
 // planSkeletonOuts). Any other shell command (a redirect, `sed -i`, `cp`/`mv`, a script writing through fs) is
 // not read: a command's targets can only be guessed, and a guess misses as much as it finds. The builder's own
@@ -1394,6 +1394,8 @@ export type PlanScope = "unscoped" | "none-named" | "named";
 // Nothing claimed → nothing checked, by design: the screen-builder's SubagentStop still gates delegated builds,
 // and every builder's transcript holds its plan-skeleton call and the Write/Edit calls of its own code.
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+/** The builder agent hooks.json gates: the plugin-scoped name, or the bare one (the agent copied into a project's .claude/agents/). */
+const BUILDER_AGENT = /^(designtwin:)?screen-builder$/;
 /** A path the session wrote, and the directory it was relative to (the entry's `cwd`, when recorded). */
 export interface WrittenPath { path: string; base: string | null }
 // The paths one transcript line's tool_use items write, appended to `out`.
@@ -1407,7 +1409,7 @@ function lineActions(line: string, ownOnly: boolean, out: WrittenPath[]): void {
     const inp = item.input;
     const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
     if (WRITE_TOOLS.has(item.name)) { for (const k of ["file_path", "notebook_path"]) { const f = inp[k]; if (typeof f === "string") out.push({ path: f, base }); } }
-    else if (item.name === "Bash" && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command)) out.push({ path: f, base });
+    else if (SHELL_TOOLS.has(item.name) && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command, item.name === "PowerShell")) out.push({ path: f, base });
   }
 }
 
@@ -1447,31 +1449,40 @@ function transcriptActions(file: string, ownOnly: boolean): WrittenPath[] {
   return out;
 }
 
-// The plan files a Bash command creates through plan-skeleton (see OWNERSHIP): the `--out <path>` / `--out=<path>`
-// of each simple command with a word naming the plan-skeleton script (`plan-skeleton.js`, `.ts`, …) — run directly
-// or through node/npx/tsx, or merely named (`echo plan-skeleton.js --out x` counts too: a miss would leave a plan
-// unchecked, a false claim only checks one). A `cd <dir>` earlier in the same command line is followed, so a relative `--out` after it
-// resolves under that dir; after a `cd` whose target it cannot read (none, `-`, `~…`, a `$` expansion) only an
-// absolute `--out` counts. Heredoc bodies are data, not commands.
+// The plan files a shell command (the Bash tool's, or the PowerShell tool's — on by default on Windows without Git
+// Bash, same `command` input) creates through plan-skeleton (see OWNERSHIP): the `--out <path>` / `--out=<path>`
+// of each simple command with a word naming the plan-skeleton script (`plan-skeleton.js`, `.ts`, …) — run directly,
+// through node/npx/tsx or PowerShell's `&`, or merely named (`echo plan-skeleton.js --out x` counts too: a miss would
+// leave a plan unchecked, a false claim only checks one). A directory change earlier in the same command line (cd,
+// pushd, chdir, `builtin cd`, PowerShell's Set-Location/sl/Push-Location) is followed, so a relative `--out` after it
+// resolves under that dir. After one it cannot follow — no target, `-`, `~…`, a `$` expansion, popd, or any cd on a
+// line with a `( … )` subshell or a `$( … )`/backtick substitution (simpleCommands flattens those, so a cd inside one
+// cannot be told from one outside it) — a relative `--out` is tried against the entry's cwd, the likeliest root:
+// a false claim needs that exact plan to exist. Heredoc bodies are data, not commands. A PowerShell command is split
+// with PowerShell's quoting (a backslash is a plain character, a backtick an escape).
+const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
 const PLAN_SKELETON = /^plan-skeleton(\.[cm]?[jt]s)?$/i;
+const CHANGE_DIR = /^(cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)$/i;
 const isAbsPath = (p: string): boolean => /^(?:[A-Za-z]:)?[\\/]/.test(p);
-function planSkeletonOuts(cmd: string): string[] {
+function planSkeletonOuts(cmd: string, powershell = false): string[] {
   const out: string[] = [];
-  let dir: string | null = ""; // "" = the transcript entry's cwd; null = a cd this cannot follow
+  const text = powershell ? cmd : dropHeredocBodies(cmd);
+  const nested = (powershell ? /\(/ : /[(`]/).test(text);
+  let dir: string | null = ""; // "" = the transcript entry's cwd; null = a directory this cannot follow
   const under = (d: string, p: string): string => (d && !isAbsPath(p) ? `${d.replace(/[\\/]+$/, "")}/${p}` : p);
-  for (const words of simpleCommands(dropHeredocBodies(cmd))) {
-    if (words[0] === "cd") {
-      const to = words.slice(1).find((w) => w === "-" || !w.startsWith("-"));
-      dir = to === undefined || to === "-" || /^~|\$|`/.test(to) ? null : isAbsPath(to) ? to : dir === null ? null : under(dir, to);
+  for (const all of simpleCommands(text, { powershell })) {
+    const words = all[0] === "builtin" || all[0] === "command" ? all.slice(1) : all;
+    const head = words[0] ?? "";
+    if (CHANGE_DIR.test(head)) {
+      const to = /^pop/i.test(head) ? undefined : words.slice(1).find((w) => w === "-" || !w.startsWith("-"));
+      dir = nested || to === undefined || to === "-" || /^~|\$|`/.test(to) ? null : isAbsPath(to) ? to : dir === null ? null : under(dir, to);
       continue;
     }
     if (!words.some((w) => PLAN_SKELETON.test(w.split(/[\\/]/).pop() ?? ""))) continue;
     words.forEach((w, k) => {
       const eq = /^--out=(.+)$/.exec(w);
       const target = w === "--out" ? words[k + 1] : eq?.[1];
-      if (!target) return;
-      if (isAbsPath(target)) out.push(target);
-      else if (dir !== null) out.push(under(dir, target));
+      if (target) out.push(dir === null ? target : under(dir, target));
     });
   }
   return out;
@@ -1522,7 +1533,8 @@ const USAGE = [
   "A Claude Code hook payload (it has hook_event_name) gets a block as {\"decision\":\"block\",\"reason\":…} on stdout",
   "and exit 0 instead — a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
   "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",
-  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing.",
+  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing (a screen-builder's",
+  "SubagentStop then prints {\"systemMessage\":…} naming the open plans left unchecked — a notice, not a block).",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<…>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
@@ -1664,6 +1676,15 @@ async function main(argv: string[]): Promise<number> {
     const own = ownPlans(open, input, plans, cwd);
     if (own.scope === "none-named") {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) — nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
+      // An orchestrator claiming nothing is normal; a screen-builder claiming nothing is a build the gate never saw.
+      // stderr on exit 0 reaches no one, so that case says it to the user as a systemMessage — without blocking.
+      if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type)) {
+        const names = open.map((p) => path.relative(cwd, p.file).replace(/\\/g, "/"));
+        console.log(JSON.stringify({ systemMessage: `verify-build: the ${input.agent_type} agent stopped without claiming a plan, so its build was NOT checked. `
+          + `Open plan(s) left unchecked: ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. `
+          + "A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); "
+          + `shell edits (sed, cp, a redirect) are not read. Check one now: ${scriptCmd("verify-build")} <plan.json>` }));
+      }
       return 0;
     }
     for (const p of own.plans) all.push({ p, cwd });
