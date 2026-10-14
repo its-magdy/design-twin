@@ -1343,17 +1343,25 @@ function main(argv) {
       }
       const replacing = fs6.existsSync(dest) && !identical;
       const rel = path3.relative(process.cwd(), dest), prevOf = (p) => p + ".prev";
-      let spent = false;
+      let spent = false, demoted = false;
       if (identical && follows === void 0) {
-        if (diffedHash(dest) !== null) for (const p of [prevOf(dest), prevOf(dest + ".assets.json"), prevOf(dest) + DIFFED]) fs6.rmSync(p, { force: true });
+        const mark = diffedHash(dest);
+        if (mark !== null && fs6.existsSync(prevOf(dest)) && !fs6.existsSync(prevOf(dest) + DIFFED)) {
+          try {
+            fs6.writeFileSync(prevOf(dest) + DIFFED, mark + "\n");
+            demoted = true;
+          } catch {
+          }
+        }
         fs6.rmSync(dest + DIFFED, { force: true });
       }
       if (replacing) {
         spent = follows === void 0 && isSpent(f, dest);
         if (follows !== void 0 ? refusedKeys.has(follows) : !force && !spent) {
           if (follows === void 0) {
+            const unreadable = readJson(dest, anyJson);
             const shared = path3.basename(f) === MERGED_VARIABLES_FILE ? ` (every screen and design-system pull merges into ${MERGED_VARIABLES_FILE}, so a pull for another screen changes it too)` : "";
-            console.error(diffedSince(f, dest) ? `design-diff: ${rel} was already diffed against an earlier export, and ${f} was re-pulled since${shared} \u2014 refusing to overwrite it. Run the diff now (its report lists the earlier sync's changes again), then snapshot again.` : `design-diff: ${rel} already exists, would change, and no diff has used it yet${shared} \u2014 refusing to overwrite it. Run the diff now, then snapshot again (--force replaces it without a diff, the old one is kept as .prev).`);
+            console.error(!("doc" in unreadable) ? `design-diff: ${rel} ${unreadable.error} \u2014 there is nothing in it to protect, and no diff can use it: re-take it with --snapshot --force.` : diffedSince(f, dest) ? `design-diff: ${rel} was already diffed against an earlier export, and ${f} was re-pulled since${shared} \u2014 refusing to overwrite it. Run the diff now (its report lists the earlier sync's changes again), then snapshot again.` : `design-diff: ${rel} already exists, would change, and no diff has used it yet${shared} \u2014 refusing to overwrite it. Run the diff now, then snapshot again (--force replaces it without a diff, the old one is kept as .prev).`);
             refused++;
             refusedKeys.add(key);
           }
@@ -1388,7 +1396,7 @@ function main(argv) {
       } catch {
       }
       console.log(`snapshot: ${f} -> ${path3.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : replacing ? " (replaced)" : ""}`);
-      if (spent) console.log(`  the old snapshot (spent by the last diff) is kept as ${rel}.prev, never used as a baseline \u2014 if the last sync was stopped before its report was applied, diff against it: --against ${rel}.prev`);
+      if (spent || demoted) console.log(`  the old snapshot (spent by the last diff) is kept as ${rel}.prev, never used as a baseline \u2014 if the last sync was stopped before its report was applied, diff against it: --against ${rel}.prev`);
     }
     return refused || missing ? 1 : 0;
   }

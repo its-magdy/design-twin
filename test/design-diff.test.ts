@@ -813,7 +813,7 @@ check("an unreadable snapshot: the diff names it (exit 2), step 2 refuses it, an
   const bad = cli(root, LOGIN);
   const refused = cli(root, "--snapshot", LOGIN);
   const forced = cli(root, "--snapshot", "--force", LOGIN);
-  return bad.status === 2 && /after the re-pull the snapshot would be the new export, so the diff then uses git HEAD or --against/.test(bad.stderr) && refused.status === 1 && /refusing to overwrite/.test(refused.stderr)
+  return bad.status === 2 && /after the re-pull the snapshot would be the new export, so the diff then uses git HEAD or --against/.test(bad.stderr) && refused.status === 1 && /not valid JSON.*re-take it with --snapshot --force/.test(refused.stderr)
     && forced.status === 0 && fs.readFileSync(snap, "utf8") === fs.readFileSync(path.join(root, LOGIN), "utf8");
 })());
 check("a project nested under another design/ (…/design/proj), run from proj/src: the snapshot lands in proj/design/.sync/, not the outer one", (() => {
@@ -867,7 +867,7 @@ check("a late snapshot (taken after the re-pull, baseline from git), then the ne
   return first.against === "git HEAD" && s2.status === 0 && /unchanged/.test(s2.stdout) && !marked
     && !d.warnings.some((w) => /already diffed/.test(w)) && d.changed[0]?.fields[0]?.before === "v2" && d.changed[0]?.fields[0]?.after === "v3";
 })());
-check("a --force snapshot (its .prev was the diff's baseline), then the next sync's identical snapshot drops that .prev: no 'older than' note after the next re-pull", (() => {
+check("a --force snapshot (its .prev was the diff's baseline), then the next sync's identical snapshot turns that .prev into a recovery copy: no 'older than' note after the next re-pull, and the copy is still there", (() => {
   const root = project();
   putScreen(root, "v1", "2026-01-01T00:00:00Z");
   cli(root, "--snapshot", LOGIN);
@@ -875,10 +875,45 @@ check("a --force snapshot (its .prev was the diff's baseline), then the next syn
   cli(root, "--snapshot", "--force", LOGIN);
   const first = parseAs(cli(root, LOGIN, "--json").stdout, isScreenResult, "design-diff --json"); // snapshot == export, so .prev (v1) is the baseline
   const s2 = cli(root, "--snapshot", LOGIN);
-  const left = fs.readdirSync(path.join(root, "design", ".sync")).filter((f) => /\.prev$/.test(f));
+  const prev = path.join(root, SNAP_LOGIN + ".prev");
+  const kept = fs.existsSync(prev) && fs.existsSync(prev + ".diffed") && fs.readFileSync(prev, "utf8").includes('"v1"');
   putScreen(root, "v3", "2026-03-01T00:00:00Z");
   const d = parseAs(cli(root, LOGIN, "--json").stdout, isScreenResult, "design-diff --json");
-  return first.against.endsWith(".prev") && first.changed[0]?.fields[0]?.before === "v1" && s2.status === 0 && left.length === 0 && !d.warned && d.changed[0]?.fields[0]?.before === "v2";
+  return first.against.endsWith(".prev") && first.changed[0]?.fields[0]?.before === "v1" && s2.status === 0 && kept && s2.stdout.includes(`--against ${SNAP_LOGIN}.prev`)
+    && !d.warned && d.changed[0]?.fields[0]?.before === "v2";
+})());
+check("a no-change sync does not delete a spent .prev: sync 1 diffed and stopped, sync 2 re-pulled nothing, sync 3's step 2 leaves the recovery copy", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  cli(root, "--snapshot", LOGIN);
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  cli(root, LOGIN);
+  cli(root, "--snapshot", LOGIN); // sync 2's step 2: the v1 copy becomes .prev
+  cli(root, LOGIN); // sync 2's diff: nothing re-pulled, the snapshot is the export
+  const s3 = cli(root, "--snapshot", LOGIN);
+  const prev = path.join(root, SNAP_LOGIN + ".prev");
+  const against = parseAs(cli(root, LOGIN, "--against", SNAP_LOGIN + ".prev", "--json").stdout, isScreenResult, "design-diff --json");
+  return s3.status === 0 && fs.existsSync(prev) && fs.existsSync(prev + ".diffed") && !fs.existsSync(path.join(root, SNAP_LOGIN + ".diffed")) && against.changed[0]?.fields[0]?.before === "v1";
+})());
+check("an abandoned --force sync keeps its only baseline: forced snapshot, diffed, stopped; the next step 2 is identical and the pre-force copy is still there to diff against", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  cli(root, "--snapshot", LOGIN);
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  cli(root, "--snapshot", "--force", LOGIN);
+  cli(root, LOGIN); // the report was shown, then the sync stopped
+  const s2 = cli(root, "--snapshot", LOGIN);
+  const against = parseAs(cli(root, LOGIN, "--against", SNAP_LOGIN + ".prev", "--json").stdout, isScreenResult, "design-diff --json");
+  return s2.status === 0 && /\(unchanged\)/.test(s2.stdout) && s2.stdout.includes(`--against ${SNAP_LOGIN}.prev`) && against.changed[0]?.fields[0]?.before === "v1" && against.changed[0]?.fields[0]?.after === "v2";
+})());
+check("--snapshot over an UNREADABLE snapshot says it is unreadable and to re-take it with --force (not 'diff first', which exits 2)", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  cli(root, "--snapshot", LOGIN);
+  fs.writeFileSync(path.join(root, SNAP_LOGIN), "{ not json");
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  const s = cli(root, "--snapshot", LOGIN);
+  return s.status === 1 && /export__pages__home__Login__1_1\.json is not valid JSON/.test(s.stderr) && /--snapshot --force/.test(s.stderr) && !/Run the diff now|no diff has used/.test(s.stderr);
 })());
 check("a forced .prev that no diff has used survives an identical re-run of step 2 (it is still the only older copy)", (() => {
   const root = project();

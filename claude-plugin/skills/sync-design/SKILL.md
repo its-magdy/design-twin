@@ -94,7 +94,7 @@ writes the real path here, not there).
    compared. The old copy stays beside it as `<name>.prev` (the command prints where) — a recovery
    copy the diff never uses on its own. If you stopped after step 4 without applying the report, diff
    against the `.prev` copy (`--against design/.sync/<name>.prev`) or skip step 2 next time.
-   Snapshotting a file that has not changed prints `(unchanged)` and leaves the snapshot as it is.
+   Snapshotting a file that has not changed prints `(unchanged)` and leaves the snapshot as it is (a `.prev` is never deleted there; one a `--force` snapshot left becomes a recovery copy too, with the same `--against` line).
    A snapshot no diff has used yet is refused with exit 1 rather than replaced: it is the
    only copy older than the export on disk. Do not reach for `--force` then. The refusal that says
    "already diffed against an earlier export" means the export was re-pulled outside a sync — most

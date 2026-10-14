@@ -849,20 +849,26 @@ function main(argv: string[]): number {
       if (fs.existsSync(dest)) { try { identical = Buffer.compare(fs.readFileSync(dest), fs.readFileSync(f)) === 0; } catch { /* treat as different */ } }
       const replacing = fs.existsSync(dest) && !identical;
       const rel = path.relative(process.cwd(), dest), prevOf = (p: string): string => p + ".prev";
-      let spent = false;
+      let spent = false, demoted = false;
       if (identical && follows === undefined) {
-        // The export IS the snapshot: whatever diff marked it is over. A `.prev` left by a forced snapshot was
-        // that diff's baseline (the sync is done with it), and a mark that outlived the sync would
-        // make the next re-pull look like one outside a sync.
-        if (diffedHash(dest) !== null) for (const p of [prevOf(dest), prevOf(dest + ".assets.json"), prevOf(dest) + DIFFED]) fs.rmSync(p, { force: true });
+        // The export IS the snapshot, so a mark left by the diff that used it is over and goes. History stays: a
+        // `.prev` that diff compared against (a forced snapshot's) becomes a recovery copy like a spent one —
+        // the sync may have been stopped before its report was applied — and one already marked is left alone.
+        const mark = diffedHash(dest);
+        if (mark !== null && fs.existsSync(prevOf(dest)) && !fs.existsSync(prevOf(dest) + DIFFED)) {
+          try { fs.writeFileSync(prevOf(dest) + DIFFED, mark + "\n"); demoted = true; } catch { /* best effort: it stays a baseline */ }
+        }
         fs.rmSync(dest + DIFFED, { force: true });
       }
       if (replacing) {
         spent = follows === undefined && isSpent(f, dest);
         if (follows !== undefined ? refusedKeys.has(follows) : !force && !spent) {
           if (follows === undefined) {
+            const unreadable = readJson(dest, anyJson);
             const shared = path.basename(f) === MERGED_VARIABLES_FILE ? ` (every screen and design-system pull merges into ${MERGED_VARIABLES_FILE}, so a pull for another screen changes it too)` : "";
-            console.error(diffedSince(f, dest)
+            console.error(!("doc" in unreadable)
+              ? `design-diff: ${rel} ${unreadable.error} — there is nothing in it to protect, and no diff can use it: re-take it with --snapshot --force.`
+              : diffedSince(f, dest)
               ? `design-diff: ${rel} was already diffed against an earlier export, and ${f} was re-pulled since${shared} — refusing to overwrite it. Run the diff now (its report lists the earlier sync's changes again), then snapshot again.`
               : `design-diff: ${rel} already exists, would change, and no diff has used it yet${shared} — refusing to overwrite it. Run the diff now, then snapshot again (--force replaces it without a diff, the old one is kept as .prev).`);
             refused++;
@@ -896,7 +902,7 @@ function main(argv: string[]): number {
         }
       } catch { /* the sidecar could not be written — the copy is still the snapshot */ }
       console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : replacing ? " (replaced)" : ""}`);
-      if (spent) console.log(`  the old snapshot (spent by the last diff) is kept as ${rel}.prev, never used as a baseline — if the last sync was stopped before its report was applied, diff against it: --against ${rel}.prev`);
+      if (spent || demoted) console.log(`  the old snapshot (spent by the last diff) is kept as ${rel}.prev, never used as a baseline — if the last sync was stopped before its report was applied, diff against it: --against ${rel}.prev`);
     }
     return refused || missing ? 1 : 0; // a returned code, not exit(): main's caller sets process.exitCode so every already-printed line flushes first
   }
