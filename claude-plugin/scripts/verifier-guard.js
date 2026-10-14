@@ -69,6 +69,105 @@ function readHookInput(opts) {
   });
 }
 
+// design-to-code/shell-words.ts
+function simpleCommands(src, opts = {}) {
+  const ps = opts.powershell === true;
+  const cmds = [];
+  const stack = [];
+  let words = [], word = "", inWord = false, quote = null;
+  const endWord = () => {
+    if (inWord) words.push(word);
+    word = "";
+    inWord = false;
+  };
+  const endCmd = () => {
+    endWord();
+    if (words.length) cmds.push(words);
+    words = [];
+  };
+  const open = (closer, start) => {
+    stack.push({ words, word, inWord, quote, closer, start });
+    words = [];
+    word = "";
+    inWord = false;
+    quote = null;
+  };
+  const close = (end) => {
+    endCmd();
+    const f = stack.pop();
+    if (!f) return;
+    ({ words, word, quote } = f);
+    word += src.slice(f.start, end + 1);
+    inWord = true;
+  };
+  for (let i = 0; i < src.length; i++) {
+    const c = src.charAt(i);
+    if (quote === "'") {
+      if (c === "'") quote = null;
+      else word += c;
+      continue;
+    }
+    const top = stack[stack.length - 1];
+    if (c === "`" && ps) {
+      if (i + 1 < src.length) {
+        word += src.charAt(++i);
+        inWord = true;
+      }
+      continue;
+    }
+    if (c === "`") {
+      if (top?.closer === "`") close(i);
+      else open("`", i);
+      continue;
+    }
+    if (c === "$" && src.charAt(i + 1) === "(") {
+      open(")", i);
+      i++;
+      continue;
+    }
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === "\\" && !ps && '$`"\\\n'.includes(src.charAt(i + 1)) && i + 1 < src.length) word += src.charAt(++i);
+      else word += c;
+      continue;
+    }
+    if (c === ")" && top?.closer === ")") {
+      close(i);
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      inWord = true;
+      continue;
+    }
+    if (c === "\\" && !ps) {
+      if (i + 1 < src.length && src.charAt(i + 1) !== "\n") {
+        word += src.charAt(i + 1);
+        inWord = true;
+      }
+      i++;
+      continue;
+    }
+    if (c === "#" && !inWord) {
+      while (i + 1 < src.length && src.charAt(i + 1) !== "\n") i++;
+      continue;
+    }
+    if (";&|\n()".includes(c)) {
+      endCmd();
+      continue;
+    }
+    if (/\s/.test(c)) {
+      endWord();
+      continue;
+    }
+    word += c;
+    inWord = true;
+  }
+  while (stack.length) close(src.length - 1);
+  endCmd();
+  return cmds;
+}
+
 // design-to-code/cli-args.ts
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -125,95 +224,6 @@ function writeVerdict(file, ctx) {
     return `${file} is the verify tools' own (the expectation, report, status and diff), never written by hand. Report progress with \`${scriptCmd("verify-screen")} --status <Screen> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
   }
   return `the visual-verifier measures, it never edits app code: it writes only design/verify/ (its measured file and screenshots) and the run cache node_modules/.cache/designtwin-verify/ (stage/<runId>/ for evidence, scratch/ for throwaway scripts). ${file} is outside both. Put a scratch script in node_modules/.cache/designtwin-verify/scratch/, and report a defect in the build as a measurement or a note \u2014 never fix it.`;
-}
-function simpleCommands(src) {
-  const cmds = [];
-  const stack = [];
-  let words = [], word = "", inWord = false, quote = null;
-  const endWord = () => {
-    if (inWord) words.push(word);
-    word = "";
-    inWord = false;
-  };
-  const endCmd = () => {
-    endWord();
-    if (words.length) cmds.push(words);
-    words = [];
-  };
-  const open = (closer, start) => {
-    stack.push({ words, word, inWord, quote, closer, start });
-    words = [];
-    word = "";
-    inWord = false;
-    quote = null;
-  };
-  const close = (end) => {
-    endCmd();
-    const f = stack.pop();
-    if (!f) return;
-    ({ words, word, quote } = f);
-    word += src.slice(f.start, end + 1);
-    inWord = true;
-  };
-  for (let i = 0; i < src.length; i++) {
-    const c = src.charAt(i);
-    if (quote === "'") {
-      if (c === "'") quote = null;
-      else word += c;
-      continue;
-    }
-    const top = stack[stack.length - 1];
-    if (c === "`") {
-      if (top?.closer === "`") close(i);
-      else open("`", i);
-      continue;
-    }
-    if (c === "$" && src.charAt(i + 1) === "(") {
-      open(")", i);
-      i++;
-      continue;
-    }
-    if (quote === '"') {
-      if (c === '"') quote = null;
-      else if (c === "\\" && '$`"\\\n'.includes(src.charAt(i + 1)) && i + 1 < src.length) word += src.charAt(++i);
-      else word += c;
-      continue;
-    }
-    if (c === ")" && top?.closer === ")") {
-      close(i);
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      quote = c;
-      inWord = true;
-      continue;
-    }
-    if (c === "\\") {
-      if (i + 1 < src.length && src.charAt(i + 1) !== "\n") {
-        word += src.charAt(i + 1);
-        inWord = true;
-      }
-      i++;
-      continue;
-    }
-    if (c === "#" && !inWord) {
-      while (i + 1 < src.length && src.charAt(i + 1) !== "\n") i++;
-      continue;
-    }
-    if (";&|\n()".includes(c)) {
-      endCmd();
-      continue;
-    }
-    if (/\s/.test(c)) {
-      endWord();
-      continue;
-    }
-    word += c;
-    inWord = true;
-  }
-  while (stack.length) close(src.length - 1);
-  endCmd();
-  return cmds;
 }
 var prog = (w) => (w.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, "");
 var isAssign = (w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w);
@@ -534,7 +544,6 @@ export {
   decide,
   denyOutput,
   main,
-  simpleCommands,
   tempRoots,
   writeVerdict
 };
