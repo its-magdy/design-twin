@@ -1,7 +1,9 @@
 // verifier-guard.ts — the visual-verifier subagent's PreToolUse guard. Usage in --help (USAGE below).
 //
-// Registered in claude-plugin/hooks/hooks.json (PreToolUse, matcher `Bash|Write`: the agent's tools are
-// Read, Glob, Grep, Bash and Write, and the matcher sends only the two that change things): Claude Code ignores `hooks` in a plugin-shipped agent's frontmatter, so a rule meant
+// Registered in claude-plugin/hooks/hooks.json (PreToolUse, matcher `Bash|Write|PowerShell`: the agent's tools are
+// Read, Glob, Grep, Bash and Write, and the matcher sends only the ones that change things — PowerShell is matched
+// as defense in depth, should the agent ever be given it, the way Edit/MultiEdit are judged below): Claude Code
+// ignores `hooks` in a plugin-shipped agent's frontmatter, so a rule meant
 // for one plugin agent has to be a plugin-level hook that looks at who is calling. Every PreToolUse
 // payload carries `agent_type` when the call comes from inside a subagent (`designtwin:visual-verifier`
 // for this plugin's agent — the plugin-scoped name); a call from anywhere else is not this hook's
@@ -21,7 +23,12 @@
 //   - a dependency install or reinstall (npm/pnpm/yarn/bun install, ci, add, …) and a Playwright
 //     browser install: the user's call, and `npm ci`/`npm install` clear node_modules/.cache with the
 //     live status and the staged evidence in it.
-//   - a Bash call with `dangerouslyDisableSandbox`: a permission denial is not a sandbox violation.
+//   - a Bash or PowerShell call with `dangerouslyDisableSandbox`: a permission denial is not a sandbox violation.
+// A PowerShell call (tool_name `PowerShell`, the same `command` field) is judged like a Bash one, with PowerShell's
+// quoting: `Stop-Process -Name` / `kill -Name` / `Get-Process … | Stop-Process` are pattern kills (`Stop-Process -Id <pid>`
+// stays allowed), and `pwsh -c` / `cmd /c` / `iex` bodies are read. As for Bash, the files a command writes are not read.
+// Gaps both shells share: .NET calls ((Get-Process node).Kill(), [IO.File]::WriteAllText), `Start-Process npm -ArgumentList
+// install` and Invoke-CimMethod Terminate.
 // A refusal is a PreToolUse decision on stdout (permissionDecision "deny" + the reason, which Claude
 // sees) with exit 0 — not exit 2, which PowerShell turns into 1, a non-blocking error.
 //
@@ -142,6 +149,9 @@ const BUN_VALUED = new Set(["--cwd", "--config", "-c"]);
 const NPX_VALUED = new Set(["-p", "--package", "--call", "-c", "--cache", "--registry", "--userconfig"]);
 const PLAYWRIGHT_PKG = /^(@playwright\/test|playwright|playwright-core|playwright-chromium)(@.*)?$/;
 const PID_LOOKUPS = new Set(["pgrep", "pidof", "lsof", "ps", "fuser"]);
+// PowerShell/Windows lookups of processes by name, command line or port (`ps` is Get-Process's alias, above).
+const PS_LOOKUPS = new Set(["get-process", "gps", "get-nettcpconnection", "get-netudpconnection", "get-ciminstance", "get-wmiobject", "netstat", "tasklist"]);
+const POWERSHELLS = new Set(["pwsh", "powershell"]);
 // A playwright CLI run by path: …/playwright/cli.js, …/playwright-core/cli.js, …/@playwright/test/cli.js.
 const PLAYWRIGHT_CLI = /(^|[\\/])(@playwright[\\/][^\\/]+|playwright[^\\/]*)[\\/]cli\.js$/i;
 
@@ -162,11 +172,28 @@ function parentOnly(args: Words): boolean {
 }
 
 // Does `text` (a command line, or a substitution's raw text) look PIDs up by name, pattern or port? `pgrep -P <pid>` does not.
-function lookupByPattern(text: string): boolean {
-  return simpleCommands(text).some((w) => { // a $( … ) / backtick in `text` is lifted out as a command of its own
+function lookupByPattern(text: string, ps = false): boolean {
+  return simpleCommands(text, { powershell: ps }).some((w) => { // a $( … ) / backtick in `text` is lifted out as a command of its own
     const p = prog(w[0] ?? "");
-    return PID_LOOKUPS.has(p) && !(p === "pgrep" && parentOnly(w.slice(1)));
+    if ((p === "get-process" || p === "gps") && /^-(id|pid)$/i.test(w[1] ?? "") && w.length === 3) return false; // Get-Process -Id <pid>: no pattern
+    return PID_LOOKUPS.has(p) || PS_LOOKUPS.has(p) ? !(p === "pgrep" && parentOnly(w.slice(1))) : false;
   });
+}
+
+// PowerShell's Stop-Process (and its aliases `kill`, `spps`, in a PowerShell call): a pattern kill when it selects by
+// -Name / -ProcessName, or takes no PID of its own and is fed by a lookup (`Get-Process node | Stop-Process`,
+// `Stop-Process -Id (Get-Process node).Id`). `Stop-Process -Id 4242` / `Stop-Process $devPid` stay allowed.
+function psStopIsPatternKill(args: Words, line: string): boolean {
+  if (args.some((a) => /^-(na|nam|name|pr|pro|proc|proce|proces|process|processn|processna|processnam|processname)(:.*)?$/i.test(a))) return true;
+  const ids: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (/^-(id|pid)$/i.test(a)) { if (i + 1 < args.length) ids.push(args[++i] ?? ""); continue; }
+    if (/^-(id|pid):/i.test(a)) { ids.push(a); continue; }
+    if (!a.startsWith("-")) ids.push(a);
+  }
+  const fed = ids.length === 0 || ids.some((w) => (w.includes("$(") || w.includes("`")) && lookupByPattern(w, true));
+  return fed && lookupByPattern(line, true);
 }
 
 // The PIDs a kill names (after its signal option): `kill -1` (every process the user may signal), `kill -9 -1`,
@@ -186,9 +213,9 @@ function killsEverything(args: Words): boolean {
 }
 
 const REASON = {
-  kill: "pattern kills (pkill, killall, fuser -k, taskkill /IM, a kill fed by pgrep/pidof/lsof/ps, kill -1 / kill 0) take down the user's own servers and editors. "
+  kill: "pattern kills (pkill, killall, fuser -k, taskkill /IM, Stop-Process -Name / Get-Process … | Stop-Process, a kill fed by pgrep/pidof/lsof/ps, kill -1 / kill 0) take down the user's own servers and editors. "
     + "Close only what you opened: stop only a PID you started and recorded (`kill <pid>`) — its whole tree with `kill -- -<pgid>` (the process group you started) "
-    + "or its children with `pkill -P <pid>` — and reuse a dev server the user already runs.",
+    + "or its children with `pkill -P <pid>` — and reuse a dev server the user already runs (PowerShell: `Stop-Process -Id <pid>`).",
   install: "installing or reinstalling dependencies is the user's call, never the verifier's — and `npm ci`/`npm install` clear node_modules/.cache, "
     + "the live status and your staged evidence with it. Write status `blocked` with the command as the detail and hand it back to the caller.",
   playwright: "installing Playwright or its browsers is the user's call (it edits the project's dependencies and downloads ~150 MB). "
@@ -204,8 +231,8 @@ const playwrightInstall = (words: Words, i: number): boolean => {
 };
 
 // The verdict on one simple command; `line` is the whole command line it came from (for a piped kill).
-function commandVerdict(cmd: Words, line: string, depth: number): string | null {
-  let words = cmd;
+function commandVerdict(cmd: Words, line: string, depth: number, ps: boolean): string | null {
+  let words = ps ? unbrace(cmd) : cmd;
   let viaXargs = false;
   for (let guard = 0; guard < 8; guard++) {
     let i = 0;
@@ -220,6 +247,7 @@ function commandVerdict(cmd: Words, line: string, depth: number): string | null 
     if (p === "timeout") j++; // its duration
     words = words.slice(j);
   }
+  if (ps) words = unbrace(words);
   const p = prog(words[0] ?? "");
   const args = words.slice(1);
   if (!p) return null;
@@ -230,12 +258,23 @@ function commandVerdict(cmd: Words, line: string, depth: number): string | null 
     return body !== undefined && depth < 4 ? bashVerdict(body, depth + 1) : null;
   }
   if (p === "eval") return depth < 4 ? bashVerdict(args.join(" "), depth + 1) : null;
+  if (p === "iex" || p === "invoke-expression") return depth < 4 ? bashVerdict(args.join(" "), depth + 1, true) : null;
+  if (POWERSHELLS.has(p)) { // pwsh -c "<script>": the rest of the words are the script (-Command is the default, too)
+    const body = psCommandBody(args);
+    return body && depth < 4 ? bashVerdict(body, depth + 1, true) : null;
+  }
+  if (p === "cmd") {
+    const c = args.findIndex((a) => /^\/[ck]$/i.test(a));
+    return c >= 0 && depth < 4 ? bashVerdict(args.slice(c + 1).join(" "), depth + 1, true) : null; // cmd has no backslash escapes: PowerShell quoting reads its paths
+  }
 
   if (p === "killall" || (p === "pkill" && !parentOnly(args))) return REASON.kill;
   if (p === "fuser" && args.some((a) => /^-[a-z]*k/i.test(a))) return REASON.kill;
   // `/IM` from cmd or PowerShell, `//IM` from Git Bash (which would otherwise rewrite `/IM` as a path), `-IM`
   if (p === "taskkill" && args.some((a) => /^(\/\/?|-)(im|fi)$/i.test(a))) return REASON.kill;
+  if (p === "stop-process" || p === "spps") return psStopIsPatternKill(args, line) ? REASON.kill : null;
   if (p === "kill") {
+    if (ps && psStopIsPatternKill(args, line)) return REASON.kill;
     if (killsEverything(args)) return REASON.kill;
     if (viaXargs && lookupByPattern(line)) return REASON.kill;
     if (args.some((a) => (a.includes("$(") || a.includes("`")) && lookupByPattern(a))) return REASON.kill;
@@ -299,13 +338,26 @@ function npxVerdict(words: Words, from: number): string | null {
   return PLAYWRIGHT_PKG.test(pkg) && playwrightInstall(words, s + 1) ? REASON.playwright : null;
 }
 
-/** Why a shell command line is refused, or null. */
-export function bashVerdict(command: string, depth = 0): string | null {
-  for (const cmd of simpleCommands(command)) {
-    const v = commandVerdict(cmd, command, depth);
+/** Why a shell command line is refused, or null. `ps`: read it as PowerShell (its quoting, its cmdlets). */
+export function bashVerdict(command: string, depth = 0, ps = false): string | null {
+  for (const cmd of simpleCommands(command, { powershell: ps })) {
+    const v = commandVerdict(cmd, command, depth, ps);
     if (v) return v;
   }
   return null;
+}
+
+// The script a `pwsh` / `powershell` invocation runs: the words after -Command (also its default), joined.
+function psCommandBody(args: Words): string {
+  const c = args.findIndex((a) => /^-c(o(m(m(a(nd?)?)?)?)?)?$/i.test(a));
+  return (c >= 0 ? args.slice(c + 1) : args.filter((a, k) => !a.startsWith("-") && !/^-(f|file)$/i.test(args[k - 1] ?? ""))).join(" ");
+}
+
+// A PowerShell script block's braces are not part of the command inside: `{ Set-Content x }` → `Set-Content x`.
+function unbrace(words: Words): Words {
+  const out = words.filter((w) => w !== "{" && w !== "}");
+  if (out.length) { out[0] = (out[0] ?? "").replace(/^\{+/, ""); out[out.length - 1] = (out[out.length - 1] ?? "").replace(/\}+$/, ""); }
+  return out;
 }
 
 // ================================================================ the decision
@@ -326,10 +378,10 @@ export function decide(payload: unknown, ctx: GuardCtx): { deny: string } | { ma
   if (typeof tool !== "string" || !isJsonObject(input)) return { malformed: `a ${agent} call with no tool_name/tool_input` };
   const cwd = typeof payload.cwd === "string" && payload.cwd ? payload.cwd : ctx.cwd;
   const here: GuardCtx = { cwd, tmpRoots: ctx.tmpRoots };
-  if (tool === "Bash") {
+  if (tool === "Bash" || tool === "PowerShell") {
     if (input.dangerouslyDisableSandbox === true) return { deny: REASON.sandbox };
-    if (typeof input.command !== "string") return { malformed: "a Bash call with no command" };
-    const v = bashVerdict(input.command);
+    if (typeof input.command !== "string") return { malformed: `a ${tool} call with no command` };
+    const v = bashVerdict(input.command, 0, tool === "PowerShell");
     return v ? { deny: v } : null;
   }
   const key = FILE_TOOLS[tool];
@@ -360,7 +412,8 @@ const USAGE = [
   "",
   "Refuses, for the designtwin:visual-verifier subagent only: a file write outside design/verify/ and the run cache",
   "(node_modules/.cache/designtwin-verify/), or to a tool-owned file in design/verify/; a pattern kill (pkill, killall, …);",
-  "a dependency install or a Playwright browser install; a Bash call with dangerouslyDisableSandbox.",
+  "a dependency install or a Playwright browser install; a Bash or PowerShell call with dangerouslyDisableSandbox.",
+  "(A PowerShell call is judged like a Bash one; as for Bash, the files a command writes are not read.)",
   "A refusal is {\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",…}} on stdout; every answer exits 0.",
   "A call from any other agent, or a payload it cannot read, is allowed (the latter logged to stderr).",
 ].join("\n");

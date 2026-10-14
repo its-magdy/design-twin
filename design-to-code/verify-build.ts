@@ -1534,7 +1534,9 @@ const USAGE = [
   "and exit 0 instead — a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
   "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",
   "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing (a screen-builder's",
-  "SubagentStop then prints {\"systemMessage\":…} naming the open plans left unchecked — a notice, not a block).",
+  "SubagentStop then prints {\"systemMessage\":…} naming the open plans left unchecked — a notice, not a block; Claude",
+  "Code 2.1.299 was observed not to display a SubagentStop systemMessage, so it shows only in the hook output / transcript:",
+  "the plans stay open, and --status or a hand run, verify-build <plan.json>, checks them).",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<…>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
@@ -1677,7 +1679,9 @@ async function main(argv: string[]): Promise<number> {
     if (own.scope === "none-named") {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) — nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
       // An orchestrator claiming nothing is normal; a screen-builder claiming nothing is a build the gate never saw.
-      // stderr on exit 0 reaches no one, so that case says it to the user as a systemMessage — without blocking.
+      // stderr on exit 0 reaches no one, so that case emits a systemMessage naming the unchecked plans — without blocking.
+      // Claude Code 2.1.299 was observed not to display a SubagentStop systemMessage: it shows in the hook output / transcript only.
+      // The plans stay open; --status or a hand run (verify-build <plan.json>) checks them.
       if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type)) {
         const names = open.map((p) => path.relative(cwd, p.file).replace(/\\/g, "/"));
         console.log(JSON.stringify({ systemMessage: `verify-build: the ${input.agent_type} agent stopped without claiming a plan, so its build was NOT checked. `

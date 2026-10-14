@@ -21,6 +21,7 @@ const bash = (command: string, extra: Record<string, unknown> = {}, agent: strin
   ({ hook_event_name: "PreToolUse", cwd: "/proj", ...(agent === null ? {} : { agent_type: agent, agent_id: "a1" }), tool_name: "Bash", tool_input: { command, ...extra } });
 const write = (file: string, tool = "Write", key = "file_path"): unknown =>
   ({ hook_event_name: "PreToolUse", cwd: "/proj", agent_type: AGENT, agent_id: "a1", tool_name: tool, tool_input: { [key]: file, content: "x" } });
+const mal = (x: unknown): boolean => { const d = decide(x, CTX); return d !== null && "malformed" in d; };
 const denied = (payload: unknown): boolean => { const d = decide(payload, CTX); return d !== null && "deny" in d; };
 const allowed = (payload: unknown): boolean => decide(payload, CTX) === null;
 
@@ -168,6 +169,58 @@ check("refused, whatever the command", denied(bash("node x.js", { dangerouslyDis
 check("false, or absent, is a normal call", allowed(bash("node x.js", { dangerouslyDisableSandbox: false })) && allowed(bash("node x.js")));
 check("not refused for another agent", allowed(bash("node x.js", { dangerouslyDisableSandbox: true }, "general-purpose")));
 
+// ---------------------------------------------------------------- PowerShell
+const ps = (command: string, extra: Record<string, unknown> = {}, agent: string | null = AGENT): unknown => {
+  const p = bash(command, extra, agent);
+  return isJsonObject(p) ? { ...p, tool_name: "PowerShell" } : p;
+};
+console.log("\nPowerShell — allowed:");
+const PS_OK: readonly string[] = [
+  "node \"C:\\plugins\\designtwin\\scripts\\verify-probe.js\" --check",
+  "Get-Content design\\verify\\Home__1_2.expected.json",
+  "Get-Process -Id 4242", "Get-Process node", "Get-NetTCPConnection -LocalPort 5173",
+  "Stop-Process -Id 4242", "Stop-Process -Id 4242 -Force", "Stop-Process $devPid", "kill 4242", "kill $devPid",
+  "Get-Content node_modules\\.cache\\designtwin-verify\\scratch\\dev.pid | ForEach-Object { Stop-Process -Id $_ }",
+  "node x.js 2>&1", "node x.js > $null", "node x.js 2> $null",
+  "Set-Content src/App.tsx x", "Copy-Item a.json design/verify/a.json", "echo 'Stop-Process -Name node'", "npm ls playwright", "npx vite --port 5174",
+  "pwsh -NoProfile -Command \"Get-Process -Id 4242\"", "if ($ok) { Stop-Process -Id 4242 }",
+];
+for (const c of PS_OK) check(c, allowed(ps(c)));
+
+console.log("\nPowerShell — refused (pattern kills):");
+const PS_KILLS: readonly string[] = [
+  "Stop-Process -Name node", "Stop-Process -Name node -Force", "stop-process -processname vite", "Stop-Process -ProcessName:node", "spps -Name node",
+  "kill -Name node", "kill -ProcessName node", "Get-Process node | Stop-Process", "Get-Process -Name vite | Stop-Process -Force", "gps node | kill", "ps node | spps",
+  "Get-Process node | ForEach-Object { Stop-Process -Id $_.Id } ; Get-Process vite | Stop-Process",
+  "Stop-Process -Id (Get-Process node).Id", "Stop-Process -Id $(Get-Process node).Id",
+  "Stop-Process -Id (Get-NetTCPConnection -LocalPort 5173).OwningProcess", "Get-NetTCPConnection -LocalPort 5173 | Select -Expand OwningProcess | Stop-Process",
+  "if ($x) { Stop-Process -Name node }", "{ Stop-Process -Name node }",
+  "taskkill /IM node.exe /F", "taskkill /F /FI \"IMAGENAME eq node.exe\"", "cmd /c taskkill /im node.exe /f", "cmd.exe /c \"taskkill /F /IM node.exe\"",
+  "pwsh -Command \"Stop-Process -Name node\"", "powershell.exe -NoProfile -c 'Get-Process node | Stop-Process'", "pwsh -c Stop-Process -Name node",
+  "iex 'Stop-Process -Name node'", "Invoke-Expression \"Stop-Process -Name node\"", "bash -c 'pkill node'", "pkill node",
+];
+for (const c of PS_KILLS) check(c, denied(ps(c)));
+
+console.log("\nPowerShell — refused (installs, Playwright):");
+const PS_INSTALLS: readonly string[] = [
+  "npm install", "npm.cmd ci", "pnpm add -D playwright", "yarn", "bun add axe-core", "npx playwright install chromium", "npx.cmd playwright install",
+  "npm init playwright@latest", "& npm install", "pwsh -c 'npm ci'", "cd apps/web; npm install",
+];
+for (const c of PS_INSTALLS) check(c, denied(ps(c)));
+
+{
+  const k = decide(ps("Stop-Process -Name node"), CTX);
+  check("a PowerShell kill refusal names Stop-Process -Id", k !== null && "deny" in k && /Stop-Process -Id <pid>/.test(k.deny));
+}
+check("a cmd /c body is read with PowerShell quoting (backslashes kept): a quoted Windows path to npm install is refused",
+  denied(ps("cmd /c \"C:\\tools\\npm.cmd install\"")) && denied(ps("cmd.exe /c \"C:\\tools\\npm.cmd ci\"")));
+check("Bash: a cmd.exe /c taskkill /IM is refused; netstat -ano (a plain listing) is allowed",
+  denied(bash("cmd.exe /c \"taskkill /IM node.exe\"")) && allowed(bash("netstat -ano")));
+check("dangerouslyDisableSandbox is refused on a PowerShell call too, and only for the verifier",
+  denied(ps("Get-Date", { dangerouslyDisableSandbox: true })) && allowed(ps("Get-Date", { dangerouslyDisableSandbox: false })) && allowed(ps("Get-Date", { dangerouslyDisableSandbox: true }, "general-purpose")));
+check("a PowerShell call from another agent, or the main session, is never judged", allowed(ps("Stop-Process -Name node", {}, "general-purpose")) && allowed(ps("Stop-Process -Name node", {}, null)));
+check("a PowerShell call with no command is malformed (allowed, reported)", mal({ agent_type: AGENT, tool_name: "PowerShell", tool_input: {} }));
+
 // ---------------------------------------------------------------- the lexer
 console.log("\nsimpleCommands:");
 const sc = (s: string): string => JSON.stringify(simpleCommands(s));
@@ -182,7 +235,6 @@ check("an unclosed quote or substitution still yields its words", bashVerdict("e
 
 // ---------------------------------------------------------------- malformed input: allowed, reported
 console.log("\nmalformed input (allowed — never brick the session):");
-const mal = (x: unknown): boolean => { const d = decide(x, CTX); return d !== null && "malformed" in d; };
 check("not an object", mal("pkill") && mal(null) && mal([1]));
 check("the verifier with no tool_name / tool_input", mal({ agent_type: AGENT }) && mal({ agent_type: AGENT, tool_name: "Bash", tool_input: "pkill x" }));
 check("Bash with no command, Write with no file_path", mal({ agent_type: AGENT, tool_name: "Bash", tool_input: {} }) && mal({ agent_type: AGENT, tool_name: "Write", tool_input: { content: "x" } }));
@@ -266,7 +318,7 @@ console.log("\nregistration (hooks.json, the agent's name and tools):");
   const name = must(/^name:\s*(\S+)$/m.exec(fm)?.[1], "name:");
   const CHANGES = new Set(["Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit"]);
   const uncovered = tools.filter((t) => CHANGES.has(t) && !matches(t));
-  check(`the matcher covers every tool the verifier can change things with (its tools: ${tools.join(", ")})` + (uncovered.length ? ` — NOT: ${uncovered.join(", ")}` : ""), uncovered.length === 0 && tools.includes("Bash") && tools.includes("Write"));
+  check(`the matcher covers every tool the verifier can change things with (its tools: ${tools.join(", ")})` + (uncovered.length ? ` — NOT: ${uncovered.join(", ")}` : ""), uncovered.length === 0 && tools.includes("Bash") && tools.includes("Write") && matches("PowerShell"));
   check("the matcher does not spawn the hook for read-only tools (Read, Glob, Grep)", !["Read", "Glob", "Grep"].some(matches));
   const pluginDoc: unknown = JSON.parse(fs.readFileSync(path.join(ROOT, "claude-plugin", ".claude-plugin", "plugin.json"), "utf8"));
   const plugin = isJsonObject(pluginDoc) && typeof pluginDoc.name === "string" ? pluginDoc.name : "";
