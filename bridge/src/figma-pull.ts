@@ -790,8 +790,8 @@ const topLevelLayers = (r: ListPagesReply | ListChildrenReply): NodeSummary[] =>
   "pages" in r ? r.pages.flatMap((p) => p.frames ?? []) : r.children;
 
 // The closing line of an export — where the time went. A direct pull opens a fresh bridge and waits
-// out the plugin's reconnect (a 3 s retry timer, slower still in a background window), which measured 27 s
-// against an export of under 3 s; naming the wait is what makes that visible, and `dtwin serve` is the fix.
+// out the plugin's reconnect (a retry timer walking three ports, slower still in a background window),
+// which measured 27 s against an export of under 3 s; naming the wait is what makes that visible, and `dtwin serve` is the fix.
 // `connectMs` is the own-bridge wait for the plugin (0 / ignored behind a daemon, which waits inside the request).
 // `platform`: where no daemon can run (daemon.ts daemonSupported) the hint names the wait, not `dtwin serve`.
 const CONNECT_HINT_MS = 5000;
@@ -803,7 +803,7 @@ function formatDone(t: { totalMs: number; connectMs: number; exportMs: number; w
   const exp = t.viaDaemon ? "export (incl. any wait for the plugin)" : "export";
   const lines = [`done in ${secs(t.totalMs)} — ${wait} · ${exp} ${secs(t.exportMs)} · write ${secs(t.writeMs)}`];
   if (!t.viaDaemon && t.connectMs >= CONNECT_HINT_MS) {
-    lines.push("the wait was the plugin reconnecting to this fresh bridge (it retries every 3 s, and slower in a background window)" +
+    lines.push("the wait was the plugin reconnecting to this fresh bridge (it retries every second, one port at a time, and slower in a background window)" +
       (daemon.daemonSupported(platform) ? " — `dtwin serve` in another terminal keeps one bridge open, so the next command skips it." : "."));
   }
   return lines;
@@ -845,7 +845,7 @@ function rotateToken(): void {
   console.log(token);
   console.error(`[dtwin] ${had ? "replaced" : "saved"} the bridge token in ${file}.`);
   // The whole point of naming this: the plugin has the OLD token in clientStorage and will
-  // fail every handshake with a bare 401, retrying every 3s, until someone re-pastes.
+  // fail every handshake, retrying on its own, until someone re-pastes.
   console.error('[dtwin] re-paste it into the plugin\'s "Bridge token" field and press Save — until you do, the plugin cannot connect.');
   if (process.env.FIGMA_BRIDGE_TOKEN) {
     console.error("[dtwin] warning: FIGMA_BRIDGE_TOKEN is set and OVERRIDES this file, so the bridge will keep using the env value. Unset it for the rotation to take effect.");
@@ -984,7 +984,7 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
     if (daemon.daemonSupported()) console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
     // --list-clients IS meaningful with nothing ever connecting ("which files can I talk to?" →
     // "none, open one"), but with no daemon running it is talking to a bridge it JUST opened, and every
-    // plugin window currently open in Figma is mid-reconnect to it (they retry every 3s). Skipping the
+    // plugin window currently open in Figma is mid-reconnect to it (timeouts.ts PLUGIN_REDIAL_MS). Skipping the
     // wait here would make `list clients` answer `{"clients":[]}` with exit 0 while two files were
     // connected a second later — the documented `--timeout` window applies to this
     // command too. The difference from an export is only what happens on a full timeout: no plugin
@@ -999,7 +999,8 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
     // With no target (this includes --list-clients) or a file name, whole or partial, the fresh bridge also
     // settles first (timeouts.ts SETTLE_MS), even past a shorter --timeout, so a second open file a redial
     // behind is connected — and the command refused as ambiguous, or listed — instead of the first file to
-    // land being taken silently.
+    // land being taken silently. Either way it also waits out the `hello` of a window whose socket has just
+    // opened (at most the identification grace), so the listing or the refusal names that file.
     const tConnect = Date.now();
     await b.awaitClient(client, connectWaitMs);
     // "No plugin connected" means none ever did: one that connected and has gone again is the request's

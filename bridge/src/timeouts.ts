@@ -2,6 +2,7 @@
 // staleness.ts): figma-pull.ts's exported, test-driven parseArgs picks its budgets from this table,
 // and it must not load server-core (token resolution + a process.exit on a bad FIGMA_BRIDGE_PORT at
 // module load) just to read two constants. No load-time effects. Every caller imports them from here.
+import { ALLOWED_PORTS } from "./ports.ts";
 
 // Per-COMMAND time budgets, in ONE table. The budget is a property of the work, not of the caller, so
 // both front-ends (figma-pull CLI, figma-mcp) read it from here instead of restating the tiers — a
@@ -31,9 +32,10 @@ export const exportTimeout = ({ selection, allPages }: { selection?: boolean; al
 export const HEARTBEAT_MS = 30000;
 
 // How long a NAMED --client target (file name / fileKey, not a c<N> connId) is waited for after the
-// first plugin connects. Every open plugin window redials every 3 s (figma-plugin ui.html), so a file
-// that is open lands within one or two cycles; 15 s is five, and a name that never matches fails
-// with the connected list instead of holding the terminal for the whole connect window.
+// first plugin connects. Every open plugin window redials every PLUGIN_REDIAL_MS, one port at a time, so
+// a file that is open lands within one walk of the three ports (3 s); 15 s is five such walks — room for
+// a window Figma throttles in the background — and a name that never matches fails with the connected
+// list instead of holding the terminal for the whole connect window.
 export const NAMED_CLIENT_WAIT_MS = 15000;
 
 // The longest delay one setTimeout holds: "When delay is larger than 2147483647 or less than 1, the delay
@@ -42,22 +44,26 @@ export const NAMED_CLIENT_WAIT_MS = 15000;
 export const MAX_TIMER_MS = 2147483647;
 
 // How often an open plugin window redials a bridge it has lost or not found yet: figma-plugin ui.html
-// scheduleReconnect (`ms || 3000`), one port of the three per attempt (connect() walks BRIDGE_PORTS on
-// every failed dial), so a window that keeps missing comes back to the same port every 9 s.
-export const PLUGIN_REDIAL_MS = 3000;
+// REDIAL_MS (scheduleReconnect's `ms || REDIAL_MS`; test/ui.test.ts pins the two together), one port of
+// the three per attempt (connect() walks BRIDGE_PORTS on every failed dial), so a window that keeps
+// missing comes back to the same port every 3 s.
+export const PLUGIN_REDIAL_MS = 1000;
 
 // How long a bridge whose plugins have only just started connecting holds a request that does not name
 // one file by connId or fileKey (no target, or a file name — names repeat and match as substrings) before
 // routing it. Two open files redial on their own clocks, so right after a bridge starts, whichever lands
 // first is all there is for a moment — and an unaddressed (or half-addressed) command would silently go to
-// that file instead of being refused as ambiguous. One redial interval plus a margin for the second
-// window's `hello` covers windows a step apart on the same port; windows a port or two apart (up to
-// 2 × PLUGIN_REDIAL_MS later still) are not waited for — that would cost every one-shot command a
-// further 6 s. Counted from the moment the bridge went from no plugin to one, and restarted when a plugin
-// leaves while others stay (it is probably redialling), so a bridge whose plugins have been connected for
-// longer (a daemon, a long MCP session) pays nothing until one of them leaves; a connId or fileKey is
-// routed at once. A request's own connect window cannot cut the settle short.
-export const SETTLE_MS = PLUGIN_REDIAL_MS + 500;
+// that file instead of being refused as ambiguous. A second window can be anywhere in its walk of the
+// three ports, so it reaches this bridge's port up to one full walk (3 × PLUGIN_REDIAL_MS) after the
+// first; that plus a margin for its `hello` covers every window that is redialling normally, for 3.5 s
+// on an unaddressed one-shot command. The walk assumes a refused dial fails at once, as it does on macOS
+// and Linux; on Windows a refused localhost connect can take about 2 s, so a walk there is longer and the
+// settle covers less of it. A window Figma throttles in the background can still land later.
+// Counted from the moment the bridge went from no plugin to one, and restarted when a plugin leaves while
+// others stay (it is probably redialling), so a bridge whose plugins have been connected for longer (a
+// daemon, a long MCP session) pays nothing until one of them leaves; a connId or fileKey is routed at
+// once. A request's own connect window cannot cut the settle short.
+export const SETTLE_MS = ALLOWED_PORTS.length * PLUGIN_REDIAL_MS + 500;
 
 // The client-side guard on a request sent through a daemon: the daemon's own command timeout plus every
 // wait the daemon may spend before sending — the connect window, then at most NAMED_CLIENT_WAIT_MS for a

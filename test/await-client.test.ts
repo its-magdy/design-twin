@@ -220,6 +220,7 @@ console.log("\nawaitClient — a client leaves, the caller gives up, the bridge 
 console.log("\nawaitClient — a fresh bridge settles before it routes a vague target:");
 const SETTLE = 600; // stands in for SETTLE_MS (3.5 s): the rule, not the constant, is under test here
 const errOf = (fn: () => unknown): string => { try { fn(); return "routed"; } catch (e) { return e instanceof Error ? e.message.split("\n")[0] ?? "" : String(e); } };
+const errOfFull = (fn: () => unknown): string => { try { fn(); return "routed"; } catch (e) { return e instanceof Error ? e.message : String(e); } };
 {
   const r = reg(SETTLE);
   realSetTimeout(() => connect(r, "File A"), 50);
@@ -359,6 +360,94 @@ console.log("\nawaitClient — a partial name while another window has not said 
   ok("[identifying] a name with no match ends at the window as before", none.ms >= 190 && none.ms < 500 && clean(none));
 }
 
+// ------------------------------------------------------------------ listings name a window that just opened
+// --list-clients and every refusal list what is connected; a socket that opened a moment ago is a hello
+// away from its file name, so the wait holds for it (bounded by its identification grace).
+console.log("\nawaitClient — a listing or refusal waits for a just-opened window's hello:");
+{
+  const names = (r: Registry): string => r.live().map((e) => r.describe(e).file ?? "(unidentified)").join(", ");
+  const r = reg();
+  connect(r, "File A");
+  const b = connect(r);
+  realSetTimeout(() => r.identify(b, hello("File B")), 50);
+  const a = await timed(r, () => r.awaitClient(null, 5000));
+  ok("[listing] no target, two files, the second's hello 50 ms away: the wait ends on that hello", a.ms >= 40 && a.ms < 400 && clean(a));
+  ok("[listing] …so the listing names both files", names(r) === "File A, File B");
+  ok("[listing] …and so does the ambiguity refusal", /"File B"/.test(errOfFull(() => r.resolveClient(null))) && !/unidentified/.test(errOfFull(() => r.resolveClient(null))));
+
+  const r2 = reg();
+  connect(r2, "File A");
+  const quiet = connect(r2);
+  quiet.connectedMono = performance.now() - (core.IDENTIFY_GRACE_MS - 150); // never says hello; its grace ends in 150 ms
+  const g = await timed(r2, () => r2.awaitClient(null, 60000));
+  ok("[listing] a socket that never says hello holds the listing only until its grace (bounded, not the window)", g.ms >= 100 && g.ms < 700 && clean(g));
+  ok("[listing] …and is then listed as unidentified", names(r2) === "File A, (unidentified)");
+
+  const r3 = reg();
+  connect(r3, "File A");
+  const c = connect(r3);
+  realSetTimeout(() => r3.identify(c, hello("File C")), 50);
+  const id = await timed(r3, () => r3.awaitClient("c9", 5000));
+  ok("[listing] an absent connId waits for the hello too, so its 'no match' list names every file",
+    id.ms >= 40 && id.ms < 400 && /"File C"/.test(errOfFull(() => r3.resolveClient("c9"))) && clean(id));
+
+  const r4 = reg();
+  connect(r4, "Untitled A");
+  connect(r4, "Untitled B");
+  const d = connect(r4);
+  realSetTimeout(() => r4.identify(d, hello("Other")), 50);
+  const amb = await timed(r4, () => r4.awaitClient("Untitled", 5000));
+  ok("[listing] an ambiguous name waits for the hello too, so the refusal lists it by name",
+    amb.ms >= 40 && amb.ms < 400 && names(r4) === "Untitled A, Untitled B, Other" && clean(amb));
+
+  const r5 = reg();
+  connect(r5, "File A");
+  connect(r5); // c2, no hello yet
+  const live = await timed(r5, () => r5.awaitClient("c2", 5000));
+  ok("[listing] a live connId still routes at once, hello or not", live.ms < 20 && clean(live));
+}
+
+// ------------------------------------------------------------------ a socket flapping without a hello
+// Every leave restarts the settle and every new socket brings a fresh grace: a socket that opens and closes
+// without a hello faster than the settle must not hold a wait past the cap (window or settle, plus one grace,
+// from the moment a client went live).
+console.log("\nawaitClient — a silent socket flapping faster than the settle is cut off at the cap:");
+{
+  const settle = 300;
+  const r = reg(settle);
+  connect(r, "File A");
+  await sleep(settle + 20); // settled, File A identified
+  let flapping = true;
+  const flap = async (): Promise<void> => {
+    while (flapping) {
+      const f = connect(r);
+      await sleep(100);
+      disconnect(r, f);
+      await sleep(150);
+    }
+  };
+  const flapper = flap();
+  await sleep(20);
+  // The cap: max(min(window, name cap), settle) + IDENTIFY_GRACE_MS from when File A was already live (the call).
+  const capMs = Math.max(200, settle) + core.IDENTIFY_GRACE_MS;
+  const t0 = Date.now();
+  // a wait the cap does not end would hold the suite for good: past capMs + 3 s it reads as Infinity and fails
+  const at = (p: Promise<void>): Promise<number> =>
+    Promise.race([p.then(() => Date.now() - t0), sleep(capMs + 3000).then(() => Number.POSITIVE_INFINITY)]);
+  const [noTarget, byName, listing] = await Promise.all([
+    at(r.awaitClient(null, 200)),
+    at(r.awaitClient("File", 200)),
+    at(r.awaitClient(null, 60000, undefined, 200)), // --list-clients: a long connect window, the name cap bounds it
+  ]);
+  flapping = false;
+  await flapper;
+  ok(`[flap] no target: ends at the cap (~${capMs} ms), not held by the restarted settle (${noTarget} ms)`, noTarget >= capMs - 100 && noTarget < capMs + 600);
+  ok(`[flap] a file name: the same (${byName} ms)`, byName >= capMs - 100 && byName < capMs + 600);
+  ok(`[flap] a listing with a long window: bounded by the cap too (${listing} ms)`, listing >= capMs - 100 && listing < capMs + 600);
+  ok("[flap] …and no wait is left listening", r.waiting() === 0);
+  ok("[flap] the request then routes File A (one identified file, the flapper gone)", errOf(() => r.resolveClient("File")) === "routed");
+}
+
 // ------------------------------------------------------------------ a connId on a settling bridge
 console.log("\nawaitClient — a connId is ready as soon as that connection is live:");
 {
@@ -460,6 +549,10 @@ console.log("\ndaemonGuardMs — the client-side guard outlasts every wait the d
   ok("[guard] never more than one setTimeout holds (a --timeout at its ceiling would otherwise fire the guard at once)",
     daemonGuardMs(MAX_TIMER_MS, MAX_TIMER_MS) === MAX_TIMER_MS && daemonGuardMs(2147483000, 2147483000) === MAX_TIMER_MS);
   ok("[guard] the CLI's 90 s window, and no window at all: the same", daemonGuardMs(300000, 90000) - 300000 >= worst(90000) + 20000 && daemonGuardMs(120000) - 120000 >= worst(0) + 20000);
+  const { PLUGIN_REDIAL_MS } = await import("../bridge/src/timeouts.ts");
+  const { ALLOWED_PORTS } = await import("../bridge/src/ports.ts");
+  ok("[settle-ms] the settle outlasts one walk of every allowed port at the plugin's redial (3.5 s at 1 s per port)",
+    SETTLE_MS > ALLOWED_PORTS.length * PLUGIN_REDIAL_MS && SETTLE_MS === 3500);
 }
 
 // ------------------------------------------------------------------ the abort text

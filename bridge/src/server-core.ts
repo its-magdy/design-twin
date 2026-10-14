@@ -91,9 +91,9 @@ function safeEqual(a: string, b: string): boolean {
 
 // Failed-handshake accounting. Two jobs, one counter:
 //
-//  1. DIAGNOSIS. The plugin caches its token in figma.clientStorage and retries every 3s, so a token
+//  1. DIAGNOSIS. The plugin caches its token in figma.clientStorage and retries on its own, so a token
 //     that does not match any more (usually: someone ran --rotate-token and didn't re-paste) becomes a
-//     silent 3-second reconnect loop. The bridge is the only side that can see WHY, so it says so —
+//     silent reconnect loop. The bridge is the only side that can see WHY, so it says so —
 //     once, not sixty times a minute.
 //  2. THROTTLE. Nothing here is a serious brute-force defence (the token is 192 bits; a local
 //     attacker guessing it is not the threat model — see the Origin note above). It exists so a
@@ -363,8 +363,8 @@ export function isConnId(target: string): boolean {
   return /^c\d+$/.test(target);
 }
 
-/** How long a connected client that has not sent its `hello` still holds an unaddressed wait for one that
- *  has. The plugin sends it a beat after the socket opens (ui.html, on every open); a client that never does
+/** How long a connected client that has not sent its `hello` still holds a wait that would otherwise resolve
+ *  without its file name (an unaddressed request, a listing, an ambiguity). The plugin sends it a beat after the socket opens (ui.html, on every open); a client that never does
  *  (a bundle that predates `hello`) is taken as it is once this passes, so it cannot hold a whole connect window. */
 const IDENTIFY_GRACE_MS = 3000;
 
@@ -519,7 +519,8 @@ function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOpti
    * (figma-pull's own bridge, the daemon for a request that carries a connect window, the MCP server for
    * a named `client`, and any request while the bridge is still settling). Resolves when:
    *   - a NAMED target (file name or fileKey, not a connId) matches: at once for a single match by fileKey,
-   *     or for several matches (the ambiguity is resolveClient's to report); a single match by file name
+   *     or for several matches once no connected client is still waiting to identify itself (the ambiguity
+   *     is resolveClient's to report, and its list then names every file); a single match by file name
    *     only once the bridge has settled and no connected client is still waiting to identify itself
    *     (below). File names are not unique and a name matches as a substring, so one match is not yet the
    *     only candidate. Every open plugin window redials on its own clock (figma-plugin ui.html), so with
@@ -527,17 +528,26 @@ function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOpti
    *     System"` failed with only the other file listed, and that file connected two seconds later). And a
    *     socket that is open is not yet identified: its `hello`, which carries the file name, arrives a beat
    *     later ("one run in four failed");
-   *   - a connId: that connection is live (it needs no identification), or some client has identified
+   *   - a connId: that connection is live (it needs no identification), or every live client has identified
    *     itself (or been connected IDENTIFY_GRACE_MS without doing so), so a connId that is not there fails
-   *     with the connected list instead of holding the window;
-   *   - no target: a live client has identified itself, or has been connected for IDENTIFY_GRACE_MS without
-   *     doing so — and the bridge has settled or several clients are already connected (resolveClient then
-   *     refuses to guess);
+   *     with the connected list, every file in it named, instead of holding the window;
+   *   - no target: every live client has identified itself, or has been connected for IDENTIFY_GRACE_MS
+   *     without doing so — and the bridge has settled or several clients are already connected (resolveClient
+   *     then refuses to guess). So a listing (--list-clients) right after a window's socket opens waits the
+   *     few milliseconds to its `hello` and shows the file name; a client that never sends one is listed
+   *     unidentified once its grace has passed;
    *   - the window runs out: `waitMs` (Infinity: no end) for a first live client; once one is live, a
    *     named target gets min(waitMs, NAMED_CLIENT_WAIT_MS) from that moment, so a name that never
    *     matches fails with the connected list instead of holding the whole connect window. A window (> 0)
    *     that ends before the settle does is stretched to it for a target that is not a connId, since
    *     routing at the window would take the first file to land;
+   *   - the CAP: once some client has been live without a gap since moment L, the wait ends by
+   *     L + max(min(waitMs, NAMED_CLIENT_WAIT_MS), settleMs) + IDENTIFY_GRACE_MS (18 s at most with the
+   *     defaults — the CLI's connect window is longer than the 15 s cap), whatever the settle and the graces say — a
+   *     socket that opens and closes without a hello faster than the settle restarts it on every leave and
+   *     brings a fresh grace each time, and would otherwise hold the wait for good. With nothing live, only
+   *     the window ends it (Infinity still waits for a first plugin, or, with no target or a connId, for a
+   *     client that stays connected long enough to say hello or outlast its grace — as before the cap);
    *   - `signal` aborts, or the registry is cleared (the bridge closed).
    * SETTLED: settleMs (timeouts.ts SETTLE_MS) have passed since the settle window started — the registry
    * went from no live client to one, or a client left while others stayed (it is probably redialling).
@@ -546,7 +556,7 @@ function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOpti
    * whose plugins have been connected longer pays nothing.
    * Never rejects: resolveClient, run afterwards, says what is wrong with whatever is connected then.
    * Woken by the registry's change event (a connect, a `hello`, a close) — no polling; the one timer is the
-   * next moment the answer can change without an event (the window, the settle, an identification grace),
+   * next moment the answer can change without an event (the window, the cap, the settle, an identification grace),
    * unref'd so a wait never keeps a process alive by itself, and cleared on every exit, as is the listener.
    * `namedCapMs` is NAMED_CLIENT_WAIT_MS (the test suite shortens it).
    */
@@ -560,6 +570,7 @@ function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOpti
     const exact = (e: ClientEntry<S>): boolean => e.connId === t || (e.fileKey !== null && e.fileKey === t);
     const start = performance.now();
     let firstLiveAt: number | null = null;
+    let liveFrom: number | null = null; // since when some client has been live without a gap (null: none now)
     let timer: ReturnType<typeof setTimeout> | null = null;
     let done = false;
     return new Promise<void>((resolve) => {
@@ -583,24 +594,32 @@ function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOpti
         const settled = now >= settleAt;
         // A client that has not sent its hello yet may be another window of the file being asked for.
         const identifying = entries.some((e) => !e.instanceId && now - e.connectedMono < IDENTIFY_GRACE_MS);
+        // Every outcome that does not route to one matched file — a refusal or a "no match" that lists the
+        // connected files, a no-target request with several, `--list-clients` — waits out a hello still due,
+        // so a window whose socket opened a moment ago is listed by its file name, not as unidentified.
         let ready: boolean;
         if (named) {
           const matched = matchClient(entries, t);
           const [only] = matched;
-          ready = matched.length > 1 || (only !== undefined && (exact(only) || (settled && !identifying)));
+          ready = (matched.length > 1 && !identifying) || (only !== undefined && (exact(only) || (settled && !identifying)));
         } else {
-          const someone = entries.some((e) => !!e.instanceId || now - e.connectedMono >= IDENTIFY_GRACE_MS);
           const there = connId && entries.some((e) => e.connId === t); // a connId names one socket: identification adds nothing
-          ready = there || (someone && (connId || settled || entries.length > 1));
+          ready = there || (entries.length > 0 && !identifying && (connId || settled || entries.length > 1));
         }
         if (ready) return finish();
         let deadline = named && firstLiveAt !== null ? firstLiveAt + Math.min(windowMs, capMs) : start + windowMs;
         // A window that ends inside the settle would route to whichever file has landed so far.
         if (!connId && windowMs > 0 && entries.length && !settled) deadline = Math.max(deadline, settleAt);
-        if (now >= deadline) return finish();
-        // The next moment the answer can change without an event: the window, the settle, or an
+        // The settle restarts on every leave and every new socket brings its own grace, so a socket that
+        // keeps opening and closing without a hello could push both forever: the cap counts from the moment
+        // this wait last saw a client go live and nothing moves it.
+        if (!entries.length) liveFrom = null;
+        else if (liveFrom === null) liveFrom = now;
+        const capAt = liveFrom === null ? Number.POSITIVE_INFINITY : liveFrom + Math.max(Math.min(windowMs, capMs), settleMs) + IDENTIFY_GRACE_MS;
+        if (now >= deadline || now >= capAt) return finish();
+        // The next moment the answer can change without an event: the window, the cap, the settle, or an
         // unidentified client's grace.
-        let wake = deadline;
+        let wake = Math.min(deadline, capAt);
         if (!connId && entries.length && !settled) wake = Math.min(wake, settleAt);
         for (const e of entries) if (!e.instanceId && now - e.connectedMono < IDENTIFY_GRACE_MS) wake = Math.min(wake, e.connectedMono + IDENTIFY_GRACE_MS);
         if (timer) clearTimeout(timer);
@@ -749,7 +768,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       return;
     }
     // Every connection is kept. The previous single-socket rule terminated the incumbent here, which
-    // made two open Figma files fight: the displaced plugin's 3s auto-reconnect immediately stole the
+    // made two open Figma files fight: the displaced plugin's auto-reconnect immediately stole the
     // bridge back, and the two ping-ponged forever (observed live). Admitting both removes the
     // contention rather than arbitrating it.
     const entry = registry.add(ws);
