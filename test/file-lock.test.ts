@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { check, report } from "./assert.ts";
-import { LockBusy, LockLost, acquireFileLock, breakGuardOf, breakStale, lockFileOf, withFileLock } from "../bridge/src/file-lock.ts";
+import { LockBusy, LockLost, PID_NS, acquireFileLock, breakGuardOf, breakStale, lockFileOf, withFileLock } from "../bridge/src/file-lock.ts";
 import { updateJsonLike } from "../bridge/src/json-file.ts";
 
 const t = (name: string, cond: () => boolean): void => {
@@ -21,7 +21,8 @@ const t = (name: string, cond: () => boolean): void => {
 };
 const roots: string[] = [];
 const mk = (): string => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-lock-")); roots.push(d); return d; };
-const holder = (pid: number, at: number, host = os.hostname()): string => JSON.stringify({ pid, host, at, token: "feedfacefeedface" });
+// ns: this process's pid namespace on Linux (as file-lock.ts stamps it), so a same-host holder is probed by its pid
+const holder = (pid: number, at: number, host = os.hostname()): string => JSON.stringify({ pid, host, at, token: "feedfacefeedface", ns: PID_NS });
 /** A pid that existed and has exited (a finished child). */
 const deadPid = (): number => {
   const r = spawnSync(process.execPath, ["-e", ""]);

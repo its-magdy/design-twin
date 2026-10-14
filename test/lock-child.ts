@@ -21,7 +21,7 @@
 //                                                                           one acquire, printed like "try"
 import fs from "node:fs";
 import os from "node:os";
-import { acquireFileLock, withFileLock } from "../bridge/src/file-lock.ts";
+import { PID_NS, acquireFileLock, withFileLock } from "../bridge/src/file-lock.ts";
 import type { HeldLock } from "../bridge/src/file-lock.ts";
 import { lockFileOfStatus, liveStatusFile, isVerifyStatusV2, writeStatus } from "../design-to-code/verify-run.ts";
 import { parsePlanText, updatePlan } from "../design-to-code/plan-record.ts";
@@ -75,7 +75,7 @@ if (mode === "counter") {
   for (let n = 0; Date.now() < Number(b); n++) {
     try {
       const fd = fs.openSync(a, "wx");
-      fs.writeSync(fd, JSON.stringify({ pid: Number(c), host: os.hostname(), at: Date.now(), token: `dead${n}` }));
+      fs.writeSync(fd, JSON.stringify({ pid: Number(c), host: os.hostname(), at: Date.now(), token: `dead${n}`, ns: PID_NS }));
       fs.closeSync(fd);
     } catch { /* held */ }
     sleepSync(2);
@@ -99,7 +99,7 @@ if (mode === "counter") {
   const guard = a + ".break";
   // "guard": another host's lock a minute old — a dead holder's whatever pid it names
   fs.writeFileSync(a, JSON.stringify(kind === "guard" ? { pid: process.pid, host: "another-host.invalid", at: Date.now() - 60_000, token: "child" }
-    : { pid: process.pid, host: os.hostname(), at: Date.now(), token: "child" }));
+    : { pid: process.pid, host: os.hostname(), at: Date.now(), token: "child", ns: PID_NS }));
   Object.defineProperty(process, "platform", { value: "win32" });
   const t0 = Date.now();
   let refusedFrom: number | null = null;

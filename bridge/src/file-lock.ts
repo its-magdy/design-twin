@@ -90,7 +90,7 @@ export interface HeldLock {
 
 /** The pid namespace of this process on Linux (`pid:[<inode>]`), "" elsewhere: two processes with the same hostname
  *  in different namespaces (a container on the host's network) cannot see each other's pids. */
-const PID_NS = ((): string => {
+export const PID_NS = ((): string => {
   if (process.platform !== "linux") return "";
   try { return fs.readlinkSync("/proc/self/ns/pid"); } catch { return ""; }
 })();

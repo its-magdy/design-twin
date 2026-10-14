@@ -12,7 +12,7 @@ import { shellArg } from "../design-to-code/cli-args.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { check, report } from "./assert.ts";
 import { POSIX_SH } from "./posix-sh.ts";
-import { LockBusy, LockLost } from "../bridge/src/file-lock.ts";
+import { LockBusy, LockLost, PID_NS } from "../bridge/src/file-lock.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const safe = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch (e) { console.log(`    (threw: ${e instanceof Error ? e.message : String(e)})`); } return check(name, r); };
@@ -439,14 +439,14 @@ await block("writeStatus locked:", async () => {
   // the lock is broken and taken by another writer while this one runs its before hook: no record over theirs
   VR.writeStatus(base, { runId: "run-lost", phase: "measuring", by: "verify-probe" });
   const beforeLost = fs.readFileSync(live, "utf8");
-  const other = JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token: "0123456789abcdef" });
+  const other = JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token: "0123456789abcdef", ns: PID_NS });
   const lost = ((): unknown => { try { VR.writeStatus(base, { runId: "run-lost", phase: "measured", by: "verify-probe" }, { before: () => { fs.writeFileSync(VR.lockFileOfStatus(base), other); return {}; } }); return null; } catch (e) { return e; } })();
   safe("the status lock taken by another writer during the write → LockLost (a LockBusy), no record written, the other writer's lock left",
     () => lost instanceof LockLost && lost instanceof LockBusy && fs.readFileSync(live, "utf8") === beforeLost && fs.readFileSync(VR.lockFileOfStatus(base), "utf8") === other);
   fs.rmSync(VR.lockFileOfStatus(base));
   // a lock left by a writer that was killed mid-write (its pid is gone) does not wedge the run
   const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999;
-  fs.writeFileSync(VR.lockFileOfStatus(base), JSON.stringify({ pid: deadPid, host: os.hostname(), at: Date.now(), token: "0123456789abcdef" }));
+  fs.writeFileSync(VR.lockFileOfStatus(base), JSON.stringify({ pid: deadPid, host: os.hostname(), at: Date.now(), token: "0123456789abcdef", ns: PID_NS }));
   const s = spawnSync(process.execPath, [VS_TS, "--status", "Plots", "--phase", "starting", "--new-run"], { cwd: path.dirname(path.dirname(dir)), encoding: "utf8" });
   safe("a lock left by a killed writer (dead pid) → the next --status breaks it and writes (exit 0), no lock left", () => s.status === 0 && readStatusFile(live)?.phase === "starting" && !fs.existsSync(VR.lockFileOfStatus(base)));
 });
