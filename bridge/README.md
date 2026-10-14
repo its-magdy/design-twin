@@ -427,11 +427,27 @@ like `--list-clients`' own listing does. Under a running `dtwin serve` daemon, c
 once per plugin connection and stay stable until that plugin's window disconnects/reconnects.
 
 A named target (file name or fileKey) is **waited for**: each open plugin window redials on its own
-3 s clock, so right after a bridge starts only one of two open files may be connected yet. `dtwin`
-gives the named file up to 15 s (or `--timeout`, whichever is shorter) to land before resolving the
-name; a name that never matches then fails with the list of what *is* connected. A bare `c<N>`
-never waits. The MCP `client` argument gets the same 15 s wait on every tool (holding the bridge or
-routed through a daemon).
+3 s clock, so right after a bridge starts only one of two open files may be connected yet. Once a
+first plugin is connected, `dtwin` gives the named file up to 15 s more (or `--timeout`, whichever is
+shorter) to land before resolving the name; a name that never matches then fails with the list of
+what *is* connected. A bare `c<N>` never waits for its file. The MCP `client` argument gets the same
+wait on every tool: holding the bridge, up to 15 s for a first plugin to connect and then up to 15 s
+more for the name; routed through a daemon, the same two windows, spent by the daemon's bridge.
+
+**A fresh bridge settles before it guesses.** For 3.5 s after a bridge's first plugin connects (one
+redial interval plus a moment for the next window's hello), a command with **no** `--client`, or one
+whose `--client` is a file name — whole or partial: names repeat (two `Untitled`) and a name matches as
+a substring (`App` also matches `App (Copy)`) — is held: a second open file may still be redialling,
+and without it the command would silently go to whichever file landed first instead of being refused
+as ambiguous. The hold outlasts a shorter `--timeout`, which only bounds how long to wait for a first
+plugin. A connId or fileKey is routed at once. A bridge that has had its plugins connected for 3.5 s
+pays nothing — a `dtwin serve` daemon, a running MCP session — until one of them leaves while others
+stay: that window is probably redialling, so the 3.5 s start again. A partial file name is also held
+while another connected window has not yet said which file it is (a few milliseconds, at most 3 s).
+`--list-clients` on its own bridge waits the same 3.5 s, so it lists every window that redialled in
+that time; behind a running daemon it lists whatever is connected at that moment, with no wait. A window
+that is several redials behind (it walks the three allowed ports, 3 s each) can still land after that;
+with two files open, address the one you mean.
 
 `--client` is an **address**, not a scope — it composes with every other flag:
 ```
@@ -511,6 +527,9 @@ minutes at a terminal and 90 seconds when stderr is not a TTY (an agent's shell,
 `no Figma plugin connected within Ns`, exit 1, with the next step. A first word that is not a verb
 but is an obvious guess at one (`dtwin export`, `dtwin ls`, `dtwin check`) is refused with the real
 verb instead of being taken as an output folder; `dtwin pull export` still exports into `./export`.
+`--timeout` takes at most 2147483 seconds (about 24 days, the longest delay one Node timer holds);
+`Infinity`, `0`, a negative or a larger number is refused with a usage error rather than run as an
+export that times out at once.
 
 Three honest limits, because they change what the numbers mean:
 - **Component counts are usage-derived.** Figma exposes **no API to enumerate a library's contents**,

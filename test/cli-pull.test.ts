@@ -187,6 +187,21 @@ try {
     check("`--client <c2's name>` → connection.connId is c2, not the first client's c1", !!conn && conn.connId === "c2");
     check("the socket line on stderr names c2", /\[dtwin\] socket c2 up /.test(r.stderr));
   }
+  // A plugin that connected and then left (no redial) is not "no plugin connected": the request's own
+  // resolveClient text says so, not the CLI's connect-window error.
+  console.log("\ncli pull — a plugin that connected and left:");
+  {
+    const dir = path.join(tmp, "left");
+    fs.mkdirSync(dir);
+    const ran = dtwin(dir, ["pull", "out", "--node", "1:2", "--timeout", "3"]);
+    const plugin = fakePlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { exportNode: () => nodeReply() });
+    await plugin.opened;
+    await sleep(300);
+    plugin.stop();
+    const r = await ran;
+    check("it exits 1 with resolveClient's not-connected text", r.code === 1 && /Figma plugin not connected\. Open the file in Figma and run the plugin\./.test(r.stderr));
+    check("…not the never-connected text", !/no Figma plugin connected within/.test(r.stderr));
+  }
   // The same through a running daemon (`dtwin serve`): the connection comes from the daemon's status, narrowed
   // to the addressed file by connectionFor; the timing line says it went via the daemon.
   // A second command while a one-shot command holds the port (no daemon to route through) exits 1 with

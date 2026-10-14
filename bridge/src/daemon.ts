@@ -26,11 +26,11 @@ import os from "node:os";
 import path from "node:path";
 import { errMsg, errCode } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
-import { NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
+import { abortReason } from "./abort-reason.ts";
 import { bridgePortOrExit } from "./ports.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
-import type { ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
+import type { ClientRow, ConnectionInfo, ProgressTick, RequestOptions } from "./server-core.ts";
 
 // ---- the daemon socket protocol (newline-delimited JSON, one request -> one reply per connection)
 //
@@ -154,16 +154,14 @@ function isDaemonStatus(x: unknown): x is DaemonStatusView {
 export interface DaemonBridge {
   port: number;
   isConnected(): boolean;
-  waitForConnection(timeoutMs: number): Promise<void>;
   request(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<unknown>;
   /** The same, also naming the client the command went to (server-core has it; a fake may not).
    *  `stallMs` is server-core's own opt-in (the daemon never passes it); `onProgress` receives every
    *  tick the chosen connection sends while the request is in flight — the source of progress frames.
    *  `signal` is aborted when the daemon's client disconnects (or the daemon shuts down) before the
-   *  reply; server-core then sends the plugin a cancel frame for the request. */
-  requestWithClient?(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<{ reply: unknown; client: ClientRow }>;
-  /** Waits (bounded) for a named target to match a live client; never throws (server-core has it; a fake may not). */
-  waitForClient?(target: string, timeoutMs: number): Promise<void>;
+   *  reply; server-core then sends the plugin a cancel frame for the request. `opts.waitMs` is the
+   *  request frame's `waitForConnection`: server-core waits that long for the target first (awaitClient). */
+  requestWithClient?(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal, opts?: RequestOptions): Promise<{ reply: unknown; client: ClientRow }>;
   close(): void;
   listClients?: () => ClientRow[];
   connectionInfo?: () => ConnectionInfo;
@@ -586,18 +584,13 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
         queue = queue.then(async () => {
           try {
             if (abandoned()) return;
-            // A connect window that runs out is not the error: the request below then fails in the
-            // bridge's own resolveClient with "Figma plugin not connected. Open the file in Figma and
-            // run the plugin." — the text every other path prints — instead of waitForConnection's
-            // "timed out waiting for the plugin to connect" (which said what the daemon did, not what
-            // the caller should do). Same fall-through as figma-pull.ts's listClients wait.
-            if (msg.waitForConnection && !bridge.isConnected()) await bridge.waitForConnection(msg.waitForConnection).catch(() => {});
-            // A named client (not a c<N> connId) whose window has not redialled yet: same bounded wait
-            // as the CLI's own bridge path (figma-pull.ts), so `--client <name>` under a daemon does
-            // not fail on the first file that happened to reconnect after a Figma restart.
-            if (msg.waitForConnection && typeof msg.client === "string" && msg.client && !/^c\d+$/.test(msg.client) && bridge.waitForClient) {
-              await bridge.waitForClient(msg.client, Math.min(msg.waitForConnection, NAMED_CLIENT_WAIT_MS));
-            }
+            // msg.waitForConnection is the caller's connect window (the CLI sends its own, the MCP server
+            // NAMED_CLIENT_WAIT_MS for a named client): the bridge waits for the target first, a named
+            // one capped at NAMED_CLIENT_WAIT_MS once a plugin is connected (server-core awaitClient), so
+            // `--client <name>` does not fail on the first file that happened to reconnect after a Figma
+            // restart. A window that runs out is not the error: the request then fails in the bridge's own
+            // resolveClient ("Figma plugin not connected. Open the file in Figma and run the plugin.") —
+            // the text every other path prints. A client that leaves during the wait ends it (ac.signal).
             // msg.client is the routing target (connId / fileKey / file-name substring). Forwarded
             // verbatim: the bridge owns the matching rules, so the daemon never has to know them.
             // The client the bridge picked rides back on the reply (a fake bridge without
@@ -610,11 +603,11 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
             const onProgress = msg.progress === true
               ? (tick: ProgressTick) => { send(conn, id === undefined ? { progress: tick } : { id, progress: tick }); }
               : undefined;
-            if (abandoned()) return; // the client left during the connect waits above
             if (typeof bridge.requestWithClient === "function") {
-              const o = await bridge.requestWithClient(msg.cmd, msg.args, msg.timeoutMs, msg.client, undefined, onProgress, ac.signal);
+              const o = await bridge.requestWithClient(msg.cmd, msg.args, msg.timeoutMs, msg.client, undefined, onProgress, ac.signal, ifDefined("waitMs", msg.waitForConnection));
               reply(conn, { ok: true, ...ifDefined("id", msg.id), result: o.reply, client: o.client });
             } else {
+              // A bridge without requestWithClient (a minimal fake) has no wait either: asked at once.
               const result = await bridge.request(msg.cmd, msg.args, msg.timeoutMs, msg.client);
               reply(conn, { ok: true, ...ifDefined("id", msg.id), result });
             }
@@ -765,7 +758,7 @@ export function probe(sock: string, timeoutMs = 1500): Promise<boolean> {
 // is connected or sent.
 function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | DaemonControlRequest, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<{ result: unknown; client: ClientRow | null }> {
   return new Promise<{ result: unknown; client: ClientRow | null }>((resolve, reject) => {
-    if (signal?.aborted) return reject(new Error("request aborted before it was sent"));
+    if (signal?.aborted) return reject(abortReason(signal, "request aborted before it was sent"));
     const c = net.createConnection(sock);
     c.setEncoding("utf8");
     let settled = false;
@@ -810,10 +803,7 @@ function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | Dae
       onAbort = () => {
         if (settled) return;
         disarm();
-        const r: unknown = sig.reason;
-        // A bare abort() carries a DOMException "AbortError" (itself an Error in Node) — that names
-        // nothing, so it gets the fixed text; an Error the caller built is passed through as-is.
-        done(reject, r instanceof Error && !(r instanceof DOMException) ? r : new Error("request aborted by the caller"));
+        done(reject, abortReason(sig, "request aborted by the caller"));
         try { c.destroy(); } catch { /* already gone */ }
       };
       sig.addEventListener("abort", onAbort, { once: true });

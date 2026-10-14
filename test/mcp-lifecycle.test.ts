@@ -256,7 +256,7 @@ function fakeBridge(): { b: DaemonBridge; closes(): number; pending(): number; r
   let requests = 0;
   const waiters: Array<() => void> = [];
   const b: DaemonBridge = {
-    port: 0, isConnected: () => true, waitForConnection: async () => {},
+    port: 0, isConnected: () => true,
     request: (cmd) => { requests++; return cmd === "listPages" ? new Promise((r) => { waiters.push(() => r({})); }) : Promise.resolve({}); },
     close: () => { closes++; },
   };

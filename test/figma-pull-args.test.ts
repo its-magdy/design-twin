@@ -85,4 +85,11 @@ console.log("\nfigma-pull args — command ownership guards:");
     && /^--css is a read option for a node\/page walk — --design-system skips/.test(err(["--design-system", "--variant-visuals", "--css"]) ?? ""));
 }
 
+// --timeout: one timer must hold it (setTimeout runs a longer delay, or Infinity, after 1 ms), and a daemon
+// frame cannot carry Infinity (JSON null) — so those are refused up front rather than failing at once later.
+console.log("\nfigma-pull args — --timeout bounds:");
+check("--timeout Infinity is refused, naming the bound", /^--timeout expects a positive number of seconds \(at most 2147483, about 24 days\), got 'Infinity'$/.test(usageError(() => readArgs(["--timeout", "Infinity"])) ?? ""));
+check("--timeout above the bound is refused", /got '2147484'$/.test(usageError(() => readArgs(["--timeout", "2147484"])) ?? ""));
+check("--timeout at the bound is taken, for the connect window too", (() => { const r = readArgs(["--timeout", "2147483"]); return r.connectWaitMs === 2147483000 && r.exportTimeoutMs === 2147483000; })());
+
 report();

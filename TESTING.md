@@ -133,6 +133,9 @@ node test/bridge.test.ts        # expect: all checks pass, exit 0 — determinis
 # do NOT clear an inherited FIGMA_BRIDGE_TOKEN, so a shell that already exports one (e.g. a
 # CI/ephemeral escape-hatch token) defeats the "no token there" setup and the
 # `[doctor-cli] with no token, the plugin probe is SKIPPED` case fails for a different reason.
+node test/await-client.test.ts  # expect: all checks pass, exit 0 — server-core's client registry and the one wait for
+                                 # a Figma client every front-end uses (awaitClient: named target, connId, no target,
+                                 # leave/abort/close, listeners and timers released), on plain objects — binds no port
 node --check bridge/src/server-core.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
 ```
 
