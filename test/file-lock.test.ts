@@ -77,7 +77,7 @@ console.log("a live holder — waited for, then LockBusy:");
   // released by its holder while we wait → taken
   fs.writeFileSync(lock, holder(process.pid, Date.now()));
   // a timer here cannot fire while the main thread blocks in Atomics.wait: a child releases it instead
-  const releaser = spawn(process.execPath, ["-e", `setTimeout(() => require("fs").rmSync(${JSON.stringify(lock)}, { force: true }), 200)`]);
+  const releaser = spawn(process.execPath, ["-e", 'setTimeout(() => require("fs").rmSync(process.argv[1], { force: true }), 200)', lock]);
   const t1 = Date.now();
   const got = withFileLock(lock, () => "mine", { waitMs: 5_000 });
   t("a holder that releases while we wait → the lock is taken then (not LockBusy)", () => got === "mine" && Date.now() - t1 >= 100);
