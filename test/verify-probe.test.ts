@@ -1961,6 +1961,84 @@ if (process.platform !== "win32") {
   check(`closeCapped: a browser child still running after the close (the handle already disconnected) is SIGKILLed (${gone ? "gone" : "still running after 3 s"}${threw ? ", closeCapped threw" : ""})`, gone && !threw);
 }
 
+// The page-side text read, on a minimal fake DOM (no browser): measureElements' `text` keeps a line break the page
+// shows — a <br>, or a newline under white-space pre / pre-wrap / pre-line / break-spaces — as "\n" and collapses every
+// other run of spaces, tabs and newlines; collectCandidates finds "Line one Line two" in "Line one<br>Line two".
+{
+  type FakeNode = FakeText | FakeEl;
+  class FakeText {
+    nodeType = 3;
+    nodeValue: string;
+    constructor(v: string) { this.nodeValue = v; }
+    get textContent(): string { return this.nodeValue; }
+  }
+  class FakeEl {
+    nodeType = 1;
+    tagName: string;
+    css: Record<string, string>;
+    parentElement: FakeEl | null = null;
+    childNodes: FakeNode[];
+    constructor(tag: string, css: Record<string, string>, kids: Array<FakeNode | string>) {
+      this.tagName = tag.toUpperCase();
+      this.css = css;
+      this.childNodes = kids.map((k) => (typeof k === "string" ? new FakeText(k) : k));
+      for (const k of this.childNodes) if (k instanceof FakeEl) k.parentElement = this;
+    }
+    get children(): FakeEl[] { return this.childNodes.filter((n): n is FakeEl => n instanceof FakeEl); }
+    get textContent(): string { return this.childNodes.map((n) => n.textContent).join(""); }
+    getBoundingClientRect() { return { x: 0, y: 0, width: 100, height: 20, left: 0, top: 0, right: 100, bottom: 20 }; }
+    getClientRects() { return [this.getBoundingClientRect()]; }
+    getAttribute(_name: string): string | null { return null; }
+    closest(_sel: string): FakeEl | null { return null; }
+    checkVisibility(): boolean { return true; }
+    contains(o: FakeEl): boolean { for (let p: FakeEl | null = o; p; p = p.parentElement) if (p === this) return true; return false; }
+    querySelectorAll(sel: string): FakeEl[] {
+      const out: FakeEl[] = [];
+      const walk = (e: FakeEl): void => { for (const c of e.children) { if (sel === "*" || c.tagName.toLowerCase() === sel) out.push(c); walk(c); } };
+      walk(this);
+      return out;
+    }
+  }
+  const el = (tag: string, kids: Array<FakeNode | string>, css: Record<string, string> = {}): FakeEl => new FakeEl(tag, css, kids);
+  const cases: Array<{ name: string; node: FakeEl; want: string }> = [
+    { name: "a <br> is a line break", node: el("p", ["Line one", el("br", []), "Line two"]), want: "Line one\nLine two" },
+    { name: "spaces and newlines in source around a <br> are dropped", node: el("p", ["Line one  \n  ", el("br", []), "\n   Line two"]), want: "Line one\nLine two" },
+    { name: "white-space normal: a newline is a space, a run is one space", node: el("p", ["Line   one\n\tLine two"]), want: "Line one Line two" },
+    { name: "white-space pre-line keeps the newline (white-space-collapse preserve-breaks)", node: el("p", ["Line one\n   Line two"], { "white-space-collapse": "preserve-breaks" }), want: "Line one\nLine two" },
+    { name: "white-space pre-wrap keeps it (no white-space-collapse reported: the white-space value)", node: el("p", ["Line one\r\nLine two"], { "white-space": "pre-wrap" }), want: "Line one\nLine two" },
+    { name: "preserve-spaces turns a newline into a space", node: el("p", ["Line one\nLine two"], { "white-space-collapse": "preserve-spaces" }), want: "Line one Line two" },
+    { name: "the white-space is the text node's own element's, not the measured element's", node: el("div", [el("span", ["Line one\nLine two"], { "white-space-collapse": "preserve" }), "\nand more"]), want: "Line one\nLine two and more" },
+    { name: "a nested <br> counts; a non-breaking space is kept as written", node: el("p", [el("b", ["Total", el("br", [])]), "\u00a0due"]), want: "Total\n\u00a0due" },
+  ];
+  const byPath = new Map<string, FakeEl>(cases.map((c, i) => [`p${i}`, c.node]));
+  // only for collectCandidates: a <br> inside a child, with no other separator ("Total<br>due" has textContent "Totaldue")
+  const nested = el("p", [el("b", ["Total", el("br", [])]), "due"]);
+  const body = el("body", [...cases.map((c) => c.node), nested]);
+  const html = el("html", [body]);
+  const fakeDocument = {
+    body, documentElement: html,
+    querySelector: (p: string): FakeEl | null => byPath.get(p) ?? null,
+    querySelectorAll: (sel: string): FakeEl[] => html.querySelectorAll(sel),
+    createRange: () => ({ selectNodeContents: (_n: unknown): void => {}, getBoundingClientRect: () => ({ x: 0, y: 0, width: 50, height: 20, left: 0, top: 0, right: 50, bottom: 20 }) }),
+  };
+  const fakeStyle = (e: FakeEl) => ({ getPropertyValue: (k: string): string => e.css[k] ?? "" });
+  Object.assign(globalThis, { document: fakeDocument, getComputedStyle: fakeStyle, scrollX: 0, scrollY: 0, innerWidth: 1000, innerHeight: 800 });
+  try {
+    const res = PP.measureElements({ frameRect: { x: 0, y: 0, w: 1000, h: 800 }, keys: ["text"], items: cases.map((_c, i) => ({ nodeId: `n${i}`, path: `p${i}`, isText: true, isPaint: false, isPlaceholder: false, sharesWith: null })) });
+    cases.forEach((c, i) => {
+      const got = res[i]?.styles.text;
+      check(`[probe text] ${c.name}: ${JSON.stringify(c.want)}${got === c.want ? "" : ` (got ${JSON.stringify(got)})`}`, got === c.want);
+    });
+    const found = PP.collectCandidates({ frames: [], texts: ["Line one Line two", "Total due"], positions: [] });
+    const at = (i: number): string => `html > body:nth-child(1) > p:nth-child(${i})`;
+    check("[probe text] collectCandidates finds 'Line one<br>Line two' by the text 'Line one Line two'",
+      (found.text["Line one Line two"]?.exact ?? []).some((c) => c.path === at(1)));
+    check("[probe text] …and '<b>Total<br></b>due' by 'Total due' (a nested <br>)", (found.text["Total due"]?.exact ?? []).some((c) => c.path === at(cases.length + 1)));
+  } finally {
+    for (const k of ["document", "getComputedStyle", "scrollX", "scrollY", "innerWidth", "innerHeight"]) Reflect.deleteProperty(globalThis, k);
+  }
+}
+
 check("[LAUNCH_ARGS] the probe's chromium flags include --disable-lcd-text (grayscale text AA; the e2e suites that render references import the same list)", VP.LAUNCH_ARGS.includes("--disable-lcd-text"));
 
 // a refused `measured` status write is worded by why: a lost lock or a busy one is not the run cache refusing it

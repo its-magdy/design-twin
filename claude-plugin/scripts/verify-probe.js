@@ -134,9 +134,22 @@ function collectCandidates(input) {
     if (l) l.push(e);
     else m.set(k, [e]);
   };
+  const hasBr = /* @__PURE__ */ new Set();
+  if (wanted.size && document.body) for (const br of Array.from(document.body.querySelectorAll("br"))) for (let p = br.parentElement; p && !hasBr.has(p); p = p.parentElement) hasBr.add(p);
+  const brText = (e) => {
+    let out = "", k = 0;
+    for (const n of Array.from(e.childNodes)) {
+      if (n.nodeType === 3) out += n.nodeValue || "";
+      else if (n.nodeType === 1) {
+        const c = e.children[k++];
+        if (c) out += c.tagName.toLowerCase() === "br" ? " " : hasBr.has(c) ? brText(c) : c.textContent || "";
+      }
+    }
+    return out;
+  };
   if (wanted.size) {
     for (const el of all) {
-      const t = norm(el.textContent);
+      const t = norm(hasBr.has(el) ? brText(el) : el.textContent);
       if (t) {
         if (wanted.has(t)) push(exact, t, el);
         for (const orig of wantedLower.get(t.toLowerCase()) || []) push(caseless, orig, el);
@@ -168,7 +181,37 @@ function measureElements(input) {
   };
   const r2 = (n) => Math.round(n * 100) / 100;
   const pageRect = (r) => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
-  const collapse = (s) => (s || "").replace(/[ \t\n\r\f]+/g, " ").trim();
+  const keepsBreaks = (e) => {
+    const s = getComputedStyle(e);
+    const c = s.getPropertyValue("white-space-collapse").trim();
+    if (c) return c === "preserve" || c === "preserve-breaks" || c === "break-spaces";
+    return /^(pre|pre-wrap|pre-line|break-spaces)$/.test(s.getPropertyValue("white-space").trim());
+  };
+  const shownText = (root) => {
+    let out = "";
+    const walk = (e) => {
+      let keep = null;
+      let k = 0;
+      for (const n of Array.from(e.childNodes)) {
+        if (n.nodeType === 3) {
+          const v = n.nodeValue || "";
+          if (!/[\n\r]/.test(v)) {
+            out += v;
+            continue;
+          }
+          keep ??= keepsBreaks(e);
+          out += keep ? v.replace(/\r\n?/g, "\n") : v.replace(/[\n\r]/g, " ");
+        } else if (n.nodeType === 1) {
+          const c = e.children[k++];
+          if (!c) continue;
+          if (c.tagName.toLowerCase() === "br") out += "\n";
+          else walk(c);
+        }
+      }
+    };
+    walk(root);
+    return out.replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim();
+  };
   let ctx = null;
   const rgba = (css) => {
     const s = css.trim();
@@ -507,7 +550,7 @@ function measureElements(input) {
           put(k, px(cs.getPropertyValue("opacity")), "no computed opacity");
           break;
         case "text":
-          put(k, item.isText && !item.isPlaceholder ? collapse(el.textContent) : null, item.isPlaceholder ? "an input placeholder: see placeholderText" : "not a TEXT node");
+          put(k, item.isText && !item.isPlaceholder ? shownText(el) : null, item.isPlaceholder ? "an input placeholder: see placeholderText" : "not a TEXT node");
           break;
         case "tag":
           put(k, tag, "");

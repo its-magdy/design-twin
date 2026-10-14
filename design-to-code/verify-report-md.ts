@@ -237,8 +237,12 @@ function deltasMarkdown(deltas: VerifyDelta[]): string[] {
   }
   L.push(`## Value mismatches (${deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token | Group / accepted |", "|---|---|---|---|---|---|---|");
   for (const d of deltas) {
-    const status = d.accepted ? `accepted — ${d.accepted.reason} (${d.accepted.decidedBy}, ${d.accepted.decidedAt})` : d.group ? `\`${d.group}\`` : "";
-    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "—"} | ${status} |`);
+    // every cell that carries a layer name, a measured value, a token or a free-text reason goes through mdText: a | or a
+    // newline in one would split the table row
+    const status = d.accepted ? `accepted — ${mdText(d.accepted.reason)} (${mdText(d.accepted.decidedBy)}, ${mdText(d.accepted.decidedAt)})` : d.group ? `\`${d.group}\`` : "";
+    const tx = isTextRow(d.field);
+    const cell = (v: unknown): string => mdText(tx ? showText(v) : withUnit(v, d.unit));
+    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${mdText(d.name)} \`${d.nodeId}\` | ${d.field}${tx && d.note ? ` — ${mdText(d.note)}` : ""} | ${cell(d.expected)} | ${cell(d.actual)} | ${d.token ? mdText(d.token) : "—"} | ${status} |`);
   }
   L.push("");
   return L;
@@ -364,5 +368,11 @@ function probeInputMarkdown(r: VerifyReportV2): string[] {
   }
   return L;
 }
+// A text row's copy with its whitespace shown — a line break as \n, a tab as \t, each space after the first in a run as
+// ·, any other space character as its escape — so a whitespace-only row is not two identical cells and a designed line
+// break does not split the table row. The row's advice goes in its Field cell: the table has no note column.
+const isTextRow = (field: string): boolean => /^(text|placeholder text)\b/.test(field);
+const showText = (v: unknown): string => String(v).replace(/\r\n|[\n\r]/g, "\\n").replace(/\t/g, "\\t").replace(/ {2,}/g, (m) => " " + "·".repeat(m.length - 1))
+  .replace(/[^\S \t\n\r]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
 // A value that already ends in its unit is printed once (a probe's "28px" must not print as "28pxpx").
 const withUnit = (v: unknown, unit: string | undefined): string => { const t = fmt(v); return unit && !t.endsWith(unit) ? t + unit : t; };

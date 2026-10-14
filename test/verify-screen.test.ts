@@ -236,6 +236,162 @@ console.log("verify-screen — text:");
   ok("[placeholder] a designed NBSP matches a built plain space, and the reverse (no placeholder text delta)",
     !rep.deltas.some((d) => (d.nodeId === "2:7" || d.nodeId === "2:8") && d.field === "placeholder text"));
 }
+{
+  // Copy that differs only in HTML-collapsible whitespace (spaces, tabs, line breaks) is the same copy as rendered —
+  // a LOW row naming which side has more of it, not a HIGH copy delta. The built-in probe reports spaces collapsed and a
+  // line break the page shows (a <br>, a newline under white-space pre-line…) as "\n"; a hand-written probe may report
+  // a raw run. Another space character (U+3000, U+2009) is not collapsed: a LOW row naming it as an escape.
+  const f = { family: "Poppins", size: 14 };
+  const exp = buildExpectation([doc([
+    textNode("2:9", "Double", "Save  changes", f),
+    textNode("2:10", "Break", "Line one\nLine two", f),
+    textNode("2:11", "Built break", "Pay now", f),
+    textNode("2:12", "Cased", "save  draft", { ...f, case: "upper" }),
+    textNode("2:13", "Real change", "Keep  editing", f),
+    textNode("2:14", "One break", "Row one\nRow two", f),
+    textNode("2:15", "Space at break", "Line one\n Line two", f),
+    textNode("2:16", "Case and space", "Send  invite", f),
+    textNode("2:17", "Wide built", "Buy now", f),
+    textNode("2:18", "Wide designed", "Tokyo\u3000Osaka", f),
+    textNode("2:19", "NBSP run", "Pay\u00a0\u00a0now", f),
+    textNode("2:20", "Built run", "Pay later", f),
+    textNode("2:21", "Kept break", "Part one\nPart two", f),
+  ])]);
+  const rep = compare(exp, measured([
+    { nodeId: "2:9", styles: { text: "Save changes" } },
+    { nodeId: "2:10", styles: { text: "Line one Line two" } },
+    { nodeId: "2:11", styles: { text: "Pay\nnow" } },
+    { nodeId: "2:12", styles: { text: "SAVE DRAFT" } },
+    { nodeId: "2:13", styles: { text: "Stop editing" } },
+    { nodeId: "2:14", styles: { text: "Row one\n\nRow two" } },
+    { nodeId: "2:15", styles: { text: "Line one\nLine two" } },
+    { nodeId: "2:16", styles: { text: "send invite" } },
+    { nodeId: "2:17", styles: { text: "Buy\u3000now" } },
+    { nodeId: "2:18", styles: { text: "Tokyo Osaka" } },
+    { nodeId: "2:19", styles: { text: "Pay now" } },
+    { nodeId: "2:20", styles: { text: "Pay  later" } },
+    { nodeId: "2:21", styles: { text: "Part one\nPart two" } },
+  ]));
+  const row = (id: string) => rep.deltas.filter((d) => d.nodeId === id && d.field === "text");
+  const noteOf = (id: string): string => row(id)[0]?.note || "";
+  const lowWith = (id: string, re: RegExp): boolean => { const r = row(id); return r.length === 1 && r[0]?.severity === "low" && re.test(noteOf(id)); };
+  ok("[text] a designed double space against a single built space is a LOW row naming the repeated spaces, white-space and &nbsp;",
+    lowWith("2:9", /^differs only in whitespace: the design has repeated spaces/) && /pre-wrap/.test(noteOf("2:9")) && /&nbsp;/.test(noteOf("2:9")));
+  ok("[text] a designed line break against a built space is a LOW row saying the design has the line break (kept by pre, pre-wrap, pre-line, break-spaces)",
+    lowWith("2:10", /the design has 1 line break here and the build no line breaks/) && /pre-line or break-spaces/.test(noteOf("2:10")));
+  ok("[text] a build line break (a <br>) the design does not have is a LOW row saying the build has it", lowWith("2:11", /the build has 1 line break here and the design no line breaks/));
+  ok("[text] the whitespace rule holds through a text case (UPPER 'save  draft' against 'SAVE DRAFT')", lowWith("2:12", /repeated spaces/));
+  ok("[text] a real copy change in a string with a double space stays HIGH",
+    row("2:13").length === 1 && row("2:13")[0]?.severity === "high" && !/whitespace/.test(noteOf("2:13")));
+  ok("[text] one designed line break against two built ones names the BUILD's extra break, not the design's",
+    lowWith("2:14", /the build has 2 line breaks here and the design 1 line break/) && !/the design has/.test(noteOf("2:14")));
+  ok("[text] a space beside a designed line break is not 'repeated spaces' (HTML drops it where it keeps the break)",
+    lowWith("2:15", /it sits beside a line break or in another order/) && !/repeated spaces/.test(noteOf("2:15")));
+  ok("[text] a case change and a double space together are LOW and name both",
+    lowWith("2:16", /differs only in case and whitespace/) && /repeated spaces/.test(noteOf("2:16")));
+  ok("[text] a built ideographic space against a designed plain space is LOW, naming U+3000 as an escape — never 'HTML collapses it'",
+    lowWith("2:17", /differs only in the kind of space: the design has ordinary spaces where the build has \\u3000 \(ideographic space\)/) && !/collapses it to one/.test(noteOf("2:17")));
+  ok("[text] a designed ideographic space against a plain built one is the kind of space, not 'repeated spaces'",
+    lowWith("2:18", /the design has \\u3000 \(ideographic space\) where the build has ordinary spaces/) && !/repeated spaces/.test(noteOf("2:18")));
+  ok("[text] a designed run of non-breaking spaces against one built space is LOW (repeated spaces: the build's gap is narrower), and the NBSP row still shows",
+    lowWith("2:19", /repeated spaces/) && rep.deltas.some((d) => d.nodeId === "2:19" && /invisible/.test(d.field)));
+  ok("[text] a run only a hand-written probe reports for the build is LOW: it collapses when rendered", lowWith("2:20", /build's text has a run of spaces/));
+  ok("[text] a designed line break the build keeps (\\n from the probe) is no text row at all", row("2:21").length === 0);
+  // the report's markdown: a text row's cells show the whitespace (\n, · per extra space, escapes for other spaces)
+  // and carry the row's advice, and a designed newline cannot split the table row
+  const md = reportToMarkdown(rep);
+  const line = (id: string): string => md.split("\n").find((l) => l.includes(`\`${id}\``) && /\| text/.test(l)) ?? "";
+  ok("[md] a text row's designed double space shows as a · in its cell, so the two cells differ", /\| Save ·changes \| Save changes \|/.test(line("2:9")));
+  ok("[md] a designed line break shows as \\n and keeps the row on one table line", /\| Line one\\\\nLine two \| Line one Line two \|/.test(line("2:10")));
+  ok("[md] another space character shows as its escape", /\| Buy\\\\u3000now \|/.test(line("2:17")));
+  ok("[md] the row carries its advice", /differs only in whitespace: the design has repeated spaces/.test(line("2:9")));
+}
+
+{
+  // A whitespace-only difference is LOW only when it renders alike: a zero-width no-break space or a non-breaking space the
+  // build holds changes what shows (the first merges two words, the second keeps a gap's width); a design's soft line
+  // break (U+2028) is a line break; a tab is not any number of spaces. A real copy change is never downgraded to LOW.
+  const f = { family: "Poppins", size: 14 };
+  const exp = buildExpectation([doc([
+    textNode("3:1", "Merged", "log in", f),
+    textNode("3:2", "Merged back", "sign\ufeffup", f),
+    textNode("3:3", "Wide built", "Pay now", f),
+    textNode("3:4", "Cased wide", "Sign In", f),
+    textNode("3:5", "Wide designed", "Pay\u00a0\u00a0later", f),
+    textNode("3:6", "Soft break", "Line one\u2028Line two", f),
+    textNode("3:7", "Soft break, built space", "Part one\u2028Part two", f),
+    textNode("3:8", "Paragraph", "Para one\u2029Para two", f),
+    textNode("3:9", "Built separator", "Side one Side two", f),
+    textNode("3:10", "Designed tab", "Name\tvalue", f),
+    textNode("3:11", "Built tab", "Key  value", f),
+    textNode("3:12", "Plain copy", "Save", f),
+    textNode("3:13", "Designed run", "Gap\u00a0\u00a0here", f),
+    textNode("3:14", "Designed single", "One\u00a0two", f),
+    textNode("3:15", "Designed spaces", "Hold  there", f),
+    textNode("3:16", "Identical", "Fix\u00a0this  now", f),
+    textNode("3:17", "Wider build", "Two  here", f),
+  ])]);
+  const rep = compare(exp, measured([
+    { nodeId: "3:1", styles: { text: "log\ufeffin" } },
+    { nodeId: "3:2", styles: { text: "sign up" } },
+    { nodeId: "3:3", styles: { text: "Pay\u00a0\u00a0now" } },
+    { nodeId: "3:4", styles: { text: "SIGN\u00a0\u00a0IN" } },
+    { nodeId: "3:5", styles: { text: "Pay\u00a0later" } },
+    { nodeId: "3:6", styles: { text: "Line one\nLine two" } },
+    { nodeId: "3:7", styles: { text: "Part one Part two" } },
+    { nodeId: "3:8", styles: { text: "Para one\nPara two" } },
+    { nodeId: "3:9", styles: { text: "Side one\u2028Side two" } },
+    { nodeId: "3:10", styles: { text: "Name  value" } },
+    { nodeId: "3:11", styles: { text: "Key\tvalue" } },
+    { nodeId: "3:12", styles: { text: "Save" } },
+    { nodeId: "3:13", styles: { text: "Gap  here" } },
+    { nodeId: "3:14", styles: { text: "One two" } },
+    { nodeId: "3:15", styles: { text: "Hold\u00a0\u00a0there" } },
+    { nodeId: "3:16", styles: { text: "Fix\u00a0this  now" } },
+    { nodeId: "3:17", styles: { text: "Two\u00a0\u00a0\u00a0here" } },
+  ]));
+  const row = (id: string) => rep.deltas.filter((d) => d.nodeId === id && d.field === "text");
+  const noteOf = (id: string): string => row(id)[0]?.note || "";
+  const sev = (id: string): string => (row(id).length === 1 ? row(id)[0]?.severity ?? "" : `${row(id).length} rows`);
+  ok("[text] a zero-width no-break space that merges the built words is HIGH, not 'the kind of space'", sev("3:1") === "high" && !/kind of space/.test(noteOf("3:1")));
+  ok("[text] a designed zero-width no-break space against a built space is HIGH too", sev("3:2") === "high" && !/kind of space/.test(noteOf("3:2")));
+  ok("[text] a built run of non-breaking spaces against a designed single space is HIGH and names the gap widths, never 'collapses'",
+    sev("3:3") === "high" && /width of a gap: the design's is 1 space wide and the build's 2 spaces wide/.test(noteOf("3:3")) && !/collapses it to one/.test(noteOf("3:3")));
+  ok("[text] the same through a case change", sev("3:4") === "high" && /width of a gap/.test(noteOf("3:4")));
+  ok("[text] a designed non-breaking run against a built single non-breaking space is LOW: the build's gap is narrower", sev("3:5") === "low" && /the design has repeated spaces/.test(noteOf("3:5")));
+  ok("[text] a designed soft line break (U+2028) against a built newline is no text row", row("3:6").length === 0);
+  ok("[text] a designed soft line break against a built space is the line-break advice, not 'the kind of space'",
+    sev("3:7") === "low" && /the design has 1 line break here and the build no line breaks/.test(noteOf("3:7")) && !/kind of space/.test(noteOf("3:7")));
+  ok("[text] a designed paragraph separator (U+2029) against a built newline is no text row", row("3:8").length === 0);
+  ok("[text] a U+2028 the BUILD carries is still a space character named by its escape", sev("3:9") === "low" && /the build has \\u2028 \(line separator\)/.test(noteOf("3:9")));
+  ok("[text] a designed tab against built spaces says it is a tab, not 'another order'",
+    sev("3:10") === "low" && /the build has no tabs|the design has 1 tab here and the build no tabs/.test(noteOf("3:10")) && !/another order/.test(noteOf("3:10")));
+  ok("[text] a built tab against designed spaces names the build's tab", sev("3:11") === "low" && /the build has 1 tab here and the design no tabs/.test(noteOf("3:11")) && !/another order/.test(noteOf("3:11")));
+  ok("[text] identical copy has no text row", row("3:12").length === 0);
+  ok("[text] a designed run of non-breaking spaces against built ordinary spaces is LOW (a plain run renders one wide), with the repeated-spaces advice",
+    sev("3:13") === "low" && /the design has repeated spaces where the build has fewer/.test(noteOf("3:13")) && /&nbsp;/.test(noteOf("3:13")));
+  ok("[text] two designed plain spaces against two built non-breaking spaces render alike: no text row",
+    row("3:15").length === 0);
+  ok("[text] a designed gap narrower than the build's non-breaking run is HIGH", sev("3:17") === "high" && /the design's is 2 spaces wide and the build's 3 spaces wide/.test(noteOf("3:17")));
+  ok("[text] identical copy with a non-breaking space and a plain double space is no text row", row("3:16").length === 0);
+  ok("[text] a single designed non-breaking space against a built space is no text row (only the invisible-character row)",
+    row("3:14").length === 0 && rep.deltas.some((d) => d.nodeId === "3:14" && /invisible/.test(d.field)));
+  const md = reportToMarkdown(rep);
+  ok("[md] no raw U+2028 reaches the report", !md.includes("\u2028"));
+}
+{
+  // A layer name, a token, an accepted reason and a non-text value are all text the table prints: a | or a newline in one
+  // must not split the row.
+  const f = { family: "Poppins", size: 14 };
+  const exp = buildExpectation([doc([textNode("4:1", "Pipe | name\nnext", "Copy", f)])]);
+  const rep = compare(exp, measured([{ nodeId: "4:1", styles: { text: "Other", fontFamily: "Poppins | Sans" } }]));
+  const d = rep.deltas.find((x) => x.nodeId === "4:1");
+  if (d) { d.token = "color/a|b"; d.accepted = { reason: "kept | on purpose\nsecond line", decidedBy: "a|b", decidedAt: "2026-10-14" }; d.expected = "x | y"; }
+  const lines = reportToMarkdown(rep).split("\n").filter((l) => l.startsWith("| ") && l.includes("`4:1`"));
+  const pipes = (l: string): number => (l.match(/(?<!\\)\|/g) || []).length;
+  ok(`[md] a | or newline in the layer name, token, accepted reason or a value leaves the row one table line with 8 live pipes (got ${lines.map(pipes).join(",")})`,
+    lines.length >= 1 && lines.every((l) => pipes(l) === 8) && lines.some((l) => l.includes("Pipe \\| name next")) && lines.some((l) => l.includes("color/a\\|b")) && lines.some((l) => l.includes("kept \\| on purpose second line")));
+}
 
 // ---------------------------------------------------------------- coverage and interactions
 console.log("verify-screen — a screen can match every pixel and still be a dead mockup:");
