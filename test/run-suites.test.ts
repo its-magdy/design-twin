@@ -387,8 +387,11 @@ console.log("CMD " + JSON.stringify({
     check("[pool] runNode: killAfterMs also ends the processes the run started (its grandchild is gone)", tree !== TIMED_OUT && tree.killed && gpid > 0 && !(await alive()));
     const quick = await within(runNode(tmp, "-e", ["0"], 20_000), TIMED_OUT);
     check("[pool] runNode: a run that exits before killAfterMs is not killed", quick !== TIMED_OUT && !quick.killed && quick.status === 0);
-    const env = await within(runNode(tmp, "-e", ["process.stdout.write(String(process.env.X) + String(!!process.env.PATH))"], 0, { X: "1" }), TIMED_OUT);
-    check(`[pool] runNode: env is the child's WHOLE environment, not added to this one's (X set, PATH gone; saw ${env === TIMED_OUT ? "a timeout" : JSON.stringify(env.stdout)})`, env !== TIMED_OUT && env.stdout === "1false");
+    // a variable of this process's own (not PATH: libuv on Windows copies PATH, SYSTEMROOT and a few more into any env missing them)
+    process.env.DT_RUNNODE_PARENT_ONLY = "1";
+    const env = await within(runNode(tmp, "-e", ["process.stdout.write(String(process.env.X) + String(!!process.env.DT_RUNNODE_PARENT_ONLY))"], 0, { X: "1" }), TIMED_OUT);
+    delete process.env.DT_RUNNODE_PARENT_ONLY;
+    check(`[pool] runNode: env is the child's WHOLE environment, not added to this one's (X set, this process's DT_RUNNODE_PARENT_ONLY gone; saw ${env === TIMED_OUT ? "a timeout" : JSON.stringify(env.stdout)})`, env !== TIMED_OUT && env.stdout === "1false");
   }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

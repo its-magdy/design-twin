@@ -72,5 +72,6 @@ export const runNode = (cwd: string, script: string, args: string[], killAfterMs
   p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
   p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
   p.on("error", (e) => { clearTimeout(timer); resolve({ status: null, stdout, stderr: `${stderr}spawn failed: ${e.message}\n`, ms: Date.now() - t0, killed }); });
-  p.on("close", (status) => { clearTimeout(timer); resolve({ status, stdout, stderr, ms: Date.now() - t0, killed }); });
+  // a killed run's status is null everywhere (Windows: a process ended by taskkill or TerminateProcess exits with code 1)
+  p.on("close", (status) => { clearTimeout(timer); resolve({ status: killed ? null : status, stdout, stderr, ms: Date.now() - t0, killed }); });
 });
