@@ -47,20 +47,24 @@ export const MAX_TIMER_MS = 2147483647;
 export const PLUGIN_REDIAL_MS = 3000;
 
 // How long a bridge whose plugins have only just started connecting holds a request that does not name
-// one file exactly (no target, or part of a file name) before routing it. Two open files redial on their
-// own clocks, so right after a bridge starts, whichever lands first is all there is for a moment — and an
-// unaddressed (or half-addressed) command would silently go to that file instead of being refused as
-// ambiguous. One redial interval plus a margin for the second window's `hello` covers windows a step
-// apart on the same port; windows a port or two apart (up to 2 × PLUGIN_REDIAL_MS later still) are not
-// waited for — that would cost every one-shot command a further 6 s. Counted from the moment the bridge
-// went from no plugin to one, so a bridge whose plugins have been connected for longer (a daemon, a long
-// MCP session) pays nothing; an exact connId, fileKey or file name is routed at once.
+// one file by connId or fileKey (no target, or a file name — names repeat and match as substrings) before
+// routing it. Two open files redial on their own clocks, so right after a bridge starts, whichever lands
+// first is all there is for a moment — and an unaddressed (or half-addressed) command would silently go to
+// that file instead of being refused as ambiguous. One redial interval plus a margin for the second
+// window's `hello` covers windows a step apart on the same port; windows a port or two apart (up to
+// 2 × PLUGIN_REDIAL_MS later still) are not waited for — that would cost every one-shot command a
+// further 6 s. Counted from the moment the bridge went from no plugin to one, and restarted when a plugin
+// leaves while others stay (it is probably redialling), so a bridge whose plugins have been connected for
+// longer (a daemon, a long MCP session) pays nothing until one of them leaves; a connId or fileKey is
+// routed at once. A request's own connect window cannot cut the settle short.
 export const SETTLE_MS = PLUGIN_REDIAL_MS + 500;
 
 // The client-side guard on a request sent through a daemon: the daemon's own command timeout plus every
 // wait the daemon may spend before sending — the connect window, then at most NAMED_CLIENT_WAIT_MS for a
-// named target (server-core awaitClient) — and a margin, so the daemon's own, clearer error always lands
-// before the guard does.
+// named target (server-core awaitClient) — and a margin (it also absorbs the settle, SETTLE_MS), so the
+// daemon's own, clearer error normally lands before the guard does. Not always: the daemon runs requests
+// one at a time and the time a request spends queued behind earlier ones is not counted here, and the
+// MAX_TIMER_MS cap below can cut the sum short.
 // Capped at MAX_TIMER_MS: the guard is one setTimeout, which runs a longer delay after 1 ms.
 export const daemonGuardMs = (timeoutMs: number, connectWaitMs: number = 0): number =>
   Math.min(timeoutMs + connectWaitMs + Math.min(connectWaitMs, NAMED_CLIENT_WAIT_MS) + 30000, MAX_TIMER_MS);

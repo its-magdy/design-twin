@@ -3252,6 +3252,31 @@ void (async () => {
     b.close();
   }
 
+  {
+    // requestWithClient on a bridge with nothing connected yet, given a connect window that ends inside
+    // the settle (the first file lands at 100 ms, the second at 450 ms, the window is 300 ms): the wait
+    // runs to the end of the settle, so the second file is seen and the request is refused, not sent to
+    // the first.
+    const port = nextPort++;
+    const b = core.createBridge(port, { settleMs: 700 });
+    const dial = async (file: string, afterMs: number) => {
+      await sleep(afterMs);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
+      await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });
+      ws.send(JSON.stringify({ type: "hello", instanceId: "i-" + file, file }));
+      return ws;
+    };
+    const first = dial("File A", 100);
+    const second = dial("File B", 450);
+    const t0 = Date.now();
+    const outcome = await b.requestWithClient("ping", {}, 3000, null, undefined, undefined, undefined, { waitMs: 300 }).then(() => "sent", (e: unknown) => asErr(e).message);
+    ok("[settle-request] a connect window that ends inside the settle does not cut the settle short: the second file is seen",
+      Date.now() - t0 >= 440 && /^2 Figma files are connected to the bridge/.test(outcome));
+    (await first).close();
+    (await second).close();
+    b.close();
+  }
+
   // ---------------------------------------------------------------- plugin version reporting
   console.log("\nserver-core — plugin version reporting and staleness:");
   // Live-verified on this machine: a real daemon + a real Figma plugin, both still

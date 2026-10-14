@@ -436,13 +436,18 @@ more for the name; routed through a daemon, the same two windows, spent by the d
 
 **A fresh bridge settles before it guesses.** For 3.5 s after a bridge's first plugin connects (one
 redial interval plus a moment for the next window's hello), a command with **no** `--client`, or one
-whose `--client` only partly matches a file name, is held: a second open file may still be redialling,
+whose `--client` is a file name — whole or partial: names repeat (two `Untitled`) and a name matches as
+a substring (`App` also matches `App (Copy)`) — is held: a second open file may still be redialling,
 and without it the command would silently go to whichever file landed first instead of being refused
-as ambiguous. An exact connId, fileKey or full file name is routed at once, and a bridge whose plugins
-have been connected for longer — a `dtwin serve` daemon, a running MCP session — never waits.
+as ambiguous. The hold outlasts a shorter `--timeout`, which only bounds how long to wait for a first
+plugin. A connId or fileKey is routed at once. A bridge that has had its plugins connected for 3.5 s
+pays nothing — a `dtwin serve` daemon, a running MCP session — until one of them leaves while others
+stay: that window is probably redialling, so the 3.5 s start again. A partial file name is also held
+while another connected window has not yet said which file it is (a few milliseconds, at most 3 s).
 `--list-clients` on its own bridge waits the same 3.5 s, so it lists every window that redialled in
-that time. A window that is several redials behind (it walks the three allowed ports, 3 s each) can
-still land after that; with two files open, address the one you mean.
+that time; behind a running daemon it lists whatever is connected at that moment, with no wait. A window
+that is several redials behind (it walks the three allowed ports, 3 s each) can still land after that;
+with two files open, address the one you mean.
 
 `--client` is an **address**, not a scope — it composes with every other flag:
 ```

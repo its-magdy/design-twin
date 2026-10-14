@@ -249,11 +249,20 @@ for (const [first, second] of [["App Base", "App Docs"], ["App Docs", "App Base"
 {
   const r = reg(SETTLE);
   realSetTimeout(() => connect(r, "App Base", "KEYBASE"), 50);
-  const byName = await timed(r, () => r.awaitClient("App Base", 5000));
   const byKey = await timed(r, () => r.awaitClient("KEYBASE", 5000));
   const byId = await timed(r, () => r.awaitClient("c1", 5000));
-  ok("[settle] an EXACT file name, fileKey or connId is routed at once on a fresh bridge", byName.ms < 150 && byKey.ms < 20 && byId.ms < 20 && clean(byName) && clean(byKey) && clean(byId));
+  ok("[settle] a fileKey or connId is routed at once on a fresh bridge", byKey.ms >= 40 && byKey.ms < 150 && byId.ms < 20 && clean(byKey) && clean(byId));
   ok("[settle] settleLeft says how much of the window is left", r.settleLeft() > SETTLE - 200 && r.settleLeft() <= SETTLE);
+  const byName = await timed(r, () => r.awaitClient("App Base", 5000));
+  ok("[settle] …but a WHOLE file name is not exact (names repeat): it sits out the settle like a partial one", byName.ms >= SETTLE - 150 && byName.ms < SETTLE + 400 && clean(byName));
+}
+for (const [label, first, second] of [["a whole name that two files share", "Untitled", "Untitled"], ["a whole name that is the start of another", "App", "App (Copy)"]] as const) {
+  const r = reg(SETTLE);
+  realSetTimeout(() => connect(r, first), 50);
+  realSetTimeout(() => connect(r, second), 250);
+  const a = await timed(r, () => r.awaitClient(first, 5000));
+  ok(`[settle] ${label}: the wait lasts until the second file lands`, a.ms >= 240 && a.ms < SETTLE && clean(a));
+  ok(`[settle] …and the request is refused as ambiguous (${label})`, errOf(() => r.resolveClient(first)) === `'${first}' matches 2 connected files — be more specific, or use the connId.`);
 }
 {
   const r = reg(SETTLE);
@@ -272,11 +281,96 @@ for (const [first, second] of [["App Base", "App Docs"], ["App Docs", "App Base"
   ok("[settle] …which the next unaddressed wait sits out", c.ms >= SETTLE - 100 && clean(c));
 }
 {
-  // The connect window still bounds the settle: a --timeout shorter than it ends the wait.
+  // A connect window that ends inside the settle is stretched to it: routing at the window would take
+  // the first file to land (the daemon asks once, the CLI's --timeout can be short).
   const r = reg(SETTLE);
   connect(r, "Only File");
   const a = await timed(r, () => r.awaitClient(null, 150));
-  ok("[settle] a window shorter than the settle ends the wait at the window", a.ms >= 140 && a.ms < 400 && clean(a));
+  ok("[settle] a window shorter than the settle is stretched to the settle", a.ms >= SETTLE - 100 && a.ms < SETTLE + 400 && clean(a));
+  const r2 = reg(SETTLE);
+  realSetTimeout(() => connect(r2, "File A"), 100);
+  realSetTimeout(() => connect(r2, "File B"), 450);
+  const b = await timed(r2, () => r2.awaitClient(null, 300));
+  ok("[settle] no target, a 300 ms window, the second file landing after it: the wait still sees it", b.ms >= 440 && b.ms < SETTLE + 400 && clean(b));
+  ok("[settle] …so the request is refused as ambiguous, not sent to the first file", errOf(() => r2.resolveClient(null)) === "2 Figma files are connected to the bridge — say which one to use.");
+  const r3 = reg(SETTLE);
+  realSetTimeout(() => connect(r3, "Design App"), 50);
+  realSetTimeout(() => connect(r3, "Design System"), 400);
+  const c = await timed(r3, () => r3.awaitClient("Design", 200));
+  ok("[settle] a partial name with a short window: the same", c.ms >= 390 && clean(c) && errOf(() => r3.resolveClient("Design")) === "'Design' matches 2 connected files — be more specific, or use the connId.");
+  const r4 = reg(SETTLE);
+  connect(r4, "Only File");
+  const d = await timed(r4, () => r4.awaitClient("Nobody Has This", 150));
+  ok("[settle] a name that matches nothing is stretched too (a later file may be the one), then fails with the list", d.ms >= SETTLE - 100 && d.ms < SETTLE + 400 && clean(d));
+  const e = await timed(r4, () => r4.awaitClient("c9", 150));
+  ok("[settle] a connId is not stretched — it names one socket", e.ms < 20 && clean(e));
+  const z = await timed(r4, () => r4.awaitClient(null, 0));
+  ok("[settle] no window at all does not wait (the caller asked for none)", z.ms < 20 && clean(z));
+}
+
+// A plugin that leaves while others stay is probably redialling: the remaining clients are not the whole
+// picture until the settle has passed again.
+console.log("\nawaitClient — a window leaves and comes back:");
+{
+  const r = reg(SETTLE);
+  connect(r, "File A");
+  const leaver = connect(r, "File B");
+  await sleep(SETTLE + 20);
+  ok("[leave-settle] a settled bridge pays nothing", r.settleLeft() === 0);
+  disconnect(r, leaver);
+  ok("[leave-settle] a client leaving while another stays restarts the settle", r.settleLeft() > SETTLE - 100);
+  realSetTimeout(() => connect(r, "File B"), 150);
+  const a = await timed(r, () => r.awaitClient(null, 5000));
+  ok("[leave-settle] no target: the wait covers the redial gap, so the returning file is seen", a.ms >= 140 && a.ms < SETTLE + 300 && clean(a));
+  ok("[leave-settle] …and the request is refused as ambiguous, not sent to the file that stayed", errOf(() => r.resolveClient(null)) === "2 Figma files are connected to the bridge — say which one to use.");
+  await sleep(SETTLE + 20);
+  r.remove(leaver); // already gone: a late close of a dropped socket restarts nothing
+  ok("[leave-settle] …and a late remove of an entry that is already gone leaves the settle alone", r.settleLeft() === 0);
+  const r2 = reg(SETTLE);
+  const only = connect(r2, "Only File");
+  disconnect(r2, only);
+  ok("[leave-settle] the last client leaving starts no window (nothing is connected to hold)", r2.settleLeft() === 0);
+}
+
+// ------------------------------------------------------------------ a second window still identifying
+console.log("\nawaitClient — a partial name while another window has not said hello:");
+{
+  // A settled bridge: one file identified, another socket open whose hello has not arrived. The name may
+  // belong to that second window too, so the single match is not routed yet.
+  const r = reg();
+  connect(r, "Design App", "KEYDESIGN");
+  const b = connect(r);
+  realSetTimeout(() => r.identify(b, hello("Design System")), 150);
+  const a = await timed(r, () => r.awaitClient("Design", 5000));
+  ok("[identifying] a single partial match waits for the other open socket's hello", a.ms >= 140 && a.ms < 800 && clean(a));
+  ok("[identifying] …and the request is refused as ambiguous", errOf(() => r.resolveClient("Design")) === "'Design' matches 2 connected files — be more specific, or use the connId.");
+  const r2 = reg();
+  connect(r2, "Design App", "KEYDESIGN");
+  const quiet = connect(r2);
+  quiet.connectedMono = performance.now() - (core.IDENTIFY_GRACE_MS - 150);
+  const g = await timed(r2, () => r2.awaitClient("Design", 5000));
+  ok("[identifying] a socket that never says hello holds it only for its identification grace", g.ms >= 100 && g.ms < 700 && g.made <= 3 && clean(g));
+  const k = await timed(r2, () => r2.awaitClient("KEYDESIGN", 5000));
+  ok("[identifying] …and a fileKey, which names one file, never waits for it", k.ms < 20 && clean(k));
+  const r3 = reg();
+  connect(r3, "Design App");
+  connect(r3);
+  const none = await timed(r3, () => r3.awaitClient("Nobody Has This", 200));
+  ok("[identifying] a name with no match ends at the window as before", none.ms >= 190 && none.ms < 500 && clean(none));
+}
+
+// ------------------------------------------------------------------ a connId on a settling bridge
+console.log("\nawaitClient — a connId is ready as soon as that connection is live:");
+{
+  const r = reg(3500);
+  connect(r); // c1, not identified, and the settle has 3.5 s to run
+  const a = await timed(r, () => r.awaitClient("c1", r.settleLeft()));
+  ok("[connId-live] a live, unidentified connId does not wait for any hello, a grace or the settle", a.ms < 20 && clean(a));
+  const r2 = reg(3500);
+  connect(r2);
+  connect(r2, "Other File");
+  const b = await timed(r2, () => r2.awaitClient("c1", 5000));
+  ok("[connId-live] …nor for another client's", b.ms < 20 && clean(b));
 }
 
 // ------------------------------------------------------------------ odd windows

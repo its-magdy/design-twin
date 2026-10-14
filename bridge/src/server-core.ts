@@ -396,7 +396,8 @@ function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOpti
   changes.setMaxListeners(64);
   let connSeq = 0;
   let closed = false;
-  // When the registry last went from no live client to one (monotonic): the settle window counts from it.
+  // When the settle window started (monotonic): the registry went from no live client to one, or a client
+  // left while others stayed. The window counts from it.
   let liveSince: number | null = null;
   const changed = (): void => { changes.emit("change"); };
 
@@ -427,6 +428,9 @@ function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOpti
   function remove(entry: ClientEntry<S>): void {
     if (clients.get(entry.connId) !== entry) return;
     clients.delete(entry.connId);
+    // A window that leaves usually comes back a redial later (a reload, a Figma restart). Until then the
+    // clients that remain are not the whole picture, so an unaddressed request waits the settle again.
+    if (live().length) liveSince = performance.now();
     changed();
   }
 
@@ -514,25 +518,32 @@ function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOpti
    * Wait, bounded, until `target` can be routed — the one wait every front-end uses before a request
    * (figma-pull's own bridge, the daemon for a request that carries a connect window, the MCP server for
    * a named `client`, and any request while the bridge is still settling). Resolves when:
-   *   - a NAMED target (file name or fileKey, not a connId) matches: at once for a single EXACT match
-   *     (its connId, fileKey or whole file name), or for several matches (the ambiguity is resolveClient's
-   *     to report); a single partial match only once the bridge has settled (below). Every open plugin
-   *     window redials on its own clock (figma-plugin ui.html), so with two files open whichever lands
-   *     first is all there is for a moment (seen live: `--client "Design System"` failed with only the
-   *     other file listed, and that file connected two seconds later). And a socket that is open is not
-   *     yet identified: its `hello`, which carries the file name, arrives a beat later ("one run in four
-   *     failed").
-   *   - no target, or a connId: a live client has identified itself, or has been connected for
-   *     IDENTIFY_GRACE_MS without doing so — and, with no target, the bridge has settled or several
-   *     clients are already connected (resolveClient then refuses to guess);
+   *   - a NAMED target (file name or fileKey, not a connId) matches: at once for a single match by fileKey,
+   *     or for several matches (the ambiguity is resolveClient's to report); a single match by file name
+   *     only once the bridge has settled and no connected client is still waiting to identify itself
+   *     (below). File names are not unique and a name matches as a substring, so one match is not yet the
+   *     only candidate. Every open plugin window redials on its own clock (figma-plugin ui.html), so with
+   *     two files open whichever lands first is all there is for a moment (seen live: `--client "Design
+   *     System"` failed with only the other file listed, and that file connected two seconds later). And a
+   *     socket that is open is not yet identified: its `hello`, which carries the file name, arrives a beat
+   *     later ("one run in four failed");
+   *   - a connId: that connection is live (it needs no identification), or some client has identified
+   *     itself (or been connected IDENTIFY_GRACE_MS without doing so), so a connId that is not there fails
+   *     with the connected list instead of holding the window;
+   *   - no target: a live client has identified itself, or has been connected for IDENTIFY_GRACE_MS without
+   *     doing so — and the bridge has settled or several clients are already connected (resolveClient then
+   *     refuses to guess);
    *   - the window runs out: `waitMs` (Infinity: no end) for a first live client; once one is live, a
    *     named target gets min(waitMs, NAMED_CLIENT_WAIT_MS) from that moment, so a name that never
-   *     matches fails with the connected list instead of holding the whole connect window;
+   *     matches fails with the connected list instead of holding the whole connect window. A window (> 0)
+   *     that ends before the settle does is stretched to it for a target that is not a connId, since
+   *     routing at the window would take the first file to land;
    *   - `signal` aborts, or the registry is cleared (the bridge closed).
-   * SETTLED: settleMs (timeouts.ts SETTLE_MS) have passed since the registry went from no live client to
-   * one. Until then a target that is not exact could be routed to the first file to land while another
-   * open file's window is a redial behind — a silent wrong-file export — so it waits; the window still
-   * bounds that wait. A bridge whose plugins have been connected longer pays nothing.
+   * SETTLED: settleMs (timeouts.ts SETTLE_MS) have passed since the settle window started — the registry
+   * went from no live client to one, or a client left while others stayed (it is probably redialling).
+   * Until then a target that is not routed by connId or fileKey could go to the first file to land while
+   * another open file's window is a redial behind — a silent wrong-file export — so it waits. A bridge
+   * whose plugins have been connected longer pays nothing.
    * Never rejects: resolveClient, run afterwards, says what is wrong with whatever is connected then.
    * Woken by the registry's change event (a connect, a `hello`, a close) — no polling; the one timer is the
    * next moment the answer can change without an event (the window, the settle, an identification grace),
@@ -545,7 +556,8 @@ function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOpti
     const named = t !== "" && !connId;
     const windowMs = waitMs > 0 ? waitMs : 0; // NaN, 0 and below: no wait; Infinity: no end
     const capMs = namedCapMs >= 0 ? namedCapMs : NAMED_CLIENT_WAIT_MS; // NaN or negative: the default, not a timer that never settles
-    const exact = (e: ClientEntry<S>): boolean => e.connId === t || (e.fileKey !== null && e.fileKey === t) || e.file === t;
+    // Only an id names one socket: file names repeat ("Untitled") and match as substrings ("App" in "App (Copy)").
+    const exact = (e: ClientEntry<S>): boolean => e.connId === t || (e.fileKey !== null && e.fileKey === t);
     const start = performance.now();
     let firstLiveAt: number | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -569,23 +581,28 @@ function createRegistry<S extends RegistrySocket = WebSocket>(opts: RegistryOpti
         if (entries.length && firstLiveAt === null) firstLiveAt = now;
         const settleAt = liveSince === null ? now : liveSince + settleMs;
         const settled = now >= settleAt;
+        // A client that has not sent its hello yet may be another window of the file being asked for.
+        const identifying = entries.some((e) => !e.instanceId && now - e.connectedMono < IDENTIFY_GRACE_MS);
         let ready: boolean;
         if (named) {
           const matched = matchClient(entries, t);
           const [only] = matched;
-          ready = matched.length > 1 || (only !== undefined && (exact(only) || settled));
+          ready = matched.length > 1 || (only !== undefined && (exact(only) || (settled && !identifying)));
         } else {
           const someone = entries.some((e) => !!e.instanceId || now - e.connectedMono >= IDENTIFY_GRACE_MS);
-          ready = someone && (connId || settled || entries.length > 1);
+          const there = connId && entries.some((e) => e.connId === t); // a connId names one socket: identification adds nothing
+          ready = there || (someone && (connId || settled || entries.length > 1));
         }
         if (ready) return finish();
-        const deadline = named && firstLiveAt !== null ? firstLiveAt + Math.min(windowMs, capMs) : start + windowMs;
+        let deadline = named && firstLiveAt !== null ? firstLiveAt + Math.min(windowMs, capMs) : start + windowMs;
+        // A window that ends inside the settle would route to whichever file has landed so far.
+        if (!connId && windowMs > 0 && entries.length && !settled) deadline = Math.max(deadline, settleAt);
         if (now >= deadline) return finish();
         // The next moment the answer can change without an event: the window, the settle, or an
         // unidentified client's grace.
         let wake = deadline;
         if (!connId && entries.length && !settled) wake = Math.min(wake, settleAt);
-        if (!named) for (const e of entries) if (!e.instanceId) wake = Math.min(wake, e.connectedMono + IDENTIFY_GRACE_MS);
+        for (const e of entries) if (!e.instanceId && now - e.connectedMono < IDENTIFY_GRACE_MS) wake = Math.min(wake, e.connectedMono + IDENTIFY_GRACE_MS);
         if (timer) clearTimeout(timer);
         timer = setTimeout(check, Math.min(Math.max(Math.ceil(wake - now), 1), MAX_TIMER_MS));
         timer.unref();
@@ -986,7 +1003,8 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   function requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal, opts: RequestOptions = {}): Promise<RequestOutcome<C>> {
     if (signal?.aborted) return Promise.reject(abortReason(signal, "request aborted before it was sent"));
     // A bridge that is still settling holds every request for the rest of that window (awaitClient routes
-    // an exact target at once), so a fresh bridge never routes a vague one to the first file to land.
+    // a connId or fileKey at once), so a fresh bridge never routes a vague one to the first file to land.
+    // A connect window shorter than the rest of the settle is stretched to it inside awaitClient.
     const asked = opts.waitMs ?? 0;
     const waitMs = Math.max(asked > 0 ? asked : 0, registry.settleLeft());
     if (!(waitMs > 0)) return dispatch(cmd, args, timeoutMs, target, stallMs, onProgress, signal);

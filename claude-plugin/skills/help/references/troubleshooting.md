@@ -90,9 +90,11 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   wrong file looks exactly like a correct one. Give each file its own output dir (`design/base`,
   `design/lib`) so exports don't collide.
 - **A one-shot command waits ~3.5 s after the plugin connects** → the fresh bridge is settling: with no
-  `--client`, or one that only partly matches a file name, it waits one plugin redial for a second open
-  file before routing, so it refuses to guess instead of picking whichever file landed first. An exact
-  connId, fileKey or full file name skips it, and so does a running `dtwin serve` daemon. A window
+  `--client`, or one that is a file name (whole or partial — names repeat and match as substrings), it
+  waits one plugin redial for a second open file before routing, so it refuses to guess instead of picking
+  whichever file landed first; a shorter `--timeout` does not cut it short. A connId or fileKey skips it.
+  A running `dtwin serve` daemon or MCP session pays nothing once its plugins have been connected for
+  3.5 s, but waits again when one window leaves while others stay (it is probably redialling). A window
   several redials behind can still land later — with two files open, always pass `--client`.
 - **A connection that sat idle came back as a different `instanceId`** → Figma restarted the plugin
   runtime. Don't leave the Figma window **minimized** (its renderer gets suspended); occluded is fine.

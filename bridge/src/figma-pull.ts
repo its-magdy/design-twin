@@ -996,9 +996,10 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
     // plugin's `hello` and, with two files open, against the OTHER file's window — whichever redials
     // first is the only one connected for a moment (seen live) — so once a plugin is connected a named
     // target gets min(--timeout, NAMED_CLIENT_WAIT_MS) more to show up before the request resolves it.
-    // With no target (this includes --list-clients) or a partial name, the fresh bridge also settles
-    // first (timeouts.ts SETTLE_MS), so a second open file a redial behind is connected — and the command
-    // refused as ambiguous, or listed — instead of the first file to land being taken silently.
+    // With no target (this includes --list-clients) or a file name, whole or partial, the fresh bridge also
+    // settles first (timeouts.ts SETTLE_MS), even past a shorter --timeout, so a second open file a redial
+    // behind is connected — and the command refused as ambiguous, or listed — instead of the first file to
+    // land being taken silently.
     const tConnect = Date.now();
     await b.awaitClient(client, connectWaitMs);
     // "No plugin connected" means none ever did: one that connected and has gone again is the request's
