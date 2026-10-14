@@ -617,9 +617,11 @@ console.log("build-screen docs (quick keys + export docs):");
     && /design-diff\.js" design\/export --out design\/changes\/<screen>-shared\.md/.test(syncSkill)
     && !/design-system\/(tokens|styles\.\w+|components\.\w+|hygiene)\.json/.test(syncSkill.replace(/drift-lint\.js"[^`]*`/g, ""))
     && !/bridge\/src|design\/sync\/|not found/.test(syncSkill));
-  check("sync-design: the next sync re-runs step 2 (a spent snapshot is replaced), an unspent one is refused and --force is not the answer; syncs[] records both reports; no-export-set projects skip the shared diff",
+  check("sync-design: the next sync re-runs step 2 (a spent snapshot is replaced), an unspent one is refused and --force is only for an unreadable snapshot, a re-pull outside a sync is named; syncs[] records both reports; no-export-set projects skip the shared diff",
     /once step 4 has diffed against a snapshot, that snapshot is spent, and `--snapshot` replaces it/.test(syncSkill)
     && /Do not reach for `--force` then; run step 4 first/.test(syncSkill) && !/always safe/.test(syncSkill)
+    && /"already diffed against an earlier export" means the screen was re-pulled outside a sync/.test(syncSkill)
+    && /The one case for `--force` is a snapshot step 4 reports as unreadable \(it cannot be diffed, so it is no baseline to lose\): re-run this step with `--force`/.test(syncSkill)
     && /diff:\["design\/changes\/<screen>\.md", "design\/changes\/<screen>-shared\.md"\]/.test(syncSkill)
     && /unreadable — that one exits 2 with the report still written/.test(syncSkill) && /has nothing for the second command \(it exits 2 saying so\): skip it/.test(syncSkill));
   const readme21 = flat(read("bridge/README.md"));

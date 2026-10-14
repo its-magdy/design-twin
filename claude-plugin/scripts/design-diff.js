@@ -964,20 +964,20 @@ function realOf(p) {
     return d === p ? p : path3.join(realOf(d), path3.basename(p));
   }
 }
-function projectRoot(abs, cwd) {
-  const inside = (dir) => {
-    const r = path3.relative(dir, abs);
-    return r !== "" && !r.startsWith("..") && !path3.isAbsolute(r);
-  };
-  if (inside(path3.join(cwd, DESIGN_DIR))) return cwd;
-  for (let d = cwd; path3.dirname(d) !== d; d = path3.dirname(d)) if (path3.basename(d) === DESIGN_DIR && inside(d)) return path3.dirname(d);
-  return cwd;
+var escapes = (rel) => rel === "" || rel === ".." || rel.startsWith(".." + path3.sep) || path3.isAbsolute(rel);
+function relUnder(base, abs) {
+  const logical = path3.relative(base, abs);
+  if (!escapes(logical)) return logical;
+  const real = path3.relative(realOf(base), realOf(abs));
+  return escapes(real) ? null : real;
 }
 function snapshotPath(file, cwd = process.cwd()) {
-  const realCwd = realOf(cwd), abs = realOf(path3.resolve(cwd, file)), root = projectRoot(abs, realCwd);
-  const rel = path3.relative(path3.join(root, DESIGN_DIR), abs);
-  const flat = (rel.startsWith("..") ? path3.basename(file) : rel).split(path3.sep).join("__");
-  return path3.join(root, SNAPSHOT_DIR, flat);
+  const abs = path3.resolve(cwd, file);
+  for (let d = cwd; ; d = path3.dirname(d)) {
+    const rel = relUnder(path3.join(d, DESIGN_DIR), abs);
+    if (rel !== null) return path3.join(d, SNAPSHOT_DIR, rel.split(path3.sep).join("__"));
+    if (path3.dirname(d) === d) return path3.join(cwd, SNAPSHOT_DIR, path3.basename(file));
+  }
 }
 function hashAssetBytes(fileName, buf) {
   return sha1Hex(normalizeForCompare(fileName, buf));
@@ -1015,7 +1015,7 @@ function redrawnAssets(file, newDoc, prev, cwd) {
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
     else if (prev.kind === "git") {
       try {
-        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path3.relative(realOf(cwd), realOf(path3.join(now.root, a))).split(path3.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
+        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + (relUnder(cwd, path3.join(now.root, a)) ?? path3.relative(cwd, path3.join(now.root, a))).split(path3.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
       } catch {
       }
     }
@@ -1035,17 +1035,13 @@ function previous(file, against, cwd = process.cwd(), current = null) {
     if (!("doc" in r)) throw new Error(`the snapshot ${path3.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force, or pass --against <an older copy>`);
     found.push({ doc: r.doc, source: path3.relative(cwd, snap), kind: "snapshot", assets });
   }
-  let prevCopy;
   if (fs5.existsSync(snap + ".prev")) {
     const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord);
     const r = readJson(snap + ".prev", anyJson);
-    if ("doc" in r) {
-      prevCopy = { doc: r.doc, source: path3.relative(cwd, snap) + ".prev", kind: "snapshot", assets };
-      found.push(prevCopy);
-    }
+    if ("doc" in r) found.push({ doc: r.doc, source: path3.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
   }
   try {
-    const rel = path3.relative(realOf(cwd), realOf(path3.resolve(cwd, file))).split(path3.sep).join("/");
+    const rel = (relUnder(cwd, path3.resolve(cwd, file)) ?? path3.relative(cwd, path3.resolve(cwd, file))).split(path3.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
     const doc = JSON.parse(text);
     found.push({ doc, source: "git HEAD", kind: "git" });
@@ -1063,13 +1059,13 @@ function previous(file, against, cwd = process.cwd(), current = null) {
     return null;
   };
   const now = at(current), notes = [];
-  const notSame = found.filter((c) => !(now && at(c.doc) === now));
-  for (const c of found) if (!notSame.includes(c)) notes.push(`${c.source} is the SAME export as ${file} (exportedAt ${now}) \u2014 ${c.kind === "snapshot" ? "the snapshot was taken after the re-pull" : "the new export is already committed"}, so it was not used as the baseline.`);
-  const useful = notSame.some((c) => c.kind === "snapshot" && c !== prevCopy) ? notSame.filter((c) => c !== prevCopy) : notSame;
+  const useful = found.filter((c) => !(now && at(c.doc) === now));
+  for (const c of found) if (!useful.includes(c)) notes.push(`${c.source} is the SAME export as ${file} (exportedAt ${now}) \u2014 ${c.kind === "snapshot" ? "the snapshot was taken after the re-pull" : "the new export is already committed"}, so it was not used as the baseline.`);
   useful.sort((x, y) => String(at(y.doc) || "").localeCompare(String(at(x.doc) || "")));
   const [newest, older] = useful;
   if (newest === void 0) return { ...firstFound, notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
   if (older !== void 0 && at(newest.doc) !== at(older.doc)) notes.push(`${older.source} is older than ${newest.source} \u2014 used the newer one, so changes already applied are not listed again.`);
+  if (newest.source === path3.relative(cwd, snap) && diffedSince(file, snap)) notes.push(`${newest.source} was already diffed against an earlier export of ${file}, and the file was re-pulled since \u2014 this lists everything since that diff, including changes the earlier sync already applied.`);
   return { ...newest, notes };
 }
 var DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
@@ -1131,15 +1127,21 @@ function markDiffed(file, cwd) {
     }
   }
 }
-function isSpent(file, snap) {
-  let marked;
+var diffedHash = (snap) => {
   try {
-    marked = fs5.readFileSync(snap + DIFFED, "utf8").trim();
+    return fs5.readFileSync(snap + DIFFED, "utf8").trim() || null;
   } catch {
-    return false;
+    return null;
   }
-  return marked !== "" && marked === fileHash(file);
-}
+};
+var isSpent = (file, snap) => {
+  const m = diffedHash(snap);
+  return m !== null && m === fileHash(file);
+};
+var diffedSince = (file, snap) => {
+  const m = diffedHash(snap);
+  return m !== null && m !== fileHash(file);
+};
 var errorText = (e) => String(e && typeof e === "object" && "message" in e ? e.message : void 0);
 function compareFile(file, current, against, cwd) {
   let prev;
@@ -1156,8 +1158,22 @@ function compareFile(file, current, against, cwd) {
     return { error: errorText(e) };
   }
   diff.warnings = [...prev.notes, ...diff.warnings || []];
-  if (!against) markDiffed(file, cwd);
   return { result: { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff }, same: !!prev.same };
+}
+function writeReport(out, text, summary) {
+  if (!out) {
+    process.stdout.write(text);
+    return true;
+  }
+  try {
+    fs5.mkdirSync(path3.dirname(path3.resolve(out)), { recursive: true });
+    fs5.writeFileSync(out, text);
+  } catch (e) {
+    console.error(`design-diff: cannot write ${out}: ${errorText(e)}`);
+    return false;
+  }
+  console.log(`wrote ${out} \u2014 ${summary()}`);
+  return true;
 }
 var changeCount = (r) => r.summary.added + r.summary.removed + r.summary.changed + (r.summary.reordered || 0);
 var noBaselineHint = (what) => `no snapshot in ${SNAPSHOT_DIR.split(path3.sep).join("/")}/, and it is not committed in git.
@@ -1191,6 +1207,7 @@ function diffDirectory(dir, json, out) {
   }
   const d = { dir, results: [], notCompared: [] };
   const failed = [];
+  const compared = [];
   let missing = 0;
   for (const file of files) {
     const r = readJson(file, anyJson);
@@ -1201,8 +1218,11 @@ function diffDirectory(dir, json, out) {
     } else if ("none" in c) {
       missing++;
       d.notCompared.push({ file, reason: `no snapshot and not committed in git \u2014 nothing older to compare against` });
-    } else if (c.same) d.notCompared.push({ file, reason: `the same export as ${c.result.against} \u2014 not re-pulled since it was snapshotted (or snapshotted after the re-pull)` });
-    else d.results.push(c.result);
+    } else {
+      compared.push(file);
+      if (c.same) d.notCompared.push({ file, reason: `the same export as ${c.result.against} \u2014 not re-pulled since it was snapshotted (or snapshotted after the re-pull)` });
+      else d.results.push(c.result);
+    }
   }
   for (const file of gone) d.notCompared.push({ file, reason: "in the snapshot, no longer in the export" });
   if (files.length && missing === files.length) {
@@ -1210,12 +1230,12 @@ function diffDirectory(dir, json, out) {
     return 2;
   }
   const text = json ? JSON.stringify(d, null, 2) + "\n" : directoryMarkdown(d);
-  if (out) {
-    fs5.mkdirSync(path3.dirname(path3.resolve(out)), { recursive: true });
-    fs5.writeFileSync(out, text);
+  const wrote = writeReport(out, text, () => {
     const changed = d.results.filter((r) => changeCount(r)).length, warned = d.results.filter((r) => r.warnings.length).length;
-    console.log(`wrote ${out} \u2014 ${d.results.length} file(s) compared, ${changed} changed, ${d.notCompared.length} not compared${warned ? ` \u2014 ${warned} with warning(s), read them` : ""}`);
-  } else process.stdout.write(text);
+    return `${d.results.length} file(s) compared, ${changed} changed, ${d.notCompared.length} not compared${warned ? ` \u2014 ${warned} with warning(s), read them` : ""}`;
+  });
+  if (!wrote) return 1;
+  for (const file of compared) markDiffed(file, process.cwd());
   for (const line of failed) console.error(line);
   return failed.length ? 2 : 0;
 }
@@ -1272,22 +1292,23 @@ function main(argv) {
       }
       const replacing = fs5.existsSync(dest) && !identical;
       if (replacing) {
-        const allowed = follows !== void 0 ? !refusedKeys.has(follows) : force || isSpent(f, dest);
-        if (!allowed) {
+        const spent = follows === void 0 && isSpent(f, dest);
+        if (follows !== void 0 ? refusedKeys.has(follows) : !force && !spent) {
           if (follows === void 0) {
-            console.error(`design-diff: ${path3.relative(process.cwd(), dest)} already exists, would change, and no diff has used it yet \u2014 refusing to overwrite it (diff first; or pass --force to replace it, the old one is kept as .prev).`);
+            const rel = path3.relative(process.cwd(), dest);
+            console.error(diffedSince(f, dest) ? `design-diff: ${rel} was already diffed against an earlier export, and ${f} was re-pulled since \u2014 refusing to overwrite it. Run the diff now to see everything since that diff (it repeats changes the earlier sync applied), then snapshot again.` : `design-diff: ${rel} already exists, would change, and no diff has used it yet \u2014 refusing to overwrite it (diff first; or pass --force to replace it, the old one is kept as .prev).`);
             refused++;
             refusedKeys.add(key);
           }
           continue;
         }
-        try {
-          fs5.copyFileSync(dest, dest + ".prev");
-        } catch {
-        }
-        try {
-          if (fs5.existsSync(dest + ".assets.json")) fs5.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
-        } catch {
+        const keepPrev = follows === void 0 && !spent;
+        for (const [from, to] of [[dest, dest + ".prev"], [dest + ".assets.json", dest + ".assets.json.prev"]]) {
+          try {
+            if (keepPrev && fs5.existsSync(from)) fs5.copyFileSync(from, to);
+            else if (!keepPrev) fs5.rmSync(to, { force: true });
+          } catch {
+          }
         }
       }
       if (!identical) {
@@ -1304,7 +1325,7 @@ function main(argv) {
         }
       } catch {
       }
-      console.log(`snapshot: ${f} -> ${path3.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : replacing ? " (replaced; the old one is kept as .prev)" : ""}`);
+      console.log(`snapshot: ${f} -> ${path3.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : replacing ? " (replaced)" : ""}`);
     }
     return refused || missing ? 1 : 0;
   }
@@ -1335,11 +1356,8 @@ ${USAGE}`);
   }
   const result = c.result;
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${result.against}`);
-  if (out) {
-    fs5.mkdirSync(path3.dirname(path3.resolve(out)), { recursive: true });
-    fs5.writeFileSync(out, text);
-    console.log(`wrote ${out} \u2014 ${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`);
-  } else process.stdout.write(text);
+  if (!writeReport(out, text, () => `${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`)) return 1;
+  if (!against) markDiffed(file, process.cwd());
   return 0;
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

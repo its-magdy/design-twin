@@ -90,11 +90,13 @@ writes the real path here, not there).
    can't be computed, and the choices are an older copy passed with `--against`, or a careful manual
    comparison of the code against the new export. Only a computed diff is presented as a diff.
    **The next sync just runs this step again**: once step 4 has diffed against a snapshot, that
-   snapshot is spent, and `--snapshot` replaces it (keeping the old one as `<name>.prev`) as long as
-   the export is still the one step 4 compared. A snapshot no diff has used yet — or one whose export
-   was re-pulled again since — is refused with exit 1 rather than replaced: it is the only copy older
-   than the export on disk. Do not reach for `--force` then; run step 4 first. An identical snapshot is a
-   silent no-op.
+   snapshot is spent, and `--snapshot` replaces it as long as the export is still the one step 4
+   compared. A snapshot no diff has used yet is refused with exit 1 rather than replaced: it is the
+   only copy older than the export on disk. Do not reach for `--force` then; run step 4 first. Refused
+   as "already diffed against an earlier export" means the screen was re-pulled outside a sync: step
+   4's report then also lists what the earlier sync applied (it warns) — skip those. An identical
+   snapshot is a silent no-op. The one case for `--force` is a snapshot step 4 reports as unreadable
+   (it cannot be diffed, so it is no baseline to lose): re-run this step with `--force`.
 
 3. **Re-pull the same scope**, not the whole file — `dtwin pull --node <root id>` (or
    `mcp__designtwin__figma_export_url` with `writeToDisk: true`). **Before re-pulling, prefer a running

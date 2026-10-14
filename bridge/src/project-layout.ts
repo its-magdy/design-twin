@@ -161,8 +161,8 @@ delete the whole directory and re-pull and you lose nothing.
 
 \`design-diff.ts --snapshot <file or export dir>\` copies a file here BEFORE you re-pull it, so the sync-design skill
 can diff the old export against the new one afterwards. It is non-destructive: a snapshot that would
-replace an existing, DIFFERENT one is refused until a diff has used the old one (or you pass
-\`--force\`), and the old copy is kept as \`<name>.prev\` — see \`claude-plugin/skills/sync-design/SKILL.md\`. It is not part of the
+replace an existing, DIFFERENT one is refused until a diff has used the old one, or you pass
+\`--force\` (which keeps the old copy as \`<name>.prev\`) — see \`claude-plugin/skills/sync-design/SKILL.md\`. It is not part of the
 Figma-owned export above and not something a re-pull ever writes to; delete it any time, it only
 affects what the next diff compares against.
 

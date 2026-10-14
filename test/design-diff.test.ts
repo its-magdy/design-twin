@@ -732,4 +732,97 @@ check("run from inside design/, a snapshot still lands in <project>/design/.sync
     && parseAs(d.stdout, isScreenResult, "design-diff --json").baseline === "snapshot";
 })());
 
+
+console.log("CLI — a second sync, more:");
+check("a file changed in sync 1 and NOT re-pulled in sync 2 is 'not re-pulled' in the 2nd report — the spent snapshot leaves no .prev to re-report it from", (() => {
+  const { root, exp } = dirProject();
+  cli(root, "--snapshot", exp);
+  rewrite(root, path.join(exp, "design-system", "styles.text.json"), (d) => { d.exportedAt = "2026-02-01T00:00:00Z"; d.styles = []; });
+  cli(root, exp);
+  const s2 = cli(root, "--snapshot", exp);
+  rewrite(root, path.join(exp, "variables.json"), (d) => { d.exportedAt = "2026-03-01T00:00:00Z"; d.variables = [variable({ name: "brand", type: "COLOR", values: { Light: "#333333" } })]; }); // only this is re-pulled
+  const second = cli(root, exp).stdout;
+  const prevs = fs.readdirSync(path.join(root, "design", ".sync")).filter((f) => f.endsWith(".prev"));
+  return s2.status === 0 && prevs.length === 0 && !/Styles removed/.test(second) && !/\.prev/.test(second)
+    && /^- `[^`]*styles\.text\.json`: the same export as .* not re-pulled/m.test(second) && /#111111 → #333333/.test(second);
+})());
+check("replacing a spent snapshot also drops a .prev an earlier --force left, so it never resurfaces as a baseline", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  cli(root, "--snapshot", LOGIN);
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  cli(root, "--snapshot", "--force", LOGIN); // .prev = v1
+  putScreen(root, "v3", "2026-03-01T00:00:00Z");
+  cli(root, LOGIN); // spends the v2 snapshot
+  cli(root, "--snapshot", LOGIN);
+  putScreen(root, "v4", "2026-04-01T00:00:00Z");
+  const d = parseAs(cli(root, LOGIN, "--json").stdout, isScreenResult, "design-diff --json");
+  const prevs = fs.readdirSync(path.join(root, "design", ".sync")).filter((f) => f.endsWith(".prev"));
+  return prevs.length === 0 && !d.warned && d.changed[0]?.fields[0]?.before === "v3";
+})());
+check("re-pulled OUTSIDE a sync (spent at E1, now E2): step 2 says it was already diffed and re-pulled since, and the diff warns that the earlier sync's changes are listed again", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  cli(root, "--snapshot", LOGIN);
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  cli(root, LOGIN);
+  putScreen(root, "v3", "2026-03-01T00:00:00Z");
+  const s = cli(root, "--snapshot", LOGIN);
+  const d = parseAs(cli(root, LOGIN, "--json").stdout, isScreenResult, "design-diff --json");
+  return s.status === 1 && /already diffed against an earlier export, and .* was re-pulled since/.test(s.stderr) && !/no diff has used it yet/.test(s.stderr)
+    && d.warnings.some((w) => /already diffed against an earlier export .* including changes the earlier sync already applied/.test(w));
+})());
+check("a report that cannot be written is one line (exit 1, no stack) and spends nothing", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  const vars = path.join(root, "design", "export", "variables.json");
+  fs.writeFileSync(vars, JSON.stringify(tokens({ exportedAt: "2026-01-01T00:00:00Z", variables: [] })));
+  cli(root, "--snapshot", LOGIN, path.join("design", "export"));
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  fs.writeFileSync(vars, JSON.stringify(tokens({ exportedAt: "2026-02-01T00:00:00Z", variables: [] })));
+  fs.mkdirSync(path.join(root, "design", "changes", "login.md"), { recursive: true }); // a directory where the report goes
+  const r = cli(root, LOGIN, "--out", path.join("design", "changes", "login.md"));
+  const dr = cli(root, path.join("design", "export"), "--out", path.join("design", "changes", "login.md"));
+  const marks = fs.readdirSync(path.join(root, "design", ".sync")).filter((f) => f.endsWith(".diffed"));
+  return r.status === 1 && /^design-diff: cannot write .*login\.md: /m.test(r.stderr) && !/\n {4}at /.test(r.stderr)
+    && dr.status === 1 && /cannot write/.test(dr.stderr) && marks.length === 0;
+})());
+check("a symlinked design/export holding a library: snapshot names keep their path (design-system/ and libraries/<dir>/ tokens.json do not collide)", (() => {
+  const { root, exp } = dirProject();
+  const lib = path.join(root, exp, "libraries", "lib-abcdefgh");
+  fs.mkdirSync(lib, { recursive: true });
+  fs.writeFileSync(path.join(lib, "tokens.json"), JSON.stringify(tokens({ exportedAt: "2026-01-01T00:00:00Z", variables: [{ name: "radius", type: "FLOAT", values: { M: 4 } }] })));
+  const elsewhere = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-real-export-")), "export");
+  fs.renameSync(path.join(root, exp), elsewhere);
+  fs.symlinkSync(elsewhere, path.join(root, exp), "junction");
+  const s = cli(root, "--snapshot", exp);
+  const sync = fs.readdirSync(path.join(root, "design", ".sync"));
+  rewrite(root, path.join(exp, "libraries", "lib-abcdefgh", "tokens.json"), (d) => { d.exportedAt = "2026-02-01T00:00:00Z"; d.variables = [variable({ name: "radius", type: "FLOAT", values: { M: 8 } })]; });
+  const r = cli(root, exp);
+  return s.status === 0 && sync.includes("export__design-system__tokens.json") && sync.includes("export__libraries__lib-abcdefgh__tokens.json") && !sync.includes("tokens.json")
+    && r.status === 0 && /M: 4 → 8/.test(r.stdout) && !/space\/md/.test(r.stdout);
+})());
+check("an unreadable snapshot: the diff names it (exit 2), step 2 refuses it, and --force (the documented way out) replaces it", (() => {
+  const root = project();
+  putScreen(root, "v1", "2026-01-01T00:00:00Z");
+  cli(root, "--snapshot", LOGIN);
+  const snap = path.join(root, "design", ".sync", "export__pages__home__Login__1_1.json");
+  fs.writeFileSync(snap, "{ not json");
+  putScreen(root, "v2", "2026-02-01T00:00:00Z");
+  const bad = cli(root, LOGIN);
+  const refused = cli(root, "--snapshot", LOGIN);
+  const forced = cli(root, "--snapshot", "--force", LOGIN);
+  return bad.status === 2 && refused.status === 1 && /refusing to overwrite/.test(refused.stderr)
+    && forced.status === 0 && fs.readFileSync(snap, "utf8") === fs.readFileSync(path.join(root, LOGIN), "utf8");
+})());
+check("a project nested under another design/ (…/design/proj), run from proj/src: the snapshot lands in proj/design/.sync/, not the outer one", (() => {
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-nested-"));
+  const proj = path.join(outer, "design", "proj");
+  fs.mkdirSync(path.join(proj, "design", "export"), { recursive: true });
+  fs.mkdirSync(path.join(proj, "src"));
+  fs.writeFileSync(path.join(proj, "design", "export", "variables.json"), JSON.stringify(tokens({ variables: [] })));
+  const s = cli(path.join(proj, "src"), "--snapshot", path.join("..", "design", "export", "variables.json"));
+  return s.status === 0 && fs.existsSync(path.join(proj, "design", ".sync", "export__variables.json")) && !fs.existsSync(path.join(outer, "design", ".sync"));
+})());
+
 report();
