@@ -97,6 +97,15 @@ console.log("verify docs (pass-with-deviations and waivers):");
     && /Never waivable: a missing component, a failed interaction, anything not measured/.test(verifySkill) && /descope.{0,200}only the user decides/i.test(verifySkill)
     && /`undesigned`.{0,200}never blocks a pass/.test(verifySkill));
   check("the screen-builder never writes waivers/descopes or runs --accept", /never write `waivers\[\]` or `descopes\[\]`.{0,80}never run `verify-screen\.js --accept`/.test(builder));
+  // verify-build claims a plan only through Write/Edit and plan-skeleton's --out: both texts a builder reads say so,
+  // and neither still lists a shell command (a redirect, sed, cp) as a way the hook finds the plan.
+  check("the screen-builder and hook-and-status: the hook finds a plan through Write/Edit and plan-skeleton's --out, and shell edits are named as not read", (() => {
+    const hook = flat(read("claude-plugin/skills/build-screen/references/hook-and-status.md"));
+    return [builder, hook].every((t) => /\(Write\/Edit, (or )?plan-skeleton's `--out`\)/.test(t) && /not `sed`\/`cp`\/a redirect/.test(t))
+      && !/Write\/Edit, a redirect/.test(builder + hook);
+  })());
+  check("sync-design: its patch is made with Write/Edit, not sed/cp/a redirect, which the Stop hook does not read",
+    /Write\/Edit, not `sed`\/`cp`\/a redirect, which it does not read/.test(flat(read("claude-plugin/skills/sync-design/SKILL.md"))));
   check("build-screen names verified-with-deviations; sync-design says a re-export reopens waivers",
     /`verified-with-deviations`/.test(skill) && /reopens every waiver/.test(flat(read("claude-plugin/skills/sync-design/SKILL.md"))));
 }

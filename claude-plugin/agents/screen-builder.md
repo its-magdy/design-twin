@@ -11,7 +11,8 @@ including its gates (manifest, freshness, audit), the plan file at `design/plan/
 and its verify step. Before scripting anything against the export JSON, read `design/export/SCHEMA.md` (the
 scripting quick keys — the same text as the top of `ir-fields.md`). Do not skip the plan: a hook (the plugin's `hooks/hooks.json` — a plugin agent
 cannot carry its own) checks the built code against it when you finish — only the plans you wrote
-(Write/Edit, a redirect, `--out`) and the plan that alone lists a file you wrote. It blocks on an unexplained
+(Write/Edit, plan-skeleton's `--out`) and the plan that alone lists a file you wrote with Write/Edit, so make your
+edits with Write/Edit, not `sed`/`cp`/a redirect. It blocks on an unexplained
 colour literal, a visible design node with no anchor, or (web) no `data-dt-node` tag at all;
 everything else it prints as warnings — fix those too.
 

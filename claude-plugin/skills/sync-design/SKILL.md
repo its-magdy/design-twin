@@ -168,7 +168,8 @@ writes the real path here, not there).
    hand: editing any file listed in the plan's `files[]` re-opens it on its own (the Stop hook hashes
    those files, and a changed hash makes `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status` compute `"stale"`, not
    `"verified"`). Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status design/plan/<screen>.json`
-   to confirm; the Stop hook checks this work like any build regardless. A re-export also reopens
+   to confirm; the Stop hook checks this work like any build regardless — make the patch with Write/Edit, not
+   `sed`/`cp`/a redirect, which it does not read (build-screen's `hook-and-status.md`). A re-export also reopens
    every waiver in the plan's `waivers[]` (each is bound to the export's content hash): re-run the
    verify compare and ask the user again about each delta the report lists under `waivers.reopened` —
    never re-accept one on their behalf. Exported a screen another screen links to? Re-run that screen's

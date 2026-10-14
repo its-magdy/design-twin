@@ -1371,6 +1371,119 @@ function readHookInput(opts) {
   });
 }
 
+// design-to-code/shell-words.ts
+function simpleCommands(src, opts = {}) {
+  const ps = opts.powershell === true;
+  const cmds = [];
+  const stack = [];
+  let words = [], word = "", inWord = false, quote = null;
+  const endWord = () => {
+    if (inWord) words.push(word);
+    word = "";
+    inWord = false;
+  };
+  const endCmd = () => {
+    endWord();
+    if (words.length) cmds.push(words);
+    words = [];
+  };
+  const open = (closer, start) => {
+    stack.push({ words, word, inWord, quote, closer, start });
+    words = [];
+    word = "";
+    inWord = false;
+    quote = null;
+  };
+  const close = (end) => {
+    endCmd();
+    const f = stack.pop();
+    if (!f) return;
+    ({ words, word, quote } = f);
+    word += src.slice(f.start, end + 1);
+    inWord = true;
+  };
+  for (let i = 0; i < src.length; i++) {
+    const c = src.charAt(i);
+    if (quote === "'") {
+      if (c === "'") quote = null;
+      else word += c;
+      continue;
+    }
+    const top = stack[stack.length - 1];
+    if (c === "`" && ps) {
+      if (i + 1 < src.length) {
+        word += src.charAt(++i);
+        inWord = true;
+      }
+      continue;
+    }
+    if (c === "`") {
+      if (top?.closer === "`") close(i);
+      else open("`", i);
+      continue;
+    }
+    if (c === "$" && src.charAt(i + 1) === "(") {
+      open(")", i);
+      i++;
+      continue;
+    }
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === "\\" && !ps && '$`"\\\n'.includes(src.charAt(i + 1)) && i + 1 < src.length) word += src.charAt(++i);
+      else word += c;
+      continue;
+    }
+    if (c === ")" && top?.closer === ")") {
+      close(i);
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      inWord = true;
+      continue;
+    }
+    if (c === "\\" && !ps) {
+      if (i + 1 < src.length && src.charAt(i + 1) !== "\n") {
+        word += src.charAt(i + 1);
+        inWord = true;
+      }
+      i++;
+      continue;
+    }
+    if (c === "#" && !inWord) {
+      while (i + 1 < src.length && src.charAt(i + 1) !== "\n") i++;
+      continue;
+    }
+    if (";&|\n()".includes(c)) {
+      endCmd();
+      continue;
+    }
+    if (/\s/.test(c)) {
+      endWord();
+      continue;
+    }
+    word += c;
+    inWord = true;
+  }
+  while (stack.length) close(src.length - 1);
+  endCmd();
+  return cmds;
+}
+function dropHeredocBodies(cmd) {
+  const kept = [];
+  let delim = null;
+  for (const line of cmd.split("\n")) {
+    if (delim !== null) {
+      if (line.trim() === delim) delim = null;
+      continue;
+    }
+    kept.push(line);
+    const h = /(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
+    if (h && h[2]) delim = h[2];
+  }
+  return kept.join("\n");
+}
+
 // design-to-code/verify-build.ts
 var HOOK_TIMEOUT_MS = () => Number(process.env.DTWIN_HOOK_TIMEOUT_MS) || 6e4;
 var STDIN_WAIT_MS = () => {
@@ -2509,6 +2622,7 @@ function computeStatus(plan, opts) {
   return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons, unhashedWhy), reports };
 }
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+var BUILDER_AGENT = /^(designtwin:)?screen-builder$/;
 function lineActions(line, ownOnly, out) {
   if (!line.trim()) return;
   let v = null;
@@ -2528,7 +2642,7 @@ function lineActions(line, ownOnly, out) {
         const f = inp[k];
         if (typeof f === "string") out.push({ path: f, base });
       }
-    } else if (item.name === "Bash" && typeof inp.command === "string") for (const f of bashWriteTargets(inp.command)) out.push({ path: f, base });
+    } else if (SHELL_TOOLS.has(item.name) && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command, item.name === "PowerShell")) out.push({ path: f, base });
   }
 }
 var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:_|\\u005f)(?:u|\\u0075)(?:s|\\u0073)(?:e|\\u0065)"/i;
@@ -2564,148 +2678,32 @@ function transcriptActions(file, ownOnly) {
   });
   return out;
 }
-function bashWriteTargets(cmd) {
-  const kept = [];
-  let delim = null;
-  for (const line of cmd.split("\n")) {
-    if (delim !== null) {
-      if (line.trim() === delim) delim = null;
-      continue;
-    }
-    kept.push(line);
-    const h = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
-    if (h && h[2]) delim = h[2];
-  }
-  const toks = [];
-  const text = kept.join("\n");
-  let i = 0, word = null;
-  const flush = () => {
-    if (word !== null) {
-      toks.push({ word });
-      word = null;
-    }
-  };
-  while (i < text.length) {
-    const c = text[i] ?? "";
-    if (c === "'" || c === '"') {
-      const j = text.indexOf(c, i + 1);
-      const end = j === -1 ? text.length : j;
-      word = (word ?? "") + text.slice(i + 1, end).replace(/\\(.)/g, c === '"' ? "$1" : "\\$1");
-      i = end + 1;
-      continue;
-    }
-    if (c === "\\" && i + 1 < text.length) {
-      word = (word ?? "") + (text[i + 1] ?? "");
-      i += 2;
-      continue;
-    }
-    if (/\s/.test(c) && c !== "\n") {
-      flush();
-      i++;
-      continue;
-    }
-    const two = text.slice(i, i + 2);
-    const fdThenFlush = () => {
-      if (word !== null && /^\d+$/.test(word)) word = null;
-      else flush();
-    };
-    if (two === ">>" || two === "&>") {
-      fdThenFlush();
-      toks.push({ op: two === "&>" ? ">" : ">>" });
-      i += 2;
-      continue;
-    }
-    if (c === ">") {
-      fdThenFlush();
-      toks.push({ op: ">" });
-      i++;
-      continue;
-    }
-    if (two === "&&" || two === "||" || two === "<<") {
-      flush();
-      toks.push({ op: two });
-      i += 2;
-      continue;
-    }
-    if ([";", "|", "\n", "<", "&", "(", ")"].includes(c)) {
-      flush();
-      toks.push({ op: c });
-      i++;
-      continue;
-    }
-    word = (word ?? "") + c;
-    i++;
-  }
-  flush();
+var SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
+var PLAN_SKELETON = /^plan-skeleton(\.[cm]?[jt]s)?$/i;
+var CHANGE_DIR = /^(cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)$/i;
+var isAbsPath = (p) => /^(?:[A-Za-z]:)?[\\/]/.test(p);
+function planSkeletonOuts(cmd, powershell = false) {
   const out = [];
-  let cmdWords = [];
-  const endCommand = () => {
-    const [head, ...args] = cmdWords;
-    const name = head === void 0 ? "" : path8.posix.basename(head.replace(/\\/g, "/"));
-    const plain = args.filter((w) => !w.startsWith("-"));
-    if (["cp", "mv", "install", "ln"].includes(name) && plain.length >= 2) out.push(plain[plain.length - 1] ?? "");
-    if (name === "sed" && args.some((w) => w === "-i" || w.startsWith("-i") || w.startsWith("--in-place")) || name === "perl" && args.some((w) => /^-\w*i/.test(w))) {
-      let script = false;
-      for (let k = 0; k < args.length; k++) {
-        const w = args[k] ?? "";
-        if (w === "-i" && args[k + 1] === "") {
-          k++;
-          continue;
-        }
-        if (w === "-e" || w === "-f" || name === "perl" && /^-\w*e$/.test(w)) {
-          k++;
-          script = true;
-          continue;
-        }
-        if (w.startsWith("-")) continue;
-        if (!script && name === "sed") {
-          script = true;
-          continue;
-        }
-        out.push(w);
-      }
+  const text = powershell ? cmd : dropHeredocBodies(cmd);
+  const nested = (powershell ? /\(/ : /[(`]/).test(text);
+  let dir = "";
+  const under = (d, p) => d && !isAbsPath(p) ? `${d.replace(/[\\/]+$/, "")}/${p}` : p;
+  for (const all of simpleCommands(text, { powershell })) {
+    const words = all[0] === "builtin" || all[0] === "command" ? all.slice(1) : all;
+    const head = words[0] ?? "";
+    if (CHANGE_DIR.test(head)) {
+      const to = /^pop/i.test(head) ? void 0 : words.slice(1).find((w) => w === "-" || !w.startsWith("-"));
+      dir = nested || to === void 0 || to === "-" || /^~|\$|`/.test(to) ? null : isAbsPath(to) ? to : dir === null ? null : under(dir, to);
+      continue;
     }
-    if (/^(python3?|node)$/.test(name)) {
-      const at = args.findIndex((w) => w === "-c" || w === "-e");
-      const code = at === -1 ? void 0 : args[at + 1];
-      if (code) {
-        for (const m of code.matchAll(/['"`]([^'"`\n]+)['"`]/g)) if (m[1]) out.push(m[1]);
-      }
-    }
-    if (cmdWords.some((w) => /plan-skeleton/.test(w))) out.push(...cmdWords.filter((w) => !w.startsWith("-")));
-    const tee = cmdWords.findIndex((w) => w === "tee" || w.endsWith("/tee"));
-    if (tee !== -1) out.push(...cmdWords.slice(tee + 1).filter((w) => !w.startsWith("-")));
-    cmdWords.forEach((w, k) => {
-      if ((w === "--out" || w === "-o") && cmdWords[k + 1] !== void 0) out.push(cmdWords[k + 1] ?? "");
+    if (!words.some((w) => PLAN_SKELETON.test(w.split(/[\\/]/).pop() ?? ""))) continue;
+    words.forEach((w, k) => {
       const eq = /^--out=(.+)$/.exec(w);
-      if (eq && eq[1]) out.push(eq[1]);
+      const target = w === "--out" ? words[k + 1] : eq?.[1];
+      if (target) out.push(dir === null ? target : under(dir, target));
     });
-    cmdWords = [];
-  };
-  for (let k = 0; k < toks.length; k++) {
-    const t = toks[k];
-    if (!t) continue;
-    if ("word" in t) {
-      cmdWords.push(t.word);
-      continue;
-    }
-    if (t.op === ">" || t.op === ">>") {
-      const n = toks[k + 1];
-      if (n && "word" in n) {
-        out.push(n.word);
-        k++;
-      }
-      continue;
-    }
-    if (t.op === "<" || t.op === "<<") {
-      const n = toks[k + 1];
-      if (n && "word" in n) k++;
-      continue;
-    }
-    endCommand();
   }
-  endCommand();
-  return out.filter(Boolean);
+  return out;
 }
 function sameFile(w, rel, cwd) {
   const c = w.path.trim().replace(/\\/g, "/");
@@ -2747,7 +2745,9 @@ var USAGE2 = [
   '(opt out: "tagging": {"off": true, "reason": "\u2026"}). Everything else is a warning (exit 0).',
   'A Claude Code hook payload (it has hook_event_name) gets a block as {"decision":"block","reason":\u2026} on stdout',
   "and exit 0 instead \u2014 a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
-  "Hook mode checks the plans the stopping agent's transcript names; a transcript that names none checks nothing.",
+  "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",
+  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing (a screen-builder's",
+  'SubagentStop then prints {"systemMessage":\u2026} naming the open plans left unchecked \u2014 a notice, not a block).',
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<\u2026>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
@@ -2898,7 +2898,11 @@ async function main(argv) {
     if (!open.length) return 0;
     const own = ownPlans(open, input, plans, cwd);
     if (own.scope === "none-named") {
-      console.error(`verify-build: this session wrote or ran nothing naming a plan under design/plan/ \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
+      console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
+      if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type)) {
+        const names = open.map((p) => path8.relative(cwd, p.file).replace(/\\/g, "/"));
+        console.log(JSON.stringify({ systemMessage: `verify-build: the ${input.agent_type} agent stopped without claiming a plan, so its build was NOT checked. Open plan(s) left unchecked: ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); shell edits (sed, cp, a redirect) are not read. Check one now: ${scriptCmd("verify-build")} <plan.json>` }));
+      }
       return 0;
     }
     for (const p of own.plans) all.push({ p, cwd });
@@ -2965,6 +2969,7 @@ export {
   mayHoldToolUse,
   moduleImported,
   ownPlans,
+  planSkeletonOuts,
   readHookInput2 as readHookInput,
   recordedReportWarnings,
   scanText,
