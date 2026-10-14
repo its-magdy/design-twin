@@ -95,6 +95,26 @@ function behaviourMarkdown(b: ReportBehaviour): string[] {
 
 export function reportToMarkdown(r: VerifyReportV2): string {
   const L: string[] = [];
+  L.push(...headMarkdown(r));
+  L.push(...coverageMarkdown(r));
+  L.push(...behaviourMarkdown(r.behaviour));
+  L.push(...visualMarkdown(r.visual));
+  if (r.against) L.push(...againstMarkdown(r, r.against));
+  L.push(...matchedMarkdown(r));
+  if (r.deltas.length) L.push(...deltasMarkdown(r.deltas));
+  L.push(...waiversMarkdown(r));
+  L.push(...nodeListsMarkdown(r));
+  L.push(...interactionsMarkdown(r));
+  L.push(...gapsMarkdown(r));
+  L.push(...probeInputMarkdown(r));
+  L.push("## Limits of this method", "");
+  for (const l of r.limits || []) L.push(`- ${l}`);
+  return L.join("\n") + "\n";
+}
+/** The title, the three headlines, what was measured against what, how the probe reached the screen, the build served
+ *  and why the verdict is not a pass. */
+function headMarkdown(r: VerifyReportV2): string[] {
+  const L: string[] = [];
   L.push(`# Verify — ${r.screen}`, "");
   L.push(`**${r.headline || r.verdict.toUpperCase()}**`, "");
   L.push(`**${mdText(r.behaviour.headline)}**`, "");
@@ -114,6 +134,11 @@ export function reportToMarkdown(r: VerifyReportV2): string {
     for (const w of r.why) L.push(`- ${w}`);
     L.push("");
   }
+  return L;
+}
+/** The md section "What was actually checked": the coverage table. */
+function coverageMarkdown(r: VerifyReportV2): string[] {
+  const L: string[] = [];
   const c = r.coverage;
   L.push("## What was actually checked", "");
   L.push("| | |", "|---|---|");
@@ -132,70 +157,95 @@ export function reportToMarkdown(r: VerifyReportV2): string {
   if (c.pageOverflow !== undefined) L.push(`| page overflow at the design width (overflowX) | ${c.pageOverflow} |`);
   if (c.deltasAccepted) L.push(`| value mismatches accepted by a plan waiver (listed, out of the counts) | ${c.deltasAccepted} |`);
   L.push("");
-  L.push(...behaviourMarkdown(r.behaviour));
-  L.push(...visualMarkdown(r.visual));
-  if (r.against) {
-    const a = r.against;
-    L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} → ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} → ${a.nodesExpected.after}` +
-      `${a.probeChanged === true ? " · **the probe changed**" : a.probeChanged === null ? " · probe identity unknown on both rounds" : ""}${a.expectationChanged ? " · the expectation changed" : ""}. This never changes the verdict.`, "");
-    const d = a.deltas;
-    if (d && d.sameMeasured) {
-      const rc = d.reclassified || [];
-      L.push(`Previous deltas (node + field): **the same measured file as last round** — nothing about the build changed, so nothing is fixed, new or lost; ${d.unchanged} still open` +
-        `${rc.length ? `, ${rc.length} reclassified by the compare (or the expectation): ${rc.filter((x) => x.change === "gone").length} no longer a delta, ${rc.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
-      if (rc.length) {
-        L.push(`## Reclassified (${rc.length})`, "", "*Same measured file — the compare changed, not the build.*", "", "| Node | Field | Change | Was |", "|---|---|---|---|");
-        for (const x of rc.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${x.change === "gone" ? "no longer a delta" : "newly a delta"} | ${x.change === "gone" ? fmt(x.was) : ""} |`);
-        if (rc.length > 40) L.push(`| …and ${rc.length - 40} more | | | |`);
-        L.push("");
-      }
-    } else if (d) {
-      const nu = d.nowUnverifiable || [];
-      L.push(`Previous deltas (node + field): ${d.fixed} fixed · ${d.unchanged} still open · ${d.new} new · ${d.lostCoverage.length ? `**${d.lostCoverage.length} lost coverage** (gone only because they were not measured this round)` : "0 lost coverage"}` +
-        `${nu.length ? ` · ${nu.length} now unverifiable by method (measured, but the compare no longer reads it)` : ""}.`, "");
-      if (nu.length) {
-        L.push(`## Now unverifiable by method (${nu.length})`, "", "*A previous delta whose value was measured this round, but the compare now declines it — not lost coverage, not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
-        for (const x of nu.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
-        if (nu.length > 40) L.push(`| …and ${nu.length - 40} more | | | |`);
-        L.push("");
-      }
-    }
-    if (a.sameBuild === true && r.headline.includes("SAME BUILD SERVED")) L.push("**The same build was served as last round although the code changed** — a stale preview or dist? Rebuild before measuring a preview.", "");
-    if (d && d.lostCoverage.length) {
-      L.push(`## Lost coverage (${d.lostCoverage.length})`, "", "*A previous delta that is gone only because its node or value was not measured — not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
-      for (const x of d.lostCoverage.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
-      if (d.lostCoverage.length > 40) L.push(`| …and ${d.lostCoverage.length - 40} more | | | |`);
-      L.push("");
-    }
+  return L;
+}
+type Against = NonNullable<VerifyReportV2["against"]>;
+type AgainstDeltas = NonNullable<Against["deltas"]>;
+/** Against the previous round: the counts, what happened to its deltas, a same-build warning and the lost coverage. */
+function againstMarkdown(r: VerifyReportV2, a: Against): string[] {
+  const L: string[] = [];
+  L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} → ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} → ${a.nodesExpected.after}` +
+    `${a.probeChanged === true ? " · **the probe changed**" : a.probeChanged === null ? " · probe identity unknown on both rounds" : ""}${a.expectationChanged ? " · the expectation changed" : ""}. This never changes the verdict.`, "");
+  const d = a.deltas;
+  if (d && d.sameMeasured) L.push(...sameMeasuredMarkdown(d));
+  else if (d) L.push(...deltaChangesMarkdown(d));
+  if (a.sameBuild === true && r.headline.includes("SAME BUILD SERVED")) L.push("**The same build was served as last round although the code changed** — a stale preview or dist? Rebuild before measuring a preview.", "");
+  if (d && d.lostCoverage.length) {
+    L.push(`## Lost coverage (${d.lostCoverage.length})`, "", "*A previous delta that is gone only because its node or value was not measured — not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
+    for (const x of d.lostCoverage.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
+    if (d.lostCoverage.length > 40) L.push(`| …and ${d.lostCoverage.length - 40} more | | | |`);
+    L.push("");
   }
+  return L;
+}
+/** The previous deltas when the measured file is the same as last round: only the compare can have reclassified them. */
+function sameMeasuredMarkdown(d: AgainstDeltas): string[] {
+  const L: string[] = [];
+  const rc = d.reclassified || [];
+  L.push(`Previous deltas (node + field): **the same measured file as last round** — nothing about the build changed, so nothing is fixed, new or lost; ${d.unchanged} still open` +
+    `${rc.length ? `, ${rc.length} reclassified by the compare (or the expectation): ${rc.filter((x) => x.change === "gone").length} no longer a delta, ${rc.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
+  if (rc.length) {
+    L.push(`## Reclassified (${rc.length})`, "", "*Same measured file — the compare changed, not the build.*", "", "| Node | Field | Change | Was |", "|---|---|---|---|");
+    for (const x of rc.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${x.change === "gone" ? "no longer a delta" : "newly a delta"} | ${x.change === "gone" ? fmt(x.was) : ""} |`);
+    if (rc.length > 40) L.push(`| …and ${rc.length - 40} more | | | |`);
+    L.push("");
+  }
+  return L;
+}
+/** The previous deltas against a new measured file: fixed, still open, new, lost coverage, now unverifiable. */
+function deltaChangesMarkdown(d: AgainstDeltas): string[] {
+  const L: string[] = [];
+  const nu = d.nowUnverifiable || [];
+  L.push(`Previous deltas (node + field): ${d.fixed} fixed · ${d.unchanged} still open · ${d.new} new · ${d.lostCoverage.length ? `**${d.lostCoverage.length} lost coverage** (gone only because they were not measured this round)` : "0 lost coverage"}` +
+    `${nu.length ? ` · ${nu.length} now unverifiable by method (measured, but the compare no longer reads it)` : ""}.`, "");
+  if (nu.length) {
+    L.push(`## Now unverifiable by method (${nu.length})`, "", "*A previous delta whose value was measured this round, but the compare now declines it — not lost coverage, not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
+    for (const x of nu.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
+    if (nu.length > 40) L.push(`| …and ${nu.length - 40} more | | | |`);
+    L.push("");
+  }
+  return L;
+}
+/** The md section "How nodes were matched": the probe's identity and the match census. */
+function matchedMarkdown(r: VerifyReportV2): string[] {
+  const L: string[] = [];
+  const c = r.coverage;
   L.push("## How nodes were matched", "");
   const ip = r.inputs && r.inputs.probe;
   L.push(ip && ip !== "unknown" ? `Probe: ${ip.name} ${ip.version ?? "(no version)"} · sha256 ${ip.sha256.slice(0, 12)}… · ${ip.playwright.package} ${ip.playwright.version} · ${ip.browser.name} ${ip.browser.version}` : "Probe: unknown (a hand-written measured.json — its numbers are not comparable round to round).", "");
   L.push("| rule | node specs |", "|---|---|");
   for (const b of MATCH_BUCKETS) if ((c.matchedBy[b] ?? 0) > 0 || b === "tag") L.push(`| ${MATCH_LABEL[b] ?? b} | ${c.matchedBy[b] ?? 0} |`);
   L.push("");
-  if (r.deltas.length) {
-    // one line per cause first (a group = one cause, many rows); the table still lists every row.
-    const groups = new Map<string, VerifyDelta[]>();
-    for (const d of r.deltas) if (d.group) getOrInit(groups, d.group, () => []).push(d);
-    if (groups.size) {
-      L.push(`## Grouped causes (${groups.size})`, "", "*Presentational: every row still counts on its own.*", "");
-      for (const [g, list] of groups) {
-        const rootId = g.startsWith("placement:") ? g.slice("placement:".length) : null;
-        const root = rootId ? list.find((d) => d.nodeId === rootId) : undefined;
-        const open = list.filter((d) => !d.accepted);
-        L.push(`- \`${g}\` — ${list[0]?.field ?? ""}, **${list.length} rows**${root ? ` (${root.name || root.nodeId} and ${list.length - 1} inside it)` : ` (${fmt(list[0]?.expected)} → ${fmt(list[0]?.actual)})`}` +
-          `${open.length < list.length ? ` · ${list.length - open.length} accepted` : ""} — accept together: \`--accept <report> --group ${g} --reason … --by …\``);
-      }
-      L.push("");
-    }
-    L.push(`## Value mismatches (${r.deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token | Group / accepted |", "|---|---|---|---|---|---|---|");
-    for (const d of r.deltas) {
-      const status = d.accepted ? `accepted — ${d.accepted.reason} (${d.accepted.decidedBy}, ${d.accepted.decidedAt})` : d.group ? `\`${d.group}\`` : "";
-      L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "—"} | ${status} |`);
+  return L;
+}
+/** The grouped causes and the value-mismatch table (a non-empty deltas list). */
+function deltasMarkdown(deltas: VerifyDelta[]): string[] {
+  const L: string[] = [];
+  // one line per cause first (a group = one cause, many rows); the table still lists every row.
+  const groups = new Map<string, VerifyDelta[]>();
+  for (const d of deltas) if (d.group) getOrInit(groups, d.group, () => []).push(d);
+  if (groups.size) {
+    L.push(`## Grouped causes (${groups.size})`, "", "*Presentational: every row still counts on its own.*", "");
+    for (const [g, list] of groups) {
+      const rootId = g.startsWith("placement:") ? g.slice("placement:".length) : null;
+      const root = rootId ? list.find((d) => d.nodeId === rootId) : undefined;
+      const open = list.filter((d) => !d.accepted);
+      L.push(`- \`${g}\` — ${list[0]?.field ?? ""}, **${list.length} rows**${root ? ` (${root.name || root.nodeId} and ${list.length - 1} inside it)` : ` (${fmt(list[0]?.expected)} → ${fmt(list[0]?.actual)})`}` +
+        `${open.length < list.length ? ` · ${list.length - open.length} accepted` : ""} — accept together: \`--accept <report> --group ${g} --reason … --by …\``);
     }
     L.push("");
   }
+  L.push(`## Value mismatches (${deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token | Group / accepted |", "|---|---|---|---|---|---|---|");
+  for (const d of deltas) {
+    const status = d.accepted ? `accepted — ${d.accepted.reason} (${d.accepted.decidedBy}, ${d.accepted.decidedAt})` : d.group ? `\`${d.group}\`` : "";
+    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "—"} | ${status} |`);
+  }
+  L.push("");
+  return L;
+}
+/** Plan waivers that no longer apply (reopened or unused). */
+function waiversMarkdown(r: VerifyReportV2): string[] {
+  const L: string[] = [];
   const wv = r.waivers;
   if (wv && (wv.reopened.length || wv.unused.length)) {
     L.push("## Plan waivers that no longer apply", "");
@@ -203,6 +253,12 @@ export function reportToMarkdown(r: VerifyReportV2): string {
     for (const w of wv.unused) L.push(`- unused \`${w.nodeId}\` (${w.field})${w.why ? ` — ${w.why}` : ""}`);
     L.push("");
   }
+  return L;
+}
+/** The folded node specs, the components reported absent, and the instance sets with no evidence (on this screen, then
+ *  inside the shared shell). */
+function nodeListsMarkdown(r: VerifyReportV2): string[] {
+  const L: string[] = [];
   if (r.folded && r.folded.length) {
     L.push(`## Folded into a measured ancestor (${r.folded.length} node specs, out of the count)`, "");
     for (const f of r.folded) L.push(`- \`${f.nodeId}\` ${f.name || ""} → \`${f.into}\` — ${f.why}`);
@@ -227,6 +283,12 @@ export function reportToMarkdown(r: VerifyReportV2): string {
     if (inShell.length > 40) L.push(`- …and ${inShell.length - 40} more`);
     L.push("");
   }
+  return L;
+}
+/** The designed interactions not confirmed, the probe results that matched none, the interactions not graded and what
+ *  the build does that the design never drew. */
+function interactionsMarkdown(r: VerifyReportV2): string[] {
+  const L: string[] = [];
   const bad = r.interactions.filter((i) => i.result === "fail" || i.result === "not-probed");
   if (bad.length) {
     L.push(`## Designed interactions not confirmed (${bad.length})`, "");
@@ -257,6 +319,11 @@ export function reportToMarkdown(r: VerifyReportV2): string {
     if (inf.length > 40) L.push(`- …and ${inf.length - 40} more`);
     L.push("");
   }
+  return L;
+}
+/** What was not checked: the node specs not measured, the values the probe did not report, the values excluded by method. */
+function gapsMarkdown(r: VerifyReportV2): string[] {
+  const L: string[] = [];
   if (r.notMeasured.length) {
     L.push(`## Not measured (${r.notMeasured.length} node specs)`, "", "*Gaps in the probe, not clean results.*", "");
     for (const n of r.notMeasured.slice(0, 40)) L.push(`- \`${n.nodeId}\` ${n.name || ""} — ${n.why}`);
@@ -276,6 +343,11 @@ export function reportToMarkdown(r: VerifyReportV2): string {
     if (r.notComparable.length + r.unverifiable.length > 40) L.push(`- …and ${r.notComparable.length + r.unverifiable.length - 40} more`);
     L.push("");
   }
+  return L;
+}
+/** The md section "About the probe's input": keys verify-screen does not read, duplicates, hidden layers, foreign tags. */
+function probeInputMarkdown(r: VerifyReportV2): string[] {
+  const L: string[] = [];
   const p: Partial<VerifyReportV2["probe"]> = r.probe || {};
   if ((p.unknownKeys && p.unknownKeys.length) || (p.unknownTopLevelKeys && p.unknownTopLevelKeys.length) || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || p.foreignTags || (p.inputNotes && p.inputNotes.length)) {
     L.push("## About the probe's input", "");
@@ -290,9 +362,7 @@ export function reportToMarkdown(r: VerifyReportV2): string {
     if (ft) L.push(`- ${ft.total} tag(s)/id(s) on the page name no node of this expectation (informational): ${ft.prefixDrift} prefix drift (an expected node's \`;\` path under another instance id — a stale or other screen's id table?), ${ft.alias} another screen's id for one of these nodes (alias), ${ft.unknown} unknown${ft.sample.length ? ` — e.g. ${ft.sample.map((id) => `\`${id}\``).join(", ")}` : ""}`);
     L.push("");
   }
-  L.push("## Limits of this method", "");
-  for (const l of r.limits || []) L.push(`- ${l}`);
-  return L.join("\n") + "\n";
+  return L;
 }
 // A value that already ends in its unit is printed once (a probe's "28px" must not print as "28pxpx").
 const withUnit = (v: unknown, unit: string | undefined): string => { const t = fmt(v); return unit && !t.endsWith(unit) ? t + unit : t; };
