@@ -166,6 +166,25 @@ const strictCollapse = (t: string): string => t.trim().replace(HTML_WS, " ").rep
  *  space differs between two copies it makes equal. U+FEFF is left alone: it has no width, so "log\ufeffin" renders
  *  "login" and is not "log in" in another kind of space. */
 const spaceNorm = (t: string): string => strictCollapse(t).replace(/[^\S\ufeff]/g, " ");
+/** A designed copy's spaces by their rendered width: Figma never collapses a space, so each space or non-breaking space in
+ *  a gap is one space wide. */
+const designRender = (t: string): string => t.trim().replace(/[ \u00a0]+/g, (r) => " ".repeat(r.length));
+/** A built copy's spaces by their rendered width: HTML collapses each run of plain spaces to one and never a non-breaking
+ *  space, so a gap is one space wide per non-breaking space plus one per run of plain spaces between them. */
+const buildRender = (t: string): string => t.trim().replace(/[ \u00a0]+/g, (r) => " ".repeat(r.split("\u00a0").filter(Boolean).length + (r.match(/\u00a0/g) || []).length));
+/** How the build's gaps compare to the design's in rendered width (designRender against buildRender), for copy with a
+ *  non-breaking space whose words are the same and whose only whitespace is spaces and non-breaking spaces; null for
+ *  any other difference. "wider" if any build gap is wider than the design's. */
+function gapCmp(want: string, have: string): "same" | "narrower" | "wider" | null {
+  if (/[\t\n\r\f]/.test(want + have)) return null;
+  const dw = designRender(want), bw = buildRender(have);
+  const wt = dw.split(/ +/), bt = bw.split(/ +/);
+  if (wt.length !== bt.length || wt.some((x, i) => x !== bt[i])) return null;
+  const dg = dw.match(/ +/g) || [], bg = bw.match(/ +/g) || [];
+  let wider = false, narrower = false;
+  dg.forEach((g, i) => { const b = bg[i]?.length ?? 0; if (b > g.length) wider = true; else if (b < g.length) narrower = true; });
+  return wider ? "wider" : narrower ? "narrower" : "same";
+}
 /** Figma stores a Shift+Enter soft line break as U+2028 (a paragraph separator as U+2029); in the design it is a line
  *  break, so the copy compares read it as \n (HTML itself does not break at either character). */
 const designBreaks = (t: string): string => t.replace(/[\u2028\u2029]/g, "\n");
@@ -212,11 +231,11 @@ function whitespaceWhy(want: string, have: string): string {
   if (h.spaces > w.spaces) return "the build's text has a run of spaces where the design has fewer — HTML collapses it to one space when rendered unless white-space is pre, pre-wrap or break-spaces, so it reads as designed unless one of those is set";
   return "it sits beside a line break or in another order — it renders the same once HTML collapses it, unless white-space is pre, pre-wrap or break-spaces";
 }
-/** For copy that is the same except for the width of a gap that holds a non-breaking space: HTML collapses ordinary spaces
- *  and tabs to one but never a U+00A0, so the two gaps render at different widths. The first gap that differs, by width. */
+/** For copy that is the same except for the width of a gap that holds a non-breaking space and renders wider in the build:
+ *  HTML collapses ordinary spaces and tabs to one but never a U+00A0. The first gap that differs, by rendered width. */
 function gapWidthWhy(want: string, have: string): string {
-  const gaps = (t: string): number[] => (strictCollapse(t).match(/ +/g) || []).map((g) => g.length);
-  const wg = gaps(want), hg = gaps(have);
+  const gaps = (t: string, render: (t: string) => string): number[] => (render(t).match(/ +/g) || []).map((g) => g.length);
+  const wg = gaps(want, designRender), hg = gaps(have, buildRender);
   const k = wg.findIndex((len, i) => len !== hg[i]);
   const wide = (len: number | undefined): string => `${len ?? 0} space${len === 1 ? "" : "s"} wide`;
   return `differs only in the width of a gap: the design's is ${wide(wg[k])} and the build's ${wide(hg[k])} — HTML collapses ordinary spaces and tabs to one space but keeps every non-breaking space (&nbsp;, U+00A0), so the two render at different widths; make the gaps match`;
@@ -1086,22 +1105,23 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
         : `the design renders '${w}' (stored '${designText.trim()}'${spec.textCase ? `, text case ${spec.textCase}` : ""}); the build renders '${g}' (text '${String(got.text).trim()}'${rt.transform !== null ? `, text-transform ${rt.transform}` : ", text-transform not reported"})`;
       // Whitespace. With each run of HTML-collapsible whitespace read as one space (strictCollapse) the same: a difference
       // in those runs alone, not a copy change — HTML collapses them unless white-space keeps them, and the built-in probe
-      // reports the build's spaces collapsed. A non-breaking space on either side is never collapsed, so its gap keeps
-      // its width in that compare. The same once each space character HTML keeps is one space
+      // reports the build's spaces collapsed. The same once each space character HTML keeps is one space
       // (spaceNorm): they differ in that kind of space (U+3000, U+2009, …).
-      // Each non-breaking space reads as a plain one for the copy (nbspTrim), but a run of them is wider than the ordinary
-      // spaces it stands against once HTML collapses those, so such copy is not the same when the gaps differ in width.
-      const same = rt.same && strictCollapse(rt.want) === strictCollapse(rt.have);
+      // A non-breaking space on either side is judged by rendered width (gapCmp): the design's gaps are as wide as their
+      // spaces (Figma never collapses one), the build's collapse each run of plain spaces to one and keep every non-breaking
+      // space. The same width is the same copy; a narrower build gap is the whitespace case below (low); a wider one a real change.
+      const gc = (/\u00a0/.test(rt.want) || /\u00a0/.test(rt.have)) && rt.want !== rt.have ? gapCmp(rt.want, rt.have) : null;
+      const same = gc !== null ? gc === "same" : rt.same;
       const wsR = same ? null : renderedText(designText, spec.textCase, String(got.text), got.textTransform, strictCollapse);
-      const wsOnly = wsR !== null && wsR.same;
-      const spaceKind = !same && !wsOnly && renderedText(designText, spec.textCase, String(got.text), got.textTransform, spaceNorm).same;
+      const wsOnly = gc !== null ? gc === "narrower" : wsR !== null && wsR.same;
+      const spaceKind = gc === null && !same && !wsOnly && renderedText(designText, spec.textCase, String(got.text), got.textTransform, spaceNorm).same;
       if (!same) {
         // case, judged with whitespace runs collapsed — a case change and a double space together are both named
         const caseOnly = !wsOnly && !spaceKind && strictCollapse(rt.want).toLowerCase() === strictCollapse(rt.have).toLowerCase();
         const caseWs = caseOnly && w.toLowerCase() !== g.toLowerCase();
         // the same once a non-breaking space collapses like any space (looseCollapse), so the difference is the width of a
         // gap holding a non-breaking space, which HTML does not collapse — a real change, never low
-        const nbspGap = !wsOnly && !spaceKind && !caseOnly && looseCollapse(rt.want).toLowerCase() === looseCollapse(rt.have).toLowerCase();
+        const nbspGap = gc === "wider" || (!wsOnly && !spaceKind && !caseOnly && looseCollapse(rt.want).toLowerCase() === looseCollapse(rt.have).toLowerCase());
         // "Name▲": the designed string plus glyphs that are not letters or digits (a sort caret,
         // an icon font) — the copy is intact; name the extra glyphs rather than calling it a copy bug.
         const extraGlyphs = !wsOnly && !spaceKind && !caseOnly && !nbspGap && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
@@ -1116,7 +1136,7 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
         const asDesigned = rowTexts ? rowTexts.filter((t) => t === w).length : 0;
         const realData = !wsOnly && !spaceKind && !caseOnly && !nbspGap && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
         const caseHead = caseWs ? "differs only in case and whitespace" : "differs only in case";
-        const why = wsR !== null && wsOnly ? `differs only in whitespace: ${whitespaceWhy(nbspTrim(wsR.want), nbspTrim(wsR.have))}`
+        const why = wsR !== null && wsOnly ? `differs only in whitespace: ${gc !== null ? whitespaceWhy(designRender(rt.want), buildRender(rt.have)) : whitespaceWhy(nbspTrim(wsR.want), nbspTrim(wsR.have))}`
           : spaceKind ? spaceKindWhy(w, g)
           : nbspGap ? gapWidthWhy(rt.want, rt.have)
           : caseOnly ? `${caseShown ? `${caseHead}, as rendered` : `${caseHead} — check for a text-transform, which Figma applies at render time while storing the original`}${caseWs ? ` — the whitespace: ${whitespaceWhy(w, g)}` : ""}`
