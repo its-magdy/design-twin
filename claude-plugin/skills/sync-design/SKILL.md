@@ -91,12 +91,22 @@ writes the real path here, not there).
    comparison of the code against the new export. Only a computed diff is presented as a diff.
    **The next sync just runs this step again**: once step 4 has diffed against a snapshot, that
    snapshot is spent, and `--snapshot` replaces it as long as the export is still the one step 4
-   compared. A snapshot no diff has used yet is refused with exit 1 rather than replaced: it is the
-   only copy older than the export on disk. Do not reach for `--force` then; run step 4 first. Refused
-   as "already diffed against an earlier export" means the screen was re-pulled outside a sync: step
-   4's report then also lists what the earlier sync applied (it warns) — skip those. An identical
-   snapshot is a silent no-op. The one case for `--force` is a snapshot step 4 reports as unreadable
-   (it cannot be diffed, so it is no baseline to lose): re-run this step with `--force`.
+   compared. The old copy stays beside it as `<name>.prev` (the command prints where) — a recovery
+   copy the diff never uses on its own. If you stopped after step 4 without applying the report, diff
+   against the `.prev` copy (`--against design/.sync/<name>.prev`) or skip step 2 next time.
+   Snapshotting a file that has not changed prints `(unchanged)` and leaves the snapshot as it is.
+   A snapshot no diff has used yet is refused with exit 1 rather than replaced: it is the
+   only copy older than the export on disk. Do not reach for `--force` then. The refusal that says
+   "already diffed against an earlier export" means the export was re-pulled outside a sync — most
+   often `variables.json`, which every screen pull and the design-system pull merge into, so building
+   another screen between syncs does it. The answer to both refusals is the same as the command's: run
+   step 4's diff now, then run this step again. That report also lists what the earlier sync applied
+   (it warns): a change the code already has was applied then, a change it does not have is new — do not
+   skip a change just because the report repeats others. The one case for `--force` is a snapshot step 4
+   reports as unreadable: before the re-pull, re-run this step with `--force`; after it a forced
+   snapshot would be the new export, so diff against git `HEAD` (when `design/` is committed) or an
+   older copy with `--against`. A symlinked `design/export` is found by its path through `design/`
+   (`design/export/pages/…`), not by the real directory it points to.
 
 3. **Re-pull the same scope**, not the whole file — `dtwin pull --node <root id>` (or
    `mcp__designtwin__figma_export_url` with `writeToDisk: true`). **Before re-pulling, prefer a running

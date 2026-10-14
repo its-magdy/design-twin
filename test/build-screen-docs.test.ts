@@ -619,11 +619,16 @@ console.log("build-screen docs (quick keys + export docs):");
     && !/bridge\/src|design\/sync\/|not found/.test(syncSkill));
   check("sync-design: the next sync re-runs step 2 (a spent snapshot is replaced), an unspent one is refused and --force is only for an unreadable snapshot, a re-pull outside a sync is named; syncs[] records both reports; no-export-set projects skip the shared diff",
     /once step 4 has diffed against a snapshot, that snapshot is spent, and `--snapshot` replaces it/.test(syncSkill)
-    && /Do not reach for `--force` then; run step 4 first/.test(syncSkill) && !/always safe/.test(syncSkill)
-    && /"already diffed against an earlier export" means the screen was re-pulled outside a sync/.test(syncSkill)
-    && /The one case for `--force` is a snapshot step 4 reports as unreadable \(it cannot be diffed, so it is no baseline to lose\): re-run this step with `--force`/.test(syncSkill)
+    && /Do not reach for `--force` then\./.test(syncSkill) && !/always safe/.test(syncSkill)
+    && /"already diffed against an earlier export" means the export was re-pulled outside a sync/.test(syncSkill)
+    && /The one case for `--force` is a snapshot step 4 reports as unreadable: before the re-pull, re-run this step with `--force`/.test(syncSkill)
     && /diff:\["design\/changes\/<screen>\.md", "design\/changes\/<screen>-shared\.md"\]/.test(syncSkill)
     && /unreadable — that one exits 2 with the report still written/.test(syncSkill) && /has nothing for the second command \(it exits 2 saying so\): skip it/.test(syncSkill));
+  check("sync-design: a replaced spent snapshot stays as <name>.prev for a diff by hand, variables.json's refusals are named with the answer the command gives, an unchanged snapshot is not 'silent', a symlinked design/export is addressed through design/",
+    /stays beside it as `<name>\.prev`/.test(syncSkill) && /diff against the `\.prev` copy \(`--against design\/\.sync\/<name>\.prev`\) or skip step 2 next time/.test(syncSkill)
+    && /`variables\.json`, which every screen pull and the design-system pull merge into/.test(syncSkill) && /run step 4's diff now, then run this step again/.test(syncSkill)
+    && !/skip those|silent no-op/.test(syncSkill) && /prints `\(unchanged\)`/.test(syncSkill)
+    && /A symlinked `design\/export` is found by its path through `design\/`/.test(syncSkill));
   const readme21 = flat(read("bridge/README.md"));
   const extract21 = extractDocs;
   const verbs21 = read("bridge/src/verbs.ts");

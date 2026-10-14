@@ -58,7 +58,7 @@ import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
 import { DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
-import { DESIGN_DIR, MERGED_VARIABLES_FILE, SNAPSHOT_DIR } from "../bridge/src/project-layout.ts";
+import { DESIGN_DIR, EXPORT_DIR, MERGED_VARIABLES_FILE, SNAPSHOT_DIR, looksLikeExportDir } from "../bridge/src/project-layout.ts";
 import { LIBRARY_FILE_NAMES, ROOT as LIBRARIES_DIR } from "../bridge/src/library-layout.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
@@ -451,16 +451,25 @@ function relUnder(base: string, abs: string): string | null {
   const real = path.relative(realOf(base), realOf(abs));
   return escapes(real) ? null : real;
 }
+const ancestorsOf = (from: string): string[] => { const out: string[] = []; for (let d = from; ; d = path.dirname(d)) { out.push(d); if (path.dirname(d) === d) return out; } };
+// A directory whose design/ is a project's: it holds an export (the current layout's or the flat one) or a snapshot already.
+const hasProjectDesign = (d: string): boolean => looksLikeExportDir(path.join(d, DESIGN_DIR)) || looksLikeExportDir(path.join(d, EXPORT_DIR)) || fs.existsSync(path.join(d, SNAPSHOT_DIR));
 // design/export/pages/Home/Login__1_2.json -> design/.sync/export__pages__Home__Login__1_2.json, under the
-// nearest of the cwd and its ancestors whose design/ holds the file (run from the project root, from
-// design/ or below, or from a source folder beside it). A file under none keeps its bare name in the cwd's.
-function snapshotPath(file: string, cwd: string = process.cwd()): string {
+// project whose design/ holds the file: the nearest of the cwd and its ancestors that has one (run from the
+// project root, from design/ or below, or from a source folder beside it), else the nearest ancestor of the
+// FILE (an absolute path from outside the project, or an inner project addressed from an outer one). A file
+// under no project's design/ has no snapshot place (null): a bare name in the cwd's design/.sync would be
+// found by no run from anywhere else. A design/export symlinked elsewhere is found by the path through
+// design/, not by its real target.
+function snapshotPath(file: string, cwd: string = process.cwd()): string | null {
   const abs = path.resolve(cwd, file);
-  for (let d = cwd; ; d = path.dirname(d)) {
-    const rel = relUnder(path.join(d, DESIGN_DIR), abs);
-    if (rel !== null) return path.join(d, SNAPSHOT_DIR, rel.split(path.sep).join("__"));
-    if (path.dirname(d) === d) return path.join(cwd, SNAPSHOT_DIR, path.basename(file));
+  const placeUnder = (d: string): string | null => { const rel = relUnder(path.join(d, DESIGN_DIR), abs); return rel === null ? null : path.join(d, SNAPSHOT_DIR, rel.split(path.sep).join("__")); };
+  const fromCwd = ancestorsOf(cwd);
+  for (const d of [...fromCwd.filter(hasProjectDesign), ...ancestorsOf(path.dirname(abs)).filter(hasProjectDesign), ...fromCwd]) {
+    const p = placeUnder(d);
+    if (p !== null) return p;
   }
+  return null;
 }
 
 // ---- asset bytes. A node's `asset` path is derived from its id, so a re-drawn icon keeps the same
@@ -530,11 +539,13 @@ function previous(file: string, against: string | undefined, cwd: string = proce
   }
   const found: Array<Omit<Baseline, "notes">> = [];
   const snap = snapshotPath(file, cwd);
-  if (fs.existsSync(snap)) {
+  if (snap !== null && fs.existsSync(snap)) {
     const assets = readJsonOrNull(snap + ".assets.json", isStringRecord); // null: an older snapshot, or no assets
     const r = readJson(snap, anyJson);
     // The snapshot is the baseline this command exists for: a corrupt one is said, not diffed as "no baseline".
-    if (!("doc" in r)) throw new Error(`the snapshot ${path.relative(cwd, snap)} ${r.error} — re-take it with --snapshot --force, or pass --against <an older copy>`);
+    // The advice depends on when it is read: before the re-pull --force re-takes the snapshot, after it
+    // that copy would be the new export, so the diff has git HEAD or --against left.
+    if (!("doc" in r)) throw new Error(`the snapshot ${path.relative(cwd, snap)} ${r.error} — re-take it with --snapshot --force if the export has not been re-pulled yet; after the re-pull the snapshot would be the new export, so the diff then uses git HEAD or --against <an older copy>`);
     found.push({ doc: r.doc, source: path.relative(cwd, snap), kind: "snapshot", assets });
   }
   // `--snapshot --force` keeps the baseline it is about to replace as `<name>.prev`
@@ -545,7 +556,9 @@ function previous(file: string, against: string | undefined, cwd: string = proce
   // SAME export as the file on disk and gets filtered out below exactly like any other same-export
   // baseline — leaving `.prev` (B0) as the only genuinely older copy; without it the diff would say
   // "There is no OLDER export to compare against" while it sat right there.
-  if (fs.existsSync(snap + ".prev")) {
+  // A `.prev` with a `.prev.diffed` beside it is the other kind: a SPENT snapshot a later sync replaced,
+  // kept only so someone can diff against it by hand (--against). It is history, never a baseline.
+  if (snap !== null && fs.existsSync(snap + ".prev") && !fs.existsSync(snap + ".prev" + DIFFED)) {
     const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord); // null: no assets sidecar was kept
     const r = readJson(snap + ".prev", anyJson);
     if ("doc" in r) found.push({ doc: r.doc, source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets }); // a corrupt .prev is ignored rather than failing the whole diff
@@ -586,7 +599,7 @@ function previous(file: string, against: string | undefined, cwd: string = proce
   const [newest, older] = useful;
   if (newest === undefined) return { ...firstFound, notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
   if (older !== undefined && at(newest.doc) !== at(older.doc)) notes.push(`${older.source} is older than ${newest.source} — used the newer one, so changes already applied are not listed again.`);
-  if (newest.source === path.relative(cwd, snap) && diffedSince(file, snap)) notes.push(`${newest.source} was already diffed against an earlier export of ${file}, and the file was re-pulled since — this lists everything since that diff, including changes the earlier sync already applied.`);
+  if (snap !== null && newest.source === path.relative(cwd, snap) && diffedSince(file, snap)) notes.push(`${newest.source} was already diffed against an earlier export of ${file}, and the file was re-pulled since — this lists everything since that diff, including changes the earlier sync already applied.`);
   return { ...newest, notes };
 }
 
@@ -600,12 +613,28 @@ const dsFilePath = (exportRoot: string, name: string): string => name === DESIGN
 // bridge/src/library-layout.ts names them — not libraries/index.json, which only lists the libraries).
 function exportSetCandidates(exportRoot: string): string[] {
   const libRoot = path.join(exportRoot, LIBRARIES_DIR);
-  const libDirs = fs.existsSync(libRoot) ? fs.readdirSync(libRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort() : [];
+  const onDisk = fs.existsSync(libRoot) ? fs.readdirSync(libRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
+  const libDirs = [...new Set([...onDisk, ...snapshotLibraryDirs(libRoot)])].sort();
   return [
     path.join(exportRoot, MERGED_VARIABLES_FILE),
     ...DS_FILE_NAMES.map((n) => dsFilePath(exportRoot, n)),
     ...libDirs.flatMap((d) => LIBRARY_FILE_NAMES.map((n) => path.join(libRoot, d, n))),
   ];
+}
+// The libraries a snapshot was taken of, read from the snapshot names (export__libraries__<dir>__<file>): a
+// library export removed or renamed since has no directory left to list, and its snapshot is what says so.
+function snapshotLibraryDirs(libRoot: string): string[] {
+  const probe = snapshotPath(path.join(libRoot, "d", "f.json"));
+  if (probe === null) return [];
+  const prefix = path.basename(probe).slice(0, -"d__f.json".length);
+  let names: string[];
+  try { names = fs.readdirSync(path.dirname(probe)); } catch { return []; }
+  const dirs = new Set<string>();
+  for (const n of names) {
+    if (!n.startsWith(prefix)) continue;
+    for (const f of LIBRARY_FILE_NAMES) if (n.endsWith("__" + f) && n.length > prefix.length + f.length + 2) dirs.add(n.slice(prefix.length, -(f.length + 2)));
+  }
+  return [...dirs];
 }
 // …keeping only those on disk: a screen-only project has no design-system/, and an export from an
 // older plugin may lack a part, so a missing one is not something to report.
@@ -653,19 +682,22 @@ function siblingFilesOf(f: string): string[] {
 // A snapshot a diff has already compared against is spent: the sidecar `<snapshot>.diffed` records the
 // content hash of the export it was diffed against, written once the report is out. `--snapshot`
 // replaces a spent snapshot without --force as long as the export is still that one — the next sync's
-// step 2, before its re-pull — and keeps no `.prev` (a spent copy is history, not a baseline). A
-// snapshot no diff has used yet, or one whose export was re-pulled again after the diff, still needs
-// --force: replacing it would lose the only copy older than the export on disk.
+// step 2, before its re-pull — and keeps the old one as `.prev` for a diff by hand (--against), never as a
+// baseline (a `.prev.diffed` beside it says so). A snapshot no diff has used yet, or one whose export was
+// re-pulled again after the diff, still needs --force: replacing it would lose the only copy older than
+// the export on disk. A snapshot whose bytes ARE the export it was diffed against was never spent: that
+// diff listed nothing for a sync to apply, so the mark says only that a diff ran.
 const DIFFED = ".diffed";
 const fileHash = (f: string): string | null => { try { return sha1Hex(fs.readFileSync(f)); } catch { return null; } };
 function markDiffed(file: string, cwd: string): void {
   const snap = snapshotPath(file, cwd), h = fileHash(file);
-  if (h && fs.existsSync(snap)) { try { fs.writeFileSync(snap + DIFFED, h + "\n"); } catch { /* unmarked: the next --snapshot asks for --force, as before */ } }
+  if (h && snap !== null && fs.existsSync(snap)) { try { fs.writeFileSync(snap + DIFFED, h + "\n"); } catch { /* unmarked: the next --snapshot asks for --force, as before */ } }
 }
 const diffedHash = (snap: string): string | null => { try { return fs.readFileSync(snap + DIFFED, "utf8").trim() || null; } catch { return null; } };
+// (A snapshot with the export's own bytes never reaches isSpent: --snapshot treats that as the no-op.)
 const isSpent = (file: string, snap: string): boolean => { const m = diffedHash(snap); return m !== null && m === fileHash(file); };
 // Diffed once, and the export re-pulled after that diff: the snapshot is older than what the last sync applied.
-const diffedSince = (file: string, snap: string): boolean => { const m = diffedHash(snap); return m !== null && m !== fileHash(file); };
+const diffedSince = (file: string, snap: string): boolean => { const m = diffedHash(snap); return m !== null && m !== fileHash(file) && m !== fileHash(snap); };
 
 // One file against its baseline: the diff, no baseline at all, or why it could not be compared.
 type Compared = { result: DiffResult; same: boolean } | { none: true } | { error: string };
@@ -720,7 +752,7 @@ function diffDirectory(dir: string, json: boolean, out: string | undefined): num
   const files = exportSetFiles(dir);
   // A set member with a snapshot but no file any more left the export after the snapshot (a library
   // export removed, a part an older plugin wrote): said, not silently dropped.
-  const gone = exportSetCandidates(dir).filter((f) => !fs.existsSync(f) && fs.existsSync(snapshotPath(f)));
+  const gone = exportSetCandidates(dir).filter((f) => { const snap = snapshotPath(f); return !fs.existsSync(f) && snap !== null && fs.existsSync(snap); });
   if (!files.length && !gone.length) { console.error(`design-diff: ${dir} holds no ${MERGED_VARIABLES_FILE}, design-system or library files — pass the export directory (the one with ${MERGED_VARIABLES_FILE}, ${DESIGN_SYSTEM_FILES.MANIFEST} and ${DESIGN_SYSTEM_DIR}/), or one file.`); return 2; }
   const d: DirDiffResult = { dir, results: [], notCompared: [] };
   const failed: string[] = [];
@@ -797,11 +829,16 @@ function main(argv: string[]): number {
     // A refusal, or a named file that is not there, must not exit 0 — indistinguishable, to a script, from every file being
     // snapshotted successfully. sync-design's own step 2 is meant to run unattended before a re-pull;
     // a refusal it can't see means the user finds out only later, when the diff is wrong.
+    // A file under no project's design/ has no place for its snapshot: said once, before any file is copied.
+    for (const { file: f } of entries.values()) {
+      if (fs.existsSync(f) && snapshotPath(f) === null) { console.error(`design-diff: ${f} is not under a design/ directory that holds an export (looked above the file and above ${process.cwd()}) — run this from the project root, or name the file by its path inside design/export/`); return 2; }
+    }
     let refused = 0, missing = 0;
     const refusedKeys = new Set<string>();
     for (const [key, { file: f, follows }] of entries) {
       if (!fs.existsSync(f)) { console.error(`design-diff: ${f} not found — nothing to snapshot (first pull?)`); missing++; continue; }
       const dest = snapshotPath(f);
+      if (dest === null) continue; // refused above
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       // Non-destructive: a snapshot is the only copy older than the export once the re-pull lands, so a
       // snapshot that would CHANGE an existing one is refused — unless the old one is spent (a diff
@@ -811,26 +848,39 @@ function main(argv: string[]): number {
       let identical = false;
       if (fs.existsSync(dest)) { try { identical = Buffer.compare(fs.readFileSync(dest), fs.readFileSync(f)) === 0; } catch { /* treat as different */ } }
       const replacing = fs.existsSync(dest) && !identical;
+      const rel = path.relative(process.cwd(), dest), prevOf = (p: string): string => p + ".prev";
+      let spent = false;
+      if (identical && follows === undefined) {
+        // The export IS the snapshot: whatever diff marked it is over. A `.prev` left by a forced snapshot was
+        // that diff's baseline (the sync is done with it), and a mark that outlived the sync would
+        // make the next re-pull look like one outside a sync.
+        if (diffedHash(dest) !== null) for (const p of [prevOf(dest), prevOf(dest + ".assets.json"), prevOf(dest) + DIFFED]) fs.rmSync(p, { force: true });
+        fs.rmSync(dest + DIFFED, { force: true });
+      }
       if (replacing) {
-        const spent = follows === undefined && isSpent(f, dest);
+        spent = follows === undefined && isSpent(f, dest);
         if (follows !== undefined ? refusedKeys.has(follows) : !force && !spent) {
           if (follows === undefined) {
-            const rel = path.relative(process.cwd(), dest);
+            const shared = path.basename(f) === MERGED_VARIABLES_FILE ? ` (every screen and design-system pull merges into ${MERGED_VARIABLES_FILE}, so a pull for another screen changes it too)` : "";
             console.error(diffedSince(f, dest)
-              ? `design-diff: ${rel} was already diffed against an earlier export, and ${f} was re-pulled since — refusing to overwrite it. Run the diff now to see everything since that diff (it repeats changes the earlier sync applied), then snapshot again.`
-              : `design-diff: ${rel} already exists, would change, and no diff has used it yet — refusing to overwrite it (diff first; or pass --force to replace it, the old one is kept as .prev).`);
+              ? `design-diff: ${rel} was already diffed against an earlier export, and ${f} was re-pulled since${shared} — refusing to overwrite it. Run the diff now (its report lists the earlier sync's changes again), then snapshot again.`
+              : `design-diff: ${rel} already exists, would change, and no diff has used it yet${shared} — refusing to overwrite it. Run the diff now, then snapshot again (--force replaces it without a diff, the old one is kept as .prev).`);
             refused++;
             refusedKeys.add(key);
           }
           continue;
         }
-        // Only a forced replacement of a snapshot no diff has used keeps it as `.prev` — the baseline
-        // previous() falls back to when that forced copy turns out to be the re-pulled export itself.
-        // A spent snapshot, or a screen sibling (never diffed), leaves no `.prev`, and drops any older one.
-        const keepPrev = follows === undefined && !spent;
-        for (const [from, to] of [[dest, dest + ".prev"], [dest + ".assets.json", dest + ".assets.json.prev"]] as const) {
+        // The old copy of a diff target is kept as `<name>.prev`, overwriting the one before. After a forced
+        // replacement of a snapshot no diff has used it stays a baseline: previous() falls back to it when
+        // that forced copy turns out to be the re-pulled export itself. A SPENT snapshot's copy carries its
+        // `.diffed` as `.prev.diffed` — history that previous() never reads, there so a sync that was
+        // abandoned after its diff can still be diffed against (--against). A screen's siblings (never
+        // diffed) keep none, and drop an older one.
+        const keepPrev = follows === undefined;
+        for (const [from, to] of [[dest, prevOf(dest)], [dest + ".assets.json", prevOf(dest + ".assets.json")]] as const) {
           try { if (keepPrev && fs.existsSync(from)) fs.copyFileSync(from, to); else if (!keepPrev) fs.rmSync(to, { force: true }); } catch { /* best effort */ }
         }
+        try { if (spent) fs.copyFileSync(dest + DIFFED, prevOf(dest) + DIFFED); else fs.rmSync(prevOf(dest) + DIFFED, { force: true }); } catch { /* best effort */ }
       }
       if (!identical) { fs.copyFileSync(f, dest); fs.rmSync(dest + DIFFED, { force: true }); }
       let n = 0;
@@ -846,6 +896,7 @@ function main(argv: string[]): number {
         }
       } catch { /* the sidecar could not be written — the copy is still the snapshot */ }
       console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : replacing ? " (replaced)" : ""}`);
+      if (spent) console.log(`  the old snapshot (spent by the last diff) is kept as ${rel}.prev, never used as a baseline — if the last sync was stopped before its report was applied, diff against it: --against ${rel}.prev`);
     }
     return refused || missing ? 1 : 0; // a returned code, not exit(): main's caller sets process.exitCode so every already-printed line flushes first
   }
