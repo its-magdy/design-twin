@@ -15,7 +15,7 @@
 // transparent layer; a panel that is only the destination tag; and a plan-only opener (plan.interactions). ?mode=wide
 // adds a 1700px strip to the Beds section only; ?mode=reload-on-first-hover reloads once on the hovered row.
 // plot-ledger-edge.html holds the edge-case repros, one ?mode= each.
-// The freeze repros say where a page stopped answering: froze lists the query of each page that began one.
+// The freeze repro says where a page stopped answering: froze lists the query of each page that began one.
 //
 // A write is charged to the run whose page made it (the POST's Referer query, when it is a launched --url's); any other write
 // (no Referer, an <object> / <embed> subframe's own URL) is charged to every run's check, and each suite's final check wants
@@ -54,27 +54,22 @@ export const loadNote = (m: VerifyMeasured | null): boolean => (m?.notes || []).
 
 export interface ProbeRunOptions { env?: NodeJS.ProcessEnv; killAfterMs?: number }
 
-/** The env that makes a run's Playwright log its browser process launcher on stderr (`pw:browser <launched> pid=N`, then the
- *  close or kill and the profile cleanup) — the browser processes a run started, without reading the process table. */
+/** The env that makes a run's Playwright log its browser process launcher on stderr (`pw:browser <launched> pid=N`, and when
+ *  that process ends while the run is alive `[pid=N] <process did exit: exitCode=…, signal=…>`) — the browsers a run started
+ *  and how each ended, without reading the process table. */
 export const BROWSER_LOG: NodeJS.ProcessEnv = { DEBUG: "pw:browser" };
 /** The browser pids a run under BROWSER_LOG launched. */
 export const launchedPids = (stderr: string): number[] => [...stderr.matchAll(/pw:browser <launched> pid=(\d+)/g)].map((m) => Number(m[1]));
-/** Whether `pid` still runs — on POSIX, any process of the group it leads too (Playwright spawns the browser detached, so it
- *  leads the group its renderers start in; kill(2) with -pid). Signal 0 only tests for existence, on every platform
- *  (https://nodejs.org/api/process.html#processkillpid-signal); Windows has no process groups to test. EPERM: it exists. */
-const running = (pid: number): boolean => (process.platform === "win32" ? [pid] : [pid, -pid]).some((p) => {
-  try { process.kill(p, 0); return true; } catch (e) { return e instanceof Error && "code" in e && e.code === "EPERM"; }
-});
-/** Polls until none of `pids` runs (a killed browser can stay a zombie a moment until it is reaped), at most `ms`; true when
- *  every one is gone. */
-export async function browsersGone(pids: number[], ms = 10_000): Promise<boolean> {
-  const end = Date.now() + ms;
-  for (;;) {
-    if (!pids.some(running)) return true;
-    if (Date.now() >= end) return false;
-    await new Promise((r) => setTimeout(r, 100));
-  }
-}
+/** How the browser `pid` ended, as Playwright logged it: "exitCode=0, signal=null" when it quit on its own while the run was
+ *  alive (the probe closed it); a signal when it was killed (the probe's last-resort SIGKILL of its browser children); null
+ *  when no exit was logged (the run ended first and Playwright's exit hook killed it — that hook logs nothing). */
+export const browserExit = (stderr: string, pid: number): string | null => new RegExp(String.raw`\[pid=${pid}\] <process did exit: (exitCode=[^,]*, signal=[^>]*)>`).exec(stderr)?.[1] ?? null;
+/** SIGKILL the process group of each pid (POSIX: Playwright spawns the browser detached, so it leads its own group) — the
+ *  cleanup after a run the test had to kill, whose browser no exit hook ended. Windows has no process groups: nothing. */
+export const killGroups = (pids: number[]): void => {
+  if (process.platform === "win32") return;
+  for (const pid of pids) { try { process.kill(-pid, "SIGKILL"); } catch { /* gone already */ } }
+};
 
 export interface DriveFixture {
   url: (mode?: string) => string;
@@ -89,8 +84,7 @@ export interface DriveFixture {
   writes: string[];
   /** the writes charged to the runs on these --url values, plus the unattributed ones */
   writesOf: (...urls: string[]) => string[];
-  /** the query of every page that began a freeze (plot-ledger-edge.html?mode=freeze-drive's GET /plot-ledger-froze, and every
-   *  never-yielding document ?mode=freeze-reach was answered with) */
+  /** the query of every page that began a freeze (plot-ledger-edge.html?mode=freeze-drive's GET /plot-ledger-froze, by its Referer) */
   froze: string[];
   /** a path inside the temp project, and the run status the probe left for a verify dir base (the run cache's live file) */
   abs: (rel: string) => string;
@@ -159,7 +153,6 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
   const writesOf = (...urls: string[]): string[] => [...[...new Set(urls.map(searchOf))].flatMap((s) => writesBy.get(s) ?? []), ...(writesBy.get("?") ?? [])];
   const seen = new Map<string, number>();
   const froze: string[] = [];
-  const FROZEN_DOC = "<!doctype html><html><body><div class=\"app\" data-dt-node=\"70:1\"></div><script>for (;;) { /* never yields */ }</script></body></html>";
   const SLOW_JS = "document.body.insertAdjacentHTML(\"beforeend\", '<div class=\"app\" data-dt-node=\"70:1\"><h1 data-dt-node=\"70:2\">Beds</h1></div>');";
   const server = http.createServer((req, res) => {
     const u = new URL(req.url || "/", "http://x");
@@ -170,7 +163,11 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
       writesBy.set(k, [...(writesBy.get(k) ?? []), what]);
       res.writeHead(204); res.end(); return;
     }
-    if (name === "plot-ledger-froze") { froze.push(u.search); res.writeHead(204); res.end(); return; }
+    // the freeze began: charged to the page that said so (its Referer's query)
+    if (name === "plot-ledger-froze") {
+      try { froze.push(new URL(req.headers.referer ?? "").search); } catch { froze.push("?"); }
+      res.writeHead(204); res.end(); return;
+    }
     if (name === "plot-ledger-hang.png" || name === "plot-ledger-hangdoc") return; // an image that never loads (held until finish())
     if (name === "plot-ledger-slow.png") { setTimeout(() => { res.writeHead(404); res.end(); }, Number(u.searchParams.get("d") || 2500)).unref(); return; }
     if (name === "plot-ledger-late.png") { setTimeout(() => { res.writeHead(404); res.end(); }, 12_000).unref(); return; }
@@ -183,8 +180,6 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
     const n = (seen.get(req.url || "") ?? 0) + 1;
     seen.set(req.url || "", n);
     if (u.searchParams.get("mode") === "slow-reach" && n > 1) return; // held until the probe gives up (closed by finish())
-    // answered every time, but after the first with a document whose inline script never yields (the driving pages' reach freezes)
-    if (u.searchParams.get("mode") === "freeze-reach" && n > 1) { froze.push(u.search); res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(FROZEN_DOC); return; }
     // &csp=1 → a strict style CSP (an injected <style> without the page's nonce is blocked)
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...(u.searchParams.get("csp") ? { "content-security-policy": "style-src 'nonce-dtcsp'" } : {}) });
     res.end(fs.readFileSync(file));

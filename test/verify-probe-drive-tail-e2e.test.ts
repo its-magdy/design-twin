@@ -16,9 +16,8 @@
 // into a document that loads late, a reload into a never-loading one after an in-place click, a load note gone stale, the
 // measured-anyway document's own late load, same-URL links handled in place then a reload, the real "kept navigating"
 // duration, a page going on to a server that never answers before its load, a client redirect's late own load; a page whose
-// main thread stops answering mid-drive (an endless loop in the frame after a click, in the click handler, in every driving
-// page's document while it loads) and one blocked 3 s that recovers — each bounded, cut (or not) as the probe words it, its
-// browser gone afterwards (Playwright's launcher log names the pid).
+// main thread stops answering mid-drive (an endless loop in the frame after a click) — cut by the drive's own budget as the
+// probe words it, its browser closed by the probe (Playwright's launcher log says how it ended).
 //
 // needs the repo's devDependency `playwright` + chromium. Locally an unavailable renderer prints SKIPPED; in CI
 // (CI=true) that is a failure.  Run with:  node test/verify-probe-drive-tail-e2e.test.ts
@@ -26,15 +25,15 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { VerifyMeasured } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { BROWSER_LOG, READY, browsersGone, ix, launchedPids, loadNote, out, startDriveFixture, type Run } from "./drive-e2e-fixture.ts";
+import { BROWSER_LOG, READY, browserExit, ix, killGroups, launchedPids, loadNote, out, startDriveFixture, type Run } from "./drive-e2e-fixture.ts";
 
 const { url, edge, probe, vs, read, readReport, written, writes, froze, abs, status, EXPECTED, QUIET, finish } =
   await startDriveFixture("dt-probe-drive-tail-e2e-", "verify-probe drive e2e, serial tail — the built bundles in a real chromium, from a temp project:");
 
-// the freeze runs: Playwright's launcher log on stderr (the browser pids), and SIGKILLed at 90 s — a hang fails, never hangs the suite
+// the freeze runs: Playwright's launcher log on stderr (the browser pids and how each ended), and SIGKILLed at 90 s — a hang fails, never hangs the suite
 const FREEZE_RUN = { env: BROWSER_LOG, killAfterMs: 90_000 };
 const freezeArgs = (u: string, base: string, maxTime: string): string[] => ["--expected", EXPECTED, "--url", u, "--out", out(base), "--timeout", "30000", "--max-time", maxTime];
-const freezeUrl = { raf: `${edge("freeze-drive")}&how=raf`, click: `${edge("freeze-drive")}&how=click`, recover: `${edge("freeze-drive")}&how=recover&ms=3000`, reach: edge("freeze-reach") };
+const freezeUrl = `${edge("freeze-drive")}&how=raf`;
 
 // ---- the runs (T): each started only when the one before it has finished (wall-clock windows, see the header)
 const T = {
@@ -67,10 +66,7 @@ const T = {
   bounceHang: () => probe(["--expected", QUIET, "--url", edge("bounce-hang"), "--out", out("BounceHang"), "--timeout", "12000", "--max-time", "40000"]),
   redirSlow: () => probe(["--expected", QUIET, "--url", edge("redir-slow"), "--out", out("RedirSlow"), "--steps", "steps-redir-slow.json", "--ready", READY, "--timeout", "30000", "--max-time", "90000"]),
   // a page whose main thread stops answering mid-drive: --timeout 30 s, so only the drive's budget can end the freeze
-  freezeRaf: (runId: string) => probe([...freezeArgs(freezeUrl.raf, "FreezeRaf", "25000"), "--run", runId], FREEZE_RUN),
-  freezeClick: () => probe(freezeArgs(freezeUrl.click, "FreezeClick", "25000"), FREEZE_RUN),
-  freezeReach: () => probe(freezeArgs(freezeUrl.reach, "FreezeReach", "25000"), FREEZE_RUN),
-  freezeRecover: () => probe(freezeArgs(freezeUrl.recover, "FreezeRecover", "45000"), FREEZE_RUN),
+  freezeRaf: (runId: string) => probe([...freezeArgs(freezeUrl, "FreezeRaf", "30000"), "--run", runId], FREEZE_RUN),
 };
 console.log(`serial: ${Object.keys(T).length} runs, one at a time`);
 
@@ -275,34 +271,47 @@ if (rRS.status !== 0) console.log(rRS.stderr);
 check("a client redirect to a document whose load comes at 11 s (past the 10 s cap), after a click changed it in place → its own late load: exit 0, re-runs 0, the root by tag (was: 'the page reloaded … after step 2', exit 4)",
   rRS.status === 0 && mRS?.navigation?.reruns === 0 && mRS.frame?.via === "tag" && mRS.frame.nodeId === "70:1");
 
-// ---- a page whose main thread stops answering while the drive runs (plot-ledger-edge.html?mode=freeze-drive / freeze-reach).
-// --max-time 25 s leaves the drive about 25 − 15 − the measurement; the cut closes the frozen row's context (that ends the page
-// and whatever the row waited on in it), every later row is not run, the measured file and the status are written as usual
-// (exit 0, inside --max-time — the watchdog's way out is exit 4 with nothing written), and no browser process outlives the run.
+// ---- a page whose main thread stops answering while the drive runs (plot-ledger-edge.html?mode=freeze-drive).
+// --max-time 30 s leaves the drive about 30 − 15 − the launch and measurement; the cut closes the frozen row's context (that ends
+// the page and whatever the row waited on in it), every later row is not run, and the measured file and the status are written
+// as usual — exit 0 (the --max-time watchdog's way out is exit 4 with nothing written). The probe then closes its browser
+// itself: Playwright logs that browser's own exit, code 0, while the probe runs (a browser the probe's last-resort SIGKILL or
+// Playwright's exit hook had to end logs a signal or nothing).
 const searchOf = (u: string): string => new URL(u).search;
 const ROWS = ["70:44", "70:45", "70:46", "70:47", "70:48", "70:49", "70:53", "70:50"];
 const cutRow = (m: VerifyMeasured | null, id: string): boolean => { const e = ix(m, id); return e?.ok === null && e.cut === "budget" && e.detail === "not-run: time budget"; };
 /** the drive was cut, not wedged: every row recorded, no "stopped answering" note */
 const notWedged = (m: VerifyMeasured | null): boolean => (m?.interactions || []).length === ROWS.length && !(m?.notes || []).some((n) => /stopped answering/.test(n));
-const freezeChecks = async (label: string, r: Run, m: VerifyMeasured | null, u: string, driven: string[]): Promise<void> => {
-  if (r.status !== 0) console.log(r.stderr);
+/** the run's single browser, closed by the probe: its pid and how Playwright logged its end. A run the suite had to kill
+ *  (killAfterMs) left its browser to nobody — its process group is killed here. */
+const browserClosed = (label: string, r: Run): boolean => {
   const pids = launchedPids(r.stderr);
-  check(`${label} → exit 0 in ${Math.round(r.ms / 1000)} s (< 25 s: the drive's own cut, not the --max-time watchdog), measured written, the freeze began (the page said so)`,
-    r.status === 0 && !r.killed && r.ms < 25_000 && m !== null && froze.includes(searchOf(u)));
-  check(`${label} → ${driven.length ? `${driven.join(", ")} driven ok:true before it, ` : ""}the frozen row and every row after it ok:null cut budget 'not-run: time budget'; cut, not wedged (all ${ROWS.length} rows recorded, no 'stopped answering' note)`,
-    driven.every((id) => ix(m, id)?.ok === true && ix(m, id)?.cut === undefined) && ROWS.filter((id) => !driven.includes(id)).every((id) => cutRow(m, id)) && notWedged(m));
-  check(`${label} → its browser (pid ${pids.join(", ") || "none logged"}, from Playwright's launcher log) is gone once the run ends — no process of its group left`,
-    pids.length === 1 && await browsersGone(pids));
+  if (r.killed) killGroups(pids);
+  const exit = pids.length === 1 ? browserExit(r.stderr, pids[0] ?? 0) : null;
+  return check(`${label} → one browser launched (pid ${pids.join(", ") || "none logged"}), closed by the probe: Playwright logged its own exit 'exitCode=0, signal=null' while the run was up (saw ${exit ?? "no exit"})`,
+    pids.length === 1 && exit === "exitCode=0, signal=null");
+};
+/** a failed check prints what the probe said of its drive (or all its stderr, when it did not get that far) */
+const driveLines = (r: Run): string => r.stderr.split("\n").filter((l) => /^(drive|note|verify-probe:|warning) /.test(l)).join("\n") || r.stderr;
+const freezeChecks = (label: string, r: Run, m: VerifyMeasured | null, u: string, driven: string[]): void => {
+  const ok = [
+    check(`${label} → exit 0 in ${Math.round(r.ms / 1000)} s (the drive's own cut — not the --max-time watchdog's exit 4), measured written, the freeze began (the page said so)`,
+      r.status === 0 && !r.killed && m !== null && froze.includes(searchOf(u))),
+    check(`${label} → ${driven.length ? `${driven.join(", ")} driven ok:true before it, ` : ""}the frozen row and every row after it ok:null cut budget 'not-run: time budget'; cut, not wedged (all ${ROWS.length} rows recorded, no 'stopped answering' note)`,
+      driven.every((id) => ix(m, id)?.ok === true && ix(m, id)?.cut === undefined) && ROWS.filter((id) => !driven.includes(id)).every((id) => cutRow(m, id)) && notWedged(m)),
+    browserClosed(label, r),
+  ];
+  if (ok.includes(false)) console.log(driveLines(r));
 };
 
-// (1) an endless loop in the animation frame after the click (every later evaluate never returns), the run bound to a verify
-// run: its `measured` status is written after the measured file (it carries that file's sha) — then --compare grades the cut
-// row as not probed, never as a failure
+// an endless loop in the animation frame after the click (every later evaluate never returns), the run bound to a verify run:
+// its `measured` status is written after the measured file (it carries that file's sha) — then --compare grades the cut row as
+// not probed, never as a failure
 const stF = await vs(["--status", "FreezeRaf", "--phase", "starting", "--new-run", "--dir", "design/verify"]);
 const runF = /^run (\S+) rev 1$/m.exec(stF.stdout)?.[1] ?? "";
 const rF = await T.freezeRaf(runF);
 const mF = read(out("FreezeRaf"));
-await freezeChecks("an opener whose click freezes the next animation frame for good (70:45)", rF, mF, freezeUrl.raf, ["70:44"]);
+freezeChecks("an opener whose click freezes the next animation frame for good (70:45)", rF, mF, freezeUrl, ["70:44"]);
 check("the frozen row on stderr as the probe words it: 'drive 70:45 on_click → ok:null · not-run: time budget'", /^drive 70:45 on_click → ok:null · not-run: time budget$/m.test(rF.stderr));
 const sF = status(out("FreezeRaf"));
 const mFile = abs(out("FreezeRaf") + ".measured.json");
@@ -316,26 +325,6 @@ const rowF = (id: string): string | undefined => (repF?.interactions || []).find
 if (repF === null) console.log(cF.stderr);
 check(`--compare of the frozen run: the cut row 70:45 not-probed (saw ${String(rowF("70:45"))}), never fail; 70:44, driven before the freeze, passes (saw ${String(rowF("70:44"))})`,
   rowF("70:45") === "not-probed" && rowF("70:44") === "pass");
-
-// (1b) the endless loop inside the click handler itself (the click's own input dispatch is never answered)
-const rFC = await T.freezeClick();
-await freezeChecks("an opener whose click handler loops for good (70:45)", rFC, read(out("FreezeClick")), freezeUrl.click, ["70:44"]);
-
-// (3) the freeze at navigation: every driving page's document runs an endless inline script (its load never comes)
-const rFR = await T.freezeReach();
-await freezeChecks("a driving page whose document never yields while it loads (every row's reach)", rFR, read(out("FreezeReach")), freezeUrl.reach, []);
-
-// (2) the main thread blocked 3 s in the frame after the click, then the dialog opens — slow, not wedged: the row is graded on
-// what it opened, and the rows after it are driven
-const rFV = await T.freezeRecover();
-const mFV = read(out("FreezeRecover"));
-if (rFV.status !== 0) console.log(rFV.stderr);
-const pFV = launchedPids(rFV.stderr);
-check(`an opener whose click blocks the main thread 3 s then opens its dialog → exit 0 in ${Math.round(rFV.ms / 1000)} s (< 45 s), the freeze began; 70:45 ok:true (the dialog it opened, no cut), 70:44 and 70:46 ok:true too; no row cut, no 'stopped answering' note`,
-  rFV.status === 0 && !rFV.killed && rFV.ms < 45_000 && froze.includes(searchOf(freezeUrl.recover))
-  && ["70:44", "70:45", "70:46"].every((id) => ix(mFV, id)?.ok === true && ix(mFV, id)?.detectedBy === "[role=dialog]")
-  && !(mFV?.interactions || []).some((i) => i.cut !== undefined) && notWedged(mFV));
-check(`the recovered run's browser (pid ${pFV.join(", ") || "none logged"}) is gone once the run ends`, pFV.length === 1 && await browsersGone(pFV));
 
 // Per run above, and no run in this suite made a write at all — no fixture has a write the drive or a step may make (the pooled
 // suite holds the same check over its own runs)

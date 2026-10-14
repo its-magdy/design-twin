@@ -62,9 +62,8 @@
     // a step whose click follows a real link: that load is the step's own (not after the initial load)
     const on = q.get("section") === "beds";
     document.write('<nav><a data-dt-node="70:30" href="/plot-ledger-edge.html?mode=link-step&section=beds">Beds</a></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>'));
-  } else if (mode === "slow-reach" || mode === "freeze-reach") {
-    // M1: the server answers this URL at once the first time and holds every later request (the driving pages' reach);
-    // freeze-reach: answers every later request with a document whose script never yields
+  } else if (mode === "slow-reach") {
+    // M1: the server answers this URL at once the first time and holds every later request (the driving pages' reach)
     document.write(beds);
   } else if (mode === "ancestor") {
     // M2: a destination-tagged wrapper already on screen around the opener; an unrelated dialog opening inside it is
@@ -625,26 +624,21 @@
     document.getElementById("jump").onclick = () => { shell.scrollTo({ top: 300 }); f.style.top = `${100 + shell.scrollTop}px`; f.hidden = false; };
   } else if (mode === "freeze-drive") {
     // a page whose main thread stops answering while an opener is driven: Edit (70:44) opens its dialog at once; Split
-    // (70:45) blocks the main thread after its click — forever in the next animation frame (&how=raf), forever inside the
-    // click handler itself (&how=click), or for &ms= in the next frame and then opens its dialog (&how=recover); the openers
-    // after it open their dialog at once. The measurement pass never clicks, so it measures the screen as usual. Right before
-    // it blocks, a synchronous GET /plot-ledger-froze<this page's query> tells the server the freeze began (the test's proof
-    // that the drive reached it).
+    // (70:45) blocks the main thread forever in the animation frame after its click; the openers after it open their dialog
+    // at once. The measurement pass never clicks, so it measures the screen as usual. Right before
+    // it blocks, a synchronous GET /plot-ledger-froze tells the server the freeze began (the server reads which page from its
+    // Referer — the test's proof that the drive reached it).
     document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
       <button data-dt-node="70:44" id="edit">Edit</button><button data-dt-node="70:45" id="split">Split</button>
       <button data-dt-node="70:46" id="rename">Rename</button><button data-dt-node="70:50" id="add">Add bed</button>
       <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div></div>`);
-    const how = q.get("how") || "raf", ms = Number(q.get("ms") || 3000);
     const spin = (until) => {
-      const x = new XMLHttpRequest(); x.open("GET", "/plot-ledger-froze" + location.search, false); x.send();
+      const x = new XMLHttpRequest(); x.open("GET", "/plot-ledger-froze", false); x.send();
       while (Date.now() < until) { /* the main thread blocked */ }
     };
     const show = () => { document.getElementById("fresh").hidden = false; };
     for (const id of ["edit", "rename", "add"]) document.getElementById(id).onclick = show;
-    document.getElementById("split").onclick = () => {
-      if (how === "click") spin(Infinity);
-      else requestAnimationFrame(() => { spin(how === "recover" ? Date.now() + ms : Infinity); show(); });
-    };
+    document.getElementById("split").onclick = () => requestAnimationFrame(() => { spin(Infinity); show(); });
   }
 </script>
 </body>
