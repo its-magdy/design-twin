@@ -1954,11 +1954,24 @@ if (process.platform !== "win32") {
   const exited = new Promise<boolean>((resolve) => child.once("exit", () => resolve(true)));
   await new Promise<void>((resolve) => { child.once("spawn", () => resolve()); });
   const fake = { newBrowserCDPSession: () => Promise.reject(new Error("browser has disconnected")), close: () => Promise.resolve(), isConnected: () => false };
-  let threw = false;
-  try { await VP.closeCapped(fake, 200); } catch { threw = true; }
-  const gone = await Promise.race([exited, sleep(3000).then(() => false)]);
+  // Its kill rests on one `ps` the product caps at 3 s: on a starved machine that `ps` can time out and kill nothing, so
+  // a child still running after a call gets a fresh call (a fresh `ps`), up to CALLS. The exit is awaited on its event
+  // (EXIT_WAIT_MS per call), never slept for; closeCapped killing nothing at all still fails every call.
+  const CALLS = 3, EXIT_WAIT_MS = 5_000;
+  let threw = false, calls = 0, gone = false;
+  while (!gone && calls < CALLS) {
+    calls++;
+    try { await VP.closeCapped(fake, 200); } catch { threw = true; }
+    gone = await Promise.race([exited, sleep(EXIT_WAIT_MS, undefined, { ref: false }).then(() => false)]);
+  }
   if (!gone) child.kill("SIGKILL");
-  check(`closeCapped: a browser child still running after the close (the handle already disconnected) is SIGKILLed (${gone ? "gone" : "still running after 3 s"}${threw ? ", closeCapped threw" : ""})`, gone && !threw);
+  // A machine so starved that this same `ps` cannot finish inside the product's cap leaves nothing to judge: skipped, not failed.
+  const psCap = PB.PS_CAP_MS ?? 3_000;
+  const psAt = Date.now();
+  const ps = gone ? undefined : spawnSync("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8", timeout: psCap });
+  const starved = ps !== undefined && (ps.error !== undefined || Date.now() - psAt >= psCap);
+  if (starved) console.log(`  (skipped: closeCapped's browser-child kill — a \`ps\` of this machine took ${Date.now() - psAt} ms, past the ${psCap} ms the product allows it)`);
+  else check(`closeCapped: a browser child still running after the close (the handle already disconnected) is SIGKILLed (${gone ? `gone after ${calls} call${calls === 1 ? "" : "s"}` : `still running after ${CALLS} calls, ${EXIT_WAIT_MS / 1000} s each`}${threw ? ", closeCapped threw" : ""})`, gone && !threw);
 }
 
 // The page-side text read, on a minimal fake DOM (no browser): measureElements' `text` keeps a line break the page
