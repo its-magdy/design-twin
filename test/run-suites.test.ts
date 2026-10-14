@@ -374,8 +374,24 @@ console.log("CMD " + JSON.stringify({
     check("[pool] runNode: a spawn that throws synchronously (NUL in an argument) resolves status null with `spawn failed:` in stderr", sync !== TIMED_OUT && sync.status === null && /^spawn failed: /.test(sync.stderr) && sync.stdout === "");
     const hung = await within(runNode(tmp, "-e", ["setTimeout(() => {}, 30000)"], 200), TIMED_OUT);
     check("[pool] runNode: killAfterMs SIGKILLs a run that has not exited and reports killed (status null)", hung !== TIMED_OUT && hung.killed && hung.status === null && hung.ms < 10_000);
+    // a descendant of the killed run goes with it: the child starts a grandchild and prints its pid, then both hang
+    const tree = await within(runNode(tmp, "-e", ["const g = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' }); console.log(g.pid); setTimeout(() => {}, 30000)"], 1500), TIMED_OUT);
+    const gpid = tree === TIMED_OUT ? 0 : Number(tree.stdout.trim());
+    const alive = async (): Promise<boolean> => {
+      for (let i = 0; i < 50; i++) {
+        try { process.kill(gpid, 0); } catch (e) { return e instanceof Error && "code" in e && e.code === "EPERM"; }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return true;
+    };
+    check("[pool] runNode: killAfterMs also ends the processes the run started (its grandchild is gone)", tree !== TIMED_OUT && tree.killed && gpid > 0 && !(await alive()));
     const quick = await within(runNode(tmp, "-e", ["0"], 20_000), TIMED_OUT);
     check("[pool] runNode: a run that exits before killAfterMs is not killed", quick !== TIMED_OUT && !quick.killed && quick.status === 0);
+    // a variable of this process's own (not PATH: libuv on Windows copies PATH, SYSTEMROOT and a few more into any env missing them)
+    process.env.DT_RUNNODE_PARENT_ONLY = "1";
+    const env = await within(runNode(tmp, "-e", ["process.stdout.write(String(process.env.X) + String(!!process.env.DT_RUNNODE_PARENT_ONLY))"], 0, { X: "1" }), TIMED_OUT);
+    delete process.env.DT_RUNNODE_PARENT_ONLY;
+    check(`[pool] runNode: env is the child's WHOLE environment, not added to this one's (X set, this process's DT_RUNNODE_PARENT_ONLY gone; saw ${env === TIMED_OUT ? "a timeout" : JSON.stringify(env.stdout)})`, env !== TIMED_OUT && env.stdout === "1false");
   }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

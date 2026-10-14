@@ -622,6 +622,23 @@
     if (q.get("painted")) { const tick = () => { painted = shell.scrollTop; requestAnimationFrame(tick); }; requestAnimationFrame(tick); }
     document.getElementById("move").onclick = () => { f.style.top = `${100 + (q.get("painted") ? painted : shell.scrollTop)}px`; f.hidden = false; };
     document.getElementById("jump").onclick = () => { shell.scrollTo({ top: 300 }); f.style.top = `${100 + shell.scrollTop}px`; f.hidden = false; };
+  } else if (mode === "freeze-drive") {
+    // a page whose main thread stops answering while an opener is driven: Edit (70:44) opens its dialog at once; Split
+    // (70:45) blocks the main thread forever in the animation frame after its click; the openers after it open their dialog
+    // at once. The measurement pass never clicks, so it measures the screen as usual. Right before
+    // it blocks, a synchronous GET /plot-ledger-froze tells the server the freeze began (the server reads which page from its
+    // Referer — the test's proof that the drive reached it).
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <button data-dt-node="70:44" id="edit">Edit</button><button data-dt-node="70:45" id="split">Split</button>
+      <button data-dt-node="70:46" id="rename">Rename</button><button data-dt-node="70:50" id="add">Add bed</button>
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Bed form</div></div></div>`);
+    const spin = (until) => {
+      const x = new XMLHttpRequest(); x.open("GET", "/plot-ledger-froze", false); x.send();
+      while (Date.now() < until) { /* the main thread blocked */ }
+    };
+    const show = () => { document.getElementById("fresh").hidden = false; };
+    for (const id of ["edit", "rename", "add"]) document.getElementById(id).onclick = show;
+    document.getElementById("split").onclick = () => requestAnimationFrame(() => { spin(Infinity); show(); });
   }
 </script>
 </body>
