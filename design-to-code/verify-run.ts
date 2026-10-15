@@ -272,7 +272,7 @@ export interface StatusWriteHooks {
   continues?: boolean;
   /** the write is of a run its writer names (verify-screen --status without --new-run): refused (RunNotCurrent) when the
    *  status names another run that has not ended, an abandoned one included — checked with the ended-run check, before
-   *  `before`. An ended run or no status takes it (the record of a measured file after its run's status ended) */
+   *  `before`. An ended run or no status takes it (the record of a measured file after the status's run ended) */
   current?: boolean;
 }
 /** How long a status write waits for another one (the probe writes a measured file and its screenshots inside). */
@@ -470,7 +470,8 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   if (ended) { console.error(ended.message); return 2; }
   // a run of its writer's (not --new-run) is written only while no other run is open: a recovery or end-it command run
   // late, after another run started, would replace that run in the status (and a `done` publish over it). Checked again
-  // under the lock — that also catches a run started between the read above and the write (the inferred id is stale then)
+  // under the lock — that also catches a run started between the read above and the write (the inferred id is stale then;
+  // a run that starts AND ends inside that gap is not caught: an ended run takes the record by design)
   const current = !f["new-run"];
   const other = current ? notCurrentRun(base, prev, runId) : null;
   if (other) { console.error(other.message); return 2; }
