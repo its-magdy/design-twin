@@ -180,7 +180,8 @@ function paddingNotShown(n: IrNode, L: LegacyLayout, pad: readonly number[]): Ar
         const al = al0 === "space-around" || al0 === "space-evenly" ? "center" : al0;
         const lost: PadSide[] = al === "center" ? sides : al === "flex-end" ? [sides[0] ?? "left"] : [sides[1] ?? "right"];
         const shown = lost.filter((sd) => (pad[PAD_SIDES.indexOf(sd)] ?? 0) !== 0);
-        if (shown.length) out.push({ sides: shown, why: `padding ${a}+${z} plus its content (${r2(content)}px) exceeds the fixed ${size}px ${dim}, and the content is ${al === "center" ? "centred" : al === "flex-end" ? "end-aligned" : "start-aligned"} — the design cannot show the ${shown.join("/")} padding, so the build need not have it` });
+        if (shown.length) out.push({ sides: shown, why: `padding ${a}+${z} plus its content (${r2(content)}px) exceeds the fixed ${size}px ${dim}, and the content is ` +
+          `${al === "center" ? "centred" : al === "flex-end" ? "end-aligned" : "start-aligned"} — the design cannot show the ${shown.join("/")} padding, so the build need not have it` });
         continue;
       }
     }
@@ -188,13 +189,15 @@ function paddingNotShown(n: IrNode, L: LegacyLayout, pad: readonly number[]): Ar
     // padding, so that padding shows even with centred items)
     const centred = main ? L.justifyContent === "center" : L.alignItems === "center" && !(wraps && L.alignContent === "space-between");
     const grows = flow.some((c) => (main ? growsAlong(c, dir) : (ax === "x" ? c.widthMode === "fill" : c.heightMode === "fill") || c.alignSelf === "stretch"));
-    if (flow.length && centred && a === z && !grows && !(main && wraps)) out.push({ sides, why: `content centred in a fixed ${size}px ${dim} with equal padding (${a}) — the padding moves nothing, so the build need not have it` });
+    if (flow.length && centred && a === z && !grows && !(main && wraps))
+      out.push({ sides, why: `content centred in a fixed ${size}px ${dim} with equal padding (${a}) — the padding moves nothing, so the build need not have it` });
   }
   return out;
 }
 
 const lineBoxWhy = (lh: number, h: number): string =>
-  `the line box (${r2(lh)}px) is taller than the fixed text box (${r2(h)}px): Figma lets the line overflow the box — the build chooses: line-height ${r2(lh)} (the text overflows its box, as in Figma) or ${r2(h)} (the glyphs sit about ${r2((lh - h) / 2)}px higher); the TEXT height is not compared`;
+  `the line box (${r2(lh)}px) is taller than the fixed text box (${r2(h)}px): Figma lets the line overflow the box — the build chooses: line-height ${r2(lh)} (the text overflows its box, as in Figma) or ${r2(h)} ` +
+    `(the glyphs sit about ${r2((lh - h) / 2)}px higher); the TEXT height is not compared`;
 
 /** The drawn state a node inherits from an ancestor that was drawn in one. `from` = the owner's name (for the why),
  *  `fromId` = its id (the probe hovers the OWNER, not this node — spec.drawnStateFrom). */
@@ -241,7 +244,8 @@ function expectText({ n, spec, skip }: NodeSpecCtx): void {
   // a font variant (smaller capitals), not different characters: not compared.
   const fcase = n.font ? n.font.case : undefined;
   if (n.text != null && (fcase === "upper" || fcase === "lower" || fcase === "title")) spec.textCase = fcase;
-  else if (n.text != null && (fcase === "small_caps" || fcase === "small_caps_forced")) skip("text case", fcase, "small caps (font-variant) not compared — Figma draws the stored characters as small capitals; the build's font-variant is not measured");
+  else if (n.text != null && (fcase === "small_caps" || fcase === "small_caps_forced"))
+    skip("text case", fcase, "small caps (font-variant) not compared — Figma draws the stored characters as small capitals; the build's font-variant is not measured");
 }
 /** the typography: family, size, weight, line height, letter spacing and the font colour */
 function expectFont({ n, spec }: NodeSpecCtx): void {
@@ -294,7 +298,8 @@ function expectStroke({ n, spec }: NodeSpecCtx): void {
     if (typeof st.weight === "number") spec.borderWidth = st.weight;
     // Per-side weights (a divider with only a bottom border) have no single CSS `border-width` to
     // compare against, so record them as their own field rather than picking one arbitrarily.
-    else if (st.weights && typeof st.weights === "object") { const ws = st.weights; spec.borderWidths = (["top", "right", "bottom", "left"] as const).map((k) => { const v = ws[k]; return typeof v === "number" ? v : 0; }); }
+    else if (st.weights && typeof st.weights === "object") { const ws = st.weights;
+      spec.borderWidths = (["top", "right", "bottom", "left"] as const).map((k) => { const v = ws[k]; return typeof v === "number" ? v : 0; }); }
     if (st.align) spec.strokeAlign = st.align; // (after the weight/weights chain)
   }
 }
@@ -311,7 +316,8 @@ function expectRadius({ n, spec, skip, paints }: NodeSpecCtx): void {
   if (n.radius !== undefined && n.radius !== null && !drawsBox && n.type !== "TEXT") {
     const r = n.radius;
     const rv: JsonValue = typeof r === "number" ? r : { ...ifDefined("tl", r.tl), ...ifDefined("tr", r.tr), ...ifDefined("br", r.br), ...ifDefined("bl", r.bl) };
-    if (typeof r !== "number" || r !== 0) skip("border-radius", rv, "radius on a layer that draws nothing (no visible fill, stroke or effect, and it does not clip its content) — its corners are invisible in the design too");
+    if (typeof r !== "number" || r !== 0) skip("border-radius", rv,
+      "radius on a layer that draws nothing (no visible fill, stroke or effect, and it does not clip its content) — its corners are invisible in the design too");
   } else if (typeof n.radius === "number") spec.borderRadius = n.radius;
   else if (n.radius && typeof n.radius === "object") {
     const rc = n.radius;
@@ -353,8 +359,10 @@ function expectGap({ n, spec, skip }: NodeSpecCtx, L: LegacyLayout): void {
     // "Auto — choose from Between, Around, and Evenly auto spacing options", which "match CSS
     // property values space-between, space-evenly and space-around respectively") — so the stored
     // value is slack for all three, not just space-between.
-    else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around") skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
-    else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g, "a child fills the main axis, so the stored gap and that child's size trade off — placement is checked through the children's positions and sizes instead");
+    else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around")
+      skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
+    else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g,
+      "a child fills the main axis, so the stored gap and that child's size trade off — placement is checked through the children's positions and sizes instead");
     else spec.gap = g;
   }
 }
@@ -408,7 +416,8 @@ function expectTextSize({ n, spec, skip }: NodeSpecCtx, box: Box): void {
   else if (rb && num(rb.w)) {
     spec.width = rb.w;
     spec.widthFrom = "renderBox";
-    skip("width (text box)", box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, so the ink width (renderBox) is compared instead`);
+    skip("width (text box)", box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, so the ink width (renderBox) is ` +
+      `compared instead`);
   } else spec.width = box.w;
   // a FIXED-height text box shorter than its line box (a 28px line in a 24px box). Figma lets the line
   // overflow the box; CSS has no such box, so the build picks one — say so instead of letting a later height or
@@ -432,7 +441,8 @@ function expectOpacity({ n, spec }: NodeSpecCtx): void {
   if (typeof n.opacity === "number" && n.opacity !== 1) spec.opacity = n.opacity;
   // the exporter omits opacity 1 — a node that paints or carries copy states it anyway, so a control
   // rendered at opacity 0.5 is a delta instead of passing unchecked
-  else if (spec.text !== undefined || spec.placeholderText !== undefined || spec.color !== undefined || spec.backgroundColor !== undefined || spec.fill !== undefined || spec.borderColor !== undefined || spec.decorated) spec.opacity = 1;
+  else if (spec.text !== undefined || spec.placeholderText !== undefined || spec.color !== undefined || spec.backgroundColor !== undefined || spec.fill !== undefined || spec.borderColor !== undefined || spec.decorated)
+    spec.opacity = 1;
 }
 /** the interaction state the node is drawn in — its own, else the one it inherits from an ancestor */
 function expectDrawnState({ n, spec }: NodeSpecCtx, inheritedState: InheritedState | undefined): void {
@@ -796,7 +806,8 @@ function mergePlanInteractions(bx: ExpectBuild, planIn: ExpectOptions["plan"] | 
     // the probe opens a dialog by clicking its opener — a dialog row on any other trigger (hover, key, drag…)
     // could never be driven, so it would sit not-probed forever
     if (o.expect === "dialog" && trigger !== "on_click" && trigger !== "on_press") return drop(`expect dialog needs trigger on_click or on_press (the probe opens a dialog by clicking its opener), not ${trigger}`);
-    if (keys.has(`${id}|${trigger}`)) return drop(`duplicates ${interactions.some((r) => r.nodeId === id && r.trigger === trigger && r.source !== "plan") ? "the export's own interaction" : "an earlier plan row"} for this node and trigger (${trigger})`);
+    if (keys.has(`${id}|${trigger}`)) return drop(`duplicates ${interactions.some((r) => r.nodeId === id && r.trigger === trigger && r.source !== "plan") ? "the export's own interaction" : "an earlier plan row"} for ` +
+      `this node and trigger (${trigger})`);
     keys.add(`${id}|${trigger}`);
     const destinationId = typeof o.destinationId === "string" ? o.destinationId.trim() : undefined;
     const row: VerifyInteraction = { nodeId: id, name: node.name, trigger, action: actionForExpect(o.expect), expect: o.expect, ...ifDefined("destinationId", destinationId), source: "plan" };
@@ -960,7 +971,8 @@ function firstReferenceImage(bx: ExpectBuild, opts: ExpectOptions | null | undef
     readReference, colorProfile: opts && typeof opts.colorProfile === "string" ? opts.colorProfile : null });
 }
 // expectation.frame / frames[] row: the frame's id, name, size and clip (no x/y)
-const rootFrame = (f: Partial<VerifyFrame>): Partial<VerifyRootFrame> => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
+const rootFrame = (f: Partial<VerifyFrame>): Partial<VerifyRootFrame> =>
+  ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
 /** the expectation document: what the walk and the passes collected, the counts, and the notes for its reader */
 function expectationOf(bx: ExpectBuild, docs: ExpectInput[], planInteractions: VerifyExpectation["planInteractions"],
   referenceImage: VerifyReferenceImage | VerifyReferenceUnusable | undefined): BuiltExpectation {

@@ -80,10 +80,12 @@ function runStatusNote(base: string, now = Date.now()): string | null {
   const st = found.status, name = path.basename(base);
   if (st === "v1") return `${found.file} is a hand-written status (no run id) — not checked`;
   const detail = st.detail ? ` (${st.detail})` : "";
-  if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} — its measured/report files are partial; this expectation is safe to re-measure against`;
+  if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} — its measured/report files are partial; this expectation is safe to ` +
+    `re-measure against`;
   if (TERMINAL_PHASES.includes(st.phase)) return null;
   const age = now - Date.parse(st.at);
-  if (Number.isFinite(age) && age >= STATUS_STALL_MS) return `the last run of ${name} (run ${st.runId}) never finished — still at phase ${st.phase}${detail}, ${Math.round(age / 1000)} s ago; its measured/report files are partial`;
+  if (Number.isFinite(age) && age >= STATUS_STALL_MS) return `the last run of ${name} (run ${st.runId}) never finished — still at phase ${st.phase}${detail}, ${Math.round(age / 1000)} s ago; its measured/report ` +
+    `files are partial`;
   return `a run of ${name} (run ${st.runId}) is in progress — phase ${st.phase}${detail}${Number.isFinite(age) ? `, ${Math.round(age / 1000)} s ago` : ""}; it measures against the expectation it started with`;
 }
 
@@ -180,7 +182,8 @@ function main(argv: string[]): number | Promise<number> {
     "      — what the build does that the design never drew — are listed under 'Inferred, not designed', never graded).\n" +
     "      --out defaults to design/verify/<the .expected.json file's own basename>.\n" +
     "      Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes\n" +
-    "      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.\n" +    "      Integrity first: a measured file naming no or another expectation, or a run status not finished / naming another\n" +
+    "      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.\n" +
+    "      Integrity first: a measured file naming no or another expectation, or a run status not finished / naming another\n" +
     "      measured file, makes the verdict 'incomplete' even with high mismatches (the numbers belong to an unverified run).\n" +
     "      The plan for this frame (--plan <plan.json>; else the plan file --expect merged interactions from, while it exists;\n" +
     "      else design/plan/ as at --expect) supplies waivers[] and descopes[]: an accepted\n" +
@@ -214,7 +217,8 @@ function main(argv: string[]): number | Promise<number> {
 
   const OPTIONS = {
     out: { type: "string" }, interactions: { type: "string" }, against: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" },
-    accept: { type: "boolean" }, node: { type: "string" }, field: { type: "string" }, group: { type: "string" }, reason: { type: "string" }, by: { type: "string" }, plan: { type: "string" }, "all-fields": { type: "boolean" },
+    accept: { type: "boolean" }, node: { type: "string" }, field: { type: "string" }, group: { type: "string" }, reason: { type: "string" }, by: { type: "string" }, plan: { type: "string" },
+      "all-fields": { type: "boolean" },
     status: { type: "string" }, wait: { type: "string" }, phase: { type: "string" }, run: { type: "string" }, "new-run": { type: "boolean" }, detail: { type: "string" },
     dir: { type: "string" }, publish: { type: "string" }, timeout: { type: "string" }, stall: { type: "string" }, interval: { type: "string" },
     "record-plan": { type: "boolean" },
@@ -301,7 +305,8 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   const chosen = choosePlan(flagged, firstRoot && firstRoot.id, path.basename(outBase0));
   const planForExpect = chosen.hit;
   if (chosen.all.length > 1 && chosen.all.some((h) => h.plan.interactions !== undefined)) {
-    console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h) => h.file).join(", ")}) — using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another`
+    console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h) => h.file).join(", ")}) — using ${planForExpect.file}, the only one listing files[] ` +
+      `(--compare picks the same); pass --plan <plan.json> to choose another`
       : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h) => h.file).join(", ")}) — no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
   }
   // the reference PNG (pointer relative to design/export/) and the document's colour profile stamp
@@ -376,7 +381,8 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   // what the last run beside this expectation says (failed/blocked, never finished, in progress, hand-written)
   const runNote = runStatusNote(outBase);
   if (runNote) console.error(`note  ${runNote}`);
-  if (prev !== null && prev === next) console.error(`note  ${target} is byte-identical to the expectation on disk (same export inputs, sha256 ${h.slice(0, 12)}…) — unchanged; this says nothing about the build: re-measure to check the code`);
+  if (prev !== null && prev === next) console.error(`note  ${target} is byte-identical to the expectation on disk (same export inputs, sha256 ${h.slice(0, 12)}…) — unchanged; this says nothing about the build: ` +
+    `re-measure to check the code`);
   else if (onlyExportedAt) {
     // a re-pull with nothing changed rewrites only exportedAt. Same design, same specs —
     // the measurements and report beside it still describe it.
@@ -389,15 +395,18 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
       : `the expectation recorded no export hash (exportContentSha256) — cannot tell whether the export or the expectation generator changed`;
     console.error(`note  REPLACED an existing ${target} that differed (sha256 ${sha256Hex(prev).slice(0, 12)}… → ${h.slice(0, 12)}…): ${why}; the previous one is kept as ${prevFile}`);
     const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs.existsSync(f));
-    if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation — re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
+    if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation — re-measure and re-compare before reading ` +
+      `${stale.length > 1 ? "them" : "it"}.`);
   }
   const hc = exp.counts.hidden;
   const lineBoxes = exp.notComparable.filter((g) => g.field === TEXT_BOX_HEIGHT).length;
   console.error(`${exp.counts.nodes} node spec(s), ${exp.counts.instances} instance(s), ${exp.counts.interactions} designed interaction(s) — visible layers only; ` +
     `skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ` +
-    `${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable${lineBoxes ? `; ${lineBoxes} a line box taller than its fixed text box — the build chooses its line-height` : ""}) · expectation sha256 ${h.slice(0, 12)}…`);
+    `${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable${lineBoxes ? `; ${lineBoxes} a line box taller than its fixed text box — the build chooses its line-height` : ""}) · ` +
+      `expectation sha256 ${h.slice(0, 12)}…`);
   const ri = exp.referenceImage;
-  if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}×${ri.png.h} at ${scaleText(ri.scale)} (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` — ${ri.colorProfile}: colours are compared without colour management` : ""}`
+  if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}×${ri.png.h} at ${scaleText(ri.scale)} ` +
+    `(${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` — ${ri.colorProfile}: colours are compared without colour management` : ""}`
     : `note  no visual diff for this screen: ${ri.why}`);
   if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers — interaction coverage cannot be checked, and the report will say so rather than passing.");
   return 0;
@@ -405,7 +414,8 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
 
 /** `--compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan]
  *  [--out <base>]`: writes <Screen>.report.json + .md (compare) and exits 1 unless the verdict passes. */
-function compareMain(files: string[], flags: { out?: string | undefined; interactions?: string | undefined; against?: string | undefined; plan?: string | undefined; "record-plan"?: boolean | undefined }, USAGE: string): number {
+function compareMain(files: string[], flags: { out?: string | undefined; interactions?: string | undefined; against?: string | undefined; plan?: string | undefined; "record-plan"?: boolean | undefined },
+  USAGE: string): number {
   const sha = (file: string): string => sha256Hex(fs.readFileSync(file));
   const { out, interactions: interactionsFile, against: againstFile, plan: planFlag } = flags;
   const recordPlanFlag = !!flags["record-plan"];
@@ -473,7 +483,8 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
       const r = readJson(recPi, isPlan);
       if (!("doc" in r)) recordedPlanGone = r.missing ? "no longer exists" : `is not a readable plan now (${r.error})`;
       else if (!flagged) {
-        const foundNow = planHit ? ` instead of ${planHit.file}, the plan found in design/plan/ now` : all.length ? `; ${all.length} plans in design/plan/ describe this frame now (${all.map((h) => h.file).join(", ")})` : "; no plan in design/plan/ describes this frame";
+        const foundNow = planHit ? ` instead of ${planHit.file}, the plan found in design/plan/ now` : all.length ? `; ${all.length} plans in design/plan/ describe this frame now (${all.map((h) => h.file).join(", ")})`
+          : "; no plan in design/plan/ describes this frame";
         compareNotes.push(`using ${recPi} (the plan --expect merged interactions from)${foundNow} — its interactions[], waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`);
         console.error(`note  ${compareNotes[compareNotes.length - 1]}`);
         planHit = { file: recPi, plan: r.doc, choice: "recorded" };
@@ -529,7 +540,8 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path.join(path.dirname(expFile), path.basename(measuredBase)) : null;
   const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path.resolve(probeBase) !== path.resolve(measuredBase) ? readStatusAt(probeBase) : null);
   // (status: null = looked and found none — a measured file naming its run then has nothing recording it)
-  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`, status: found.status } }
+  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`,
+    status: found.status } }
     : measuredBase !== null ? { status: null } : {};
   // the diff PNG the probe recorded — as recorded, else the same name beside the measured file (a published stage)
   const vd: unknown = measured.visual && measured.visual.ran ? measured.visual.diff : undefined;
@@ -538,7 +550,10 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
     const beside = path.join(path.dirname(measuredFile), path.basename(vd));
     visualDiff = fs.existsSync(vd) ? { path: vd, exists: true } : fs.existsSync(beside) ? { path: beside.split(path.sep).join("/"), exists: true } : { path: vd, exists: false };
   }
-  const rep = compare(expectation, measured, { ...statusOpt, ...(readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}), ...(readable.dropped.includes("visual") ? { visualMalformed: true } : {}), ...(visualDiff ? { visualDiff } : {}), ...(readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...(extraInferred !== undefined ? { inferred: extraInferred } : {}), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
+  const rep = compare(expectation, measured, { ...statusOpt, ...(readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}), ...(readable.dropped.includes("visual") ? { visualMalformed: true } : {}),
+    ...(visualDiff ? { visualDiff } : {}), ...(readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone),
+    ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...(extraInferred !== undefined ? { inferred: extraInferred } : {}), expectationSha256: sha(expFile),
+    measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
   const md = reportToMarkdown(rep);
   write(false, compareBase, rep, md);
   console.error(rep.headline);
@@ -546,9 +561,11 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   console.error(rep.behaviour.headline);
   console.error(rep.visual.headline);
   const nie = rep.probe.measuredIdsNotInExpectation || 0;
-  if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) — measured against another screen or an older expectation?`);
+  if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) — measured against another screen or an older ` +
+    `expectation?`);
   for (const w of rep.waivers.reopened) console.error(`warn  waiver REOPENED ${w.nodeId} (${w.field}): ${w.why}`);
-  if (rep.waivers.unused.length) console.error(`note  ${rep.waivers.unused.length} plan waiver(s)/descope(s) match nothing this round: ${rep.waivers.unused.map((w) => `${w.nodeId} (${w.field})`).join(", ")} — fixed? drop them`);
+  if (rep.waivers.unused.length) console.error(`note  ${rep.waivers.unused.length} plan waiver(s)/descope(s) match nothing this round: ${rep.waivers.unused.map((w) => `${w.nodeId} (${w.field})`).join(", ")} — ` +
+    `fixed? drop them`);
   // the report just written → the tool-owned keys of plan.verification (plan-record.ts). A failure leaves
   // the report in place and says so (exit 1): the plan then still holds the previous record.
   if (recordPlanFlag && planHit) {
@@ -571,7 +588,8 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
 // `--accept <report> (--node <id> [--field <label>] | --group <gid>) --reason … --by … [--plan <plan.json>]`.
 // Copies the report delta(s) into plan.waivers[] — one row per node + field — bound to the export content hash
 // and to the designed and built values. It never grades anything: the next --compare applies (or reopens) them.
-function acceptMain(files: string[], flags: { node?: string | undefined; field?: string | undefined; group?: string | undefined; reason?: string | undefined; by?: string | undefined; plan?: string | undefined; "all-fields"?: boolean | undefined }, USAGE: string): number {
+function acceptMain(files: string[], flags: { node?: string | undefined; field?: string | undefined; group?: string | undefined; reason?: string | undefined; by?: string | undefined; plan?: string | undefined;
+  "all-fields"?: boolean | undefined }, USAGE: string): number {
   const reportFile = files[0];
   if (!reportFile || files.length > 1) { console.error("--accept needs exactly one <Screen>.report.json\n" + USAGE); return 2; }
   if ((flags.node === undefined) === (flags.group === undefined)) { console.error("--accept needs exactly one of --node <id> / --group <gid>\n" + USAGE); return 2; }
@@ -579,7 +597,8 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
   // One "keep the 16px" must not also waive a copy or colour delta on the same node: name the field, or say all.
   if (flags.node !== undefined && (flags.field === undefined) === !flags["all-fields"]) { console.error("--accept --node needs exactly one of --field \"<label>\" / --all-fields\n" + USAGE); return 2; }
   const reason = (flags.reason || "").trim(), by = (flags.by || "").trim();
-  if (!reason || !by) { console.error(`--accept needs ${!reason ? "--reason \"<why this deviation is intended>\"" : ""}${!reason && !by ? " and " : ""}${!by ? "--by \"<who decided>\"" : ""} — a waiver without a reason and a decider is not recorded\n` + USAGE); return 2; }
+  if (!reason || !by) { console.error(`--accept needs ${!reason ? "--reason \"<why this deviation is intended>\"" : ""}${!reason && !by ? " and " : ""}${!by ? "--by \"<who decided>\"" : ""} — a waiver without a ` +
+    `reason and a decider is not recorded\n` + USAGE); return 2; }
   const r = readJson(reportFile, isVerifyReport);
   if (!("doc" in r)) { console.error(`error  report: '${reportFile}' ${r.error}`); return 2; }
   const report = r.doc;
@@ -595,7 +614,8 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
   if (!planFile) {
     const hits = plansFor(report.nodeId, stem);
     const only = hits.length === 1 ? hits[0] : undefined;
-    if (!only) { console.error(hits.length ? `error  ${hits.length} plans describe this screen (${hits.map((h) => h.file).join(", ")}) — pass --plan <plan.json>` : "error  no plan in design/plan/ describes this screen (run from the project root, or pass --plan <plan.json>)"); return 1; }
+    if (!only) { console.error(hits.length ? `error  ${hits.length} plans describe this screen (${hits.map((h) => h.file).join(", ")}) — pass --plan <plan.json>`
+      : "error  no plan in design/plan/ describes this screen (run from the project root, or pass --plan <plan.json>)"); return 1; }
     planFile = only.file;
   }
   const pr = readJson(planFile, isPlan);

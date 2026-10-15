@@ -1877,8 +1877,10 @@ function checkVerification(plan, cwd) {
   if (v.mode === "rendered") {
     const shape = (x) => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
     const wrongShape = [];
-    if (v.artifacts !== void 0 && !Array.isArray(v.artifacts)) wrongShape.push(`verification.artifacts must be an array of paths, got ${shape(v.artifacts)} \u2014 e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
-    if (v.deltas !== void 0 && !Array.isArray(v.deltas)) wrongShape.push(`verification.deltas must be an array of the residual differences, got ${shape(v.deltas)} \u2014 the counts live in the report; list each difference ([] if none were found)`);
+    if (v.artifacts !== void 0 && !Array.isArray(v.artifacts))
+      wrongShape.push(`verification.artifacts must be an array of paths, got ${shape(v.artifacts)} \u2014 e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
+    if (v.deltas !== void 0 && !Array.isArray(v.deltas))
+      wrongShape.push(`verification.deltas must be an array of the residual differences, got ${shape(v.deltas)} \u2014 the counts live in the report; list each difference ([] if none were found)`);
     if (wrongShape.length) return v.deltas === void 0 ? [...wrongShape, "verification.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)"] : wrongShape;
     const artifacts = Array.isArray(v.artifacts) ? v.artifacts : [];
     if (!artifacts.length) return ['verification.mode is "rendered" but `artifacts` is empty \u2014 list the screenshot(s)/report the render produced'];
@@ -1897,7 +1899,8 @@ function verificationWarnings(plan) {
   if (!v || v.mode !== "rendered") return [];
   const out = [];
   const c = v.coverage;
-  if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push('verification.coverage is missing \u2014 record {rendered:[\u2026], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, "Beyond the ideal frame")');
+  if (!c || !Array.isArray(c.rendered) || !c.rendered.length)
+    out.push('verification.coverage is missing \u2014 record {rendered:[\u2026], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, "Beyond the ideal frame")');
   if (!v.a11y) out.push("verification.a11y is missing \u2014 copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) \u2014 `verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded \u2014 say so in the report rather than implying one ran");
   return out;
 }
@@ -1940,7 +1943,8 @@ function behaviourWarnings(plan, reports, ctx = {}) {
   const a11y = plan.verification && typeof plan.verification === "object" ? plan.verification.a11y : void 0;
   const recorded = a11y && typeof a11y === "object" ? a11y.violations : void 0;
   const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : void 0, all, ctx);
-  if (recorded !== void 0 && target.missing !== void 0 && all.some((r2) => r2.behaviour && r2.behaviour.ran)) out.push(`verification.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ \u2014 the a11y count was not checked against it`);
+  if (recorded !== void 0 && target.missing !== void 0 && all.some((r2) => r2.behaviour && r2.behaviour.ran))
+    out.push(`verification.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ \u2014 the a11y count was not checked against it`);
   const r = target.ref ?? newestOwn(all);
   const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
   const failWarning = (ref, fail, failed) => {
@@ -1957,7 +1961,8 @@ function behaviourWarnings(plan, reports, ctx = {}) {
     return [...out, ...otherFails];
   }
   if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
-  if (recorded !== void 0 && target.missing === void 0 && recorded !== b.fail) out.push(`verification.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} \u2014 copy report.behaviour.summary`);
+  if (recorded !== void 0 && target.missing === void 0 && recorded !== b.fail)
+    out.push(`verification.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} \u2014 copy report.behaviour.summary`);
   return [...out, ...otherFails];
 }
 var A11Y = /\b(a11y|axe|accessib)/i;
@@ -1975,12 +1980,15 @@ function verificationContradictions(plan, reports) {
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
   for (const r of reports || []) {
     const recordedHere = !!(v.recorded && typeof v.recorded === "object" && v.recorded.report === r.rel);
-    if (!recordedHere && Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 copy them (or the ones you judged real, with why) into the plan`);
+    if (!recordedHere && Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length)
+      out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 copy them (or the ones you judged real, with why) into the plan`);
     for (const k of ["verifyScreenVerdict", "verdict"]) {
       const claimed = v[k];
       const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
-      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict)) out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} \u2014 the report is the verdict; the plan cannot overrule it`);
-      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations") out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" \u2014 say the accepted deviations, not a plain pass`);
+      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict))
+        out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} \u2014 the report is the verdict; the plan cannot overrule it`);
+      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations")
+        out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" \u2014 say the accepted deviations, not a plain pass`);
     }
   }
   return out;
@@ -2008,7 +2016,10 @@ function validatePlanHeader(plan) {
 var DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
 function tokenCore(x) {
   let s = String(x || "").toLowerCase().replace(/^--/, "").replace(/^var\(--|\)$/g, "");
-  s = s.replace(/^(color|colors|spacing|space|radius|rounded|text|font|font-size|font-weight|leading|tracking|shadow|bg|border|fill|stroke|ring|outline|gap|gap-[xy]|p[xytrbl]?|m[xytrbl]?|w|h|size|inset|top|left|right|bottom)-/, "");
+  s = s.replace(
+    /^(color|colors|spacing|space|radius|rounded|text|font|font-size|font-weight|leading|tracking|shadow|bg|border|fill|stroke|ring|outline|gap|gap-[xy]|p[xytrbl]?|m[xytrbl]?|w|h|size|inset|top|left|right|bottom)-/,
+    ""
+  );
   s = s.replace(/^figma-/, "").replace(/-[0-9a-f]{8}$/, "");
   return alnumKey(s);
 }
@@ -2350,7 +2361,8 @@ function checkPlan({ plan, file }, cwd, opts) {
     const show = undecided.slice(0, 8).map((row) => `${row.figmaName ? `'${row.figmaName}' ` : ""}${String(row.value)} (${row.kind})`).join(", ");
     warnings.push(`${undecided.length} token row(s) have no token and no recorded decision: ${show}${undecided.length > 8 ? `, +${undecided.length - 8} more` : ""} \u2014 fill codeToken, or say what you did about it in \`decision\` (a one-off literal is a legitimate answer; say so)`);
   }
-  for (const row of live) if (row.acknowledged !== void 0 && !isAcknowledged(row)) warnings.push(`token row '${row.figmaName || String(row.value)}' has an empty \`acknowledged\` \u2014 say why the shared code token is right, or remove the field`);
+  for (const row of live) if (row.acknowledged !== void 0 && !isAcknowledged(row))
+    warnings.push(`token row '${row.figmaName || String(row.value)}' has an empty \`acknowledged\` \u2014 say why the shared code token is right, or remove the field`);
   const byCodeToken = /* @__PURE__ */ new Map();
   for (const row of live) {
     if (!hasToken(row) || !row.figmaName || isAcknowledged(row)) continue;
@@ -2397,7 +2409,8 @@ function checkPlan({ plan, file }, cwd, opts) {
     const verdict = verdictOf(row);
     if (verdict === "reused" && row.mapModule && !seenModule.has(row.mapModule)) {
       seenModule.add(row.mapModule);
-      if (!moduleImported(row.mapModule, byFile, cwd) && !moduleImported(row.mapModule, reachable(), cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (neither this plan's files, nor a plan file they import, nor one that renders them \u2014 an app shell \u2014 or its direct imports; compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) \u2014 was it regenerated instead of reused? If it is rendered by a shared layout above this screen (e.g. an app shell), list that layout file in this plan's files[] too`);
+      if (!moduleImported(row.mapModule, byFile, cwd) && !moduleImported(row.mapModule, reachable(), cwd))
+        warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (neither this plan's files, nor a plan file they import, nor one that renders them \u2014 an app shell \u2014 or its direct imports; compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) \u2014 was it regenerated instead of reused? If it is rendered by a shared layout above this screen (e.g. an app shell), list that layout file in this plan's files[] too`);
     }
     const mappedTo = verdict === "new" && row.key ? mapped.get(row.key) : void 0;
     if (mappedTo) {
@@ -2569,11 +2582,17 @@ function reportVerdict(plan, cwd, exp, reports, cached) {
   const expSha = exp && exp.doc ? exportContentSha256(exp.doc) : null;
   for (const r of reports) {
     if (!r.exportContentSha256) {
-      if (r.expectationChanged) return { status: "unverified", reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`] };
+      if (r.expectationChanged) return {
+        status: "unverified",
+        reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`]
+      };
       return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run ${scriptCmd("verify-screen")} --expect and --compare`] };
     }
     if (!expSha) return { status: "unverified", reasons: [`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`] };
-    if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}\u2026 \u2192 ${expSha.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`] };
+    if (r.exportContentSha256 !== expSha) return {
+      status: "unverified",
+      reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}\u2026 \u2192 ${expSha.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`]
+    };
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
     if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) \u2014 re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
     const now = fileHashes2(plan, cwd, cached);
@@ -2584,7 +2603,10 @@ function reportVerdict(plan, cwd, exp, reports, cached) {
   const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
   const withDeviations = reports.filter((r) => r.verdict === "pass-with-deviations");
   const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations \u2014 accepted deltas / descoped interactions are listed in the report)` : "says pass";
-  return { status: withDeviations.length ? "verified-with-deviations" : "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} ${says} and measured this design and exactly these files (by content)${head ? ` \u2014 at git ${head.slice(0, 12)}` : ""}`] };
+  return {
+    status: withDeviations.length ? "verified-with-deviations" : "verified",
+    reasons: [`${reports.map((r) => r.rel).join(", ")} ${says} and measured this design and exactly these files (by content)${head ? ` \u2014 at git ${head.slice(0, 12)}` : ""}`]
+  };
 }
 function computeStatus(plan, opts) {
   const o = opts || {};

@@ -1952,7 +1952,8 @@ function paddingNotShown(n, L, pad) {
     }
     const centred = main2 ? L.justifyContent === "center" : L.alignItems === "center" && !(wraps && L.alignContent === "space-between");
     const grows = flow.some((c) => main2 ? growsAlong(c, dir) : (ax === "x" ? c.widthMode === "fill" : c.heightMode === "fill") || c.alignSelf === "stretch");
-    if (flow.length && centred && a === z && !grows && !(main2 && wraps)) out.push({ sides, why: `content centred in a fixed ${size}px ${dim} with equal padding (${a}) \u2014 the padding moves nothing, so the build need not have it` });
+    if (flow.length && centred && a === z && !grows && !(main2 && wraps))
+      out.push({ sides, why: `content centred in a fixed ${size}px ${dim} with equal padding (${a}) \u2014 the padding moves nothing, so the build need not have it` });
   }
   return out;
 }
@@ -1981,7 +1982,8 @@ function expectText({ n, spec, skip }) {
   if (n.text != null) spec.text = n.text;
   const fcase = n.font ? n.font.case : void 0;
   if (n.text != null && (fcase === "upper" || fcase === "lower" || fcase === "title")) spec.textCase = fcase;
-  else if (n.text != null && (fcase === "small_caps" || fcase === "small_caps_forced")) skip("text case", fcase, "small caps (font-variant) not compared \u2014 Figma draws the stored characters as small capitals; the build's font-variant is not measured");
+  else if (n.text != null && (fcase === "small_caps" || fcase === "small_caps_forced"))
+    skip("text case", fcase, "small caps (font-variant) not compared \u2014 Figma draws the stored characters as small capitals; the build's font-variant is not measured");
 }
 function expectFont({ n, spec }) {
   if (!n.font) return;
@@ -2041,7 +2043,11 @@ function expectRadius({ n, spec, skip, paints }) {
   if (n.radius !== void 0 && n.radius !== null && !drawsBox && n.type !== "TEXT") {
     const r = n.radius;
     const rv = typeof r === "number" ? r : { ...ifDefined("tl", r.tl), ...ifDefined("tr", r.tr), ...ifDefined("br", r.br), ...ifDefined("bl", r.bl) };
-    if (typeof r !== "number" || r !== 0) skip("border-radius", rv, "radius on a layer that draws nothing (no visible fill, stroke or effect, and it does not clip its content) \u2014 its corners are invisible in the design too");
+    if (typeof r !== "number" || r !== 0) skip(
+      "border-radius",
+      rv,
+      "radius on a layer that draws nothing (no visible fill, stroke or effect, and it does not clip its content) \u2014 its corners are invisible in the design too"
+    );
   } else if (typeof n.radius === "number") spec.borderRadius = n.radius;
   else if (n.radius && typeof n.radius === "object") {
     const rc = n.radius;
@@ -2071,8 +2077,13 @@ function expectGap({ n, spec, skip }, L) {
     const dir = L.flexDirection === "column" ? "column" : "row";
     const flow = inFlowChildren(n);
     if (flow.length < 2) skip("gap", g, `fewer than two laid-out children (${flow.length}) \u2014 a gap has nothing to separate`);
-    else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around") skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
-    else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g, "a child fills the main axis, so the stored gap and that child's size trade off \u2014 placement is checked through the children's positions and sizes instead");
+    else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around")
+      skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
+    else if (flow.some((c) => growsAlong(c, dir))) skip(
+      "gap",
+      g,
+      "a child fills the main axis, so the stored gap and that child's size trade off \u2014 placement is checked through the children's positions and sizes instead"
+    );
     else spec.gap = g;
   }
 }
@@ -2130,7 +2141,8 @@ function expectPosition({ n, spec }, frame) {
 }
 function expectOpacity({ n, spec }) {
   if (typeof n.opacity === "number" && n.opacity !== 1) spec.opacity = n.opacity;
-  else if (spec.text !== void 0 || spec.placeholderText !== void 0 || spec.color !== void 0 || spec.backgroundColor !== void 0 || spec.fill !== void 0 || spec.borderColor !== void 0 || spec.decorated) spec.opacity = 1;
+  else if (spec.text !== void 0 || spec.placeholderText !== void 0 || spec.color !== void 0 || spec.backgroundColor !== void 0 || spec.fill !== void 0 || spec.borderColor !== void 0 || spec.decorated)
+    spec.opacity = 1;
 }
 function expectDrawnState({ n, spec }, inheritedState) {
   const own = drawnStateOf(n);
@@ -2941,9 +2953,15 @@ function deltaChanges(prev, cur, now) {
     }
     if (d.field === "overflowX") {
       const po = now.pageOverflow;
-      if (po === void 0 || po === "not measured" || po === "not at design width") out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: po === "not at design width" ? "the page was not measured at the design width this round" : "page overflow was not measured this round" });
+      if (po === void 0 || po === "not measured" || po === "not at design width")
+        out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: po === "not at design width" ? "the page was not measured at the design width this round" : "page overflow was not measured this round" });
       else if (po === "designed to scroll") nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: "the frame is designed to scroll sideways now" });
-      else if (po === "clipped") nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: "the page is still wider than the design width but clips it now (overflow-x hidden/clip) \u2014 clipped, not fixed" });
+      else if (po === "clipped") nowUnverifiable.push({
+        nodeId: d.nodeId,
+        field: d.field,
+        was: was(d),
+        why: "the page is still wider than the design width but clips it now (overflow-x hidden/clip) \u2014 clipped, not fixed"
+      });
       else out.fixed++;
       continue;
     }
@@ -3055,7 +3073,15 @@ var MEASURED_TOP_KEYS = {
   visual: true
 };
 var MEASURED_UNTYPED_TOP_KEYS = /* @__PURE__ */ new Set(["inferred"]);
-var TOP_KEY_HINTS = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes", navEvents: "navigation" };
+var TOP_KEY_HINTS = {
+  notFound: "notMeasured",
+  notFoundInDom: "notMeasured",
+  notMeasuredByProbe: "notMeasured",
+  missing: "notMeasured",
+  measurements: "nodes",
+  elements: "nodes",
+  navEvents: "navigation"
+};
 var INTERACTION_OUTCOMES = ["url-changed", "dialog-opened", "selector-appeared", "state-changed", "none"];
 var ANY_BUT_NONE = INTERACTION_OUTCOMES.filter((o) => o !== "none");
 var OUTCOMES_FOR_ACTION = {
@@ -3083,7 +3109,8 @@ function evidenceGaps(hit, action) {
   const nav = hit.navEvents;
   if (nav === void 0) gaps.push("no navEvents recorded (documents loaded during the interaction: a reload or a full navigation)");
   else if (typeof nav !== "number" || !Number.isInteger(nav) || nav < 0) gaps.push(`navEvents ${JSON.stringify(nav)} is not a count`);
-  else if (nav > 0 && !(action !== void 0 && URL_ACTIONS.has(action) && hit.outcome === "url-changed")) gaps.push(`${nav} document(s) loaded during the interaction (a reload or a full navigation) \u2014 a reload is not an outcome${hit.outcome === "url-changed" ? `; only a navigate, back or url action may load a document` : ""}`);
+  else if (nav > 0 && !(action !== void 0 && URL_ACTIONS.has(action) && hit.outcome === "url-changed"))
+    gaps.push(`${nav} document(s) loaded during the interaction (a reload or a full navigation) \u2014 a reload is not an outcome${hit.outcome === "url-changed" ? `; only a navigate, back or url action may load a document` : ""}`);
   return gaps;
 }
 function compare(expectation, measured, opts) {
@@ -3432,7 +3459,10 @@ function readNode(cx, spec, m, matchedBy) {
     measuredIn = state;
   }
   const stUm = st ? st.unmeasured : void 0;
-  const um = { ...isJsonObject(m.unmeasured) ? m.unmeasured : {}, ...isJsonObject(stUm) ? Object.fromEntries(Object.entries(stUm).filter((e) => typeof e[1] === "string")) : {} };
+  const um = {
+    ...isJsonObject(m.unmeasured) ? m.unmeasured : {},
+    ...isJsonObject(stUm) ? Object.fromEntries(Object.entries(stUm).filter((e) => typeof e[1] === "string")) : {}
+  };
   const nullWhy = (...keys) => {
     for (const k of keys) {
       const w = um[k];
@@ -3511,7 +3541,13 @@ function checkFields(cx, n) {
       nullKeys = ["gapVisual", "gap"];
     }
     if (f.key === "fill" && (PIXEL_TAGS.has(tagLc) || m.fillSource === "img")) {
-      unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: f.label, expected: want0, why: `drawn by an <${PIXEL_TAGS.has(tagLc) ? tagLc : "img"}>: its paint is pixels, not a CSS property \u2014 the SVG's own fill cannot be read from the element's computed style` });
+      unverifiable.push({
+        nodeId: spec.nodeId,
+        name: spec.name,
+        field: f.label,
+        expected: want0,
+        why: `drawn by an <${PIXEL_TAGS.has(tagLc) ? tagLc : "img"}>: its paint is pixels, not a CSS property \u2014 the SVG's own fill cannot be read from the element's computed style`
+      });
       continue;
     }
     tally(f.key, present);
@@ -3560,7 +3596,13 @@ function checkFields(cx, n) {
     }
     if (val === void 0) {
       if (f.optional) {
-        unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: f.label, expected: want0, why: "a ::placeholder colour is not readable from getComputedStyle(el) \u2014 report placeholderColor to have it checked" });
+        unverifiable.push({
+          nodeId: spec.nodeId,
+          name: spec.name,
+          field: f.label,
+          expected: want0,
+          why: "a ::placeholder colour is not readable from getComputedStyle(el) \u2014 report placeholderColor to have it checked"
+        });
         continue;
       }
       gap(spec, f.label, "the probe did not report this property", true);
@@ -3600,7 +3642,8 @@ function checkFields(cx, n) {
         want = cssBorderWidth(want0);
         strokeNote = `the design's ${want0}px stroke draws as a ${want}px CSS border (computed border widths are whole px, at least 1)`;
       }
-      if (ring && got.strokeAlign && spec.strokeAlign && spec.strokeAlign !== "center" && got.strokeAlign !== spec.strokeAlign) strokeNote = `read from a ${got.strokeFrom} ring ${got.strokeAlign} the box; the design's stroke is ${spec.strokeAlign}`;
+      if (ring && got.strokeAlign && spec.strokeAlign && spec.strokeAlign !== "center" && got.strokeAlign !== spec.strokeAlign)
+        strokeNote = `read from a ${got.strokeFrom} ring ${got.strokeAlign} the box; the design's stroke is ${spec.strokeAlign}`;
     }
     if (f.key === "borderRadius") {
       const c = radiusCorners(val);
@@ -3656,7 +3699,12 @@ function checkCorners(cx, n) {
     const c = radiusCorners(got.borderRadius);
     tally("borderRadius", got.borderRadius !== void 0);
     if (got.borderRadius === null || Array.isArray(got.borderRadius) && got.borderRadius.some((v) => v === null)) gapNull("border-radius", "borderRadius");
-    else if (!c) gap(spec, "border-radius", got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a px radius`, got.borderRadius === void 0);
+    else if (!c) gap(
+      spec,
+      "border-radius",
+      got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a px radius`,
+      got.borderRadius === void 0
+    );
     else if (c.some((r) => r < 0)) gap(spec, "border-radius", `${JSON.stringify(got.borderRadius)} is impossible for a radius (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
     else {
       const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
@@ -3666,7 +3714,13 @@ function checkCorners(cx, n) {
         cx.fieldsChecked++;
         const want = clampRadius(rc[k], spec.width, spec.height), have = clampRadius(measured[k], W, H);
         const d = Math.abs(want - have);
-        if (d > TOLERANCE.radius) push(spec, `border-radius (${{ tl: "top-left", tr: "top-right", br: "bottom-right", bl: "bottom-left" }[k]})`, "medium", { want, got: have, delta: Number(d.toFixed(3)) }, { unit: "px", ...ifDefined("token", tokenFor(spec, "radius." + k)) });
+        if (d > TOLERANCE.radius) push(
+          spec,
+          `border-radius (${{ tl: "top-left", tr: "top-right", br: "bottom-right", bl: "bottom-left" }[k]})`,
+          "medium",
+          { want, got: have, delta: Number(d.toFixed(3)) },
+          { unit: "px", ...ifDefined("token", tokenFor(spec, "radius." + k)) }
+        );
       });
     }
   }
@@ -3704,7 +3758,8 @@ function checkPlaceholderText(cx, n) {
     else if (got.placeholderText === null) gapNull("placeholder text", "placeholderText");
     else {
       cx.fieldsChecked++;
-      if (!renderedText(String(spec.placeholderText), spec.textCase, String(got.placeholderText), void 0, nbspTrim).same) push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
+      if (!renderedText(String(spec.placeholderText), spec.textCase, String(got.placeholderText), void 0, nbspTrim).same)
+        push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
     }
   }
 }
@@ -3742,9 +3797,15 @@ function checkText(cx, n) {
         const caseHead = caseWs ? "differs only in case and whitespace" : "differs only in case";
         const why = wsR !== null && wsOnly ? `differs only in whitespace: ${gc !== null ? whitespaceWhy(designRender(rt.want), buildRender(rt.have)) : whitespaceWhy(nbspTrim(wsR.want), nbspTrim(wsR.have))}` : spaceKind ? spaceKindWhy(w, g) : nbspGap ? gapWidthWhy(rt.want, rt.have) : caseOnly ? `${caseShown ? `${caseHead}, as rendered` : `${caseHead} \u2014 check for a text-transform, which Figma applies at render time while storing the original`}${caseWs ? ` \u2014 the whitespace: ${whitespaceWhy(w, g)}` : ""}` : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) \u2014 check the copy is the data the design means` : void 0;
         const note = [why, renderNote].filter((x) => x !== void 0).join(" \u2014 ");
-        push(spec, "text", wsOnly || spaceKind || caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.textCase ? rt.want : designText, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null }, {
-          ...note ? { note } : {}
-        });
+        push(
+          spec,
+          "text",
+          wsOnly || spaceKind || caseOnly || extraGlyphs || realData ? "low" : "high",
+          { want: spec.textCase ? rt.want : designText, got: caseShown && rt.transform !== null ? rt.have : got.text, delta: null },
+          {
+            ...note ? { note } : {}
+          }
+        );
       }
       if (/\u00a0/.test(String(spec.text))) {
         const show = (t) => String(t).replace(/\u00a0/g, "\\u00a0");
@@ -4065,9 +4126,11 @@ function runIntegrity(cx) {
   } else if (st) {
     const stFile = opts.status ? opts.status.file : "status.json";
     const endHint = measuredRun === void 0 ? ` \u2014 wait for it, or if nobody is running it any more, end it: --status ${shellArg(st.screen)} --phase failed --run ${shellArg(st.runId)}` : "";
-    if (measuredRun === void 0 && TERMINAL_PHASES.includes(st.phase) && st.phase !== "done") integrity.push(`this measured file names no run and ${INTEGRITY_PHRASES.measuredBefore} (${stFile}: run ${st.runId} ${st.phase} at ${st.at}) \u2014 measure again`);
+    if (measuredRun === void 0 && TERMINAL_PHASES.includes(st.phase) && st.phase !== "done")
+      integrity.push(`this measured file names no run and ${INTEGRITY_PHRASES.measuredBefore} (${stFile}: run ${st.runId} ${st.phase} at ${st.at}) \u2014 measure again`);
     else if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}${endHint}`);
-    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?${st.phase === "done" ? "" : endHint}`);
+    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256)
+      integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?${st.phase === "done" ? "" : endHint}`);
   }
   return { st, integrity, unboundNote, measuredRun };
 }
@@ -4102,7 +4165,8 @@ function gradeInteractions(cx, g) {
   const { pageNotes, unboundNote, measuredRows, probeBound, probeRows, exercised } = g;
   const exportSha = expectation.exportContentSha256;
   inputNotes.push(...pageNotes);
-  if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === void 0) inputNotes.push("expectation written by an older verify-screen (TEXT box widths, no aliases) \u2014 re-run --expect");
+  if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === void 0)
+    inputNotes.push("expectation written by an older verify-screen (TEXT box widths, no aliases) \u2014 re-run --expect");
   const descopeRows = [];
   (Array.isArray(opts.descopes) ? opts.descopes : []).forEach((d, i) => {
     if (isPlanDescope(d)) descopeRows.push(d);
@@ -4117,7 +4181,8 @@ function gradeInteractions(cx, g) {
     return live;
   };
   if (unboundNote !== void 0) inputNotes.push(unboundNote);
-  if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length) inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) \u2014 graded as agent evidence");
+  if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length)
+    inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) \u2014 graded as agent evidence");
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i) => {
     const key = String(i.nodeId) + "|" + i.trigger;
     const p = probeRows.get(key), a = exercised.get(key);
@@ -4155,17 +4220,34 @@ function gradeInteractions(cx, g) {
     } : {};
     const saidBy = fromProbe ? "probe said" : "agent evidence said";
     const scoped = descopeFor(i);
-    if (scoped) return Object.assign(row, { result: "descoped", detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`, ...worked ? { note: "descoped but works \u2014 the probe drove it successfully; drop the descope?" } : {} });
-    if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned", detail: `destination ${i.destinationId} is not in this Figma file's export \u2014 nothing designed to check it against${hit && hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}` });
+    if (scoped) return Object.assign(row, {
+      result: "descoped",
+      detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`,
+      ...worked ? { note: "descoped but works \u2014 the probe drove it successfully; drop the descope?" } : {}
+    });
+    if (i.destinationExported === false && !worked) return Object.assign(
+      row,
+      { result: "undesigned", detail: `destination ${i.destinationId} is not in this Figma file's export \u2014 nothing designed to check it against${hit && hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}` }
+    );
     if (!hit) return Object.assign(row, { result: "not-probed", detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
     if (hit.result === "not-probed" || hit.ok === null || hit.ok === void 0) return Object.assign(row, { result: "not-probed", ...ifDefined("detail", hit.detail), ...probeBound ? said : {} });
     if (hit.ok === false) return Object.assign(row, { result: "fail", ...ifDefined("detail", hit.detail), ...ifDefined("selector", hit.selector), ...said });
     if (insideMiss) {
-      return Object.assign(row, { result: "not-probed", detail: `probe pass without the destination tag inside the opened element \u2014 tag the root of what opens with data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
+      return Object.assign(row, {
+        result: "not-probed",
+        detail: `probe pass without the destination tag inside the opened element \u2014 tag the root of what opens with data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}${hit.detail ? `; probe said: ${hit.detail}` : ""}`,
+        ...ifDefined("selector", hit.selector),
+        ...said
+      });
     }
     if (!worked || !hit.selector) {
-      return Object.assign(row, { result: "not-probed", detail: `reported ok without evidence \u2014 ${(gaps || []).join("; ")}${hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
+      return Object.assign(row, {
+        result: "not-probed",
+        detail: `reported ok without evidence \u2014 ${(gaps || []).join("; ")}${hit.detail ? `; ${saidBy}: ${hit.detail}` : ""}`,
+        ...ifDefined("selector", hit.selector),
+        ...said
+      });
     }
     return Object.assign(row, { result: "pass", ...ifDefined("detail", hit.detail), selector: hit.selector, selectorCount: count, ...said });
   });
@@ -4375,7 +4457,8 @@ function planInteractionsCheck(cx) {
   const gone = opts.recordedPlanGone || null;
   const shaNow = planNow ? planInteractionsSha256(planNow.plan) : "";
   const planInteractionsChanged = !planNow || !(recordedPi ? shaNow !== recordedPi.sha256 : !!nowRows && nowRows.length > 0) ? null : !recordedPi ? `the plan's interactions[] changed since --expect (${planNow.file}: the expectation merged none) \u2014 re-run --expect${rerunPlanArg}` : otherPlan && planNow.choice === "flag" ? `the plan's interactions[] differ from those --expect merged (${planNow.file}, passed by --plan: sha256 ${shaNow.slice(0, 12)}\u2026; --expect merged ${recordedPi.plan}'s${gone ? `, which ${gone}` : ""}: ${recordedPi.sha256.slice(0, 12)}\u2026) \u2014 re-run --expect --plan ${planNow.file}${gone ? "" : `, or drop --plan at --compare to check against ${recordedPi.plan}`}` : otherPlan ? `the plan's interactions[] at --expect came from ${recordedPi.plan}, which ${gone ?? "--compare did not use"}; the plan found now, ${planNow.file}, declares others (sha256 ${recordedPi.sha256.slice(0, 12)}\u2026 at --expect, ${shaNow.slice(0, 12)}\u2026 now) \u2014 if that plan moved, re-run --compare \u2026 --plan <its path now>; otherwise re-run --expect \u2026 --plan <the plan you intend> (--plan ${planNow.file} to adopt this one)` : `the plan's interactions[] changed since --expect (${planNow.file}: sha256 ${recordedPi.sha256.slice(0, 12)}\u2026 at --expect, ${shaNow.slice(0, 12)}\u2026 now) \u2014 re-run --expect${rerunPlanArg}`;
-  if (recordedPi && planNow && otherPlan && gone && !planInteractionsChanged) inputNotes.push(`the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}; ${planNow.file} (used now) declares the same interactions[]`);
+  if (recordedPi && planNow && otherPlan && gone && !planInteractionsChanged)
+    inputNotes.push(`the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}; ${planNow.file} (used now) declares the same interactions[]`);
   if (recordedPi && !planNow) inputNotes.push(gone ? `the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}, and no single plan describes this frame now \u2014 not checked; pass --compare \u2026 --plan <plan.json> (or re-run --expect \u2026 --plan <plan.json>)` : `the expectation merged plan interactions from ${recordedPi.plan}, but no plan was found for this frame now \u2014 not checked`);
   return { planNow, planInteractionsChanged };
 }
@@ -4536,17 +4619,21 @@ function againstOf(cx, g) {
       nodesExpected: { before: pc && num(pc.nodesExpected) ? pc.nodesExpected : null, after: nodesExpected },
       probeChanged: prevSha === null && curSha === null ? null : prevSha !== curSha,
       expectationChanged: prevExp && opts.expectationSha256 ? prevExp !== opts.expectationSha256 : null,
-      ...Array.isArray(prev.deltas) ? { deltas: deltaChanges(prev.deltas, deltas, {
-        notMeasured,
-        fieldsNotMeasured,
-        unverifiable,
-        notComparable: expectation.notComparable || [],
-        specIds: new Set(specs.map((sp) => String(sp.nodeId))),
-        absent: absentGaps,
-        placementGaps,
-        pageOverflow,
-        sameMeasured: !!(opts.measuredSha256 && prev.inputs && prev.inputs.measuredSha256 === opts.measuredSha256)
-      }) } : {},
+      ...Array.isArray(prev.deltas) ? { deltas: deltaChanges(
+        prev.deltas,
+        deltas,
+        {
+          notMeasured,
+          fieldsNotMeasured,
+          unverifiable,
+          notComparable: expectation.notComparable || [],
+          specIds: new Set(specs.map((sp) => String(sp.nodeId))),
+          absent: absentGaps,
+          placementGaps,
+          pageOverflow,
+          sameMeasured: !!(opts.measuredSha256 && prev.inputs && prev.inputs.measuredSha256 === opts.measuredSha256)
+        }
+      ) } : {},
       // unknown when either side's hash is partial (bodies left out) — never "the same build" on a partial hash
       sameBuild: prevBuild && buildNow && !prevBuild.unhashed && !buildNow.unhashed ? prevBuild.assetsSha256 === buildNow.assetsSha256 : null
     };
@@ -4905,7 +4992,8 @@ function behaviourMarkdown(b) {
   }
   if (b.checks.length) {
     L.push("| Status | Check | Node/target | Variant | Detail |", "|---|---|---|---|---|");
-    for (const c of b.checks.slice(0, BEHAVIOUR_MD_ROWS)) L.push(`| ${c.status} | ${mdText(c.id)} | ${behaviourWhere(c)} | ${mdText(c.variant)} | ${mdText(c.detail)}${c.synthetic ? " *(synthetic (headless), not a real-browser observation)*" : ""} |`);
+    for (const c of b.checks.slice(0, BEHAVIOUR_MD_ROWS))
+      L.push(`| ${c.status} | ${mdText(c.id)} | ${behaviourWhere(c)} | ${mdText(c.variant)} | ${mdText(c.detail)}${c.synthetic ? " *(synthetic (headless), not a real-browser observation)*" : ""} |`);
     if (b.checks.length > BEHAVIOUR_MD_ROWS) L.push(`| \u2026and ${b.checks.length - BEHAVIOUR_MD_ROWS} more (report.json lists all) | | | | |`);
     L.push("");
   }
@@ -4977,7 +5065,8 @@ function againstMarkdown(r, a) {
   const d = a.deltas;
   if (d && d.sameMeasured) L.push(...sameMeasuredMarkdown(d));
   else if (d) L.push(...deltaChangesMarkdown(d));
-  if (a.sameBuild === true && r.headline.includes("SAME BUILD SERVED")) L.push("**The same build was served as last round although the code changed** \u2014 a stale preview or dist? Rebuild before measuring a preview.", "");
+  if (a.sameBuild === true && r.headline.includes("SAME BUILD SERVED"))
+    L.push("**The same build was served as last round although the code changed** \u2014 a stale preview or dist? Rebuild before measuring a preview.", "");
   if (d && d.lostCoverage.length) {
     L.push(`## Lost coverage (${d.lostCoverage.length})`, "", "*A previous delta that is gone only because its node or value was not measured \u2014 not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
     for (const x of d.lostCoverage.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
@@ -5003,7 +5092,14 @@ function deltaChangesMarkdown(d) {
   const nu = d.nowUnverifiable || [];
   L.push(`Previous deltas (node + field): ${d.fixed} fixed \xB7 ${d.unchanged} still open \xB7 ${d.new} new \xB7 ${d.lostCoverage.length ? `**${d.lostCoverage.length} lost coverage** (gone only because they were not measured this round)` : "0 lost coverage"}${nu.length ? ` \xB7 ${nu.length} now unverifiable by method (measured, but the compare no longer reads it)` : ""}.`, "");
   if (nu.length) {
-    L.push(`## Now unverifiable by method (${nu.length})`, "", "*A previous delta whose value was measured this round, but the compare now declines it \u2014 not lost coverage, not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
+    L.push(
+      `## Now unverifiable by method (${nu.length})`,
+      "",
+      "*A previous delta whose value was measured this round, but the compare now declines it \u2014 not lost coverage, not a fix.*",
+      "",
+      "| Node | Field | Was | Why |",
+      "|---|---|---|---|"
+    );
     for (const x of nu.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
     if (nu.length > 40) L.push(`| \u2026and ${nu.length - 40} more | | | |`);
     L.push("");
@@ -5624,14 +5720,34 @@ function compareMain(files, flags, USAGE) {
   const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
   const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path11.join(path11.dirname(expFile), path11.basename(measuredBase)) : null;
   const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path11.resolve(probeBase) !== path11.resolve(measuredBase) ? readStatusAt(probeBase) : null);
-  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path11.basename(found.file) : `${path11.basename(found.file)} (live, ${found.file})`, status: found.status } } : measuredBase !== null ? { status: null } : {};
+  const statusOpt = found ? { status: {
+    file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path11.basename(found.file) : `${path11.basename(found.file)} (live, ${found.file})`,
+    status: found.status
+  } } : measuredBase !== null ? { status: null } : {};
   const vd = measured.visual && measured.visual.ran ? measured.visual.diff : void 0;
   let visualDiff = null;
   if (typeof vd === "string" && vd) {
     const beside = path11.join(path11.dirname(measuredFile), path11.basename(vd));
     visualDiff = fs12.existsSync(vd) ? { path: vd, exists: true } : fs12.existsSync(beside) ? { path: beside.split(path11.sep).join("/"), exists: true } : { path: vd, exists: false };
   }
-  const rep = compare(expectation, measured, { ...statusOpt, ...readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}, ...readable.dropped.includes("visual") ? { visualMalformed: true } : {}, ...visualDiff ? { visualDiff } : {}, ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}, ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...extraInferred !== void 0 ? { inferred: extraInferred } : {}, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...planHit ? { plan: planHit } : {} });
+  const rep = compare(expectation, measured, {
+    ...statusOpt,
+    ...readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {},
+    ...readable.dropped.includes("visual") ? { visualMalformed: true } : {},
+    ...visualDiff ? { visualDiff } : {},
+    ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {},
+    ...ifDefined("recordedPlanGone", recordedPlanGone),
+    ...ifDefined("interactions", extra),
+    ...ifDefined("components", extraComponents),
+    ...extraInferred !== void 0 ? { inferred: extraInferred } : {},
+    expectationSha256: sha(expFile),
+    measuredSha256: sha(measuredFile),
+    artifactCheck,
+    ...ifDefined("code", code),
+    ...ifDefined("against", against),
+    ...planInputs,
+    ...planHit ? { plan: planHit } : {}
+  });
   const md = reportToMarkdown(rep);
   write(false, compareBase, rep, md);
   console.error(rep.headline);
