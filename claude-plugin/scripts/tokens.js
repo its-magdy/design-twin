@@ -6,6 +6,7 @@ import fs3 from "node:fs";
 import path4 from "node:path";
 
 // design-to-code/types.ts
+var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
@@ -273,6 +274,7 @@ function planProblem(x) {
   if (x.tagging !== void 0 && x.tagging !== null && !(isJsonObject(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
   if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isJsonObject(x.verification) && x.verification.hook !== void 0 && !isJsonObject(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  if (isJsonObject(x.verification) && x.verification.recorded !== void 0 && !isJsonObject(x.verification.recorded)) return "is not a valid plan: `verification.recorded` must be an object";
   for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
@@ -280,6 +282,31 @@ function isPlan(x) {
   return planProblem(x) === null;
 }
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+var isCount = (x) => typeof x === "number" && Number.isFinite(x);
+var need = (ok) => ({ need: true, ok });
+var opt = (ok) => ({ need: false, ok });
+var str = (v) => typeof v === "string";
+var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, need(isCount)]));
+var RECORD_DELTA = { nodeId: need(str), field: need(str), severity: need((v) => v === "high" || v === "medium"), expected: opt(() => true), actual: opt(() => true) };
+var RECORD_A11Y = { tool: need(str), violations: need(isCount), warnings: need(isCount), report: need(str) };
+var RECORD_FIELDS = {
+  schema: need((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
+  by: need(str),
+  at: need(str),
+  report: need(str),
+  reportSha256: need(str),
+  verdict: need(str),
+  headline: need(str),
+  behaviourHeadline: opt(str),
+  counts: need(isJsonObject),
+  mode: need((v) => v === "rendered" || v === "static-only"),
+  reason: opt(str),
+  renderer: opt(str),
+  artifacts: need(isStringArray),
+  deltas: need(Array.isArray),
+  a11y: opt(isJsonObject)
+};
+var RECORD_KEYS = Object.keys(RECORD_FIELDS);
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
 function isPlanWaiver(x) {
   return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
@@ -723,7 +750,7 @@ var num = (raw) => {
   const n = Number(raw);
   return Number.isFinite(n) ? String(Math.round(n * 1e4) / 1e4) : "0";
 };
-var str = (raw) => JSON.stringify(String(raw));
+var str2 = (raw) => JSON.stringify(String(raw));
 var hex4 = (c) => c.toString(16).padStart(4, "0");
 var quoteWith = (raw, esc) => {
   const s = String(raw);
@@ -847,7 +874,7 @@ function swiftui(cols) {
 }
 function flutter(cols) {
   const T = { color: "Color", dimension: "double", fontSize: "double", number: "double", bool: "bool", string: "String" };
-  const lit = (k, r) => r === FULL ? "double.infinity" : k === "color" ? `Color(${argb(r)})` : k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\$/g, "\\$") : num(r);
+  const lit = (k, r) => r === FULL ? "double.infinity" : k === "color" ? `Color(${argb(r)})` : k === "bool" ? bool(r) : k === "string" ? str2(r).replace(/\$/g, "\\$") : num(r);
   const lerp = (f) => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
   const L = [`// ${HEADER}`, "// ignore_for_file: constant_identifier_names", "import 'dart:ui' show lerpDouble;", "", "import 'package:flutter/material.dart';"];
   for (const c of cols) {
@@ -892,7 +919,7 @@ function flutter(cols) {
 }
 function reactNative(cols) {
   const T = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
-  const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str(hexOf(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
+  const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str2(hexOf(r)) : k === "bool" ? bool(r) : k === "string" ? str2(r) : num(r);
   const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
   for (const c of cols) {
     const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
@@ -906,8 +933,8 @@ function reactNative(cols) {
       ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${commentText(f.source)}`),
       "}",
       "",
-      `export type ${c.type}Mode = ${c.modes.map((m) => str(m.id)).join(" | ")};`,
-      `export const ${v}DefaultMode: ${c.type}Mode = ${str(c.defaultId)};`,
+      `export type ${c.type}Mode = ${c.modes.map((m) => str2(m.id)).join(" | ")};`,
+      `export const ${v}DefaultMode: ${c.type}Mode = ${str2(c.defaultId)};`,
       "",
       `export const ${v}: Record<${c.type}Mode, ${c.type}> = {`
     );

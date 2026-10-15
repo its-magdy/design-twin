@@ -1075,6 +1075,7 @@ var MEASURED_KEYS_DOC = {
 var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
 
 // design-to-code/types.ts
+var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
@@ -1253,6 +1254,7 @@ function planProblem(x) {
   if (x.tagging !== void 0 && x.tagging !== null && !(isJsonObject(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
   if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isJsonObject(x.verification) && x.verification.hook !== void 0 && !isJsonObject(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  if (isJsonObject(x.verification) && x.verification.recorded !== void 0 && !isJsonObject(x.verification.recorded)) return "is not a valid plan: `verification.recorded` must be an object";
   for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
@@ -1260,6 +1262,31 @@ function isPlan(x) {
   return planProblem(x) === null;
 }
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+var isCount = (x) => typeof x === "number" && Number.isFinite(x);
+var need = (ok) => ({ need: true, ok });
+var opt = (ok) => ({ need: false, ok });
+var str = (v) => typeof v === "string";
+var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, need(isCount)]));
+var RECORD_DELTA = { nodeId: need(str), field: need(str), severity: need((v) => v === "high" || v === "medium"), expected: opt(() => true), actual: opt(() => true) };
+var RECORD_A11Y = { tool: need(str), violations: need(isCount), warnings: need(isCount), report: need(str) };
+var RECORD_FIELDS = {
+  schema: need((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
+  by: need(str),
+  at: need(str),
+  report: need(str),
+  reportSha256: need(str),
+  verdict: need(str),
+  headline: need(str),
+  behaviourHeadline: opt(str),
+  counts: need(isJsonObject),
+  mode: need((v) => v === "rendered" || v === "static-only"),
+  reason: opt(str),
+  renderer: opt(str),
+  artifacts: need(isStringArray),
+  deltas: need(Array.isArray),
+  a11y: opt(isJsonObject)
+};
+var RECORD_KEYS = Object.keys(RECORD_FIELDS);
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
 function isPlanWaiver(x) {
   return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
@@ -2309,8 +2336,8 @@ function clickPointControl(el, arg) {
       for (const ps of ["::before", "::after"]) {
         const c = css(e, "content", ps);
         if (!c || c === "none" || c === "normal" || css(e, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(e, "visibility", ps)) || css(e, "opacity", ps) === "0" && outOfFlow(e, ps)) continue;
-        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        const s = str ? str[1] ?? "" : null;
+        const str2 = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        const s = str2 ? str2[1] ?? "" : null;
         const fill2 = !clear(css(e, "background-color", ps));
         const paints2 = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || fill2 && (s !== "" || !chrome(host));
         if (paints2 && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
@@ -2422,8 +2449,8 @@ function clickPointControl(el, arg) {
         const c = css(f, "content", ps);
         const pos = css(f, "position", ps);
         if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
-        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
+        const str2 = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        if (!(str2 === null || /\S/.test(str2[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
         let q = fr;
         if (pos === "absolute") {
           let cb = f;
@@ -3544,8 +3571,8 @@ function markOpener(arg) {
       for (const ps of ["::before", "::after"]) {
         const c = css(e, "content", ps);
         if (!c || c === "none" || c === "normal" || css(e, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(e, "visibility", ps)) || css(e, "opacity", ps) === "0" && outOfFlow(e, ps)) continue;
-        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        const s = str ? str[1] ?? "" : null;
+        const str2 = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        const s = str2 ? str2[1] ?? "" : null;
         const fill2 = !clear(css(e, "background-color", ps));
         const paints2 = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || fill2 && (s !== "" || !chrome(host));
         if (paints2 && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
@@ -3657,8 +3684,8 @@ function markOpener(arg) {
         const c = css(f, "content", ps);
         const pos = css(f, "position", ps);
         if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
-        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
+        const str2 = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        if (!(str2 === null || /\S/.test(str2[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
         let q = fr;
         if (pos === "absolute") {
           let cb = f;

@@ -5,6 +5,7 @@
 import path2 from "node:path";
 
 // design-to-code/types.ts
+var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
@@ -177,6 +178,7 @@ function planProblem(x) {
   if (x.tagging !== void 0 && x.tagging !== null && !(isJsonObject(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
   if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isJsonObject(x.verification) && x.verification.hook !== void 0 && !isJsonObject(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  if (isJsonObject(x.verification) && x.verification.recorded !== void 0 && !isJsonObject(x.verification.recorded)) return "is not a valid plan: `verification.recorded` must be an object";
   for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
@@ -184,6 +186,31 @@ function isPlan(x) {
   return planProblem(x) === null;
 }
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+var isCount = (x) => typeof x === "number" && Number.isFinite(x);
+var need = (ok) => ({ need: true, ok });
+var opt = (ok) => ({ need: false, ok });
+var str = (v) => typeof v === "string";
+var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, need(isCount)]));
+var RECORD_DELTA = { nodeId: need(str), field: need(str), severity: need((v) => v === "high" || v === "medium"), expected: opt(() => true), actual: opt(() => true) };
+var RECORD_A11Y = { tool: need(str), violations: need(isCount), warnings: need(isCount), report: need(str) };
+var RECORD_FIELDS = {
+  schema: need((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
+  by: need(str),
+  at: need(str),
+  report: need(str),
+  reportSha256: need(str),
+  verdict: need(str),
+  headline: need(str),
+  behaviourHeadline: opt(str),
+  counts: need(isJsonObject),
+  mode: need((v) => v === "rendered" || v === "static-only"),
+  reason: opt(str),
+  renderer: opt(str),
+  artifacts: need(isStringArray),
+  deltas: need(Array.isArray),
+  a11y: opt(isJsonObject)
+};
+var RECORD_KEYS = Object.keys(RECORD_FIELDS);
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
 function isPlanWaiver(x) {
   return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);

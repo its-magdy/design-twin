@@ -418,10 +418,11 @@ Copy this checklist into your notes and keep it updated:
      assumed) fall back to a structural + visual self-review against the `.png` — and report it as
      "not rendered — reviewed statically", never as a verified match.
    - **Record the evidence in the plan** under `verification`: on web `--compare … --record-plan` writes the
-     tool-owned keys from the report, and you still write `coverage` (`hook-and-status.md` has both shapes).
+     tool-owned `verification.recorded` block from the report (never edit it), and you still write `coverage`
+     (`hook-and-status.md` has both shapes).
    - **The `Stop` hook** (`verify-build.js`) checks the built code against the plan as your turn ends: it
-     **blocks** on a raw colour the plan resolved to a token, a visible node with no anchor, and (web) no
-     `data-dt-node` tag, and warns on the rest; run it by hand with
+     **blocks** on a raw colour the plan resolved to a token, a visible node with no anchor, (web) no
+     `data-dt-node` tag, and a hand edit of `verification.recorded`, and warns on the rest; run it by hand with
      `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" design/plan/<Layer>__<id>.json`.
    - **Status is computed, never stored**:
      `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status design/plan/<screen>.json` derives it from the

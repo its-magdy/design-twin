@@ -302,6 +302,43 @@ check("rendered with an artifact that is not on disk fails", has(problems({}, { 
 check("rendered with a real artifact + deltas + coverage + a11y is clean", problems({ "a.tsx": "", "design/verify/login.png": "png" }, { files: ["a.tsx"], verification: { mode: "rendered", renderer: "playwright", artifacts: ["design/verify/login.png"], deltas: [], coverage: { rendered: ["default"], notChecked: [] }, a11y: { tool: "axe-core", violations: 0 } } }).length === 0);
 check("static-only needs a reason", has(problems({}, { verification: { mode: "static-only" } }), /no `reason`/));
 
+console.log("verification.recorded — the tool's block:");
+{
+  const EDITED = (k: string): string => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan; residuals go in deviations[]`;
+  // a recorded@2 block as --record-plan writes it (its report is not on disk here, so only its shape is checked)
+  const REC = { schema: "designtwin/plan-verification-record@2", by: "verify-screen --record-plan", at: "2026-10-07T12:00:00.000Z", report: "design/verify/login.report.json",
+    reportSha256: "0".repeat(64), verdict: "pass", headline: "PASS", counts: { high: 0, medium: 0, low: 0, accepted: 0, notMeasured: 0, inferred: 0 },
+    mode: "rendered", renderer: "playwright-chromium", artifacts: ["design/verify/login.png"], deltas: [{ nodeId: "1:2", field: "width", severity: "medium", expected: 10, actual: 12 }],
+    a11y: { tool: "axe-core 4.13.0", violations: 0, warnings: 0, report: "design/verify/login.report.json" } };
+  const planWith = (verification: Record<string, unknown>): Plan => { const r = parsePlan({ files: ["a.tsx"], verification }); if (!("plan" in r)) throw new Error(r.error); return r.plan; };
+  const FILES = { "a.tsx": "", "design/verify/login.png": "png" };
+  const recordBlocks = (verification: Record<string, unknown>): string[] => blocks(FILES, planWith(verification)).filter((b) => b.startsWith("verification.recorded."));
+  const p = parsePlan({ verification: { recorded: "fail" } });
+  check("[shape] parsePlan refuses a non-object verification.recorded, naming it", "error" in p && p.error === "is not a valid plan: `verification.recorded` must be an object");
+  check("[shape] …but reads a recorded block with hand edits inside (verify-build blocks on those, and --record-plan can still repair the plan)",
+    "plan" in parsePlan({ verification: { recorded: { ...REC, residuals: [], verdict: 3 } } }));
+  check("the record as written → no block, and the readers take mode/artifacts/deltas/a11y from it (no 'mode' warning, nothing missing)",
+    recordBlocks({ coverage: { rendered: ["default"], notChecked: [] }, recorded: REC }).length === 0 && problems(FILES, planWith({ coverage: { rendered: ["default"], notChecked: [] }, recorded: REC })).length === 0);
+  check(`a key the tool does not write, at the top of the record or inside a row → BLOCKS naming it (got ${JSON.stringify(recordBlocks({ recorded: { ...REC, residuals: ["shadow"], deltas: [{ ...REC.deltas[0], why: "approximation" }] } }))})`,
+    JSON.stringify(recordBlocks({ recorded: { ...REC, residuals: ["shadow"], deltas: [{ ...REC.deltas[0], why: "approximation" }] } })) === JSON.stringify([EDITED("residuals"), EDITED("deltas[0].why")]));
+  check("a value of the wrong kind (a string count, an object deltas, an unknown mode, a missing artifacts) → BLOCKS, one message each",
+    JSON.stringify(recordBlocks({ recorded: { ...REC, counts: { ...REC.counts, high: "4" }, deltas: { high: 4 }, mode: "rendered-ish", artifacts: undefined } }))
+      === JSON.stringify([EDITED("mode"), EDITED("artifacts"), EDITED("deltas"), EDITED("counts.high")]));
+  check("…and a wrong schema string is an edit too", JSON.stringify(recordBlocks({ recorded: { ...REC, schema: "designtwin/plan-verification-record@3" } })) === JSON.stringify([EDITED("schema")]));
+  const v1 = { by: REC.by, at: REC.at, report: REC.report, reportSha256: REC.reportSha256, verdict: REC.verdict, headline: REC.headline, counts: REC.counts };
+  check("a recorded@1 block (no schema) is accepted as written, and its plan reads mode … a11y from the top level as before",
+    recordBlocks({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: { ...v1, note: "hand" } }).length === 0
+    && has(problems(FILES, planWith({ mode: "static-only", recorded: v1 })), /^verification\.mode is "static-only" with no `reason`/));
+  check("beside a recorded@1 the top-level mode/deltas are the record's (no 'ignored' warning); a hand headline is ignored, with one warning",
+    !has(problems(FILES, planWith({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: v1 })), /ignored — verification\.recorded/)
+    && has(problems(FILES, planWith({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], headline: "PASS", recorded: v1 })), /^verification\.headline is ignored — verification\.recorded is the record/));
+  check("beside a recorded@2 the top-level artifacts/a11y are ignored, with one warning naming both — and a broken top-level artifacts is not read",
+    has(problems(FILES, planWith({ artifacts: { shot: "x" }, a11y: { violations: 9 }, recorded: REC })), /^verification\.artifacts, verification\.a11y are ignored — verification\.recorded is the record/)
+    && !has(problems(FILES, planWith({ artifacts: { shot: "x" }, a11y: { violations: 9 }, recorded: REC })), /artifacts must be an array/));
+  check("a recorded@2 static-only with no reason says where the reason comes from (the measured file), not 'write one'",
+    has(problems(FILES, planWith({ recorded: { ...REC, mode: "static-only", renderer: undefined } })), /^verification\.recorded\.mode is "static-only" with no `reason` — the measured file gave none/));
+}
+
 console.log("hook process (exit codes; status is computed, never written):");
 check("[shape] a plan the hook cannot use is WARNED about by name on every stop, never silently skipped", (() => {
   const root = project({ "a.tsx": "" }, { status: "pending", files: ["a.tsx"], verification: STATIC });

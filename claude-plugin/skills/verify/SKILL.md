@@ -176,7 +176,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
   [--interactions design/verify/<Screen>.evidence.json] [--record-plan] --out design/verify/<Screen>   # --interactions only when the verifier wrote that file
 ```
 
-`--record-plan` writes the tool-owned keys of the plan's `verification` block from this report, so nobody copies it in by hand: `mode` (`"static-only"` + the measured file's `reason`, and no `renderer`, when it was static-only), `renderer`, `artifacts`, the open high/medium `deltas` (the field is the tool's: a row it did not write is replaced, with a note — a residual the builder keeps goes in `deviations[]`), `a11y` (when the behaviour checks ran) and `recorded` (the report's file, sha256, verdict, headline and counts). Hand keys — `coverage`, notes — and `deviations`, `waivers`, `descopes` and `status` are never touched, and recording never reopens a plan (the hook's hash does not cover `verification`; a hook record from before that change is re-stamped in the same write). The plan is the one the compare already uses (`--plan <plan.json>`, else the ONE plan in `design/plan/` that describes the frame); none, or several and no `--plan`, is exit 2 before anything is compared. The plan records project-relative paths only: a report written outside the project (`--out` elsewhere) is exit 1 — the report stays written, the plan is not updated. If the report is edited or re-run later, `verify-build` warns that `plan.verification` records an older run — re-run `--compare --record-plan`; the report, not the plan, carries the verdict.
+`--record-plan` writes the plan's `verification.recorded` block from this report, so nobody copies it in by hand. The block is the tool's, written whole every run: the report's file, sha256, verdict, headline and counts, `mode` (`"static-only"` + the measured file's `reason`, and no `renderer`, when it was static-only), `renderer`, `artifacts`, the open high/medium `deltas` and `a11y` (when the behaviour checks ran). Never edit it: `verify-build` **blocks** on a key it does not write, a value of the wrong kind, or a verdict, headline or count that the report it names (same sha256) does not say — re-run `--compare --record-plan`; a residual the builder keeps goes in `deviations[]`, never in the record. The rest of `verification` — `coverage`, notes — is yours, and `deviations`, `waivers`, `descopes` and `status` are never touched. A plan recorded before the block held all of this (or filled by hand) keeps `mode`, `artifacts`, `deltas`, `a11y`… at the top level of `verification`; the first `--record-plan` moves them into `recorded`, with a note, and after that those keys — or a hand `headline`/`verdict` — at the top level are ignored, with a warning; recording never reopens a plan (the hook's hash does not cover `verification`; a hook record from before that change is re-stamped in the same write). The plan is the one the compare already uses (`--plan <plan.json>`, else the ONE plan in `design/plan/` that describes the frame); none, or several and no `--plan`, is exit 2 before anything is compared. The plan records project-relative paths only: a report written outside the project (`--out` elsewhere) is exit 1 — the report stays written, the plan is not updated. If the report is edited or re-run later, `verify-build` warns that `plan.verification` records an older run — re-run `--compare --record-plan`; the report, not the plan, carries the verdict.
 
 The baseline is implicit: the existing `<Screen>.report.json` about to be overwritten; `--against <prev report>` overrides it. Exit 0 only when the verdict is `pass` or `pass-with-deviations`. It writes `<Screen>.report.json` and `<Screen>.report.md`,
 and prints the **headline** — the coverage line, verdict first:
@@ -244,15 +244,16 @@ forced-colours visibility, sub-pixel text, overflow at 1024 and 320 px, `axe-cor
 for each designed or plan modal dialog, focus on open, focus trap, Escape, focus return, scroll position and
 scrim. It is written to `report.behaviour`, the `BEHAVIOUR/A11Y (not the fidelity verdict)` line, and a
 "Behaviour and accessibility" section of the markdown report; those checks never change the verdict. State that
-line after the headline. A `fail` is a warning from `verify-build` and the Stop hook (so is a `plan.verification.a11y`
+line after the headline. A `fail` is a warning from `verify-build` and the Stop hook (so is a recorded `a11y`
 that disagrees with the report), and **a measurable accessibility failure is never waived**: fix it, or raise a
 designer question. Record it with `--compare … --record-plan`, not by hand: it copies `report.behaviour.summary` into
-`plan.verification.a11y` (`{tool, violations: summary.fail, warnings: summary.warn, report: "<the
-report.json you copied it from>"}`, `tool` being `"axe-core <version>"` when axe-core ran, else
+`plan.verification.recorded.a11y` (`{tool, violations: summary.fail, warnings: summary.warn, report: "<the
+report.json you copied it from>"}` — the shape a plan with no record keeps at `verification.a11y` when it is copied by
+hand —, `tool` being `"axe-core <version>"` when axe-core ran, else
 `"verify-probe behaviour checks"` — the hook compares the count with that one report; `summary.fail` counts the
-elements behind a "+N more" row, not one) beside `mode`,
-`renderer`, `artifacts`, the open high/medium `deltas` and a `recorded` block (the report's sha256, verdict, headline and
-counts). Say how far to
+elements behind a "+N more" row, not one), inside the tool's `recorded` block beside `mode`,
+`renderer`, `artifacts`, the open high/medium `deltas` and the report's sha256, verdict, headline and
+counts. Say how far to
 trust it: names computed by Playwright (Chromium), not screen-reader verified; a native date/select picker
 row is synthetic (headless), not a real-browser observation; a check marked `not-run` is not a pass. `axe-core`
 is optional and resolved from the project, so without it that one check is `not-run`; installing it
@@ -310,7 +311,7 @@ with a note in the report, so read the next report to confirm it applied.
 **A reference PNG that is only a stand-in.** When the designer drew an illustration, photo or placeholder the build deliberately does not reproduce, the builder records a plan `deviations[]` row with `field: "reference"` (`{nodeId, field: "reference", designed, built, reason}`). `--compare` then says "the plan marks the reference illustrative for N node(s)" on the VISUAL line and in an input note, so a visual-diff region there is read as expected. It never waives or changes a delta — only the user's `--accept` does that.
 
 Differences in the code → the user can ask for them to be fixed (a normal edit; when the screen has a
-plan, re-run `--compare --record-plan` so its `verification` points at the new report — the report, not the plan,
+plan, re-run `--compare --record-plan` so its `verification.recorded` points at the new report — the report, not the plan,
 carries the verdict). The design itself changed
 since the build → `/designtwin:sync-design`. Problems that are in the *design* — contrast, a missing
 state, a token collision → `/designtwin:audit-design`.

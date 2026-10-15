@@ -9,8 +9,8 @@
 // schema validator. Maps have their own full validator (map-validate.ts validateMap).
 //
 // Each guard carries an `expected` string: what read-json.ts prints when a file fails it.
-import { isJsonObject } from "./types.ts";
-import type { JsonObject } from "./types.ts";
+import { PLAN_VERIFICATION_RECORD_SCHEMA, isJsonObject } from "./types.ts";
+import type { JsonObject, PlanVerificationRecord } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
 import type { VariableComposedColor } from "../bridge/src/doc-types.ts";
 import type {
@@ -326,6 +326,9 @@ function planProblem(x: unknown): string | null {
   if (x.tagging !== undefined && x.tagging !== null && !(isJsonObject(x.tagging) && (x.tagging.off === undefined || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return "is not a valid plan: `tagging` must be {\"off\": true, \"reason\": \"…\"}";
   if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isJsonObject(x.verification) && x.verification.hook !== undefined && !isJsonObject(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  // (only its kind: a hand edit inside the record is verify-build's block, which --record-plan can repair — a plan
+  // refused here could not be read to repair it)
+  if (isJsonObject(x.verification) && x.verification.recorded !== undefined && !isJsonObject(x.verification.recorded)) return "is not a valid plan: `verification.recorded` must be an object";
   // navigate / interactions: only the lists' kind — rows are validated where used (probe-steps.ts parseSteps; --expect drops a bad interaction row with why)
   for (const k of ["navigate", "interactions"] as const) if (x[k] !== undefined && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
@@ -338,6 +341,42 @@ isPlan.expected = "a plan (started by the plan-skeleton script): an object whose
 /** A plan, or the reason it is not one (one line, naming the field). */
 export function parsePlan(x: unknown): { plan: Plan } | { error: string } {
   return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
+}
+
+// plan.verification.recorded@2 (types.ts PlanVerificationRecord) — the one closed shape in a plan: plan-record.ts
+// writes it whole, so a key it does not write or a value of the wrong kind was written by hand.
+const isCount = (x: unknown): boolean => typeof x === "number" && Number.isFinite(x);
+const closed = (o: JsonObject, at: string, fields: Record<string, { need: boolean; ok: (v: unknown) => boolean }>): string[] => {
+  const out = Object.keys(o).filter((k) => !Object.hasOwn(fields, k)).map((k) => `${at}${k}`);
+  for (const [k, f] of Object.entries(fields)) if (o[k] === undefined ? f.need : !f.ok(o[k])) out.push(`${at}${k}`);
+  return out;
+};
+const need = (ok: (v: unknown) => boolean) => ({ need: true, ok });
+const opt = (ok: (v: unknown) => boolean) => ({ need: false, ok });
+const str = (v: unknown): boolean => typeof v === "string";
+const RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, need(isCount)]));
+const RECORD_DELTA = { nodeId: need(str), field: need(str), severity: need((v) => v === "high" || v === "medium"), expected: opt(() => true), actual: opt(() => true) };
+const RECORD_A11Y = { tool: need(str), violations: need(isCount), warnings: need(isCount), report: need(str) };
+const RECORD_FIELDS = {
+  schema: need((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA), by: need(str), at: need(str), report: need(str), reportSha256: need(str),
+  verdict: need(str), headline: need(str), behaviourHeadline: opt(str), counts: need(isJsonObject),
+  mode: need((v) => v === "rendered" || v === "static-only"), reason: opt(str), renderer: opt(str), artifacts: need(isStringArray),
+  deltas: need(Array.isArray), a11y: opt(isJsonObject),
+};
+/** Every key a recorded@2 block may hold (plan-record.ts drops any other, with a note). */
+export const RECORD_KEYS: readonly string[] = Object.keys(RECORD_FIELDS);
+/** The keys (dotted: `counts.high`, `deltas[2].note`, `a11y.tool`) of a recorded@2 block that are outside its
+ *  closed set or hold the wrong kind of value; [] = the block is the tool's shape. */
+export function recordProblems(rec: JsonObject): string[] {
+  const out = closed(rec, "", RECORD_FIELDS);
+  if (isJsonObject(rec.counts)) out.push(...closed(rec.counts, "counts.", RECORD_COUNTS));
+  if (Array.isArray(rec.deltas)) rec.deltas.forEach((d, i) => out.push(...(isJsonObject(d) ? closed(d, `deltas[${i}].`, RECORD_DELTA) : [`deltas[${i}]`])));
+  if (isJsonObject(rec.a11y)) out.push(...closed(rec.a11y, "a11y.", RECORD_A11Y));
+  return out;
+}
+/** A recorded block in the @2 shape (`schema` set — a block without it is a recorded@1, read the older way) with no problem. */
+export function isVerificationRecord(x: unknown): x is PlanVerificationRecord {
+  return isJsonObject(x) && x.schema !== undefined && recordProblems(x).length === 0;
 }
 
 // plan.waivers[] / plan.descopes[] rows. The plan guard only asks for objects (a hand-edited row must

@@ -524,11 +524,36 @@ export interface PlanHookRecord {
   /** web profiles: anchored visible nodes whose id appears in a listed file, of how many */
   tagCoverage?: { tagged: number; anchored: number };
 }
-/** the tool-owned record of one --compare run, written by plan-record.ts recordPlan(). */
-export interface PlanVerificationRecord {
+/** `schema` of the record plan-record.ts recordPlan() writes into plan.verification.recorded */
+export const PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
+/** what one report says, as the record counts it: high/medium/low = OPEN deltas; accepted = waived ones */
+export interface PlanRecordCounts { high: number; medium: number; low: number; accepted: number; notMeasured: number; inferred: number }
+/** one OPEN high/medium report delta, as the record lists it — these keys and no others */
+export interface PlanRecordedDelta { nodeId: string; field: string; severity: "high" | "medium"; expected?: JsonValue; actual?: JsonValue }
+/** report.behaviour.summary as a plan records it — violations = summary.fail, warnings = summary.warn, report = the report.json it came from */
+export interface PlanA11yRecord { tool?: string; violations?: number; warnings?: number; report?: string }
+/** The first record (no `schema`): only the report's facts; mode … a11y sat at verification's top level, beside the
+ *  agent's keys. Still read (the top-level keys are the fallback); the next --record-plan rewrites it as @2. */
+export interface PlanVerificationRecordV1 {
+  schema?: undefined;
   by: "verify-screen --record-plan"; at: string; report: string; reportSha256: string; verdict: string; headline: string;
   behaviourHeadline?: string;
-  counts: { high: number; medium: number; low: number; accepted: number; notMeasured: number; inferred: number };
+  counts: PlanRecordCounts;
+}
+/** The tool-owned record of one --compare run, written whole by plan-record.ts recordPlan() — a closed set
+ *  (doc-guards.ts recordProblems): verify-build blocks on a key outside it, a value of the wrong kind, or a
+ *  verdict/headline/count that the report it names (same sha256) does not say. */
+export interface PlanVerificationRecord extends Omit<PlanVerificationRecordV1, "schema"> {
+  schema: typeof PLAN_VERIFICATION_RECORD_SCHEMA;
+  /** "static-only" + the measured file's reason (no renderer) when nothing was rendered */
+  mode: "rendered" | "static-only";
+  reason?: string;
+  renderer?: string;
+  /** the report .json/.md and the report's own artifacts that exist on disk, project-relative */
+  artifacts: string[];
+  deltas: PlanRecordedDelta[];
+  /** only when the report's behaviour checks ran */
+  a11y?: { tool: string; violations: number; warnings: number; report: string };
 }
 /** one thing the build does that the design never drew — judged against best practice, never "matched",
  *  never the verdict. kind: plan-declared interaction, an interaction whose destination was never exported, a state
@@ -537,21 +562,28 @@ export interface InferredRow {
   kind: "plan-interaction" | "undesigned-interaction" | "undrawn-state" | "agent";
   nodeId?: string; name?: string; trigger?: string; state?: string; built?: string; why: string;
 }
+/** A plan's verification block. `recorded` is the tool's (--compare --record-plan writes it whole), `hook` is
+ *  verify-build's, everything else is the agent's. Readers take mode … a11y from a recorded@2 block and fall back to
+ *  the top-level keys below only without one (a hand-written or native plan, a recorded@1 plan): beside a recorded@2
+ *  those keys — and a hand headline/verdict — are ignored, with a warning (plan-record.ts verificationFacts). */
 export interface PlanVerification {
+  /** the fallback for a plan with no recorded@2 — as are reason, renderer, artifacts, deltas and a11y */
   mode?: "rendered" | "static-only" | (string & {});
   reason?: string;
   renderer?: string;
   /** Documented as arrays; a plan read from disk may hold anything (the guard does not check them — a plan was seen holding objects there). */
   artifacts?: string[] | JsonValue;
   deltas?: JsonValue[] | JsonValue;
+  /** the agent's: which states/themes/sizes were rendered, and which were not (with why) */
   coverage?: { rendered?: string[]; notChecked?: Array<string | { what?: string; why?: string }> };
-  /** the skill copies report.behaviour.summary here — violations = summary.fail, warnings = summary.warn */
-  a11y?: { tool?: string; violations?: number; warnings?: number; report?: string };
+  /** report.behaviour.summary, copied by hand where --record-plan does not run */
+  a11y?: PlanA11yRecord;
+  /** hand-written; read (against the report) only for a plan with no `recorded` */
   verifyScreenVerdict?: string | { verdict?: string };
   verdict?: string | { verdict?: string };
   hook?: PlanHookRecord;
   /** what `verify-screen --compare --record-plan` recorded (tool-owned; the report is the verdict) */
-  recorded?: PlanVerificationRecord;
+  recorded?: PlanVerificationRecord | PlanVerificationRecordV1;
   // A model-written verification block often carries more (interactionScript, typecheck, dataDtNode,
   // interactions, …): nothing reads those, and the hook's rewrite carries them through untouched.
 }

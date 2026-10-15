@@ -162,9 +162,10 @@ Render at least once each, when the stack supports it:
 - A narrow and a wide width (small phone / tablet, or web breakpoints) for fill/hug behavior.
 
 Record what you covered in the plan's `verification.coverage` — `{rendered:[…], notChecked:[{what,
-why}]}` (yours to write) — and, on web, let `verify-screen.js --compare … --record-plan` write the rest of `verification`
-(`mode` — `static-only` + its `reason` for a static-only measured file —, `renderer`, `artifacts`, open `deltas`, `a11y` from
-`report.behaviour.summary`, `recorded`); elsewhere, when an
+why}]}` (yours to write) — and, on web, let `verify-screen.js --compare … --record-plan` write `verification.recorded`, the
+tool's block (the report's sha256, verdict, headline and counts, `mode` — `static-only` + its `reason` for a static-only
+measured file —, `renderer`, `artifacts`, open `deltas`, `a11y` from `report.behaviour.summary`), which you never edit;
+elsewhere, when an
 accessibility check ran, `verification.a11y` — `{tool, violations, warnings, report}`, copied from `report.behaviour.summary`. One
 rendered frame is a legitimate result; an unstated one is not, because the report would then read as
 "verified" for states nobody looked at. The Stop hook only warns when these are missing.
@@ -180,7 +181,7 @@ rendered frame is a legitimate result; an unstated one is not, because the repor
 - Never trade maintainability for pixels: a round that adds absolute positioning, a fixed size or a
   magic offset to a node the export lays out with auto layout, or replaces a token with a literal,
   is a regression even when the screenshot got closer. Record the residual in `deviations[]` (with a reason) instead —
-  `verification.deltas` belongs to `--record-plan`, which replaces any row it did not write.
+  the record's `deltas` belong to `--record-plan`, which writes `verification.recorded` whole (a hand edit there blocks the Stop hook).
 - After two approaches fail on the same issue, stop and re-read the IR and profile for that node; you're
   probably misreading a unit or a sizing mode.
 
