@@ -34,7 +34,7 @@ import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import type { InteractionEvidence, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { readStatus, type VerifyStatusV2 } from "../design-to-code/verify-run.ts";
 import { check, report } from "./assert.ts";
-import { runNode, type Run } from "./pool.ts";
+import { killPidTree, runNode, type KillHost, type Run } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROBE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -61,20 +61,25 @@ export const BROWSER_LOG: NodeJS.ProcessEnv = { DEBUG: "pw:browser" };
 /** The browser pids a run under BROWSER_LOG launched. */
 export const launchedPids = (stderr: string): number[] => [...stderr.matchAll(/pw:browser <launched> pid=(\d+)/g)].map((m) => Number(m[1]));
 /** How the browser `pid` ended, as Playwright logged it: "exitCode=0, signal=null" when it quit on its own while the run was
- *  alive (the probe closed it); a signal when it was killed (the probe's last-resort SIGKILL of its browser children); null
- *  when no exit was logged (the run ended first and Playwright's exit hook killed it — that hook logs nothing). */
+ *  alive (the probe closed it); a signal when it was killed (POSIX: the probe's last-resort SIGKILL of its browser children —
+ *  Windows has no signals, a killed process logs a non-zero exitCode); null when no exit was logged (the run ended first and
+ *  Playwright's exit hook killed it — that hook logs nothing). */
 export const browserExit = (stderr: string, pid: number): string | null => new RegExp(String.raw`\[pid=${pid}\] <process did exit: (exitCode=[^,]*, signal=[^>]*)>`).exec(stderr)?.[1] ?? null;
-/** SIGKILL the process group of each pid (POSIX: Playwright spawns the browser detached, so it leads its own group) — the
- *  cleanup after a run the test had to kill, whose browser no exit hook ended. Windows has no process groups: nothing. */
-export const killGroups = (pids: number[]): void => {
-  if (process.platform === "win32") return;
-  for (const pid of pids) { try { process.kill(-pid, "SIGKILL"); } catch { /* gone already */ } }
+/** The cleanup after a run the test had to kill (`r.killed`), whose browser no exit hook ended: each browser pid is ended with
+ *  what it started (killPidTree). POSIX: always — Playwright spawns the browser detached, so it leads its own process group,
+ *  which runNode's kill of the run's group never reaches. Windows: only when runNode's taskkill /T of the run failed
+ *  (`!r.treeKilled`) — Playwright does not detach the browser there, so a tree kill that worked has ended it, and its pid,
+ *  free since, may belong to another process by now (a second taskkill /T would end that one's tree). Not killed: nothing.
+ *  `host` is for the tests. */
+export const killBrowsers = (r: Pick<Run, "killed" | "treeKilled">, pids: number[], host?: KillHost): void => {
+  if (!r.killed || ((host?.platform ?? process.platform) === "win32" && r.treeKilled)) return;
+  for (const pid of pids) killPidTree(pid, host);
 };
 
 export interface DriveFixture {
   url: (mode?: string) => string;
   edge: (mode: string) => string;
-  /** a verify-probe run; `o.env` adds to its environment, `o.killAfterMs` SIGKILLs a run still up then (runNode) */
+  /** a verify-probe run; `o.env` adds to its environment, `o.killAfterMs` kills a run still up then, with what it started (runNode) */
   probe: (args: string[], o?: ProbeRunOptions) => Promise<Run>;
   vs: (args: string[]) => Promise<Run>;
   read: (base: string) => VerifyMeasured | null;
