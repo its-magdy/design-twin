@@ -6979,7 +6979,8 @@ async function main(argv) {
   const armed = { end: null };
   const onSignal = (sig) => {
     armed.end?.(`probe stopped by ${sig} \u2014 nothing written`);
-    process.exit(128 + os3.constants.signals[sig]);
+    process.exitCode = 128 + os3.constants.signals[sig];
+    exitFlushed(process.exitCode);
   };
   const own = {
     arm: (e) => {
@@ -7471,7 +7472,10 @@ ${USAGE}`);
 var EXIT_GRACE_MS = 1e3;
 function exitWhenDone(code) {
   process.exitCode = code;
-  setTimeout(() => process.stderr.write("", () => process.stdout.write("", () => process.exit(code))), EXIT_GRACE_MS).unref();
+  setTimeout(() => exitFlushed(code), EXIT_GRACE_MS).unref();
+}
+function exitFlushed(code) {
+  process.stderr.write("", () => process.stdout.write("", () => process.exit(code)));
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   main(process.argv.slice(2)).then(exitWhenDone, (e) => {

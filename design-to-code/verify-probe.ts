@@ -1129,7 +1129,8 @@ export async function main(argv: string[]): Promise<number> {
   const armed: { end: ((detail: string) => void) | null } = { end: null };
   const onSignal = (sig: (typeof STOP_SIGNALS)[number]): void => {
     armed.end?.(`probe stopped by ${sig} — nothing written`);
-    process.exit(128 + os.constants.signals[sig]);
+    process.exitCode = 128 + os.constants.signals[sig];
+    exitFlushed(process.exitCode);
   };
   const own: OwnRunGuard = {
     arm: (e) => { armed.end = e; for (const s of STOP_SIGNALS) process.on(s, onSignal); },
@@ -1568,7 +1569,12 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
 const EXIT_GRACE_MS = 1_000;
 function exitWhenDone(code: number): void {
   process.exitCode = code;
-  setTimeout(() => process.stderr.write("", () => process.stdout.write("", () => process.exit(code))), EXIT_GRACE_MS).unref();
+  setTimeout(() => exitFlushed(code), EXIT_GRACE_MS).unref();
+}
+/** exit once stderr and stdout have flushed — the grace timer above, and a stop signal (its listener replaces Node's
+ *  default exit, and Playwright's own SIGINT/SIGTERM/SIGHUP listeners only close the browser) */
+function exitFlushed(code: number): void {
+  process.stderr.write("", () => process.stdout.write("", () => process.exit(code)));
 }
 
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
