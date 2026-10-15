@@ -2055,6 +2055,29 @@ function recordedReportWarnings(plan, cwd) {
 }
 var COUNT_KEYS = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 var RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"];
+function reportRecordNames(report, reportSha256, cwd) {
+  if (typeof report !== "string" || !report || typeof reportSha256 !== "string") return null;
+  const bytes = readRegularFile(path8.resolve(cwd, report));
+  if (!bytes || sha256Hex(bytes) !== reportSha256) return null;
+  let parsed = null;
+  try {
+    const x = JSON.parse(bytes.toString("utf8"));
+    parsed = x;
+  } catch {
+  }
+  return isVerifyReport(parsed) ? parsed : null;
+}
+function recordedV1Edits(rec, cwd) {
+  const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
+  if (!report || typeof rec.report !== "string") return [];
+  const said = recordFacts(report, rec.report);
+  const edited = [];
+  for (const k of ["verdict", "headline", "behaviourHeadline"]) if (rec[k] === void 0 !== (said[k] === void 0) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
+  const counts = rec.counts;
+  if (!isJsonObject(counts)) edited.push("counts");
+  else for (const k of COUNT_KEYS) if (counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
+  return edited.map((k) => `verification.recorded.${k} is tool-owned and was edited \u2014 re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`);
+}
 function recordedEdits(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
   if (!isJsonObject(rec)) return [];
@@ -2066,22 +2089,13 @@ function recordedEdits(plan, cwd) {
       return [`verification.recorded holds only ${named}, which no record writes \u2014 remove ${them}, or re-run verify-screen --compare --record-plan (it writes the block); residuals go in deviations[], anything else in notes`];
     return [`verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes \u2014 remove ${them}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${them}); residuals go in deviations[], anything else in notes`];
   }
-  if (!isRecordV2Shaped(rec)) return [];
+  if (!isRecordV2Shaped(rec)) return recordedV1Edits(rec, cwd);
   const all = recordProblems(rec);
   const lacks = rec.schema === void 0 ? all.filter((k) => RECORD_KEYS.includes(k) && rec[k] === void 0) : [];
   const edited = all.filter((k) => !lacks.includes(k));
   if (!edited.length && isVerificationRecord(rec)) {
-    const bytes = readRegularFile(path8.resolve(cwd, rec.report));
-    const parse = (b) => {
-      try {
-        const x = JSON.parse(b.toString("utf8"));
-        return x;
-      } catch {
-        return null;
-      }
-    };
-    const report = bytes && sha256Hex(bytes) === rec.reportSha256 ? parse(bytes) : null;
-    if (isVerifyReport(report)) {
+    const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
+    if (report) {
       const said = recordFacts(report, rec.report);
       for (const k of RECORD_FACT_KEYS) if (rec[k] === void 0 !== (said[k] === void 0) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
