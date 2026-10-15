@@ -55,7 +55,7 @@ import { isJsonObject } from "./types.ts";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { canonical, isPassingVerdict, waiversHash } from "./plan-waivers.ts";
-import { isPageIndex, isPagesRootIndex, isProbeIdentity, isRecordV2Shaped, isReportBehaviour, isVerificationRecord, isVerifyReport, parsePlan, recordProblems, recordV1HandKeys } from "./doc-guards.ts";
+import { isPageIndex, isPagesRootIndex, isProbeIdentity, isRecordV2Shaped, isReportBehaviour, isVerificationRecord, isVerifyReport, parsePlan, RECORD_KEYS, RECORD_V1_KEYS, recordProblems, recordV1HandKeys, recordV2OnlyKeys } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull, readRegularFile } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { isScreenDoc } from "./export-shape.ts";
@@ -593,7 +593,8 @@ function recordedReportWarnings(plan: Plan, cwd: string): string[] {
 // fail, which comes first (computeStatus). A recorded block with only the first record's keys (recorded@1) is read the
 // older way and never blocks; one with a key only @2 writes is a @2 block, `schema` or not (doc-guards.ts
 // isRecordV2Shaped). A recorded@1 a person added keys to that no record writes (doc-guards.ts recordV1HandKeys) blocks
-// with ONE message naming them — not one per @2 key it lacks. These messages are saved in the plan
+// with ONE message naming them — not one per @2 key it lacks (one holding nothing but such keys is not a record, and
+// says so). A schema-less block that holds a @2-only key still blocks, with ONE message for the keys it lacks. These messages are saved in the plan
 // (verification.hook.blocking): scripts are named in words.
 const COUNT_KEYS: ReadonlyArray<keyof PlanRecordCounts> = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"] as const;
@@ -603,12 +604,20 @@ function recordedEdits(plan: Plan, cwd: string): string[] {
   const added = recordV1HandKeys(rec);
   if (added.length) {
     const named = added.map((k) => `\`${k}\``).join(", ");
+    const them = added.length > 1 ? "them" : "it";
+    // (no first-format key at all: the block is not a record, so it is not "a record with keys added")
+    if (!Object.keys(rec).some((k) => RECORD_V1_KEYS.includes(k)))
+      return [`verification.recorded holds only ${named}, which no record writes — remove ${them}, or re-run verify-screen --compare --record-plan (it writes the block); ` +
+        "residuals go in deviations[], anything else in notes"];
     return [`verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes — ` +
-      `remove ${added.length > 1 ? "them" : "it"}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${added.length > 1 ? "them" : "it"}); ` +
+      `remove ${them}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${them}); ` +
       "residuals go in deviations[], anything else in notes"];
   }
   if (!isRecordV2Shaped(rec)) return [];
-  const edited = recordProblems(rec);
+  const all = recordProblems(rec);
+  // (no schema, yet a key only @2 writes: the keys @2 needs and the block lacks are missing, not edited — one message)
+  const lacks = rec.schema === undefined ? all.filter((k) => RECORD_KEYS.includes(k) && rec[k] === undefined) : [];
+  const edited = all.filter((k) => !lacks.includes(k));
   if (!edited.length && isVerificationRecord(rec)) {
     const bytes = readRegularFile(path.resolve(cwd, rec.report)); // (null: no report to compare with)
     const parse = (b: Buffer): unknown => { try { const x: unknown = JSON.parse(b.toString("utf8")); return x; } catch { return null; } };
@@ -621,7 +630,12 @@ function recordedEdits(plan: Plan, cwd: string): string[] {
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
-  return edited.map((k) => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+  const out = edited.map((k) => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+  if (lacks.length) {
+    const held = recordV2OnlyKeys(rec).map((k) => `\`${k}\``).join(", ");
+    out.push(`verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.join(", ")} — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+  }
+  return out;
 }
 
 // Beside a recorded block (the record), the record's own keys at verification's top level — and a hand-written

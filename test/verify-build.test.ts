@@ -305,6 +305,7 @@ check("static-only needs a reason", has(problems({}, { verification: { mode: "st
 console.log("verification.recorded — the tool's block:");
 {
   const EDITED = (k: string): string => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`;
+  const LACKS = (held: string, lacks: string): string => `verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks} — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`;
   // a recorded@2 block as --record-plan writes it (its report is not on disk here, so only its shape is checked)
   const REC = { schema: "designtwin/plan-verification-record@2", by: "verify-screen --record-plan", at: "2026-10-07T12:00:00.000Z", report: "design/verify/login.report.json",
     reportSha256: "0".repeat(64), verdict: "pass", headline: "PASS", counts: { high: 0, medium: 0, low: 0, accepted: 0, notMeasured: 0, inferred: 0 },
@@ -330,8 +331,24 @@ console.log("verification.recorded — the tool's block:");
     recordBlocks({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: v1 }).length === 0 && recordBlocks({ recorded: { ...v1, behaviourHeadline: "B" } }).length === 0
     && has(problems(FILES, planWith({ mode: "static-only", recorded: v1 })), /^verification\.mode is "static-only" with no `reason`/));
   check(`a schema-less block holding a key the first record never wrote is a @2 block with its schema removed → BLOCKS (got ${JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered" } }))})`,
-    JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered" } })) === JSON.stringify([EDITED("schema"), EDITED("artifacts"), EDITED("deltas")])
-    && JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered", note: "hand" } })) === JSON.stringify([EDITED("note"), EDITED("schema"), EDITED("artifacts"), EDITED("deltas")]));
+    JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered" } })) === JSON.stringify([LACKS("`mode`", "schema, artifacts, deltas")])
+    && JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered", note: "hand" } })) === JSON.stringify([EDITED("note"), LACKS("`mode`", "schema, artifacts, deltas")]));
+  // …and a key the block lacks is missing, not edited: ONE message (a first-format record with `a11y` moved inside)
+  const moved = recordBlocks({ recorded: { ...v1, a11y: REC.a11y } });
+  check(`a schema-less block with only \`a11y\` added → ONE block saying the @2 keys are missing, not four "edited" (got ${JSON.stringify(moved)})`,
+    JSON.stringify(moved) === JSON.stringify([LACKS("`a11y`", "schema, mode, artifacts, deltas")])
+    && JSON.stringify(recordBlocks({ recorded: { ...REC, mode: undefined } })) === JSON.stringify([EDITED("mode")]));
+  // a block holding nothing a record writes is not a record: it is told so, once
+  const handOnly = recordBlocks({ recorded: { note: "x", residuals: [] } });
+  check(`a block with none of the first record's keys → ONE block saying it holds only keys no record writes (got ${JSON.stringify(handOnly)})`,
+    JSON.stringify(handOnly) === JSON.stringify(["verification.recorded holds only `note`, `residuals`, which no record writes — remove them, or re-run verify-screen --compare --record-plan (it writes the block); residuals go in deviations[], anything else in notes"])
+    && recordBlocks({ recorded: { note: "x" } })[0]?.startsWith("verification.recorded holds only `note`, which no record writes — remove it, or re-run") === true
+    && recordBlocks({ recorded: {} }).length === 0);
+  // the open deltas [] of a record of ANOTHER report, beside a report that lists some: the record is not this build's
+  const other = verificationContradictions(planWith({ recorded: { ...REC, deltas: [] } }), [reportRef({ rel: "design/verify/other.report.json", deltas: [{ nodeId: "1:2", field: "width", severity: "medium", expected: 10, actual: 12 }] })]);
+  check(`a recorded deltas [] beside another report that lists a delta → the record is of another report, record it (got ${JSON.stringify(other)})`,
+    other.length === 1 && /^verification\.recorded\.deltas is \[\] but design\/verify\/other\.report\.json lists 1 delta\(s\) — the record is of another report; if design\/verify\/other\.report\.json is this build's, record it \(node .*verify-screen\.\w+.* --compare --record-plan\)$/.test(other[0] ?? "")
+    && verificationContradictions(planWith({ recorded: { ...REC, deltas: [] } }), [reportRef({ rel: REC.report, deltas: [{ nodeId: "1:2", field: "width", severity: "medium", expected: 10, actual: 12 }] })]).length === 0);
   // a key no record writes does not make a recorded@1 a @2 block: ONE block naming it, the plan read the older way
   const v1Hand = recordBlocks({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: { ...v1, note: "hand", residuals: [] } });
   check(`a recorded@1 with keys no record writes → ONE block naming them and what to do, not one per @2 key it lacks (got ${JSON.stringify(v1Hand)})`,

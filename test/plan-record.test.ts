@@ -439,7 +439,7 @@ console.log("verify-build on the record: a hand edit of it blocks; its keys left
     fs.writeFileSync(path.join(root, REL), JSON.stringify(p, null, 2) + "\n");
   };
   const checked = () => checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
-  const recordBlocks = (): string[] => checked().blocking.filter((b) => b.startsWith("verification.recorded."));
+  const recordBlocks = (): string[] => checked().blocking.filter((b) => b.startsWith("verification.recorded"));
   write((_, rec) => { rec.verdict = "pass"; });
   check(`the verdict edited while reportSha256 still names the report → BLOCKS: "${EDITED("verdict")}" (got ${JSON.stringify(recordBlocks())})`,
     JSON.stringify(recordBlocks()) === JSON.stringify([EDITED("verdict")]));
@@ -470,7 +470,9 @@ console.log("verify-build on the record: a hand edit of it blocks; its keys left
     recordBlocks().length === 0 && isJsonObject(reordered) && Object.keys(reordered)[0] === "a11y" && isJsonObject(reordered.a11y) && Object.keys(reordered.a11y)[0] === "report");
   // a @2 block with its schema removed is not a recorded@1: it holds keys that record never wrote
   write((_, rec) => { delete rec.schema; });
-  check(`the schema removed from a @2 block → still a @2 block, and it BLOCKS (got ${JSON.stringify(recordBlocks())})`, JSON.stringify(recordBlocks()) === JSON.stringify([EDITED("schema")]));
+  const noSchema = recordBlocks();
+  check(`the schema removed from a @2 block → still a @2 block, and it BLOCKS once, saying the schema is missing (got ${JSON.stringify(noSchema)})`,
+    noSchema.length === 1 && /^verification\.recorded has no schema but holds `mode`, .*`artifacts`.*, which only a @2 record writes; it lacks schema — re-run verify-screen --compare --record-plan \(or restore the block\); residuals go in deviations\[\]$/.test(noSchema[0] ?? ""));
   // --status says blocked at once for a closed plan whose record was edited (the hook's next check would block)
   write((_, rec) => { rec.verdict = "pass"; });
   const edited = statusOf(root);

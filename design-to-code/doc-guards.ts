@@ -368,12 +368,16 @@ const RECORD_FIELDS = {
 /** Every key a recorded@2 block may hold (plan-record.ts drops any other, with a note). */
 export const RECORD_KEYS: readonly string[] = Object.keys(RECORD_FIELDS);
 // What the first record (recorded@1, no `schema`) ever held — the report's facts only
-const RECORD_V1_KEYS: readonly string[] = ["by", "at", "report", "reportSha256", "verdict", "headline", "behaviourHeadline", "counts"];
+export const RECORD_V1_KEYS: readonly string[] = ["by", "at", "report", "reportSha256", "verdict", "headline", "behaviourHeadline", "counts"];
+/** The keys of a recorded block that only a @2 record writes (schema, mode, artifacts, deltas, a11y, …). */
+export function recordV2OnlyKeys(rec: JsonObject): string[] {
+  return Object.keys(rec).filter((k) => !RECORD_V1_KEYS.includes(k) && RECORD_KEYS.includes(k));
+}
 /** A recorded block to read and check as @2: it has a `schema`, or a key only @2 writes (mode, artifacts, deltas,
  *  a11y, … — a @2 block whose schema was removed by hand is still a @2 block, and its edit still blocks). A key no
  *  record writes does not make a block @2: see recordV1HandKeys. */
 export function isRecordV2Shaped(rec: JsonObject): boolean {
-  return rec.schema !== undefined || Object.keys(rec).some((k) => !RECORD_V1_KEYS.includes(k) && RECORD_KEYS.includes(k));
+  return rec.schema !== undefined || recordV2OnlyKeys(rec).length > 0;
 }
 /** The keys a person added to a recorded@1 block (no `schema`, no key only @2 writes) that no record ever writes
  *  (`residuals`, `note`, …); [] for a @2 block or an untouched recorded@1. */

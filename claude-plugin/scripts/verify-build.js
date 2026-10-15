@@ -692,8 +692,11 @@ var RECORD_FIELDS = {
 };
 var RECORD_KEYS = Object.keys(RECORD_FIELDS);
 var RECORD_V1_KEYS = ["by", "at", "report", "reportSha256", "verdict", "headline", "behaviourHeadline", "counts"];
+function recordV2OnlyKeys(rec) {
+  return Object.keys(rec).filter((k) => !RECORD_V1_KEYS.includes(k) && RECORD_KEYS.includes(k));
+}
 function isRecordV2Shaped(rec) {
-  return rec.schema !== void 0 || Object.keys(rec).some((k) => !RECORD_V1_KEYS.includes(k) && RECORD_KEYS.includes(k));
+  return rec.schema !== void 0 || recordV2OnlyKeys(rec).length > 0;
 }
 function recordV1HandKeys(rec) {
   return isRecordV2Shaped(rec) ? [] : Object.keys(rec).filter((k) => !RECORD_KEYS.includes(k));
@@ -2058,10 +2061,15 @@ function recordedEdits(plan, cwd) {
   const added = recordV1HandKeys(rec);
   if (added.length) {
     const named = added.map((k) => `\`${k}\``).join(", ");
-    return [`verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes \u2014 remove ${added.length > 1 ? "them" : "it"}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${added.length > 1 ? "them" : "it"}); residuals go in deviations[], anything else in notes`];
+    const them = added.length > 1 ? "them" : "it";
+    if (!Object.keys(rec).some((k) => RECORD_V1_KEYS.includes(k)))
+      return [`verification.recorded holds only ${named}, which no record writes \u2014 remove ${them}, or re-run verify-screen --compare --record-plan (it writes the block); residuals go in deviations[], anything else in notes`];
+    return [`verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes \u2014 remove ${them}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${them}); residuals go in deviations[], anything else in notes`];
   }
   if (!isRecordV2Shaped(rec)) return [];
-  const edited = recordProblems(rec);
+  const all = recordProblems(rec);
+  const lacks = rec.schema === void 0 ? all.filter((k) => RECORD_KEYS.includes(k) && rec[k] === void 0) : [];
+  const edited = all.filter((k) => !lacks.includes(k));
   if (!edited.length && isVerificationRecord(rec)) {
     const bytes = readRegularFile(path8.resolve(cwd, rec.report));
     const parse = (b) => {
@@ -2079,7 +2087,12 @@ function recordedEdits(plan, cwd) {
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
-  return edited.map((k) => `verification.recorded.${k} is tool-owned and was edited \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+  const out = edited.map((k) => `verification.recorded.${k} is tool-owned and was edited \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+  if (lacks.length) {
+    const held = recordV2OnlyKeys(rec).map((k) => `\`${k}\``).join(", ");
+    out.push(`verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.join(", ")} \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+  }
+  return out;
 }
 var SHADOWED_TOOL_KEYS = ["mode", "reason", "renderer", "artifacts", "deltas", "a11y"];
 var HAND_VERDICT_KEYS = ["headline", "verdict", "verifyScreenVerdict"];
