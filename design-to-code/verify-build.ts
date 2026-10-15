@@ -617,7 +617,9 @@ function reportRecordNames(report: unknown, reportSha256: unknown, cwd: string):
 // report's own text, never rebuilt), behaviourHeadline only when the report has one, counts from summary with the same
 // fallbacks (accepted from the accepted deltas, notMeasured from coverage or notMeasured[], inferred from inferred[]) —
 // so an untouched old record of that report matches, and a difference is a hand edit: it BLOCKS like the @2 compare.
-// Re-recording rewrites the block in the current format.
+// One old record can differ untouched: the first writer hashed the file on disk, so a --compare that rewrote the same
+// report meanwhile left that run's sha beside this run's facts. The message names both causes; re-recording, which
+// rewrites the block in the current format, settles either.
 function recordedV1Edits(rec: JsonObject, cwd: string): string[] {
   const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
   if (!report || typeof rec.report !== "string") return [];
@@ -627,7 +629,7 @@ function recordedV1Edits(rec: JsonObject, cwd: string): string[] {
   const counts = rec.counts;
   if (!isJsonObject(counts)) edited.push("counts");
   else for (const k of COUNT_KEYS) if (counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
-  return edited.map((k) => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`);
+  return edited.map((k) => `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote) — re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`);
 }
 function recordedEdits(plan: Plan, cwd: string): string[] {
   const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;

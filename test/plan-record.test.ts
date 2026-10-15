@@ -288,7 +288,7 @@ console.log("the record is replaced whole; a recorded@1 plan is migrated; a stat
   // key; with the report rewritten since (sha differs) there is nothing to compare with
   const root = project();
   const p = planOf(root);
-  const EDITED_V1 = (k: string): string => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`;
+  const EDITED_V1 = (k: string): string => `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote) — re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`;
   const v1 = { by: "verify-screen --record-plan", at: NOW, report: REPORT, reportSha256: sha256(fs.readFileSync(path.join(root, REPORT))), verdict: rep.verdict, headline: rep.headline,
     behaviourHeadline: rep.behaviour.headline, counts: { high: 1, medium: 1, low: 2, accepted: 1, notMeasured: 0, inferred: 0 } };
   const put = (recorded: JsonObject): void => fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: [], recorded } }, null, 2) + "\n");

@@ -2076,7 +2076,7 @@ function recordedV1Edits(rec, cwd) {
   const counts = rec.counts;
   if (!isJsonObject(counts)) edited.push("counts");
   else for (const k of COUNT_KEYS) if (counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
-  return edited.map((k) => `verification.recorded.${k} is tool-owned and was edited \u2014 re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`);
+  return edited.map((k) => `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote) \u2014 re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`);
 }
 function recordedEdits(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
