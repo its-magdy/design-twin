@@ -140,13 +140,16 @@ console.log("verify docs (run integrity + agent safety):");
     && /Two cases leave it at `measuring` — a probe killed outright \(SIGKILL\), and an exit whose last status write was refused/.test(verifyRef)
     && /the run records the probe's pid, host and a deadline \(its start \+ `--max-time` \+ 120 s\): the next probe without `--run` ends it `failed` itself .{0,40}once that pid is gone on the same machine or, on any host, the deadline has passed/.test(verifyRef)
     && /Before the deadline, when it cannot tell — the run was started on another host, or the pid is running — it refuses, naming that probe's own run/.test(verifyRef)
-    && /when a later probe did, it finds the status naming that run and writes nothing more \(exit 2\)/.test(verifyRef)
-    && /Each probe run replaces the published `design\/verify\/<Screen>\.status\.json` with its own run's \(the pid and host stay in the run cache, never in that file\)/.test(verifyRef)
+    && /when a later probe did, it finds the status naming that run and writes nothing more \(exit 2, or 128 \+ the signal's number when a stop signal ended it, or 1 after an error\)/.test(verifyRef)
+    && /An own run that ends `done` replaces the published `design\/verify\/<Screen>\.status\.json` with its run's \(the pid and host stay in the run cache, never in that file\); one that ends `failed` publishes nothing/.test(verifyRef)
+    && !/Each probe run replaces the published/.test(verifyRef)
     && !/never stays open/.test(verifyRef)
     && /`--wait` on an old id returns at once on that run's old `done` only until a later run replaces the status — after that it ends in exit 5, `stalled` once that run's status stops changing \(`--stall`\), at the latest on `--timeout`/.test(skill)
     && /then it ends in exit 5 — `stalled` once that run's status stops changing for `--stall`, at the latest on `--timeout`/.test(verifySkill)
     && !/waits out its `--timeout`/.test(skill + verifySkill)
-    && /Your own probe without `--run` is such a later run: it replaces the live status and the published `design\/verify\/<Screen>\.status\.json`/.test(skill));
+    && /Your own probe without `--run` is such a later run: it replaces the live status with its own run's, and the published `design\/verify\/<Screen>\.status\.json` too once that run ends `done` \(a `failed` one publishes nothing\)/.test(skill));
+  check("--status without --new-run writes no run over ANOTHER run that has not ended (the run protocol)",
+    /Nor does `--status` \(without `--new-run`\) write your run while the status names ANOTHER run that has not ended \(exit 2, naming it and how to wait for it or end it\)/.test(verifySkill));
   check("run membership is the run id and the recorded sha, never a timestamp: a hand-written measured file naming no run is judged by the run beside it, which --status --phase measured records (verdict rules, native measuring)",
     /A measured file that names no run \(written by hand on a native stack, or by an older probe\) is judged by the run whose status is beside it/.test(verifySkill)
     && /No timestamp decides which run a file belongs to/.test(verifySkill) && !/measured after that run ended|measured AFTER that run ended/.test(verifySkill + verifyRef)

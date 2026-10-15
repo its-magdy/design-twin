@@ -468,7 +468,8 @@ gets a NEW run (`--status <Screen> --phase queued --new-run`, its id passed to t
 more writes, and `--wait` on an old id returns at once on that run's old `done` only until a later run replaces the
 status — after that it ends in exit 5, `stalled` once that run's status stops changing (`--stall`), at the latest on
 `--timeout`. Your own probe without `--run` is such a later run: it
-replaces the live status and the published `design/verify/<Screen>.status.json` with its own run's.
+replaces the live status with its own run's, and the published `design/verify/<Screen>.status.json` too once that run
+ends `done` (a `failed` one publishes nothing).
 
 It runs for minutes and reports progress into the run cache (`node_modules/.cache/designtwin-verify/`; published as
 `design/verify/<screen>.status.json` at `done`). **Wait with `verify-screen.js --wait <Screen> --run <id>` rather than

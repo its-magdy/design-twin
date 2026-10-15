@@ -138,13 +138,13 @@ function isStale(file: string, text: string, staleMs: number): boolean {
   if (h === null) {
     try { return ageOf(fs.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS); } catch { return false; } // gone: the next open takes it
   }
-  if (sameMachine(h)) return !pidAlive(h.pid) || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
+  const state = processState(h);
+  if (state !== "unknown") return state === "gone" || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
   return ageOf(h.at) > staleMs;
 }
 
 /** This process's stamp for a lock or guard it creates. `at` is the moment it is written: the age a waiter compares. */
-const stampOf = (token: string): string =>
-  JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...(PID_NS ? { ns: PID_NS } : {}) });
+const stampOf = (token: string): string => JSON.stringify({ ...thisProcess(), at: Date.now(), token });
 /**
  * Create `file` exclusively and write this process's stamp into it. Returns the stamp when the file on disk holds it
  * once written, null when it does not: the file was judged a dead holder's while still empty and removed (another

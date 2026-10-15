@@ -448,7 +448,6 @@ console.log("updateJsonLike — a locked read-modify-write in the file's own for
   t("acquireFileLock returns a release; releasing twice is harmless", () => held && !fs.existsSync(lock));
 }
 
-
 // processState: a record that outlives a lock (a probe's own run) judged the way a lock holder is
 console.log("processState — the holder judgement for a stamped process:");
 {

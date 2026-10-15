@@ -385,10 +385,10 @@ safe("…another run's status: the hint says re-measure in the current run, neve
   const w = r.why.find((x) => /taken in run run-9/.test(x)) || "";
   return /run run-7 is the current run — re-measure in it/.test(w) && !/--phase measured --run run-9/.test(w);
 });
-safe("…another run's status that ENDED done: 'measure again' first, then the --phase done record of this file's run — never 'the current run'", () => {
+safe("…another run's status that ENDED done: 'measure again' only — no record command (this file's run may have ended too: a record would revive it), never 'the current run'", () => {
   const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-9" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
   const w = r.why.find((x) => /taken in run run-9/.test(x)) || "";
-  return r.verdict === "incomplete" && /— no status of that run records it; measure again, or record it with --status Garden --phase done --run run-9$/.test(w) && !/is the current run/.test(w);
+  return r.verdict === "incomplete" && w.endsWith("— no status of that run records it; measure again") && !/--phase done|--status|is the current run/.test(w);
 });
 safe("…another run's status that ended failed / blocked: 'measure again' only — no record command, which would hide that outcome", () =>
   (["failed", "blocked"] as const).every((p) => {

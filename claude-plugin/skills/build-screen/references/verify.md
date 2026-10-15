@@ -126,8 +126,9 @@ goes on. Before the deadline, when it cannot tell — the run was started on ano
 refuses, naming that probe's own run, when and by which pid it started; if no probe is running, end it with the
 `--status <Screen> --phase failed --run <id>` command it prints. A probe that was stopped or slept past its deadline
 finishes in its run when nobody took it over; when a later probe did, it finds the status naming that run and writes
-nothing more (exit 2). Each probe run replaces the published `design/verify/<Screen>.status.json` with its own run's
-(the pid and host stay in the run cache, never in that file).
+nothing more (exit 2, or 128 + the signal's number when a stop signal ended it, or 1 after an error). An own run that
+ends `done` replaces the published `design/verify/<Screen>.status.json` with its run's (the pid and host stay in the
+run cache, never in that file); one that ends `failed` publishes nothing — only the live status says so.
 
 **Known approximations** (listed in the plan: shadow spread on iOS, blur radius conversions, diamond
 gradients, progressive blur, noise/glass, P3 colors, Figma-vs-platform text rasterizing) are excluded

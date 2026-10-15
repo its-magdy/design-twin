@@ -230,6 +230,7 @@ function pidAlive(pid) {
   }
 }
 var sameMachine = (h) => h.host === os.hostname() && h.ns === PID_NS;
+var thisProcess = () => ({ pid: process.pid, host: os.hostname(), ...PID_NS ? { ns: PID_NS } : {} });
 function processState(p) {
   if (!Number.isInteger(p.pid) || p.pid <= 0 || !sameMachine({ host: p.host, ns: p.ns ?? "" })) return "unknown";
   return pidAlive(p.pid) ? "alive" : "gone";
@@ -255,10 +256,11 @@ function isStale(file, text, staleMs) {
       return false;
     }
   }
-  if (sameMachine(h)) return !pidAlive(h.pid) || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
+  const state = processState(h);
+  if (state !== "unknown") return state === "gone" || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
   return ageOf(h.at) > staleMs;
 }
-var stampOf = (token) => JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...PID_NS ? { ns: PID_NS } : {} });
+var stampOf = (token) => JSON.stringify({ ...thisProcess(), at: Date.now(), token });
 function claim(file, token) {
   const fd = fs3.openSync(file, "wx");
   const mine = stampOf(token);
@@ -1148,8 +1150,23 @@ function replacedRun(prev, runId) {
 function abandonedRun(prev, runId) {
   return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && (processState(prev.ownRun) === "gone" || overdue(prev.ownRun)) ? prev : null;
 }
+function otherOpenRun(prev, runId) {
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) ? prev : null;
+}
 function openRun(base, prev, runId) {
-  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && !abandonedRun(prev, runId) ? new RunOpen(base, prev) : null;
+  const open = otherOpenRun(prev, runId);
+  return open && !abandonedRun(open, runId) ? new RunOpen(base, open) : null;
+}
+var RunNotCurrent = class extends Error {
+  constructor(base, runId, open) {
+    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
+    super(`run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 nothing is written; wait for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, end it (${vs} --status ${S} --phase failed --run ${id} --dir ${dir})`);
+    this.name = "RunNotCurrent";
+  }
+};
+function notCurrentRun(base, prev, runId) {
+  const open = otherOpenRun(prev, runId);
+  return open ? new RunNotCurrent(base, runId, open) : null;
 }
 var STATUS_LOCK = { waitMs: 15e3 };
 function writeStatus(base, p, hooks = {}) {
@@ -1161,6 +1178,8 @@ function writeStatus(base, p, hooks = {}) {
     if (ended) throw ended;
     const open = hooks.alone ? openRun(base, prev, p.runId) : null;
     if (open) throw open;
+    const other = hooks.current ? notCurrentRun(base, prev, p.runId) : null;
+    if (other) throw other;
     const replaced = hooks.continues ? replacedRun(prev, p.runId) : null;
     if (replaced) throw replaced;
     const put = (doc2) => {
@@ -1285,7 +1304,7 @@ function statusMain(screen, f, usage) {
       console.error(e.message);
       return EXIT_RUN_CACHE;
     }
-    if (e instanceof RunEnded) {
+    if (e instanceof RunEnded || e instanceof RunNotCurrent) {
       console.error(e.message);
       return 2;
     }
@@ -1340,6 +1359,12 @@ function statusRun(screen, f, usage) {
     console.error(ended.message);
     return 2;
   }
+  const current = !f["new-run"];
+  const other = current ? notCurrentRun(base, prev, runId) : null;
+  if (other) {
+    console.error(other.message);
+    return 2;
+  }
   const S = path8.basename(base), dir = path8.dirname(base);
   const cache = runCacheDir(dir);
   inRunCache(dir, () => {
@@ -1378,6 +1403,7 @@ function statusRun(screen, f, usage) {
   let doc;
   try {
     doc = writeStatus(base, { runId, phase, by, ...f.detail !== void 0 ? { detail: f.detail } : {}, ...shas, ...prep ? { published: prep.files } : {} }, {
+      current,
       after: (d) => {
         prep?.commit();
         if (phase === "done") publishStatus(base, d);
@@ -4176,7 +4202,7 @@ function runIntegrity(cx) {
   if (opts.expectationSha256 && !measured.expectationSha256) integrity.push(`${INTEGRITY_PHRASES.noExpectation} \u2014 nothing ties these numbers to this design; re-measure with the shipped probe`);
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
   if (measuredRun !== void 0 && opts.status !== void 0 && (st === null || st.runId !== measuredRun)) {
-    integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${!st ? `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure` : st.phase === "done" ? `measure again, or record it with --status ${shellArg(st.screen)} --phase done --run ${measuredRun}` : TERMINAL_PHASES.includes(st.phase) ? `measure again (a record of run ${measuredRun} now would hide run ${st.runId}'s ${st.phase} outcome)` : `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)`}`);
+    integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${!st ? `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure` : st.phase === "done" ? "measure again" : TERMINAL_PHASES.includes(st.phase) ? `measure again (a record of run ${measuredRun} now would hide run ${st.runId}'s ${st.phase} outcome)` : `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)`}`);
   } else if (st) {
     const stFile = opts.status ? opts.status.file : "status.json";
     const S = shellArg(st.screen);
@@ -5424,7 +5450,8 @@ function main(argv) {
       workspace root its dependencies are hoisted to, never past .git; the OS temp dir, not shared between sandboxed and unsandboxed
       commands, with no package.json or Yarn PnP) \u2014 <dir> resolves against the cwd \u2014 outside every dev-server
       watch, so a heartbeat never reloads the page being measured \u2014 and prints \`run <id> rev <n>\` (stdout), the live file and the run's
-      stage dir (stderr). A run that has ended (done/failed/blocked) takes no more writes, with or without --run (exit 2: start a --new-run). \`done\` checks first \u2014 refuses (exit 1)
+      stage dir (stderr). A run that has ended (done/failed/blocked) takes no more writes, with or without --run (exit 2: start a --new-run),
+      and without --new-run nothing is written while ANOTHER run is open (exit 2: wait for it or end it). \`done\` checks first \u2014 refuses (exit 1)
       a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or
       not the one the probe recorded in this run \u2014 then publishes, records the sha256 of <Screen>.expected/.measured.json (and
       .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every

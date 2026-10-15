@@ -5694,10 +5694,11 @@ function isStale(file, text, staleMs) {
       return false;
     }
   }
-  if (sameMachine(h)) return !pidAlive(h.pid) || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
+  const state = processState(h);
+  if (state !== "unknown") return state === "gone" || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
   return ageOf(h.at) > staleMs;
 }
-var stampOf = (token) => JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now(), token, ...PID_NS ? { ns: PID_NS } : {} });
+var stampOf = (token) => JSON.stringify({ ...thisProcess(), at: Date.now(), token });
 function claim(file, token) {
   const fd = fs3.openSync(file, "wx");
   const mine = stampOf(token);
@@ -5994,8 +5995,23 @@ function replacedRun(prev, runId) {
 function abandonedRun(prev, runId) {
   return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && (processState(prev.ownRun) === "gone" || overdue(prev.ownRun)) ? prev : null;
 }
+function otherOpenRun(prev, runId) {
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) ? prev : null;
+}
 function openRun(base, prev, runId) {
-  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && !abandonedRun(prev, runId) ? new RunOpen(base, prev) : null;
+  const open = otherOpenRun(prev, runId);
+  return open && !abandonedRun(open, runId) ? new RunOpen(base, open) : null;
+}
+var RunNotCurrent = class extends Error {
+  constructor(base, runId, open) {
+    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
+    super(`run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 nothing is written; wait for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, end it (${vs} --status ${S} --phase failed --run ${id} --dir ${dir})`);
+    this.name = "RunNotCurrent";
+  }
+};
+function notCurrentRun(base, prev, runId) {
+  const open = otherOpenRun(prev, runId);
+  return open ? new RunNotCurrent(base, runId, open) : null;
 }
 var STATUS_LOCK = { waitMs: 15e3 };
 function writeStatus(base, p, hooks = {}) {
@@ -6007,6 +6023,8 @@ function writeStatus(base, p, hooks = {}) {
     if (ended) throw ended;
     const open = hooks.alone ? openRun(base, prev, p.runId) : null;
     if (open) throw open;
+    const other = hooks.current ? notCurrentRun(base, prev, p.runId) : null;
+    if (other) throw other;
     const replaced = hooks.continues ? replacedRun(prev, p.runId) : null;
     if (replaced) throw replaced;
     const put = (doc2) => {
@@ -6892,8 +6910,8 @@ var USAGE = `usage:
       probe's pid and host and a deadline (start + --max-time + 120 s): the next probe without --run ends it \`failed\` once
       that pid is gone (same machine) or, on any host, the deadline has passed, and goes on; before the deadline it refuses
       when it cannot tell (another host, or the pid runs). A probe that finds its own run replaced by such a later one
-      (it was stopped or slept past its deadline) writes nothing more (exit 2). The probe writes the run's LIVE status
-      (the run cache,
+      (it was stopped or slept past its deadline) writes nothing more (exit 2; 128+n after a stop signal, 1 after an
+      error). The probe writes the run's LIVE status (the run cache,
       node_modules/.cache/designtwin-verify/<Screen>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
       before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed; with --run an
       exit 3/4 bumps its rev. A --run that already ended (done/failed/blocked) is refused before anything starts, and a run that
@@ -7096,8 +7114,8 @@ ${USAGE}`);
   const outBase = f.out ?? (f.expected ? path9.join(path9.dirname(f.expected), path9.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
   const statusBase = f.expected ? path9.join(path9.dirname(f.expected), path9.basename(outBase)) : "";
   const expSha = expBytes ? sha256Hex(expBytes) : void 0;
-  const ownRun = f.run === void 0 && !f.check && !!statusBase;
   const runId = f.check || !statusBase ? void 0 : f.run ?? newRunId();
+  const ownRun = runId !== void 0 && f.run === void 0;
   const refusedAtStart = runId === void 0 ? null : ownRun ? openRun(statusBase, readStatus(statusBase), runId) : endedRun(readStatus(statusBase), runId);
   if (refusedAtStart) {
     console.error(`verify-probe: ${refusedAtStart.message}`);
@@ -7137,9 +7155,9 @@ ${USAGE}`);
   const ended = (code) => {
     if (runId !== void 0 && (code === 3 || code === 4) && (!ownRun || measuringRecorded)) {
       const w = { runId, phase: ownRun ? "failed" : "measuring", by: "verify-probe", detail: `probe exit ${code} \u2014 nothing written`, ...expSha ? { expectationSha256: expSha } : {} };
-      const wrote = status(w);
+      const wrote2 = status(w);
       if (ownRun) own.disarm();
-      if (wrote === "over") return 2;
+      if (wrote2 === "over") return 2;
     }
     return code;
   };
@@ -7159,9 +7177,9 @@ ${USAGE}`);
     ...ownRun ? { ownRun: { ...thisProcess(), startedAt: (/* @__PURE__ */ new Date()).toISOString(), deadline: new Date(Date.now() + maxTime + OWN_RUN_GRACE_MS).toISOString() } } : {}
   }) : "refused";
   if (measuring === "over") return 2;
-  measuringRecorded = runId !== void 0 && measuring === "ok";
-  if (ownRun && runId !== void 0) console.error(`run    ${runId} \u2014 this probe's own (no --run): it ends it, done with the files or failed on an exit 3/4`);
-  if (ownRun && measuringRecorded && runId !== void 0) {
+  measuringRecorded = measuring === "ok";
+  if (ownRun) console.error(`run    ${runId} \u2014 this probe's own (no --run): it ends it, done with the files or failed on an exit 3/4`);
+  if (ownRun && measuringRecorded) {
     const id = runId;
     own.arm((detail) => {
       try {
@@ -7346,7 +7364,7 @@ ${USAGE}`);
   }
   if (typeof first === "number") return ended(first);
   const { run, identity, driven, driveNote, behaviour, forcedPng, prep, visualCap, captureMs } = first;
-  if (!expectation || !expBytes || !f.expected || !f.url) return 2;
+  if (!expectation || !expBytes || !f.expected || !f.url || runId === void 0) return 2;
   const png = outBase + ".png";
   const r = run.result;
   const frameOut = (fr) => ({ nodeId: fr.nodeId, selector: fr.selector, via: fr.via, rect: fr.rect });
@@ -7372,7 +7390,7 @@ ${USAGE}`);
     components: r.components,
     tagsNotInExpectation: r.tagsNotInExpectation,
     ...run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {},
-    ...runId !== void 0 ? { runId } : {},
+    runId,
     build: { ...run.build, ...gitState(project) },
     ...stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {},
     page: r.page,
@@ -7410,27 +7428,24 @@ ${USAGE}`);
       console.error(`warning  ${statusFile(statusBase)}: ${firstLine(e)} \u2014 the durable status is not written (the live one says done)`);
     }
   };
-  if (runId === void 0) writeFiles();
-  else {
-    const wrote = status({
-      runId,
-      phase: lastPhase,
-      by: "verify-probe",
-      detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
-      ...expSha ? { expectationSha256: expSha } : {}
-    }, { before: writeFiles, ...ownRun ? { after: publish } : {} });
-    own.disarm();
-    if (wrote === "over") return 2;
-    if (wrote === "refused") {
-      statusRefused = true;
-      const now = written ? null : readStatus(statusBase);
-      const endedNow = written ? null : !ownRun ? endedRun(now, runId) : (measuringRecorded ? replacedRun(now, runId) : null) ?? openRun(statusBase, now, runId);
-      if (endedNow) {
-        console.error(`verify-probe: ${endedNow.message}`);
-        return 2;
-      }
-      if (!written) writeFiles();
+  const wrote = status({
+    runId,
+    phase: lastPhase,
+    by: "verify-probe",
+    detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
+    ...expSha ? { expectationSha256: expSha } : {}
+  }, { before: writeFiles, ...ownRun ? { after: publish } : {} });
+  own.disarm();
+  if (wrote === "over") return 2;
+  if (wrote === "refused") {
+    statusRefused = true;
+    const now = written ? null : readStatus(statusBase);
+    const endedNow = written ? null : !ownRun ? endedRun(now, runId) : measuringRecorded ? replacedRun(now, runId) : openRun(statusBase, now, runId);
+    if (endedNow) {
+      console.error(`verify-probe: ${endedNow.message}`);
+      return 2;
     }
+    if (!written) writeFiles();
   }
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
@@ -7445,7 +7460,7 @@ ${USAGE}`);
   console.error(visualLine(visual));
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`);
-  if (statusRefused && runId !== void 0) {
+  if (statusRefused) {
     const outDir = path9.resolve(path9.dirname(outBase)), verifyDir = path9.resolve(path9.dirname(statusBase));
     const findable = outDir === verifyDir || !ownRun && outDir === path9.resolve(stageDirOf(statusBase, runId));
     console.error(`warning  ${outBase}.measured.json is written, but ${measuredRefusedWhy(refusal.by, runId, lastPhase)}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it${refusal.by === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path9.basename(statusBase))} --phase ${lastPhase} --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir${ownRun ? "" : " or the run's stage dir"})`));

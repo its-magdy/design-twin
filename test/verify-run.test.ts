@@ -410,6 +410,97 @@ await block("verify-screen --status after an ended run:", async () => {
   safe("…a write for another run id still goes through", () => VR.writeStatus(base, { runId: "run-next", phase: "starting", by: "agent" }).rev === 1);
 });
 
+// a --status write of a named run (--run, or the inferred run in progress) never lands over ANOTHER run that has not ended
+console.log("verify-screen --status — never over another open run (without --new-run):");
+await block("verify-screen --status vs another open run:", async () => {
+  const { dir, base, live, cli } = project();
+  const absDir = path.resolve(dir); // passed as --dir: the printed commands name it as given
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999;
+  const own = (pid: number): VR.OwnRunStamp => ({ pid, host: os.hostname(), ...(PID_NS ? { ns: PID_NS } : {}), startedAt: "2026-10-15T08:00:00.000Z", deadline: "2999-01-01T00:00:00.000Z" });
+  // a probe printed the recovery for run-a; another probe took run-a over and run-b measures now
+  VR.writeStatus(base, { runId: "run-b", phase: "measuring", by: "verify-probe", ownRun: own(process.pid) }, { alone: true });
+  fs.writeFileSync(path.join(dir, "Plots.measured.json"), measuredFor(dir, { runId: "run-a" }));
+  const openDoc = fs.readFileSync(live, "utf8");
+  const late = cli("--status", "Plots", "--phase", "done", "--run", "run-a", "--dir", absDir);
+  safe("the recovery `--phase done --run run-a` run after run-b started → exit 2 'run run-a is not the current run of Plots: run run-b is open (…)' with how to wait for / end it; nothing written or published", () =>
+    late.status === 2 && late.stderr.includes("run run-a is not the current run of Plots: run run-b is open (phase measuring, rev 1, by verify-probe, ")
+      && late.stderr.includes(`nothing is written; wait for it (${scriptCmd("verify-screen")} --wait Plots --run run-b --dir ${shellArg(absDir)})`)
+      && late.stderr.trimEnd().endsWith(`end it (${scriptCmd("verify-screen")} --status Plots --phase failed --run run-b --dir ${shellArg(absDir)})`)
+      && fs.readFileSync(live, "utf8") === openDoc && !fs.existsSync(path.join(dir, "Plots.status.json")));
+  if (late.status !== 2) console.log(`    exit ${String(late.status)}: ${String(late.stderr).slice(0, 400)}`);
+  fs.rmSync(path.join(dir, "Plots.measured.json"));
+  const before = cli("--status", "Plots", "--phase", "done", "--run", "run-a");
+  safe("…said before the measured-file checks (no measured file: still exit 2, not 1)", () => before.status === 2 && /is not the current run/.test(before.stderr) && !/does not exist/.test(before.stderr));
+  // a verifier's open run V, then an end-it hint for an older run run late
+  VR.writeStatus(base, { runId: "run-b", phase: "failed", by: "verify-probe" });
+  VR.writeStatus(base, { runId: "run-v", phase: "driving", by: "agent" });
+  const vDoc = fs.readFileSync(live, "utf8");
+  const endLate = cli("--status", "Plots", "--phase", "failed", "--run", "run-old");
+  safe("an end-it hint (`--phase failed --run run-old`) run while a verifier's run-v is open → exit 2, run-v's status byte-identical", () =>
+    endLate.status === 2 && endLate.stderr.includes("run run-old is not the current run of Plots: run run-v is open (phase driving") && fs.readFileSync(live, "utf8") === vDoc);
+  const mine = cli("--status", "Plots", "--phase", "driving", "--run", "run-v", "--detail", "heartbeat");
+  safe("…the verifier's own --run writes go on in run-v: exit 0, rev 2", () => mine.status === 0 && mine.stdout.trim() === "run run-v rev 2");
+  const queued = cli("--status", "Plots", "--phase", "queued", "--new-run", "--by", "orchestrator");
+  safe("…--new-run still starts a run over it (the orchestrator's queued run): exit 0, rev 1", () => queued.status === 0 && /^run \S+ rev 1$/m.test(queued.stdout) && readStatusFile(live)?.phase === "queued");
+  const qId = readStatusFile(live)?.runId ?? "";
+  // an abandoned own run (its probe's pid is gone) is open too: only a probe's own run ends it as abandoned
+  VR.writeStatus(base, { runId: qId, phase: "failed", by: "orchestrator" });
+  VR.writeStatus(base, { runId: "run-dead", phase: "measuring", by: "verify-probe", ownRun: own(deadPid) });
+  const overDead = cli("--status", "Plots", "--phase", "driving", "--run", "run-x");
+  safe("another probe's own run left open by a probe that is gone → refused the same way (no abandoned exemption); it stays measuring", () =>
+    overDead.status === 2 && /run run-x is not the current run of Plots: run run-dead is open/.test(overDead.stderr) && readStatusFile(live)?.runId === "run-dead" && readStatusFile(live)?.phase === "measuring");
+  // an ended run, or no status: the measured-file recovery after its run's status ended still records
+  VR.writeStatus(base, { runId: "run-dead", phase: "failed", by: "agent" });
+  fs.writeFileSync(path.join(dir, "Plots.measured.json"), measuredFor(dir, { runId: "run-r" }));
+  const rec = cli("--status", "Plots", "--phase", "measured", "--run", "run-r");
+  safe("over another run that ended (failed) → the `--phase measured --run run-r` recovery is written: exit 0, rev 1", () => rec.status === 0 && rec.stdout.trim() === "run run-r rev 1");
+  safe("notCurrentRun: the one refusal — another v2 run not ended (abandoned included); never the run itself, an ended run, a v1 file or no status", () => {
+    const st = VR.readStatus(base);
+    const openSt = st !== null && st !== "v1" ? { ...st, phase: "measuring" as const, ownRun: own(deadPid) } : null;
+    return openSt !== null && VR.notCurrentRun(base, openSt, "run-other") instanceof VR.RunNotCurrent && VR.abandonedRun(openSt, "run-other") !== null
+      && VR.notCurrentRun(base, openSt, "run-r") === null && VR.notCurrentRun(base, { ...openSt, phase: "done" }, "run-other") === null
+      && VR.notCurrentRun(base, "v1", "run-other") === null && VR.notCurrentRun(base, null, "run-other") === null;
+  });
+
+  // another run starts between --status's own read and its write (a takeover of the run it continues): refused under the lock
+  const takeOver = (): void => { VR.writeStatus(base, { runId: "run-t", phase: "measuring", by: "verify-probe", ownRun: own(process.pid) }, { alone: true, abandoned: () => {} }); };
+  const race = (flags: VR.StatusFlags, start: () => void): { code: number; err: string; took: boolean } => {
+    const errs: string[] = [];
+    let took = false;
+    const rm = fs.rmSync;
+    // the cache write check's probe file is removed after statusRun's read, before writeStatus: take the run over there
+    Reflect.set(fs, "rmSync", (p: fs.PathLike, o?: fs.RmOptions): void => {
+      rm(p, o);
+      if (!took && path.basename(String(p)) === `.w-${process.pid}`) {
+        took = true;
+        start();
+      }
+    });
+    const logErr = console.error, logOut = console.log;
+    console.error = (...a: unknown[]): void => { errs.push(a.map(String).join(" ")); };
+    console.log = (): void => {};
+    let code: number;
+    try { code = VR.statusMain("Plots", { ...flags, dir }, "usage"); }
+    finally { Reflect.set(fs, "rmSync", rm); console.error = logErr; console.log = logOut; }
+    return { code, err: errs.join("\n"), took };
+  };
+  VR.writeStatus(base, { runId: "run-r", phase: "failed", by: "agent" });
+  VR.writeStatus(base, { runId: "run-c", phase: "measuring", by: "verify-probe", ownRun: own(deadPid) });
+  const inferred = race({ phase: "driving" }, takeOver);
+  const tDoc = readStatusFile(live);
+  safe("no --run: the run in progress (run-c) is taken over after --status read it → exit 2 'run run-c is not the current run of Plots: run run-t is open'; run-t's status untouched (rev 1, measuring)", () =>
+    inferred.took && inferred.code === 2 && inferred.err.includes("run run-c is not the current run of Plots: run run-t is open (phase measuring, rev 1, ")
+      && tDoc?.runId === "run-t" && tDoc.rev === 1 && tDoc.phase === "measuring");
+  if (inferred.code !== 2) console.log(`    exit ${inferred.code}: ${inferred.err.slice(0, 300)}`);
+  VR.writeStatus(base, { runId: "run-t", phase: "failed", by: "agent" });
+  VR.writeStatus(base, { runId: "run-n", phase: "driving", by: "agent" });
+  // an orchestrator queues a new run (--new-run) after this --status checked run-n
+  const named = race({ phase: "failed", run: "run-n" }, () => { VR.writeStatus(base, { runId: "run-q", phase: "queued", by: "orchestrator" }); });
+  safe("--run run-n: another run opens after --status checked → refused under the lock the same way (exit 2), run-q's status untouched", () =>
+    named.took && named.code === 2 && named.err.includes("run run-n is not the current run of Plots: run run-q is open (phase queued, rev 1, ")
+      && readStatusFile(live)?.runId === "run-q" && readStatusFile(live)?.phase === "queued");
+});
+
 // ---------------------------------------------------------------- one status writer at a time (<live status>.lock)
 console.log("writeStatus — locked; before/after hooks; a run that ended gets no files:");
 await block("writeStatus locked:", async () => {
@@ -622,7 +713,9 @@ await block("verify-screen --wait:", async () => {
   const mc = await moving;
   clearInterval(beat);
   safe("a status rewritten every ~0.3 s under --stall 0.5 → no stall for ~2 s (ends on --timeout, exit 5, never 'stalled')", () => mc === 5);
-  // a wait that sees the run finish while it polls — reading the LIVE file (nothing in design/verify changes)
+  // a wait that sees the run finish while it polls — reading the LIVE file (nothing in design/verify changes); the
+  // heartbeat run ends first (a --status --run write never lands over another open run)
+  VR.writeStatus(base, { runId: "run-m", phase: "failed", by: "agent", detail: "heartbeats over" });
   cli("--status", "Plots", "--phase", "driving", "--run", "run-e");
   fs.writeFileSync(path.join(dir, "Plots.measured.json"), measuredFor(dir));
   const stage = VR.stageDirOf(base, "run-e");
@@ -884,17 +977,32 @@ await block("writeStatus alone own run:", async () => {
   const finished = VR.writeStatus(base, { runId: "run-own", phase: "done", by: "verify-probe" }, { alone: true, continues: true, before: () => { ownFiles = true; return {}; } });
   safe("its own run past its deadline, still open under the lock (nobody took it over) → its late `done` goes through: files written, rev 2 done", () =>
     ownFiles && finished.runId === "run-own" && finished.phase === "done" && finished.rev === 2);
-  for (const phase of ["done", "failed"] as const) {
-    // A (alive, past its deadline) is late; B takes R1 over (ends it, starts R2) and finishes R2 `done`, published
-    VR.writeStatus(base, { runId: `r1-${phase}`, phase: "measuring", by: "verify-probe", ownRun: own(process.pid, os.hostname(), "2026-01-01T00:00:00.000Z") }, { alone: true });
-    VR.writeStatus(base, { runId: `r2-${phase}`, phase: "measuring", by: "verify-probe", ownRun: own(process.pid) }, { alone: true });
-    const r2done = VR.writeStatus(base, { runId: `r2-${phase}`, phase: "done", by: "verify-probe" }, { alone: true, continues: true, after: (d) => VR.publishStatus(base, d) });
+  for (const [i, phase] of (["done", "failed"] as const).entries()) {
+    // A (alive, past its deadline) is late; B takes R1 over (ends it, starts R2) and finishes R2 `done`, published —
+    // the ids are numbered per case (R2 ends done in both; `phase` is the late write's)
+    const r1 = `r1-late${i}`, r2 = `r2-taker${i}`;
+    VR.writeStatus(base, { runId: r1, phase: "measuring", by: "verify-probe", ownRun: own(process.pid, os.hostname(), "2026-01-01T00:00:00.000Z") }, { alone: true });
+    VR.writeStatus(base, { runId: r2, phase: "measuring", by: "verify-probe", ownRun: own(process.pid) }, { alone: true });
+    const r2done = VR.writeStatus(base, { runId: r2, phase: "done", by: "verify-probe" }, { alone: true, continues: true, after: (d) => VR.publishStatus(base, d) });
     const liveBefore = fs.readFileSync(live, "utf8"), pubBefore = fs.readFileSync(VR.statusFile(base), "utf8");
     let lateFiles = false;
-    const late = ((): unknown => { try { VR.writeStatus(base, { runId: `r1-${phase}`, phase, by: "verify-probe" }, { alone: true, continues: true, before: () => { lateFiles = true; return {}; } }); return null; } catch (e) { return e; } })();
-    safe(`…its run was taken over and the replacement ended done → its late \`${phase}\` is refused (RunReplaced 'replaced by run r2-${phase} (done)'), \`before\` never runs, the live and published status stay the replacement's`, () =>
-      r2done.phase === "done" && late instanceof VR.RunReplaced && late.message === `run r1-${phase} was replaced by run r2-${phase} (done) while this probe ran — nothing more is written in it`
+    const late = ((): unknown => { try { VR.writeStatus(base, { runId: r1, phase, by: "verify-probe" }, { alone: true, continues: true, before: () => { lateFiles = true; return {}; } }); return null; } catch (e) { return e; } })();
+    safe(`…its run was taken over and the replacement ended done → its late \`${phase}\` is refused (RunReplaced 'replaced by run ${r2} (done)'), \`before\` never runs, the live and published status stay the replacement's`, () =>
+      r2done.phase === "done" && late instanceof VR.RunReplaced && late.message === `run ${r1} was replaced by run ${r2} (done) while this probe ran — nothing more is written in it`
         && !lateFiles && fs.readFileSync(live, "utf8") === liveBefore && fs.readFileSync(VR.statusFile(base), "utf8") === pubBefore);
+  }
+  {
+    // the replacement is still OPEN and itself abandoned (its probe's pid is gone, still measuring): the late write is
+    // refused as replaced — never taken for the next own run that ends the replacement and records the late run over it
+    VR.writeStatus(base, { runId: "r1-late-open", phase: "measuring", by: "verify-probe", ownRun: own(process.pid, os.hostname(), "2026-01-01T00:00:00.000Z") }, { alone: true });
+    VR.writeStatus(base, { runId: "r2-gone", phase: "measuring", by: "verify-probe", ownRun: own(deadPid) }, { alone: true, abandoned: () => {} });
+    const openBefore = fs.readFileSync(live, "utf8");
+    let lateFiles = false, endedIt = false;
+    const late = ((): unknown => { try { VR.writeStatus(base, { runId: "r1-late-open", phase: "done", by: "verify-probe" }, { alone: true, continues: true, abandoned: () => { endedIt = true; }, before: () => { lateFiles = true; return {}; } }); return null; } catch (e) { return e; } })();
+    safe("…its run was taken over and the replacement is still open but abandoned (pid gone) → its late `done` is refused (RunReplaced 'replaced by run r2-gone (measuring)'): the replacement is not ended, `before` never runs, the status byte-identical", () =>
+      VR.abandonedRun(VR.readStatus(base), "r1-late-open") !== null && late instanceof VR.RunReplaced && late.message === "run r1-late-open was replaced by run r2-gone (measuring) while this probe ran — nothing more is written in it"
+        && !endedIt && !lateFiles && fs.readFileSync(live, "utf8") === openBefore);
+    VR.writeStatus(base, { runId: "r2-gone", phase: "failed", by: "verify-probe" });
   }
   safe("…the same late write without `continues` (its `measuring` was never recorded) is not refused for another run's status", () =>
     VR.writeStatus(base, { runId: "r1-lone", phase: "measuring", by: "verify-probe" }, { alone: true }).rev === 1);
