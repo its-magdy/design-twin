@@ -1234,10 +1234,11 @@ await block("an unwritable run cache (M-a):", async () => {
   safe("verify-probe --run with a read-only run cache → still exit 3 (no renderer), a 'warning  run cache … is not writable' line, no stack", () =>
     p.status === 3 && /warning {2}run cache \S+ is not writable \(sandbox write scope\?\)/.test(p.stderr) && !/\n\s+at /.test(p.stderr));
   // the failed attempt could not be counted: the run would sit at its last phase, so the probe says how to end it
-  safe("…the attempt is not counted, and a 'status run run-w not counted — …' line says to re-run once after the user's fix, then end the run with verify-screen --status … --phase failed",
+  safe("…the attempt is not counted, and a 'status run run-w not counted — …' line says a verify-screen --status write would be refused the same way, so re-run once the cache takes writes — no command to run now",
     () => p.stderr.includes("status run run-w not counted — this failed attempt (exit 3) is not in the run's status (the run cache refused the write). " +
-      "Ask the user to make a renderer available, then re-run the probe once in this run (--run run-w); if that attempt fails too, whatever its own line says, end the run: ")
-      && /verify-screen\S* --status Plots --phase failed --run run-w --detail "probe exit 3 twice" --dir \S+/.test(p.stderr));
+      "Until the run cache takes writes (the warning above says how), no status write of this run is recorded — a verify-screen --status write that ends it would be refused the same way. " +
+      "Ask the user to make a renderer available, then re-run the probe once in this run (--run run-w) once it does;")
+      && !/--status Plots --phase failed --run run-w --detail/.test(p.stderr));
 });
 
 // ---------------------------------------------------------------- M-b: one key per directory, whatever its spelling

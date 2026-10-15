@@ -204,7 +204,11 @@ console.log("verify docs (run integrity + agent safety):");
     && /after an exit 3 \(no renderer\) ask the user first, and re-run it once in this run after they fix the renderer/.test(verifyRef)
     && /with --run, re-run once in the run after they/.test(flat(read("design-to-code/verify-probe.ts")))
     && /A run id is one pass: a probe that succeeds in between does not reset the count/.test(verifyRef)
-    && /`status run <id> not counted — …` with the command that ends the run/.test(verifyRef) && /--phase failed --run <id>` command/.test(verifyRef));
+    && /`status run <id> not counted — …` with the command that ends the run/.test(verifyRef) && /--phase failed --run <id>` command/.test(verifyRef)
+    && /A run cache that is not writable refuses that command the same way, so then the line prints none/.test(flat(verifyRef)));
+  check("while the user answers an exit 3 the run stays open: it resumes with the same --run id, and an orchestrator's --wait may end `stalled` meanwhile — wait again with that id (verifier, verify skill, run protocol)",
+    ["claude-plugin/agents/visual-verifier.md", "claude-plugin/skills/verify/SKILL.md", "claude-plugin/skills/verify/references/run-protocol.md"].map((f) => read(f))
+      .every((t) => /stays open\s+at `measuring`/.test(flat(t)) && /never `--new-run`/.test(flat(t)) && /exit 5 `stalled`/.test(flat(t)) && /`--wait` again with the same/.test(flat(t))));
   check("nodeId and trigger are copied VERBATIM from the expectation row; a pair that matches no row is reported", /VERBATIM from the\s+expectation row/.test(verifier) && /VERBATIM from the expectation row/.test(verifySkill) && /matched no designed interaction/.test(verifier + verifySkill));
   check("each interaction records outcome (url-changed | dialog-opened | selector-appeared | state-changed | none) and navEvents; a pass needs exactly one match, an allowed outcome, no unexpected navigation; else not-probed; the example carries both fields",
     [verifier, verifySkill].every((t) => /`url-changed`.{0,20}`dialog-opened`.{0,20}`selector-appeared`.{0,20}`state-changed`.{0,20}`none`/.test(t) && /navEvents/.test(t) && /ONE (matched )?(element|match)/.test(t) && /not-probed/.test(t))
@@ -416,7 +420,8 @@ console.log("build-screen docs (same-URL documents + load wait):");
     && /\[--steps design\/plan\/<screen>\.json\]/.test(skill) && /`--ready` defaults to `\[data-dt-node="<frame id>"\]`/.test(skill)
     && ![verifier, verifySkill, verifyRef, skill].some((t) => /always pass `--ready|--ready '\[data-dt-node/.test(t)));
   check("the screen root carries its frame id (build-screen); an untagged root on a page that shows at least half of the screen's other tags is measured with a note (fewer: exit 4), and a tagging-off plan has no default — pass --ready <root selector> or --ready none (verifier, verify skill, build-screen)",
-    /\*\*The screen root carries its frame id\*\*/.test(skill) && /finds the root by size and\s+fill, and says so in a note/.test(skill) && /verify then passes `--ready <root selector>`, or `--ready none`/.test(skill)
+    /\*\*The screen root carries its frame id\*\*/.test(skill) && /finds the root by the frame's size and a\s+fill \(else the viewport stands in for it\), and says how in a note/.test(skill)
+    && /is another screen's root: both exit 4\. Later loads of the run wait for the same/.test(flat(skill)) && /verify then passes `--ready <root selector>`, or `--ready none`/.test(skill)
     && [verifier, verifySkill].every((t) => /the screen root is not tagged/.test(t) && /"tagging": \{"off": true, …\}/.test(t) && /`--ready <root selector>`/.test(t))
     && /a page that shows fewer than half of the expectation's own tags, is exit 4 naming the default and the count — a redirect after load \(a login page, another origin\) included, never "kept navigating"/.test(verifySkill));
 }

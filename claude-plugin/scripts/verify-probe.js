@@ -716,15 +716,48 @@ function focusablePath(path10) {
   parts.unshift("html");
   return parts.join(" > ");
 }
-function countVisibleTags(ids) {
-  const want = new Set(ids), shown = /* @__PURE__ */ new Set();
+function screenTags(a) {
+  const want = new Set(a.ids), known = new Set(a.known);
+  const visible = (el) => {
+    const st = getComputedStyle(el);
+    if (st.getPropertyValue("display") === "contents") {
+      for (const c of Array.from(el.children)) if (visible(c)) return true;
+      for (const n of Array.from(el.childNodes)) {
+        if (n.nodeType !== 3) continue;
+        const range = document.createRange();
+        range.selectNodeContents(n);
+        const r2 = range.getBoundingClientRect();
+        if (r2.width > 0 && r2.height > 0) return true;
+      }
+      return false;
+    }
+    if (typeof el.checkVisibility === "function" && !el.checkVisibility()) return false;
+    if (st.getPropertyValue("visibility") !== "visible") return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const own = /* @__PURE__ */ new Map(), foreign = [];
   for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
     const id = el.getAttribute("data-dt-node");
-    if (id === null || !want.has(id) || shown.has(id)) continue;
-    const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0 && getComputedStyle(el).getPropertyValue("visibility") !== "hidden") shown.add(id);
+    if (id === null) continue;
+    const mine = want.has(id);
+    if (!mine && known.has(id)) continue;
+    if (!visible(el)) continue;
+    if (mine) {
+      const l = own.get(id);
+      if (l) l.push(el);
+      else own.set(id, [el]);
+    } else foreign.push({ id, el });
   }
-  return shown.size;
+  const shown = own.size;
+  for (const { id, el } of foreign) {
+    const r = el.getBoundingClientRect();
+    if (a.frame !== null && Math.abs(r.width - a.frame.w) <= 2 && Math.abs(r.height - a.frame.h) <= 2) return { shown, foreign: { id, by: "size", encloses: 0 } };
+    let encloses = 0;
+    for (const els of own.values()) if (els.some((o) => o !== el && el.contains(o))) encloses++;
+    if (shown > 0 && encloses * 2 > shown) return { shown, foreign: { id, by: "encloses", encloses } };
+  }
+  return { shown, foreign: null };
 }
 function focusInfo(path10) {
   const el = document.querySelector(path10);
@@ -6437,6 +6470,12 @@ var gone = (e) => new BrowserGoneError(`the page or browser closed or crashed du
 var KeptNavigatingError = class extends Error {
 };
 var UnreachableError = class extends Error {
+  /** the default --ready missed on a page that shows another screen's tagged root (its exit-4 hint is foreignRootHint) */
+  foreign;
+  constructor(m, foreign = null) {
+    super(m);
+    this.foreign = foreign;
+  }
 };
 var docUrl = (u) => {
   const i = u.indexOf("#");
@@ -6457,13 +6496,37 @@ async function docTokenOrNull(page) {
 }
 var visibleOnly = (sel) => `${sel} >> visible=true`;
 var takesForScreen = (shown, total) => total > 0 && shown * 2 >= total;
-async function tagsShown(page, ids) {
+var screenTagsMet = (s, total) => takesForScreen(s.shown, total) && s.foreign === null;
+async function screenTagsNow(page, root) {
   try {
-    return await page.evaluate(countVisibleTags, ids);
+    return await page.evaluate(screenTags, { ids: root.ids, known: root.known, frame: root.frame });
   } catch (e) {
     if (errorKind(e, page) === "gone") throw gone(e);
-    return 0;
+    return { shown: 0, foreign: null };
   }
+}
+var WaitTimeoutError = class extends Error {
+  constructor(what, ms) {
+    super(`${what}: Timeout ${ms}ms exceeded.`);
+    this.name = "TimeoutError";
+  }
+};
+async function waitForScreenTags(page, root, timeout) {
+  const end = Date.now() + timeout;
+  for (; ; ) {
+    if (screenTagsMet(await screenTagsNow(page, root), root.ids.length)) return;
+    const left = end - Date.now();
+    if (left <= 0) throw new WaitTimeoutError("waiting for at least half of the expectation's own tags", timeout);
+    await sleep5(Math.min(POLL_MS3, left));
+  }
+}
+var refusingRoot = (s, total) => takesForScreen(s.shown, total) ? s.foreign : null;
+function screenTagsWhy(s, total) {
+  const f = refusingRoot(s, total);
+  if (f !== null) {
+    return ` (another screen's tagged root is on the page: a visible element tagged data-dt-node="${f.id}", an id this expectation does not name, ${f.by === "size" ? "has the frame's size (\xB12 px)" : `encloses ${f.encloses} of the ${s.shown} own tags the page shows`})`;
+  }
+  return ` (the page shows ${s.shown} of the expectation's ${total} own tags \u2014 fewer than half)`;
 }
 function settleMiss(s) {
   if (s.readyWait && !s.navigated && s.sameDocument) return "unreachable";
@@ -6510,6 +6573,7 @@ async function settle(page, log, ready, timeout, root) {
   };
   for (; ; ) {
     let readyWait = false;
+    let readyMs = timeout;
     try {
       const known = token !== null && token !== "" ? log.loadTimedOut.get(token) : void 0;
       const state = await page.evaluate("document.readyState");
@@ -6535,7 +6599,9 @@ async function settle(page, log, ready, timeout, root) {
       await page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
       if (ready) {
         readyWait = true;
-        await page.locator(visibleOnly(root?.seen ? root.tags : ready)).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, docDeadline - Date.now()) : timeout });
+        readyMs = moved() ? Math.max(1, docDeadline - Date.now()) : timeout;
+        if (root?.seen === true) await waitForScreenTags(page, root, readyMs);
+        else await page.locator(visibleOnly(ready)).first().waitFor({ state: "visible", timeout: readyMs });
       }
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
@@ -6553,11 +6619,12 @@ async function settle(page, log, ready, timeout, root) {
         continue;
       }
       if (next === "kept") throw kept();
-      const shown = readyWait && root !== void 0 && !root.seen ? await tagsShown(page, root.ids) : null;
-      if (root === void 0 || shown === null || !takesForScreen(shown, root.ids.length)) {
-        const why = !readyWait || root === void 0 ? "" : shown === null ? " (nor any of the expectation's own tags)" : ` (the page shows ${shown} of the expectation's ${root.ids.length} own tags \u2014 fewer than half)`;
-        throw new UnreachableError(ready ? `--ready '${ready}' never became visible${why}: ${firstLine(e)}` : firstLine(e));
+      const look = readyWait && root !== void 0 && pwErrorKind(e) === "timeout" ? await screenTagsNow(page, root) : null;
+      if (root === void 0 || look === null || !screenTagsMet(look, root.ids.length)) {
+        const why = look === null || root === void 0 ? "" : screenTagsWhy(look, root.ids.length);
+        throw new UnreachableError(ready ? `--ready '${ready}' never became visible${why}: ${firstLine(e)}` : firstLine(e), look !== null && root !== void 0 ? refusingRoot(look, root.ids.length) : null);
       }
+      if (!root.seen) root.waitedMs = readyMs;
       root.seen = true;
       docDeadline = Date.now() + cap;
     }
@@ -7126,7 +7193,8 @@ var USAGE = `usage:
       --ready: after every page load (and the steps) the probe waits for this selector to be visible before measuring \u2014
       by default the frame's tag [data-dt-node="<frame id>"] (expectation.frame.nodeId), so a page that is not the screen
       (a login redirect, another section) is an exit 4, never measured \u2014 unless it shows at least half of the expectation's own
-      tags: then the root is untagged and the page is measured, with a note; --ready none waits for nothing. With no frame
+      tags and no other screen's tagged root: then the root is untagged and the page is measured, with a note (later loads
+      wait for the same); --ready none waits for nothing. With no frame
       id in the expectation, or a --steps plan with tagging.off, there is no default (a note says so). Not visible within
       --timeout \u2192 exit 4.
       --steps: a JSON list of steps (or a plan whose \`navigate\` holds them; a plan with none is no steps \u2014 a note says so)
@@ -7187,7 +7255,12 @@ function probeAttemptLine(doc, exit) {
 }
 function probeAttemptUncounted(o) {
   const why = o.by === "lost" ? "another writer took over the status lock while the probe held it" : o.by === "busy" ? "another status write held the status lock for the whole wait" : "the run cache refused the write";
-  return `status run ${o.runId} not counted \u2014 this failed attempt (exit ${o.exit}) is not in the run's status (${why}). ${o.exit === 3 ? "Ask the user to make a renderer available, then re-run" : "Re-run"} the probe once in this run (--run ${o.runId}); if that attempt fails too, whatever its own line says, end the run: ${scriptCmd("verify-screen")} --status ${shellArg(o.screen)} --phase failed --run ${o.runId} --detail ${shellArg(`probe exit ${o.exit} twice`)} --dir ${shellArg(o.verifyDir)}`;
+  const rerun = `${o.exit === 3 ? "Ask the user to make a renderer available, then re-run" : "Re-run"} the probe once in this run (--run ${o.runId})`;
+  const head = `status run ${o.runId} not counted \u2014 this failed attempt (exit ${o.exit}) is not in the run's status (${why}). `;
+  if (o.by === "cache") {
+    return head + `Until the run cache takes writes (the warning above says how), no status write of this run is recorded \u2014 a verify-screen --status write that ends it would be refused the same way. ${rerun} once it does; if that attempt fails too, end the run failed (verify-screen --status \u2026 --phase failed --run ${o.runId}) whatever its own line says`;
+  }
+  return head + `${rerun}; if that attempt fails too, whatever its own line says, end the run: ${scriptCmd("verify-screen")} --status ${shellArg(o.screen)} --phase failed --run ${o.runId} --detail ${shellArg(`probe exit ${o.exit} twice`)} --dir ${shellArg(o.verifyDir)}`;
 }
 var READY_NONE = "none";
 function readyOf(flag, frameId, taggingOff = false) {
@@ -7205,18 +7278,30 @@ function planTaggingOff(doc) {
 }
 function ownTagsOf(exp, frameId) {
   const hidden = new Set(exp.hidden && exp.hidden.ids || []);
-  const ids = /* @__PURE__ */ new Set();
-  for (const s of exp.nodes || []) if (!hidden.has(s.nodeId)) ids.add(s.nodeId);
-  for (const i of exp.instances || []) if (!hidden.has(i.nodeId)) ids.add(i.nodeId);
-  for (const fr of exp.frames || []) if (typeof fr.nodeId === "string") ids.add(fr.nodeId);
+  const ids = /* @__PURE__ */ new Set(), others = /* @__PURE__ */ new Set(), known = /* @__PURE__ */ new Set([frameId, ...hidden]);
+  for (const s of exp.nodes || []) {
+    known.add(s.nodeId);
+    if (s.frameId !== void 0 && s.frameId !== frameId) others.add(s.nodeId);
+    else if (!hidden.has(s.nodeId)) ids.add(s.nodeId);
+  }
+  for (const i of exp.instances || []) {
+    known.add(i.nodeId);
+    if (!hidden.has(i.nodeId) && !others.has(i.nodeId)) ids.add(i.nodeId);
+  }
+  for (const fr of exp.frames || []) if (typeof fr.nodeId === "string") known.add(fr.nodeId);
   ids.delete(frameId);
-  return ids.size ? { ids: [...ids], tags: [...ids].map(attrSelector).join(", ") } : null;
+  const w = exp.frame?.w, h = exp.frame?.h;
+  return ids.size ? { ids: [...ids], known: [...known], frame: typeof w === "number" && typeof h === "number" ? { w, h } : null } : null;
 }
-function untaggedRootNote(ready, timeout) {
-  return `the screen root is not tagged: ${ready} (the default --ready) never showed within ${Math.round(timeout / 1e3)}s, but the page shows at least half of the expectation's own tags, so it was measured as the screen and its root found as an untagged one (size and fill) \u2014 tag the root ${ready.slice(1, -1)}, or pass --ready <root selector>`;
+var untaggedRootFound = (via) => via === "size-and-fill" ? "its root found as the outermost element with the frame's size (\xB12 px) and a fill" : via === "viewport" ? "no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)" : via === "tag" ? "its root found by its tag after all (the tag showed after the wait)" : "its root not found";
+function untaggedRootNote(ready, waitedMs, via) {
+  return `the screen root is not tagged: ${ready} (the default --ready) never showed within ${Math.round(waitedMs / 100) / 10}s, but the page shows at least half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, ${untaggedRootFound(via)} \u2014 tag the root ${ready.slice(1, -1)}, or pass --ready <root selector>`;
 }
 function defaultReadyMissed(ready, withSteps) {
-  return `${ready} is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen: the page the probe reached is not the screen \u2014 a redirect (a login page, another origin) or another section (${withSteps ? "the --steps ended somewhere else: check the plan's navigate list" : "a screen that is a section of the app is reached with --steps <plan.json>"}) \u2014 or nothing on it is tagged (a tagging opt-out: pass --ready <root selector>, or --ready none to wait for nothing)`;
+  return `${ready} is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen: the page the probe reached is not the screen \u2014 a redirect (a login page, another origin) or another section (${withSteps ? "the --steps ended somewhere else: check the plan's navigate list" : "a screen that is a section of the app is reached with --steps <plan.json>"}) \u2014 or nothing on it is tagged (a tagging opt-out: pass --ready <root selector>, or --ready none to wait for nothing) \u2014 or the root is untagged and most of its tags are not visible at load: tag the root ${ready.slice(1, -1)} or pass --ready <root selector>`;
+}
+function foreignRootHint(ready, f, withSteps) {
+  return `${ready} is the default --ready (the frame's tag), and the page shows another screen's tagged root (data-dt-node="${f.id}" ${f.by === "size" ? "has this frame's size" : "encloses most of this screen's visible tags"}): the probe reached another screen \u2014 check ${withSteps ? "the --steps plan's navigate list" : "the --url, or reach the screen with --steps <plan.json>"}; if that element is a wrapper of this screen tagged with another id, tag this screen's root ${ready.slice(1, -1)} or pass --ready <root selector>`;
 }
 var STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 async function main(argv) {
@@ -7514,8 +7599,9 @@ ${USAGE}`);
       await browser.close().catch(() => void 0);
       if (e instanceof UnreachableError) {
         const byDefault = f.ready === void 0 && ready !== void 0 && e.message.startsWith(`--ready '${ready}'`);
-        console.error(`verify-probe: ${e.message} \u2014 nothing written.` + (byDefault ? `
-  ${defaultReadyMissed(ready, steps.length > 0)}` : ""));
+        const hint = !byDefault ? "" : e.foreign !== null ? foreignRootHint(ready, e.foreign, steps.length > 0) : defaultReadyMissed(ready, steps.length > 0);
+        console.error(`verify-probe: ${e.message} \u2014 nothing written.` + (hint ? `
+  ${hint}` : ""));
         return 4;
       }
       if (pwErrorKind(e) === "gone") {
@@ -7528,7 +7614,7 @@ ${USAGE}`);
       }
       throw e;
     }
-    if (untaggedRoot?.seen === true && ready !== void 0) notes.push(untaggedRootNote(ready, timeout));
+    if (untaggedRoot?.seen === true && ready !== void 0) notes.push(untaggedRootNote(ready, untaggedRoot.waitedMs ?? timeout, run2.kind === "ok" ? run2.result.frames[0]?.via : void 0));
     let driven2 = null, driveNote2 = null;
     let wedged = false;
     const rows = run2.kind === "ok" ? drivable(expectation) : [];
@@ -7795,6 +7881,7 @@ export {
   defaultReadyMissed,
   driveOutcome,
   errorKind,
+  foreignRootHint,
   foreignTags,
   installHint,
   isNavigationAway,
@@ -7810,9 +7897,12 @@ export {
   probeAttemptUncounted,
   projectRequire,
   readyOf,
+  refusingRoot,
   resolveAxe,
   resolvePlaywright,
   runProbe,
+  screenTagsMet,
+  screenTagsWhy,
   settleMiss,
   statusRefusalOf,
   takesForScreen,

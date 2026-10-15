@@ -654,17 +654,54 @@ export function focusablePath(path: string): string | null {
   parts.unshift("html");
   return parts.join(" > ");
 }
-/** How many of `ids` tag at least one visible element — a box with a size and no visibility:hidden, as Playwright reads
- *  visible. SELF-CONTAINED. */
-export function countVisibleTags(ids: string[]): number {
-  const want = new Set(ids), shown = new Set<string>();
+/** What screenTags reads: `ids` — the expectation's own node ids (its first root's, the frame's own excepted); `known` —
+ *  every id the expectation names (any root, hidden ones, the frames); `frame` — the frame's size, when it states one. */
+export interface ScreenTagsInput { ids: string[]; known: string[]; frame: { w: number; h: number } | null }
+/** A visible element tagged with an id the expectation does not name that looks like another screen's root: it has the
+ *  frame's size (±2 px), or it encloses most of the visible own tags (`encloses` of them). */
+export interface ForeignRoot { id: string; by: "size" | "encloses"; encloses: number }
+export interface ScreenTags { shown: number; foreign: ForeignRoot | null }
+/** How far a page whose frame tag is missing looks like the screen: how many of `ids` tag at least one visible element,
+ *  and another screen's tagged root on it, if any (ForeignRoot). Visible as Playwright reads it: a display:contents
+ *  element by its children (a visible child element or a text node with a box), any other one by checkVisibility(),
+ *  visibility "visible" and a box with a size. SELF-CONTAINED. */
+export function screenTags(a: ScreenTagsInput): ScreenTags {
+  const want = new Set(a.ids), known = new Set(a.known);
+  const visible = (el: PageElement): boolean => {
+    const st = getComputedStyle(el);
+    if (st.getPropertyValue("display") === "contents") {
+      for (const c of Array.from(el.children)) if (visible(c)) return true;
+      for (const n of Array.from(el.childNodes)) {
+        if (n.nodeType !== 3) continue;
+        const range = document.createRange(); range.selectNodeContents(n);
+        const r = range.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return true;
+      }
+      return false;
+    }
+    if (typeof el.checkVisibility === "function" && !el.checkVisibility()) return false;
+    if (st.getPropertyValue("visibility") !== "visible") return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const own = new Map<string, PageElement[]>(), foreign: Array<{ id: string; el: PageElement }> = [];
   for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
     const id = el.getAttribute("data-dt-node");
-    if (id === null || !want.has(id) || shown.has(id)) continue;
-    const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0 && getComputedStyle(el).getPropertyValue("visibility") !== "hidden") shown.add(id);
+    if (id === null) continue;
+    const mine = want.has(id);
+    if (!mine && known.has(id)) continue;
+    if (!visible(el)) continue;
+    if (mine) { const l = own.get(id); if (l) l.push(el); else own.set(id, [el]); } else foreign.push({ id, el });
   }
-  return shown.size;
+  const shown = own.size;
+  for (const { id, el } of foreign) {
+    const r = el.getBoundingClientRect();
+    if (a.frame !== null && Math.abs(r.width - a.frame.w) <= 2 && Math.abs(r.height - a.frame.h) <= 2) return { shown, foreign: { id, by: "size", encloses: 0 } };
+    let encloses = 0;
+    for (const els of own.values()) if (els.some((o) => o !== el && el.contains(o))) encloses++;
+    if (shown > 0 && encloses * 2 > shown) return { shown, foreign: { id, by: "encloses", encloses } };
+  }
+  return { shown, foreign: null };
 }
 /** Whether the element at `path` has focus, and whether it matches :focus-visible. SELF-CONTAINED. */
 export function focusInfo(path: string): { focused: boolean; focusVisible: boolean } {

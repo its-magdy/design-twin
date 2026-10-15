@@ -28,7 +28,7 @@ Most false diffs come from the render, not the code:
 **On web the shipped probe does all of this** (`<scripts>/verify-probe.js`): it waits for `document.fonts.ready`,
 emulates reduced motion and switches animations/transitions off, waits for `--ready` — by default the screen root's
 tag `[data-dt-node="<frame id>"]`, so a page that is not the screen is exit 4, never measured (`--ready none` waits
-for nothing; an untagged root on a page that shows at least half of the screen's other tags is measured with a note, and a plan with
+for nothing; an untagged root on a page that shows at least half of the screen root's other tags, and no other screen's tagged root, is measured with a note, and a plan with
 `tagging.off` has no default — `measurable.md`) — then requires a quiet window (no navigation, no DOM churn) before measuring, and detects reloads (one re-run,
 then exit 4 with nothing written). It does not use `networkidle` — Playwright's docs discourage it, and a
 page with polling or a dev-server socket never reaches it. Do not re-implement any of this by hand.

@@ -114,11 +114,13 @@ const url = (mode?: string): string => `http://127.0.0.1:${port}/staff-directory
 // runs the behaviour checks); the probe takes it only with the test-only env var
 const behaviourOff = (args: string[]): string[] => (args.includes("--check") || args.includes("--behaviour") ? args : [...args, "--behaviour", "off"]);
 // The staff-directory pages leave the frame root untagged (the probe finds it by size and fill), so the frame tag the
-// probe waits for by default never shows there: those runs pass --ready none. The shell-rings and loom pages tag their
-// root and keep the default, as does the run that checks the default on a redirect.
-const TAGGED_ROOT = /\/(shell-rings|loom-queue-owner-hover)\.html$|\/session-bounce$/;
+// probe waits for by default never shows there: those runs pass --ready none, so they do not wait out --timeout first.
+// The shell-rings and loom pages tag their root and keep the default, as do the run that checks the default on a
+// redirect and the staff-directory vite-mode run, which checks the untagged-root way out (12 of the expectation's 24
+// own tags show at load — at least half).
+const DEFAULT_READY = /\/(shell-rings|loom-queue-owner-hover)\.html$|\/session-bounce$|\/staff-directory\.html\?mode=vite$/;
 const readyNone = (args: string[]): string[] =>
-  args.includes("--check") || args.includes("--ready") || TAGGED_ROOT.test(args[args.indexOf("--url") + 1] ?? "") ? args : [...args, "--ready", "none"];
+  args.includes("--check") || args.includes("--ready") || DEFAULT_READY.test(args[args.indexOf("--url") + 1] ?? "") ? args : [...args, "--ready", "none"];
 const probe = (args: string[]): Promise<Run> => runNode(tmp, BUNDLE, readyNone(behaviourOff(args)), 0, { ...process.env, [BEHAVIOUR_OFF_ENV]: "1" });
 // (a probe without --run keeps its run's status in the run cache of the expectation's dir — tmp has no package.json, so
 // that is <os tmpdir>/designtwin-verify/<key>/: removed with tmp)
@@ -454,9 +456,15 @@ check("measured.build: the url, mode static, same-origin assets hashed (document
 check("the same build served again → the same assetsSha256", m8?.build?.assetsSha256 !== undefined && m8.build.assetsSha256 === bd?.assetsSha256);
 fs.writeFileSync(path.join(tmp, "asset.js"), "window.__plotsBuild = 2;\n");
 const b9 = path.join(tmp, "run9", "Staff");
-const r9 = await probe(["--expected", expected, "--url", url("vite"), "--out", b9, "--project", ROOT]);
+// (the default --ready: the untagged root's way out, after a 3 s wait for the frame's tag)
+const r9 = await probe(["--expected", expected, "--url", url("vite"), "--out", b9, "--project", ROOT, "--timeout", "3000"]);
 const m9 = read(b9);
+if (r9.status !== 0) console.log(r9.stderr);
 check("the fixture's JS changed → a different assetsSha256; /@vite/client served → mode vite-dev", r9.status === 0 && m9?.build !== undefined && m9.build.assetsSha256 !== bd?.assetsSha256 && m9.build.mode === "vite-dev");
+check("[ready] the default --ready on the untagged staff-directory root (12 of 24 own tags visible) → measured, the root by size and fill, with the untagged-root note naming the 3 s wait and how the root was found",
+  m9?.frame?.via === "size-and-fill" && (m9.notes || []).includes("the screen root is not tagged: [data-dt-node=\"50:1\"] (the default --ready) never showed within 3s, but the page shows " +
+    "at least half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, its root found as the outermost element with the frame's size (±2 px) " +
+    "and a fill — tag the root data-dt-node=\"50:1\", or pass --ready <root selector>"));
 
 // ---- a shared shell tagged with another screen's ids, foreign tags, display, rings
 // (the expectation is written here: its `aliases` are what --expect derives from sibling exports of the same file)

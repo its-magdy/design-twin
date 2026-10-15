@@ -26,9 +26,12 @@ measurement aid, never component identity — that is the plan's `components[]` 
 probe waits for that tag after every load (its default `--ready`), so a page that is not the screen — a login bounce,
 another section — is never measured. A root that cannot carry it (a shell shared by several screens keeps ONE
 frame's ids, a layout component the screen does not own) still measures: when the frame's tag never shows but at
-least half of the screen's other tags do, the probe measures the page as the screen after its `--timeout`, finds the
-root by size and fill, and says so in a note (fewer is another section that shares the shell: exit 4) — so tag a
-wrapper the screen owns with the frame id where you can. A project that
+least half of the screen root's other tags do, the probe measures the page as the screen once the wait for the tag
+runs out (its `--timeout`, or what is left of a navigation's 10 s window), finds the root by the frame's size and a
+fill (else the viewport stands in for it), and says how in a note. Fewer is another section that shares the shell, and
+an element tagged with an id the expectation does not name that has the frame's size, or encloses most of those tags,
+is another screen's root: both exit 4. Later loads of the run wait for the same — so tag a wrapper the screen owns
+with the frame id where you can. A project that
 cannot tag at all (the opt-out below) has no tag to wait for: verify then passes `--ready <root selector>`, or
 `--ready none`.
 
