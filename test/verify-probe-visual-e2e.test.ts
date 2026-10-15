@@ -19,7 +19,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
-import { LAUNCH_ARGS } from "../design-to-code/verify-probe.ts";
+import { BEHAVIOUR_OFF_ENV, LAUNCH_ARGS } from "../design-to-code/verify-probe.ts";
 import { decodePng, encodePng, pngInfo, resampleBox } from "../bridge/src/png.ts";
 import type { MeasuredVisual, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
@@ -133,8 +133,9 @@ for (const pkg of ["playwright", "playwright-core"]) {
   const from = path.join(ROOT, "node_modules", pkg);
   if (fs.existsSync(from)) fs.symlinkSync(from, path.join(monoApp, "node_modules", pkg), "dir");
 }
-
-const probe = (proj: string, args: string[]): Promise<Run> => runNode(proj, PROBE, [...args, "--project", proj]);
+// --behaviour off is taken only with the test-only env var
+const OFF_ENV: NodeJS.ProcessEnv = { ...process.env, [BEHAVIOUR_OFF_ENV]: "1" };
+const probe = (proj: string, args: string[]): Promise<Run> => runNode(proj, PROBE, [...args, "--project", proj], 0, OFF_ENV);
 const vs = (proj: string, args: string[]): Promise<Run> => runNode(proj, VS, args);
 const out = (name: string): string => path.join("design", "verify", name);
 const read = (proj: string, base: string): VerifyMeasured | null => readJsonOrNull(path.join(proj, base + ".measured.json"), isVerifyMeasured);
@@ -183,8 +184,8 @@ const P = {
   e8: q(() => probe(pMain, ["--expected", EXP, "--url", url(), "--out", out("Short"), "--max-time", "15000", ...OFF])),
   e9: q(() => probe(pMain, ["--expected", EXP, "--url", url("tall"), "--out", out("Tall"), ...OFF])),
   e10: q(() => probe(pMain, ["--expected", out("Ledger") + ".expected.json", "--url", url("long"), "--out", out("Ledger"), ...OFF])),
-  e11: q(() => runNode(pMain, PROBE, ["--expected", out("Null") + ".expected.json", "--url", url(), "--out", out("Null"), "--project", pMain, ...OFF], 60_000)),
-  e12: q(() => runNode(monoApp, PROBE, ["--expected", path.join("..", out("Firings") + ".expected.json"), "--url", url(), "--out", path.join("..", out("Mono")), "--project", monoApp, ...OFF], 90_000)),
+  e11: q(() => runNode(pMain, PROBE, ["--expected", out("Null") + ".expected.json", "--url", url(), "--out", out("Null"), "--project", pMain, ...OFF], 60_000, OFF_ENV)),
+  e12: q(() => runNode(monoApp, PROBE, ["--expected", path.join("..", out("Firings") + ".expected.json"), "--url", url(), "--out", path.join("..", out("Mono")), "--project", monoApp, ...OFF], 90_000, OFF_ENV)),
 };
 
 // ---- e1: the correct twin

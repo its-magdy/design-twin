@@ -15,8 +15,8 @@ the agent drives itself. The verify skill and the visual-verifier agent follow t
 
 A screen picked by component state, not by the URL, is not reached by `--url` alone: the probe would measure the
 default section and read every spec as "not measured". The plan's `navigate` list takes the page to the screen —
-pass the plan to `--steps` only when it has a `navigate` list (a plan with none is exit 2 "holds no `navigate`
-list"; a JSON array of steps works too). The plan's `route` stays advisory free text: it never reaches the screen.
+pass the screen's plan to `--steps` (a JSON array of steps works too); a plan with no `navigate` list runs no
+steps, and the probe says so in a `note` line. The plan's `route` stays advisory free text: it never reaches the screen.
 
 The vocabulary is CLOSED and navigation-only — `{"click": "<selector>"}`, `{"waitFor": "<selector>"}`,
 `{"goto": "/same-origin/path"}`; no fill, press or hover. A `click` selector must match EXACTLY ONE visible
@@ -27,9 +27,23 @@ steps are idempotent — never write a step that changes state — and they are 
 interaction on. A step that fails while measuring is exit 4 and nothing is written (the log names the step; exit 2
 for a bad steps file); on a driving page it only makes that row `ok: null` ("not-run").
 
-With steps, always pass `--ready '[data-dt-node="<frame id>"]'` (or end the steps with a `waitFor` of the screen
-root): a click's navigation to another URL is the step's own even when the app sends it elsewhere (an expired
-session bouncing to a login page), and only the root check tells that page from the screen. The probe records
+After every load and the steps the probe waits for the screen root's tag — `--ready` defaults to
+`[data-dt-node="<frame id>"]`, the expectation's frame: a click's navigation to another URL is the step's own even
+when the app sends it elsewhere (an expired session bouncing to a login page), and only the root check tells that
+page from the screen. A root that never shows, on a page that shows fewer than half of the expectation's own tags,
+is exit 4 naming the default and the count — a redirect after load (a login page, another origin) included, never
+"kept navigating", and so is another section whose shared shell carries a few of this frame's ids. A page that shows
+at least half of the screen root's other tags but not the root's (an untagged root; a shell that keeps another
+frame's ids on its parts counts them through their component path and aliases) is measured as the screen once the
+root's wait runs out (`--timeout`, or what is left of a navigation's 10 s window), with the note "the screen root is not tagged" saying how the root was found — report it for the builder
+to tag the root. Only the first root's tags count (a multi-root export's dialog is closed at load); a visible element
+tagged with an id the expectation does not name that has the frame's size (±2 px) or encloses most of those tags is
+another screen's root — exit 4 naming it, never measured (a shared shell whose root carries another frame's id is
+one: it needs this frame's id on a wrapper the screen owns, or `--ready <root selector>`); and every later load of
+the run (the re-run, the driven pages, a new document) waits for the same rule, never for any one tag. Pass `--ready <selector>` only for a root tagged otherwise, and
+`--ready none` only to wait for nothing. A plan with `"tagging": {"off": true, …}` has no tag to wait for: the probe
+reads it from the plan passed as `--steps` and waits for no frame tag (a note says so) — pass `--ready <root
+selector>` there when the screen has a root to wait for. The probe records
 `measured.reach` (`steps`, `sha256`, `source`, `url`) and prints where the steps ended (`reach … → <url>`);
 `--compare` reports it under `inputs.reach` (`matchesPlan` when the plan has `navigate`), and a mismatch is an input
 note, never a verdict.

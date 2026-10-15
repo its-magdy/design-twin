@@ -26,8 +26,10 @@ Most false diffs come from the render, not the code:
   insets there.
 
 **On web the shipped probe does all of this** (`<scripts>/verify-probe.js`): it waits for `document.fonts.ready`,
-emulates reduced motion and switches animations/transitions off, optionally waits for `--ready <selector>`,
-then requires a quiet window (no navigation, no DOM churn) before measuring, and detects reloads (one re-run,
+emulates reduced motion and switches animations/transitions off, waits for `--ready` — by default the screen root's
+tag `[data-dt-node="<frame id>"]`, so a page that is not the screen is exit 4, never measured (`--ready none` waits
+for nothing; an untagged root on a page that shows at least half of the screen root's other tags, and no other screen's tagged root, is measured with a note, and a plan with
+`tagging.off` has no default — `measurable.md`) — then requires a quiet window (no navigation, no DOM churn) before measuring, and detects reloads (one re-run,
 then exit 4 with nothing written). It does not use `networkidle` — Playwright's docs discourage it, and a
 page with polling or a dev-server socket never reaches it. Do not re-implement any of this by hand.
 
@@ -35,8 +37,9 @@ A screen that is a section of the app (chosen by component state, not the URL) i
 (the plan's `navigate`: `click` / `waitFor` / `goto <same-origin path>` — closed, navigation-only, exactly one visible
 match per `click` (a `waitFor` needs at least one), a click never submits; replayed on every page load, a failing step while measuring is exit 4 with
 nothing written; a click either changes the page in place or navigates to ANOTHER URL — a click that reloads the same URL
-loses what it built, one re-run, then exit 4 naming the step (a link to the URL already shown counts as a `goto` for the load the click starts); always pass `--ready` with the screen root's tag, or end the
-steps with a `waitFor` of it — a click that lands on another page, a login bounce, is still the step's own). The plan's `route` is advisory. After measuring, the probe drives the overlay/swap `on_click` /
+loses what it built, one re-run, then exit 4 naming the step (a link to the URL already shown counts as a `goto` for the load the click starts); a click that lands on another page,
+a login bounce, is still the step's own, and the default `--ready` on the screen root's tag is what tells it apart; a
+plan with no `navigate` runs no steps). The plan's `route` is advisory. After measuring, the probe drives the overlay/swap `on_click` /
 `on_press` interactions and plan `expect: "dialog"` rows (`on_click` / `on_press` only) itself — skipping a disabled
 opener (`:disabled` / `[disabled]` / `aria-disabled`, on it or an ancestor) and one that would submit a form (`ok: null`), revealing a hover-hidden opener, clicking with the real
 mouse, watching the dialog contract (`:modal`, `dialog[open]`, `[role=dialog]`, `[role=alertdialog]`,

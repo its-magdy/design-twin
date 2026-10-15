@@ -18,6 +18,7 @@ import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import { liveStatusFile, lockFileOfStatus, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { freeHoverPoint } from "../design-to-code/probe-page.ts";
+import { BEHAVIOUR_OFF_ENV } from "../design-to-code/verify-probe.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 import { POSIX_SH } from "./posix-sh.ts";
@@ -77,6 +78,13 @@ const server = http.createServer((req, res) => {
     res.end(html.replace("</body>", extra + "</body>"));
     return;
   }
+  // a page that sends itself to a login page 300 ms after load (an expired session), and that login page
+  if (pathname === "/session-bounce") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end("<!doctype html><p>checking the session</p><script>addEventListener(\"load\", () => setTimeout(() => location.replace(\"/login-wall\"), 300))</script>");
+    return;
+  }
+  if (pathname === "/login-wall") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end("<!doctype html><h1>Sign in</h1><form><input name=\"user\"></form>"); return; }
   if (pathname === "/no-content") { res.writeHead(204); res.end(); return; }
   if (pathname === "/download") { res.writeHead(200, { "content-type": "application/octet-stream", "content-disposition": "attachment; filename=x.bin" }); res.end("x"); return; }
   const name = path.basename(pathname);
@@ -103,9 +111,18 @@ const url = (mode?: string): string => `http://127.0.0.1:${port}/staff-directory
 
 // async spawn (runNode in ./pool.ts): the server above lives in THIS process, so a spawnSync would block it from answering
 // These runs check measuring, not behaviour — `--behaviour off` keeps them fast (test/verify-probe-behaviour-e2e.test.ts
-// runs the behaviour checks)
+// runs the behaviour checks); the probe takes it only with the test-only env var
 const behaviourOff = (args: string[]): string[] => (args.includes("--check") || args.includes("--behaviour") ? args : [...args, "--behaviour", "off"]);
-const probe = (args: string[]): Promise<Run> => runNode(tmp, BUNDLE, behaviourOff(args));
+// The staff-directory pages leave the frame root untagged (the probe finds it by size and fill), so the frame tag the
+// probe waits for by default never shows there: those runs pass --ready none, so they do not wait out --timeout first.
+// The shell-rings and loom pages tag their root and keep the default, as does the run that checks the default on a
+// redirect; the runs that check the untagged root's way out keep it through probeDefaultReady.
+const TAGGED_ROOT = /\/(shell-rings|loom-queue-owner-hover)\.html$|\/session-bounce$/;
+const readyNone = (args: string[]): string[] =>
+  args.includes("--check") || args.includes("--ready") || TAGGED_ROOT.test(args[args.indexOf("--url") + 1] ?? "") ? args : [...args, "--ready", "none"];
+const probe = (args: string[]): Promise<Run> => runNode(tmp, BUNDLE, readyNone(behaviourOff(args)), 0, { ...process.env, [BEHAVIOUR_OFF_ENV]: "1" });
+/** a probe with the default --ready (the frame's tag), whatever the page */
+const probeDefaultReady = (args: string[]): Promise<Run> => runNode(tmp, BUNDLE, behaviourOff(args), 0, { ...process.env, [BEHAVIOUR_OFF_ENV]: "1" });
 // (a probe without --run keeps its run's status in the run cache of the expectation's dir — tmp has no package.json, so
 // that is <os tmpdir>/designtwin-verify/<key>/: removed with tmp)
 const finish = (): void => {
@@ -280,6 +297,15 @@ const b6 = path.join(tmp, "run6", "Staff");
 const r6 = await probe(["--expected", expected, "--url", `http://127.0.0.1:${port}/missing.html`, "--out", b6, "--project", ROOT, "--ready", "#never", "--timeout", "1500"]);
 check("--ready never visible → exit 4, nothing written", r6.status === 4 && !fs.existsSync(b6 + ".measured.json"));
 
+// the default --ready (the frame's tag): a redirect after load is the page not being the screen — never "kept
+// navigating", never the dev-server advice
+const b6r = path.join(tmp, "run6r", "Staff");
+const r6r = await probe(["--expected", expected, "--url", `http://127.0.0.1:${port}/session-bounce`, "--out", b6r, "--project", ROOT, "--timeout", "1500"]);
+check("[ready] a location.replace to a login page after load (default --ready) → exit 4 'never became visible (the page shows 0 of the expectation's N own tags — fewer than half)' + the default-ready hint; no 'kept navigating', no watch-tree advice; nothing written",
+  r6r.status === 4 && /never became visible \(the page shows 0 of the expectation's \d+ own tags — fewer than half\)/.test(r6r.stderr)
+  && r6r.stderr.includes("is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen")
+  && !/kept navigating|watch tree/.test(r6r.stderr) && !fs.existsSync(b6r + ".measured.json"));
+
 // ---- watchdog, --run status, build identity
 const b7 = path.join(tmp, "run7", "Staff");
 const t7 = Date.now();
@@ -431,9 +457,27 @@ check("measured.build: the url, mode static, same-origin assets hashed (document
 check("the same build served again → the same assetsSha256", m8?.build?.assetsSha256 !== undefined && m8.build.assetsSha256 === bd?.assetsSha256);
 fs.writeFileSync(path.join(tmp, "asset.js"), "window.__plotsBuild = 2;\n");
 const b9 = path.join(tmp, "run9", "Staff");
-const r9 = await probe(["--expected", expected, "--url", url("vite"), "--out", b9, "--project", ROOT]);
+const r9 = await probe(["--expected", expected, "--url", url("vite"), "--out", b9, "--project", ROOT, "--ready", "none"]);
 const m9 = read(b9);
 check("the fixture's JS changed → a different assetsSha256; /@vite/client served → mode vite-dev", r9.status === 0 && m9?.build !== undefined && m9.build.assetsSha256 !== bd?.assetsSha256 && m9.build.mode === "vite-dev");
+
+// ---- the default --ready on the untagged staff-directory root: the frame's tag never shows, so the page is the screen
+// only when it shows at least half of the expectation's 24 own tags (11 show at load here)
+const bUr = path.join(tmp, "run-untagged-root", "Staff");
+const rUr = await probeDefaultReady(["--expected", expected, "--url", url("untagged-root"), "--out", bUr, "--project", ROOT, "--timeout", "3000"]);
+const mUr = read(bUr);
+if (rUr.status !== 0) console.log(rUr.stderr);
+check("[ready] the default --ready on an untagged root whose page shows 16 of the expectation's 24 own tags → measured (exit 0), the root by size and fill, with the untagged-root note naming the 3 s wait and how the root was found",
+  rUr.status === 0 && mUr?.frame?.via === "size-and-fill" && (mUr.notes || []).includes("the screen root is not tagged: [data-dt-node=\"50:1\"] (the default --ready) never showed within 3s, but the page shows " +
+    "at least half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, its root found as the outermost element with the frame's size (±2 px) " +
+    "and a fill — tag the root data-dt-node=\"50:1\", or pass --ready <root selector>"));
+const bUf = path.join(tmp, "run-untagged-few", "Staff");
+const rUf = await probeDefaultReady(["--expected", expected, "--url", url("untagged-few"), "--out", bUf, "--project", ROOT, "--timeout", "3000"]);
+check("[ready] …a page that shows 8 of the 24 → exit 4 with the count and the default-ready hint, nothing written",
+  rUf.status === 4 && rUf.stderr.includes("verify-probe: --ready '[data-dt-node=\"50:1\"]' never became visible (the page shows 8 of the expectation's 24 own tags — fewer than half): ")
+  && rUf.stderr.includes("[data-dt-node=\"50:1\"] is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen")
+  && !fs.existsSync(bUf + ".measured.json"));
+if (rUf.status !== 4) console.log(rUf.stderr);
 
 // ---- a shared shell tagged with another screen's ids, foreign tags, display, rings
 // (the expectation is written here: its `aliases` are what --expect derives from sibling exports of the same file)

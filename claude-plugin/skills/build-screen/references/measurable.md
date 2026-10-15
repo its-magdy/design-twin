@@ -22,12 +22,29 @@ a lookup table (`data-dt-node={IDS.row}`) — the id string just has to appear i
 measurement aid, never component identity — that is the plan's `components[]` (catalog match,
 `design/codeconnect.local.json`).
 
+**The screen root carries its frame id**: the element that is the frame gets `data-dt-node="<frame id>"`. Step 5's
+probe waits for that tag after every load (its default `--ready`), so a page that is not the screen — a login bounce,
+another section — is never measured. A root that cannot carry it (an untagged shell root, a layout component the
+screen does not own) still measures: when the frame's tag never shows but at least half of the screen root's other
+tags do (a shared shell's tags kept from another screen count through their component path and aliases), the probe
+measures the page as the screen once the wait for the tag runs out (its `--timeout`, or what is left of a
+navigation's 10 s window), finds the root by the frame's size and a fill (else the viewport stands in for it), and
+says how in a note. Fewer is another section that shares the shell, and
+an element tagged with an id the expectation does not name that has the frame's size, or encloses most of those tags,
+is another screen's root: both exit 4. Later loads of the run wait for the same — so tag a wrapper the screen owns
+with the frame id where you can. A shared shell whose root carries ONE frame's id exits 4 on every other screen
+(that element is another screen's root there) — leave the shell's root untagged and put each screen's frame id on a
+wrapper the screen owns, or verify passes `--ready <root selector>`. A project that
+cannot tag at all (the opt-out below) has no tag to wait for: verify then passes `--ready <root selector>`, or
+`--ready none`.
+
 ## Lists and shared shells
 
 A `.map()` over designed rows tags rendered row *i* with designed row *i*'s id where one exists; a shell shared by
 several screens may keep the ids of ONE frame (the one it was built from) — verify recovers much of it on the other
 screens by component path, and by name path through the aliases `--expect` builds from the sibling exports (re-run
-`--expect` after re-exporting a sibling), but not repeated names, a shell used twice, or a hand-written probe; a
+`--expect` after re-exporting a sibling), but not repeated names, a shell used twice, or a hand-written probe — and
+never its root: a root tagged with that frame's id is another screen's root on the others (above); a
 per-screen id table (each screen's own ids from its export) still measures more. Either is fine — never invent ids.
 Both follow the reuse rules; untagged sets are reported as tag coverage, never as "missing".
 
@@ -36,6 +53,7 @@ Both follow the reuse rules; untagged sets are reported as tag coverage, never a
 On a web profile the Stop hook counts tags across every plan's `files[]`: it **blocks** when no file carries
 `data-dt-node` at all, warns below 50% coverage, and records `tagCoverage` in `verification.hook`. A project that
 genuinely cannot tag says so in the plan: `"tagging": {"off": true, "reason": "<why>"}` (no reason, no opt-out).
+The probe reads it from the plan passed as `--steps` and then waits for no frame tag by default (a note says so).
 
 ## Keeping tags out of a deploy bundle
 
@@ -63,7 +81,8 @@ A screen picked by state, not URL, gets `plan.navigate`: a short list of `{"clic
 `{"waitFor": "<selector>"}` / `{"goto": "/same-origin/path"}` steps that take a fresh page to it (each `click`
 selector matches exactly one visible element, a `waitFor` at least one; no typing, no submitting — the probe
 replays them many times; a `click` changes the page in place or navigates to another URL, never reloads the one it
-is on). Step 5 passes the plan as `--steps` with `--ready` on the screen root's tag.
+is on). Step 5 passes the plan as `--steps`, and the probe waits for the screen root's tag (its default `--ready`) —
+so tag the root with the frame id.
 
 ## An interaction the export cannot express (`plan.interactions`)
 

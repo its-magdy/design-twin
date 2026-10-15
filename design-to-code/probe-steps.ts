@@ -42,13 +42,15 @@ function isSameOriginPath(v: string): boolean {
 
 /**
  * A steps list from what a --steps file (or plan.navigate) holds: a JSON array of steps, or any object with a
- * `navigate` array (a plan). Each step has exactly one key of click / waitFor / goto with a non-empty string;
+ * `navigate` array (a plan). An object without `navigate` (a plan of a screen its URL reaches) is no steps
+ * (`noNavigate`), never an error. Each step has exactly one key of click / waitFor / goto with a non-empty string;
  * goto is a same-origin path ("/x?y", never "//host" or a URL). Anything else is refused, naming the step.
  */
-export function parseSteps(x: unknown): { steps: ProbeStep[] } | { error: string } {
-  const list: unknown = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== undefined ? x.navigate : undefined;
+export function parseSteps(x: unknown): { steps: ProbeStep[]; noNavigate?: true } | { error: string } {
+  if (isJsonObject(x) && x.navigate === undefined) return { steps: [], noNavigate: true };
+  const list: unknown = Array.isArray(x) ? x : isJsonObject(x) ? x.navigate : undefined;
   if (!Array.isArray(list)) {
-    return { error: isJsonObject(x) ? "holds no `navigate` list — pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
+    return { error: isJsonObject(x) ? "holds a `navigate` that is not a list — pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
   }
   const steps: ProbeStep[] = [];
   for (const [i, raw] of list.entries()) {

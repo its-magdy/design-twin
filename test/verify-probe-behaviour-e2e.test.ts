@@ -26,6 +26,7 @@ import type { Duplex } from "node:stream";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
+import { BEHAVIOUR_OFF_ENV } from "../design-to-code/verify-probe.ts";
 import type { BehaviourCheck, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 import { limit, runNode, type Run } from "./pool.ts";
@@ -113,7 +114,8 @@ const addr = server.address();
 const port = addr !== null && typeof addr === "object" ? (addr satisfies AddressInfo).port : 0;
 const url = (mode?: string): string => `http://127.0.0.1:${port}/seed-shelf.html${mode ? `?mode=${mode}` : ""}`;
 
-const probe = (proj: string, args: string[]): Promise<Run> => runNode(proj, PROBE, [...args, "--project", proj]);
+// (--behaviour off is taken only with the test-only env var)
+const probe = (proj: string, args: string[]): Promise<Run> => runNode(proj, PROBE, [...args, "--project", proj], 0, { ...process.env, [BEHAVIOUR_OFF_ENV]: "1" });
 const vs = (proj: string, args: string[]): Promise<Run> => runNode(proj, VS, args);
 const finish = (): void => { for (const s of sockets) s.destroy(); server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
 const out = (name: string): string => path.join("design", "verify", name);

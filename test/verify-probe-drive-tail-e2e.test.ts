@@ -39,9 +39,10 @@ const freezeUrl = `${edge("freeze-drive")}&how=raf`;
 const T = {
   budget25000: () => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Budget25000"), "--steps", "steps.json", "--ready", READY, "--max-time", "25000"]),
   budget30000: () => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Budget30000"), "--steps", "steps.json", "--ready", READY, "--max-time", "30000"]),
-  replace: () => probe(["--expected", QUIET, "--url", url("replace-state"), "--out", out("Replace"), "--max-time", "60000"]),
+  // (--ready none on replace, reloadSettleNoReady and clickReloadsSync: they check the probe with nothing to wait for — the default is the frame tag)
+  replace: () => probe(["--expected", QUIET, "--url", url("replace-state"), "--out", out("Replace"), "--ready", "none", "--max-time", "60000"]),
   reloadSettle: () => probe(["--expected", QUIET, "--url", edge("reload-settle"), "--out", out("ReloadSettle"), "--ready", READY, "--max-time", "60000"]),
-  reloadSettleNoReady: () => probe(["--expected", QUIET, "--url", edge("reload-settle"), "--out", out("ReloadSettleNoReady"), "--max-time", "60000"]),
+  reloadSettleNoReady: () => probe(["--expected", QUIET, "--url", edge("reload-settle"), "--out", out("ReloadSettleNoReady"), "--ready", "none", "--max-time", "60000"]),
   reloadStep: () => probe(["--expected", QUIET, "--url", edge("reload-step"), "--out", out("ReloadStep"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "60000"]),
   gotoReload: () => probe(["--expected", QUIET, "--url", edge("reload-after-goto"), "--out", out("GotoReload"), "--steps", "steps-goto-reload.json", "--ready", READY, "--max-time", "60000"]),
   reloadLate: () => probe(["--expected", QUIET, "--url", edge("reload-late"), "--out", out("ReloadLate"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
@@ -51,7 +52,7 @@ const T = {
   smoothShellPainted: () => probe(["--expected", EXPECTED, "--url", `${edge("smooth-shell")}&important=1&painted=1`, "--out", out("SmoothShellPainted"), "--max-time", "60000"]),
   clickReloads: () => probe(["--expected", QUIET, "--url", edge("click-reloads"), "--out", out("ClickReloads"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
   tokenSwitch: () => probe(["--expected", QUIET, "--url", edge("token-switch"), "--out", out("TokenSwitch"), "--max-time", "60000"]),
-  clickReloadsSync: () => probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=sync`, "--out", out("ClickReloadsSync"), "--steps", "steps-click-only.json", "--max-time", "60000"]),
+  clickReloadsSync: () => probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=sync`, "--out", out("ClickReloadsSync"), "--steps", "steps-click-only.json", "--ready", "none", "--max-time", "60000"]),
   clickReloads100: () => probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=100`, "--out", out("ClickReloads100"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
   clickReloadsOnce: () => probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=sync&once=1`, "--out", out("ClickReloadsOnce"), "--steps", "steps-click-only.json", "--max-time", "60000"]),
   hangImg: () => probe(["--expected", QUIET, "--url", edge("hang-img"), "--out", out("HangImg"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "22000"]),

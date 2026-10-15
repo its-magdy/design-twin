@@ -714,7 +714,9 @@ export interface VerifyFrame { nodeId: string; name: string; w?: number; h?: num
   scroll?: "horizontal" | "vertical" | "both" }
 /** A root frame as an expectation lists it (no position). */
 export type VerifyRootFrame = Omit<VerifyFrame, "x" | "y">;
-export interface VerifyInstance { nodeId: string; name: string; setName?: string; setKey?: string; variant?: string; props?: ComponentPropValues }
+export interface VerifyInstance { nodeId: string; name: string; setName?: string; setKey?: string; variant?: string; props?: ComponentPropValues;
+  /** the root it is under, on a multi-root export's second and later roots only (as VerifySpec.frameId) */
+  frameId?: string }
 export interface VerifyInteraction { nodeId: string; name: string; trigger: string; action?: string; destinationId?: string; destination?: string;
   /** false when destinationId is no node of the export for the SAME Figma file (only false is written) */
   destinationExported?: boolean;

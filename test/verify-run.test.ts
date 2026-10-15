@@ -770,7 +770,63 @@ await block("verify-probe --run exit 3:", async () => {
   fs.writeFileSync(path.join(noPw, "package.json"), "{}");
   const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"], { encoding: "utf8" });
   const st = VR.readStatus(base);
-  safe("probe exit 3 with --run → status rev bumped, phase measuring, detail 'probe exit 3 — nothing written'", () => p.status === 3 && st !== null && st !== "v1" && st.runId === "run-x" && st.rev === 2 && st.phase === "measuring" && st.detail === "probe exit 3 — nothing written");
+  safe("probe exit 3 with --run → the first failed attempt: rev bumped, phase measuring, probeFailures 1, detail names the attempt, the user's fix and the one re-run",
+    () => p.status === 3 && st !== null && st !== "v1" && st.runId === "run-x" && st.rev === 2 && st.phase === "measuring" && st.probeFailures === 1
+      && st.detail === "probe exit 3 — nothing written (failed probe attempt 1 of 2: ask the user to make a renderer available, then re-run the probe once in this run)");
+  safe("…stderr: 'status run run-x measuring — failed probe attempt 1 of 2: ask the user to make a renderer available, then re-run the probe once in this run (--run run-x); the next failed attempt ends it failed'",
+    () => p.stderr.includes("status run run-x measuring — failed probe attempt 1 of 2: ask the user to make a renderer available, then re-run the probe once in this run (--run run-x); the next failed attempt ends it failed"));
+  // the agent's own write between the two attempts keeps the count (it carries forward within the run)
+  VR.writeStatus(base, { runId: "run-x", phase: "renderer-ready", by: "agent", detail: "re-running the probe" });
+  const kept = VR.readStatus(base);
+  safe("…a later write of the same run carries probeFailures forward", () => kept !== null && kept !== "v1" && kept.probeFailures === 1 && kept.phase === "renderer-ready");
+  const p2 = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"], { encoding: "utf8" });
+  const st2 = VR.readStatus(base);
+  safe("the second failed attempt (exit 3 again) → the probe ends the run itself: phase failed, probeFailures 2, rev 4, by verify-probe, exit 3",
+    () => p2.status === 3 && st2 !== null && st2 !== "v1" && st2.runId === "run-x" && st2.phase === "failed" && st2.probeFailures === 2 && st2.rev === 4 && st2.by === "verify-probe"
+      && st2.detail === "probe exit 3 — nothing written (failed probe attempt 2 of 2: the probe ended the run failed)");
+  safe("…stderr: 'status run run-x failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)'",
+    () => p2.stderr.includes("status run run-x failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)"));
+  const before3 = JSON.stringify(VR.readStatus(base));
+  const p3 = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"], { encoding: "utf8" });
+  safe("a third probe in that run → refused before anything starts (exit 2, 'already ended at failed'); the ended run is never reopened",
+    () => p3.status === 2 && p3.stderr.includes("run run-x already ended at failed (probe exit 3 — nothing written (failed probe attempt 2 of 2: the probe ended the run failed))") && JSON.stringify(VR.readStatus(base)) === before3);
+});
+
+console.log("writeStatus probeFailed — the run's failed probe attempts:");
+await block("probeFailed counting:", async () => {
+  const { base, live } = project();
+  VR.writeStatus(base, { runId: "run-c1", phase: "measuring", by: "verify-probe", detail: "probe exit 4 — nothing written", probeFailed: 4 });
+  VR.writeStatus(base, { runId: "run-c2", phase: "measuring", by: "verify-probe", detail: "probe exit 4 — nothing written", probeFailed: 4 });
+  const other = VR.readStatus(base);
+  safe("another run's failed attempt counts from 1 (the count is per run)", () => other !== null && other !== "v1" && other.runId === "run-c2" && other.probeFailures === 1 && other.phase === "measuring");
+  const plain = VR.writeStatus(base, { runId: "run-c3", phase: "measuring", by: "agent" });
+  safe("a run with no failed attempt has no probeFailures", () => plain.probeFailures === undefined);
+  const raw: unknown = JSON.parse(fs.readFileSync(live, "utf8"));
+  fs.writeFileSync(live, JSON.stringify({ ...(typeof raw === "object" && raw !== null ? raw : {}), probeFailures: "two" }));
+  const mal = VR.readStatus(base);
+  safe("a malformed probeFailures is read as none counted, never the whole status", () => mal !== null && mal !== "v1" && mal.runId === "run-c3" && mal.probeFailures === undefined);
+  const next = VR.writeStatus(base, { runId: "run-c3", phase: "measuring", by: "verify-probe", detail: "probe exit 4 — nothing written", probeFailed: 4 });
+  safe("…and the next failed attempt counts from 1", () => next.probeFailures === 1 && next.phase === "measuring");
+
+  // a run id is one pass: a successful probe between two failed attempts does not reset the count
+  const s = project();
+  s.cli("--status", "Plots", "--phase", "renderer-ready", "--run", "run-s");
+  const first = VR.writeStatus(s.base, { runId: "run-s", phase: "measuring", by: "verify-probe", detail: "probe exit 4 — nothing written", probeFailed: 4 });
+  safe("an exit 4's first attempt → 'failed probe attempt 1 of 2: re-run the probe once in this run' (no renderer to fix)",
+    () => first.detail === "probe exit 4 — nothing written (failed probe attempt 1 of 2: re-run the probe once in this run)" && first.phase === "measuring");
+  const okWrite = VR.writeStatus(s.base, { runId: "run-s", phase: "measured", by: "verify-probe", detail: "measured" });
+  safe("a successful probe in the same run (its `measured` write) keeps probeFailures 1", () => okWrite.probeFailures === 1 && okWrite.phase === "measured");
+  const second = VR.writeStatus(s.base, { runId: "run-s", phase: "measuring", by: "verify-probe", detail: "probe exit 4 — nothing written", probeFailed: 4 });
+  safe("…so a later failed attempt in that run is its second: the run ends failed", () => second.probeFailures === 2 && second.phase === "failed");
+
+  // the count is in the durable status `done` publishes into design/verify
+  const d = project();
+  d.cli("--status", "Plots", "--phase", "renderer-ready", "--run", "run-d");
+  VR.writeStatus(d.base, { runId: "run-d", phase: "measuring", by: "verify-probe", detail: "probe exit 4 — nothing written", probeFailed: 4 });
+  fs.writeFileSync(path.join(d.dir, "Plots.measured.json"), measuredFor(d.dir, { runId: "run-d" }));
+  const dd = d.cli("--status", "Plots", "--phase", "done", "--run", "run-d");
+  const durable = readStatusFile(path.join(d.dir, "Plots.status.json"));
+  safe("done after one failed attempt → the published design/verify/Plots.status.json carries probeFailures 1", () => dd.status === 0 && durable?.phase === "done" && durable.probeFailures === 1);
 });
 
 // The probe, too, never reopens an ended run (it writes measuring/measured through writeStatus)
@@ -1177,6 +1233,12 @@ await block("an unwritable run cache (M-a):", async () => {
   fs.chmodSync(cache, 0o755);
   safe("verify-probe --run with a read-only run cache → still exit 3 (no renderer), a 'warning  run cache … is not writable' line, no stack", () =>
     p.status === 3 && /warning {2}run cache \S+ is not writable \(sandbox write scope\?\)/.test(p.stderr) && !/\n\s+at /.test(p.stderr));
+  // the failed attempt could not be counted: the run would sit at its last phase, so the probe says how to end it
+  safe("…the attempt is not counted, and a 'status run run-w not counted — …' line says a verify-screen --status write would be refused the same way, so re-run once the cache takes writes — no command to run now",
+    () => p.stderr.includes("status run run-w not counted — this failed attempt (exit 3) is not in the run's status (the run cache refused the write). " +
+      "Until the run cache takes writes (the warning above says how), no status write of this run is recorded — a verify-screen --status write that ends it would be refused the same way. " +
+      "Ask the user to make a renderer available, then re-run the probe once in this run (--run run-w) once it does;")
+      && !/--status Plots --phase failed --run run-w --detail/.test(p.stderr));
 });
 
 // ---------------------------------------------------------------- M-b: one key per directory, whatever its spelling

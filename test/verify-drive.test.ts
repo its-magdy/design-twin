@@ -317,7 +317,9 @@ console.log("the steps vocabulary and the reach record:");
     err([{ click: "#a" }, { fill: "#q" }], /step 2 \{fill: …\} is not a step.*form/) && err([{ press: "Enter" }], /step 1 \{press/) && err([{ hover: "#row" }], /hover/));
   safe("two keys, an empty selector, a cross-origin goto are refused", () =>
     err([{ click: "#a", waitFor: "#b" }], /2 keys/) && err([{ click: " " }], /non-empty/) && err([{ goto: "https://example.test/x" }], /same-origin path/) && err([{ goto: "//example.test" }], /same-origin/));
-  safe("not a list, a plan without navigate → refused", () => err("click #a", /not a list/) && err({ screen: "Pantry" }, /no `navigate`/));
+  safe("not a list, a plan whose navigate is not a list → refused", () => err("click #a", /not a list/) && err({ screen: "Pantry", navigate: null }, /holds a `navigate` that is not a list/));
+  safe("a plan without navigate → no steps (noNavigate), never an error", () => { const r = parseSteps({ screen: "Pantry" }); return "steps" in r && r.steps.length === 0 && r.noNavigate === true; });
+  safe("…an empty steps list is no noNavigate (it is the caller's list)", () => { const r = parseSteps([]); return "steps" in r && r.steps.length === 0 && r.noNavigate === undefined; });
   const a: unknown = JSON.parse('{"navigate":[{"click":"#shelves"},{"waitFor":"#jars"}],"screen":"Pantry"}');
   const b: unknown = JSON.parse('{\n  "screen": "Pantry",\n  "navigate": [ { "click": "#shelves" }, { "waitFor": "#jars" } ]\n}');
   const pa = parseSteps(a), pb = parseSteps(b);

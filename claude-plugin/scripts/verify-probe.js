@@ -716,6 +716,71 @@ function focusablePath(path10) {
   parts.unshift("html");
   return parts.join(" > ");
 }
+function screenTags(a) {
+  const want = new Set(a.ids), known = new Set(a.known), alias = new Map(Object.entries(a.alias));
+  const suffix = (id) => {
+    const i = id.indexOf(";");
+    return i === -1 ? null : id.slice(i + 1);
+  };
+  const ownBySuffix = /* @__PURE__ */ new Map(), knownSuffix = /* @__PURE__ */ new Set();
+  for (const id of a.ids) {
+    const s = suffix(id);
+    if (s !== null && !ownBySuffix.has(s)) ownBySuffix.set(s, id);
+  }
+  for (const id of a.known) {
+    const s = suffix(id);
+    if (s !== null) knownSuffix.add(s);
+  }
+  const ownOf = (id) => {
+    if (want.has(id)) return id;
+    const viaAlias = alias.get(id);
+    if (viaAlias !== void 0) return viaAlias;
+    if (known.has(id)) return "";
+    const s = suffix(id);
+    if (s === null) return null;
+    return ownBySuffix.get(s) ?? (knownSuffix.has(s) ? "" : null);
+  };
+  const visible = (el) => {
+    const st = getComputedStyle(el);
+    if (st.getPropertyValue("display") === "contents") {
+      for (const c of Array.from(el.children)) if (visible(c)) return true;
+      for (const n of Array.from(el.childNodes)) {
+        if (n.nodeType !== 3) continue;
+        const range = document.createRange();
+        range.selectNodeContents(n);
+        const r2 = range.getBoundingClientRect();
+        if (r2.width > 0 && r2.height > 0) return true;
+      }
+      return false;
+    }
+    if (typeof el.checkVisibility === "function" && !el.checkVisibility()) return false;
+    if (st.getPropertyValue("visibility") !== "visible") return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const own = /* @__PURE__ */ new Map(), foreign = [];
+  for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
+    const id = el.getAttribute("data-dt-node");
+    if (id === null) continue;
+    const mine = ownOf(id);
+    if (mine === "") continue;
+    if (!visible(el)) continue;
+    if (mine !== null) {
+      const l = own.get(mine);
+      if (l) l.push(el);
+      else own.set(mine, [el]);
+    } else foreign.push({ id, el });
+  }
+  const shown = own.size;
+  for (const { id, el } of foreign) {
+    const r = el.getBoundingClientRect();
+    if (a.frame !== null && Math.abs(r.width - a.frame.w) <= 2 && Math.abs(r.height - a.frame.h) <= 2) return { shown, foreign: { id, by: "size", encloses: 0 } };
+    let encloses = 0;
+    for (const els of own.values()) if (els.some((o) => o !== el && el.contains(o))) encloses++;
+    if (shown > 0 && encloses * 2 > shown) return { shown, foreign: { id, by: "encloses", encloses } };
+  }
+  return { shown, foreign: null };
+}
 function focusInfo(path10) {
   const el = document.querySelector(path10);
   const focused = !!el && document.activeElement === el;
@@ -1576,9 +1641,10 @@ function isSameOriginPath(v) {
   return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
 }
 function parseSteps(x) {
-  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
+  if (isJsonObject(x) && x.navigate === void 0) return { steps: [], noNavigate: true };
+  const list = Array.isArray(x) ? x : isJsonObject(x) ? x.navigate : void 0;
   if (!Array.isArray(list)) {
-    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
+    return { error: isJsonObject(x) ? "holds a `navigate` that is not a list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
   }
   const steps = [];
   for (const [i, raw] of list.entries()) {
@@ -6054,12 +6120,18 @@ function writeFileAtomic(file, data, opts = {}) {
 var STATUS_SCHEMA = "designtwin/verify-status@2";
 var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
 var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var PROBE_ATTEMPTS = 2;
+function probeAttemptNote(n, exit) {
+  const next = n >= PROBE_ATTEMPTS ? "the probe ended the run failed" : exit === 3 ? "ask the user to make a renderer available, then re-run the probe once in this run" : "re-run the probe once in this run";
+  return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${next}`;
+}
 var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
 var optStr2 = (x) => x === void 0 || typeof x === "string";
 var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
 var overdue = (o) => Date.parse(o.deadline) < Date.now();
 function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun));
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
@@ -6085,9 +6157,10 @@ function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
   if (isVerifyStatusV2(r.doc)) return r.doc;
-  if (isJsonObject(r.doc) && r.doc.ownRun !== void 0) {
-    const { ownRun: _malformed, ...rest } = r.doc;
-    if (isVerifyStatusV2(rest)) return rest;
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0)) {
+    const { ownRun, probeFailures, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {} };
+    if (isVerifyStatusV2(kept)) return kept;
   }
   return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
 }
@@ -6191,21 +6264,25 @@ function writeStatus(base, p, hooks = {}) {
       return v !== void 0 ? { [k]: v } : {};
     };
     const published = w.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...w.published || []])].sort() : void 0;
-    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(w.phase)) ? same.ownRun : void 0);
+    const failures = w.probeFailed !== void 0 ? (same?.probeFailures ?? 0) + 1 : same?.probeFailures;
+    const phase = w.probeFailed !== void 0 && failures !== void 0 && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
+    const detail = w.probeFailed !== void 0 && failures !== void 0 ? `${w.detail ?? ""} (${probeAttemptNote(failures, w.probeFailed)})` : w.detail ?? "";
+    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(phase)) ? same.ownRun : void 0);
     const doc = {
       schema: STATUS_SCHEMA,
       screen: path8.basename(base),
       runId: w.runId,
       rev: same ? same.rev + 1 : 1,
-      phase: w.phase,
-      detail: w.detail ?? "",
+      phase,
+      detail,
       at: (/* @__PURE__ */ new Date()).toISOString(),
       by: w.by,
       ...pick("expectationSha256"),
       ...pick("measuredSha256"),
       ...pick("evidenceSha256"),
       ...published !== void 0 ? { published } : {},
-      ...ownRun !== void 0 ? { ownRun } : {}
+      ...ownRun !== void 0 ? { ownRun } : {},
+      ...failures !== void 0 ? { probeFailures: failures } : {}
     };
     put(doc);
     hooks.after?.(doc);
@@ -6415,6 +6492,12 @@ var gone = (e) => new BrowserGoneError(`the page or browser closed or crashed du
 var KeptNavigatingError = class extends Error {
 };
 var UnreachableError = class extends Error {
+  /** the default --ready missed on a page that shows another screen's tagged root (its exit-4 hint is foreignRootHint) */
+  foreign;
+  constructor(m, foreign = null) {
+    super(m);
+    this.foreign = foreign;
+  }
 };
 var docUrl = (u) => {
   const i = u.indexOf("#");
@@ -6433,7 +6516,53 @@ async function docTokenOrNull(page) {
     throw e;
   }
 }
-async function settle(page, log, ready, timeout) {
+var visibleOnly = (sel) => `${sel} >> visible=true`;
+var takesForScreen = (shown, total) => total > 0 && shown * 2 >= total;
+var screenTagsMet = (s, total) => takesForScreen(s.shown, total) && s.foreign === null;
+var SCREEN_LOOK_CAP_MS = 2e3;
+async function screenTagsNow(page, root, capMs) {
+  const look = (async () => {
+    try {
+      return await page.evaluate(screenTags, { ids: root.ids, known: root.known, alias: root.alias, frame: root.frame });
+    } catch (e) {
+      if (errorKind(e, page) === "gone") throw gone(e);
+      return { shown: 0, foreign: null };
+    }
+  })();
+  look.catch(() => void 0);
+  return Promise.race([look, sleep5(Math.max(1, capMs), null, { ref: false })]);
+}
+var WaitTimeoutError = class extends Error {
+  constructor(what, ms) {
+    super(`${what}: Timeout ${ms}ms exceeded.`);
+    this.name = "TimeoutError";
+  }
+};
+async function waitForScreenTags(page, root, timeout) {
+  const end = Date.now() + timeout;
+  for (; ; ) {
+    const look = await screenTagsNow(page, root, end - Date.now());
+    if (look !== null && screenTagsMet(look, root.ids.length)) return;
+    const left = end - Date.now();
+    if (left <= 0) throw new WaitTimeoutError("waiting for at least half of the expectation's own tags", timeout);
+    await sleep5(Math.min(POLL_MS3, left));
+  }
+}
+var refusingRoot = (s, total) => takesForScreen(s.shown, total) ? s.foreign : null;
+function screenTagsWhy(s, total) {
+  const f = refusingRoot(s, total);
+  if (f !== null) {
+    return ` (another screen's tagged root is on the page: a visible element tagged data-dt-node="${f.id}", an id this expectation does not name, ${f.by === "size" ? "has the frame's size (\xB12 px)" : `encloses ${f.encloses} of the ${s.shown} own tags the page shows`})`;
+  }
+  return ` (the page shows ${s.shown} of the expectation's ${total} own tags \u2014 fewer than half)`;
+}
+function settleMiss(s) {
+  if (s.readyWait && !s.navigated && s.sameDocument) return "unreachable";
+  if (s.moved) return s.pastDocDeadline ? "kept" : "retry";
+  if (s.navigated && !s.pastDocDeadline) return "retry";
+  return "unreachable";
+}
+async function settle(page, log, ready, timeout, root) {
   const cap = Math.min(QUIET_CAP_MS, timeout);
   const deadline = Date.now() + cap;
   let docDeadline = deadline;
@@ -6471,6 +6600,8 @@ async function settle(page, log, ready, timeout) {
     return null;
   };
   for (; ; ) {
+    let readyWait = false;
+    let readyMs = timeout;
     try {
       const known = token !== null && token !== "" ? log.loadTimedOut.get(token) : void 0;
       const state = await page.evaluate("document.readyState");
@@ -6494,7 +6625,12 @@ async function settle(page, log, ready, timeout) {
         stateLost();
       }
       await page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
-      if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, docDeadline - Date.now()) : timeout });
+      if (ready) {
+        readyWait = true;
+        readyMs = moved() ? Math.max(1, docDeadline - Date.now()) : timeout;
+        if (root?.seen === true) await waitForScreenTags(page, root, readyMs);
+        else await page.locator(visibleOnly(ready)).first().waitFor({ state: "visible", timeout: readyMs });
+      }
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(e, page) === "gone") throw gone(e);
@@ -6503,17 +6639,23 @@ async function settle(page, log, ready, timeout) {
         await newDocument();
         continue;
       }
+      const sameDocument = token !== null && token !== "" && now === token;
       if (token === null && now !== null) token = now;
-      if (moved() && Date.now() < docDeadline) {
+      const next = settleMiss({ readyWait, navigated: errorKind(e) === "navigated", sameDocument, moved: moved(), pastDocDeadline: Date.now() >= docDeadline });
+      if (next === "retry") {
         await sleep5(POLL_MS3);
         continue;
       }
-      if (moved()) throw kept();
-      if (errorKind(e) === "navigated" && Date.now() < docDeadline) {
-        await sleep5(POLL_MS3);
-        continue;
+      if (next === "kept") throw kept();
+      const asked = readyWait && root !== void 0 && pwErrorKind(e) === "timeout";
+      const look = asked && root !== void 0 ? await screenTagsNow(page, root, SCREEN_LOOK_CAP_MS) : null;
+      if (root === void 0 || look === null || !screenTagsMet(look, root.ids.length)) {
+        const why = look === null || root === void 0 ? asked ? ` (the page did not answer within ${SCREEN_LOOK_CAP_MS / 1e3}s when its tags were counted)` : "" : screenTagsWhy(look, root.ids.length);
+        throw new UnreachableError(ready ? `--ready '${ready}' never became visible${why}: ${firstLine(e)}` : firstLine(e), look !== null && root !== void 0 ? refusingRoot(look, root.ids.length) : null);
       }
-      throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${firstLine(e)}` : firstLine(e));
+      if (!root.seen) root.waitedMs = readyMs;
+      root.seen = true;
+      docDeadline = Date.now() + cap;
     }
     let mark = log.docLoads;
     let last = "", since = Date.now();
@@ -6712,11 +6854,11 @@ async function reachPage(page, log, o) {
     throw new UnreachableError(`could not load ${o.url}: ${loadFailureWhy(errMsg(e))}`);
   }
   const steps = o.steps || [];
-  if (!steps.length) return settle(page, log, o.ready, o.timeout);
+  if (!steps.length) return settle(page, log, o.ready, o.timeout, o.untaggedRoot);
   try {
     await settle(page, log, void 0, o.timeout);
     await runSteps(page, log, o);
-    const last = await settle(page, log, o.ready, o.timeout);
+    const last = await settle(page, log, o.ready, o.timeout, o.untaggedRoot);
     if (log.lost !== null) throw new StepStateLostError(log.lost);
     return { note: last.note, token: last.token };
   } finally {
@@ -7050,9 +7192,10 @@ function behaviourLine(b) {
   const n = (st) => b.checks.filter((c) => c.status === st).length;
   return `behaviour (not the fidelity verdict) ${n("fail")} fail \xB7 ${n("warn")} warn \xB7 ${n("pass")} pass \xB7 ${n("not-run")} not run${n("unsupported") ? ` \xB7 ${n("unsupported")} unsupported` : ""} \xB7 axe ${b.axe.ran ? `axe-core ${b.axe.version}` : `not run (${b.axe.why})`} \xB7 ${Math.round(b.elapsedMs / 1e3)}s of ${Math.round(b.budgetMs / 1e3)}s${b.cut ? " \u2014 CUT by the time budget" : ""}` + (b.artifacts.length ? ` \xB7 ${b.artifacts.join(", ")}` : "");
 }
+var BEHAVIOUR_OFF_ENV = "DESIGNTWIN_TEST_BEHAVIOUR_OFF";
 var USAGE = `usage:
   ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]
-      [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]
+      [--ready <selector> | none] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]
       [--steps <steps.json | plan.json>] [--behaviour on|off] [--browser-path <executable>]
       renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag \u2192 shared path \u2192 alias \u2192
       text \u2192 text-ordinal \u2192 --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.
@@ -7069,11 +7212,22 @@ var USAGE = `usage:
       (it was stopped or slept past its deadline) writes nothing more (exit 2; 128+n after a stop signal, 1 after an
       error). The probe writes the run's LIVE status (the run cache,
       node_modules/.cache/designtwin-verify/<Screen>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
-      before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed; with --run an
-      exit 3/4 bumps its rev. A --run that already ended (done/failed/blocked) is refused before anything starts, and a run that
+      before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed. With --run an
+      exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run
+      (after an exit 3, once the user has fixed the renderer), the second ends the run \`failed\` \u2014 the probe writes it (a
+      \`status run <id> \u2026\` line on stderr says which; an attempt the run cache would not count says how to end the run). A --run that
+      already ended (done/failed/blocked) is refused before anything starts, and a run that
       ends (or, its own run, another run that opens or replaces it) while the page is measured gets no files (exit 2 both ways).
       --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).
-      --steps: a JSON list of steps (or a plan whose \`navigate\` holds them) replayed after every page load, before --ready,
+      --ready: after every page load (and the steps) the probe waits for this selector to be visible before measuring \u2014
+      by default the frame's tag [data-dt-node="<frame id>"] (expectation.frame.nodeId), so a page that is not the screen
+      (a login redirect, another section) is an exit 4, never measured \u2014 unless it shows at least half of the expectation's own
+      tags and no other screen's tagged root: then the root is untagged and the page is measured, with a note (later loads
+      wait for the same); --ready none waits for nothing. With no frame
+      id in the expectation, or a --steps plan with tagging.off, there is no default (a note says so). Not visible within
+      --timeout \u2192 exit 4.
+      --steps: a JSON list of steps (or a plan whose \`navigate\` holds them; a plan with none is no steps \u2014 a note says so)
+      replayed after every page load, before --ready,
       to reach a screen that is a section of the app (not a URL): {"click": "<selector>"} | {"waitFor": "<selector>"} |
       {"goto": "/same-origin/path"}. A click's selector must match exactly one visible element (a waitFor's at least one);
       a click never submits a form. A click's navigation to another URL is the step's own, however late; a reload after a
@@ -7085,7 +7239,8 @@ var USAGE = `usage:
       Then the behaviour/accessibility checks run, each unit on a fresh page within min(90 s, what --max-time leaves less
       20 s): landmarks, axe-core (when the project has it), a Tab walk (reachable, visible focus, names), forced colours,
       1024/320 px widths, and the keyboard/scroll battery on modal overlays \u2014 measured.behaviour (+ <out>.forced-colors.png),
-      never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so).
+      never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so) \u2014 for the
+      probe's own tests only: every other run is refused (exit 2).
       Before them, when the expectation carries a usable referenceImage (--expect), the frame is captured once more at the
       reference's scale and diffed against the Figma reference after the browser closes: measured.visual + <out>.diff.png
       (informational \u2014 never the verdict, never an exit 4; not skipped by --behaviour off). Its design/export/\u2026 PNG is read
@@ -7097,9 +7252,11 @@ var USAGE = `usage:
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
 exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the probe ran, or (no --run) another run of the
       screen is open, or replaced its own \u2014 also instead of a 3 or 4 \xB7 3
-      renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept navigating / reloaded twice
+      renderer unavailable (ask the user to install; never installed here; with --run, re-run once in the run after they
+      do) \xB7 4 the page kept navigating / reloaded twice
       during measurement / was unreachable / timed out / passed --max-time / a --steps step failed /
-      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).`;
+      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written; with --run the
+      second failed attempt has ended the run \`failed\`).`;
 var MAX_TIME_DEFAULT = 18e4;
 var MAX_TIME_LIMIT = 2147483647;
 var OWN_RUN_GRACE_MS = 12e4;
@@ -7120,6 +7277,71 @@ function measuredRefusedWhy(by, runId, phase = "measured") {
   if (by === "lost") return `another writer took over the status lock of run ${runId} while the probe's \`${phase}\` status write held it, so that write was not made`;
   if (by === "busy") return `another status write held the status lock of run ${runId} for the whole wait, so the probe's \`${phase}\` status write was not made`;
   return `the run cache refused the probe's \`${phase}\` status write for run ${runId}`;
+}
+function probeAttemptLine(doc, exit) {
+  const note = probeAttemptNote(doc.probeFailures ?? 0, exit);
+  return doc.phase === "failed" ? `status run ${doc.runId} failed \u2014 ${note} (a retry is a new run: --new-run)` : `status run ${doc.runId} ${doc.phase} \u2014 ${note} (--run ${doc.runId}); the next failed attempt ends it failed`;
+}
+function probeAttemptUncounted(o) {
+  const why = o.by === "lost" ? "another writer took over the status lock while the probe held it" : o.by === "busy" ? "another status write held the status lock for the whole wait" : "the run cache refused the write";
+  const rerun = `${o.exit === 3 ? "Ask the user to make a renderer available, then re-run" : "Re-run"} the probe once in this run (--run ${o.runId})`;
+  const head = `status run ${o.runId} not counted \u2014 this failed attempt (exit ${o.exit}) is not in the run's status (${why}). `;
+  if (o.by === "cache") {
+    return head + `Until the run cache takes writes (the warning above says how), no status write of this run is recorded \u2014 a verify-screen --status write that ends it would be refused the same way. ${rerun} once it does; if that attempt fails too, end the run failed (verify-screen --status \u2026 --phase failed --run ${o.runId}) whatever its own line says`;
+  }
+  return head + `${rerun}; if that attempt fails too, whatever its own line says, end the run: ${scriptCmd("verify-screen")} --status ${shellArg(o.screen)} --phase failed --run ${o.runId} --detail ${shellArg(`probe exit ${o.exit} twice`)} --dir ${shellArg(o.verifyDir)}`;
+}
+var READY_NONE = "none";
+function readyOf(flag, frameId, taggingOff = false) {
+  if (flag === READY_NONE) return { note: "ready  none (--ready none): the page is measured once it is quiet" };
+  if (flag !== void 0) return { ready: flag, note: `ready  ${flag}` };
+  if (taggingOff) return { note: "note  the --steps plan opts out of tagging (tagging.off), so there is no --ready default \u2014 the page is measured once it is quiet (pass --ready <root selector>)" };
+  if (frameId === void 0 || frameId === "") return { note: "note  the expectation names no frame node id, so there is no --ready default \u2014 the page is measured once it is quiet (pass --ready <selector>)" };
+  const ready = attrSelector(frameId);
+  return { ready, note: `ready  ${ready} (the frame's tag, the default; --ready <selector> or --ready none to change it)` };
+}
+function planTaggingOff(doc) {
+  if (!isJsonObject(doc) || !isJsonObject(doc.tagging)) return false;
+  const { off, reason } = doc.tagging;
+  return off === true && typeof reason === "string" && reason.trim() !== "";
+}
+function ownTagsOf(exp, frameId) {
+  const hidden = new Set(exp.hidden && exp.hidden.ids || []);
+  const ids = /* @__PURE__ */ new Set(), others = /* @__PURE__ */ new Set(), known = /* @__PURE__ */ new Set([frameId, ...hidden]);
+  const otherRoot = (f) => f !== void 0 && f !== frameId;
+  for (const s of exp.nodes || []) {
+    known.add(s.nodeId);
+    if (otherRoot(s.frameId)) others.add(s.nodeId);
+    else if (!hidden.has(s.nodeId)) ids.add(s.nodeId);
+  }
+  for (const i of exp.instances || []) {
+    known.add(i.nodeId);
+    if (otherRoot(i.frameId)) others.add(i.nodeId);
+    else if (!hidden.has(i.nodeId) && !others.has(i.nodeId)) ids.add(i.nodeId);
+  }
+  for (const fr of exp.frames || []) if (typeof fr.nodeId === "string") known.add(fr.nodeId);
+  ids.delete(frameId);
+  const alias = /* @__PURE__ */ new Map();
+  const named = new Set(known);
+  for (const s of exp.nodes || []) {
+    for (const a of s.aliases || []) {
+      known.add(a);
+      if (ids.has(s.nodeId) && !named.has(a) && !alias.has(a)) alias.set(a, s.nodeId);
+    }
+  }
+  const w = exp.frame?.w, h = exp.frame?.h;
+  return ids.size ? { ids: [...ids], known: [...known], alias: Object.fromEntries(alias), frame: typeof w === "number" && typeof h === "number" ? { w, h } : null } : null;
+}
+var untaggedRootFound = (via) => via === "size-and-fill" ? "its root found as the outermost element with the frame's size (\xB12 px) and a fill" : via === "viewport" ? "no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)" : "its root not found";
+function untaggedRootNote(ready, waitedMs, via) {
+  if (via === "tag") return null;
+  return `the screen root is not tagged: ${ready} (the default --ready) never showed within ${Math.round(waitedMs / 100) / 10}s, but the page shows at least half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, ${untaggedRootFound(via)} \u2014 tag the root ${ready.slice(1, -1)}, or pass --ready <root selector>`;
+}
+function defaultReadyMissed(ready, withSteps) {
+  return `${ready} is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen: the page the probe reached is not the screen \u2014 a redirect (a login page, another origin) or another section (${withSteps ? "the --steps ended somewhere else: check the plan's navigate list" : "a screen that is a section of the app is reached with --steps <plan.json>"}) \u2014 or nothing on it is tagged (a tagging opt-out: pass --ready <root selector>, or --ready none to wait for nothing) \u2014 or the root is untagged and most of its tags are not visible at load: tag the root ${ready.slice(1, -1)} or pass --ready <root selector>`;
+}
+function foreignRootHint(ready, f, withSteps) {
+  return `${ready} is the default --ready (the frame's tag), and the page shows another screen's tagged root (data-dt-node="${f.id}" ${f.by === "size" ? "has this frame's size" : "encloses most of this screen's visible tags"}): the probe reached another screen \u2014 check ${withSteps ? "the --steps plan's navigate list" : "the --url, or reach the screen with --steps <plan.json>"}; if that element is a wrapper of this screen tagged with another id, tag this screen's root ${ready.slice(1, -1)} or pass --ready <root selector>`;
 }
 var STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 async function main(argv) {
@@ -7204,6 +7426,16 @@ ${USAGE}`);
 ${USAGE}`);
     return 2;
   }
+  if (f.behaviour === "off" && process.env[BEHAVIOUR_OFF_ENV] !== "1") {
+    console.error(`verify-probe: --behaviour off is for the probe's own tests only \u2014 a run without the behaviour checks is not a verification
+${USAGE}`);
+    return 2;
+  }
+  if (f.ready !== void 0 && f.ready.trim() === "") {
+    console.error(`verify-probe: --ready must be a selector or none, got '${f.ready}'
+${USAGE}`);
+    return 2;
+  }
   const behaviourOn = f.behaviour !== "off";
   if (f.run !== void 0 && (f.check || !/^[\w.:-]+$/.test(f.run))) {
     console.error(`verify-probe: ${f.check ? "--run does not apply to --check" : `--run must be a run id (letters, digits, . : _ -), got '${f.run}'`}
@@ -7223,20 +7455,25 @@ ${USAGE}`);
   }
   let steps = [];
   let stepsSource = null;
+  let taggingOff = false;
   if (f.steps !== void 0) {
     const r2 = readJson(f.steps, anyJson);
     if ("error" in r2) {
       console.error(`verify-probe: --steps '${f.steps}' ${r2.error}`);
       return 2;
     }
+    taggingOff = planTaggingOff(r2.doc);
     const parsed = parseSteps(r2.doc);
     if ("error" in parsed) {
       console.error(`verify-probe: --steps '${f.steps}' ${parsed.error}
 ${USAGE}`);
       return 2;
     }
-    steps = parsed.steps;
-    stepsSource = `--steps ${(path9.relative(process.cwd(), path9.resolve(f.steps)) || f.steps).split(path9.sep).join("/")}`;
+    if (parsed.noNavigate) console.error(`note  --steps '${f.steps}' is a plan with no \`navigate\` list \u2014 no steps run: the screen is measured where --url lands`);
+    else {
+      steps = parsed.steps;
+      stepsSource = `--steps ${(path9.relative(process.cwd(), path9.resolve(f.steps)) || f.steps).split(path9.sep).join("/")}`;
+    }
   }
   let expectation = null, expBytes = null;
   let viewport = { w: 1280, h: 800 };
@@ -7261,6 +7498,10 @@ ${USAGE}`);
     } else if (typeof fr.w === "number" && typeof fr.h === "number") viewport = { w: Math.round(fr.w), h: Math.round(fr.h) };
     else notes.push("the expectation states no frame size \u2014 measured at 1280x800; pass --viewport");
   }
+  const readyPick = f.check ? null : readyOf(f.ready, expectation?.frame?.nodeId, taggingOff);
+  const frameNodeId = expectation?.frame?.nodeId;
+  const ownTags = f.ready === void 0 && readyPick?.ready !== void 0 && expectation && frameNodeId !== void 0 ? ownTagsOf(expectation, frameNodeId) : null;
+  const untaggedRoot = ownTags !== null ? { ...ownTags, seen: false } : void 0;
   const outBase = f.out ?? (f.expected ? path9.join(path9.dirname(f.expected), path9.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
   const statusBase = f.expected ? path9.join(path9.dirname(f.expected), path9.basename(outBase)) : "";
   const expSha = expBytes ? sha256Hex(expBytes) : void 0;
@@ -7304,10 +7545,24 @@ ${USAGE}`);
   };
   const ended = (code) => {
     if (runId !== void 0 && (code === 3 || code === 4) && (!ownRun || measuringRecorded)) {
-      const w = { runId, phase: ownRun ? "failed" : "measuring", by: "verify-probe", detail: `probe exit ${code} \u2014 nothing written`, ...expSha ? { expectationSha256: expSha } : {} };
-      const wrote2 = status(w);
+      const w = {
+        runId,
+        phase: ownRun ? "failed" : "measuring",
+        by: "verify-probe",
+        detail: `probe exit ${code} \u2014 nothing written`,
+        ...expSha ? { expectationSha256: expSha } : {},
+        ...ownRun ? {} : { probeFailed: code }
+      };
+      const rec = {};
+      const wrote2 = status(w, { after: (d) => {
+        rec.doc = d;
+      } });
       if (ownRun) own.disarm();
       if (wrote2 === "over") return 2;
+      if (!ownRun) {
+        if (rec.doc?.probeFailures !== void 0) console.error(probeAttemptLine(rec.doc, code));
+        else if (wrote2 === "refused") console.error(probeAttemptUncounted({ runId, exit: code, by: refusal.by, screen: path9.basename(statusBase), verifyDir: path9.resolve(path9.dirname(statusBase)) }));
+      }
     }
     return code;
   };
@@ -7340,6 +7595,7 @@ ${USAGE}`);
     });
   }
   if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
+  if (readyPick) console.error(readyPick.note);
   const held = {};
   let timer;
   const runDeadline = Date.now() + maxTime;
@@ -7366,13 +7622,26 @@ ${USAGE}`);
       return 0;
     }
     let run2;
-    const probeOpts = { expectation, url: f.url, ...f.ready !== void 0 ? { ready: f.ready } : {}, viewport, position: !!f.position, timeout, ...steps.length ? { steps } : {} };
+    const ready = readyPick?.ready;
+    const probeOpts = {
+      expectation,
+      url: f.url,
+      ...ready !== void 0 ? { ready } : {},
+      viewport,
+      position: !!f.position,
+      timeout,
+      ...steps.length ? { steps } : {},
+      ...untaggedRoot !== void 0 ? { untaggedRoot } : {}
+    };
     try {
       run2 = await runProbe(browser, probeOpts);
     } catch (e) {
       await browser.close().catch(() => void 0);
       if (e instanceof UnreachableError) {
-        console.error(`verify-probe: ${e.message} \u2014 nothing written.`);
+        const byDefault = f.ready === void 0 && ready !== void 0 && e.message.startsWith(`--ready '${ready}'`);
+        const hint = !byDefault ? "" : e.foreign !== null ? foreignRootHint(ready, e.foreign, steps.length > 0) : defaultReadyMissed(ready, steps.length > 0);
+        console.error(`verify-probe: ${e.message} \u2014 nothing written.` + (hint ? `
+  ${hint}` : ""));
         return 4;
       }
       if (pwErrorKind(e) === "gone") {
@@ -7384,6 +7653,10 @@ ${USAGE}`);
         return 4;
       }
       throw e;
+    }
+    if (untaggedRoot?.seen === true && ready !== void 0) {
+      const note = untaggedRootNote(ready, untaggedRoot.waitedMs ?? timeout, run2.kind === "ok" ? run2.result.frames[0]?.via : void 0);
+      if (note !== null) notes.push(note);
     }
     let driven2 = null, driveNote2 = null;
     let wedged = false;
@@ -7510,7 +7783,8 @@ ${USAGE}`);
     const b = held.browser;
     if (b) await closeCapped(b);
     console.error(`verify-probe: timed out after ${maxTime / 1e3}s (--max-time) \u2014 the browser was closed, nothing written.
-  a page that never settles (a script that does not yield, a request that never ends): re-run the probe once; if it times out again, report it (status failed).`);
+  a page that never settles (a script that does not yield, a request that never ends): re-run the probe once; if it times out again, report it \u2014
+  the probe writes the run's \`failed\` status itself (with --run at the second failed attempt; its own run at once).`);
     return ended(4);
   }
   if (typeof first === "number") return ended(first);
@@ -7637,16 +7911,20 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   });
 }
 export {
+  BEHAVIOUR_OFF_ENV,
   BODY_WAIT_MS,
   INIT_SCRIPT,
   LAUNCH_ARGS,
   PLAYWRIGHT_PACKAGES,
+  READY_NONE,
   behaviourLine,
   browserPathError,
   buildFrom,
   closeCapped,
+  defaultReadyMissed,
   driveOutcome,
   errorKind,
+  foreignRootHint,
   foreignTags,
   installHint,
   isNavigationAway,
@@ -7656,11 +7934,25 @@ export {
   loadFailureWhy,
   main,
   measuredRefusedWhy,
+  ownTagsOf,
+  planTaggingOff,
+  probeAttemptLine,
+  probeAttemptUncounted,
   projectRequire,
+  readyOf,
+  refusingRoot,
   resolveAxe,
   resolvePlaywright,
   runProbe,
-  statusRefusalOf
+  screenTagsMet,
+  screenTagsNow,
+  screenTagsWhy,
+  settleMiss,
+  statusRefusalOf,
+  takesForScreen,
+  untaggedRootNote,
+  visibleOnly,
+  waitForScreenTags
 };
 /*! visual-diff.ts — colorDelta, antialiased and hasManySiblings are a port of pixelmatch v6.0.0 (index.js,
  * https://github.com/mapbox/pixelmatch/tree/v6.0.0), under its licence:
