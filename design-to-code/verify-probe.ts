@@ -1113,16 +1113,18 @@ const OWN_RUN_GRACE_MS = 120_000;
  *  yields does not close — so ask the browser PROCESS to quit (CDP Browser.close, Chromium), then close the handle; each
  *  step capped at CLOSE_STEP_CAP_MS (unref'd caps: a pending cap must not keep the process alive once the browser is gone).
  *  Then the browser is ended with what it started if it is still running (killBrowser) — a wedged one (it answers nothing,
- *  still connected), and one that is merely slow to go: after Browser.close the handle is disconnected at once, but under
- *  load the process can take seconds to minutes to exit, and this process waits on its pipes past --max-time. The probe
+ *  still connected), and on POSIX one that is merely slow to go: after Browser.close the handle is disconnected at once, but
+ *  under load the process can take seconds to minutes to exit, and this process waits on its pipes past --max-time. The probe
  *  launched it and the browser was told to quit, so no page can be live after that and measured.json may be written.
- *  A browser that has exited is not killed on Windows (killBrowser's `exited`): once the child's handle is closed Windows
- *  may give its pid to another process, and taskkill /T would end that one's tree. The exit is read from a browser.close()
- *  that resolves within its cap (Playwright's close of a browser it launched waits for the process to close; a second
- *  concurrent close may resolve on the disconnect alone, which errs safe) and from the handle reading disconnected
- *  (a close that hits its cap can still follow an exit: Playwright's cleanup after the process closes, e.g. a profile
- *  directory it cannot remove, takes seconds). A wedged browser stays connected and keeps its kill. What remains is a
- *  still-connected browser that exits between that check and the taskkill.
+ *  On Windows `exited` (killBrowser) is: the close resolved, or the browser reads disconnected (its CDP pipe has closed). Then
+ *  no taskkill runs here: the exit has happened, so the pid may already be another process's and taskkill /T would end that
+ *  one's tree, or the pid is still held by this process and the browser is only slow to go, which is left to Playwright's own
+ *  kill (exitWhenDone ends the process, and Playwright's exit hook runs taskkill for a browser it has not seen close). Neither
+ *  a resolved close nor a disconnect proves the process exited (the pipe can close first; a close after the dispatcher is
+ *  gone resolves on the disconnect alone). A close that hits its cap can follow an exit (Playwright's cleanup after the
+ *  process closes, e.g. a profile directory it cannot remove, takes seconds): the disconnect covers it. A wedged browser stays
+ *  connected and keeps its taskkill; so does one whose close rejects while connected. What remains is a still-connected
+ *  browser that exits between that check and the taskkill.
  *  `pid` is the browser's (launchPid, recorded at launch); `host` is for the tests. */
 export async function closeCapped(b: Pick<Browser, "newBrowserCDPSession" | "close" | "isConnected">, capMs = CLOSE_STEP_CAP_MS, pid: number | undefined = launchPids.get(b),
   host: ProcHost = PROBE_HOST): Promise<void> {
@@ -1142,7 +1144,8 @@ const PROBE_HOST: ProcHost = { ...PROC_HOST, taskkill: taskkillCapped(KILL_CMD_C
  *  that stopped answering) for the browser to go on its own. The browser's pid known (launchPid): POSIX SIGKILLs its process
  *  group (Playwright spawns it detached, so it leads one; that also reaches descendants the browser left after it exited),
  *  no command run; Windows runs `taskkill /T /F /PID` (hidden) while that pid exists, and not at all when `exited` (the
- *  browser is known to have exited: the pid may be another process's by now — see killChildTree). Unknown: each direct
+ *  close resolved or the browser is disconnected: it may have exited and its pid be another process's by now — see
+ *  killChildTree). Unknown: each direct
  *  child of this process is ended — its only children are its browsers (its other commands are synchronous) — found by a
  *  /proc scan (Linux) or `pgrep -P` (else `ps` when pgrep is missing); Windows then leaves the browser to Playwright's exit
  *  hook (exitWhenDone). The wait and at most one command (pgrep, ps or taskkill, capped at KILL_CMD_CAP_MS) fit in
@@ -1616,7 +1619,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
 
 /** A browser told to quit can be slow to go, and Playwright's browser.close() then waits up to 30 s for it (a ref'd timer and
  *  the browser's pipes), keeping this process up past --max-time — where killBrowser kills nothing (Windows, with the
- *  browser's pid unknown or its taskkill failed). So a process still up EXIT_GRACE_MS after main is done exits, stdio
+ *  browser's pid unknown, its taskkill failed, or `exited`: the close resolved or the browser disconnected). So a process still up EXIT_GRACE_MS after main is done exits, stdio
  *  flushed first (process.exit drops what an async pipe has not written yet): Playwright's exit hook then kills each
  *  browser this process launched that is still running (taskkill /T /F on Windows, its process group on POSIX). A process that drains on its own never reaches the timer. */
 const EXIT_GRACE_MS = 1_000;

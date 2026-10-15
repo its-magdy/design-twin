@@ -2016,8 +2016,8 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
     reported === 4242 && failed === undefined && silent === undefined && Date.now() - at < 2_000);
   // Windows, on any OS through a stand-in host. A close that hit its cap with the browser still connected (wedged), or that
   // rejected with it connected: taskkill /T /F /PID <the browser's pid> while it runs, nothing else. A close that resolved,
-  // or one that hit its cap after the browser disconnected (Playwright's cleanup after the exit can outlast the cap), has
-  // seen the browser exit, so its pid may be another process's by now (exists() is true of the new owner here): no taskkill.
+  // or one that hit its cap after the browser disconnected (Playwright's cleanup after the exit can outlast the cap), may
+  // follow the browser exit, so its pid may be another process's by now (exists() is true of the new owner here): no taskkill.
   const win: string[][] = [], winClosed: string[][] = [], winGone: string[][] = [], winRejected: string[][] = [];
   const stuck = { ...fake, close: () => new Promise<void>(() => undefined), isConnected: () => true };
   const stuckGone = { ...stuck, isConnected: () => false };
