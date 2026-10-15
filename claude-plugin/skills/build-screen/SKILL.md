@@ -449,7 +449,8 @@ Copy this checklist into your notes and keep it updated:
    field, designed → built, the user's reason) under verification evidence — accepted is not "matches".
 
    `static-only` means "built, not visually verified" — never "matches the design". If the hook
-   blocks, fix what it listed and hand back again; it re-runs on every stop.
+   blocks, fix what it listed and re-run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>` yourself
+   until it passes, then end the turn — the hook does not check the stop that follows its own block.
 
 ## Building several screens in one session
 
@@ -457,7 +458,9 @@ Each layer's node JSON is large, and loading five into one context degrades all 
 one screen, **delegate one layer per `designtwin:screen-builder` agent** after scaffolding shared
 navigation and tokens: give it the layer name/id and the shared files to reuse. It has this skill
 preloaded, runs the same Stop-hook gate, and reports back only files created, components reused,
-missing tokens, defaults assumed, and unresolved fidelity gaps — under ~10 lines.
+missing tokens, defaults assumed, and unresolved fidelity gaps — under ~10 lines. When the builders have
+returned, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status` and report each plan's computed
+status — not the one a builder expected.
 
 For step 5's render-and-compare, prefer the **`designtwin:visual-verifier`** agent over checking your own work:
 hand it `design/verify/<Screen>.expected.json`; it renders, measures every node, drives the designed interactions

@@ -2847,17 +2847,20 @@ function computeStatus(plan, opts) {
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 var BUILDER_AGENT = /^(designtwin:)?screen-builder$/;
 function lineActions(line, ownOnly, out) {
-  if (!line.trim()) return;
+  if (!line.trim()) return 0;
   let v = null;
   try {
     const parsed = JSON.parse(line);
     v = parsed;
   } catch {
-    return;
+    return 0;
   }
-  if (!isJsonObject(v) || ownOnly && v.isSidechain === true || !isJsonObject(v.message) || !Array.isArray(v.message.content)) return;
+  if (!isJsonObject(v) || ownOnly && v.isSidechain === true || !isJsonObject(v.message) || !Array.isArray(v.message.content)) return 0;
+  let uses = 0;
   for (const item of v.message.content) {
-    if (!isJsonObject(item) || item.type !== "tool_use" || typeof item.name !== "string" || !isJsonObject(item.input)) continue;
+    if (!isJsonObject(item) || item.type !== "tool_use") continue;
+    uses++;
+    if (typeof item.name !== "string" || !isJsonObject(item.input)) continue;
     const inp = item.input;
     const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
     if (WRITE_TOOLS.has(item.name)) {
@@ -2867,6 +2870,7 @@ function lineActions(line, ownOnly, out) {
       }
     } else if (SHELL_TOOLS.has(item.name) && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command, item.name === "PowerShell")) out.push({ path: f, base });
   }
+  return uses;
 }
 var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:_|\\u005f)(?:u|\\u0075)(?:s|\\u0073)(?:e|\\u0065)"/i;
 var mayHoldToolUse = (line) => line.includes('"tool_use"') || line.includes("\\u") && TOOL_USE_ESCAPED.test(line);
@@ -2894,12 +2898,29 @@ function forEachLine(file, onLine, chunk = LINE_CHUNK) {
     fs11.closeSync(fd);
   }
 }
-function transcriptActions(file, ownOnly) {
-  const out = [];
+var NO_CLAIM_MARK = "are stopping without claiming a plan, so your build has NOT been checked";
+function isHookFeedback(line) {
+  let v = null;
+  try {
+    const parsed = JSON.parse(line);
+    v = parsed;
+  } catch {
+    return false;
+  }
+  if (!isJsonObject(v) || !isJsonObject(v.message) || v.message.role !== "user") return false;
+  const c = v.message.content;
+  return typeof c === "string" || Array.isArray(c) && !c.some((item) => isJsonObject(item) && item.type === "tool_result");
+}
+function scanTranscript(file, ownOnly) {
+  const scan = { writes: [], toolUses: 0, sentBack: false };
   forEachLine(file, (line) => {
-    if (mayHoldToolUse(line)) lineActions(line, ownOnly, out);
+    if (!scan.sentBack && line.includes(NO_CLAIM_MARK) && isHookFeedback(line)) scan.sentBack = true;
+    if (mayHoldToolUse(line)) scan.toolUses += lineActions(line, ownOnly, scan.writes);
   });
-  return out;
+  return scan;
+}
+function transcriptActions(file, ownOnly) {
+  return scanTranscript(file, ownOnly).writes;
 }
 var SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var PLAN_SKELETON = /^plan-skeleton(\.[cm]?[jt]s)?$/i;
@@ -2940,12 +2961,13 @@ function ownPlans(open, input, all, cwd) {
   const agent = typeof input.agent_transcript_path === "string" && !!input.agent_transcript_path;
   const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
   if (!file || typeof file !== "string") return { plans: open, scope: "unscoped" };
-  let writes;
+  let scan;
   try {
-    writes = transcriptActions(file, !agent);
+    scan = scanTranscript(file, !agent);
   } catch {
     return { plans: open, scope: "unscoped" };
   }
+  const writes = scan.writes;
   const listers = /* @__PURE__ */ new Map();
   for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
   const owns = (p) => {
@@ -2954,8 +2976,19 @@ function ownPlans(open, input, all, cwd) {
     return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile(w, f, cwd)));
   };
   const known = all && all.length ? all : open;
-  if (!known.some(owns)) return { plans: [], scope: "none-named" };
-  return { plans: open.filter(owns), scope: "named" };
+  if (!known.some(owns)) return { plans: [], scope: "none-named", scan };
+  return { plans: open.filter(owns), scope: "named", scan };
+}
+function ownBadPlans(bad, scan, cwd) {
+  if (!scan) return [];
+  const closed = (b) => {
+    const doc = readJsonOrNull(b.file, anyJson);
+    return isJsonObject(doc) && typeof doc.status === "string" && /^(abandoned|awaiting-user)$/.test(doc.status.trim().toLowerCase());
+  };
+  return bad.filter((b) => {
+    const rel = path8.relative(cwd, path8.resolve(b.file));
+    return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closed(b);
+  });
 }
 var USAGE2 = [
   `usage: ${scriptCmd("verify-build")}                     (Stop hook: reads the hook JSON from stdin when stdin is not a terminal)`,
@@ -2974,10 +3007,11 @@ var USAGE2 = [
   'A Claude Code hook payload (it has hook_event_name) gets a block as {"decision":"block","reason":\u2026} on stdout',
   "and exit 0 instead \u2014 a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
   "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",
-  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing (a screen-builder's",
-  'SubagentStop then prints {"systemMessage":\u2026} naming the open plans left unchecked \u2014 a notice, not a block; Claude',
-  "Code 2.1.299 was observed not to display a SubagentStop systemMessage, so it shows only in the hook output / transcript:",
-  "the plans stay open, and --status or a hand run, verify-build <plan.json>, checks them).",
+  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing. A screen-builder's",
+  "SubagentStop that claims none blocks once instead, naming the open plans: the builder runs verify-build <plan.json>",
+  "on the plan it built and names it in its report (or says it built none); its next stop (stop_hook_active) passes,",
+  "as does a builder whose transcript already holds that request or holds no tool call. A plan the agent wrote that",
+  "cannot be read blocks (another unreadable plan is a warning, and so is one whose raw JSON says status abandoned or awaiting-user).",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<\u2026>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
@@ -3108,6 +3142,8 @@ async function main(argv) {
     said.push(s);
   };
   const all = [];
+  const blockedOut = [];
+  let checkBlocked = false;
   let hookCwd = null, hookPlans;
   if (targets) {
     for (const p of targets) {
@@ -3125,21 +3161,28 @@ async function main(argv) {
     const { plans, bad } = findPlans(cwd);
     hookCwd = cwd;
     hookPlans = plans;
-    for (const b of bad) say(`verify-build: warning: ${path8.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
     const open = plans.filter((p) => isOpen(p, cwd));
-    if (!open.length) return 0;
+    if (!open.length && !bad.length) return 0;
     const own = ownPlans(open, input, plans, cwd);
-    if (own.scope === "none-named") {
+    const badOwn = ownBadPlans(bad, own.scan, cwd);
+    const fixIt = `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`;
+    for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path8.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
+    for (const b of badOwn) {
+      const rel = path8.relative(cwd, b.file);
+      blockedOut.push(`# ${path8.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, then ask) in the file, which must be valid JSON, or move it out of design/plan/`);
+    }
+    if (!open.length && !badOwn.length) return 0;
+    if (own.scope === "none-named" && !badOwn.length) {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
-      if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type)) {
+      if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type) && own.scan && own.scan.toolUses > 0 && !own.scan.sentBack) {
         const names = open.map((p) => path8.relative(cwd, p.file).replace(/\\/g, "/"));
-        console.log(JSON.stringify({ systemMessage: `verify-build: the ${input.agent_type} agent stopped without claiming a plan, so its build was NOT checked. Open plan(s) left unchecked: ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); shell edits (sed, cp, a redirect) are not read. Check one now: ${scriptCmd("verify-build")} <plan.json>` }));
+        console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${input.agent_type}) ${NO_CLAIM_MARK}. Open plan(s): ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); shell edits (sed, cp, a redirect) are not read. Before you stop: if you built one of these plans, run ${scriptCmd("verify-build")} <that plan.json>, fix what it blocks on, and name the plan and its result in your report; if you built none of them, say so in your report. This is asked once: your next stop is not checked again.` }));
       }
       return 0;
     }
     for (const p of own.plans) all.push({ p, cwd });
   }
-  const blockedOut = [], lines = [];
+  const lines = [];
   const warned = /* @__PURE__ */ new Map();
   const graphs = /* @__PURE__ */ new Map();
   for (const { p, cwd } of all) {
@@ -3147,7 +3190,10 @@ async function main(argv) {
     const name = path8.basename(p.file);
     if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
-    if (res.blocking.length) blockedOut.push(`# ${name}`, ...res.blocking.map((m) => `  - ${m}`));
+    if (res.blocking.length) {
+      checkBlocked = true;
+      blockedOut.push(`# ${name}`, ...res.blocking.map((m) => `  - ${m}`));
+    }
     const why = res.blocking.length ? "see below" : res.status.reasons[res.status.reasons.length - 1];
     lines.push(`verify-build: ${name}: hook ${res.blocking.length ? "BLOCKED" : "passed"} \xB7 computed status: ${res.status.status}${why ? ` \u2014 ${why}` : ""}`);
   }
@@ -3155,7 +3201,8 @@ async function main(argv) {
   for (const l of lines) say(l);
   if (blockedOut.length) {
     say("\nverify-build: build-screen check failed \u2014 do not report this screen as done until these are resolved");
-    say('(a plan that will not be finished: set its status to "abandoned"; a build paused on a question for the user: "awaiting-user", then ask):\n');
+    if (checkBlocked) say('(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", then ask):\n');
+    else say("");
     say(blockedOut.join("\n"));
     if (!asDecision) return 2;
     console.log(JSON.stringify({ decision: "block", reason: said.join("\n") }));

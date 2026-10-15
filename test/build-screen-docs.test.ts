@@ -104,6 +104,25 @@ console.log("verify docs (pass-with-deviations and waivers):");
     return [builder, hook].every((t) => /\(Write\/Edit, (or )?plan-skeleton's `--out`\)/.test(t) && /not `sed`\/`cp`\/a redirect/.test(t))
       && !/Write\/Edit, a redirect/.test(builder + hook);
   })());
+  // A builder that claims no plan is sent back once to check its plan by hand and name it — no doc still says the user
+  // is merely told (a SubagentStop systemMessage, observed not displayed).
+  check("the screen-builder, hook-and-status and hooks.json: a builder that claims no plan is sent back once to run verify-build on its plan and name it",
+    (() => {
+      const hook = flat(read("claude-plugin/skills/build-screen/references/hook-and-status.md"));
+      const desc = flat(read("claude-plugin/hooks/hooks.json"));
+      return /claim none and it sends you back once to run `verify-build\.js` on your plan by hand and name the plan in your report/.test(builder)
+        && /A builder that claimed none is sent back once .*runs `verify-build <plan\.json>` on the plan it built.* names the plan in its report — or says it built none; its next stop is not checked again/.test(hook)
+        && /it blocks once \(decision block;.*verify-build <plan\.json> on the plan it built and name that plan in its report.*its next stop \(stop_hook_active\) passes unchecked, so it never loops/.test(desc)
+        && !/tells the user which open plans went unchecked/.test(hook) && !/emits a systemMessage naming the open plans/.test(desc)
+        && /A plan you wrote that cannot be read .* is yours too: the hook blocks on it/.test(hook) && /a plan it wrote that cannot be read is its claim and blocks/.test(desc);
+    })());
+  // The hook does not check the stop that follows its own block (stop_hook_active): after a block the builder and the
+  // main session re-run verify-build by hand until it passes; no text still promises a re-check on every stop.
+  check("the screen-builder and build-screen: after a block, re-run verify-build by hand until it passes — no 're-runs on every stop'; the orchestrator runs --status after its builders",
+    /If the hook blocks, fix what it listed and re-run `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-build\.js" <plan\.json>` yourself until it passes, then hand back — the hook does not check the stop that follows its own block\./.test(builder)
+    && /If the hook blocks, fix what it listed and re-run `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-build\.js" <plan\.json>` yourself until it passes, then end the turn — the hook does not check the stop that follows its own block\./.test(skill)
+    && /When the builders have returned, run `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-build\.js" --status` and report each plan's computed status/.test(skill)
+    && ![builder, skill].some((t) => /re-runs on (each|every) stop/.test(t)));
   check("sync-design: its patch is made with Write/Edit, not sed/cp/a redirect, which the Stop hook does not read",
     /Write\/Edit, not `sed`\/`cp`\/a redirect, which it does not read/.test(flat(read("claude-plugin/skills/sync-design/SKILL.md"))));
   check("build-screen names verified-with-deviations; sync-design says a re-export reopens waivers",

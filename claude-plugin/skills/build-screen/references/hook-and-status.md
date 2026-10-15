@@ -40,8 +40,12 @@ The `Stop` hook (`verify-build.js`, as your turn ends) checks the plans your ses
 plan-skeleton's `--out`) and the plan whose `files[]` alone lists a file you wrote with Write/Edit — it does not
 read other shell commands, so edit the plan and the code with Write/Edit, not `sed`/`cp`/a redirect. A session that claims no
 plan checks nothing — an orchestrator that only delegated, or one that edited only files several plans share; the
-screen-builder's own hook still gates each delegated build, and tells the user which open plans went unchecked when
-a builder claimed none.
+screen-builder's own hook still gates each delegated build. A builder that claimed none is sent back once (a block
+naming the open plans): it runs `verify-build <plan.json>` on the plan it built, fixes what that blocks on, and names
+the plan in its report — or says it built none; its next stop is not checked again. A plan you wrote that cannot be
+read (bad JSON, a field of the wrong kind) is yours too: the hook blocks on it, so fix it and run `verify-build` on it —
+or, for a plan you will not finish, set `"status"` to `"abandoned"` (or `"awaiting-user"`) in the file, which must still
+be valid JSON, or move it out of `design/plan/`.
 
 It **blocks** on: a raw colour in a source file of `files[]` whose value the plan resolved to a real token (`#hex`,
 `0xFF…`, `rgb()`; comments, prose strings and `.svg`/`.json` files are not scanned, and a line that *defines* a

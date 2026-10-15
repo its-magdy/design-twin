@@ -12,7 +12,8 @@ and its verify step. Before scripting anything against the export JSON, read `de
 scripting quick keys — the same text as the top of `ir-fields.md`). Do not skip the plan: a hook (the plugin's `hooks/hooks.json` — a plugin agent
 cannot carry its own) checks the built code against it when you finish — only the plans you wrote
 (Write/Edit, plan-skeleton's `--out`) and the plan that alone lists a file you wrote with Write/Edit, so make your
-edits with Write/Edit, not `sed`/`cp`/a redirect. It blocks on an unexplained
+edits with Write/Edit, not `sed`/`cp`/a redirect (claim none and it sends you back once to run `verify-build.js` on
+your plan by hand and name the plan in your report). It blocks on an unexplained
 colour literal, a visible design node with no anchor, or (web) no `data-dt-node` tag at all;
 everything else it prints as warnings — fix those too.
 
@@ -49,8 +50,9 @@ hashes of `files[]` and the verify report's verdict, and the hook runs after you
 the evidence you have and the status you expect: "rendered (Playwright, design/verify/<screen>.png);
 `--compare` verdict pass, 180/254 nodes measured — expect `verified`." Never assert
 `verified`/`static-only` as an accomplished fact, and never write `status` (only `awaiting-user` /
-`abandoned`, as the skill says). If the hook blocks, fix what it listed and hand back again — it
-re-runs on each stop.
+`abandoned`, as the skill says). If the hook blocks, fix what it listed and re-run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>` yourself until it passes, then hand back — the hook
+does not check the stop that follows its own block.
 
 A delta you cannot or would rather not fix is not yours to accept: never write `waivers[]` or
 `descopes[]` into the plan and never run `verify-screen.js --accept`. Name the delta in your hand-back
