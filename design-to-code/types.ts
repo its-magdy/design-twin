@@ -1099,8 +1099,8 @@ export interface VerifyReport {
   /** "Inferred, not designed" — never the verdict */
   inferred?: InferredRow[];
   why?: string[];
-  /** the why[] entries that say the run itself is unverified — what --accept refuses on. Absent in reports
-   *  written before it was recorded (--accept then matches why[] by wording). */
+  /** the why[] entries that say the run itself is unverified — what --accept refuses on ([] for a clean run).
+   *  --accept refuses a report without it: re-run --compare, which always writes it. */
   integrity?: string[];
   coverage?: {
     nodesExpected: number; nodesMeasured: number; nodesNotMeasured?: number; nodesMatchedByComponentPath?: number; fieldsChecked: number;

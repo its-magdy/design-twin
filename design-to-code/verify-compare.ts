@@ -359,8 +359,8 @@ function fieldTolerance(label: string): number | null {
 // now declines (impossible, an <img> fill, a method gap) is nowUnverifiable; and when the measured file is the very
 // same file as last round's, no difference is the build's — every one is `reclassified`, none fixed/new/lost.
 const fieldBase = (f: string): string => f.replace(/\s*\(.*\)$/, "");
-// the verdict reasons that say the run itself is unverified — the ONE wording compare() writes and
-// --accept recognises (it refuses a report carrying any of them).
+// the wording of the verdict reasons that say the run itself is unverified (runIntegrity). The reasons are
+// recorded as report.integrity; --accept reads that field, never this wording.
 const INTEGRITY_PHRASES = {
   otherExpectation: "the measurements were taken against a DIFFERENT expectation",
   noExpectation: "measured file names no expectation (expectationSha256)",
@@ -369,7 +369,6 @@ const INTEGRITY_PHRASES = {
   unrecorded: "no status of that run records it",
   measuredBefore: "was measured before that run ended",
 } as const;
-export const isIntegrityReason = (w: string): boolean => Object.values(INTEGRITY_PHRASES).some((p) => w.includes(p));
 interface CoverageNow {
   notMeasured: Array<{ nodeId: string }>; fieldsNotMeasured: Array<{ nodeId: string; field: string; why: string }>; unverifiable: Array<{ nodeId: string; field: string; why: string }>;
   specIds: Set<string>; absent: Set<string>; sameMeasured: boolean;
