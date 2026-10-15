@@ -1474,6 +1474,68 @@ console.log("field-test fixes:");
       return r.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && !/without claiming/.test(out.reason) && /login\.json: hook BLOCKED/.test(out.reason)
         && planOf(root).verification?.hook?.result === "blocked" && !planAt(root, "settings").verification?.hook;
     })());
+    // A builder's SubagentStop over a transcript of the given lines (two open plans, neither claimed by default).
+    const builderStop = (lines: (root: string) => string[], extra: (root: string) => void = () => {}, payload: object = {}) => {
+      const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
+      addPlan(root, "settings", { ...BLOCKING, files: ["b.tsx"] });
+      extra(root);
+      const t = path.join(root, "agent.jsonl");
+      fs.writeFileSync(t, lines(root).join("\n"));
+      const r = runHook(root, { cwd: root, hook_event_name: "SubagentStop", agent_id: "b1", agent_type: "designtwin:screen-builder", agent_transcript_path: t, stop_hook_active: false, ...payload });
+      const out: unknown = JSON.parse(r.stdout.trim() || "null");
+      return { root, r, out, untouched: !planOf(root).verification?.hook && !planAt(root, "settings").verification?.hook };
+    };
+    const SED = toolUse("Bash", { command: "sed -i '' 's/a/b/' design/plan/login.json" });
+    const feedback = JSON.stringify({ type: "user", isSidechain: true, message: { role: "user", content: `Stop hook feedback:\n${sentBack("designtwin:screen-builder")}` } });
+    check("…a builder whose transcript already holds the no-claim request is not asked again, even with stop_hook_active false — exit 0, no stdout, nothing written", (() => {
+      const { r, untouched } = builderStop(() => [SED, feedback, SED]);
+      return r.status === 0 && untouched && r.stdout.trim() === "";
+    })());
+    check("…but the request's text inside a tool_result (the builder reading this script) does not count as asked: it is still sent back", (() => {
+      const read = JSON.stringify({ type: "user", isSidechain: true, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: sentBack("designtwin:screen-builder") }] } });
+      const { out } = builderStop(() => [SED, read]);
+      return isJsonObject(out) && out.decision === "block" && out.reason === sentBack("designtwin:screen-builder");
+    })());
+    check("…an agent transcript with no tool call (an internal agent under `claude --agent`) is not sent back — exit 0, no stdout", (() => {
+      const text = JSON.stringify({ type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: "a suggestion" }] } });
+      const { r, untouched } = builderStop(() => [text]);
+      return r.status === 0 && untouched && r.stdout.trim() === "";
+    })());
+    check("…a builder that claims only a CLOSED plan (abandoned) stays silent — exit 0, no stdout, nothing written", (() => {
+      const { r, untouched, root } = builderStop(() => [toolUse("Edit", { file_path: "design/plan/done.json", old_string: "a", new_string: "b" })], (root) => addPlan(root, "done", { ...BLOCKING, status: "abandoned" }));
+      return r.status === 0 && untouched && r.stdout.trim() === "" && !planAt(root, "done").verification?.hook;
+    })());
+    check("…a builder's SubagentStop with no agent_transcript_path checks every open plan, as before", (() => {
+      const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
+      addPlan(root, "settings", { ...BLOCKING, files: ["b.tsx"] });
+      fs.writeFileSync(path.join(root, "b.tsx"), "#5B5FC7");
+      const r = runHook(root, { cwd: root, hook_event_name: "SubagentStop", agent_id: "b1", agent_type: "designtwin:screen-builder", transcript_path: path.join(root, "main.jsonl") });
+      const out: unknown = JSON.parse(r.stdout.trim() || "null");
+      return r.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && !/without claiming/.test(out.reason)
+        && planOf(root).verification?.hook?.result === "blocked" && planAt(root, "settings").verification?.hook?.result === "blocked";
+    })());
+    const BROKEN = JSON.stringify({ status: "pending", tokens: "none" });
+    // the plan is named as the OS spells the path (path.relative), so the expectation is built the same way
+    const brokenItem = `${path.join("design", "plan", "broken.json")} is not a valid plan: \`tokens\` must be an array — you wrote this plan and it cannot be read, so it was NOT checked; `
+      + `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled), then run ${scriptCmd("verify-build")} ${path.join("design", "plan", "broken.json")}`;
+    check("a builder that Write-s an unreadable plan claims it: a block naming the plan, its error and the fix — not the no-claim request; the other plans untouched", (() => {
+      const { r, out, untouched } = builderStop(() => [toolUse("Write", { file_path: "design/plan/broken.json", content: BROKEN })], (root) => fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), BROKEN));
+      return r.status === 0 && untouched && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string"
+        && out.reason.includes(`# broken.json\n  - ${brokenItem}`) && !out.reason.includes("without claiming") && !out.reason.includes("warning: ");
+    })());
+    check("…and so does the main session's Stop, with no other open plan; an unreadable plan nobody wrote stays a warning (exit 0, no stdout)", (() => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-broken-"));
+      fs.mkdirSync(path.join(root, "design", "plan"), { recursive: true });
+      fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), BROKEN);
+      const t = path.join(root, "main.jsonl");
+      fs.writeFileSync(t, toolUse("Edit", { file_path: path.join(root, "design", "plan", "broken.json"), old_string: "a", new_string: "b" }));
+      const mine = runHook(root, { cwd: root, hook_event_name: "Stop", transcript_path: t });
+      const out: unknown = JSON.parse(mine.stdout.trim() || "null");
+      fs.writeFileSync(t, toolUse("Edit", { file_path: "src/x.tsx", old_string: "a", new_string: "b" }));
+      const other = runHook(root, { cwd: root, hook_event_name: "Stop", transcript_path: t });
+      return mine.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && out.reason.includes(brokenItem)
+        && other.status === 0 && other.stdout.trim() === "" && other.stderr.includes("broken.json is not a valid plan: `tokens` must be an array — it was NOT checked; fix it");
+    })());
   }
   check("planSkeletonOuts: the --out of a plan-skeleton call only, past a followed cd, heredoc bodies dropped", (() => {
     const o = verifyBuild.planSkeletonOuts;

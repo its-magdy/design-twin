@@ -1550,19 +1550,23 @@ const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const BUILDER_AGENT = /^(designtwin:)?screen-builder$/;
 /** A path the session wrote, and the directory it was relative to (the entry's `cwd`, when recorded). */
 export interface WrittenPath { path: string; base: string | null }
-// The paths one transcript line's tool_use items write, appended to `out`.
-function lineActions(line: string, ownOnly: boolean, out: WrittenPath[]): void {
-  if (!line.trim()) return;
+// The paths one transcript line's tool_use items write, appended to `out`; returns how many tool_use items it holds.
+function lineActions(line: string, ownOnly: boolean, out: WrittenPath[]): number {
+  if (!line.trim()) return 0;
   let v: unknown = null;
-  try { const parsed: unknown = JSON.parse(line); v = parsed; } catch { return; }
-  if (!isJsonObject(v) || (ownOnly && v.isSidechain === true) || !isJsonObject(v.message) || !Array.isArray(v.message.content)) return;
+  try { const parsed: unknown = JSON.parse(line); v = parsed; } catch { return 0; }
+  if (!isJsonObject(v) || (ownOnly && v.isSidechain === true) || !isJsonObject(v.message) || !Array.isArray(v.message.content)) return 0;
+  let uses = 0;
   for (const item of v.message.content) {
-    if (!isJsonObject(item) || item.type !== "tool_use" || typeof item.name !== "string" || !isJsonObject(item.input)) continue;
+    if (!isJsonObject(item) || item.type !== "tool_use") continue;
+    uses++;
+    if (typeof item.name !== "string" || !isJsonObject(item.input)) continue;
     const inp = item.input;
     const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
     if (WRITE_TOOLS.has(item.name)) { for (const k of ["file_path", "notebook_path"]) { const f = inp[k]; if (typeof f === "string") out.push({ path: f, base }); } }
     else if (SHELL_TOOLS.has(item.name) && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command, item.name === "PowerShell")) out.push({ path: f, base });
   }
+  return uses;
 }
 
 // A transcript is tens of MB, mostly tool_result text, and only a line holding a tool_use item can claim a
@@ -1595,10 +1599,22 @@ function forEachLine(file: string, onLine: (line: string) => void, chunk = LINE_
   } finally { fs.closeSync(fd); }
 }
 
+/** What a transcript tells the hook: the paths its tool calls write, how many tool calls it holds, and whether it
+ *  already holds the no-claim instruction (NO_CLAIM_MARK) — the builder was sent back once before. */
+export interface TranscriptScan { writes: WrittenPath[]; toolUses: number; sentBack: boolean }
+// The no-claim block's reason holds this phrase; a transcript line holding it (other than a tool_result — the builder
+// reading this script's source) is that reason, delivered back to the builder.
+const NO_CLAIM_MARK = "are stopping without claiming a plan, so your build has NOT been checked";
+function scanTranscript(file: string, ownOnly: boolean): TranscriptScan {
+  const scan: TranscriptScan = { writes: [], toolUses: 0, sentBack: false };
+  forEachLine(file, (line) => {
+    if (!scan.sentBack && line.includes(NO_CLAIM_MARK) && !line.includes('"tool_result"')) scan.sentBack = true;
+    if (mayHoldToolUse(line)) scan.toolUses += lineActions(line, ownOnly, scan.writes);
+  });
+  return scan;
+}
 function transcriptActions(file: string, ownOnly: boolean): WrittenPath[] {
-  const out: WrittenPath[] = [];
-  forEachLine(file, (line) => { if (mayHoldToolUse(line)) lineActions(line, ownOnly, out); });
-  return out;
+  return scanTranscript(file, ownOnly).writes;
 }
 
 // The plan files a shell command (the Bash tool's, or the PowerShell tool's — on by default on Windows without Git
@@ -1650,14 +1666,15 @@ function sameFile(w: WrittenPath, rel: string, cwd: string): boolean {
   return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
 }
 
-function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null | undefined, cwd: string): { plans: PlanFile[]; scope: PlanScope } {
+function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null | undefined, cwd: string): { plans: PlanFile[]; scope: PlanScope; scan?: TranscriptScan } {
   const agent = typeof input.agent_transcript_path === "string" && !!input.agent_transcript_path;
   const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
   // (a non-string path would have thrown in openSync and been caught the same way)
   if (!file || typeof file !== "string") return { plans: open, scope: "unscoped" };
-  let writes: WrittenPath[];
+  let scan: TranscriptScan;
   // the session transcript may carry a subagent's sidechain entries: those are not this session's actions
-  try { writes = transcriptActions(file, !agent); } catch { return { plans: open, scope: "unscoped" }; }
+  try { scan = scanTranscript(file, !agent); } catch { return { plans: open, scope: "unscoped" }; }
+  const writes = scan.writes;
   // rule (b): a written file claims the ONE open plan that lists it; a file two or more open plans list claims none
   const listers = new Map<string, number>();
   for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
@@ -1667,8 +1684,15 @@ function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null |
     return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile(w, f, cwd)));
   };
   const known = all && all.length ? all : open;
-  if (!known.some(owns)) return { plans: [], scope: "none-named" };
-  return { plans: open.filter(owns), scope: "named" };
+  if (!known.some(owns)) return { plans: [], scope: "none-named", scan };
+  return { plans: open.filter(owns), scope: "named", scan };
+}
+
+// The unreadable plans (findPlans' `bad`) the session's own Write/Edit or plan-skeleton --out wrote: its claim on a plan
+// it broke, which is reported to it as a block rather than as a warning nobody reads.
+function ownBadPlans(bad: readonly BadPlan[], scan: TranscriptScan | undefined, cwd: string): BadPlan[] {
+  if (!scan) return [];
+  return bad.filter((b) => { const rel = path.relative(cwd, path.resolve(b.file)); return scan.writes.some((w) => sameFile(w, rel, cwd)); });
 }
 
 // ================================================================ CLI
@@ -1692,7 +1716,9 @@ const USAGE = [
   "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",
   "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing. A screen-builder's",
   "SubagentStop that claims none blocks once instead, naming the open plans: the builder runs verify-build <plan.json>",
-  "on the plan it built and names it in its report (or says it built none); its next stop (stop_hook_active) passes.",
+  "on the plan it built and names it in its report (or says it built none); its next stop (stop_hook_active) passes,",
+  "as does a builder whose transcript already holds that request or holds no tool call. A plan the agent wrote that",
+  "cannot be read blocks (another unreadable plan is a warning).",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<…>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
@@ -1816,6 +1842,7 @@ async function main(argv: string[]): Promise<number> {
   const said: string[] = [];
   const say = (s: string): void => { console.error(s); said.push(s); };
   const all: Array<{ p: PlanFile; cwd: string }> = [];
+  const blockedOut: string[] = []; // `# <plan>` headers and the block items under each
   let hookCwd: string | null = null, hookPlans: PlanFile[] | undefined;
   if (targets) {
     for (const p of targets) {
@@ -1830,22 +1857,35 @@ async function main(argv: string[]): Promise<number> {
     setPhase("finding open plans in design/plan/");
     const { plans, bad } = findPlans(cwd);
     hookCwd = cwd; hookPlans = plans;
-    // A plan the hook cannot read is not checked — say so on every stop rather than skip it silently.
-    for (const b of bad) say(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
     const open = plans.filter((p) => isOpen(p, cwd));
-    if (!open.length) return 0; // fast path
+    if (!open.length && !bad.length) return 0; // fast path
     const own = ownPlans(open, input, plans, cwd);
-    if (own.scope === "none-named") {
+    // A plan the hook cannot read is not checked — say so on every stop rather than skip it silently. One this session
+    // wrote is its claim, and blocks: a warning on a stop that passes reaches no one (stderr on exit 0 is discarded).
+    const badOwn = ownBadPlans(bad, own.scan, cwd);
+    const fixIt = `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`;
+    for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; ${fixIt}`);
+    for (const b of badOwn) {
+      const rel = path.relative(cwd, b.file);
+      blockedOut.push(`# ${path.basename(b.file)}`, `  - ${rel} ${b.error} — you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}`);
+    }
+    if (!open.length && !badOwn.length) return 0;
+    // An agent that claims none of the open plans checks nothing — unless it broke a plan of its own (blocked above).
+    if (own.scope === "none-named" && !badOwn.length) {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) — nothing checked (${open.length} open ` +
         `plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
       // An orchestrator claiming nothing is normal; a screen-builder claiming nothing is a build the gate never saw. Its
       // tool calls name no plan of their own, so no other reader of them (the main session's Stop, a ledger) could claim
       // one either: only the builder knows which plan it built. So its SubagentStop blocks ONCE, and the reason — which
       // Claude Code delivers to the subagent as its next instruction — has it check its plan by hand and name the plan in
-      // its report. Its next stop carries stop_hook_active and returns above, so this never loops.
-      if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type)) {
+      // its report. Its next stop carries stop_hook_active and returns above, so this never loops; a transcript that
+      // already holds this reason is not asked again whatever the payload says. An agent with no tool call at all is not
+      // a build — an internal agent (prompt suggestions, a side question) reports the session's own agent_type under
+      // `claude --agent` — so it is not sent back.
+      if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type)
+        && own.scan && own.scan.toolUses > 0 && !own.scan.sentBack) {
         const names = open.map((p) => path.relative(cwd, p.file).replace(/\\/g, "/"));
-        console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${input.agent_type}) are stopping without claiming a plan, so your build has NOT been checked. `
+        console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${input.agent_type}) ${NO_CLAIM_MARK}. `
           + `Open plan(s): ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. `
           + "A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); "
           + "shell edits (sed, cp, a redirect) are not read. Before you stop: if you built one of these plans, run "
@@ -1857,7 +1897,7 @@ async function main(argv: string[]): Promise<number> {
     for (const p of own.plans) all.push({ p, cwd });
   }
 
-  const blockedOut: string[] = [], lines: string[] = [];
+  const lines: string[] = [];
   // A warning several plans share (a merged token on a shared theme) is printed ONCE, naming them all.
   const warned = new Map<string, string[]>();
   const graphs = new Map<string, ProjectGraph>(); // built once per project root per run, on first use

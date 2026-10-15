@@ -50,8 +50,9 @@ hashes of `files[]` and the verify report's verdict, and the hook runs after you
 the evidence you have and the status you expect: "rendered (Playwright, design/verify/<screen>.png);
 `--compare` verdict pass, 180/254 nodes measured — expect `verified`." Never assert
 `verified`/`static-only` as an accomplished fact, and never write `status` (only `awaiting-user` /
-`abandoned`, as the skill says). If the hook blocks, fix what it listed and hand back again — it
-re-runs on each stop.
+`abandoned`, as the skill says). If the hook blocks, fix what it listed and re-run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>` yourself until it passes, then hand back — the hook
+does not check the stop that follows its own block.
 
 A delta you cannot or would rather not fix is not yours to accept: never write `waivers[]` or
 `descopes[]` into the plan and never run `verify-screen.js --accept`. Name the delta in your hand-back
