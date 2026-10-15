@@ -2899,10 +2899,22 @@ function forEachLine(file, onLine, chunk = LINE_CHUNK) {
   }
 }
 var NO_CLAIM_MARK = "are stopping without claiming a plan, so your build has NOT been checked";
+function isHookFeedback(line) {
+  let v = null;
+  try {
+    const parsed = JSON.parse(line);
+    v = parsed;
+  } catch {
+    return false;
+  }
+  if (!isJsonObject(v) || !isJsonObject(v.message) || v.message.role !== "user") return false;
+  const c = v.message.content;
+  return typeof c === "string" || Array.isArray(c) && !c.some((item) => isJsonObject(item) && item.type === "tool_result");
+}
 function scanTranscript(file, ownOnly) {
   const scan = { writes: [], toolUses: 0, sentBack: false };
   forEachLine(file, (line) => {
-    if (!scan.sentBack && line.includes(NO_CLAIM_MARK) && !line.includes('"tool_result"')) scan.sentBack = true;
+    if (!scan.sentBack && line.includes(NO_CLAIM_MARK) && isHookFeedback(line)) scan.sentBack = true;
     if (mayHoldToolUse(line)) scan.toolUses += lineActions(line, ownOnly, scan.writes);
   });
   return scan;
@@ -2969,9 +2981,13 @@ function ownPlans(open, input, all, cwd) {
 }
 function ownBadPlans(bad, scan, cwd) {
   if (!scan) return [];
+  const closed = (b) => {
+    const doc = readJsonOrNull(b.file, anyJson);
+    return isJsonObject(doc) && typeof doc.status === "string" && /^(abandoned|awaiting-user)$/.test(doc.status.trim().toLowerCase());
+  };
   return bad.filter((b) => {
     const rel = path8.relative(cwd, path8.resolve(b.file));
-    return scan.writes.some((w) => sameFile(w, rel, cwd));
+    return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closed(b);
   });
 }
 var USAGE2 = [
@@ -2995,7 +3011,7 @@ var USAGE2 = [
   "SubagentStop that claims none blocks once instead, naming the open plans: the builder runs verify-build <plan.json>",
   "on the plan it built and names it in its report (or says it built none); its next stop (stop_hook_active) passes,",
   "as does a builder whose transcript already holds that request or holds no tool call. A plan the agent wrote that",
-  "cannot be read blocks (another unreadable plan is a warning).",
+  "cannot be read blocks (another unreadable plan is a warning, and so is one whose raw JSON says status abandoned or awaiting-user).",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<\u2026>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
@@ -3127,6 +3143,7 @@ async function main(argv) {
   };
   const all = [];
   const blockedOut = [];
+  let checkBlocked = false;
   let hookCwd = null, hookPlans;
   if (targets) {
     for (const p of targets) {
@@ -3152,7 +3169,7 @@ async function main(argv) {
     for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path8.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
     for (const b of badOwn) {
       const rel = path8.relative(cwd, b.file);
-      blockedOut.push(`# ${path8.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}`);
+      blockedOut.push(`# ${path8.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, then ask) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
     if (!open.length && !badOwn.length) return 0;
     if (own.scope === "none-named" && !badOwn.length) {
@@ -3173,7 +3190,10 @@ async function main(argv) {
     const name = path8.basename(p.file);
     if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
-    if (res.blocking.length) blockedOut.push(`# ${name}`, ...res.blocking.map((m) => `  - ${m}`));
+    if (res.blocking.length) {
+      checkBlocked = true;
+      blockedOut.push(`# ${name}`, ...res.blocking.map((m) => `  - ${m}`));
+    }
     const why = res.blocking.length ? "see below" : res.status.reasons[res.status.reasons.length - 1];
     lines.push(`verify-build: ${name}: hook ${res.blocking.length ? "BLOCKED" : "passed"} \xB7 computed status: ${res.status.status}${why ? ` \u2014 ${why}` : ""}`);
   }
@@ -3181,7 +3201,8 @@ async function main(argv) {
   for (const l of lines) say(l);
   if (blockedOut.length) {
     say("\nverify-build: build-screen check failed \u2014 do not report this screen as done until these are resolved");
-    say('(a plan that will not be finished: set its status to "abandoned"; a build paused on a question for the user: "awaiting-user", then ask):\n');
+    if (checkBlocked) say('(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", then ask):\n');
+    else say("");
     say(blockedOut.join("\n"));
     if (!asDecision) return 2;
     console.log(JSON.stringify({ decision: "block", reason: said.join("\n") }));

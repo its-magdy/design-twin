@@ -1496,6 +1496,13 @@ console.log("field-test fixes:");
       const { out } = builderStop(() => [SED, read]);
       return isJsonObject(out) && out.decision === "block" && out.reason === sentBack("designtwin:screen-builder");
     })());
+    check("…the request's text inside the builder's own tool_use input (it greps for the message) or assistant text does not count as asked either", (() => {
+      const mark = sentBack("designtwin:screen-builder");
+      const grep = toolUse("Bash", { command: `grep -rn "${mark}" .`, description: mark }, true);
+      const said = JSON.stringify({ type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: mark }] } });
+      const { out } = builderStop(() => [SED, grep, said]);
+      return isJsonObject(out) && out.decision === "block" && out.reason === mark;
+    })());
     check("…an agent transcript with no tool call (an internal agent under `claude --agent`) is not sent back — exit 0, no stdout", (() => {
       const text = JSON.stringify({ type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: "a suggestion" }] } });
       const { r, untouched } = builderStop(() => [text]);
@@ -1517,11 +1524,47 @@ console.log("field-test fixes:");
     const BROKEN = JSON.stringify({ status: "pending", tokens: "none" });
     // the plan is named as the OS spells the path (path.relative), so the expectation is built the same way
     const brokenItem = `${path.join("design", "plan", "broken.json")} is not a valid plan: \`tokens\` must be an array — you wrote this plan and it cannot be read, so it was NOT checked; `
-      + `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled), then run ${scriptCmd("verify-build")} ${path.join("design", "plan", "broken.json")}`;
-    check("a builder that Write-s an unreadable plan claims it: a block naming the plan, its error and the fix — not the no-claim request; the other plans untouched", (() => {
+      + `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled), then run ${scriptCmd("verify-build")} ${path.join("design", "plan", "broken.json")}. `
+      + "A plan you will not finish: set \"status\" to \"abandoned\" (or \"awaiting-user\", for a build paused on a question for the user, then ask) in the file, which must be valid JSON, or move it out of design/plan/";
+    const FAILED = "verify-build: build-screen check failed — do not report this screen as done until these are resolved";
+    check("a builder that Write-s an unreadable plan claims it: a block naming the plan, its error, the fix and the way out — not the no-claim request, not the generic status line; the other plans untouched", (() => {
       const { r, out, untouched } = builderStop(() => [toolUse("Write", { file_path: "design/plan/broken.json", content: BROKEN })], (root) => fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), BROKEN));
       return r.status === 0 && untouched && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string"
-        && out.reason.includes(`# broken.json\n  - ${brokenItem}`) && !out.reason.includes("without claiming") && !out.reason.includes("warning: ");
+        && out.reason.endsWith(`${FAILED}\n\n# broken.json\n  - ${brokenItem}`) && !out.reason.includes("without claiming") && !out.reason.includes("warning: ") && !out.reason.includes("set its status to");
+    })());
+    // a plan whose raw JSON holds a closed status is given up on: parsePlan fails on it before the status is read
+    for (const status of ["abandoned", " Awaiting-User "]) {
+      check(`an unreadable plan the session wrote whose raw JSON says status ${JSON.stringify(status)} does not block: a warning, exit 0, no stdout`, (() => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-closed-"));
+        fs.mkdirSync(path.join(root, "design", "plan"), { recursive: true });
+        fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), JSON.stringify({ status, tokens: "none" }));
+        const t = path.join(root, "main.jsonl");
+        fs.writeFileSync(t, toolUse("Write", { file_path: path.join(root, "design", "plan", "broken.json"), content: "{}" }));
+        const r = runHook(root, { cwd: root, hook_event_name: "Stop", transcript_path: t });
+        return r.status === 0 && r.stdout.trim() === "" && r.stderr.includes("broken.json is not a valid plan: `tokens` must be an array — it was NOT checked; fix it");
+      })());
+    }
+    check("…but with a status that is not closed (or JSON that does not parse) it still blocks", (() => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-open-"));
+      fs.mkdirSync(path.join(root, "design", "plan"), { recursive: true });
+      const t = path.join(root, "main.jsonl");
+      fs.writeFileSync(t, toolUse("Write", { file_path: path.join(root, "design", "plan", "broken.json"), content: "{}" }));
+      return ["{not json", JSON.stringify({ status: "done", tokens: "none" }), JSON.stringify(["abandoned"])].every((text) => {
+        fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), text);
+        const r = runHook(root, { cwd: root, hook_event_name: "Stop", transcript_path: t });
+        const out: unknown = JSON.parse(r.stdout.trim() || "null");
+        return r.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && out.reason.includes("you wrote this plan and it cannot be read");
+      });
+    })());
+    check("an unreadable plan blocking beside a plan whose check blocks keeps the generic status line, now with 'or move it out of design/plan/'", (() => {
+      const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
+      fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), BROKEN);
+      const t = path.join(root, "main.jsonl");
+      fs.writeFileSync(t, [toolUse("Edit", { file_path: "design/plan/login.json", old_string: "a", new_string: "b" }), toolUse("Write", { file_path: "design/plan/broken.json", content: BROKEN })].join("\n"));
+      const r = runHook(root, { cwd: root, hook_event_name: "Stop", transcript_path: t });
+      const out: unknown = JSON.parse(r.stdout.trim() || "null");
+      return r.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && out.reason.includes("# login.json\n") && out.reason.includes(`# broken.json\n  - ${brokenItem}`)
+        && out.reason.includes(`${FAILED}\n(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", then ask):\n\n#`);
     })());
     check("…and so does the main session's Stop, with no other open plan; an unreadable plan nobody wrote stays a warning (exit 0, no stdout)", (() => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-broken-"));
