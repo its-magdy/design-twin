@@ -1491,9 +1491,12 @@ function runIntegrity(cx: CompareCtx): Pick<Graded, "st" | "integrity" | "measur
     integrity.push(`the measured file was taken in run ${measuredRun}, but ` +
       `${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} ` +
       `— ${INTEGRITY_PHRASES.unrecorded}; ` +
-      // a run still open is the current one (never record this file over it); an ended one takes a record of this run
+      // a run still open is the current one (never record this file over it). Beside an ended run, measure again first: a
+      // record of this run replaces that run in the status (writeStatus refuses only a write to the ended run itself), so
+      // it is offered only over a `done` — never over a `failed` / `blocked` outcome it would hide
       `${!st ? `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`
-        : TERMINAL_PHASES.includes(st.phase) ? `record it with --status ${shellArg(st.screen)} --phase done --run ${measuredRun}, or measure again`
+        : st.phase === "done" ? `measure again, or record it with --status ${shellArg(st.screen)} --phase done --run ${measuredRun}`
+        : TERMINAL_PHASES.includes(st.phase) ? `measure again (a record of run ${measuredRun} now would hide run ${st.runId}'s ${st.phase} outcome)`
         : `run ${st.runId} is the current run — re-measure in it (never record run ${measuredRun} over it)`}`);
   } else if (st) {
     // the measured file's own run — or, for one that names no run (written by hand on a native stack, which

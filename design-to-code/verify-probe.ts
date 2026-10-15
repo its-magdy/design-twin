@@ -66,7 +66,7 @@ import { CLOSE_STEP_CAP_MS, PS_CAP_MS, behaviourBudget, runBehaviour } from "./p
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
-import { RunCacheUnwritable, RunEnded, RunOpen, endedRun, liveStatusFile, newRunId, openRun, publishStatus, readStatus, stageDirOf, statusFile, writeStatus } from "./verify-run.ts";
+import { RunCacheUnwritable, RunEnded, RunOpen, RunOverdue, endedRun, liveStatusFile, newRunId, openRun, publishStatus, readStatus, stageDirOf, statusFile, writeStatus } from "./verify-run.ts";
 import { LockBusy, LockLost, thisProcess } from "../bridge/src/file-lock.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite, StatusWriteHooks, VerifyStatusV2 } from "./verify-run.ts";
@@ -1023,10 +1023,11 @@ const USAGE =
   "      that run. Without --run the probe starts a run of its own (`run <id>` on stderr) and ends it — `done` with the files\n" +
   "      (published as <Screen>.status.json beside the expectation), `failed` on an exit 3/4 (a re-run is a new run); refused\n" +
   "      before anything starts (exit 2) while another run of the screen is open — a verifier's writes the same files: wait for\n" +
-  "      it, or end one nobody runs any more. Its own run never stays open behind it — every other non-zero exit, an error or\n" +
-  "      SIGINT/SIGTERM/SIGHUP (exit 128+n) ends it `failed`; it records the probe's pid and host, so one a killed probe left\n" +
-  "      open is ended `failed` by the next probe without --run once that pid is gone (same machine). The probe writes the\n" +
-  "      run's LIVE status (the run cache,\n" +
+  "      it, or end one nobody runs any more. Every other non-zero exit, an error or SIGINT/SIGTERM/SIGHUP (exit 128+n) ends\n" +
+  "      its own run `failed`. One left at measuring — a SIGKILL, or an exit whose last status write was refused — names the\n" +
+  "      probe's pid and host and a deadline (start + --max-time + 120 s): the next probe without --run ends it `failed` once\n" +
+  "      that pid is gone (same machine) or the deadline has passed, and goes on. The probe writes the run's LIVE status\n" +
+  "      (the run cache,\n" +
   "      node_modules/.cache/designtwin-verify/<Screen>.status.json — never the project tree a dev server watches) — `measuring`\n" +
   "      before the browser starts, `measured` (its own run: `done`) + the measured file's sha256 after it is closed; with --run an\n" +
   "      exit 3/4 bumps its rev. A --run that already ended (done/failed/blocked) is refused before anything starts, and a run that\n" +
@@ -1061,6 +1062,10 @@ const USAGE =
   "      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).";
 
 const MAX_TIME_DEFAULT = 180_000;
+/** What its own run's deadline allows past --max-time: closing a browser that does not yield (capped steps, a kill), the
+ *  visual diff in Node, the files, and up to a 15 s wait for the status lock — with room to spare. Past it the next
+ *  probe without --run takes the run for abandoned, and this probe writes nothing more in it. */
+const OWN_RUN_GRACE_MS = 120_000;
 
 /** Close the browser even when a page never yields: browser.close() closes each page first, and a page whose script never
  *  yields does not close — so ask the browser PROCESS to quit (CDP Browser.close, Chromium), then close the handle; each
@@ -1108,10 +1113,10 @@ export function measuredRefusedWhy(by: StatusRefusal, runId: string, phase: "mea
 interface OwnRunGuard { arm(end: (detail: string) => void): void; disarm(): void }
 const STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 /**
- * Run the probe. Its own run never stays open behind it: on any non-zero exit (1 included), a throw, or SIGINT /
- * SIGTERM / SIGHUP (then exit 128 + the signal's number) an armed run is ended `failed`. A SIGKILL cannot be answered:
- * the run records its probe's pid and host (ownRun), and the next probe without --run ends it once that pid is gone
- * (verify-run.ts abandonedRun).
+ * Run the probe. On every non-zero exit (1 included), a throw, or SIGINT / SIGTERM / SIGHUP (then exit 128 + the
+ * signal's number) an armed own run is ended `failed`. A SIGKILL cannot be answered, and a refused last write leaves the
+ * run at measuring: the run records its probe's pid, host and deadline (ownRun), and the next probe without --run ends
+ * it once that pid is gone or the deadline has passed (verify-run.ts abandonedRun).
  */
 export async function main(argv: string[]): Promise<number> {
   // (an object: set inside the closures)
@@ -1220,6 +1225,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     try { writeStatus(statusBase, w, { ...hooks, ...(ownRun ? { alone: true, abandoned } : {}) }); return "ok"; } catch (e) {
       if (e instanceof RunEnded) { console.error(`verify-probe: ${e.message} — it ended while this probe ran; its status is left as it is`); own.disarm(); return "over"; }
       if (e instanceof RunOpen) { console.error(`verify-probe: ${e.message} — it opened while this probe ran; nothing is written`); own.disarm(); return "over"; }
+      if (e instanceof RunOverdue) { console.error(`verify-probe: ${e.message}`); own.disarm(); return "over"; }
       if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
       console.error(`warning  ${e.message}`);
       refusal.by = statusRefusalOf(e);
@@ -1248,7 +1254,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   // written BEFORE the browser starts, and outside the project tree; not recorded when refused (or no run: --check)
   // (its own run records who started it: this process — its pid tells a run left open by a killed probe from a live one)
   const measuring = runId !== undefined ? status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...(expSha ? { expectationSha256: expSha } : {}),
-    ...(ownRun ? { ownRun: { ...thisProcess(), startedAt: new Date().toISOString() } } : {}) }) : "refused";
+    ...(ownRun ? { ownRun: { ...thisProcess(), startedAt: new Date().toISOString(), deadline: new Date(Date.now() + maxTime + OWN_RUN_GRACE_MS).toISOString() } } : {}) }) : "refused";
   // ended (or, its own run, another opened) between the check above and this write: launch nothing
   if (measuring === "over") return 2;
   measuringRecorded = runId !== undefined && measuring === "ok";

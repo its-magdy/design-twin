@@ -327,7 +327,7 @@ safe("…beside a run at measured / done whose status records NO measured file �
   return allSame(measured) && measured[0] === "incomplete | Garden.status.json (run run-7, phase measured) records no measured file, and this one names no run — nothing ties it to that run | -"
     && allSame(done) && done[0] === `incomplete | Garden.status.json (run run-7, phase done) records no measured file, and this one names no run — nothing ties it to that run${RECORD} | -`;
 });
-safe("…a file that NAMES its run beside a measured/done status without a measuredSha256 is still judged as before (no 'records no measured file')", () =>
+safe("…a file that NAMES its run beside its own run's done status without a measuredSha256 → pass: its run id ties it to that run (no 'records no measured file')", () =>
   run(measure({}, { expectationSha256: SHA_E, runId: "run-7" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done") }).verdict === "pass");
 safe("…beside a run that ended failed / blocked → incomplete 'is at phase failed|blocked — the verifier had not finished', whatever its measuredAt; no 'measured before', no end-it hint", () =>
   (["failed", "blocked"] as const).every((p) => {
@@ -385,11 +385,17 @@ safe("…another run's status: the hint says re-measure in the current run, neve
   const w = r.why.find((x) => /taken in run run-9/.test(x)) || "";
   return /run run-7 is the current run — re-measure in it/.test(w) && !/--phase measured --run run-9/.test(w);
 });
-safe("…another run's status that has ENDED (done): record this file in its own run with --phase done, or measure again — never 'the current run'", () => {
+safe("…another run's status that ENDED done: 'measure again' first, then the --phase done record of this file's run — never 'the current run'", () => {
   const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-9" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
   const w = r.why.find((x) => /taken in run run-9/.test(x)) || "";
-  return r.verdict === "incomplete" && /— no status of that run records it; record it with --status Garden --phase done --run run-9, or measure again$/.test(w) && !/is the current run/.test(w);
+  return r.verdict === "incomplete" && /— no status of that run records it; measure again, or record it with --status Garden --phase done --run run-9$/.test(w) && !/is the current run/.test(w);
 });
+safe("…another run's status that ended failed / blocked: 'measure again' only — no record command, which would hide that outcome", () =>
+  (["failed", "blocked"] as const).every((p) => {
+    const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-9" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) });
+    const w = r.why.find((x) => /taken in run run-9/.test(x)) || "";
+    return r.verdict === "incomplete" && w.endsWith(`— no status of that run records it; measure again (a record of run run-9 now would hide run run-7's ${p} outcome)`) && !/--phase done|--status/.test(w);
+  }));
 safe("an in-process caller that passes no status option is not judged: measured.runId alone → pass", () => {
   const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-9" }), { expectationSha256: SHA_E, measuredSha256: SHA_M });
   return r.verdict === "pass" && !r.why.some((w) => /no status of that run records it/.test(w));

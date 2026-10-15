@@ -1064,7 +1064,8 @@ var TERMINAL_PHASES = ["done", "failed", "blocked"];
 var MEASURED_PHASES = ["measured", "done"];
 var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
 var optStr2 = (x) => x === void 0 || typeof x === "string";
-var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var overdue = (o) => Date.parse(o.deadline) < Date.now();
 function isVerifyStatusV2(x) {
   return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun));
 }
@@ -1100,6 +1101,10 @@ function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
   if (isVerifyStatusV2(r.doc)) return r.doc;
+  if (isJsonObject(r.doc) && r.doc.ownRun !== void 0) {
+    const { ownRun: _malformed, ...rest } = r.doc;
+    if (isVerifyStatusV2(rest)) return rest;
+  }
   return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
 }
 function readStatusAt(base) {
@@ -1131,8 +1136,14 @@ var RunOpen = class extends Error {
     this.name = "RunOpen";
   }
 };
+var RunOverdue = class extends Error {
+  constructor(run, deadline) {
+    super(`run ${run.runId} (this probe's own) passed its deadline ${deadline} \u2014 the next probe without --run takes it for abandoned, so nothing more is written in it`);
+    this.name = "RunOverdue";
+  }
+};
 function abandonedRun(prev, runId) {
-  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && processState(prev.ownRun) === "gone" ? prev : null;
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && (processState(prev.ownRun) === "gone" || overdue(prev.ownRun)) ? prev : null;
 }
 function openRun(base, prev, runId) {
   return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && !abandonedRun(prev, runId) ? new RunOpen(base, prev) : null;
@@ -1154,18 +1165,20 @@ function writeStatus(base, p, hooks = {}) {
     const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
     if (left?.ownRun) {
       const o = left.ownRun;
+      const why = processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
       const endDoc = {
         ...left,
         rev: left.rev + 1,
         phase: "failed",
         at: (/* @__PURE__ */ new Date()).toISOString(),
         by: "verify-probe",
-        detail: `abandoned \u2014 the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) is gone; ended by the next probe`
+        detail: `abandoned \u2014 the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) ${why}; ended by the next probe`
       };
       put(endDoc);
       hooks.abandoned?.(endDoc);
     }
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+    if (hooks.alone && same?.ownRun && overdue(same.ownRun)) throw new RunOverdue(same, same.ownRun.deadline);
     lock.assertMine();
     const w = hooks.before ? { ...p, ...hooks.before() } : p;
     const pick = (k) => {
@@ -1173,7 +1186,7 @@ function writeStatus(base, p, hooks = {}) {
       return v !== void 0 ? { [k]: v } : {};
     };
     const published = w.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...w.published || []])].sort() : void 0;
-    const ownRun = w.ownRun ?? (same ? same.ownRun : void 0);
+    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(w.phase)) ? same.ownRun : void 0);
     const doc = {
       schema: STATUS_SCHEMA,
       screen: path8.basename(base),
@@ -1197,7 +1210,8 @@ function writeStatus(base, p, hooks = {}) {
   }
 }
 function publishStatus(base, doc) {
-  writeFileAtomic(statusFile(base), JSON.stringify(doc, null, 2) + "\n");
+  const { ownRun: _private, ...durable } = doc;
+  writeFileAtomic(statusFile(base), JSON.stringify(durable, null, 2) + "\n");
 }
 var TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\.json)$/;
 function prepareStaged(stageDir, destDir) {
@@ -4158,7 +4172,7 @@ function runIntegrity(cx) {
   if (opts.expectationSha256 && !measured.expectationSha256) integrity.push(`${INTEGRITY_PHRASES.noExpectation} \u2014 nothing ties these numbers to this design; re-measure with the shipped probe`);
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
   if (measuredRun !== void 0 && opts.status !== void 0 && (st === null || st.runId !== measuredRun)) {
-    integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${!st ? `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure` : TERMINAL_PHASES.includes(st.phase) ? `record it with --status ${shellArg(st.screen)} --phase done --run ${measuredRun}, or measure again` : `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)`}`);
+    integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${!st ? `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure` : st.phase === "done" ? `measure again, or record it with --status ${shellArg(st.screen)} --phase done --run ${measuredRun}` : TERMINAL_PHASES.includes(st.phase) ? `measure again (a record of run ${measuredRun} now would hide run ${st.runId}'s ${st.phase} outcome)` : `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)`}`);
   } else if (st) {
     const stFile = opts.status ? opts.status.file : "status.json";
     const S = shellArg(st.screen);
@@ -5308,7 +5322,7 @@ function runStatusNote(base, now = Date.now()) {
   const st = found.status, name = path11.basename(base);
   if (st === "v1") return `${found.file} is a hand-written status (no run id) \u2014 not checked`;
   const detail = st.detail ? ` (${st.detail})` : "";
-  if (st.phase === "failed" && st.ownRun) return `the last run of ${name} (run ${st.runId}) was a probe's own run (no --run) that ended failed${detail} \u2014 it wrote no measured file; this expectation is safe to re-measure against`;
+  if (st.phase === "failed" && st.ownRun) return `the last run of ${name} (run ${st.runId}) was a probe's own run (no --run) that ended failed${detail} \u2014 it recorded no measured file; this expectation is safe to re-measure against`;
   if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} \u2014 its measured/report files are partial; this expectation is safe to re-measure against`;
   if (TERMINAL_PHASES.includes(st.phase)) return null;
   const age = now - Date.parse(st.at);

@@ -867,12 +867,12 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     /note {2}the last run of Orders__5_6 \(run r-7f3a\) ended at phase failed \(the probe could not reach the page\) — its measured\/report files are partial/.test(r1.stderr));
   okOuter("identical bytes → 'byte-identical … says nothing about the build', and no .prev written",
     /byte-identical to the expectation on disk \(same export inputs/.test(r1.stderr) && /re-measure to check the code/.test(r1.stderr) && !fs.existsSync(prevFile));
-  // a probe's own run (no --run) that failed wrote no measured file: nothing beside the expectation is partial
+  // a probe's own run (no --run) that failed recorded no measured file: nothing beside the expectation is partial
   fs.writeFileSync(path.join(vdir, "Orders__5_6.status.json"), JSON.stringify({ schema: "designtwin/verify-status@2", screen: "Orders__5_6", runId: "r-own", rev: 2, phase: "failed",
-    detail: "probe exit 4 — nothing written", at: new Date().toISOString(), by: "verify-probe", ownRun: { pid: 4242, host: "h", startedAt: new Date().toISOString() } }));
+    detail: "probe exit 4 — nothing written", at: new Date().toISOString(), by: "verify-probe", ownRun: { pid: 4242, host: "h", startedAt: new Date().toISOString(), deadline: new Date().toISOString() } }));
   const rOwn = run("--expect", screenFile);
-  okOuter("a failed probe's own run → 'was a probe's own run (no --run) that ended failed (…) — it wrote no measured file', never 'partial'",
-    /note {2}the last run of Orders__5_6 \(run r-own\) was a probe's own run \(no --run\) that ended failed \(probe exit 4 — nothing written\) — it wrote no measured file; this expectation is safe to re-measure against/.test(rOwn.stderr)
+  okOuter("a failed probe's own run → 'was a probe's own run (no --run) that ended failed (…) — it recorded no measured file', never 'partial'",
+    /note {2}the last run of Orders__5_6 \(run r-own\) was a probe's own run \(no --run\) that ended failed \(probe exit 4 — nothing written\) — it recorded no measured file; this expectation is safe to re-measure against/.test(rOwn.stderr)
     && !/are partial/.test(rOwn.stderr));
   statusAt("Orders__5_6", "measuring", { at: new Date(Date.now() - 3_600_000).toISOString() });
   okOuter("a non-terminal phase older than the stall (300 s) → 'never finished'", /the last run of Orders__5_6 \(run r-7f3a\) never finished — still at phase measuring/.test(run("--expect", screenFile).stderr));

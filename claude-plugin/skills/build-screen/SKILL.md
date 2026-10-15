@@ -466,7 +466,8 @@ on what it wrote (`--interactions` when it wrote that file; `--record-plan` reco
 `verification` block), fix the high-severity deltas, and re-verify — every verifier pass (each re-verify round)
 gets a NEW run (`--status <Screen> --phase queued --new-run`, its id passed to the verifier): an ended run takes no
 more writes, and `--wait` on an old id returns at once on that run's old `done` only until a later run replaces the
-status — after that it waits out its `--timeout` (exit 5). Your own probe without `--run` is such a later run: it
+status — after that it ends in exit 5, `stalled` once that run's status stops changing (`--stall`), at the latest on
+`--timeout`. Your own probe without `--run` is such a later run: it
 replaces the live status and the published `design/verify/<Screen>.status.json` with its own run's.
 
 It runs for minutes and reports progress into the run cache (`node_modules/.cache/designtwin-verify/`; published as

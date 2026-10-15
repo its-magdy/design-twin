@@ -144,14 +144,14 @@ if (r1.status !== 0) console.log(r1.stderr);
 // no --run: a run of its own, keyed (like --run's) by the expectation's dir + the --out name — the measured file names it,
 // and its `done` (published beside the expectation) records that file's sha, so --compare judges it by that run
 const ownRunOf = (stderr: string): string => /^run {4}(\S+) — this probe's own \(no --run\)/m.exec(stderr)?.[1] ?? "";
-const statusOf = (f: string): { phase?: unknown; rev?: unknown; runId?: unknown; measuredSha256?: unknown; by?: unknown } | null => readJsonOrNull(f, isJsonObject);
+const statusOf = (f: string): { phase?: unknown; rev?: unknown; runId?: unknown; measuredSha256?: unknown; by?: unknown; ownRun?: unknown } | null => readJsonOrNull(f, isJsonObject);
 const own1 = ownRunOf(r1.stderr);
 const live1 = liveStatusFile(path.join(tmp, "Staff"));
 const st1 = statusOf(live1), pub1 = statusOf(path.join(tmp, "Staff.status.json"));
 const sha1 = fs.existsSync(base + ".measured.json") ? crypto.createHash("sha256").update(fs.readFileSync(base + ".measured.json")).digest("hex") : "";
-check("no --run → a run of its own: `run <id>` on stderr, measured.runId = that id; its live status `done` rev 2 by verify-probe, measuredSha256 = the measured file's; the same doc published as <Screen>.status.json beside the expectation",
+check("no --run → a run of its own: `run <id>` on stderr, measured.runId = that id; its live status `done` rev 2 by verify-probe, measuredSha256 = the measured file's; the same doc, without its ownRun (pid, host), published as <Screen>.status.json beside the expectation",
   /^\d{8}T\d{6}Z-[0-9a-f]{6}$/.test(own1) && m1?.runId === own1 && st1?.runId === own1 && st1.phase === "done" && st1.rev === 2 && st1.by === "verify-probe" && st1.measuredSha256 === sha1
-  && JSON.stringify(pub1) === JSON.stringify(st1));
+  && isJsonObject(st1.ownRun) && st1.ownRun.pid !== process.pid && pub1 !== null && !("ownRun" in pub1) && JSON.stringify({ ...pub1, ownRun: st1.ownRun }) === JSON.stringify(st1));
 const cmp1 = spawnSync(process.execPath, [path.join(ROOT, "design-to-code", "verify-screen.ts"), "--compare", expected, base + ".measured.json", "--out", base], { encoding: "utf8" });
 const rep1 = readJsonOrNull(base + ".report.json", isJsonObject);
 const inputs1 = rep1 !== null && isJsonObject(rep1.inputs) ? rep1.inputs : null;

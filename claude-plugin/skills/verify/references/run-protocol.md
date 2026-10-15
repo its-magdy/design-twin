@@ -58,7 +58,8 @@ Exit 0 done and the measured file matches (and the evidence file, when the run p
 `--stall 300` s. Use it instead of a hand-rolled poll loop: a moving `rev` means work is happening, a `rev` that
 has not moved for minutes is a real stall, and `phase` names the step to blame. `--wait` on an id that already
 ended returns at once on that run's old `done` — until a later run (a probe without `--run` included) replaces the
-status; then it waits out its `--timeout`.
+status; then it ends in exit 5 — `stalled` once that run's status stops changing for `--stall`, at the latest on
+`--timeout`.
 
 A pass legitimately takes far longer inside a build than standalone. Standalone is one capture against finished
 code with the renderer often already warm; inside a build it runs once per fix round (render → report deltas →

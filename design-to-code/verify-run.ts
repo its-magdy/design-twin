@@ -80,12 +80,17 @@ export interface VerifyStatusV2 {
    *  (killed outright) can be told from a live one (file-lock.ts processState) */
   ownRun?: OwnRunStamp;
 }
-/** Who started a probe's own run: the probe process (file-lock.ts thisProcess) and the time it started the run. */
-export interface OwnRunStamp extends ProcessStamp { startedAt: string }
+/** Who started a probe's own run: the probe process (file-lock.ts thisProcess), the time it started the run, and the
+ *  deadline past which no live probe still writes in it (its start + --max-time + a grace for closing the browser,
+ *  writing the files and the status lock) — the backstop for a pid that a later process reuses. */
+export interface OwnRunStamp extends ProcessStamp { startedAt: string; deadline: string }
 
 const isPhase = (x: unknown): x is StatusPhase => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
 const optStr = (x: unknown): boolean => x === undefined || typeof x === "string";
-const isOwnRunStamp = (x: unknown): x is OwnRunStamp => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr(x.ns) && typeof x.startedAt === "string";
+const isOwnRunStamp = (x: unknown): x is OwnRunStamp => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr(x.ns) && typeof x.startedAt === "string"
+  && typeof x.deadline === "string";
+/** Whether a probe's own run is past its deadline (an unreadable deadline is not). */
+const overdue = (o: OwnRunStamp): boolean => Date.parse(o.deadline) < Date.now();
 export function isVerifyStatusV2(x: unknown): x is VerifyStatusV2 {
   return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number"
     && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator")
@@ -131,6 +136,11 @@ function readStatusFile(file: string): VerifyStatusV2 | "v1" | null {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
   if (isVerifyStatusV2(r.doc)) return r.doc;
+  // a malformed ownRun is ignored (read as a run nobody's probe owns), never the whole status
+  if (isJsonObject(r.doc) && r.doc.ownRun !== undefined) {
+    const { ownRun: _malformed, ...rest } = r.doc;
+    if (isVerifyStatusV2(rest)) return rest;
+  }
   return isJsonObject(r.doc) && r.doc.schema === undefined && typeof r.doc.phase === "string" ? "v1" : null;
 }
 /** The status of `<base>` and the file it was read from: the live one first, else the published
@@ -157,7 +167,7 @@ export interface StatusWrite {
   measuredSha256?: string;
   evidenceSha256?: string;
   published?: string[];
-  /** a probe's own run: who started it (carried forward within the run) */
+  /** a probe's own run: who started it (carried forward by that probe's own writes, and by a write that ends the run) */
   ownRun?: OwnRunStamp;
 }
 /** A status write for a run that has already ended (done/failed/blocked): refused by writeStatus itself, so a writer
@@ -191,10 +201,19 @@ export class RunOpen extends Error {
     this.name = "RunOpen";
   }
 }
+/** A write of a probe's own run past its deadline (OwnRunStamp.deadline): by then the next probe without --run takes the
+ *  run for abandoned, so a probe that is merely late writes nothing more in it. Refused by writeStatus (`alone`). */
+export class RunOverdue extends Error {
+  constructor(run: VerifyStatusV2, deadline: string) {
+    super(`run ${run.runId} (this probe's own) passed its deadline ${deadline} — the next probe without --run takes it for abandoned, so nothing more is written in it`);
+    this.name = "RunOverdue";
+  }
+}
 /** Another open run over `prev` (readStatus's) that a probe without --run left behind: its own run, whose probe is
- *  provably gone (same machine, the pid no longer exists — file-lock.ts processState). The next own run ends it. */
+ *  provably gone (same machine, the pid no longer exists — file-lock.ts processState) or that is past its deadline
+ *  (a reused pid). The next own run ends it. */
 export function abandonedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): VerifyStatusV2 | null {
-  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && processState(prev.ownRun) === "gone" ? prev : null;
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && (processState(prev.ownRun) === "gone" || overdue(prev.ownRun)) ? prev : null;
 }
 /** The refusal for a write of run `runId` that must be the screen's only open run, over the status `prev` (readStatus's):
  *  null when no other v2 run is open (none, a v1 file, an ended run, `runId` itself) or the open one is abandoned
@@ -212,7 +231,8 @@ export interface StatusWriteHooks {
   after?: (doc: VerifyStatusV2) => void;
   /** the write is of a run that must be the screen's only open one (the probe's own run): refused (RunOpen) while
    *  another run is open — checked with the ended-run check, before `before`. An abandoned one (abandonedRun) is ended
-   *  `failed` first, under the same lock, and handed to `abandoned` */
+   *  `failed` first, under the same lock, and handed to `abandoned`; a write of its own run past that run's deadline is
+   *  refused (RunOverdue). Only such writes carry the run's ownRun forward (and one that ends the run) */
   alone?: boolean;
   abandoned?: (ended: VerifyStatusV2) => void;
 }
@@ -227,7 +247,8 @@ const STATUS_LOCK = { waitMs: 15_000 };
  * that ends is not reopened, published into or given files by a writer that checked it earlier. With hooks.alone, another
  * probe's own run that its probe left open (abandonedRun) is first ended `failed` under the same lock (hooks.abandoned).
  * Throws RunCacheUnwritable when the run cache refuses the lock or the write (sandbox write scope, read-only mount),
- * RunEnded when the same run has already ended, RunOpen (hooks.alone) when another run is open, LockBusy when another status write holds the lock past 15 s (or
+ * RunEnded when the same run has already ended, RunOpen (hooks.alone) when another run is open, RunOverdue (hooks.alone)
+ * when its own run is past its deadline, LockBusy when another status write holds the lock past 15 s (or
  * LockLost, a LockBusy, when the lock was taken from this write before the hook's files or the record — neither is
  * written then); a hook's own error is thrown as it is.
  */
@@ -244,12 +265,14 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
     const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
     if (left?.ownRun) {
       const o = left.ownRun;
+      const why = processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
       const endDoc: VerifyStatusV2 = { ...left, rev: left.rev + 1, phase: "failed", at: new Date().toISOString(), by: "verify-probe",
-        detail: `abandoned — the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) is gone; ended by the next probe` };
+        detail: `abandoned — the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) ${why}; ended by the next probe` };
       put(endDoc);
       hooks.abandoned?.(endDoc);
     }
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+    if (hooks.alone && same?.ownRun && overdue(same.ownRun)) throw new RunOverdue(same, same.ownRun.deadline);
     lock.assertMine();
     const w: StatusWrite = hooks.before ? { ...p, ...hooks.before() } : p;
     const pick = (k: "expectationSha256" | "measuredSha256" | "evidenceSha256"): { [K in typeof k]?: string } => {
@@ -257,7 +280,10 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
       return v !== undefined ? { [k]: v } : {};
     };
     const published = w.published !== undefined || (same && same.published) ? [...new Set([...(same && same.published) || [], ...(w.published || [])])].sort() : undefined;
-    const ownRun = w.ownRun ?? (same ? same.ownRun : undefined);
+    // a probe's own run stays one only through that probe's own writes (`alone`), or a write that ends it: a writer that
+    // continues the run (an orchestrator's --status without --run, a verifier's probe --run) adopts it — no later probe
+    // may take it for abandoned while they work in it
+    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(w.phase)) ? same.ownRun : undefined);
     const doc: VerifyStatusV2 = {
       schema: STATUS_SCHEMA, screen: path.basename(base), runId: w.runId, rev: same ? same.rev + 1 : 1, phase: w.phase, detail: w.detail ?? "", at: new Date().toISOString(), by: w.by,
       ...pick("expectationSha256"), ...pick("measuredSha256"), ...pick("evidenceSha256"),
@@ -269,9 +295,11 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
     return doc;
   } finally { lock.release(); }
 }
-/** `done`: the live status, published as the durable record design/verify/<S>.status.json (every page is closed by now). */
+/** `done`: the live status, published as the durable record design/verify/<S>.status.json (every page is closed by now) —
+ *  without ownRun: the project commits that file, and a pid and host name are nobody's business there. */
 export function publishStatus(base: string, doc: VerifyStatusV2): void {
-  writeFileAtomic(statusFile(base), JSON.stringify(doc, null, 2) + "\n");
+  const { ownRun: _private, ...durable } = doc;
+  writeFileAtomic(statusFile(base), JSON.stringify(durable, null, 2) + "\n");
 }
 
 // Files the verify tools own: a staged copy must never replace them (--expect / --compare / --status write these;

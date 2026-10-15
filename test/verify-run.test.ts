@@ -10,6 +10,7 @@ import { spawn, spawnSync } from "node:child_process";
 import * as VR from "../design-to-code/verify-run.ts";
 import { scriptCmd, shellArg } from "../design-to-code/cli-args.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { isJsonObject } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 import { POSIX_SH } from "./posix-sh.ts";
 import { LockBusy, LockLost, PID_NS } from "../bridge/src/file-lock.ts";
@@ -746,8 +747,8 @@ await block("verify-probe own run:", async () => {
     st3 !== null && st3 !== "v1" && st3.ownRun?.pid === p3.pid && st3.ownRun.host === os.hostname() && !Number.isNaN(Date.parse(st3.ownRun.startedAt)));
 });
 
-// a probe's own run never stays open behind it: a throw, a stop signal, and (SIGKILL) the next probe that finds its pid gone
-console.log("verify-probe without --run — its own run is never left open:");
+// how a probe's own run ends: a throw, a stop signal, and (SIGKILL) the next probe that finds its pid gone
+console.log("verify-probe without --run — how its own run ends (a throw, a signal, a kill):");
 await block("verify-probe own run left open:", async () => {
   const { dir, base } = project();
   const PROBE_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-probe.ts");
@@ -776,8 +777,8 @@ await block("verify-probe own run left open:", async () => {
       && s1.detail === "probe error: fake disk full — nothing written");
   if (t1.status !== 1) console.log(t1.stderr);
 
-  // stop signals (POSIX: Windows has none to send) and SIGKILL, on a probe whose launch never returns
-  if (process.platform === "win32") { console.log("  (skipped: the signal cases — Windows delivers no SIGTERM/SIGKILL to a child's handlers)"); return; }
+  // stop signals (POSIX: Windows delivers none to a child's handlers) and a kill outright (SIGKILL; TerminateProcess on
+  // Windows), on a probe whose launch never returns
   const hangs = fakeProject("() => new Promise(() => {})");
   /** start a probe that hangs in launch, wait for its own run's `measuring`, then send `sig`; resolves with its exit and stderr */
   const killed = async (sig: NodeJS.Signals): Promise<{ code: number | null; signal: NodeJS.Signals | null; err: string; id: string; pid: number }> => {
@@ -791,17 +792,22 @@ await block("verify-probe own run left open:", async () => {
     const r = await closed;
     return { ...r, err, id: ownLine(err), pid: p.pid ?? 0 };
   };
-  const term = await killed("SIGTERM");
-  const sT = st();
-  safe("SIGTERM while measuring → exit 143 (128 + 15), its own run ended `failed` 'probe stopped by SIGTERM — nothing written'", () =>
-    term.code === 143 && term.id !== "" && sT !== null && sT.runId === term.id && sT.phase === "failed" && sT.detail === "probe stopped by SIGTERM — nothing written");
-  if (term.code !== 143) console.log(`    exit ${String(term.code)} ${String(term.signal)}: ${term.err.slice(0, 400)}`);
+  if (process.platform === "win32") console.log("  (skipped: SIGTERM / SIGINT / SIGHUP — Windows delivers no stop signal to a child's handlers)");
+  else {
+    for (const [sig, code] of [["SIGTERM", 143], ["SIGINT", 130], ["SIGHUP", 129]] as const) {
+      const r = await killed(sig);
+      const sS = st();
+      safe(`${sig} while measuring → exit ${code} (128 + the signal's number), its own run ended \`failed\` 'probe stopped by ${sig} — nothing written'`, () =>
+        r.code === code && r.id !== "" && sS !== null && sS.runId === r.id && sS.phase === "failed" && sS.detail === `probe stopped by ${sig} — nothing written`);
+      if (r.code !== code) console.log(`    exit ${String(r.code)} ${String(r.signal)}: ${r.err.slice(0, 400)}`);
+    }
+  }
 
   // SIGKILL: nothing can answer it — the run stays at measuring, naming the dead probe's pid
   const kill = await killed("SIGKILL");
   const sK = st();
   safe("SIGKILL while measuring → the run stays at `measuring`, its ownRun naming the killed probe's pid on this host", () =>
-    kill.signal === "SIGKILL" && kill.id !== "" && sK !== null && sK.runId === kill.id && sK.phase === "measuring" && sK.ownRun?.pid === kill.pid && sK.ownRun.host === os.hostname());
+    (kill.signal === "SIGKILL" || process.platform === "win32") && kill.id !== "" && sK !== null && sK.runId === kill.id && sK.phase === "measuring" && sK.ownRun?.pid === kill.pid && sK.ownRun.host === os.hostname());
   const next = spawnSync(process.execPath, args(throws), { encoding: "utf8" });
   const sN = st();
   const nextId = ownLine(next.stderr);
@@ -817,7 +823,8 @@ await block("writeStatus alone own run:", async () => {
   const { dir, base, live } = project();
   const absDir = path.resolve(dir);
   const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999;
-  const own = (pid: number, host = os.hostname()): VR.OwnRunStamp => ({ pid, host, ...(PID_NS ? { ns: PID_NS } : {}), startedAt: "2026-10-15T08:00:00.000Z" });
+  const own = (pid: number, host = os.hostname(), deadline = "2999-01-01T00:00:00.000Z"): VR.OwnRunStamp =>
+    ({ pid, host, ...(PID_NS ? { ns: PID_NS } : {}), startedAt: "2026-10-15T08:00:00.000Z", deadline });
   VR.writeStatus(base, { runId: "run-dead", phase: "measuring", by: "verify-probe", ownRun: own(deadPid) });
   const seen: VR.VerifyStatusV2[] = [];
   const doc = VR.writeStatus(base, { runId: "run-next", phase: "measuring", by: "verify-probe" }, { alone: true, abandoned: (d) => { seen.push(d); } });
@@ -841,11 +848,59 @@ await block("writeStatus alone own run:", async () => {
   const refusedFar = ((): unknown => { try { VR.writeStatus(base, { runId: "run-y", phase: "measuring", by: "verify-probe" }, { alone: true }); return null; } catch (e) { return e; } })();
   safe("started on another host (its pid cannot be probed from here) → refused the same way, never taken for abandoned", () =>
     ownWording(refusedFar, "run-far", deadPid, "another-host.invalid") && VR.abandonedRun(VR.readStatus(base), "run-y") === null && readStatusFile(live)?.runId === "run-far");
-  safe("isVerifyStatusV2 reads ownRun (and refuses a malformed one); a later write of the run carries it", () => {
+  safe("isVerifyStatusV2 reads ownRun (and refuses a malformed one); a write that ends the run carries it", () => {
     const far = readStatusFile(live);
     const next = VR.writeStatus(base, { runId: "run-far", phase: "failed", by: "agent" });
     return far?.ownRun?.host === "another-host.invalid" && !VR.isVerifyStatusV2({ ...far, ownRun: { pid: "1", host: "h", startedAt: "t" } }) && next.ownRun?.host === "another-host.invalid";
   });
+
+  // a writer that continues an own run adopts it: ownRun is dropped, and no later probe takes it for abandoned
+  VR.writeStatus(base, { runId: "run-adopt", phase: "measuring", by: "verify-probe", ownRun: own(deadPid) });
+  const adopted = VR.writeStatus(base, { runId: "run-adopt", phase: "queued", by: "orchestrator" });
+  const measuredIn = VR.writeStatus(base, { runId: "run-adopt", phase: "measured", by: "verify-probe" });
+  const refusedAdopted = ((): unknown => { try { VR.writeStatus(base, { runId: "run-z", phase: "measuring", by: "verify-probe" }, { alone: true }); return null; } catch (e) { return e; } })();
+  safe("an orchestrator's non-terminal write over a dead probe's own run, then a verifier probe --run's: ownRun dropped; the next probe without --run is refused in the verifier wording, never ends it",
+    () => adopted.ownRun === undefined && measuredIn.ownRun === undefined && refusedAdopted instanceof VR.RunOpen
+      && refusedAdopted.message.startsWith("run run-adopt of Plots is open (phase measured, rev 3, by verify-probe, ") && /that run's verifier passes --run run-adopt/.test(refusedAdopted.message)
+      && readStatusFile(live)?.phase === "measured");
+  safe("…the own run's own writes (`alone`) keep it carried", () => {
+    VR.writeStatus(base, { runId: "run-adopt", phase: "failed", by: "agent" });
+    VR.writeStatus(base, { runId: "run-keep", phase: "measuring", by: "verify-probe", ownRun: own(process.pid) }, { alone: true });
+    return VR.writeStatus(base, { runId: "run-keep", phase: "measuring", by: "verify-probe", detail: "probe exit 4 — nothing written" }, { alone: true }).ownRun?.pid === process.pid;
+  });
+
+  // the deadline: a reused pid (alive) past it is still abandoned; a late probe writes nothing more in its own run
+  VR.writeStatus(base, { runId: "run-keep", phase: "failed", by: "verify-probe" });
+  VR.writeStatus(base, { runId: "run-late", phase: "measuring", by: "verify-probe", ownRun: own(process.pid, os.hostname(), "2026-01-01T00:00:00.000Z") });
+  const lateSeen: VR.VerifyStatusV2[] = [];
+  const after = VR.writeStatus(base, { runId: "run-new", phase: "measuring", by: "verify-probe" }, { alone: true, abandoned: (d) => { lateSeen.push(d); } });
+  safe("an own run whose pid is alive (or reused) but past its deadline → abandoned: ended `failed` ('is past the run's deadline …'), the next run starts", () =>
+    lateSeen.length === 1 && lateSeen[0]?.runId === "run-late" && lateSeen[0].phase === "failed" && (lateSeen[0].detail.endsWith("is past the run's deadline 2026-01-01T00:00:00.000Z; ended by the next probe"))
+      && after.runId === "run-new" && after.rev === 1);
+  VR.writeStatus(base, { runId: "run-new", phase: "failed", by: "verify-probe" });
+  VR.writeStatus(base, { runId: "run-own", phase: "measuring", by: "verify-probe", ownRun: own(process.pid, os.hostname(), "2026-01-01T00:00:00.000Z") }, { alone: true });
+  const overdueDoc = fs.readFileSync(live, "utf8");
+  let filesWritten = false;
+  const overdue = ((): unknown => { try { VR.writeStatus(base, { runId: "run-own", phase: "done", by: "verify-probe" }, { alone: true, before: () => { filesWritten = true; return {}; } }); return null; } catch (e) { return e; } })();
+  safe("its own write past its own run's deadline → RunOverdue before the files (`before` never runs), the status unchanged", () =>
+    overdue instanceof VR.RunOverdue && overdue.message === "run run-own (this probe's own) passed its deadline 2026-01-01T00:00:00.000Z — the next probe without --run takes it for abandoned, so nothing more is written in it"
+      && !filesWritten && fs.readFileSync(live, "utf8") === overdueDoc);
+
+  // a malformed ownRun is ignored: the status reads as a run nobody's probe owns (never as no status)
+  const parsed: unknown = JSON.parse(overdueDoc);
+  const malformed = isJsonObject(parsed) ? { ...parsed, runId: "run-bad", ownRun: { pid: "nope" } } : {};
+  fs.writeFileSync(live, JSON.stringify(malformed, null, 2) + "\n");
+  const readBad = VR.readStatus(base);
+  const refusedBad = ((): unknown => { try { VR.writeStatus(base, { runId: "run-b2", phase: "measuring", by: "verify-probe" }, { alone: true }); return null; } catch (e) { return e; } })();
+  safe("a live status with a malformed ownRun → read as v2 without it (not 'no status'); the next probe without --run is refused in the verifier wording", () =>
+    readBad !== null && readBad !== "v1" && readBad.runId === "run-bad" && readBad.ownRun === undefined && refusedBad instanceof VR.RunOpen && /that run's verifier passes --run run-bad/.test(refusedBad.message));
+
+  // the published copy carries no pid or host: the project commits it
+  const withOwn = VR.writeStatus(base, { runId: "run-pub", phase: "done", by: "verify-probe", ownRun: own(process.pid) });
+  VR.publishStatus(base, withOwn);
+  const published: unknown = JSON.parse(fs.readFileSync(VR.statusFile(base), "utf8"));
+  safe("publishStatus writes the done doc WITHOUT ownRun (no pid, no host in design/verify), the rest as the live one", () =>
+    withOwn.ownRun !== undefined && isJsonObject(published) && !("ownRun" in published) && JSON.stringify({ ...published, ownRun: withOwn.ownRun }) === JSON.stringify({ ...withOwn }));
 });
 
 // the probe passes `alone` on its own run's writes: a run that opens while it runs is never written over (fast — a fake launch writes it)
@@ -866,6 +921,16 @@ await block("verify-probe own run alone:", async () => {
   safe("a run queued while the probe's own run measures → its `failed` write is refused (RunOpen): exit 2, not 3, and the queued run's status byte-identical",
     () => p.status === 2 && fs.readFileSync(live, "utf8") === queued && p.stderr.includes("run run-q of Plots is open (phase queued, rev 1, by orchestrator, ") && /it opened while this probe ran/.test(p.stderr));
   if (p.status !== 2) console.log(p.stderr);
+  // its own run's deadline passes while it runs (the fake launch moves it into the past): its `failed` write is refused
+  VR.writeStatus(path.join(dir, "Plots"), { runId: "run-q", phase: "failed", by: "orchestrator" });
+  fs.writeFileSync(path.join(pw, "index.js"), "module.exports = { chromium: { launch() { const fs = require('fs'); const f = process.env.DT_TEST_LIVE; const d = require(f); " +
+    "d.ownRun.deadline = '2026-01-01T00:00:00.000Z'; fs.writeFileSync(f, JSON.stringify(d)); throw new Error('fake'); } } };\n");
+  const late = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d],
+    { encoding: "utf8", env: { ...process.env, DT_TEST_LIVE: live } });
+  const lateSt = readStatusFile(live);
+  safe("its own run past its deadline while it runs → its `failed` write is refused (RunOverdue): exit 2, the run left at measuring for the next probe to end",
+    () => late.status === 2 && lateSt?.phase === "measuring" && lateSt.ownRun?.deadline === "2026-01-01T00:00:00.000Z" && /passed its deadline 2026-01-01T00:00:00\.000Z/.test(late.stderr));
+  if (late.status !== 2) console.log(late.stderr);
 });
 
 // ---------------------------------------------------------------- M-a: the run cache stays inside the project
