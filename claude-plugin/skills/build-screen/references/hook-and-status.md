@@ -19,12 +19,13 @@ measured file was static-only), `renderer`, `artifacts`, the open high/medium `d
 write `coverage`:{rendered:[…], notChecked:[{what, why}]}** (and any notes). Never edit the block: the hook
 **blocks** on a key it does not write, a value of the wrong kind, or anything the report it names (same sha256)
 decides — verdict, headline, counts, mode, reason, renderer, the deltas, a11y — that is not what that report says;
-the edit reopens a plan the hook had closed, and `--status` reads blocked. Re-run `--compare --record-plan` (or
-restore the block); a residual you chose to keep goes in `deviations[]`, with its reason. A plan recorded before the
-block held all of this keeps `mode`, `artifacts`, `deltas`, `a11y`… at the top level of `verification`: the first
-`--record-plan` moves the ones the new record holds into `recorded` (with a note) — a hand `a11y` or `reason` this
-report does not give stays at the top level and is still read from there; after that, a key the record holds — or a
-hand `headline`/`verdict` — at the top level is ignored, with a warning.
+the edit reopens a plan the hook had closed, and `--status` then reads blocked (or failed, when a report says fail —
+that comes first). Re-run `--compare --record-plan` (or restore the block); a residual you chose to keep goes in
+`deviations[]`, with its reason. A plan recorded before the block held all of this keeps `mode`, `artifacts`,
+`deltas`, `a11y`… at the top level of `verification`: the first `--record-plan` removes the ones the new record
+holds (the record has its own, written from the report; with a note) — a hand `a11y`, or a `reason` (static-only) or
+`renderer` (rendered) this report does not give, stays at the top level and is still read from there; after that, a
+key the record holds — or a hand `headline`/`verdict` — at the top level is ignored, with a warning.
 
 Elsewhere (or by hand) the shape is `{mode:"rendered", renderer, artifacts:[<paths on disk>], deltas:[<the
 report's open high/medium deltas, [] if none>], coverage:{…}, a11y:{tool, violations, warnings, report}?}` (copied

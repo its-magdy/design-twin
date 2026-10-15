@@ -10,10 +10,11 @@
 // note. The rest of verification (coverage, notes, a hand headline) is the agent's and is left as it was, and so is the
 // rest of the plan — never deviations[] (a deviation needs a person's why; a residual goes there), waivers[], descopes[]
 // or status. One exception: mode/reason/renderer/artifacts/deltas/a11y at verification's top level — where the first
-// record (recorded@1, no schema) and hand-written plans keep them — are moved into the record when it holds them (one
-// note): the first record of such a plan migrates it. One the record lacks (a hand a11y when the behaviour checks did
-// not run, a hand reason the measured file did not give) stays, and is read from there; a renderer beside a static-only
-// record or a reason beside a rendered one no longer holds and is removed. verify-build reads each key from the record
+// record (recorded@1, no schema) and hand-written plans keep them — are removed when the record holds them (it writes its
+// own from the report; one note): the first record of such a plan migrates it. One the record lacks (a hand a11y when
+// the behaviour checks did not run, a hand reason the measured file did not give, a hand renderer the rendered report
+// did not give) stays, and is read from there; a renderer beside a static-only record or a reason beside a rendered one
+// no longer holds and is removed. verify-build reads each key from the record
 // first (verificationFacts, below). The file keeps its indentation, key order and line endings (updatePlan, below — the
 // one plan writer, also used by --accept, plan-skeleton --out and the verify-build hook); it is written only when its bytes
 // change, and a re-record of the same report keeps the old `recorded.at`. verify-build's planHash leaves `verification` out, so recording never reopens a plan — and a hook
@@ -32,6 +33,7 @@ import { ifDefined } from "../bridge/src/json-util.ts";
 import type { UpdateJsonOpts } from "../bridge/src/json-file.ts";
 import { RECORD_KEYS, isRecordV2Shaped, isVerificationRecord, isVerifyReport, parsePlan } from "./doc-guards.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
+import { canonical } from "./plan-waivers.ts";
 import { PLAN_VERIFICATION_RECORD_SCHEMA, isJsonObject } from "./types.ts";
 import { planLockFile, planLockRefused } from "./run-cache.ts";
 import type {
@@ -206,24 +208,25 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
     }
     const prev: unknown = v.recorded;
     const before = verificationFacts(v);
-    // the same report recorded again: keep its time, so an unchanged plan is not rewritten
-    if (isJsonObject(prev) && typeof prev.at === "string" && JSON.stringify({ ...prev, at: "" }) === JSON.stringify({ ...recorded, at: "" })) recorded.at = prev.at;
+    // the same report recorded again: keep its time, so an unchanged plan is not rewritten (canonical: key order is not content)
+    if (isJsonObject(prev) && typeof prev.at === "string" && canonical({ ...prev, at: "" }) === canonical({ ...recorded, at: "" })) recorded.at = prev.at;
     // The block is the tool's, replaced whole: a key it does not write was added by hand — dropped, never silently
     const foreign = isJsonObject(prev) ? Object.keys(prev).filter((k) => !RECORD_KEYS.includes(k)) : [];
     if (foreign.length) notes.push(`verification.recorded held ${foreign.map((k) => `\`${k}\``).join(", ")}, which --record-plan does not write — dropped (the block is the tool's): put a residual in deviations[] (with the why), anything else in notes`);
     if (!b.ran && before.a11y !== undefined) notes.push(`behaviour/a11y checks did not run (${b.why || "no reason recorded"}) — this record has no a11y`);
-    // The record's keys at the top level (a recorded@1 plan, a hand-written one): one the record now holds is moved into
-    // it; a renderer beside a static-only record, or a reason beside a rendered one, no longer holds and is removed; one
-    // the record lacks (a hand a11y when the behaviour checks did not run, a hand reason the measured file did not give)
-    // stays — the readers fall back to it (verificationFacts)
+    // The record's keys at the top level (a recorded@1 plan, a hand-written one): one the record now holds is removed —
+    // the record holds its own, written from the report, not the top-level value; a renderer beside a static-only record,
+    // or a reason beside a rendered one, no longer holds and is removed; one the record lacks (a hand a11y when the
+    // behaviour checks did not run, a hand reason the measured file did not give, a hand renderer the rendered report did
+    // not give) stays — the readers fall back to it (verificationFacts)
     const present = TOOL_KEYS.filter((k) => v[k] !== undefined);
-    const moved = present.filter((k) => recorded[k] !== undefined);
+    const replaced = present.filter((k) => recorded[k] !== undefined);
     const stale = present.filter((k) => recorded[k] === undefined && k === (recorded.mode === "static-only" ? "renderer" : "reason"));
-    const kept = present.filter((k) => !moved.includes(k) && !stale.includes(k));
-    for (const k of [...moved, ...stale]) delete v[k];
+    const kept = present.filter((k) => !replaced.includes(k) && !stale.includes(k));
+    for (const k of [...replaced, ...stale]) delete v[k];
     const list = (ks: readonly ToolKey[]): string => ks.map((k) => `verification.${k}`).join(", ");
-    if (moved.length || stale.length) notes.push([
-      ...(moved.length ? [`${list(moved)}: the record's ${moved.length > 1 ? "keys are" : "key is"} kept in verification.recorded now (written from this report) — the top-level ${moved.length > 1 ? "copies are" : "copy is"} removed`] : []),
+    if (replaced.length || stale.length) notes.push([
+      ...(replaced.length ? [`${list(replaced)}: the record's ${replaced.length > 1 ? "keys are" : "key is"} kept in verification.recorded now (written from this report) — the top-level ${replaced.length > 1 ? "ones are" : "one is"} removed`] : []),
       ...(stale.length ? [`${list(stale)} removed: ${recorded.mode === "static-only" ? "this report is static-only, so no renderer is claimed" : "this report was rendered, so the \"why no render\" no longer holds"}`] : []),
       ...(kept.length ? [`${list(kept)} ${kept.length > 1 ? "stay" : "stays"} at the top level: this report gives none, so ${kept.length > 1 ? "they are" : "it is"} still read from there`] : []),
     ].join("; ") + "; coverage and notes stay yours, and a residual goes in deviations[] (with the why)");

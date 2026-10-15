@@ -1210,6 +1210,25 @@ function legacyPlanHash(plan) {
   return sha256Hex(JSON.stringify(copy)).slice(0, 16);
 }
 
+// design-to-code/plan-waivers.ts
+var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
+function isPassingVerdict(v) {
+  return typeof v === "string" && PASSING_VERDICTS.includes(v);
+}
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+function waiversHash(plan) {
+  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
+  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
+  return sha256Hex(canonical({ descopes, waivers }));
+}
+
 // design-to-code/run-cache.ts
 import fs9 from "node:fs";
 import path7 from "node:path";
@@ -1232,13 +1251,13 @@ function realpath(p) {
   }
   return fs9.realpathSync(p);
 }
-function canonical(p) {
+function canonical2(p) {
   const abs = path7.resolve(p);
   try {
     return realpath(abs);
   } catch {
     const parent = path7.dirname(abs);
-    return parent === abs ? abs : path7.join(canonical(parent), path7.basename(abs));
+    return parent === abs ? abs : path7.join(canonical2(parent), path7.basename(abs));
   }
 }
 var hasPnp = (d) => exists(path7.join(d, ".pnp.cjs")) || exists(path7.join(d, ".pnp.js"));
@@ -1270,7 +1289,7 @@ function installRootOf(dir) {
   return P;
 }
 function planLockOf(planFile) {
-  const abs = canonical(planFile);
+  const abs = canonical2(planFile);
   const root = installRootOf(path7.dirname(abs));
   if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
   const rel = path7.relative(root, abs).split(path7.sep).join("/");
@@ -1429,25 +1448,6 @@ function visibility(doc) {
   return { visible, hidden, hiddenRoots };
 }
 if (false) process.exitCode = main(process.argv.slice(2));
-
-// design-to-code/plan-waivers.ts
-var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
-function isPassingVerdict(v) {
-  return typeof v === "string" && PASSING_VERDICTS.includes(v);
-}
-function canonical2(v) {
-  if (Array.isArray(v)) return `[${v.map(canonical2).join(",")}]`;
-  if (v && typeof v === "object") {
-    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical2(x)}`).join(",")}}`;
-  }
-  return JSON.stringify(v ?? null);
-}
-function waiversHash(plan) {
-  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
-  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return sha256Hex(canonical2({ descopes, waivers }));
-}
 
 // design-to-code/hook-input.ts
 import fs10 from "node:fs";
@@ -2075,7 +2075,7 @@ function recordedEdits(plan, cwd) {
     const report = bytes && sha256Hex(bytes) === rec.reportSha256 ? parse(bytes) : null;
     if (isVerifyReport(report)) {
       const said = recordFacts(report, rec.report);
-      for (const k of RECORD_FACT_KEYS) if (JSON.stringify(rec[k]) !== JSON.stringify(said[k])) edited.push(k);
+      for (const k of RECORD_FACT_KEYS) if (rec[k] === void 0 !== (said[k] === void 0) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
@@ -2091,7 +2091,7 @@ function recordedShadowWarnings(plan) {
   if (v2 && !isVerificationRecord(rec)) return [];
   const top = Object.keys(v);
   const keys = [...v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k) && rec[k] !== void 0) : [], ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
-  return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored \u2014 verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); remove the top-level ` + (keys.length > 1 ? "copies" : "copy") + ": a residual goes in deviations[] (with the why), anything else in notes"] : [];
+  return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored \u2014 verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); remove ` + (keys.length > 1 ? "them" : "it") + " from the top level: a residual goes in deviations[] (with the why), anything else in notes"] : [];
 }
 var newestOwn = (reports) => {
   const own = reports.filter((r) => r.matchedBy === "name");
@@ -2161,7 +2161,7 @@ function verificationContradictions(plan, reports) {
   for (const r of reports || []) {
     const recordedHere = isJsonObject(rec) && rec.report === r.rel;
     if (!recordedHere && Array.isArray(f.deltas) && !f.deltas.length && Array.isArray(r.deltas) && r.deltas.length)
-      out.push(`${f.at}.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 copy them (or the ones you judged real, with why) into the plan`);
+      out.push(`${f.at}.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 ` + (f.at === "verification.recorded" ? `the record is of another report; if ${r.rel} is this build's, record it (${scriptCmd("verify-screen")} --compare --record-plan)` : "copy them (or the ones you judged real, with why) into the plan"));
     if (rec !== void 0) continue;
     for (const k of ["verifyScreenVerdict", "verdict"]) {
       const claimed = v[k];
@@ -2969,9 +2969,10 @@ var USAGE2 = [
   "--status computes the status from that, the file hashes, and design/verify/<\u2026>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
   "  2. failed       a verify-report@2 for this screen says fail (never hidden behind the hook's state)",
-  "  3. blocked      the Stop hook's last check blocked",
-  "  4. stale        a file in files[] or a module anchors/components map changed (by content) since the hook passed",
-  "  5. pending      the hook has not checked this version of the plan",
+  "  3. pending      the hook has not checked this version of the plan (no hook record, or the plan changed since)",
+  "  4. blocked      the Stop hook's last check blocked, or it passed and verification.recorded was edited by hand",
+  "                  since (its next check blocks on that)",
+  "  5. stale        a file in files[] or a module anchors/components map changed (by content) since the hook passed",
   "  6. unverified | static-only | verified | verified-with-deviations   what the report says: verified",
   "     only for an @2 'pass' that measured this design, these files and the plan's current waivers[]/",
   "     descopes[], by content hash (no report / a pre-@2 report / other design, code or waivers ->",

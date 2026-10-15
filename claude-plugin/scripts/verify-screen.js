@@ -680,6 +680,29 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
+// design-to-code/plan-waivers.ts
+var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
+function isPassingVerdict(v) {
+  return typeof v === "string" && PASSING_VERDICTS.includes(v);
+}
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+function waiversHash(plan) {
+  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
+  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
+  return sha256Hex(canonical({ descopes, waivers }));
+}
+function planInteractionsSha256(plan) {
+  const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
+  return sha256Hex(canonical(rows));
+}
+
 // design-to-code/run-cache.ts
 import fs7 from "node:fs";
 import os2 from "node:os";
@@ -763,13 +786,13 @@ function realpath(p) {
   }
   return fs7.realpathSync(p);
 }
-function canonical(p) {
+function canonical2(p) {
   const abs = path5.resolve(p);
   try {
     return realpath(abs);
   } catch {
     const parent = path5.dirname(abs);
-    return parent === abs ? abs : path5.join(canonical(parent), path5.basename(abs));
+    return parent === abs ? abs : path5.join(canonical2(parent), path5.basename(abs));
   }
 }
 var hasPnp = (d) => exists(path5.join(d, ".pnp.cjs")) || exists(path5.join(d, ".pnp.js"));
@@ -801,7 +824,7 @@ function installRootOf(dir) {
   return P;
 }
 function runCacheOf(verifyDir) {
-  const v = canonical(verifyDir);
+  const v = canonical2(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
     const cache = path5.join(root, "node_modules", ".cache", CACHE_NAME);
@@ -814,7 +837,7 @@ function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
 }
 function planLockOf(planFile) {
-  const abs = canonical(planFile);
+  const abs = canonical2(planFile);
   const root = installRootOf(path5.dirname(abs));
   if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
   const rel = path5.relative(root, abs).split(path5.sep).join("/");
@@ -996,18 +1019,18 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
     }
     const prev = v.recorded;
     const before = verificationFacts(v);
-    if (isJsonObject(prev) && typeof prev.at === "string" && JSON.stringify({ ...prev, at: "" }) === JSON.stringify({ ...recorded, at: "" })) recorded.at = prev.at;
+    if (isJsonObject(prev) && typeof prev.at === "string" && canonical({ ...prev, at: "" }) === canonical({ ...recorded, at: "" })) recorded.at = prev.at;
     const foreign = isJsonObject(prev) ? Object.keys(prev).filter((k) => !RECORD_KEYS.includes(k)) : [];
     if (foreign.length) notes.push(`verification.recorded held ${foreign.map((k) => `\`${k}\``).join(", ")}, which --record-plan does not write \u2014 dropped (the block is the tool's): put a residual in deviations[] (with the why), anything else in notes`);
     if (!b.ran && before.a11y !== void 0) notes.push(`behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 this record has no a11y`);
     const present = TOOL_KEYS.filter((k) => v[k] !== void 0);
-    const moved = present.filter((k) => recorded[k] !== void 0);
+    const replaced = present.filter((k) => recorded[k] !== void 0);
     const stale = present.filter((k) => recorded[k] === void 0 && k === (recorded.mode === "static-only" ? "renderer" : "reason"));
-    const kept = present.filter((k) => !moved.includes(k) && !stale.includes(k));
-    for (const k of [...moved, ...stale]) delete v[k];
+    const kept = present.filter((k) => !replaced.includes(k) && !stale.includes(k));
+    for (const k of [...replaced, ...stale]) delete v[k];
     const list = (ks) => ks.map((k) => `verification.${k}`).join(", ");
-    if (moved.length || stale.length) notes.push([
-      ...moved.length ? [`${list(moved)}: the record's ${moved.length > 1 ? "keys are" : "key is"} kept in verification.recorded now (written from this report) \u2014 the top-level ${moved.length > 1 ? "copies are" : "copy is"} removed`] : [],
+    if (replaced.length || stale.length) notes.push([
+      ...replaced.length ? [`${list(replaced)}: the record's ${replaced.length > 1 ? "keys are" : "key is"} kept in verification.recorded now (written from this report) \u2014 the top-level ${replaced.length > 1 ? "ones are" : "one is"} removed`] : [],
       ...stale.length ? [`${list(stale)} removed: ${recorded.mode === "static-only" ? "this report is static-only, so no renderer is claimed" : 'this report was rendered, so the "why no render" no longer holds'}`] : [],
       ...kept.length ? [`${list(kept)} ${kept.length > 1 ? "stay" : "stays"} at the top level: this report gives none, so ${kept.length > 1 ? "they are" : "it is"} still read from there`] : []
     ].join("; ") + "; coverage and notes stay yours, and a residual goes in deviations[] (with the why)");
@@ -1029,29 +1052,6 @@ function readDocFile(file, what, guard, hint) {
   console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
        ${hint}` : ""));
   process.exit(2);
-}
-
-// design-to-code/plan-waivers.ts
-var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
-function isPassingVerdict(v) {
-  return typeof v === "string" && PASSING_VERDICTS.includes(v);
-}
-function canonical2(v) {
-  if (Array.isArray(v)) return `[${v.map(canonical2).join(",")}]`;
-  if (v && typeof v === "object") {
-    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical2(x)}`).join(",")}}`;
-  }
-  return JSON.stringify(v ?? null);
-}
-function waiversHash(plan) {
-  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
-  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return sha256Hex(canonical2({ descopes, waivers }));
-}
-function planInteractionsSha256(plan) {
-  const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
-  return sha256Hex(canonical2(rows));
 }
 
 // design-to-code/verify-run.ts
@@ -1337,7 +1337,7 @@ function prepareStaged(stageDir, destDir) {
   } catch (e) {
     return { error: `--publish ${stageDir}: ${firstLine(e)}` };
   }
-  if (canonical(stageDir) === canonical(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project` };
+  if (canonical2(stageDir) === canonical2(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
   const owned = files.filter((f) => TOOL_OWNED.test(f));
   if (owned.length) return { error: `--publish refuses ${owned.join(", ")} \u2014 expected/report/status files are written by verify-screen itself, never copied in` };
@@ -2003,7 +2003,7 @@ function parseSteps(x) {
   return { steps };
 }
 function stepsSha256(steps) {
-  return sha256Hex(canonical2(steps));
+  return sha256Hex(canonical(steps));
 }
 function isPlanExpect(x) {
   return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
@@ -5529,8 +5529,10 @@ function main(argv) {
       else design/plan/ as at --expect) supplies waivers[] and descopes[]: an accepted
       delta stays listed but leaves the counts; with nothing else open the verdict is 'pass-with-deviations' (exit 0).
       --record-plan: then writes that plan's verification.recorded from the report, whole \u2014 report sha, verdict,
-      counts, mode, renderer, artifacts, open high/medium deltas, a11y; hand keys (coverage, notes) stay, and the
-      record's keys at verification's top level (an older record, a hand-written plan) move into it.
+      counts, mode, renderer, artifacts, open high/medium deltas, a11y; hand keys (coverage, notes) stay. Of the
+      record's keys at verification's top level (an older record, a hand-written plan), one the new record holds is
+      removed (the record has its own, from the report); one it lacks stays \u2014 an a11y, or the reason of a static-only
+      or the renderer of a rendered report that gives none.
       No plan, or several and no --plan: exit 2 before comparing. A failed record \u2014 e.g. a report outside the project
       (the plan records project-relative paths only) \u2014 leaves the report written (exit 1).
   ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]

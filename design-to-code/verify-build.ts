@@ -54,7 +54,7 @@ import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
-import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
+import { canonical, isPassingVerdict, waiversHash } from "./plan-waivers.ts";
 import { isPageIndex, isPagesRootIndex, isProbeIdentity, isRecordV2Shaped, isReportBehaviour, isVerificationRecord, isVerifyReport, parsePlan, recordProblems, recordV1HandKeys } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull, readRegularFile } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
@@ -570,9 +570,9 @@ function verificationWarnings(plan: Plan): string[] {
   return out;
 }
 
-// plan.verification.recorded is what `--compare --record-plan` copied from ONE report. When that report
-// has since been rewritten (another --compare without --record-plan, a hand edit), the plan's copy is older than the
-// verdict it summarises. A warning — the report is the verdict either way; computeStatus reads the record's
+// plan.verification.recorded is what `--compare --record-plan` wrote from ONE report (its sha256 names that report's
+// text). When the report file has since been rewritten (another --compare without --record-plan, a hand edit), the
+// record is older than the verdict it summarises. A warning — the report is the verdict either way; computeStatus reads the record's
 // mode/reason for a plan with no report (static-only), and blocks on a hand edit of it (recordedEdits).
 // (The report is read only when it is a regular file: a record naming a FIFO or a device must not hang the hook.)
 function recordedReportWarnings(plan: Plan, cwd: string): string[] {
@@ -615,8 +615,9 @@ function recordedEdits(plan: Plan, cwd: string): string[] {
     const report = bytes && sha256Hex(bytes) === rec.reportSha256 ? parse(bytes) : null; // (unparseable: not the report the sha names)
     if (isVerifyReport(report)) {
       const said = recordFacts(report, rec.report);
-      // (JSON both sides: the plan was read from JSON, and `said` holds no undefined value a key could carry)
-      for (const k of RECORD_FACT_KEYS) if (JSON.stringify(rec[k]) !== JSON.stringify(said[k])) edited.push(k);
+      // (canonical JSON both sides — keys sorted at every depth, so an editor that reorders keys edits nothing; a key one
+      // side lacks differs from any value the other holds, null included)
+      for (const k of RECORD_FACT_KEYS) if ((rec[k] === undefined) !== (said[k] === undefined) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
@@ -638,7 +639,7 @@ function recordedShadowWarnings(plan: Plan): string[] {
   const top = Object.keys(v);
   const keys = [...(v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k) && rec[k] !== undefined) : []), ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
   return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored — verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); ` +
-    "remove the top-level " + (keys.length > 1 ? "copies" : "copy") + ": a residual goes in deviations[] (with the why), anything else in notes"] : [];
+    "remove " + (keys.length > 1 ? "them" : "it") + " from the top level: a residual goes in deviations[] (with the why), anything else in notes"] : [];
 }
 
 /** A verify report as locateReports() summarises it for the status computation. */
@@ -750,7 +751,9 @@ function verificationContradictions(plan: Plan, reports: ReportRef[] | null | un
     // --record-plan writes only the OPEN high/medium deltas — [] beside a report of lows is that record, not a gap
     const recordedHere = isJsonObject(rec) && rec.report === r.rel;
     if (!recordedHere && Array.isArray(f.deltas) && !f.deltas.length && Array.isArray(r.deltas) && r.deltas.length)
-      out.push(`${f.at}.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — copy them (or the ones you judged real, with why) into the plan`);
+      out.push(`${f.at}.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — ` + (f.at === "verification.recorded"
+        ? `the record is of another report; if ${r.rel} is this build's, record it (${scriptCmd("verify-screen")} --compare --record-plan)`
+        : "copy them (or the ones you judged real, with why) into the plan"));
     if (rec !== undefined) continue;
     for (const k of ["verifyScreenVerdict", "verdict"] as const) {
       const claimed = v[k];
@@ -1457,9 +1460,10 @@ export interface StatusResult { status: PlanComputedStatus; reasons: string[]; r
 //   1. abandoned / awaiting-user  — set by a person; nothing is evaluated
 //   2. failed    — a verify report (schema @2) for this screen says fail: a measured defect is never
 //                  hidden behind the hook's state
-//   3. blocked   — the Stop hook's last check blocked
-//   4. stale     — a file in files[] changed since the hook passed
-//   5. pending   — the hook has not checked this version of the plan
+//   3. pending   — the hook has not checked this version of the plan (no hook record, or the plan changed since)
+//   4. blocked   — the Stop hook's last check blocked, or it passed and verification.recorded was edited by hand since
+//                  (recordedEdits: the hook's next check blocks on it)
+//   5. stale     — a file in files[] changed since the hook passed (and the record was not edited)
 //   6. unverified / static-only / verified / verified-with-deviations — what the report says (see reportVerdict)
 // `reasons` is never empty for a non-verified status: it always carries the hook's state AND what the
 // report(s) say (a report too old to trust is named with its schema), plus a note when a stored
@@ -1679,9 +1683,10 @@ const USAGE = [
   "--status computes the status from that, the file hashes, and design/verify/<…>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
   "  2. failed       a verify-report@2 for this screen says fail (never hidden behind the hook's state)",
-  "  3. blocked      the Stop hook's last check blocked",
-  "  4. stale        a file in files[] or a module anchors/components map changed (by content) since the hook passed",
-  "  5. pending      the hook has not checked this version of the plan",
+  "  3. pending      the hook has not checked this version of the plan (no hook record, or the plan changed since)",
+  "  4. blocked      the Stop hook's last check blocked, or it passed and verification.recorded was edited by hand",
+  "                  since (its next check blocks on that)",
+  "  5. stale        a file in files[] or a module anchors/components map changed (by content) since the hook passed",
   "  6. unverified | static-only | verified | verified-with-deviations   what the report says: verified",
   "     only for an @2 'pass' that measured this design, these files and the plan's current waivers[]/",
   "     descopes[], by content hash (no report / a pre-@2 report / other design, code or waivers ->",

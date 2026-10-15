@@ -194,8 +194,10 @@ function main(argv: string[]): number | Promise<number> {
     "      else design/plan/ as at --expect) supplies waivers[] and descopes[]: an accepted\n" +
     "      delta stays listed but leaves the counts; with nothing else open the verdict is 'pass-with-deviations' (exit 0).\n" +
     "      --record-plan: then writes that plan's verification.recorded from the report, whole — report sha, verdict,\n" +
-    "      counts, mode, renderer, artifacts, open high/medium deltas, a11y; hand keys (coverage, notes) stay, and the\n" +
-    "      record's keys at verification's top level (an older record, a hand-written plan) move into it.\n" +
+    "      counts, mode, renderer, artifacts, open high/medium deltas, a11y; hand keys (coverage, notes) stay. Of the\n" +
+    "      record's keys at verification's top level (an older record, a hand-written plan), one the new record holds is\n" +
+    "      removed (the record has its own, from the report); one it lacks stays — an a11y, or the reason of a static-only\n" +
+    "      or the renderer of a rendered report that gives none.\n" +
     "      No plan, or several and no --plan: exit 2 before comparing. A failed record — e.g. a report outside the project\n" +
     "      (the plan records project-relative paths only) — leaves the report written (exit 1).\n" +
     `  ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]\n` +

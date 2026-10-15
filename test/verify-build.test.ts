@@ -1128,7 +1128,7 @@ console.log("--status on the untouched live plan: precedence, and a why that is 
     && !/never built|31 component/.test(row.why));
   const all = parseAs(spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" }).stdout, isStatusRows, "--status --json");
   check("every non-verified row of --status --json carries a non-empty why", all.length === 2 && all.every((r) => r.status === "verified" || (typeof r.why === "string" && r.why.length > 0)));
-  // precedence 2 over 5: an @2 report that FAILS is reported as failed even though the hook never ran
+  // precedence 2 over 3: an @2 report that FAILS is reported as failed even though the hook never ran
   const rep = readFixture(path.join(root, "design/verify/JetRoles.report.json"), isVerifyReport);
   fs.writeFileSync(path.join(root, "design/verify/JetRoles.report.json"), JSON.stringify(Object.assign(rep, { schema: "designtwin/verify-report@2", headline: "FAIL — nodes measured 76/186" })));
   const r2 = must(parseAs(spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" }).stdout, isStatusRows, "--status --json")[0], "status row [0]");

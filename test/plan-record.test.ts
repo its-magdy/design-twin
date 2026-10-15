@@ -96,7 +96,7 @@ console.log("recordPlan:");
   const after = planOf(root);
   const v = must(after.verification, "verification");
   check(`written: true, ONE note — the plan's top-level mode + deltas (a hand-written plan) are the record's now, moved into it (got ${JSON.stringify(r)})`,
-    r.written && r.notes.length === 1 && (r.notes[0] ?? "").startsWith("verification.mode, verification.deltas: the record's keys are kept in verification.recorded now (written from this report) — the top-level copies are removed")
+    r.written && r.notes.length === 1 && (r.notes[0] ?? "").startsWith("verification.mode, verification.deltas: the record's keys are kept in verification.recorded now (written from this report) — the top-level ones are removed")
     && /a residual goes in deviations\[\]/.test(r.notes[0] ?? ""));
   check(`verification keeps the agent's keys + the hook's, and the record — the top-level mode/deltas are gone (got ${JSON.stringify(Object.keys(v))})`,
     JSON.stringify(Object.keys(v)) === JSON.stringify(["coverage", "hook", "recorded"]) && !("mode" in v) && !("deltas" in v) && !("artifacts" in v) && !("a11y" in v) && !("renderer" in v));
@@ -157,7 +157,7 @@ console.log("recordPlan:");
   check(`behaviour did not run → the record has no a11y, the hand top-level one stays, two notes (got ${JSON.stringify(v.a11y)}; notes ${JSON.stringify(r.notes)})`,
     !("a11y" in rec) && JSON.stringify(v.a11y) === JSON.stringify({ tool: "manual", violations: 0 }) && r.notes.length === 2
     && /^behaviour\/a11y checks did not run \(.+\) — this record has no a11y$/.test(r.notes[0] ?? "")
-    && r.notes[1] === "verification.mode, verification.deltas: the record's keys are kept in verification.recorded now (written from this report) — the top-level copies are removed; "
+    && r.notes[1] === "verification.mode, verification.deltas: the record's keys are kept in verification.recorded now (written from this report) — the top-level ones are removed; "
       + "verification.a11y stays at the top level: this report gives none, so it is still read from there; coverage and notes stay yours, and a residual goes in deviations[] (with the why)"
     && rec.counts.high === 1);
   const facts = verificationFacts(v);
@@ -459,6 +459,15 @@ console.log("verify-build on the record: a hand edit of it blocks; its keys left
     write((_, rec) => patch(rec));
     check(`${what}, the sha still matching → BLOCKS on exactly ${keys.join(", ")} (got ${JSON.stringify(recordBlocks())})`, JSON.stringify(recordBlocks()) === JSON.stringify(keys.map(EDITED)));
   }
+  // key order is not content: an editor that reorders the record's keys (and those of its a11y and delta rows) edits nothing
+  const reversed = (o: JsonObject): JsonObject => Object.fromEntries(Object.entries(o).reverse());
+  write((v, rec) => {
+    const rows = Array.isArray(rec.deltas) ? rec.deltas.map((d) => (isJsonObject(d) ? reversed(d) : d)) : [];
+    v.recorded = reversed({ ...rec, deltas: rows, ...(isJsonObject(rec.a11y) ? { a11y: reversed(rec.a11y) } : {}), ...(isJsonObject(rec.counts) ? { counts: reversed(rec.counts) } : {}) });
+  });
+  const reordered: unknown = planOf(root).verification?.recorded;
+  check(`the record's keys reordered (top level, a11y, counts, delta rows), values unchanged → no block (got ${JSON.stringify(recordBlocks())})`,
+    recordBlocks().length === 0 && isJsonObject(reordered) && Object.keys(reordered)[0] === "a11y" && isJsonObject(reordered.a11y) && Object.keys(reordered.a11y)[0] === "report");
   // a @2 block with its schema removed is not a recorded@1: it holds keys that record never wrote
   write((_, rec) => { delete rec.schema; });
   check(`the schema removed from a @2 block → still a @2 block, and it BLOCKS (got ${JSON.stringify(recordBlocks())})`, JSON.stringify(recordBlocks()) === JSON.stringify([EDITED("schema")]));
