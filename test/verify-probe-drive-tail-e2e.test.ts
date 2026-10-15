@@ -25,12 +25,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { VerifyMeasured } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { BROWSER_LOG, READY, browserExit, ix, killGroups, launchedPids, loadNote, out, startDriveFixture, type Run } from "./drive-e2e-fixture.ts";
+import { BROWSER_LOG, READY, browserExit, ix, killBrowsers, launchedPids, loadNote, out, startDriveFixture, type Run } from "./drive-e2e-fixture.ts";
 
 const { url, edge, probe, vs, read, readReport, written, writes, froze, abs, status, EXPECTED, QUIET, finish } =
   await startDriveFixture("dt-probe-drive-tail-e2e-", "verify-probe drive e2e, serial tail — the built bundles in a real chromium, from a temp project:");
 
-// the freeze runs: Playwright's launcher log on stderr (the browser pids and how each ended), and SIGKILLed at 90 s — a hang fails, never hangs the suite
+// the freeze runs: Playwright's launcher log on stderr (the browser pids and how each ended), and killed at 90 s with everything it started (runNode) — a hang fails, never hangs the suite
 const FREEZE_RUN = { env: BROWSER_LOG, killAfterMs: 90_000 };
 const freezeArgs = (u: string, base: string, maxTime: string): string[] => ["--expected", EXPECTED, "--url", u, "--out", out(base), "--timeout", "30000", "--max-time", maxTime];
 const freezeUrl = `${edge("freeze-drive")}&how=raf`;
@@ -283,10 +283,10 @@ const cutRow = (m: VerifyMeasured | null, id: string): boolean => { const e = ix
 /** the drive was cut, not wedged: every row recorded, no "stopped answering" note */
 const notWedged = (m: VerifyMeasured | null): boolean => (m?.interactions || []).length === ROWS.length && !(m?.notes || []).some((n) => /stopped answering/.test(n));
 /** the run's single browser, closed by the probe: its pid and how Playwright logged its end. A run the suite had to kill
- *  (killAfterMs) left its browser to nobody — its process group is killed here. */
+ *  (killAfterMs) left its browser to nobody — it is ended here, with what it started, where runNode's kill did not (killBrowsers). */
 const browserClosed = (label: string, r: Run): boolean => {
   const pids = launchedPids(r.stderr);
-  if (r.killed) killGroups(pids);
+  killBrowsers(r, pids);
   const exit = pids.length === 1 ? browserExit(r.stderr, pids[0] ?? 0) : null;
   return check(`${label} → one browser launched (pid ${pids.join(", ") || "none logged"}), closed by the probe: Playwright logged its own exit 'exitCode=0, signal=null' while the run was up (saw ${exit ?? "no exit"})`,
     pids.length === 1 && exit === "exitCode=0, signal=null");

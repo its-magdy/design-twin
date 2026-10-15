@@ -42,36 +42,54 @@ export const poolSize = (env: NodeJS.ProcessEnv = process.env, cores: number = o
 };
 
 /** What runNode resolves with: the exit status (null when the process was killed by a signal or never started), the captured
- *  output, spawn → close in ms (never the time a run waited in a pool queue), and whether killAfterMs fired. */
-export interface Run { status: number | null; stdout: string; stderr: string; ms: number; killed: boolean }
+ *  output, spawn → close in ms (never the time a run waited in a pool queue), whether killAfterMs fired, and whether that kill
+ *  ended the run's whole process tree (killTree's result: false when it fell back to the child alone, or the run was not killed). */
+export interface Run { status: number | null; stdout: string; stderr: string; ms: number; killed: boolean; treeKilled: boolean }
 
-/** Ends `p` and its descendants. POSIX: SIGKILL to the group `p` leads (runNode spawns it detached for that); Windows has no
- *  groups, so taskkill /T walks the child tree by pid. Falls back to killing the child alone when the group is gone. */
-const killTree = (p: ChildProcessWithoutNullStreams): void => {
-  const pid = p.pid;
-  if (pid === undefined) { p.kill("SIGKILL"); return; }
-  if (process.platform === "win32") { try { spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore" }); } catch { p.kill("SIGKILL"); } return; }
-  try { process.kill(-pid, "SIGKILL"); } catch { p.kill("SIGKILL"); }
+/** What killPidTree needs from the host: its platform and a way to run taskkill (spawnSync's result: `error` when it could not
+ *  start or hit its timeout, `status` its exit code). The tests pass their own. The real taskkill runs hidden and is capped at
+ *  10 s: it blocks the event loop (it runs inside runNode's timer). */
+export interface KillHost { platform: NodeJS.Platform; taskkill: (args: string[]) => { error?: Error; status: number | null } }
+const HOST: KillHost = { platform: process.platform, taskkill: (args) => spawnSync("taskkill", args, { stdio: "ignore", windowsHide: true, timeout: 10_000 }) };
+
+/** Ends the process `pid` and its descendants; false when that did not happen (the caller can then kill what it holds).
+ *  POSIX: SIGKILL to the process group `pid` leads (runNode spawns its child detached for that; Playwright spawns its browser
+ *  detached) — false when there is no such group. Windows has no groups: `taskkill /T /F /PID <pid>` ends the process and the
+ *  processes it started — false when taskkill does not start or exits non-zero (spawnSync reports both, it never throws).
+ *  A pid that is not positive is false at once, nothing signalled (POSIX: process.kill(-0) would signal this process's group). */
+export const killPidTree = (pid: number, host: KillHost = HOST): boolean => {
+  if (!(pid > 0)) return false;
+  if (host.platform === "win32") { const r = host.taskkill(["/T", "/F", "/PID", String(pid)]); return r.error === undefined && r.status === 0; }
+  try { process.kill(-pid, "SIGKILL"); return true; } catch { return false; }
+};
+
+/** Ends `p` and its descendants (killPidTree) and returns true, else kills `p` alone and returns false: SIGKILL to the child
+ *  when it has no pid or the tree kill failed. */
+export const killTree = (p: { pid?: number | undefined; kill: (signal: NodeJS.Signals) => boolean }, host: KillHost = HOST): boolean => {
+  if (p.pid !== undefined && killPidTree(p.pid, host)) return true;
+  p.kill("SIGKILL");
+  return false;
 };
 
 /** Runs `node <script> ...args` in `cwd` asynchronously (a suite's server lives in the test's own process, so a spawnSync
  *  would stop it answering). Never rejects and never hangs on a failed start: a spawn that throws synchronously or emits
  *  "error" (EAGAIN under load) resolves with status null and "spawn failed: <message>" appended to stderr.
  *  killAfterMs > 0: a run that has not closed by then is killed with everything it started (POSIX: the child leads its own
- *  process group and the group gets SIGKILL; Windows: taskkill /T /F by pid) and reported killed — a hung process fails the
- *  test instead of hanging it. `node` is the running binary (process.execPath), so a script path or `-e` source both work.
+ *  process group and the group gets SIGKILL; Windows: taskkill /T /F by pid; the child alone when that fails — treeKilled
+ *  says which) and reported killed — a hung process fails the test instead of hanging it. `node` is the running binary
+ *  (process.execPath), so a script path or `-e` source both work.
  *  `env`: the child's WHOLE environment, passed to spawn as is — it replaces this process's, nothing is merged (a caller that
  *  wants to add a variable spreads process.env itself); omitted, the child inherits this process's. */
 export const runNode = (cwd: string, script: string, args: string[], killAfterMs = 0, env?: NodeJS.ProcessEnv): Promise<Run> => new Promise((resolve) => {
   const t0 = Date.now();
   let p: ChildProcessWithoutNullStreams;
   try { p = spawn(process.execPath, [script, ...args], { cwd, ...(env !== undefined ? { env } : {}), ...(killAfterMs > 0 && process.platform !== "win32" ? { detached: true } : {}) }); }
-  catch (e) { resolve({ status: null, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}\n`, ms: Date.now() - t0, killed: false }); return; }
-  let stdout = "", stderr = "", killed = false;
-  const timer = killAfterMs > 0 ? setTimeout(() => { killed = true; killTree(p); }, killAfterMs) : undefined;
+  catch (e) { resolve({ status: null, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}\n`, ms: Date.now() - t0, killed: false, treeKilled: false }); return; }
+  let stdout = "", stderr = "", killed = false, treeKilled = false;
+  const timer = killAfterMs > 0 ? setTimeout(() => { killed = true; treeKilled = killTree(p); }, killAfterMs) : undefined;
   p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
   p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-  p.on("error", (e) => { clearTimeout(timer); resolve({ status: null, stdout, stderr: `${stderr}spawn failed: ${e.message}\n`, ms: Date.now() - t0, killed }); });
+  p.on("error", (e) => { clearTimeout(timer); resolve({ status: null, stdout, stderr: `${stderr}spawn failed: ${e.message}\n`, ms: Date.now() - t0, killed, treeKilled }); });
   // a killed run's status is null everywhere (Windows: a process ended by taskkill or TerminateProcess exits with code 1)
-  p.on("close", (status) => { clearTimeout(timer); resolve({ status: killed ? null : status, stdout, stderr, ms: Date.now() - t0, killed }); });
+  p.on("close", (status) => { clearTimeout(timer); resolve({ status: killed ? null : status, stdout, stderr, ms: Date.now() - t0, killed, treeKilled }); });
 });
