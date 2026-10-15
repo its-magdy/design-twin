@@ -270,7 +270,7 @@ ok("'positions' (exact layer name only, no title collision on THIS query string)
 
 
 // ---------- an index that is not an index is treated as no index (doc-guards.ts) — not iterated as one ----------
-ok("[shape] a pages/index.json whose pageDirs is a string resolves nothing (was: each CHARACTER walked as a page dir)", (() => {
+ok("[shape] a pages/index.json whose pageDirs is a string resolves nothing (no CHARACTER is walked as a page dir)", (() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-shape-"));
   fs.mkdirSync(path.join(tmp, "pages"), { recursive: true });
   fs.writeFileSync(path.join(tmp, "pages", "index.json"), JSON.stringify({ pageDirs: "__Optimization_management_" }));

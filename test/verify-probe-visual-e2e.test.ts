@@ -193,24 +193,24 @@ const P = {
   const m = read(pMain, out("Firings")), v = ran(m);
   console.log(`    e1: exit ${r.status} ${Math.round(r.ms / 1000)}s — ${brief(m)}`);
   if (r.status !== 0) console.log(r.stderr.slice(0, 2000));
-  check("e1 the probe exits 0 and runs the visual diff", r.status === 0 && v !== null);
-  check(`e1 the reference grid, at the scale the reference was rendered at, 2048/1440, which the index's ${SCALE} rounds (dsf ${v?.capture.dsf})`, v !== null && v.grid === "reference" && v.resampled === "none" && v.capture.dsf === RENDER_SCALE && v.reference.from === "index" && v.reference.scale === RENDER_SCALE);
-  check(`e1 the reference crop skips the 12 px shadow margin (${JSON.stringify(v?.reference.crop)})`, v !== null && v.reference.crop.x === Math.round(12 * RENDER_SCALE) && v.reference.crop.y === Math.round(12 * RENDER_SCALE) && v.reference.offset.x === -12);
-  check(`e1 a correct twin: shift-tolerant < 0.5 %, no hot region (${v?.shiftTolerantPct}%, ${v?.regionsTotal})`, v !== null && v.shiftTolerantPct < 0.5 && v.regionsTotal === 0);
-  check("e1 the clip is the design window in whole CSS px at the frame's top-left", v !== null && v.capture.clip.x === 0 && v.capture.clip.y === 0 && v.capture.clip.w === 1440 && v.capture.clip.h === 720 && v.capture.frame.nodeId === "90:1" && v.capture.frame.via === "tag");
+  check("[twin] the probe exits 0 and runs the visual diff", r.status === 0 && v !== null);
+  check(`[twin] the reference grid, at the scale the reference was rendered at, 2048/1440, which the index's ${SCALE} rounds (dsf ${v?.capture.dsf})`, v !== null && v.grid === "reference" && v.resampled === "none" && v.capture.dsf === RENDER_SCALE && v.reference.from === "index" && v.reference.scale === RENDER_SCALE);
+  check(`[twin] the reference crop skips the 12 px shadow margin (${JSON.stringify(v?.reference.crop)})`, v !== null && v.reference.crop.x === Math.round(12 * RENDER_SCALE) && v.reference.crop.y === Math.round(12 * RENDER_SCALE) && v.reference.offset.x === -12);
+  check(`[twin] a correct twin: shift-tolerant < 0.5 %, no hot region (${v?.shiftTolerantPct}%, ${v?.regionsTotal})`, v !== null && v.shiftTolerantPct < 0.5 && v.regionsTotal === 0);
+  check("[twin] the clip is the design window in whole CSS px at the frame's top-left", v !== null && v.capture.clip.x === 0 && v.capture.clip.y === 0 && v.capture.clip.w === 1440 && v.capture.clip.h === 720 && v.capture.frame.nodeId === "90:1" && v.capture.frame.via === "tag");
   const dp = path.join(pMain, out("Firings") + ".diff.png");
   const di = fs.existsSync(dp) ? pngInfo(fs.readFileSync(dp)) : null;
-  check(`e1 <S>.diff.png exists with the compared size (${di?.w}×${di?.h} vs ${v?.compared.w}×${v?.compared.h})`, di !== null && v !== null && di.w === v.compared.w && di.h === v.compared.h && v.diff === (out("Firings") + ".diff.png").split(path.sep).join("/"));
-  check("e1 the diff image is never in measured.artifacts", m !== null && !(m.artifacts ?? []).some((a) => (typeof a === "string" ? a : a.path ?? "").endsWith(".diff.png")));
-  check("e1 the probe prints the visual line (informational)", /visual \(informational — never the verdict\) .*% of pixels differ/.test(r.stderr));
-  check("e1 behaviour still ran after the capture", m !== null && m.behaviour !== undefined && m.behaviour.ran === true);
+  check(`[twin] <S>.diff.png exists with the compared size (${di?.w}×${di?.h} vs ${v?.compared.w}×${v?.compared.h})`, di !== null && v !== null && di.w === v.compared.w && di.h === v.compared.h && v.diff === (out("Firings") + ".diff.png").split(path.sep).join("/"));
+  check("[twin] the diff image is never in measured.artifacts", m !== null && !(m.artifacts ?? []).some((a) => (typeof a === "string" ? a : a.path ?? "").endsWith(".diff.png")));
+  check("[twin] the probe prints the visual line (informational)", /visual \(informational — never the verdict\) .*% of pixels differ/.test(r.stderr));
+  check("[twin] behaviour still ran after the capture", m !== null && m.behaviour !== undefined && m.behaviour.ran === true);
 }
 // ---- e1 (offset frame): a frame whose window reaches below the viewport is captured whole (fullPage)
 {
   const r = await P.e1o;
   const m = read(pMain, out("Offset")), v = ran(m);
   console.log(`    e1 offset-frame: exit ${r.status} — ${brief(m)}`);
-  check(`e1 a frame 200 px down a taller page: clip at y 200, low diff (${v?.capture.clip.y}, ${v?.shiftTolerantPct}%)`, v !== null && v.capture.clip.y === 200 && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.regionsTotal === 0);
+  check(`[offset-frame] a frame 200 px down a taller page: clip at y 200, low diff (${v?.capture.clip.y}, ${v?.shiftTolerantPct}%)`, v !== null && v.capture.clip.y === 200 && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.regionsTotal === 0);
 }
 // ---- e2: a recoloured card
 {
@@ -218,17 +218,17 @@ const P = {
   const m = read(pMain, out("Recolor")), v = ran(m);
   console.log(`    e2: exit ${r.status} — ${brief(m)}`);
   const hit = v?.regions.find((g) => g.built.includes("90:12"));
-  check(`e2 a region names the recoloured card 90:12 among its built nodes, shift-tolerant > 1 % (${v?.shiftTolerantPct}%)`, v !== null && hit !== undefined && v.shiftTolerantPct > 1);
-  check("e2 the region also names the designed card (design geometry)", hit !== undefined && hit.designed.includes("90:12"));
-  check(`e2 the region sits over the card in CSS px (${JSON.stringify(hit?.rect)})`, hit !== undefined && hit.rect.x >= 32 + 2 * 324 - 12 && hit.rect.x <= 32 + 2 * 324 + 12 && hit.rect.y >= 148 && hit.rect.y <= 172 && hit.rect.w >= 280);
+  check(`[recolour] a region names the recoloured card 90:12 among its built nodes, shift-tolerant > 1 % (${v?.shiftTolerantPct}%)`, v !== null && hit !== undefined && v.shiftTolerantPct > 1);
+  check("[recolour] the region also names the designed card (design geometry)", hit !== undefined && hit.designed.includes("90:12"));
+  check(`[recolour] the region sits over the card in CSS px (${JSON.stringify(hit?.rect)})`, hit !== undefined && hit.rect.x >= 32 + 2 * 324 - 12 && hit.rect.x <= 32 + 2 * 324 + 12 && hit.rect.y >= 148 && hit.rect.y <= 172 && hit.rect.w >= 280);
 }
 // ---- e3: an export pulled before the index had the scale (from: "export")
 {
   const r = await P.e3;
   const m = read(pOld, out("Firings")), v = ran(m);
   console.log(`    e3: exit ${r.status} — ${brief(m)}`);
-  check(`e3 old export: the scale and offset recomputed from renderBox name the same render scale as the index (${v?.reference.scale}, ${JSON.stringify(v?.reference.offset)})`, v !== null && v.reference.from === "export" && v.reference.scale === RENDER_SCALE && v.reference.offset.x === -12 && v.reference.offset.y === -12);
-  check("e3 the same result as e1 (low diff, no region)", v !== null && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.regionsTotal === 0);
+  check(`[old-export] old export: the scale and offset recomputed from renderBox name the same render scale as the index (${v?.reference.scale}, ${JSON.stringify(v?.reference.offset)})`, v !== null && v.reference.from === "export" && v.reference.scale === RENDER_SCALE && v.reference.offset.x === -12 && v.reference.offset.y === -12);
+  check("[old-export] the same result as e1 (low diff, no region)", v !== null && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.regionsTotal === 0);
 }
 // ---- e7: invariance — with and without referenceImage the measurement is the same
 const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? null : { nodes: m.nodes, notMeasured: m.notMeasured, interactions: m.interactions ?? null, page: m.page ?? null,
@@ -237,61 +237,61 @@ const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? 
   const [ra, rb] = [await P.e7a, await P.e7b];
   const a = read(pMain, out("Off")), b = read(pMain, out("Older"));
   console.log(`    e7: exit ${ra.status}/${rb.status} — ${brief(a)} | ${brief(b)}`);
-  check("e7 with --behaviour off the visual diff still runs (it is no behaviour check)", ran(a) !== null);
-  check(`e7 an expectation that predates the visual diff: not run, re-run --expect (${whyOf(b)})`, /predates the visual diff \(no referenceImage\) — re-run --expect/.test(whyOf(b)) && !fs.existsSync(path.join(pMain, out("Older") + ".diff.png")));
-  check("e7 nodes, notMeasured, interactions, page and navigation are identical with and without the diff", a !== null && b !== null && strip(a) === strip(b));
-  check("e7 the measured artifacts are the same list shape (only the screenshot)", a !== null && b !== null && (a.artifacts ?? []).length === 1 && (b.artifacts ?? []).length === 1);
+  check("[invariance] with --behaviour off the visual diff still runs (it is no behaviour check)", ran(a) !== null);
+  check(`[invariance] an expectation that predates the visual diff: not run, re-run --expect (${whyOf(b)})`, /predates the visual diff \(no referenceImage\) — re-run --expect/.test(whyOf(b)) && !fs.existsSync(path.join(pMain, out("Older") + ".diff.png")));
+  check("[invariance] nodes, notMeasured, interactions, page and navigation are identical with and without the diff", a !== null && b !== null && strip(a) === strip(b));
+  check("[invariance] the measured artifacts are the same list shape (only the screenshot)", a !== null && b !== null && (a.artifacts ?? []).length === 1 && (b.artifacts ?? []).length === 1);
 }
 // ---- e4: a discovery thumbnail as the reference — and the --compare verdict does not move
 {
   const r = await P.e4;
   const m = read(pThumb, out("Firings"));
   console.log(`    e4: exit ${r.status} — ${brief(m)}`);
-  check(`e4 a 360 px thumbnail: not run, the why (${whyOf(m)})`, r.status === 0 && /a discovery thumbnail\)/.test(whyOf(m)) && !fs.existsSync(path.join(pThumb, out("Firings") + ".diff.png")));
+  check(`[thumbnail] a 360 px thumbnail: not run, the why (${whyOf(m)})`, r.status === 0 && /a discovery thumbnail\)/.test(whyOf(m)) && !fs.existsSync(path.join(pThumb, out("Firings") + ".diff.png")));
   const c4 = await vs(pThumb, ["--compare", EXP, out("Firings") + ".measured.json", "--out", out("Firings")]);
   const c1 = await vs(pMain, ["--compare", EXP, out("Off") + ".measured.json", "--out", out("Off")]);
   const r4 = readReport(pThumb, out("Firings")), r1 = readReport(pMain, out("Off"));
   console.log(`    e4 compare: ${r4?.verdict} / ${r1?.verdict} (exit ${c4.status}/${c1.status}) — ${JSON.stringify(r4?.why ?? null).slice(0, 300)}`);
-  check("e4 the --compare verdict and why equal the diffed run's (the diff is never the verdict)", r4 !== null && r1 !== null && r4.verdict === r1.verdict && JSON.stringify(r4.why ?? null) === JSON.stringify(r1.why ?? null));
+  check("[thumbnail] the --compare verdict and why equal the diffed run's (the diff is never the verdict)", r4 !== null && r1 !== null && r4.verdict === r1.verdict && JSON.stringify(r4.why ?? null) === JSON.stringify(r1.why ?? null));
 }
 // ---- e5: the reference changed since --expect
 {
   const r = await P.e5;
   const m = read(pSwap, out("Firings"));
   console.log(`    e5: exit ${r.status} — ${brief(m)}`);
-  check(`e5 a reference PNG replaced after --expect: not run (${whyOf(m)})`, r.status === 0 && /changed since --expect/.test(whyOf(m)));
+  check(`[swapped] a reference PNG replaced after --expect: not run (${whyOf(m)})`, r.status === 0 && /changed since --expect/.test(whyOf(m)));
 }
 // ---- e6: a section of the app reached by --steps (the reach reused)
 {
   const [r, rx] = [await P.e6, await P.e6x];
   const m = read(pMain, out("Tabs")), v = ran(m);
   console.log(`    e6: exit ${r.status} — ${brief(m)}; bad steps exit ${rx.status}`);
-  check(`e6 the Firings section reached by --steps: low diff (${v?.shiftTolerantPct}%)`, r.status === 0 && v !== null && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.regionsTotal === 0);
-  check("e6 a step that fails while measuring is still exit 4 with nothing written", rx.status === 4 && !fs.existsSync(path.join(pMain, out("TabsBad") + ".measured.json")) && !fs.existsSync(path.join(pMain, out("TabsBad") + ".diff.png")));
+  check(`[steps] the Firings section reached by --steps: low diff (${v?.shiftTolerantPct}%)`, r.status === 0 && v !== null && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.regionsTotal === 0);
+  check("[steps] a step that fails while measuring is still exit 4 with nothing written", rx.status === 4 && !fs.existsSync(path.join(pMain, out("TabsBad") + ".measured.json")) && !fs.existsSync(path.join(pMain, out("TabsBad") + ".diff.png")));
 }
 // ---- e8: no time left for the capture
 {
   const r = await P.e8;
   const m = read(pMain, out("Short"));
   console.log(`    e8: exit ${r.status} ${Math.round(r.ms / 1000)}s — ${brief(m)}`);
-  check(`e8 a small --max-time: exit 0, measured.json written, the diff not run — no time left (${whyOf(m)})`, r.status === 0 && m !== null && /no time left within --max-time/.test(whyOf(m)));
-  check("e8 the stale <S>.diff.png of an earlier run is removed", !fs.existsSync(path.join(pMain, out("Short") + ".diff.png")));
-  check("e8 the stderr says the diff did not run", /visual not run \(no time left/.test(r.stderr));
+  check(`[max-time] a small --max-time: exit 0, measured.json written, the diff not run — no time left (${whyOf(m)})`, r.status === 0 && m !== null && /no time left within --max-time/.test(whyOf(m)));
+  check("[max-time] the stale <S>.diff.png of an earlier run is removed", !fs.existsSync(path.join(pMain, out("Short") + ".diff.png")));
+  check("[max-time] the stderr says the diff did not run", /visual not run \(no time left/.test(r.stderr));
 }
 // ---- e9: the built frame is taller than the design
 {
   const r = await P.e9;
   const m = read(pMain, out("Tall")), v = ran(m);
   console.log(`    e9: exit ${r.status} — ${brief(m)}`);
-  check("e9 only the design window is compared, on the reference grid (no 1x fallback)", v !== null && v.grid === "reference" && v.resampled === "none" && v.capture.clip.h === 720 && v.shiftTolerantPct < 0.5);
-  check("e9 a note says the built frame is taller than the design", v !== null && v.notes.some((n) => /1440×800 CSS px and the design 1440×720/.test(n)));
+  check("[tall] only the design window is compared, on the reference grid (no 1x fallback)", v !== null && v.grid === "reference" && v.resampled === "none" && v.capture.clip.h === 720 && v.shiftTolerantPct < 0.5);
+  check("[tall] a note says the built frame is taller than the design", v !== null && v.notes.some((n) => /1440×800 CSS px and the design 1440×720/.test(n)));
 }
 // ---- e10: a tall frame whose reference scale is below 1 (Chromium renders at a factor < 1)
 {
   const r = await P.e10;
   const m = read(pMain, out("Ledger")), v = ran(m);
   console.log(`    e10: exit ${r.status} ${Math.round(r.ms / 1000)}s — ${brief(m)}`);
-  check(`e10 a 400×5000 frame at 2048/5000 (the index's ${LEDGER_SCALE} rounds it): rendered at that, on the reference grid, low diff`, v !== null && v.capture.dsf === LEDGER_RENDER_SCALE && LEDGER_RENDER_SCALE < 1 && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.compared.h >= 2046 && v.compared.h <= 2048);
+  check(`[long] a 400×5000 frame at 2048/5000 (the index's ${LEDGER_SCALE} rounds it): rendered at that, on the reference grid, low diff`, v !== null && v.capture.dsf === LEDGER_RENDER_SCALE && LEDGER_RENDER_SCALE < 1 && v.grid === "reference" && v.shiftTolerantPct < 0.5 && v.compared.h >= 2046 && v.compared.h <= 2048);
 }
 // ---- e11: a null referenceImage — ran:false with why, exit 0, the measured file written, the process exits
 {
@@ -299,15 +299,15 @@ const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? 
   const m = read(pMain, out("Null"));
   console.log(`    e11: exit ${r.status}${r.killed ? " (KILLED — hung)" : ""} ${Math.round(r.ms / 1000)}s — ${brief(m)}`);
   if (r.status !== 0) console.log(r.stderr.slice(0, 1000));
-  check("e11 referenceImage null: the probe exits 0 on its own and writes measured.json", !r.killed && r.status === 0 && m !== null);
-  check(`e11 …visual ran:false 'malformed — re-run --expect' (${whyOf(m)})`, /referenceImage is malformed — re-run --expect/.test(whyOf(m)) && /visual not run \(the expectation's referenceImage is malformed/.test(r.stderr));
+  check("[null-ref] referenceImage null: the probe exits 0 on its own and writes measured.json", !r.killed && r.status === 0 && m !== null);
+  check(`[null-ref] …visual ran:false 'malformed — re-run --expect' (${whyOf(m)})`, /referenceImage is malformed — re-run --expect/.test(whyOf(m)) && /visual not run \(the expectation's referenceImage is malformed/.test(r.stderr));
 }
 // ---- e12: the monorepo — the probe in app/ (--project app), the expectation in the root's design/verify
 {
   const r = await P.e12;
   const m = read(pMono, out("Mono")), v = ran(m);
   console.log(`    e12: exit ${r.status}${r.killed ? " (KILLED)" : ""} — ${brief(m)}`);
-  check(`e12 a monorepo (design/ at the root, --project app): the reference is found and diffed (${whyOf(m)})`, r.status === 0 && v !== null && v.grid === "reference" && v.shiftTolerantPct < 0.5);
+  check(`[monorepo] a monorepo (design/ at the root, --project app): the reference is found and diffed (${whyOf(m)})`, r.status === 0 && v !== null && v.grid === "reference" && v.shiftTolerantPct < 0.5);
 }
 
 finish();

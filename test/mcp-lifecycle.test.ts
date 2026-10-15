@@ -487,7 +487,7 @@ void (async () => {
         s.p.stdin.end();
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
-        ok(`routed via a daemon → stdin EOF → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms; a regression guard — passes at HEAD)`, !!e && e.code === 0);
+        ok(`routed via a daemon → stdin EOF → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0);
         ok("…and the daemon it routed through is untouched", f.closes() === 0 && (await daemon.probe(fake.sock)));
       } else ok("server came up", false);
       fake.shutdown();

@@ -148,7 +148,7 @@ try {
       lingering.status === 0 && /lingers\s+pass\s+1\/1/.test(lingering.out) && ms < 10_000);
   }
   {
-    // a slow reader on the runner's stdout: exit() used to drop everything still queued in the pipe (the SUMMARY)
+    // a slow reader on the runner's stdout: exit() must not drop everything still queued in the pipe (the SUMMARY)
     const e: Record<string, string | undefined> = { ...process.env, DT_RUN_SUITES_LIST: list(["big"]) };
     delete e.CI;
     const r = spawnSync("sh", ["-c", `"${process.execPath}" "${RUNNER}" | (sleep 2; cat)`], { encoding: "utf8", timeout: 60_000, env: e });

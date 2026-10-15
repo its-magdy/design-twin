@@ -150,7 +150,7 @@ block("null is not measured", () => {
   t("a probe that reports every value null: 0 values compared, verdict not pass", () => !!nothing && nothing.coverage.fieldsChecked === 0 && nothing.verdict !== "pass" && nothing.coverage.fieldsNotMeasured > 0);
   t("... and the why line says how many were reported null", () => !!nothing && nothing.why.some((w) => /reported null/.test(w)));
 
-  // padding: null used to crash compare (got.padding.every); padding [8, null, 8, 16] used to compare null as 0.
+  // padding: null does not crash compare (got.padding.every); padding [8, null, 8, 16] does not compare null as 0.
   t("padding: null is a gap with its reason, not a crash", () => {
     const rr = compare(e, measured([probeNode("1:2", { backgroundColor: "rgb(244, 244, 245)", padding: null, gap: 12, width: 1280, height: 48, tag: "div" }, { unmeasured: { padding: "padding is on a pseudo-element" } })]));
     return rr.fieldsNotMeasured.some((f) => f.nodeId === "1:2" && f.field === "padding" && f.why === "padding is on a pseudo-element");
@@ -159,7 +159,7 @@ block("null is not measured", () => {
     const rr = compare(e, measured([probeNode("1:2", { backgroundColor: "rgb(244, 244, 245)", padding: [8, null, 8, 16], gap: 12, width: 1280, height: 48, tag: "div" })]));
     return rr.fieldsNotMeasured.some((f) => f.nodeId === "1:2" && f.field === "padding") && !rr.deltas.some((d) => d.nodeId === "1:2" && d.field === "padding");
   });
-  // borderRadius null used to read "could not read 'null' as a radius" — now the probe's reason.
+  // borderRadius null carries the probe's reason, not "could not read 'null' as a radius".
   t("borderRadius: null carries the probe's reason", () => {
     const rr = compare(e, measured([probeNode("1:3", { backgroundColor: "rgb(10, 132, 255)", borderRadius: null, width: 120, height: 32, tag: "button" }, { unmeasured: { borderRadius: "clip-path, not border-radius" } })]));
     return rr.fieldsNotMeasured.some((f) => f.nodeId === "1:3" && f.field === "border-radius" && f.why === "clip-path, not border-radius");
@@ -1584,8 +1584,8 @@ block("behaviour helpers", () => {
   // the start edge moves out by the scroll of the container and every box above it (an app shell's
   // scroller), so a label scrolled above the shell's top still counts while a left:-9999px sr-only label (no scroll) does not;
   // overflow:clip on both axes paints overflow-clip-margin past the box; a container needing more than the work cap
-  // answers "content" at once (was: O(texts × depth), seconds, then "nothing")
-  t("markOpener and clickPointControl: a tall card's label above the top of a scrolled app shell → refused (was: clipped off as past the document's top edge); the same card not scrolled (label above the document top, nothing scrolled) and a left:-9999px sr-only label → own; a label in a 1 × 1 overflow:clip box with overflow-clip-margin:120px → refused (was: clipped to the box), with margin 0 → own", () => {
+  // answers "content" at once (not O(texts × depth), seconds, then "nothing")
+  t("markOpener and clickPointControl: a tall card's label above the top of a scrolled app shell → refused (not clipped off as past the document's top edge); the same card not scrolled (label above the document top, nothing scrolled) and a left:-9999px sr-only label → own; a label in a 1 × 1 overflow:clip box with overflow-clip-margin:120px → refused (not clipped to the box), with margin 0 → own", () => {
     const { box, text, mk } = d51;
     const b = (): D51El => mk("button", { r: box(90, -100, 40, 400), focusable: true, buttonLike: true, label: "Delete crate" });
     const tall = (scrolled: boolean): [D51El, D51El] => {
@@ -1615,7 +1615,7 @@ block("behaviour helpers", () => {
       return ok;
     });
   });
-  t("markOpener and clickPointControl on a card of 1500 nested 1 × 1 overflow:hidden boxes, each with a clipped text: past the work cap → both refuse its centred Delete, at once (was: O(texts × depth), then 'nothing of its own')", () => {
+  t("markOpener and clickPointControl on a card of 1500 nested 1 × 1 overflow:hidden boxes, each with a clipped text: past the work cap → both refuse its centred Delete, at once (not O(texts × depth), then 'nothing of its own')", () => {
     const { box, text, mk } = d51;
     const btn = mk("button", { r: box(90, 10, 20, 20), focusable: true, buttonLike: true, label: "Delete crate" });
     let deep: D51El = mk("span", { r: box(4, 10, 1, 1), overflow: "hidden" }, text("Move crate", box(4, 10, 70, 16)));

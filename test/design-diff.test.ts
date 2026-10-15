@@ -216,8 +216,8 @@ check("snapshot → overwrite → diff finds the change; no snapshot and no git 
     && (snapshotPath(rel, root) ?? "").endsWith("pages__home__login.json") && d.status === 0 && parseAs(d.stdout, isDiffResult, "design-diff --json").summary.changed === 1;
 })());
 
-// `--snapshot` used to be an unconditional fs.copyFileSync — running step 2 of the
-// sync-design skill twice (once before each of two later re-pulls) silently replaced the FIRST
+// `--snapshot` is not an unconditional fs.copyFileSync: running step 2 of the
+// sync-design skill twice (once before each of two later re-pulls) would silently replace the FIRST
 // baseline with whatever was on disk by the second call, which by then could already be a post-re-pull
 // export. Non-destructive by default; --force is required to replace a baseline that would actually change.
 console.log("CLI — --snapshot is non-destructive:");
@@ -263,7 +263,7 @@ console.log("CLI — --snapshot copies the sibling set:");
 check("snapshotting ONE design-system file also snapshots its 8 siblings", (() => {
   // the MANIFEST (design-system.json) lives at the export ROOT, one level ABOVE the
   // design-system/ subdirectory that holds the other 8 files (bridge/design-system-layout.js's own
-  // header comment) — not flat alongside them, which is what this fixture used to (wrongly) assume.
+  // header comment) — not flat alongside them, which a fixture must not assume.
   const names = Object.values<string>(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-ds-siblings-"));
   const dsDir = path.join(root, "design", "export", "design-system");
@@ -329,7 +329,7 @@ check("tokens: a new MODE on a collection is reported", (() => {
   const d = diffTokens(t(["Light", "Dark"]), t(["Light", "Dark", "High contrast"]));
   return d.summary.changed === 1 && d.collections[0]?.field === "Theme.modes[2]" && /Collections \/ modes/.test(markdown(d, "x"));
 })());
-check("catalog: removed / added components and a new variant option are all seen (it used to say 'Nothing changed')", (() => {
+check("catalog: removed / added components and a new variant option are all seen (not 'Nothing changed')", (() => {
   const cat = (): { components: Array<CatalogComponent & { variantProps?: Record<string, string[]> }> } => ({ components: [{ key: "k1", id: "1:1", name: "Button", type: "COMPONENT_SET", page: "DS", variantProps: { State: ["default", "pressed"] } }, { key: "k2", id: "1:2", name: "Chip", type: "COMPONENT" }] });
   const b = cat();
   const b0 = must(b.components[0], "b.components[0]");
@@ -404,9 +404,9 @@ check("a file of an unknown kind exits 2 with the reason", (() => { const root =
 
 // ---------------------------------------------------------------- style + hygiene diffs
 // The export-directory diff (sync-design) reads EVERY design-system file a --design-system pull writes,
-// including the four styles.*.json and hygiene.json — and all five used to exit 2 with "nothing here
+// including the four styles.*.json and hygiene.json — and none of the five exits 2 with "nothing here
 // can be diffed", so a typography-only or effect-only design-system change (or a new/resolved hygiene
-// warning) was exactly as undetectable as the skill warns it would be without them. Fixtures are the
+// warning) is detected, not undetectable as the skill warns it would be without them. Fixtures are the
 // REAL design-system files from a real export (test/fixtures/livetest4/design-system/).
 console.log("style + hygiene diffs (real design-system fixtures):");
 const FIX_DS = path.join(import.meta.dirname, "fixtures", "livetest4", "design-system");

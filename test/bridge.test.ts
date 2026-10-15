@@ -150,9 +150,9 @@ ok("[id-colon] node-id=5:6 -> 5:6", forms.ColonRaw?.nodeId === "5:6");
 ok("[id-nested] instance path I7-8;9-10 -> I7:8;9:10", forms.Nested?.nodeId === "I7:8;9:10");
 
 console.log("\nseed-components — reserved-key hardening:");
-// A component literally named "__proto__" used to resolve to Object.prototype: its entry vanished
-// from components.json AND the backfills landed on the prototype, after which no OTHER entry could
-// be filled either (their `=== undefined` checks became false). Both halves are asserted here.
+// A component literally named "__proto__" must not resolve to Object.prototype: its entry must not vanish
+// from components.json NOR the backfills land on the prototype, after which no OTHER entry could
+// be filled either (their `=== undefined` checks would become false). Both halves are asserted here.
 const poisoned = must(runSeed(
   "poison",
   { "a.figma.tsx": tpl("__proto__", "1-2", "evil.tsx"), "z.figma.tsx": tpl("Widget", "5-5", "widget.tsx") },
@@ -178,9 +178,9 @@ ok("[seed-preserves-human-fields] hand-authored import survives the merge", widg
 
 console.log("\nseed-components — node-id -> name via the split catalog:");
 // A Code Connect template that carries a node-id but NO `component=` can only be named by looking the
-// id up in the export. That lookup used to read `components` straight off design-system.json — which
-// since the design-system split is a slim POINTER manifest with no such array, so the map came back
-// empty and every name-less mapping was silently dropped (a clean-looking run that just found less).
+// id up in the export. That lookup must not read `components` straight off design-system.json — which
+// since the design-system split is a slim POINTER manifest with no such array, so the map would come back
+// empty and every name-less mapping be silently dropped (a clean-looking run that just found less).
 // The seeder must follow files.componentsLocal to the real catalog.
 const viaManifest = runSeed(
   "manifest-lookup",
@@ -356,21 +356,21 @@ void (async () => {
   const dErr = await disconnectErr(1009, "max payload size exceeded"); // the payload-overflow disconnect
 
   console.log("\nserver-core — disconnect diagnosis:");
-  ok("[dc] an in-flight request rejects on disconnect", !!dErr);
-  ok("[dc] the close CODE is surfaced (was discarded)", !!dErr && /1009/.test(dErr.message));
-  ok("[dc] the close reason is surfaced", !!dErr && /max payload size exceeded/i.test(dErr.message));
-  ok("[dc] 1009 names the actual knob to turn", !!dErr && /FIGMA_BRIDGE_MAX_PAYLOAD_MB/.test(dErr.message));
-  ok("[dc] and suggests pulling less at once", !!dErr && /--all-pages/.test(dErr.message));
+  ok("[disconnect] an in-flight request rejects on disconnect", !!dErr);
+  ok("[disconnect] the close CODE is surfaced (not discarded)", !!dErr && /1009/.test(dErr.message));
+  ok("[disconnect] the close reason is surfaced", !!dErr && /max payload size exceeded/i.test(dErr.message));
+  ok("[disconnect] 1009 names the actual knob to turn", !!dErr && /FIGMA_BRIDGE_MAX_PAYLOAD_MB/.test(dErr.message));
+  ok("[disconnect] and suggests pulling less at once", !!dErr && /--all-pages/.test(dErr.message));
 
   // A plain close with no error must NOT be misreported as a payload problem — it points at the
   // plugin console instead, which is where a crash/OOM actually shows up.
   const pErr = await disconnectErr(1001, ""); // peer went away, no socket error
 
-  ok("[dc-plain] a non-1009 close does NOT blame the payload limit",
+  ok("[disconnect-plain] a non-1009 close does NOT blame the payload limit",
     !!pErr && !/FIGMA_BRIDGE_MAX_PAYLOAD_MB/.test(pErr.message));
-  ok("[dc-plain] it points at the plugin console instead",
+  ok("[disconnect-plain] it points at the plugin console instead",
     !!pErr && /Open Console/i.test(pErr.message));
-  ok("[dc-plain] and still reports the close code", !!pErr && /1001/.test(pErr.message));
+  ok("[disconnect-plain] and still reports the close code", !!pErr && /1001/.test(pErr.message));
 
   // ------------------------------------------------- server-core: a bad token the PLUGIN can diagnose
   // A browser socket cannot read an HTTP 401 (it sees an opaque 1006, same as "nothing listening"), so
@@ -427,8 +427,8 @@ void (async () => {
   }
 
   // ------------------------------------------------- server-core: heartbeat (ws README ping/pong)
-  // A peer that silently stopped answering (lid closed, cable pulled) used to sit in the registry as a
-  // live client forever, so every command routed to it waited out its whole timeout. The bridge now
+  // A peer that silently stopped answering (lid closed, cable pulled) must not sit in the registry as a
+  // live client forever (every command routed to it would wait out its whole timeout). The bridge
   // pings on an interval and terminates a client that missed the previous pong. `autoPong: false` is a
   // client whose network stack never answers. The rounds are stepped by hand (`heartbeatMs: 0` +
   // heartbeatTick()): with a real short interval, one loop stall after a ping fired the next tick
@@ -525,10 +525,10 @@ void (async () => {
   }
 
   // ------------------------------------------------- server-core: MULTI-CLIENT routing (two files)
-  // The bridge used to keep ONE plugin socket and terminate the incumbent, which made two open Figma
-  // files ping-pong: the displaced plugin's 3s auto-reconnect stole the bridge straight back, forever
-  // (observed live). Connections now coexist and commands are ADDRESSED. These drive real sockets —
-  // two of them — because the whole failure mode lived in the interaction between two clients, which
+  // The bridge keeps every plugin socket, not ONE with the incumbent terminated (which makes two open Figma
+  // files ping-pong: the displaced plugin's 3s auto-reconnect steals the bridge straight back, forever).
+  // Connections coexist and commands are ADDRESSED. These drive real sockets —
+  // two of them — because the whole failure mode lives in the interaction between two clients, which
   // no single-socket test could reach.
   {
     const port = nextPort++;
@@ -570,7 +570,7 @@ void (async () => {
     ok("[multi] BOTH files stay connected — no takeover", two.length === 2);
     ok("[multi] neither is displaced (both ids present)",
       two.some((c) => c.connId === "c1") && two.some((c) => c.connId === "c2"));
-    ok("[multi] takeovers stays 0 now that connections coexist", bridge.connectionInfo().takeovers === 0);
+    ok("[multi] takeovers stays 0 while connections coexist", bridge.connectionInfo().takeovers === 0);
     ok("[multi] connectionInfo reports the client count", bridge.connectionInfo().clientsConnected === 2);
 
     // Addressing: by connId, by fileKey, and by a substring of the file name.
@@ -733,11 +733,11 @@ void (async () => {
   ok("[args] --timeout abc is rejected", /positive number/.test(usage(["--timeout", "abc"]) || ""));
   ok("[args] --timeout 600 -> 600000ms", parse(["--timeout", "600"]).exportTimeoutMs === 600000);
   ok("[args] --timeout=600 -> 600000ms (= form)", parse(["--timeout=600"]).exportTimeoutMs === 600000);
-  // A near-miss flag must not be read as this one: `startsWith("--timeout")` used to swallow it.
-  // It is now refused outright (unknown flag) — stronger than "parsed, but not as --timeout".
+  // A near-miss flag must not be read as this one: `startsWith("--timeout")` would swallow it.
+  // It is refused outright (unknown flag) — stronger than "parsed, but not as --timeout".
   ok("[args] an unrelated --timeout-ish flag is not consumed as --timeout",
     /unknown flag: --timeout-ms/.test(usage(["--timeout-ms", "5"]) || ""));
-  // Unknown flags: a typo used to match nothing and fall through to a FULL PULL that waits on the
+  // Unknown flags: a typo must not match nothing and fall through to a FULL PULL that waits on the
   // plugin — the wrong command, silently. Refused, with the nearest real flag offered.
   ok("[args] a typo'd flag is an ERROR with a did-you-mean, not a silent full pull",
     /unknown flag: --lst \(did you mean --list\?\)/.test(usage(["--lst"]) || ""));
@@ -801,7 +801,7 @@ void (async () => {
       init.apply(b, init.plan(b, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       return (JSON.parse(fs.readFileSync(path.join(a, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin?.command === "keep" && fs.readFileSync(path.join(b, ".mcp.json"), "utf8") === "{not json";
     })());
-    ok("[init] --mcp skips a well-formed JSON .mcp.json of the wrong shape and leaves it untouched (null crashed; a string mcpServers was spread char-by-char into the rewrite)", (() => {
+    ok("[init] --mcp skips a well-formed JSON .mcp.json of the wrong shape and leaves it untouched (null does not crash; a string mcpServers is not spread char-by-char into the rewrite)", (() => {
       return ["null", '{"mcpServers":"abc"}', "[1]", '{"mcpServers":[]}', '{"mcpServers":null}'].every((before) => {
         const d = mk({ ".mcp.json": before });
         const plan = init.plan(d, { mcp: true, mcpEntry: entry, token: tok });
@@ -1062,7 +1062,7 @@ void (async () => {
     return r.pageSel.length === 1 && r.readOpts.skipAssets && r.readOpts.css && r.exportTimeoutMs === 60000;
   })()));
   // …but only with a SCOPE flag. The list ops emit structural fields only — they never serialize a
-  // node, so every read option is inert there and used to be discarded without a word. Refused as a
+  // node, so every read option is inert there and must not be discarded without a word. Refused as a
   // group, --no-assets included: it is equally inert (nothing renders on that path), and exempting it
   // would leave the caller guessing which flags survive a list.
   ok("[args] --list + --css is an ERROR (read option would be ignored)", /silently ignored/.test(usage(["--list", "--css"]) || ""));
@@ -1339,12 +1339,12 @@ void (async () => {
     ],
   });
   const rootIndex = readJson<PagesRootIndex>(pagesDir, "pages", "index.json");
-  ok("[wp] every page gets its own directory, even when names fold alike",
+  ok("[page-dirs] every page gets its own directory, even when names fold alike",
     new Set(rootIndex.pageDirs.map((p) => p.dir)).size === 3);
-  ok("[wp] each page's own name is preserved (only the DIRECTORY is disambiguated)",
+  ok("[page-dirs] each page's own name is preserved (only the DIRECTORY is disambiguated)",
     rootIndex.pageDirs.map((p) => p.page).join("|") === "Design System|Design/System|Screens");
   // The real regression: no layer may exist on disk yet be absent from its page index.
-  ok("[wp] no layer is orphaned — every layer file is listed in its page's index", (() => {
+  ok("[page-dirs] no layer is orphaned — every layer file is listed in its page's index", (() => {
     let listed = 0;
     for (const pd of rootIndex.pageDirs) {
       const idx = readJson<PageIndex>(pagesDir, "pages", pd.dir, "index.json");
@@ -1353,7 +1353,7 @@ void (async () => {
     }
     return listed === 3;
   })());
-  ok("[wp] each page index reports the page it actually describes", (() => {
+  ok("[page-dirs] each page index reports the page it actually describes", (() => {
     const seen = rootIndex.pageDirs.map((pd) =>
       readJson<PageIndex>(pagesDir, "pages", pd.dir, "index.json").page);
     return seen.join("|") === "Design System|Design/System|Screens";
@@ -1362,25 +1362,25 @@ void (async () => {
   // Reassembling "pages/<dir>/index.json" from `dir` is right on this path and wrong on the plugin's
   // browser-download twin, where the HTML spec forces the same file to land flat as
   // "pages__<dir>__index.json" — so the pointer, not the convention, is the contract.
-  ok("[wp] every page index is addressable by a pointer, not by convention",
+  ok("[page-dirs] every page index is addressable by a pointer, not by convention",
     rootIndex.pageDirs.every((pd) => typeof pd.index === "string" && fs.existsSync(path.join(pagesDir, pd.index))));
-  ok("[wp] and the pointer is relative to outDir, like each layer's `file`",
+  ok("[page-dirs] and the pointer is relative to outDir, like each layer's `file`",
     rootIndex.pageDirs.every((pd) => !path.isAbsolute(pd.index) && pd.index.startsWith("pages/")));
   // The root index carries the flattened per-screen rows, not only the run manifest + pageDirs counts, so a consumer
   // need not go one hop down to `pages/<Page>/index.json` to find a single screen by name/title. The rows
   // (name/id/title/texts/file, no tree bytes) are in the file every
   // skill is told to read, so it has what it promises.
-  ok("[wp] the root index carries the run manifest AND the flattened per-screen rows (no tree bytes)",
+  ok("[page-dirs] the root index carries the run manifest AND the flattened per-screen rows (no tree bytes)",
     rootIndex.exportedAt === "t" && Array.isArray(rootIndex.layers) && rootIndex.layers.length === 3 &&
     rootIndex.layers.map((l) => l.name).sort().join("|") === "A|B|C" &&
     rootIndex.layers.every((l) => l.id && l.file) &&
     JSON.stringify(rootIndex.layers).indexOf("\"children\"") === -1);
-  ok("[wp] pages/ exists even for a zero-layer run", (() => {
+  ok("[page-dirs] pages/ exists even for a zero-layer run", (() => {
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), "figma-empty-"));
     writePages(empty, { exportedAt: "t", index: [], layers: [] });
     return fs.existsSync(path.join(empty, "pages"));
   })());
-  ok("[wp] each page dir carries the page ID, so two entries are tellable apart by more than a dir name",
+  ok("[page-dirs] each page dir carries the page ID, so two entries are tellable apart by more than a dir name",
     rootIndex.pageDirs.map((p) => p.pageId).join("|") === "0:1|0:2|0:3");
   fs.rmSync(pagesDir, { recursive: true, force: true });
 
@@ -1399,12 +1399,12 @@ void (async () => {
     ],
   });
   const dupIndex = readJson<PagesRootIndex>(dupDir, "pages", "index.json");
-  ok("[wp] two DISTINCT pages sharing a name stay two pages", dupIndex.pageDirs.length === 2);
-  ok("[wp] and get separate directories", new Set(dupIndex.pageDirs.map((p) => p.dir)).size === 2);
-  ok("[wp] each keeping the real (identical) page name, disambiguated only by id",
+  ok("[page-dirs] two DISTINCT pages sharing a name stay two pages", dupIndex.pageDirs.length === 2);
+  ok("[page-dirs] and get separate directories", new Set(dupIndex.pageDirs.map((p) => p.dir)).size === 2);
+  ok("[page-dirs] each keeping the real (identical) page name, disambiguated only by id",
     dupIndex.pageDirs.every((p) => p.page === "Screens") &&
     dupIndex.pageDirs.map((p) => p.pageId).join("|") === "0:1|0:9");
-  ok("[wp] and one layer each, not both in one bucket", (() => dupIndex.pageDirs.every((pd) => {
+  ok("[page-dirs] and one layer each, not both in one bucket", (() => dupIndex.pageDirs.every((pd) => {
     const idx = readJson<PageIndex>(dupDir, "pages", pd.dir, "index.json");
     return pd.layers === 1 && idx.layers.length === 1 && idx.pageId === pd.pageId;
   }))());
@@ -1419,16 +1419,16 @@ void (async () => {
   });
   const oldIndex = readJson<PagesRootIndex>(oldDir, "pages", "index.json");
   const oldPageDir0 = must(oldIndex.pageDirs[0], "old export's pageDirs[0]");
-  ok("[wp] a pre-pageId export still groups by name (one bucket) rather than splitting per layer",
+  ok("[page-dirs] a pre-pageId export still groups by name (one bucket) rather than splitting per layer",
     oldIndex.pageDirs.length === 1 && oldPageDir0.layers === 2);
-  ok("[wp] and OMITS pageId rather than emitting a null — absence means 'export predates page ids'",
+  ok("[page-dirs] and OMITS pageId rather than emitting a null — absence means 'export predates page ids'",
     !("pageId" in oldPageDir0));
   fs.rmSync(oldDir, { recursive: true, force: true });
 
   // ---------------------------------------------------------------- stdout is not truncated on exit
   // --list / --children print their WHOLE payload to stdout, and an agent reads this CLI through a
-  // PIPE. Node's stdout is asynchronous for pipes, so the process.exit(0) these branches used to end
-  // with discarded everything still buffered: measured 369,799 bytes written, 65,536 delivered — cut
+  // PIPE. Node's stdout is asynchronous for pipes, so a process.exit(0) at the end of these branches
+  // would discard everything still buffered: measured 369,799 bytes written, 65,536 delivered — cut
   // at one pipe buffer, yielding truncated JSON that fails to parse with nothing to say why.
   // bridge.close() replaces it: it releases the WS server (the handle that was keeping the loop alive,
   // and the reason an exit call was there at all) and lets Node drain stdout on its own.
@@ -1727,7 +1727,7 @@ void (async () => {
     ok("[lib-layout] and it is NOT deleted", fs.existsSync(path.join(base, "libraries", dirName, "ghost.json")));
     ok("[lib-layout] the orphan warning reaches the user", logged.some((m) => /STALE:/.test(m)));
     // `files` is the pointer map; a corrupt index holding an ARRAY there is not walked as one (its
-    // entries used to be reported as orphans even though no export ever mapped them).
+    // entries are not reported as orphans, since no export ever mapped them).
     fs.writeFileSync(idxPath, JSON.stringify({ ...idxDoc, files: ["libraries/" + dirName + "/ghost.json"] }));
     logged = [];
     const res3: WriteView = OUT.writeExport(path.join(ldir, "design"), { designSystem: shrunk }, (m) => logged.push(m));
@@ -1845,7 +1845,7 @@ void (async () => {
     ["tokens.json", "styles.paint.json", "styles.text.json", "styles.effect.json", "styles.grid.json",
      "components.local.json", "components.library.json", "hygiene.json"]
       .every((n) => readDS<DesignSystemStamp>(n).exportedAt === "2026-08-12T00:00:00.000Z" && readDS<DesignSystemStamp>(n).file === "Demo"));
-  ok("[ds-split] design-system.json is now a slim manifest: stamp + pointers, no bulk data",
+  ok("[ds-split] design-system.json is a slim manifest: stamp + pointers, no bulk data",
     // de-any: variables/components/styles are asserted ABSENT from the slim manifest — not fields of DesignSystemManifest.
     (() => { const m = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest & { variables?: unknown; components?: unknown; styles?: unknown };
       return m.file === "Demo" && m.colorProfile === "srgb" && m.files.tokens === "design-system/tokens.json" &&
@@ -2188,8 +2188,8 @@ void (async () => {
     await Promise.all(three.map((c) => dcli.request({ cmd: c, timeoutMs: 5000 }, 5000).then(() => order.push(c))));
     ok("[daemon] concurrent client requests run ONE at a time, in arrival order", order.join(",") === three.join(","));
 
-    // The frame is CHECKED before anything reads it (daemon.ts isDaemonRequest): a `{}` used to be
-    // forwarded to the bridge as `cmd: undefined`, and `timeoutMs: "x"` reached setTimeout as NaN.
+    // The frame is CHECKED before anything reads it (daemon.ts isDaemonRequest): a `{}` is not
+    // forwarded to the bridge as `cmd: undefined`, and `timeoutMs: "x"` does not reach setTimeout as NaN.
     // Driven over the raw socket, since the typed client cannot even express these frames.
     const rawFrame = (frame: string) => new Promise<string>((resolve, reject) => {
       const c = net.createConnection(daemon.sockPath(D_PORT));
@@ -2745,7 +2745,7 @@ void (async () => {
   ok("[token-cli] and prints it alone on stdout so `| pbcopy` works", shown.stdout.trim().split("\n").length === 1);
 
   const statusSaved = JSON.parse(runCli(["--token-status"]).stdout) as TokenStatus;
-  ok("[token-cli] --token-status now reports it as stored", statusSaved.stored === true);
+  ok("[token-cli] --token-status reports it as stored", statusSaved.stored === true);
   ok("[token-cli] and never prints the token itself",
     !runCli(["--token-status"]).stdout.includes(rotatedTok));
   ok("[token-cli] and reports the saved token as the active source", statusSaved.activeSource === "file");
@@ -2790,7 +2790,7 @@ void (async () => {
   ok("[token-boot] it reports which token is in play by fingerprint instead",
     boot2.stderr.includes(String(store.fingerprint(bootTok))));
 
-  // Regression: server-core resolves the token at REQUIRE time, so an unreadable --token-file used to
+  // Regression: server-core resolves the token at REQUIRE time, so an unreadable --token-file must not
   // throw out of a module load — a raw stack trace, before any front-end error handling was in scope.
   const badFile = runCli(["--show-token", "--token-file", "/nonexistent/nope"]);
   ok("[token-cli] an unreadable --token-file exits 1", badFile.status === 1);
@@ -2863,7 +2863,7 @@ void (async () => {
     helpVerb.stdout.indexOf("Quick start") > 0 && helpVerb.stdout.indexOf("Quick start") < helpVerb.stdout.indexOf("dtwin doctor")
     && helpVerb.stdout.indexOf("dtwin doctor") < helpVerb.stdout.indexOf("Full reference"));
   ok("[verbs-cli] help still has no side effects (no token minted)", !fs.existsSync(path.join(cliDir, "bridge-token")));
-  // `version` used to sit in the did-you-mean ALIASES table, so `dtwin version` was refused with
+  // `version` is not in the did-you-mean ALIASES table, which would refuse `dtwin version` with
   // "did you mean `dtwin --version`?" before figma-pull ever saw it.
   const versionVerb = runCli(["version"]);
   ok("[verbs-cli] `dtwin version` = `dtwin --version`, exit 0, prints the package version",
@@ -2874,7 +2874,7 @@ void (async () => {
     badVerb.status === 1 && /^\[dtwin\] error: unknown `dtwin list bogus`/.test(badVerb.stderr.trim()) && !badVerb.stderr.includes("[bridge]"));
 
 
-  ok("[verbs] a word people reach for that is NOT a verb (`export`, `ls`, `check`) is refused with the real verb — it used to become an outDir and wait for a plugin",
+  ok("[verbs] a word people reach for that is NOT a verb (`export`, `ls`, `check`) is refused with the real verb — it does not become an outDir and wait for a plugin",
     ["export", "ls", "check"].every((w) => { try { translate([w]); return false; } catch (e) { return e instanceof VerbError && /did you mean `dtwin (pull|list|doctor)`/.test(e.message); } })
     && tr("pull", "export") === "export" && translate(["export"], () => true).join(" ") === "export" && tr("./export") === "./export");
   {
@@ -2886,8 +2886,8 @@ void (async () => {
 
   // `dtwin list` against a fake plugin that answers listPages with the REAL reply shape
   // (figma-plugin/src/collect.ts listPages): top-level layers live under pages[].frames — there is no
-  // top-level `frames`. The CLI used to read `r.frames`, which the plugin never sends, so the per-type
-  // breakdown and the SECTION hint never printed on any real file. Driven end to end because both
+  // top-level `frames`. The CLI must not read `r.frames`, which the plugin never sends: the per-type
+  // breakdown and the SECTION hint print on a real file. Driven end to end because both
   // lines are stderr of main(), with no pure seam. 8789, not 8787: never contend with a real bridge.
   {
     const listReply = {
@@ -2932,7 +2932,7 @@ void (async () => {
     clearTimeout(timer);
     plugin?.close();
     ok("[list-cli] `dtwin list` against a fake plugin exits 0 and prints the reply", code === 0 && /"Sectioned App"/.test(stdout));
-    ok("[list-cli] the per-type breakdown counts layers from pages[].frames (was always empty)",
+    ok("[list-cli] the per-type breakdown counts layers from pages[].frames (not always empty)",
       /2 page\(s\), 4 top-level layer\(s\) in "Sectioned App" — 2 FRAME, 1 SECTION, 1 TEXT\./.test(stderr));
     ok("[list-cli] a page holding a SECTION prints the 'containers, not screens' hint",
       /some top-level layers are SECTIONs/.test(stderr) && /dtwin list children <section id>/.test(stderr));
@@ -3080,7 +3080,7 @@ void (async () => {
   }
 
   // A corrupt or wrong-shaped export index is SAID, not silently counted as "no screens" (a
-  // `pageDirs: 5` used to throw inside one try and drop every screen without a word).
+  // `pageDirs: 5` must not throw inside one try and drop every screen without a word).
   {
     const badDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-badindex-"));
     const exp = path.join(badDir, "design", "export");
@@ -3961,7 +3961,7 @@ void (async () => {
     fs.mkdirSync(path.join(dir, "pages", "P"), { recursive: true });
     writeOut.writeScreenAssets(dir, screenPaths({ screenName: "S", page: "P" }, "/"), [a1, a2]);
     const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "S.assets.json"), "utf8")) as ScreenAssetsDoc;
-    ok("[content-dedup] `duplicates` is empty — the writer no longer creates the duplicate it used to report",
+    ok("[content-dedup] `duplicates` is empty — the writer creates no duplicate",
       doc.duplicates.length === 0);
     const diskHash = crypto.createHash("sha1").update(fs.readFileSync(path.join(dir, "assets", "Ellipse_2327.svg"))).digest("hex");
     ok("[content-dedup] both manifest rows carry the hash of the ONE file on disk",
@@ -4099,9 +4099,9 @@ void (async () => {
 
   // ---------- the tree names the asset files actually written ----------
   // writeAssets reuses a byte-identical file already on disk under another name and version-suffixes a
-  // same-name (or same-name-but-case) different file. The screen JSON used to be written BEFORE that, with
-  // the plugin's own names, so nodes pointed at files never written — or, on a case-insensitive disk, at a
-  // different icon — and the index's `reference` at a thumbnail that held the plain name. Fixtures use the
+  // same-name (or same-name-but-case) different file. The screen JSON is written AFTER that, with the
+  // names actually written, not the plugin's own (nodes would point at files never written — or, on a
+  // case-insensitive disk, at a different icon — and the index's `reference` at a thumbnail that held the plain name). Fixtures use the
   // PLUGIN's shape: `Asset.file` is the bare name, the tree's pointer is `assets/<name>` (assets.ts
   // register()). Invented names.
   {

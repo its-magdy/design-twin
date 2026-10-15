@@ -1,9 +1,9 @@
 // fixtures.ts — typed builders for the tests' hand-made inputs (design-to-code documents, bridge
 // replies), and runtime-asserting readers for the emitters' outputs.
 //
-// A test fixture used to be an object literal forced into its type with `as unknown as TokensDoc`. That
-// hid how far the fixtures had drifted from what the producer writes: 36 variables with no `tier`, 30
-// collections with no `theming`, 30 map entries with no `figma.name`, nodes with no `id`. Each builder
+// A test fixture is not an object literal forced into its type with `as unknown as TokensDoc`. That
+// hides how far fixtures drift from what the producer writes: variables with no `tier`,
+// collections with no `theming`, map entries with no `figma.name`, nodes with no `id`. Each builder
 // here takes the fields a test cares about and fills the rest THE WAY THE PRODUCER DOES
 // (figma-plugin/src/variables.ts, map-bootstrap.ts, …), so a fixture is a real document of its type.
 //

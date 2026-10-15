@@ -539,7 +539,7 @@ const sandbox: Sandbox = context;
   ok("hidden node kept + flagged", abs.hidden === true && abs.name === "Overlay");
   ok("absolute x/y captured", abs.x === 12.4 && abs.y === 40);
   ok("frame layoutGrids captured", Array.isArray(abs.layoutGrids) && abs.layoutGrids[0]?.pattern === "columns" && abs.layoutGrids[0]?.count === 12);
-  ok("COLUMNS grid keeps its sectionSize as `size` (only GRID's cell size was read after the de-any)", abs.layoutGrids?.[0]?.size === 60);
+  ok("COLUMNS grid keeps its sectionSize as `size` (not only GRID's cell size is read)", abs.layoutGrids?.[0]?.size === 60);
   ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0]?.label === "Use spacing token md");
   ok("devStatus captured", abs.devStatus === "ready_for_dev");
   const abs0 = flatPaint(must(abs.fills?.[0], "abs.fills[0]"));
@@ -560,7 +560,7 @@ const sandbox: Sandbox = context;
   ok("background_blur no offset", rectE1.type === "background_blur" && flatEffect(rectE1).offset === undefined);
   ok("per-corner radius (mixed fallback)", !!(rect.radius && (rect.radius as RadiusCorners).tl === 8 && (rect.radius as RadiusCorners).bl === undefined));
 
-  // Two things used to land in `radius` that a builder then copied verbatim into CSS.
+  // Two things never land in `radius`, which a builder copies verbatim into CSS.
   const pill = await sandbox.serialize(
     { type: "RECTANGLE", name: "Pill", visible: true, id: "r:full", width: 120, height: 32,
       absoluteBoundingBox: { x: 0, y: 0, width: 120, height: 32 }, cornerRadius: 1000000000 }, 0, false);
@@ -621,7 +621,7 @@ const sandbox: Sandbox = context;
     Array.isArray(dsOnly.designSystem.styles.paint) && Array.isArray(dsOnly.designSystem.components));
   // The one documented gap (see collect.ts) is a consuming file's: its library (remote) variables are only
   // the ones it references. This mock DEFINES its tokens (no remote variable), so the line would be false
-  // here and must be absent; the consuming case (one remote variable) is pinned in [RD-alias] below.
+  // here and must be absent; the consuming case (one remote variable) is pinned in [ALIAS] below.
   ok("a file with no remote variable gets no 'consumes libraries' hygiene line (its catalog is its own)",
     !dsOnly.designSystem.variables.some((v) => v.remote === true) &&
     !dsOnly.designSystem.hygiene.some((h) => /library \(remote\) variables|consumes libraries|--as-library/.test(h)));
@@ -863,7 +863,7 @@ const sandbox: Sandbox = context;
   // measured 20.5% of a real payload (2,151 occurrences) with zero consumers, and the matches are
   // value-coincidence. The mock still SUPPLIES inferredVariables on scrollFrame, so this pins that the
   // extractor ignores it rather than that the fixture stopped providing it.
-  ok("inferredTokens is no longer emitted", (tree as IrNode & { inferredTokens?: unknown }).inferredTokens === undefined);
+  ok("inferredTokens is not emitted", (tree as IrNode & { inferredTokens?: unknown }).inferredTokens === undefined);
   ok("and no inferred* key leaks under another name", !Object.keys(tree).some((k) => /^inferred/.test(k)));
   // css / measurements / pluginData are OPT-IN — off by default.
   // css now AUTO-ENABLES for a small single selection (the "inspect one component" path). scrollFrame
@@ -892,11 +892,11 @@ const sandbox: Sandbox = context;
   ok("motion applied animation style props: VariableAlias value resolves to {aliasOf: <variable name>} (unified with variables.ts)",
     JSON.stringify(style0 && style0.props && style0.props.color) === '{"aliasOf":"easing/emphasized"}');
   const rotTrack = m3?.animations?.ROTATION;
-  ok("motion animations: base + duration + per-track op/keyframes surface (was dead pre-fix)",!!(
+  ok("motion animations: base + duration + per-track op/keyframes surface (not dead)",!!(
     rotTrack && rotTrack.base === 0 && rotTrack.duration === 1.2 &&
     rotTrack.tracks?.[0]?.op === "offset" && rotTrack.tracks?.[0]?.keyframes?.[1]?.value === 90));
-  // Indexed collections (fills/strokes keyed by paint index, effects by effect index) used to come out
-  // empty — every value was read as one binding — and were dropped. Pin each shape.
+  // Indexed collections (fills/strokes keyed by paint index, effects by effect index) come out
+  // whole, not empty — each value is read as its own binding, not as one — and are not dropped. Pin each shape.
   const mt = must(m3?.manualTracks, "m3.manualTracks");
   ok("motion scalar track output unchanged (TRANSLATION_X, byte-identical)", JSON.stringify(mt.TRANSLATION_X) ===
     '{"base":0,"keyframes":[{"t":0,"value":0,"easing":{"type":"ease_out"}},{"t":0.5,"value":100,"easing":{"type":"custom_cubic_bezier","cubicBezier":{"x1":0.4,"y1":0,"x2":0.2,"y2":1}}}]}');
@@ -996,7 +996,7 @@ const sandbox: Sandbox = context;
   ok("--expect: that TEXT's spec.width === renderBox.w (32.14, the ink), widthFrom renderBox, no height",
     inkSpec?.width === inkText?.renderBox?.w && inkSpec?.width === 32.14 && inkSpec.widthFrom === "renderBox" && inkSpec.height === undefined);
 
-  // --- [RD-noassets] skipAssets: the per-node exportAsync pass is the dominant cost on a real file
+  // --- [NOASSETS] skipAssets: the per-node exportAsync pass is the dominant cost on a real file
   // (it hung a ~1000-node page past 300s and outgrew the bridge's frame limit on --all-pages), yet it
   // was the only O(nodes) read with no opt-out — getCSSAsync, its cheaper twin, has had one all along.
   // Skipping must be LOUD: a missing `asset` is otherwise indistinguishable from "no graphic here".
@@ -1012,21 +1012,21 @@ const sandbox: Sandbox = context;
   const skipRun = await sandbox.collectSelection({ skipAssets: true });
   const skipCalls = exportCalls;
   const skipNode = must(skipRun.screen.nodes[0], "skipRun.screen.nodes[0]");
-  ok("[RD-noassets] no asset is emitted when skipping", skipNode.asset === undefined);
+  ok("[NOASSETS] no asset is emitted when skipping", skipNode.asset === undefined);
   // The per-ROOT reference screenshot is deliberately still taken: it's one render per exported root
   // (the self-correction image), not the O(nodes) pass that caused the hang. So the contract is
   // "no PER-NODE asset export", not "no exportAsync at all" — pin that precisely.
-  ok("[RD-noassets] the per-node asset export does not run (only the 1 reference render)", skipCalls <= 1);
-  ok("[RD-noassets] the reference screenshot IS still produced", typeof skipNode.reference === "string" || skipRun.assets.some((a) => a.kind === "reference"));
-  ok("[RD-noassets] the skip is COUNTED, not silent", skipRun.screen.manifest.assetsSkipped >= 1);
-  ok("[RD-noassets] and warned — a missing `asset` must not read as 'no graphic here'",
+  ok("[NOASSETS] the per-node asset export does not run (only the 1 reference render)", skipCalls <= 1);
+  ok("[NOASSETS] the reference screenshot IS still produced", typeof skipNode.reference === "string" || skipRun.assets.some((a) => a.kind === "reference"));
+  ok("[NOASSETS] the skip is COUNTED, not silent", skipRun.screen.manifest.assetsSkipped >= 1);
+  ok("[NOASSETS] and warned — a missing `asset` must not read as 'no graphic here'",
     skipRun.screen.manifest.warnings.some((w) => /--no-assets/.test(w) && /skipped/.test(w)));
 
   const normalRun = await sandbox.collectSelection({});
-  ok("[RD-noassets] DEFAULT is unchanged — the asset still exports",
+  ok("[NOASSETS] DEFAULT is unchanged — the asset still exports",
     typeof must(normalRun.screen.nodes[0], "normalRun.screen.nodes[0]").asset === "string");
 
-  // --- [RD-noassets-shape] a FLATTENED CONTAINER must stay flattened when skipping ---
+  // --- [NOASSETS-SHAPE] a FLATTENED CONTAINER must stay flattened when skipping ---
   // The case above is a childless RECTANGLE — a leaf either way, so it cannot catch the real bug:
   // an `iconLike` CONTAINER (icon-named, <=96px, no TEXT descendant) is normally flattened to ONE
   // svg and serialized as a leaf. When --no-assets returned `undefined` for it, serialize recursed
@@ -1048,21 +1048,21 @@ const sandbox: Sandbox = context;
   const nNode = must(must(must(iconNormal.screen.nodes[0], "iconNormal.screen.nodes[0]").children, "iconNormal tree children")[0], "iconNormal tree children[0]");
   const sNode = must(must(must(iconSkipped.screen.nodes[0], "iconSkipped.screen.nodes[0]").children, "iconSkipped tree children")[0], "iconSkipped tree children[0]");
 
-  ok("[RD-noassets-shape] normally the icon container flattens to one asset leaf",
+  ok("[NOASSETS-SHAPE] normally the icon container flattens to one asset leaf",
     typeof nNode.asset === "string" && !nNode.children);
-  ok("[RD-noassets-shape] --no-assets keeps it a LEAF — no descent into the icon's vectors",
+  ok("[NOASSETS-SHAPE] --no-assets keeps it a LEAF — no descent into the icon's vectors",
     sNode.asset === undefined && !sNode.children);
-  ok("[RD-noassets-shape] the node count is IDENTICAL to the full export (structure unaffected)",
+  ok("[NOASSETS-SHAPE] the node count is IDENTICAL to the full export (structure unaffected)",
     iconSkipped.screen.manifest.nodes === iconNormal.screen.manifest.nodes);
-  ok("[RD-noassets-shape] and the tree is no larger than the full export's",
+  ok("[NOASSETS-SHAPE] and the tree is no larger than the full export's",
     JSON.stringify(iconSkipped.screen.nodes).length <= JSON.stringify(iconNormal.screen.nodes).length);
   // Per-node, not just a manifest total: a consumer must be able to tell "graphic omitted here" from
   // "this node has no graphic" at the node it cares about.
-  ok("[RD-noassets-shape] the omission is marked ON the node, not only counted",
+  ok("[NOASSETS-SHAPE] the omission is marked ON the node, not only counted",
     sNode.assetSkipped === true);
-  ok("[RD-noassets-shape] the counter matches the exports that would REALLY have happened (1, not 2)",
+  ok("[NOASSETS-SHAPE] the counter matches the exports that would REALLY have happened (1, not 2)",
     iconSkipped.screen.manifest.assetsSkipped === 1);
-  ok("[RD-noassets-shape] no assetSkipped flag leaks into a normal run", nNode.assetSkipped === undefined);
+  ok("[NOASSETS-SHAPE] no assetSkipped flag leaks into a normal run", nNode.assetSkipped === undefined);
 
   // ---- asset NAMING and DEDUPE
   // Names came from the node-id PATH, which included the whole instance chain: an app importing 41
@@ -1099,16 +1099,16 @@ const sandbox: Sandbox = context;
     named.assets.every((a) => a.file.indexOf("/") === -1 && a.file.endsWith("." + a.format)));
   sandbox.figma.currentPage.selection = [iconSheet];
 
-  ok("[RD-noassets] and exportAsync did run when not skipping", exportCalls > skipCalls);
-  ok("[RD-noassets] a normal run reports assetsSkipped: 0", normalRun.screen.manifest.assetsSkipped === 0);
+  ok("[NOASSETS] and exportAsync did run when not skipping", exportCalls > skipCalls);
+  ok("[NOASSETS] a normal run reports assetsSkipped: 0", normalRun.screen.manifest.assetsSkipped === 0);
   // Which OPT-IN reads ran. An absent `codeSyntax`/`annotations`/`measurements` would be
   // indistinguishable from "the read was never asked for", which silently kills two of
   // build-screen's six hint tiers with nothing to say so.
-  ok("[RD-manifest] the manifest names the opt-in reads that actually ran",
+  ok("[MANIFEST] the manifest names the opt-in reads that actually ran",
     Array.isArray(normalRun.screen.manifest.reads));
-  ok("[RD-manifest] an opt-in read that was requested appears in it",
+  ok("[MANIFEST] an opt-in read that was requested appears in it",
     must((await sandbox.collectSelection({ measurements: true })).screen.manifest.reads, "manifest.reads").includes("measurements"));
-  ok("[RD-manifest] one that was not, does not",
+  ok("[MANIFEST] one that was not, does not",
     !must((await sandbox.collectSelection({})).screen.manifest.reads, "manifest.reads").includes("measurements"));
   sandbox.figma.currentPage.selection = prevSelection;
 
@@ -1172,7 +1172,7 @@ const sandbox: Sandbox = context;
   // An UNreferenced library variable must NOT be dragged in — the dump stays scoped to what's used.
   ok("unreferenced library vars are not pulled in", !libSel.variables.variables.some((v) => v.name === "unused/never"));
 
-  // ---- [RD-alias] library variable reached ONLY through another variable's ALIAS ----
+  // ---- [ALIAS] library variable reached ONLY through another variable's ALIAS ----
   // Regression from the first real export (2026-07-28). varName.ids() is a SNAPSHOT of ids referenced
   // by NODES; a library primitive reached only via another variable's alias entered the memo cache
   // LATER (when values were resolved), so its NAME resolved — `aliasOf` showed a friendly name —
@@ -1201,19 +1201,19 @@ const sandbox: Sandbox = context;
   const chainSel = await sandbox.collectSelection({ css: false });
   const cv = (n: string) => chainSel.variables.variables.find((v) => v.name === n);
 
-  ok("[RD-alias] hop 1 (aliased library var) is included", !!cv("brand/mid"));
-  ok("[RD-alias] hop 2 (alias-of-an-alias) is ALSO included — fixed point, not one extra pass", !!cv("brand/gray-100"));
+  ok("[ALIAS] hop 1 (aliased library var) is included", !!cv("brand/mid"));
+  ok("[ALIAS] hop 2 (alias-of-an-alias) is ALSO included — fixed point, not one extra pass", !!cv("brand/gray-100"));
   const grayVar = cv("brand/gray-100");
-  ok("[RD-alias] the pulled-in primitive carries its real VALUE, not just a name",
+  ok("[ALIAS] the pulled-in primitive carries its real VALUE, not just a name",
     !!grayVar && grayVar.values.Light === "#e6e6e6");
   const midVar = cv("brand/mid");
-  ok("[RD-alias] the intermediate still reads as an alias", !!(!!midVar && midVar.values.Light &&
+  ok("[ALIAS] the intermediate still reads as an alias", !!(!!midVar && midVar.values.Light &&
     aliasOf(midVar.values.Light) === "brand/gray-100"));
   // The false-accusation half: every alias target resolves, so hygiene must NOT claim otherwise.
-  ok("[RD-alias] no FALSE 'broken alias' hygiene line for a chain that fully resolves",
+  ok("[ALIAS] no FALSE 'broken alias' hygiene line for a chain that fully resolves",
     !chainSel.variables.hygiene.some((h) => /broken alias/.test(h)));
   // And the whole point: no emitted alias may point at a name that isn't in the dump.
-  ok("[RD-alias] no alias dangles — every aliasOf target exists in variables[]", (() => {
+  ok("[ALIAS] no alias dangles — every aliasOf target exists in variables[]", (() => {
     const names = new Set(chainSel.variables.variables.map((v) => v.name));
     for (const v of chainSel.variables.variables) {
       for (const val of Object.values(v.values || {})) {
@@ -1231,7 +1231,7 @@ const sandbox: Sandbox = context;
   // the line names the real remedy (--as-library) and no longer promises a page pull completes it.
   ok("design-system hygiene names --as-library and says it is not the library's catalog",
     dsConsumer.designSystem.hygiene.some((h) => /--as-library/.test(h) && /not the library's catalog/.test(h)));
-  ok("and no longer says a page pull gives the full set",
+  ok("and does not say a page pull gives the full set",
     !dsConsumer.designSystem.hygiene.some((h) => /pull a page for the full set|prior\/no page walk/.test(h)));
   // Drop only the local seed. The id resolver STAYS on the EXTRA-aware handler — it is a superset of
   // the v_lib override above, and later alias-hygiene tests still need v_lib to resolve.
@@ -1385,7 +1385,7 @@ const sandbox: Sandbox = context;
 
   // ---- an unreadable page degrades, it does not abort ----
   // PageNode.children THROWS on a page that isn't current and wasn't loaded (dynamic-page access).
-  // A failed loadAllPagesAsync used to warn "may miss pages" and then abort the whole export here.
+  // A failed loadAllPagesAsync must not abort the whole export here.
   const goodPage = must(sandbox.figma.root.children[0], "sandbox.figma.root.children[0]");
   const badPage = { name: "Locked Page", get children(): FakeNode[] { throw new Error("page not loaded"); },
     findAllWithCriteria: () => { throw new Error("page not loaded"); } };
@@ -1602,7 +1602,7 @@ const sandbox: Sandbox = context;
   const byCase = await sandbox.collectFull({ page: "  aRcHiVe ", css: false });
   ok("[PAGE] falls back to a UNIQUE case-insensitive name", byCase.layersDoc.page === "Archive");
 
-  // Figma ALLOWS duplicate page names. Exact-name matching used to pick-first with no guard, which is
+  // Figma ALLOWS duplicate page names. Exact-name matching must not pick-first with no guard, which is
   // the likeliest real collision. Nothing here is interactive, so a wrong silent pick is unrecoverable.
   let dupErr: Thrown | null = null;
   try { await sandbox.collectFull({ page: "Screens", css: false }); } catch (e) { dupErr = thrown(e); }
@@ -1623,8 +1623,8 @@ const sandbox: Sandbox = context;
   ok("[PAGE] the same page twice is exported once", dedup.layersDoc.pages === undefined && dedup.layersDoc.page === "Screens");
 
   // ---- [MEAS] measurements are read from the EXPORTED pages, not from whatever page is open ----
-  // This used to hardcode figma.currentPage, so a --page export of a non-current page attached the
-  // OPEN page's redlines to a doc about a different page. Each entry now carries its own page tag.
+  // This does not hardcode figma.currentPage, so a --page export of a non-current page does not attach the
+  // OPEN page's redlines to a doc about a different page. Each entry carries its own page tag.
   const redline = (id: string) => [{ start: { node: { id } , side: "LEFT" }, end: { node: { id }, side: "RIGHT" }, offset: 8, freeText: id }];
   pgA.getMeasurements = () => redline("a");
   pgC.getMeasurements = () => redline("c");
@@ -1648,10 +1648,10 @@ const sandbox: Sandbox = context;
   ok("[PAGE] an empty selector warns rather than silently falling back",
     blank.layersDoc.manifest.warnings.some((w) => /page selector was empty/.test(w)));
 
-  // allPages + page are MUTUALLY EXCLUSIVE. The branch below used to be `if (allPages) … else if
-  // (page)`, so allPages silently won: a caller asking for one page got all of them — a plausible
-  // export of the WRONG scope. figma-pull's arg parser refused this, but the MCP path did not, and
-  // the guard belongs at the collector where EVERY caller passes through it.
+  // allPages + page are MUTUALLY EXCLUSIVE. A plain `if (allPages) … else if
+  // (page)` would let allPages silently win: a caller asking for one page would get all of them — a plausible
+  // export of the WRONG scope. figma-pull's arg parser refuses this, but the MCP path does not go
+  // through it, so the guard belongs at the collector where EVERY caller passes through it.
   let bothErr: Thrown | null = null;
   try { await sandbox.collectFull({ allPages: true, page: "p:A", css: false }); } catch (e) { bothErr = thrown(e); }
   ok("[PAGE] allPages + page is REFUSED, not silently resolved", !!bothErr && /different scopes/.test(bothErr.message));
@@ -1694,8 +1694,8 @@ const sandbox: Sandbox = context;
   const wNoFills = await sandbox.applyWrites([{ op: "setFill", nodeId: "g:1", color: "#fff" }]);
   ok("write: setFill on a node without fills fails", wNoFills.ok === false && /has no fills/.test(must(wNoFills.error, "wNoFills.error")));
 
-  // A colour that is not hex fails the op (the schema in front of the MCP tool is not the only way in): "red" used to
-  // paint #rreedd, an unparseable channel 0, and a missing setFill color black.
+  // A colour that is not hex fails the op (the schema in front of the MCP tool is not the only way in): "red" does not
+  // paint #rreedd, an unparseable channel is not 0, and a missing setFill color is not black.
   const fillBefore = created.length;
   const rectFillBefore = rectTarget.fills;
   const wRedFrame = await sandbox.applyWrites([{ op: "createFrame", name: "Red", fill: "red" }]);
@@ -2022,7 +2022,7 @@ const sandbox: Sandbox = context;
   ok("the SCALE-1 default carries no intent and is omitted", must(es[0], "es[0]").constraint === undefined);
   ok("a node with no presets emits nothing", plainFrame.exportSettings === undefined);
 
-  // ---- skew: the sheared transform the decomposition used to throw away ----
+  // ---- skew: the sheared transform the decomposition keeps ----
   const xf = (m: number[][]) => ({ type: "FRAME", name: "T", visible: true, id: "sk:1", width: 10, height: 10,
     layoutMode: "NONE", relativeTransform: m, children: [] });
   const skewed = await sandbox.serialize(xf([[1, 0.5, 0], [0, 1, 0]]), 0, false);
@@ -2967,9 +2967,9 @@ const sandbox: Sandbox = context;
   }
 
   // ---------- hidden graphics, icon containers, asset-leaf layout/transform, same-name children ----------
-  // Every hidden graphic used to be sent to
-  // exportAsync, come back with no `<svg`, and land as `geometry` — for an icon CONTAINER that was its
-  // own background square. Real shapes: `assetSkipped` a string/true, `geometry` {fills,strokes,w,h}.
+  // A hidden graphic is not sent to
+  // exportAsync (it would come back with no `<svg` and land as `geometry` — for an icon CONTAINER, its
+  // own background square). Real shapes: `assetSkipped` a string/true, `geometry` {fills,strokes,w,h}.
   {
     const solid = [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }];
     const square = [{ data: "M0 0L16 0L16 16L0 16L0 0Z", windingRule: "NONZERO" }];

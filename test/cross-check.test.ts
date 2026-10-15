@@ -215,7 +215,7 @@ console.log("cross-check — two libraries, one name, two values:");
   });
   const res = crossCheck({ screens: [screen("S", [])], variables: vars, tokens: DS_TOKENS });
   // a clash blocks only when a visible layer on the screen binds the token.
-  ok("[collision] a punctuation-only name twin nobody on the screen binds is a warning to confirm (was: a blocker)",
+  ok("[collision] a punctuation-only name twin nobody on the screen binds is a warning to confirm, not a blocker",
     sev(res, "token-name-collision") === "warning" && /no visible layer on this screen binds it/.test(get(res, "token-name-collision").confirm ?? ""));
   const bound = crossCheck({ screens: [screen("S", [{ id: "3:1", type: "FRAME", name: "Row", tokens: { itemSpacing: "(Space 3)" } }])], variables: vars, tokens: DS_TOKENS });
   ok("[collision] …and a blocker once a visible layer binds it", sev(bound, "token-name-collision") === "blocker" && get(bound, "token-name-collision").confirm === undefined);
@@ -244,7 +244,7 @@ console.log("cross-check — does the catalog cover the screen:");
     screens: [screen("S", [instance("2:1", "other-a", "Widget"), instance("2:2", "other-b", "Gadget"), instance("2:3", "other-b", "Gadget")])],
     components: DS_COMPONENTS,
   });
-  ok("[coverage] 0% by key is a warning with a confirm question, not an empty success (was: a blocker)",
+  ok("[coverage] 0% by key is a warning with a confirm question, not an empty success or a blocker",
     sev(res, "catalog-covers-nothing") === "warning" && /components.local.json by key — is that the component library/.test(get(res, "catalog-covers-nothing").confirm ?? ""));
   ok("[coverage] it counts distinct components, not instances", res.coverage?.distinct === 2 && res.coverage?.instances === 3);
   ok("[coverage] and says outright that a catalog-vs-map count means nothing here",
@@ -308,7 +308,7 @@ console.log("cross-check — fonts and text styles:");
 {
   // One capital letter apart. This is a blocker because a name-based mapping binds it silently.
   const res = crossCheck({ screens: [screen("S", [text("2:1", "Poppins", "Medium/14 Medium")])], stylesText: DS_TEXT_STYLES });
-  ok("[styles] a case-only near-miss is a warning to confirm, not a missing style (was: a blocker)",
+  ok("[styles] a case-only near-miss is a warning to confirm, not a missing style or a blocker",
     sev(res, "text-style-near-miss") === "warning" && /the same style\?/.test(get(res, "text-style-near-miss").confirm ?? ""));
   ok("[styles] and it prints both spellings side by side",
     /'Medium\/14 Medium' vs 'Medium\/14 medium'/.test(get(res, "text-style-near-miss").message));
@@ -372,7 +372,7 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
     children: [text("2:1", "Poppins", null, "Neutrals/Neutral 500")],
   });
   const res = crossCheck({ screens: [{ doc: { screen: "S", nodes: [sidebar] }, label: "S" }], variables: vars });
-  ok("[contrast] a derived mode's unreadable pair is a warning to confirm (was: a blocker)",
+  ok("[contrast] a derived mode's unreadable pair is a warning to confirm, not a blocker",
     sev(res, "derived-mode-contrast") === "warning" && /was never drawn/.test(get(res, "derived-mode-contrast").confirm ?? ""));
   ok("[contrast] it names the mode that was never drawn, not the one that was",
     get(res, "derived-mode-contrast").mode === "Light");
@@ -688,11 +688,11 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   const oneLine = (r: { status: number | null; stderr: string }, re: RegExp): boolean => r.status === 2 && re.test(r.stderr) && !/\n {4}at /.test(r.stderr);
   ok("[shape] a screen argument that is an array of nodes (not an export) -> exit 2, one line", oneLine(run([put("arr.json", [{ id: "1:1", type: "FRAME" }])]), /screen export: '.*arr\.json' is not a screen export/));
   put("ds/components.local.json", { components: [{ key: "k" }] });
-  ok("[shape] a --design-system components.local.json with a nameless component -> exit 2 (was: read blindly)", oneLine(run([good, "--design-system", path.join(tmp, "ds")]), /component catalog: '.*components\.local\.json' is not a component catalog/));
+  ok("[shape] a --design-system components.local.json with a nameless component -> exit 2, not read blindly", oneLine(run([good, "--design-system", path.join(tmp, "ds")]), /component catalog: '.*components\.local\.json' is not a component catalog/));
   put("ds2/styles.text.json", { styles: {} });
   ok("[shape] a --design-system styles.text.json whose styles is not an array -> exit 2", oneLine(run([good, "--design-system", path.join(tmp, "ds2")]), /text styles: '.*styles\.text\.json' is not a text-style sheet/));
   ok("[shape] a --variables file that is not JSON -> exit 2 with the parser's reason", (() => { fs.writeFileSync(path.join(tmp, "v.json"), "{"); return oneLine(run([good, "--variables", path.join(tmp, "v.json")]), /variables: '.*v\.json' is not valid JSON/); })());
-  ok("[args] `--out --json` is '--out needs a value' (was: wrote <cwd>/--json.json)", (() => { const r = spawnSync(process.execPath, [CLI, good, "--out", "--json"], { encoding: "utf8", cwd: tmp }); return r.status === 2 && /cross-check: --out needs a value/.test(r.stderr) && !fs.existsSync(path.join(tmp, "--json.json")); })());
+  ok("[args] `--out --json` is '--out needs a value', not a file named <cwd>/--json.json", (() => { const r = spawnSync(process.execPath, [CLI, good, "--out", "--json"], { encoding: "utf8", cwd: tmp }); return r.status === 2 && /cross-check: --out needs a value/.test(r.stderr) && !fs.existsSync(path.join(tmp, "--json.json")); })());
 }
 
 // ---------- one name rule, finding ids, labelled proposals ----------
@@ -856,7 +856,7 @@ console.log("cross-check — colour bindings from collections resolved in differ
   ok("the same binding with the kit pinned to Dark is not a mix",
     !has(crossCheck({ screens: [{ doc: doc({ ...ALL, Kit: "Dark" }, [kitText]), label: "Settings" }], variables: vars }), "mixed-mode-bindings"));
   // the majority is chosen per mode vocabulary — Brand 1 / Brand 2 bindings, as many as the theme's or
-  // more, never mask the Dark/Light mix (they used to win the vote, and no Dark/Light collection declares 'Brand 1').
+  // more, never mask the Dark/Light mix (they do not win the vote, and no Dark/Light collection declares 'Brand 1').
   for (const n of [2, 3]) {
     const brands = Array.from({ length: n }, (_, i): NodeInput => ({ ...brandText, id: `4:${i + 1}` }));
     const m = crossCheck({ screens: [{ doc: doc(ALL, [kitText, ...brands]), label: "Settings" }], variables: vars }).findings.filter((x) => x.code === "mixed-mode-bindings");

@@ -134,8 +134,8 @@ check("only ONE reconnect is ever pending, however many closes arrive", (() => {
 })());
 
 console.log("liveness frames relayed to the bridge:");
-// The bridge's stall check reads any frame as life. A bridge run's run-begin used to stay inside the
-// window, so a cold export was silent on the socket until its first asset tick.
+// The bridge's stall check reads any frame as life. A bridge run's run-begin sends a progress frame at once,
+// so a cold export is not silent on the socket until its first asset tick.
 const progressFrames = (s: FakeSocket) => s.sent.filter((d) => (JSON.parse(d) as { type?: string }).type === "progress");
 check("run-begin of a BRIDGE run → the socket gets {type:\"progress\",phase:\"start\"} at once", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);

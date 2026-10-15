@@ -332,7 +332,7 @@ const rE3 = await P.rE3;
 const mE3 = read(projBare, out("Edge3"));
 if (rE3.status !== 0) console.log(rE3.stderr);
 check("[write block] E3 (card with Delete, Enter=confirm dialog, keydown-open + focus Delete, a global Enter hotkey): the server receives 0 POSTs", rE3.status === 0 && mE3 !== null && writesOf(E3).length === 0);
-check("keyboard.reachable counts only the opener's own control: the card's inline Delete is reached, the card (80:16) is not known to be — not-run 'the opener is a container; Tab reaches <button aria-label=\"Delete crate\"> inside it' (was: counted as reached)",
+check("keyboard.reachable counts only the opener's own control: the card's inline Delete is reached, the card (80:16) is not known to be — not-run 'the opener is a container; Tab reaches <button aria-label=\"Delete crate\"> inside it' (not counted as reached)",
   statusOf(mE3, "keyboard.reachable", "80:16") === "not-run" && /the opener is a container; Tab reaches <button aria-label="Delete crate"> inside it/.test(row(mE3, "keyboard.reachable", "80:16")?.detail ?? ""));
 check("the card opener's inline Delete is never pressed: keyboard.activation 80:16 not-run 'the opener is a container; its focusable child … is not pressed'",
   statusOf(mE3, "keyboard.activation", "80:16") === "not-run" && /the opener is a container; its focusable child <button[^>]*aria-label="Delete crate"/.test(row(mE3, "keyboard.activation", "80:16")?.detail ?? ""));
@@ -380,12 +380,12 @@ check("a non-modal picker inside an open modal sheet is not this row's modal: ev
 check("a card with its own label whose ONLY control is a centred Unstack button (80:18): the drive does not click it (ok:null naming <button type=\"button\" aria-label=\"Unstack crate\">), every dialog.* 80:18 not-run, no DELETE reaches the server",
   ix(mE6, "80:18")?.ok === null && /^the opener's click point is another control inside it \(<button type="button" aria-label="Unstack crate">\)/.test(ix(mE6, "80:18")?.detail ?? "")
   && DIALOG.every((id) => statusOf(mE6, id, "80:18") === "not-run") && !writes.some((w) => /card-own-unstack/.test(w)));
-check("keyboard.reachable 80:18: Tab reaching the Unstack button is not the card reached — not-run 'the opener is a container; Tab reaches <button … Unstack crate> inside it' (was: counted as reached)",
+check("keyboard.reachable 80:18: Tab reaching the Unstack button is not the card reached — not-run 'the opener is a container; Tab reaches <button … Unstack crate> inside it' (not counted as reached)",
   statusOf(mE6, "keyboard.reachable", "80:18") === "not-run" && /the opener is a container; Tab reaches <button[^>]*Unstack crate[^>]*> inside it/.test(row(mE6, "keyboard.reachable", "80:18")?.detail ?? ""));
 const lateOpens = handshakes.filter((h) => /op=late-open/.test(h)).length;
 check(`a WebSocket the page opens after the unit armed never reaches the server: exactly 1 handshake ?op=late-open (the drive's click, unblocked), none from the battery (saw ${lateOpens}); keyboard.activation 80:15 not-run 'the page tried to write (WebSocket /ws…)'`,
   rE6.status === 0 && lateOpens === 1 && triedTo(mE6, "keyboard.activation", "80:15", /the page tried to write \(WebSocket \/ws/));
-check(`E6 sends no WebSocket message: the drive's mouse click opens the socket without sending, the battery's keyboard press (which would send) never reaches the server (saw: ${writesOf(E6).join(", ") || "none"})`,
+check(`[ws-send] sends no WebSocket message: the drive's mouse click opens the socket without sending, the battery's keyboard press (which would send) never reaches the server (saw: ${writesOf(E6).join(", ") || "none"})`,
   rE6.status === 0 && writesOf(E6).length === 0);
 
 // ================================================================ the write block's reach, attribution, the backdrop stack
@@ -393,13 +393,13 @@ check(`E6 sends no WebSocket message: the drive's mouse click opens the socket w
 const rE7 = await P.rE7;
 const mE7 = read(projBare, out("Edge7"));
 if (rE7.status !== 0) console.log(rE7.stderr);
-check(`E7 (a SharedWorker's DELETE, a prototype-registered service worker's POST, a WebSocket message): the server receives NO write of any method at any path and no WebSocket message (saw: ${writesOf(E7).join(", ") || "none"})`,
+check(`[write-blocked] (a SharedWorker's DELETE, a prototype-registered service worker's POST, a WebSocket message): the server receives NO write of any method at any path and no WebSocket message (saw: ${writesOf(E7).join(", ") || "none"})`,
   rE7.status === 0 && mE7 !== null && writesOf(E7).length === 0);
-check("the SharedWorker's DELETE is blocked and charged to the Enter that caused it: keyboard.activation 80:15 not-run 'the page tried to write (DELETE /mutate…)' (was: pass)",
+check("the SharedWorker's DELETE is blocked and charged to the Enter that caused it: keyboard.activation 80:15 not-run 'the page tried to write (DELETE /mutate…)' (not a pass)",
   triedTo(mE7, "keyboard.activation", "80:15", /the page tried to write \(DELETE \/mutate/));
-check("the prototype-registered service worker's POST: keyboard.activation 80:17 not-run 'the page tried to write (POST /mutate…)' (was: pass)",
+check("the prototype-registered service worker's POST: keyboard.activation 80:17 not-run 'the page tried to write (POST /mutate…)' (not a pass)",
   triedTo(mE7, "keyboard.activation", "80:17", /the page tried to write \(POST \/mutate/));
-check("a WebSocket message the page sends is dropped and recorded: keyboard.activation 80:18 not-run 'the page tried to write (WebSocket /ws…)' (was: pass, the message sent)",
+check("a WebSocket message the page sends is dropped and recorded: keyboard.activation 80:18 not-run 'the page tried to write (WebSocket /ws…)' (not a pass, and the message is not sent)",
   triedTo(mE7, "keyboard.activation", "80:18", /the page tried to write \(WebSocket \/ws/));
 check("a transparent static app container over a decorative fixed layer is page content, never a wrapper: click-outside 80:16 not-run 'no backdrop to click' (never a click on the page), and the scrim read is none (not the decorative layer)",
   triedTo(mE7, "dialog.click-outside", "80:16", /no backdrop to click/) && statusOf(mE7, "dialog.scrim", "80:16") === "warn" && /the scrim is none/.test(row(mE7, "dialog.scrim", "80:16")?.detail ?? ""));
@@ -408,7 +408,7 @@ const rE8 = await P.rE8;
 const mE8 = read(projBare, out("Edge8"));
 if (rE8.status !== 0) console.log(rE8.stderr);
 const differs = (m: VerifyMeasured | null): boolean => rows(m).some((c) => /differs from the measured page/.test(c.detail));
-check(`E8 (the action bar shows after POST /graphql answers and after an MSW-style service worker is ready): the battery runs on the measured page — keyboard.reachable 8 of 8, keyboard.activation 80:23 pass, no 'display:none at rest', no fingerprint mismatch (graphql reads answered: ${graphqlReads})`,
+check(`[late-bar] (the action bar shows after POST /graphql answers and after an MSW-style service worker is ready): the battery runs on the measured page — keyboard.reachable 8 of 8, keyboard.activation 80:23 pass, no 'display:none at rest', no fingerprint mismatch (graphql reads answered: ${graphqlReads})`,
   rE8.status === 0 && rows(mE8).some((c) => c.id === "keyboard.reachable" && c.status === "pass" && /^8 of 8/.test(c.detail)) && statusOf(mE8, "keyboard.activation", "80:23") === "pass"
   && !rows(mE8).some((c) => /display:none at rest/.test(c.detail)) && !differs(mE8) && graphqlReads >= 4);
 check("a covering wrapper whose background computes to oklab(0 0 0 / 0) is transparent: dialog.scrim 80:16 pass (the backdrop under it) and click-outside 80:16 pass",
@@ -417,11 +417,11 @@ check("a covering wrapper whose background computes to oklab(0 0 0 / 0) is trans
 const rE9 = await P.rE9;
 const mE9 = read(projBare, out("Edge9"));
 if (rE9.status !== 0) console.log(rE9.stderr);
-check("a write deferred 300 ms after the Enter that clicked Delete taints that Enter's check and every later one of the unit: keyboard.activation 80:15 and dialog.focus-on-open 80:15 not-run 'the page tried to write (POST /mutate…)' (was: activation pass)",
+check("a write deferred 300 ms after the Enter that clicked Delete taints that Enter's check and every later one of the unit: keyboard.activation 80:15 and dialog.focus-on-open 80:15 not-run 'the page tried to write (POST /mutate…)' (not an activation pass)",
   rE9.status === 0 && writesOf(E9).length === 0 && triedTo(mE9, "keyboard.activation", "80:15", /the page tried to write \(POST \/mutate/) && triedTo(mE9, "dialog.focus-on-open", "80:15", /the page tried to write/));
-check("a write 300 ms after the unit's LAST action (an autosave after the safe close of 80:22) is still seen — the page stays open 0.5 s after it: focus-return 80:22 close not-run 'the page tried to write (POST /mutate…)' (was: pass, the write never sent)",
+check("a write 300 ms after the unit's LAST action (an autosave after the safe close of 80:22) is still seen — the page stays open 0.5 s after it: focus-return 80:22 close not-run 'the page tried to write (POST /mutate…)' (not a pass for a write that goes unseen)",
   row(mE9, "dialog.focus-return", "80:22", "close")?.status === "not-run" && /the page tried to write \(POST \/mutate/.test(row(mE9, "dialog.focus-return", "80:22", "close")?.detail ?? ""));
-check("a non-dialog popup opened inside an open modal root with a 0-px box is not this row's modal: dialog.focus-trap / escape-closes / scrim / click-outside 80:16 not-run 'not a modal dialog' (was: the battery on the outer root)",
+check("a non-dialog popup opened inside an open modal root with a 0-px box is not this row's modal: dialog.focus-trap / escape-closes / scrim / click-outside 80:16 not-run 'not a modal dialog' (the battery does not run on the outer root)",
   ["dialog.focus-trap", "dialog.escape-closes", "dialog.scrim", "dialog.click-outside"].every((id) => triedTo(mE9, id, "80:16", /not a modal dialog/)));
 // a cell's text that shows nothing never makes its sole centred button another control — driven by the drive,
 // pressed and reached by the keyboard battery exactly as the plain cell (80:22) in the same run
@@ -429,12 +429,12 @@ const rE10 = await P.rE10;
 const mE10 = read(projBare, out("Edge10"));
 if (rE10.status !== 0) console.log(rE10.stderr);
 const asPlainCell = (id: string): boolean => ["keyboard.reachable", "keyboard.activation"].every((c) => statusOf(mE10, c, id) === statusOf(mE10, c, "80:22"));
-check("cells whose sole centred icon button sits beside an opacity-0 hover tooltip (80:18) or a clip-path-only sr-only label (80:23): the drive clicks them (ok:true, mouse) as the plain cell 80:22 (was: ok:null 'another control')",
+check("cells whose sole centred icon button sits beside an opacity-0 hover tooltip (80:18) or a clip-path-only sr-only label (80:23): the drive clicks them (ok:true, mouse) as the plain cell 80:22 (not ok:null 'another control')",
   rE10.status === 0 && ["80:18", "80:23", "80:22"].every((id) => ix(mE10, id)?.ok === true && ix(mE10, id)?.activation === "mouse"));
 check(`keyboard.reachable / keyboard.activation for 80:18 and 80:23 are what the plain cell 80:22 gets (activation ${statusOf(mE10, "keyboard.activation", "80:22")}, reachable ${statusOf(mE10, "keyboard.reachable", "80:22")}: no 'the opener is a container' not-run)`,
   statusOf(mE10, "keyboard.activation", "80:22") === "pass" && asPlainCell("80:18") && asPlainCell("80:23")
   && !["80:18", "80:23"].some((id) => /the opener is a container/.test(row(mE10, "keyboard.reachable", id)?.detail ?? "")));
-check(`E10 sends no write (saw: ${writesOf(E10).join(", ") || "none"})`, writesOf(E10).length === 0);
+check(`[cell-opener] sends no write (saw: ${writesOf(E10).join(", ") || "none"})`, writesOf(E10).length === 0);
 // a card's label at opacity 0 in flow (an entrance not yet played) and a CSS-mask icon are the
 // card's own content — its centred Delete is never its control, in the interaction drive and in the keyboard battery alike; a hover tint
 // over a cell is its chrome
@@ -443,11 +443,11 @@ const mE11 = read(projBare, out("Edge11"));
 if (rE11.status !== 0) console.log(rE11.stderr);
 const notOwn = (id: string, ctl: string): boolean => ix(mE11, id)?.ok === null && (ix(mE11, id)?.detail ?? "").startsWith(`the opener's click point is another control inside it (<button type="button" aria-label="${ctl}">)`)
   && statusOf(mE11, "keyboard.reachable", id) === "not-run" && new RegExp(`the opener is a container; Tab reaches <button[^>]*${ctl}[^>]*> inside it`).test(row(mE11, "keyboard.reachable", id)?.detail ?? "");
-check("a card whose label is opacity 0 in flow (80:18) and a card with a CSS-mask icon (80:23), each around its centred Delete: the drive does not click it (ok:null naming the Delete), keyboard.reachable not-run 'the opener is a container' (was: the Delete taken as the card's control)",
+check("a card whose label is opacity 0 in flow (80:18) and a card with a CSS-mask icon (80:23), each around its centred Delete: the drive does not click it (ok:null naming the Delete), keyboard.reachable not-run 'the opener is a container' (the Delete is not taken as the card's control)",
   rE11.status === 0 && notOwn("80:18", "Unstack crate") && notOwn("80:23", "Unship crate"));
 check(`a cell under a pointer-events:none hover tint over the whole cell (80:22): driven ok:true by mouse, keyboard.activation ${statusOf(mE11, "keyboard.activation", "80:22")} (pass)`,
   ix(mE11, "80:22")?.ok === true && ix(mE11, "80:22")?.activation === "mouse" && statusOf(mE11, "keyboard.activation", "80:22") === "pass");
-check(`E11 sends no write (saw: ${writesOf(E11).join(", ") || "none"})`, writesOf(E11).length === 0);
+check(`[container-label] sends no write (saw: ${writesOf(E11).join(", ") || "none"})`, writesOf(E11).length === 0);
 // E12: the keyboard battery's control is judged by the SAME pixel check as the interaction drive's (only the
 // control hidden vs all the container's content hidden) — a card whose only content of its own is a <progress> (80:18) or its own
 // ::before status dot (80:23): the drive refuses its Delete by the pixels and Tab reaching the Delete is not the card reached (the
@@ -459,11 +459,11 @@ if (rE12.status !== 0) console.log(rE12.stderr);
 const notOwnPx = (id: string, ctl: string, byPx: boolean): boolean => ix(mE12, id)?.ok === null && (ix(mE12, id)?.detail ?? "").startsWith(`the opener's click point is another control inside it (<button type="button" aria-label="${ctl}">)`)
   && /paints something of its own beside it/.test(ix(mE12, id)?.detail ?? "") === byPx
   && statusOf(mE12, "keyboard.reachable", id) === "not-run" && new RegExp(`the opener is a container; Tab reaches <button[^>]*${ctl}[^>]*> inside it`).test(row(mE12, "keyboard.reachable", id)?.detail ?? "");
-check(`a card with a <progress> (80:18: by the DOM's media rule) or its own ::before status dot (80:23: by the pixels) around its centred Delete: the drive refuses it, keyboard.reachable not-run 'the opener is a container; Tab reaches <button …> inside it' (saw: ${statusOf(mE12, "keyboard.reachable", "80:18")} / ${statusOf(mE12, "keyboard.reachable", "80:23")}; was: pass, the Delete taken for the card's control)`,
+check(`a card with a <progress> (80:18: by the DOM's media rule) or its own ::before status dot (80:23: by the pixels) around its centred Delete: the drive refuses it, keyboard.reachable not-run 'the opener is a container; Tab reaches <button …> inside it' (saw: ${statusOf(mE12, "keyboard.reachable", "80:18")} / ${statusOf(mE12, "keyboard.reachable", "80:23")}; not a pass, the Delete is not taken for the card's control)`,
   rE12.status === 0 && notOwnPx("80:18", "Unstack crate", false) && notOwnPx("80:23", "Unship crate", true));
 check(`a cell whose sole button sits in a filled wrapper (80:22): driven ok:true by mouse, keyboard.activation ${statusOf(mE12, "keyboard.activation", "80:22")} (pass)`,
   ix(mE12, "80:22")?.ok === true && ix(mE12, "80:22")?.activation === "mouse" && statusOf(mE12, "keyboard.activation", "80:22") === "pass");
-check(`E12 sends no write (saw: ${writesOf(E12).join(", ") || "none"})`, writesOf(E12).length === 0);
+check(`[container-dot] sends no write (saw: ${writesOf(E12).join(", ") || "none"})`, writesOf(E12).length === 0);
 // a refusal of a container's sole control names its reason — the DOM rule's (E11 80:18, its opacity-0
 // label in flow) and the pixels' (E12 80:23, its own ::before dot) — in the drive's row and in keyboard.reachable
 check(`the refusal names its reason: 80:18 drive row '… — not driven (its own content: text "…")' and keyboard.reachable '… not the opener's own control — its own content: text …'; 80:23 drive row '(the opener paints something of its own …)' and keyboard.reachable '… not the opener's own control — the opener paints something of its own …' (saw: ${row(mE11, "keyboard.reachable", "80:18")?.detail ?? "none"} | ${row(mE12, "keyboard.reachable", "80:23")?.detail ?? "none"})`,

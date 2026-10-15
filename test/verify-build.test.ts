@@ -95,7 +95,7 @@ check("[css] colorLiterals reads rgb(100% 0% 0% / 50%), rgb(10.4, 0, 0) and the 
   const c = colorLiterals("rgb(100% 0% 0% / 50%) rgb(10.4, 0, 0) rgb(0 0 0 / 40%) rgb(var(--x)) rgba(${c}, 0.5)");
   return c.get("#ff000080") === "rgb(100% 0% 0% / 50%)" && c.has("#0a0000ff") && c.has("#00000066") && c.size === 3;
 })());
-check("[alpha] a scrim is no longer exempted by an allowedLiterals entry for the opaque colour", (() => {
+check("[alpha] a scrim is not exempted by an allowedLiterals entry for the opaque colour", (() => {
   const scrim = { value: "#ffffff1a", kind: "color", codeToken: "bg-scrim", verdict: "exact" };
   // (theme.css is outside files[]: it only declares --color-scrim, so the undeclared-token check is satisfied)
   const pr = problems({ "a.tsx": "bg-[#ffffff1a]", "theme.css": "@theme { --color-scrim: #ffffff1a; }" }, { files: ["a.tsx"], tokens: [scrim],
@@ -177,7 +177,7 @@ check("[defs] and the failure message says allowedLiterals matches an exact valu
 
 console.log("token checks — only plan-resolved values fail:");
 check("a resolved color used as a raw #hex BLOCKS", has(blocks({ "a.tsx": "color: #5b5fc7" }, { files: ["a.tsx"], tokens: [brand], verification: STATIC }), /raw colour #5b5fc7.*brand-600/));
-check("…and as Compose 0xFF… (the old gate was blind to native)", has(problems({ "A.kt": "Color(0xFF5B5FC7)" }, { files: ["A.kt"], tokens: [brand], verification: STATIC }), /0xFF5B5FC7/));
+check("…and as Compose 0xFF… (the gate is not blind to native)", has(problems({ "A.kt": "Color(0xFF5B5FC7)" }, { files: ["A.kt"], tokens: [brand], verification: STATIC }), /0xFF5B5FC7/));
 check("…and as rgb()", has(problems({ "a.css": "color: rgb(91, 95, 199)" }, { files: ["a.css"], tokens: [brand], verification: STATIC }), /rgb\(91, 95, 199\)/));
 check("an UNRESOLVED rgba() (a one-off shadow) passes — profiles prescribe these", problems({ "a.css": "box-shadow: 0 1px 2px rgba(0,0,0,0.12)" }, { files: ["a.css"], tokens: [brand], verification: STATIC }).length === 0);
 check("an UNRESOLVED arbitrary value (text-[15px]) passes", problems({ "a.tsx": "text-[15px]" }, { files: ["a.tsx"], tokens: [gap16], verification: STATIC }).length === 0);
@@ -316,7 +316,7 @@ check("[shape] a plan path argument that is not a plan -> 'cannot read plan(s): 
   const r = spawnSync(process.execPath, [HOOK, "p.json"], { encoding: "utf8", cwd: root });
   return r.status === 1 && /verify-build: cannot read plan\(s\): p\.json \(is not a plan \(the file holds an array, not an object\)\)/.test(r.stderr);
 })());
-check("[shape] parsePlan names the field: `deviations` as an object is refused (the warning path used to accept anything)", (() => {
+check("[shape] parsePlan names the field: `deviations` as an object is refused (the warning path does not accept anything)", (() => {
   const p = parsePlan({ deviations: {} });
   return "error" in p && /`deviations` must be an array/.test(p.error);
 })());
@@ -473,7 +473,7 @@ check("fan-out: an agent is judged on the plan ITS transcript claims, not a sibl
   const mine = path.join(root, "agent-a.jsonl"), none = path.join(root, "none.jsonl");
   fs.writeFileSync(mine, toolUse("Write", { file_path: root + "/design/plan/login.json", content: "{}" }));
   fs.writeFileSync(none, "{}");
-  // a transcript naming no plan checks nothing (it used to fall back to every open plan and block)
+  // a transcript naming no plan checks nothing (it does not fall back to every open plan and block)
   const unscoped = runHook(root, { cwd: root, agent_id: "a1", agent_transcript_path: none }).status;
   const untouched = !readFixture(sibling, isPlan).verification?.hook;
   const r = runHook(root, { cwd: root, agent_id: "a1", agent_transcript_path: mine });
@@ -1004,7 +1004,7 @@ console.log("freshness by content, never by clock:");
   withReport("pass-with-deviations", null);
   const g1hook = spawnSync(process.execPath, [HOOK, planFile], { cwd: root, encoding: "utf8" }); // checked by name: the Stop hook's fast path is silent on a plan it already passed
   const g1 = st();
-  check(`every report passing, one "pass-with-deviations" → verified-with-deviations (got ${g1.status}; was: unverified)`,
+  check(`every report passing, one "pass-with-deviations" → verified-with-deviations (got ${g1.status}, not unverified)`,
     g1.status === "verified-with-deviations" && /pass-with-deviations/.test(g1.reasons.join(" ")));
   check("the Stop hook does not block on a pass-with-deviations report, and prints the computed status",
     g1hook.status === 0 && /hook passed · computed status: verified-with-deviations/.test(g1hook.stderr));
@@ -1503,19 +1503,19 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
   const R = "design/verify/login.report.json";
   const twoFail = [reportRef({ rel: R, behaviour: beh(2, ["dialog.focus-return", "keyboard.reachable"]) })];
   const w1 = bw({ verification: { mode: "rendered" } }, twoFail);
-  check("[15] fail 2 → a warning naming the report, the count and the ids, 'never waived'", !!w1 && w1.some((w) => w.startsWith(`${R}: behaviour/a11y — 2 failures (dialog.focus-return, keyboard.reachable)`) && /never waived: fix it or raise a designer question/.test(w)));
+  check("[behaviour] fail 2 → a warning naming the report, the count and the ids, 'never waived'", !!w1 && w1.some((w) => w.startsWith(`${R}: behaviour/a11y — 2 failures (dialog.focus-return, keyboard.reachable)`) && /never waived: fix it or raise a designer question/.test(w)));
   const w2 = bw({ verification: { mode: "rendered", a11y: { tool: "verify-probe+axe-core 4.13.0", violations: 0 } } }, twoFail);
-  check("[15] plan.verification.a11y.violations 0 vs report fail 2 → 'records 0 violations … has 2 failures — copy report.behaviour.summary'", !!w2 && w2.some((w) => /^verification\.a11y records 0 violations but design\/verify\/login\.report\.json behaviour has 2 failures — copy report\.behaviour\.summary$/.test(w)));
+  check("[behaviour] plan.verification.a11y.violations 0 vs report fail 2 → 'records 0 violations … has 2 failures — copy report.behaviour.summary'", !!w2 && w2.some((w) => /^verification\.a11y records 0 violations but design\/verify\/login\.report\.json behaviour has 2 failures — copy report\.behaviour\.summary$/.test(w)));
   const w3 = bw({ verification: { mode: "rendered", a11y: { tool: "verify-probe", violations: 2 } } }, twoFail);
-  check("[15] …equal (2 and 2) → no disagreement (the fail warning stays)", !!w3 && !w3.some((w) => /verification\.a11y records/.test(w)) && w3.some((w) => /2 failures \(/.test(w)));
+  check("[behaviour] …equal (2 and 2) → no disagreement (the fail warning stays)", !!w3 && !w3.some((w) => /verification\.a11y records/.test(w)) && w3.some((w) => /2 failures \(/.test(w)));
   const w4 = bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [reportRef({ rel: R, behaviour: beh(0, []) })]);
-  check("[15] fail 0 and a11y 0 → nothing", !!w4 && w4.length === 0);
+  check("[behaviour] fail 0 and a11y 0 → nothing", !!w4 && w4.length === 0);
   const w5 = bw({ verification: { mode: "rendered" } }, [reportRef({ rel: R, behaviour: beh(0, [], false, "--behaviour off") })]); // (shippedProbe false: still warns)
-  check("[15] ran:false '--behaviour off' → 'not run (--behaviour off)' warning", !!w5 && w5.some((w) => w.startsWith(`${R}: behaviour/a11y checks were not run (--behaviour off)`)));
+  check("[behaviour] ran:false '--behaviour off' → 'not run (--behaviour off)' warning", !!w5 && w5.some((w) => w.startsWith(`${R}: behaviour/a11y checks were not run (--behaviour off)`)));
   const w6 = bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [reportRef({ rel: R, shippedProbe: true, behaviour: beh(0, [], false, "the measured file carries no behaviour checks (hand-written, or a probe that predates the behaviour checks)") })]);
-  check("[15] ran:false (no block) → 'did not run (why)'; no a11y disagreement on a run that did not happen", !!w6 && w6.length === 1 && /did not run \(the measured file carries no behaviour checks/.test(w6[0] ?? ""));
+  check("[behaviour] ran:false (no block) → 'did not run (why)'; no a11y disagreement on a run that did not happen", !!w6 && w6.length === 1 && /did not run \(the measured file carries no behaviour checks/.test(w6[0] ?? ""));
   const w7 = bw({ verification: { mode: "rendered", a11y: { violations: 3 } } }, [reportRef({ rel: R })]);
-  check("[15] a report with no behaviour section (predates the behaviour checks) → no behaviour warning", !!w7 && w7.length === 0);
+  check("[behaviour] a report with no behaviour section (predates the behaviour checks) → no behaviour warning", !!w7 && w7.length === 0);
   // the plan's ONE a11y number is compared with the ONE report it came from, never with every matching report
   const own = reportRef({ rel: "design/verify/Crates.report.json", matchedBy: "name", mtimeMs: 2, shippedProbe: true, behaviour: beh(1, ["a11y.name"]) });
   const older = reportRef({ rel: "design/verify/80_1.report.json", matchedBy: "nodeId", mtimeMs: 1, shippedProbe: true, behaviour: beh(3, ["a11y.name"]) });
@@ -1553,7 +1553,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     return dis(abs).length === 0 && dis(rel).length === 0 && dis(absNoPlan).length === 0 && !abs.some((m) => NF.test(m)) && !rel.some((m) => NF.test(m));
   })());
   check("a11y.report naming no located report → says so, compares with none", !!l6e && dis(l6e).length === 0 && l6e.some((w) => /a11y\.report names design\/verify\/Gone\.report\.json, which is not a verify report found/.test(w)));
-  check("[15] the a11y-missing warning says to copy report.behaviour.summary", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /a11y is missing — copy report\.behaviour\.summary/.test(w)));
+  check("[behaviour] the a11y-missing warning says to copy report.behaviour.summary", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /a11y is missing — copy report\.behaviour\.summary/.test(w)));
   // ONE behaviour warning for the run — the plan's own newest report (or the one a11y.report names) — with its
   // count's singular/plural. design/verify/ is flat (locateReports reads only it), so a re-run with the same --out
   // overwrites its report and every other matched file is another --out: each warns on its own failures, never "not run"
@@ -1600,9 +1600,9 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
   const VER = { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], coverage: { rendered: ["default"], notChecked: [] } } as const;
   const root = project(files, { status: "pending", files: ["a.tsx"], verification: { ...VER, a11y: { tool: "verify-probe", violations: 0 } } });
   const ref = verifyBuild.locateReports(planOf(root), path.join(root, "design", "plan", "login.json"), root, null).find((r) => r.rel === R);
-  check("[15] locateReports summarises report.behaviour {ran, fail 2, failed ids}", JSON.stringify(ref && "behaviour" in ref ? ref.behaviour : undefined) === JSON.stringify({ ran: true, why: null, fail: 2, warn: 0, failed: ["a11y.axe", "keyboard.focus-visible"] }));
+  check("[behaviour] locateReports summarises report.behaviour {ran, fail 2, failed ids}", JSON.stringify(ref && "behaviour" in ref ? ref.behaviour : undefined) === JSON.stringify({ ran: true, why: null, fail: 2, warn: 0, failed: ["a11y.axe", "keyboard.focus-visible"] }));
   const r1 = runHook(root);
-  check("[15] the hook: exit 0 (never blocked), stderr warns '2 failures (a11y.axe, keyboard.focus-visible)' and the a11y disagreement",
+  check("[behaviour] the hook: exit 0 (never blocked), stderr warns '2 failures (a11y.axe, keyboard.focus-visible)' and the a11y disagreement",
     r1.status === 0 && /login\.report\.json: behaviour\/a11y — 2 failures \(a11y\.axe, keyboard\.focus-visible\)/.test(r1.stderr) && /verification\.a11y records 0 violations but .* has 2 failures/.test(r1.stderr));
   {
     // a measured file with no behaviour block: hand-written / non-web (inputs.probe "unknown") → silent; the shipped probe's → warns
@@ -1615,15 +1615,15 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     const hRef = refOf(hand), sRef = refOf(shipped);
     const hw = hRef ? bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [hRef]) : null;
     const sw = sRef ? bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [sRef]) : null;
-    check("[15] no behaviour block, inputs.probe 'unknown' (hand-written / non-web) → no behaviour warning, in the function and in the hook",
+    check("[behaviour] no behaviour block, inputs.probe 'unknown' (hand-written / non-web) → no behaviour warning, in the function and in the hook",
       handRep.inputs?.probe === "unknown" && !!hw && hw.length === 0 && !/behaviour\/a11y checks did not run/.test(runHook(hand).stderr));
-    check("[15] no behaviour block, inputs.probe = the shipped probe (an older probe) → 'did not run … re-run the shipped probe', in the function and in the hook",
+    check("[behaviour] no behaviour block, inputs.probe = the shipped probe (an older probe) → 'did not run … re-run the shipped probe', in the function and in the hook",
       !!sRef && "shippedProbe" in sRef && sRef.shippedProbe && !!sw && sw.some((w) => /behaviour\/a11y checks did not run \(the measured file carries no behaviour checks.*re-run the shipped probe/.test(w))
       && /login\.report\.json: behaviour\/a11y checks did not run/.test(runHook(shipped).stderr));
   }
   const mal = project({ ...files, "design/verify/login.report.json": JSON.stringify({ ...rep, behaviour: { ran: "maybe" } }) }, { status: "pending", files: ["a.tsx"], verification: { ...VER, a11y: { violations: 0 } } });
   const ref2 = verifyBuild.locateReports(planOf(mal), path.join(mal, "design", "plan", "login.json"), mal, null).find((r) => r.rel === R);
-  check("[15] a malformed report.behaviour is read as none (the report itself still located)", !!ref2 && "behaviour" in ref2 && ref2.behaviour === null);
+  check("[behaviour] a malformed report.behaviour is read as none (the report itself still located)", !!ref2 && "behaviour" in ref2 && ref2.behaviour === null);
 }
 
 console.log("claude-plugin/scripts bundles:");
@@ -1808,7 +1808,7 @@ void build(tmp).then(async () => {
       fs.mkdirSync(path.join(cwd, "design", "audit"), { recursive: true });
       fs.writeFileSync(path.join(cwd, "design", "audit", "Studio_Configurations.json"), "{ truncated");
       const w = auditGateWarnings({ screenName: "Studio Configurations" }, cwd, null);
-      check("an audit file that cannot be read WARNS that the gate was not checked (was: silently no blockers)",
+      check("an audit file that cannot be read WARNS that the gate was not checked (not silently no blockers)",
         w.length === 1 && /Studio_Configurations\.json is not valid JSON .*the audit gate was NOT checked/.test(must(w[0], "w[0]")));
     }
   }
@@ -1870,7 +1870,7 @@ void build(tmp).then(async () => {
     };
     const planOver = (overridden: string[]): Plan => ({ screenName: "Sample Screen", auditGate: { auditFile: "design/audit/Sample_Screen__1_1.json", verdict: "blocked", overridden, reason: "acknowledged", decidedBy: "owner", decidedAt: "2026-10-07" } });
     const before = auditGateWarnings(planOver(["missing-font#0"]), mkAudit(["1:1", "2:2"]), null);
-    check(`before the fix: missing-font#0 covers 1:1, 2:2 is still not listed (got ${JSON.stringify(before)})`,
+    check(`with 1:1 and 2:2 both open: missing-font#0 covers 1:1, 2:2 is still not listed (got ${JSON.stringify(before)})`,
       before.some((x) => /not listed/.test(x) && x.includes("missing-font@2:2")) && before.some((x) => x.includes("missing-font#0 → missing-font@1:1")));
     const after = auditGateWarnings(planOver(["missing-font#0"]), mkAudit(["2:2"]), null);
     check(`1:1 fixed: the shifted missing-font#0 now covers 2:2 — the warning names missing-font#0 → missing-font@2:2 (got ${JSON.stringify(after)})`,

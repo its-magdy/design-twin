@@ -207,13 +207,13 @@ check("an unknown flag is refused (exit 2), not swallowed", run([screen(JR), var
   check("[shape] a screen argument that is not a screen export -> 'cannot read the screen JSON …: is not a screen export', exit 1",
     r1.status === 1 && /plan-skeleton: cannot read the screen JSON .*notscreen\.json: is not a screen export/.test(r1.stderr) && r1.stdout === "");
   const r2 = run([screen(JR), vars(JR), DS, "--map", put("map.json", { version: 1, components: { K: { figma: { key: "K" } } } })]);
-  check("[shape] an invalid --map is refused, one line (was: read blindly, every instance silently unmapped)",
+  check("[shape] an invalid --map is refused, one line (not read blindly, with every instance silently unmapped)",
     r2.status === 1 && /plan-skeleton: cannot read the component map .*map\.json: is not a valid component map/.test(r2.stderr));
   const ds = path.join(dir, "ds");
   fs.mkdirSync(ds);
   fs.writeFileSync(path.join(ds, "tokens.json"), "{ not json");
   const r3 = run([screen(JR), vars(JR), ds]);
-  check("[shape] a design-system tokens.json that is there but broken is refused (was: silently no design system)",
+  check("[shape] a design-system tokens.json that is there but broken is refused (not silently no design system)",
     r3.status === 1 && /cannot read the design system's tokens .*tokens\.json: is not valid JSON/.test(r3.stderr));
   const planFile = put("plan.json", { tokens: "none" });
   const r4 = run([screen(JR), vars(JR), DS, "--out", planFile]);

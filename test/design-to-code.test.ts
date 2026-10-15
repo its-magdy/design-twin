@@ -95,9 +95,9 @@ check("DTCG and CSS agree on which FLOATs are lengths (one unitDecision, opts.un
 check("description -> $description", leafAt(dtcg, "color.primary").$description === "Primary brand");
 check("clean ds lints clean", lintTokens(ds).length === 0);
 // DTCG 2025.10 conformance: no typeless leaves; 6-digit hex fallback; boolean coerced not dropped.
-check("[T-str-type] STRING -> $type:'string' (valid, not typeless)", (() => { const d = toDTCG(tokens({ variables: [{ name: "font/sans", type: "STRING", values: { v: "Inter" } }] })); return leafAt(d, "font.sans").$type === "string" && leafAt(d, "font.sans").$value === "Inter"; })());
-check("[T-bool-coerce] BOOLEAN -> $type:'string' + origin in $extensions (no typeless leaf)", (() => { const w: string[] = []; const d = toDTCG(tokens({ variables: [{ name: "flag/on", type: "BOOLEAN", values: { v: true } }] }), w); return leafAt(d, "flag.on").$type === "string" && leafAt(d, "flag.on").$value === "true" && figmaExt(leafAt(d, "flag.on")).originalType === "boolean" && w.some((m) => /BOOLEAN/.test(m)); })());
-check("[T-6hex] color leaf hex fallback always 6-digit, alpha split out (2025.10)", (() => { const d = toDTCG(tokens({ variables: [{ name: "scrim", type: "COLOR", values: { v: "#00000080" } }] })); return asColor(leafAt(d, "scrim").$value).hex === "#000000" && near(asColor(leafAt(d, "scrim").$value).alpha, 0.502); })());
+check("[str-type] STRING -> $type:'string' (valid, not typeless)", (() => { const d = toDTCG(tokens({ variables: [{ name: "font/sans", type: "STRING", values: { v: "Inter" } }] })); return leafAt(d, "font.sans").$type === "string" && leafAt(d, "font.sans").$value === "Inter"; })());
+check("[bool-coerce] BOOLEAN -> $type:'string' + origin in $extensions (no typeless leaf)", (() => { const w: string[] = []; const d = toDTCG(tokens({ variables: [{ name: "flag/on", type: "BOOLEAN", values: { v: true } }] }), w); return leafAt(d, "flag.on").$type === "string" && leafAt(d, "flag.on").$value === "true" && figmaExt(leafAt(d, "flag.on")).originalType === "boolean" && w.some((m) => /BOOLEAN/.test(m)); })());
+check("[hex-fallback] color leaf hex fallback always 6-digit, alpha split out (2025.10)", (() => { const d = toDTCG(tokens({ variables: [{ name: "scrim", type: "COLOR", values: { v: "#00000080" } }] })); return asColor(leafAt(d, "scrim").$value).hex === "#000000" && near(asColor(leafAt(d, "scrim").$value).alpha, 0.502); })());
 check("[fixtures-null] asColor(null) throws a FixtureError ('not a DTCG colour…'), not a raw TypeError", (() => {
   try { asColor(malformed(null)); return false; } catch (e) { return e instanceof FixtureError && /^not a DTCG colour/.test(e.message); }
 })());
@@ -364,44 +364,44 @@ check("added prop has correct kind+codeProp (not just presence)", anyProp(a2, "K
 check("non-label TEXT -> camelCase codeProp (not children)", must(bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Placeholder: { type: "TEXT" } } }])).components.K, "component 'K'").props?.Placeholder?.codeProp === "placeholder");
 
 console.log("validator — negative coverage:");
-check("[V] version 2 rejected", !ok({ version: 2, components: {} }));
-check("[V] code.targets numeric module rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E", targets: { web: { module: 5 } } } } } }));
-check("[V] variantOverrides.code missing export rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, variantOverrides: [{ when: { T: "x" }, code: { module: "m" } }] } } }));
-check("[V] figma.unstable non-bool rejected", !ok({ version: 1, components: { K: { figma: { name: "B", unstable: "yes" }, code: { module: "m", export: "E" } } } }));
-check("[V] boolean omitDefault non-bool rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "boolean", codeProp: "p", omitDefault: "no" } } } } }));
-check("[V] figmaFileKey non-string rejected", !ok({ version: 1, components: {}, figmaFileKey: 5 }));
+check("[map-valid] version 2 rejected", !ok({ version: 2, components: {} }));
+check("[map-valid] code.targets numeric module rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E", targets: { web: { module: 5 } } } } } }));
+check("[map-valid] variantOverrides.code missing export rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, variantOverrides: [{ when: { T: "x" }, code: { module: "m" } }] } } }));
+check("[map-valid] figma.unstable non-bool rejected", !ok({ version: 1, components: { K: { figma: { name: "B", unstable: "yes" }, code: { module: "m", export: "E" } } } }));
+check("[map-valid] boolean omitDefault non-bool rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "boolean", codeProp: "p", omitDefault: "no" } } } } }));
+check("[map-valid] figmaFileKey non-string rejected", !ok({ version: 1, components: {}, figmaFileKey: 5 }));
 
 // ================= mutation survivors closed =====
 console.log("tokens — mutation survivors:");
-check("[T-fw] FONT_WEIGHT-scoped FLOAT is unitless", toCSS(tokens({ variables: [{ name: "weight/bold", type: "FLOAT", scopes: ["FONT_WEIGHT"], values: { v: 700 } }] })).includes("--weight-bold: 700;"));
-check("[T-ul] opts.unitless overrides px", toCSS(tokens({ variables: [{ name: "z/top", type: "FLOAT", values: { v: 100 } }] }), { unitless: new Set(["z/top"]) }).includes("--z-top: 100;"));
-check("[T-sn] string-number FLOAT gets px", toCSS(tokens({ variables: [{ name: "s/x", type: "FLOAT", values: { v: "16" } }] })).includes("--s-x: 16px;"));
-// [T-lh] Figma LineHeight is px|percent, NEVER a unitless multiplier -> px is the correct default
+check("[unit-weight] FONT_WEIGHT-scoped FLOAT is unitless", toCSS(tokens({ variables: [{ name: "weight/bold", type: "FLOAT", scopes: ["FONT_WEIGHT"], values: { v: 700 } }] })).includes("--weight-bold: 700;"));
+check("[unit-opts] opts.unitless overrides px", toCSS(tokens({ variables: [{ name: "z/top", type: "FLOAT", values: { v: 100 } }] }), { unitless: new Set(["z/top"]) }).includes("--z-top: 100;"));
+check("[unit-string-number] string-number FLOAT gets px", toCSS(tokens({ variables: [{ name: "s/x", type: "FLOAT", values: { v: "16" } }] })).includes("--s-x: 16px;"));
+// [unit-line-height] Figma LineHeight is px|percent, NEVER a unitless multiplier -> px is the correct default
 // (unitless `line-height: 24` would mean 24x font size). See the UNITLESS_SCOPES comment in tokens-core.ts.
-check("[T-lh] LINE_HEIGHT-scoped FLOAT stays px (not unitless)", toCSS(tokens({ variables: [{ name: "text/lh", type: "FLOAT", scopes: ["LINE_HEIGHT"], values: { v: 24 } }] })).includes("--text-lh: 24px;"));
-// [T-ls] letter-spacing bare number is invalid CSS -> px, not unitless.
-check("[T-ls] LETTER_SPACING-scoped FLOAT stays px (bare number is invalid CSS)", toCSS(tokens({ variables: [{ name: "text/ls", type: "FLOAT", scopes: ["LETTER_SPACING"], values: { v: 0.5 } }] })).includes("--text-ls: 0.5px;"));
-// ---------- [RD-*] real-data regressions: names/scopes taken from a live "Design System - NIMA"
-// file (Figma starter plan). The mock fixtures above all set NARROW scopes, which hid these: real
+check("[unit-line-height] LINE_HEIGHT-scoped FLOAT stays px (not unitless)", toCSS(tokens({ variables: [{ name: "text/lh", type: "FLOAT", scopes: ["LINE_HEIGHT"], values: { v: 24 } }] })).includes("--text-lh: 24px;"));
+// [unit-letter-spacing] letter-spacing bare number is invalid CSS -> px, not unitless.
+check("[unit-letter-spacing] LETTER_SPACING-scoped FLOAT stays px (bare number is invalid CSS)", toCSS(tokens({ variables: [{ name: "text/ls", type: "FLOAT", scopes: ["LETTER_SPACING"], values: { v: 0.5 } }] })).includes("--text-ls: 0.5px;"));
+// ---------- real-data cases (unit-*, name-fold): names/scopes taken from a live design-system
+// file. The mock fixtures above all set NARROW scopes, which hid these: real
 // files leave Figma's default ALL_SCOPES in place, so the scopes-only unit rule emitted invalid CSS.
-check("[RD-fw] ALL_SCOPES font-weight is unitless by NAME (was `500px`, invalid CSS)",
+check("[unit-name-weight] ALL_SCOPES font-weight is unitless by NAME (not `500px`, invalid CSS)",
   toCSS(tokens({ variables: [{ name: "Font-Weight/medium", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 500 } }] })).includes("--Font-Weight-medium: 500;"));
-check("[RD-op] ALL_SCOPES opacity is unitless by NAME (was `0.5px`, invalid CSS)",
+check("[unit-name-opacity] ALL_SCOPES opacity is unitless by NAME (not `0.5px`, invalid CSS)",
   toCSS(tokens({ variables: [{ name: "Opacity/disabled", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 0.5 } }] })).includes("--Opacity-disabled: 0.5;"));
-check("[RD-nos] the same holds when `scopes` is absent entirely",
+check("[unit-name-no-scopes] the same holds when `scopes` is absent entirely",
   toCSS(tokens({ variables: [{ name: "font-weight/bold", type: "FLOAT", values: { v: 700 } }] })).includes("--font-weight-bold: 700;"));
 // A font SIZE is a genuine length -> must keep px. Guards the name heuristic against over-reach.
-check("[RD-fs] font-SIZE keeps px (heuristic does not over-match `font`)",
+check("[unit-name-size] font-SIZE keeps px (heuristic does not over-match `font`)",
   toCSS(tokens({ variables: [{ name: "Font-Size/Text-sm", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 14 } }] })).includes("--Font-Size-Text-sm: 14px;"));
 // A NARROWED scope stays authoritative — the name must never override an explicit designer signal.
-check("[RD-narrow] explicit LINE_HEIGHT scope beats a name containing 'weight'",
+check("[unit-scope-wins] explicit LINE_HEIGHT scope beats a name containing 'weight'",
   toCSS(tokens({ variables: [{ name: "weight/line-height", type: "FLOAT", scopes: ["LINE_HEIGHT"], values: { v: 24 } }] })).includes("--weight-line-height: 24px;"));
 // The name heuristic is a GUESS, and every other rewrite in this file announces itself. A silent one
 // is only visible as surprising CSS downstream.
-check("[RD-say] a unit decided by NAME rather than scopes is reported by lintTokens",
+check("[unit-lint] a unit decided by NAME rather than scopes is reported by lintTokens",
   lintTokens(tokens({ variables: [{ name: "Opacity/disabled", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 0.5 } }] }))
     .some((w) => /Opacity\/disabled/.test(w) && /UNITLESS/.test(w)));
-check("[RD-say] but a token the SCOPES decided is not reported (no noise on an explicit signal)",
+check("[unit-lint] but a token the SCOPES decided is not reported (no noise on an explicit signal)",
   !lintTokens(tokens({ variables: [{ name: "opacity/disabled", type: "FLOAT", scopes: ["OPACITY"], values: { v: 0.5 } }] }))
     .some((w) => /UNITLESS/.test(w)));
 // numberUnit short-circuits on opts.unitless BEFORE the name heuristic, so a token the caller named
@@ -409,52 +409,52 @@ check("[RD-say] but a token the SCOPES decided is not reported (no noise on an e
 // that was never made — and tells the caller to go fix it in Figma when they already fixed it here.
 const nameGuessDs = tokens({ variables: [{ name: "Opacity/disabled", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 0.5 } }] });
 const overrideOpts = { unitless: new Set(["Opacity/disabled"]) };
-check("[RD-opts] a token overridden via opts.unitless is NOT reported as a name guess",
+check("[unit-opts] a token overridden via opts.unitless is NOT reported as a name guess",
   !lintTokens(nameGuessDs, overrideOpts).some((w) => /UNITLESS/.test(w)));
-check("[RD-opts] the same token IS reported when linted without those opts (the guess really did run)",
+check("[unit-opts] the same token IS reported when linted without those opts (the guess really did run)",
   lintTokens(nameGuessDs).some((w) => /UNITLESS/.test(w)));
 // The override must not swallow the OTHER warnings for that token — it only pre-empts the unit guess.
-check("[RD-opts] opts.unitless does not suppress unrelated warnings",
+check("[unit-opts] opts.unitless does not suppress unrelated warnings",
   lintTokens(tokens({ variables: [{ name: "(Space 3)", type: "FLOAT", values: { v: 12 } }] }), { unitless: new Set(["(Space 3)"]) })
     .some((w) => /illegal in a CSS custom property/.test(w)));
 // Emitter and linter must agree about which tokens the heuristic touched — same opts, same verdict.
-check("[RD-opts] emitter agrees: opts.unitless drops the px",
+check("[unit-opts] emitter agrees: opts.unitless drops the px",
   toCSS(nameGuessDs, overrideOpts).includes("--Opacity-disabled: 0.5;"));
-// `font[-_ ]?weight` used to be unanchored, so a font-weight SCALE — a multiplier, the one case in the
-// family where the unit matters — also matched.
-check("[RD-bound] 'font-weight-scale' is NOT swept up by the font-weight name rule",
+// `font[-_ ]?weight` is anchored, so a font-weight SCALE — a multiplier, the one case in the
+// family where the unit matters — does not match.
+check("[unit-bound] 'font-weight-scale' is NOT swept up by the font-weight name rule",
   toCSS(tokens({ variables: [{ name: "font-weight-scale/lg", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 2 } }] })).includes("--font-weight-scale-lg: 2px;"));
 // The matching unit is the `/`-delimited GROUP, so the property may sit in any segment...
-check("[RD-bound] the property may be a trailing segment ('text/font-weight')",
+check("[unit-bound] the property may be a trailing segment ('text/font-weight')",
   toCSS(tokens({ variables: [{ name: "text/font-weight", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 600 } }] })).includes("--text-font-weight: 600;"));
 // ...but a segment that merely CONTAINS it names something else.
-check("[RD-bound] 'opacity-curve' is a different property, not an opacity",
+check("[unit-bound] 'opacity-curve' is a different property, not an opacity",
   toCSS(tokens({ variables: [{ name: "motion/opacity-curve", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 3 } }] })).includes("--motion-opacity-curve: 3px;"));
-// [RD-fold] "(Space 3)" is a real variable name; parens are illegal in a custom property and were
+// [name-fold] "(Space 3)" is a real variable name; parens are illegal in a custom property and were
 // folded to `---Space-3-` SILENTLY, breaking the never-silent guarantee.
-check("[RD-fold] illegal chars in a token name are folded",
+check("[name-fold] illegal chars in a token name are folded",
   toCSS(tokens({ variables: [{ name: "(Space 3)", type: "FLOAT", values: { v: 12 } }] })).includes("---Space-3-: 12px;"));
-check("[RD-fold] and the fold is REPORTED by lintTokens",
+check("[name-fold] and the fold is REPORTED by lintTokens",
   lintTokens(tokens({ variables: [{ name: "(Space 3)", type: "FLOAT", values: { v: 12 } }] })).some((w) => /illegal in a CSS custom property/.test(w) && /\(Space 3\)/.test(w)));
-// ---------- [RD2-*] real-data regression from a live "🎨 Design System" export (Material 3 typography
+// ---------- real-data case (unit-mixed, unit-pure) from a live design-system export (a typography
 // scale): a "Body 2" FLOAT is scoped to FONT_WEIGHT *and* FONT_SIZE/LINE_HEIGHT/LETTER_SPACING/
 // PARAGRAPH_SPACING/PARAGRAPH_INDENT at once. `.some()` let the single unitless scope win, emitting
 // `--Body-2: 18;` (invalid as a font-size) with no hygiene warning at all.
-check("[RD2-mixed] a scope mix of FONT_WEIGHT + length scopes keeps px (majority-length wins)",
+check("[unit-mixed] a scope mix of FONT_WEIGHT + length scopes keeps px (majority-length wins)",
   toCSS(tokens({ variables: [{ name: "Body 2", type: "FLOAT", scopes: ["FONT_WEIGHT", "FONT_SIZE", "LINE_HEIGHT", "LETTER_SPACING", "PARAGRAPH_SPACING", "PARAGRAPH_INDENT"], values: { v: 18 } }] })).includes("--Body-2: 18px;"));
-check("[RD2-pure] a PURE FONT_WEIGHT+OPACITY mix (no length scope) is still unitless",
+check("[unit-pure] a PURE FONT_WEIGHT+OPACITY mix (no length scope) is still unitless",
   toCSS(tokens({ variables: [{ name: "w/x", type: "FLOAT", scopes: ["FONT_WEIGHT", "OPACITY"], values: { v: 500 } }] })).includes("--w-x: 500;"));
-check("[RD-fold] a legal name is NOT reported as folded",
+check("[name-fold] a legal name is NOT reported as folded",
   !lintTokens(tokens({ variables: [{ name: "Neutral/Grey 800", type: "COLOR", values: { v: "#262626" } }] })).some((w) => /illegal in a CSS custom property/.test(w)));
 
-// [T-empty] no emittable vars -> no empty `:root {}` block.
-check("[T-empty] empty variable set emits no `:root` block", toCSS({ variables: [] }) === "" && toCSS(tokens({ variables: [{ name: "", type: "COLOR", values: { v: "#abcdef" } }] })) === "");
-// [T-str-safe] a STRING token cannot break out of its declaration/block: `;` and `}` are CSS-hex-escaped.
-check("[T-str-safe] STRING `;`/`}` are CSS-escaped (no declaration breakout)", toCSS(tokens({ variables: [{ name: "content/x", type: "STRING", values: { v: "a;b}c" } }] })).includes("--content-x: a\\3b b\\7d c;"));
-// [T-str-plain] an ordinary font stack (commas/spaces only) passes through byte-for-byte.
-check("[T-str-plain] ordinary STRING (font stack) passes through unescaped", toCSS(tokens({ variables: [{ name: "font/sans", type: "STRING", values: { v: "Inter, system-ui, sans-serif" } }] })).includes("--font-sans: Inter, system-ui, sans-serif;"));
-// [T-str-lint] never-silent: the escape is also reported by lintTokens.
-check("[T-str-lint] escaped STRING reported by lintTokens", lintTokens(tokens({ variables: [{ name: "c/x", type: "STRING", values: { v: "a}b" } }] })).some((w) => /CSS-structural/.test(w)));
+// [empty-root] no emittable vars -> no empty `:root {}` block.
+check("[empty-root] empty variable set emits no `:root` block", toCSS({ variables: [] }) === "" && toCSS(tokens({ variables: [{ name: "", type: "COLOR", values: { v: "#abcdef" } }] })) === "");
+// [str-safe] a STRING token cannot break out of its declaration/block: `;` and `}` are CSS-hex-escaped.
+check("[str-safe] STRING `;`/`}` are CSS-escaped (no declaration breakout)", toCSS(tokens({ variables: [{ name: "content/x", type: "STRING", values: { v: "a;b}c" } }] })).includes("--content-x: a\\3b b\\7d c;"));
+// [str-plain] an ordinary font stack (commas/spaces only) passes through byte-for-byte.
+check("[str-plain] ordinary STRING (font stack) passes through unescaped", toCSS(tokens({ variables: [{ name: "font/sans", type: "STRING", values: { v: "Inter, system-ui, sans-serif" } }] })).includes("--font-sans: Inter, system-ui, sans-serif;"));
+// [str-lint] never-silent: the escape is also reported by lintTokens.
+check("[str-lint] escaped STRING reported by lintTokens", lintTokens(tokens({ variables: [{ name: "c/x", type: "STRING", values: { v: "a}b" } }] })).some((w) => /CSS-structural/.test(w)));
 
 console.log("drift — mutation survivors:");
 check("[clean] id-matched component NOT falsely unmapped", driftLint(codeMap({ "3:3": { figma: { name: "Card", id: "3:3" } } }), catalog([{ id: "3:3", name: "Card", type: "COMPONENT" }])).warnings.every((w) => w.code !== "unmapped-component"));
@@ -466,9 +466,9 @@ const collB = catalog([{ key: "K", name: "B", type: "COMPONENT", props: { "Size#
 check("[drift] colliding catalog base -> ambiguous warn, order-independent, no kind-mismatch", driftLint(collMap, collA).errors.every((e) => e.code !== "kind-mismatch") && driftLint(collMap, collB).errors.every((e) => e.code !== "kind-mismatch") && driftLint(collMap, collA).warnings.some((w) => w.code === "ambiguous-prop"));
 
 console.log("validator — uncovered rules:");
-check("[V] invalid status rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, status: "bogus" } } }));
-check("[V] figma.key non-string rejected", !ok({ version: 1, components: { K: { figma: { name: "B", key: 5 }, code: { module: "m", export: "E" } } } }));
-check("[V] enum values object value rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "enum", codeProp: "p", values: { a: {} } } } } } }));
+check("[map-valid] invalid status rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, status: "bogus" } } }));
+check("[map-valid] figma.key non-string rejected", !ok({ version: 1, components: { K: { figma: { name: "B", key: 5 }, code: { module: "m", export: "E" } } } }));
+check("[map-valid] enum values object value rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "enum", codeProp: "p", values: { a: {} } } } } } }));
 
 console.log("bootstrap — mutation survivors:");
 check("[boot-unstable] fresh unpublished component flagged unstable", must(bootstrap(catalog([{ id: "9:9", name: "Loose", type: "COMPONENT" }])).components["9:9"], "component '9:9'").figma.unstable === true);
@@ -489,8 +489,8 @@ check("[nonarray-options] non-array options -> no-variant-options warning, no cr
 check("[cset-drift] unmapped COMPONENT_SET surfaced", driftLint(codeMap({}), catalog([{ key: "SET", name: "Btn", type: "COMPONENT_SET", props: { Variant: { type: "VARIANT", options: ["a"] } } }])).warnings.some((w) => w.code === "unmapped-component"));
 
 console.log("validator — array-shaped fields:");
-check("[V] components as array rejected", !ok({ version: 1, components: [] }));
-check("[V] figma as array rejected", !ok({ version: 1, components: { K: { figma: ["x"], code: { module: "m", export: "E" } } } }));
+check("[map-valid] components as array rejected", !ok({ version: 1, components: [] }));
+check("[map-valid] figma as array rejected", !ok({ version: 1, components: { K: { figma: ["x"], code: { module: "m", export: "E" } } } }));
 
 console.log("bootstrap — more survivors:");
 check("[cset-boot] COMPONENT_SET bootstrapped as enum", (() => { const b = bootstrap(catalog([{ key: "SET", name: "Btn", type: "COMPONENT_SET", props: { Variant: { type: "VARIANT", options: ["a", "b"] } } }])); return b.components.SET !== undefined && anyProp(b, "SET", "Variant").kind === "enum"; })());
@@ -559,17 +559,17 @@ console.log("validator — prototype-named prop kinds:");
 // validation error into an uncaught TypeError and breaking "never throws on bad data".
 const propMap = (kind: unknown) => ({ version: 1, components: { B: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { p: { kind, codeProp: "x" } } } } });
 for (const kind of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
-  check(`[V-proto-kind] kind '${kind}' reports an error instead of throwing`, (() => {
+  check(`[map-valid-proto-kind] kind '${kind}' reports an error instead of throwing`, (() => {
     let res;
     try { res = validateMap(propMap(kind)); } catch (e) { return false; }
     return res.ok === false && res.errors.some((e) => /must be one of/.test(e.message) && e.path.endsWith(".kind"));
   })());
 }
-check("[V-kind-nonstring] non-string kind reports an error instead of throwing", (() => {
+check("[map-valid-kind-nonstring] non-string kind reports an error instead of throwing", (() => {
   let res; try { res = validateMap(propMap(42)); } catch (e) { return false; }
   return res.ok === false;
 })());
-check("[V-valid-kind-still-ok] a genuine kind still validates", validateMap(propMap("boolean")).ok === true);
+check("[map-valid-kind-ok] a genuine kind still validates", validateMap(propMap("boolean")).ok === true);
 
 console.log("security — CSS breakout in STRING tokens:");
 // A STRING token value can escape its declaration three ways; all must be neutralized AND reported.
@@ -671,7 +671,7 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   check("[dup-css] and input ORDER changes nothing about which name each value gets",
     /--Space-4-e26d506e: 24px;/.test(c2) && /--Space-4-64928e3a: 16px;/.test(c2));
   const w = lintTokens(space4(true));
-  check("[dup-css] the warning names BOTH keys and BOTH values, and no longer claims a 'later definition wins'",
+  check("[dup-css] the warning names BOTH keys and BOTH values, and does not claim a 'later definition wins'",
     w.some((m) => /e26d506e/.test(m) && /64928e3a/.test(m) && /"Mode 1":24/.test(m) && /"Desktop":16/.test(m) && /resolve DIFFERENTLY/.test(m)) && !w.some((m) => /later definition wins/.test(m)));
   const d = toDTCG(space4(false));
   check("[dup-dtcg] tokens.dtcg.json keeps both too, with the Figma key under $extensions",
@@ -966,9 +966,9 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
 })();
 
 // ---------- a file of the WRONG KIND is a sentence too (doc-guards.ts), not a TypeError or a quiet no-op ----------
-// Each of these used to be read as `JSON.parse(…) as T`: a catalog whose `components` was a string made
-// drift-lint lint nothing, a token file with a broken row died inside the emitter, a screen with no
-// nodes produced an empty result that read like a clean run.
+// None of these is read as `JSON.parse(…) as T`: a catalog whose `components` is a string must not make
+// drift-lint lint nothing, a token file with a broken row must not die inside the emitter, a screen with no
+// nodes must not produce an empty result that reads like a clean run.
 (() => {
   const D2C = path.join(import.meta.dirname, "..", "design-to-code");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-shape-"));
@@ -1118,7 +1118,7 @@ console.log("tokens — opacity FLOATs are percentages:");
   const sameModes = tokens({ collections: [{ name: "Theme", modes: ["Light", "Light"], default: "Light" }], variables: [
     { name: "fx/gap", type: "FLOAT", collection: "Theme", scopes: ["GAP"], values: { Light: 4 } }] });
   const sameKt = toNative(sameModes, "compose").text;
-  check("[modes] Compose hint: every mode named like the default (formerly a TypeError) falls back to the second mode by id",
+  check("[modes] Compose hint: every mode named like the default (not a TypeError) falls back to the second mode by id",
     sameKt.includes("CompositionLocalProvider(LocalThemeTokens provides ThemeTokensLight2) { … }"));
 }
 
@@ -1173,7 +1173,7 @@ console.log("tokens — composed colours:");
     && twc.includes("--color-figma-overlay-scrim: color-mix(in srgb, #000000 var(--figma-opacity-60), transparent);")
     && twc.includes("--figma-opacity-60: 60%;"));
   const lint = lintTokens(composed);
-  check("[composed] lint no longer says the CSS dropped the opacity (it carries it), and calls no nested alias dangling",
+  check("[composed] lint does not say the CSS dropped the opacity (it carries it), and calls no nested alias dangling",
     !lint.some((m) => /composed colour/.test(m)) && !lint.some((m) => /undefined token/.test(m)));
   // An opacity alias whose target's CSS is NOT a percentage (an unscoped FLOAT -> `40px`) would make
   // color-mix() invalid, so that value alone falls back to the colour half — and says so.
@@ -1849,9 +1849,9 @@ console.log("map — SLOT props:");
 }
 
 // ---------- the four hand-parsed CLIs share cliParse: --flag=value, every unknown flag, no stray words ---------
-// map-bootstrap, get-component, resolve-screen and verify-build used to take argv by hand (indexOf + splice, or
-// array destructuring), so `--out=x` was an unknown option, a single-dash typo became a positional, only the first
-// unknown flag was named, and a surplus positional was ignored. Real subprocesses: the behaviour is the exit code
+// map-bootstrap, get-component, resolve-screen and verify-build take argv through cliParse, not by hand (indexOf + splice, or
+// array destructuring), so `--out=x` is a known form, a single-dash typo is not a positional, every
+// unknown flag is named, and a surplus positional is not ignored. Real subprocesses: the behaviour is the exit code
 // and what lands on stderr. None binds a port.
 (() => {
   const D2C = path.join(import.meta.dirname, "..", "design-to-code");
@@ -1884,10 +1884,10 @@ console.log("map — SLOT props:");
   check("[cli-args] …and -hh is help, not a silently ignored flag", run(mb, ["-hh"]).status === 0 && /^usage: /m.test(run(mb, ["-hh"]).stdout)
     && run(vb, ["-hh"]).status === 0 && /^usage: /m.test(run(vb, ["-hh"]).stdout));
   check("[cli-args] a dash-leading word after a value-taking flag is that flag's missing value, not an unknown flag", rejects(mb, ["c.json", "--out", "-Button"], 1, /^map-bootstrap: --out needs a value$/m));
-  check("[cli-args] map-bootstrap rejects a third positional (it was silently dropped)", rejects(mb, ["c.json", "a.json", "b.json"], 1, /^map-bootstrap: unexpected argument b\.json$/m));
+  check("[cli-args] map-bootstrap rejects a third positional (not silently dropped)", rejects(mb, ["c.json", "a.json", "b.json"], 1, /^map-bootstrap: unexpected argument b\.json$/m));
   check("[cli-args] map-bootstrap: a value-taking flag with no value, or a flag as its value, says so", rejects(mb, ["c.json", "--out"], 1, /^map-bootstrap: --out needs a value$/m)
     && rejects(mb, ["c.json", "--out", "--screen", "s.json"], 1, /^map-bootstrap: --out needs a value$/m));
-  check("[cli-args] map-bootstrap: an empty --out is no file name (it used to be taken for no --out and print to stdout)", rejects(mb, ["c.json", "--out", ""], 1, /^map-bootstrap: --out needs a value$/m));
+  check("[cli-args] map-bootstrap: an empty --out is no file name (it is not taken for no --out and printed to stdout)", rejects(mb, ["c.json", "--out", ""], 1, /^map-bootstrap: --out needs a value$/m));
   check("[cli-args] map-bootstrap: no catalog prints the usage, exit 1", run(mb, []).status === 1 && /^usage: /m.test(run(mb, []).stderr));
 
   check("[cli-args] get-component still resolves a handle", run(gc, ["c.json", "KEY_SAMPLE_BUTTON"]).status === 0);
@@ -1899,7 +1899,7 @@ console.log("map — SLOT props:");
   const noMatch = (script: string, args: string[], what: RegExp): boolean => { const r = run(script, args); return r.status === 1 && what.test(r.stderr) && !/unknown flag|unexpected argument/.test(r.stderr); };
   check("[cli-args] get-component: --bogus, -x, -h-thing and -hh are names to look up (no match, exit 1), not flags",
     ["--bogus", "-x", "-h-thing", "-hh"].every((h) => noMatch(gc, ["c.json", h], new RegExp(`no component matches '${h}'`))));
-  check("[cli-args] get-component rejects a third positional (it was ignored)", rejects(gc, ["c.json", "KEY_SAMPLE_BUTTON", "extra"], 2, /^get-component: unexpected argument extra$/m));
+  check("[cli-args] get-component rejects a third positional (not ignored)", rejects(gc, ["c.json", "KEY_SAMPLE_BUTTON", "extra"], 2, /^get-component: unexpected argument extra$/m));
   check("[cli-args] get-component with one argument prints the usage, exit 2", run(gc, ["c.json"]).status === 2 && /^usage: /m.test(run(gc, ["c.json"]).stderr));
 
   check("[cli-args] resolve-screen still resolves, with and without the plan dir", run(rs, [".", "Home"]).status === 0 && run(rs, [".", "Home", "plan"]).status === 0);
@@ -1907,7 +1907,7 @@ console.log("map — SLOT props:");
     found(rs, [".", "- Draft"], "1:3") && found(rs, [".", "---"], "1:4") && found(rs, ["--", ".", "- Draft"], "1:3"));
   check("[cli-args] resolve-screen: --bogus, -x, -h-thing and -hh are names to look up (no match, exit 1), not flags",
     ["--bogus", "-x", "-h-thing", "-hh"].every((h) => noMatch(rs, [".", h], new RegExp(`'${h}' matches no screen`))));
-  check("[cli-args] resolve-screen rejects a fourth positional (it was ignored)", rejects(rs, [".", "Home", "plan", "extra"], 2, /^resolve-screen: unexpected argument extra$/m));
+  check("[cli-args] resolve-screen rejects a fourth positional (not ignored)", rejects(rs, [".", "Home", "plan", "extra"], 2, /^resolve-screen: unexpected argument extra$/m));
   check("[cli-args] resolve-screen with one argument prints the usage, exit 2", run(rs, ["."]).status === 2 && /^usage: /m.test(run(rs, ["."]).stderr));
 
   check("[cli-args] verify-build --status still runs (no plans is not an error)", run(vb, ["--status"]).status === 0);

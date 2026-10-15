@@ -680,8 +680,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
   console.log("verify-screen — none of the eight false-positive families is a high delta:");
   // Before: 4 of 4 highs on the real GP probe were wrong, and 2 of 2 on JR.
-  ok("[fp] the real Guided Policies probe output now yields 0 high deltas (was 4)", () => gpRep.summary.high === 0);
-  ok("[fp] the real Jet Roles probe output now yields 0 high deltas (was 2)", () => jrRep.summary.high === 0);
+  ok("[fp] the real Guided Policies probe output yields 0 high deltas (not 4)", () => gpRep.summary.high === 0);
+  ok("[fp] the real Jet Roles probe output yields 0 high deltas (not 2)", () => jrRep.summary.high === 0);
   // The same probe fed the REAL DOM evidence from the independent Playwright pass.
   // GuidedPolicies.dom.json — the independent Playwright pass's evidence (only the fields read here).
   interface DomBox { tag: string; width: number; height: number; x: number; y: number; backgroundColor: string; color: string; radius: number[]; padding: number[]; svgFill?: string }
@@ -726,7 +726,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[tolerance] the Jet Roles filter button's Rows Spacing gap 8 → 12 and width 110 → 115.83 are still reported",
     () => jrRep.deltas.some((d) => d.nodeId === "I20173:142047;885:2723" && d.field === "gap" && d.expected === 8 && d.actual === 12) &&
     jrRep.deltas.some((d) => d.nodeId === "I20173:142047;885:2723" && d.field === "width" && d.actual === 115.83));
-  ok("[tolerance] 111.83×38 against 110×36 is reported now (size tolerance 1, was an inclusive 2)",
+  ok("[tolerance] 111.83×38 against 110×36 is reported (size tolerance 1, not an inclusive 2)",
     () => gpRep.deltas.some((d) => d.nodeId === "I20024:134073;885:2723" && d.field === "height" && d.expected === 36 && d.actual === 38) &&
     gpRep.deltas.some((d) => d.nodeId === "I20024:134073;885:2723" && d.field === "width" && d.actual === 111.83));
   ok("[tolerance] the content column's extra 24px bottom padding is reported (padding was never read from layout.padding)",
@@ -745,7 +745,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
   console.log("verify-screen — 'components never built' is gone; tag coverage is named as such:");
   for (const [name, rep] of [["Jet Roles", jrRep], ["Guided Policies", gpRep]] as const) {
-    ok(`[components] ${name}: 0 components reported absent (was ${name === "Jet Roles" ? 31 : 52} 'never built'), and no 'never built' reason`,
+    ok(`[components] ${name}: 0 components reported absent (not ${name === "Jet Roles" ? 31 : 52} 'never built'), and no 'never built' reason`,
       rep.summary.componentsAbsent === 0 && rep.missingComponents === undefined && !rep.why.some((w) => /never built/.test(w)));
     ok(`[components] ${name}: the metric is named tag coverage, not presence, and counts visible sets only`,
       () => /tag coverage, not presence/.test(rep.headline) && rep.untaggedInstanceSets.every((s) => s.nodeIds.every((id) => !(name === "Jet Roles" ? jrHidden : gpHidden).has(id))));
@@ -822,8 +822,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
 
 // ---------- wrong-kind inputs are one line + exit 2 (doc-guards.ts) — never compared as `{}` ----------
-// A non-object expectation or measurement used to be read as an EMPTY document, so --compare graded
-// nothing and printed a verdict about it.
+// A non-object expectation or measurement is not read as an EMPTY document (--compare would grade
+// nothing and print a verdict about it).
 (() => {
   const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-shape-"));
@@ -840,7 +840,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     run("--compare", exp, meas, "--interactions", put("ints.json", [{ trigger: "on_click", ok: true }])).status === 2);
   okOuter("[shape] --expect: a screen argument that is not a screen export -> exit 2, one line",
     oneLine(run("--expect", put("notscreen.json", { nodes: "none" })), /screen export: 'notscreen\.json' is not a screen export/));
-  okOuter("[args] `--out --force` is '--out needs a value' (was: an artefact set named --force)",
+  okOuter("[args] `--out --force` is '--out needs a value' (not an artefact set named --force)",
     (() => { const r = run("--expect", put("s.json", { nodes: [{ id: "1:1", type: "FRAME", name: "S" }] }), "--out", "--force"); return r.status === 2 && /verify-screen: --out needs a value/.test(r.stderr); })());
 })();
 
