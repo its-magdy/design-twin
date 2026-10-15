@@ -293,7 +293,8 @@ function checkMeasured(base: string, measFile: string, runId: string, sameRun: V
 const RUN_ID = /^[\w.:-]+$/;
 const short = (sha: string | null | undefined): string => (sha ? `${sha.slice(0, 12)}…` : "none");
 
-export interface StatusFlags { phase?: string | undefined; run?: string | undefined; "new-run"?: boolean | undefined; detail?: string | undefined; dir?: string | undefined; publish?: string | undefined; by?: string | undefined }
+export interface StatusFlags { phase?: string | undefined; run?: string | undefined; "new-run"?: boolean | undefined; detail?: string | undefined; dir?: string | undefined; publish?: string | undefined;
+  by?: string | undefined }
 /**
  * `--status <S> --phase <p> …` → exit 0 wrote / 1 refused (a check, or another status write held the lock) / 2 usage (or a write to a run that already ended) / 6 the run cache is not writable (printed as
  * one sentence naming the cache and the project root — never a stack). Prints `run <id> rev <n>` on stdout and the
@@ -326,7 +327,9 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   else if (f["new-run"]) runId = newRunId();
   else if (prevV2 && !TERMINAL_PHASES.includes(prevV2.phase)) runId = prevV2.runId;
   else {
-    console.error(`pass --run <id> or --new-run — ${prevV2 ? `the last run (${prevV2.runId}) ended at ${prevV2.phase}` : prev === "v1" ? "the status on disk is an older hand-written one" : "there is no run in progress"}, so there is nothing to continue\n` + usage);
+    console.error(`pass --run <id> or --new-run — ` +
+      `${prevV2 ? `the last run (${prevV2.runId}) ended at ${prevV2.phase}` : prev === "v1" ? "the status on disk is an older hand-written one" : "there is no run in progress"}, ` +
+      `so there is nothing to continue\n` + usage);
     return 2;
   }
   const sameRun = prevV2 && prevV2.runId === runId ? prevV2 : null;
@@ -441,7 +444,8 @@ export async function waitMain(screen: string | undefined, f: WaitFlags, usage: 
     }
     const now = Date.now();
     if (now - t0 >= timeout * 1000) { console.error(`timed out after ${timeout}s waiting for run ${f.run} (${describe(st)})`); return 5; }
-    if (now - lastChange >= stall * 1000) { console.error(`stalled: ${at ? at.file : liveStatusFile(base)} has not changed for ${stall}s (${describe(st)}) — the verifier may be stuck; check it before re-running`); return 5; }
+    if (now - lastChange >= stall * 1000) { console.error(`stalled: ${at ? at.file : liveStatusFile(base)} has not changed for ${stall}s (${describe(st)}) — the verifier may be stuck; check it before re-running`);
+      return 5; }
     await sleep(Math.min(interval * 1000, Math.max(1, timeout * 1000 - (now - t0))));
   }
 }

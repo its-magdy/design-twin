@@ -54,7 +54,8 @@ import { isVerifyExpectation } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
-import type { BuildIdentity, InteractionEvidence, MeasuredBehaviour, MeasuredComponent, MeasuredVisual, MeasuredNode, PageOverflow, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, ProbeStep, VerifyMeasured, VerifySpec } from "./types.ts";
+import type { BuildIdentity, InteractionEvidence, MeasuredBehaviour, MeasuredComponent, MeasuredVisual, MeasuredNode, PageOverflow, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, ProbeStep, VerifyMeasured,
+  VerifySpec } from "./types.ts";
 import { describeStep, parseSteps, stepsSha256 } from "./probe-steps.ts";
 import { StepError, drivable, driveBudget, driveInteractions, raf2, readPageOverflow, submitGuard } from "./probe-drive.ts";
 import type { DriveResult } from "./probe-drive.ts";
@@ -159,7 +160,8 @@ async function launch(r: Extract<Resolution, { ok: true }>, dir: string, executa
   // came out as hot regions in the visual diff (the e2e's correct twin, on CI).
   try { return { browser: await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...(executablePath !== undefined ? { executablePath } : {}) }) }; } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
-    return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch${executablePath !== undefined ? ` from --browser-path ${executablePath} (only guaranteed with the bundled Chromium)` : ""}: ${first}`, hint: browserHint(dir) };
+    return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch${executablePath !== undefined ? ` from --browser-path ${executablePath} (only guaranteed with the bundled Chromium)` : ""}: ${first}`,
+      hint: browserHint(dir) };
   }
 }
 
@@ -321,7 +323,8 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
   let newDocs = 0;
   let loadNote: string | null = null;
   const moved = (): boolean => log.docLoads !== navAtStart || newDocs > 0;
-  const kept = (): KeptNavigatingError => new KeptNavigatingError(`the page kept navigating for ${Math.round((Date.now() - started) / 1000)}s${log.navs > 0 ? " after load" : ""} (${Math.max(log.docLoads - navAtStart, newDocs)} navigation(s)) and never settled`);
+  const kept = (): KeptNavigatingError => new KeptNavigatingError(`the page kept navigating for ${Math.round((Date.now() - started) / 1000)}s${log.navs > 0 ? " after load" : ""} ` +
+    `(${Math.max(log.docLoads - navAtStart, newDocs)} navigation(s)) and never settled`);
   const stateLost = (): void => { if (log.lost !== null) throw new StepStateLostError(log.lost); };
   stateLost();
   let token = await docTokenOrNull(page);
@@ -461,7 +464,8 @@ async function oneVisible(page: Page, sel: string, wait: number, name: string, a
       if (kind === "other") throw new StepError(`${name}: ${firstLine(e)}`);
     }
     if (Date.now() >= deadline) {
-      throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1000)}s — ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
+      throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1000)}s — ` +
+        `${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
     }
     await sleep(POLL_MS);
   }
@@ -544,7 +548,8 @@ export function loadFailureWhy(message: string): string {
   const first = message.split("\n")[0] ?? "";
   if (/Download is starting/i.test(first)) return "the URL started a file download, not a page — point it at the page that renders the screen";
   if (/net::ERR_ABORTED/.test(first)) {
-    return "the browser cancelled the navigation before any page arrived (net::ERR_ABORTED) — the URL answered with no document (e.g. 204 No Content) or the page stopped its own load; point it at the page that renders the screen";
+    return "the browser cancelled the navigation before any page arrived (net::ERR_ABORTED) — the URL answered with no document (e.g. 204 No Content) or the page stopped its own load; " +
+      "point it at the page that renders the screen";
   }
   return first;
 }
@@ -749,7 +754,8 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
     // one element, one spec (five rows' identical dates all landed on one cell)
     const claimed = claimOnce(matches.map(({ m }) => m));
     matches.forEach((x, i) => { const c = claimed[i]; if (c) x.m = c; });
-    const item = (spec: VerifySpec, m: Match): MeasureItem => ({ nodeId: spec.nodeId, path: m.path, isText: spec.type === "TEXT", isPaint: isPaintSpec(spec), isPlaceholder: spec.placeholder === true, sharesWith: m.sharesWith ?? null,
+    const item = (spec: VerifySpec, m: Match): MeasureItem =>
+      ({ nodeId: spec.nodeId, path: m.path, isText: spec.type === "TEXT", isPaint: isPaintSpec(spec), isPlaceholder: spec.placeholder === true, sharesWith: m.sharesWith ?? null,
       ...(typeof spec.backgroundColor === "string" ? { backgroundSpec: true } : {}) });
     const frameOf = (spec: VerifySpec): ResolvedFrame | null | undefined => frames.get(spec.frameId ?? frameIn[0]?.nodeId ?? "");
     const frameRectOf = (spec: VerifySpec): Rect => { const f = frameOf(spec); return f ? f.rect : { x: 0, y: 0, w: o.viewport.w, h: o.viewport.h }; };
@@ -822,7 +828,8 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
     const pageOverflow: PageOverflow = { ...overflow, compatMode };
     const tokenNow = await docToken(page);
     if (tokenNow !== token || (token === "" && log.docLoads !== navsAtReach)) throw new NavigatedError("the page loaded a new document during measurement");
-    if (compatMode !== "CSS1Compat") stateNotes.add(`the page renders in quirks mode (document.compatMode ${compatMode}: no <!doctype html>) — its layout and page overflow measure differently from a standards-mode build`);
+    if (compatMode !== "CSS1Compat") stateNotes.add(`the page renders in quirks mode (document.compatMode ${compatMode}: no <!doctype html>) — ` +
+      `its layout and page overflow measure differently from a standards-mode build`);
 
     const components: MeasuredComponent[] = [];
     for (const i of exp.instances || []) {
@@ -916,7 +923,8 @@ async function bodiesRead(reads: readonly BodyRead[], served: ReadonlyMap<string
   }
   if (!missed.size) return null;
   const list = [...missed].slice(0, 5).map(([p, why]) => `${p} (${why})`).join(", ");
-  return { note: `build identity: ${missed.size} same-origin response body(ies) not hashed — ${list}${missed.size > 5 ? ", …" : ""}; measured.build.assetsSha256 leaves them out (build.unhashed)`, unhashed: missed.size };
+  return { note: `build identity: ${missed.size} same-origin response body(ies) not hashed — ${list}${missed.size > 5 ? ", …" : ""}; measured.build.assetsSha256 leaves them out (build.unhashed)`,
+    unhashed: missed.size };
 }
 
 /** Measure with one automatic full re-run after a reload; a second one is exit 4. */
@@ -1102,7 +1110,9 @@ export async function main(argv: string[]): Promise<number> {
   if (f.behaviour !== undefined && f.behaviour !== "on" && f.behaviour !== "off") { console.error(`verify-probe: --behaviour must be on or off, got '${f.behaviour}'\n${USAGE}`); return 2; }
   if (f.behaviour !== undefined && f.check) { console.error(`verify-probe: --behaviour does not apply to --check\n${USAGE}`); return 2; }
   const behaviourOn = f.behaviour !== "off";
-  if (f.run !== undefined && (f.check || !/^[\w.:-]+$/.test(f.run))) { console.error(`verify-probe: ${f.check ? "--run does not apply to --check" : `--run must be a run id (letters, digits, . : _ -), got '${f.run}'`}\n${USAGE}`); return 2; }
+  if (f.run !== undefined && (f.check || !/^[\w.:-]+$/.test(f.run))) {
+    console.error(`verify-probe: ${f.check ? "--run does not apply to --check" : `--run must be a run id (letters, digits, . : _ -), got '${f.run}'`}\n${USAGE}`); return 2;
+  }
 
   if (!f.check) {
     if (!f.expected || !f.url) { console.error(`verify-probe: --expected and --url are both required\n${USAGE}`); return 2; }
@@ -1185,12 +1195,14 @@ export async function main(argv: string[]): Promise<number> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const runDeadline = Date.now() + maxTime;
   const watchdog = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), maxTime); });
-  const work = (async (): Promise<number | { run: Extract<ProbeRun, { kind: "ok" }>; identity: ProbeIdentity; driven: InteractionEvidence[] | null; driveNote: string | null; behaviour: MeasuredBehaviour; forcedPng: Buffer | null; prep: VisualPrep; visualCap: VisualCapture | { why: string }; captureMs: number }> => {
+  const work = (async (): Promise<number | { run: Extract<ProbeRun, { kind: "ok" }>; identity: ProbeIdentity; driven: InteractionEvidence[] | null; driveNote: string | null; behaviour: MeasuredBehaviour;
+    forcedPng: Buffer | null; prep: VisualPrep; visualCap: VisualCapture | { why: string }; captureMs: number }> => {
     const launched = await launch(res, project, browserPath);
     if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
     const browser = launched.browser;
     held.browser = browser;
-    const identity: ProbeIdentity = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version }, browser: { name: "chromium", version: browser.version(), ...(browserPath !== undefined ? { executable: "custom" as const } : {}) } };
+    const identity: ProbeIdentity = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version },
+      browser: { name: "chromium", version: browser.version(), ...(browserPath !== undefined ? { executable: "custom" as const } : {}) } };
     // the path is printed (stdout/stderr), never written into a file
     const browserLine = `chromium ${identity.browser.version}${browserPath !== undefined ? ` (--browser-path ${browserPath})` : ""}`;
 
@@ -1420,18 +1432,22 @@ export async function main(argv: string[]): Promise<number> {
   }
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
-  console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) — tag ${c.tag} · shared path ${c.sharedPath} · alias ${c.tagAlias} · text ${c.text} · ordinal ${c.textOrdinal} · position ${c.position} · frame ${c.frame} · not measured ${c.notMeasured}` +
+  console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) — tag ${c.tag} · shared path ${c.sharedPath} · alias ${c.tagAlias} · text ${c.text} · ordinal ${c.textOrdinal} · ` +
+    `position ${c.position} · frame ${c.frame} · not measured ${c.notMeasured}` +
     ` · frame root via ${firstFrame ? firstFrame.via : "none"} · navigations after load ${run.navigation.afterInitialLoad}, re-runs ${run.navigation.reruns}`);
   const tn = r.tagsNotInExpectation;
   if (tn.count) console.error(`note  ${tn.count} data-dt-node value(s) on visible elements are not in the expectation (e.g. ${tn.ids.slice(0, 5).map((x) => x.id).join(", ")}) — --compare classifies them`);
   if (stepsSource !== null) console.error(`reach ${steps.length} step(s) from ${stepsSource} (sha ${stepsSha256(steps).slice(0, 12)}…) → ${r.url}`);
   const pg = r.page;
-  console.error(`page  scrollWidth ${pg.scrollWidth} at clientWidth ${pg.clientWidth} (overflow-x ${pg.overflowX})${pg.scrollWidth > pg.clientWidth + 1 ? (pg.scrollable ? ` — scrolls sideways (widest: ${pg.offenders.slice(0, 3).map((o) => o.dt ? `data-dt-node="${o.dt}"` : o.path).join(", ") || "?"})` : " — overflows but clipped") : ""}`);
+  console.error(`page  scrollWidth ${pg.scrollWidth} at clientWidth ${pg.clientWidth} (overflow-x ${pg.overflowX})` +
+    `${pg.scrollWidth > pg.clientWidth + 1 ? (pg.scrollable ? ` — scrolls sideways (widest: ` +
+      `${pg.offenders.slice(0, 3).map((o) => o.dt ? `data-dt-node="${o.dt}"` : o.path).join(", ") || "?"})` : " — overflows but clipped") : ""}`);
   for (const ev of driven || []) console.error(`drive ${ev.nodeId} ${ev.trigger ?? ""} → ${ev.ok === true ? "ok" : "ok:null"} · ${ev.detail ?? ""}`);
   console.error(behaviourLine(behaviour));
   console.error(visualLine(visual));
   for (const n of allNotes) console.error(`note  ${n}`);
-  console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…) · ${res.pkg} ${res.version} · chromium ${identity.browser.version}${browserPath !== undefined ? ` (--browser-path ${browserPath})` : ""}`);
+  console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…) · ${res.pkg} ${res.version} · chromium ` +
+    `${identity.browser.version}${browserPath !== undefined ? ` (--browser-path ${browserPath})` : ""}`);
   if (statusRefused && runId !== undefined) {
     // say which write was refused and what --compare will make of it; the recovery records the measured file's
     // sha after the same checks `done` applies (it reads <verify dir>/<S>.measured.json, else the run's stage dir)
@@ -1440,7 +1456,8 @@ export async function main(argv: string[]): Promise<number> {
     console.error(`warning  ${outBase}.measured.json is written, but ${measuredRefusedWhy(refusal.by, runId)}` +
       (measuringRecorded ? " — the live status still says measuring, so --compare reports the run incomplete"
         : " (its `measuring` write was refused too) — no live status of the run exists, so --compare will report the run as unrecorded") +
-      `. Record it${refusal.by === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` +
+      `. Record it${refusal.by === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path.basename(statusBase))} ` +
+      `--phase measured --run ${runId} --dir ${shellArg(verifyDir)}` +
       (findable ? "" : ` — after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
   }
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);

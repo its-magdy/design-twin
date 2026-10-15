@@ -88,7 +88,8 @@ function readHookInput(): Promise<HookRead> {
   return readHookPayload({
     waitMs: STDIN_WAIT_MS(),
     hardMs: Math.max(50, HOOK_TIMEOUT_MS() - 250),
-    stalled: (bytes) => `timed out after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s waiting for the hook payload on stdin (${bytes} byte(s) received, no end-of-file) — pass the plan path as an argument instead, or pipe the payload: echo '{"cwd":"…"}' | ${scriptCmd("verify-build")}`,
+    stalled: (bytes) => `timed out after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s waiting for the hook payload on stdin (${bytes} byte(s) received, no end-of-file) — pass the plan path as an argument instead, or ` +
+      `pipe the payload: echo '{"cwd":"…"}' | ${scriptCmd("verify-build")}`,
   });
 }
 
@@ -516,15 +517,18 @@ function loadMapKeys(cwd: string): Map<string, { name: string; module: string }>
 function checkVerification(plan: Plan, cwd: string): string[] {
   const v = plan.verification;
   if (!v || typeof v !== "object" || v.mode === undefined) {
-    return ["no `verification.mode` in the plan — record how the build was checked: {mode:\"rendered\", renderer, artifacts:[…], deltas:[…]} after rendering and comparing (references/verify.md), or {mode:\"static-only\", reason} if the project genuinely has no way to render"];
+    return ["no `verification.mode` in the plan — record how the build was checked: {mode:\"rendered\", renderer, artifacts:[…], deltas:[…]} after rendering and comparing (references/verify.md), or " +
+      "{mode:\"static-only\", reason} if the project genuinely has no way to render"];
   }
   if (v.mode === "rendered") {
     // An agent may write artifacts/deltas as OBJECTS ({screenshot: "…"}, {high: 33, …}) — say the shape is wrong, not "empty"/"missing"
     const shape = (x: unknown): string => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
     // (both shape errors in one round: a plan can have both as objects, and this is only a warning)
     const wrongShape: string[] = [];
-    if (v.artifacts !== undefined && !Array.isArray(v.artifacts)) wrongShape.push(`verification.artifacts must be an array of paths, got ${shape(v.artifacts)} — e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
-    if (v.deltas !== undefined && !Array.isArray(v.deltas)) wrongShape.push(`verification.deltas must be an array of the residual differences, got ${shape(v.deltas)} — the counts live in the report; list each difference ([] if none were found)`);
+    if (v.artifacts !== undefined && !Array.isArray(v.artifacts))
+      wrongShape.push(`verification.artifacts must be an array of paths, got ${shape(v.artifacts)} — e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
+    if (v.deltas !== undefined && !Array.isArray(v.deltas))
+      wrongShape.push(`verification.deltas must be an array of the residual differences, got ${shape(v.deltas)} — the counts live in the report; list each difference ([] if none were found)`);
     if (wrongShape.length) return v.deltas === undefined ? [...wrongShape, "verification.deltas is missing — list the residual differences against the reference ([] if none were found)"] : wrongShape;
     const artifacts = Array.isArray(v.artifacts) ? v.artifacts : [];
     if (!artifacts.length) return ["verification.mode is \"rendered\" but `artifacts` is empty — list the screenshot(s)/report the render produced"];
@@ -545,8 +549,11 @@ function verificationWarnings(plan: Plan): string[] {
   if (!v || v.mode !== "rendered") return [];
   const out: string[] = [];
   const c = v.coverage;
-  if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push("verification.coverage is missing — record {rendered:[…], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, \"Beyond the ideal frame\")");
-  if (!v.a11y) out.push("verification.a11y is missing — copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) — `verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded — say so in the report rather than implying one ran");
+  if (!c || !Array.isArray(c.rendered) || !c.rendered.length)
+    out.push("verification.coverage is missing — record {rendered:[…], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered " +
+      "(references/verify.md, \"Beyond the ideal frame\")");
+  if (!v.a11y) out.push("verification.a11y is missing — copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) — " +
+      "`verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded — say so in the report rather than implying one ran");
   return out;
 }
 
@@ -617,12 +624,14 @@ function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, 
   const a11y = plan.verification && typeof plan.verification === "object" ? plan.verification.a11y : undefined;
   const recorded = a11y && typeof a11y === "object" ? a11y.violations : undefined;
   const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : undefined, all, ctx);
-  if (recorded !== undefined && target.missing !== undefined && all.some((r) => r.behaviour && r.behaviour.ran)) out.push(`verification.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ — the a11y count was not checked against it`);
+  if (recorded !== undefined && target.missing !== undefined && all.some((r) => r.behaviour && r.behaviour.ran))
+    out.push(`verification.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ — the a11y count was not checked against it`);
   const r = target.ref ?? newestOwn(all);
   const n = (k: number, one: string, many: string): string => `${k} ${k === 1 ? one : many}`;
   const failWarning = (ref: ReportRef, fail: number, failed: string[]): string => {
     const ids = [...new Set(failed)];
-    return `${ref.rel}: behaviour/a11y — ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) — not the fidelity verdict, but a measurable accessibility failure is never waived: fix it or raise a designer question`;
+    return `${ref.rel}: behaviour/a11y — ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) — not the fidelity verdict, but a measurable ` +
+      `accessibility failure is never waived: fix it or raise a designer question`;
   };
   // Every other report file (not the one speaking for the run)
   const others = all.filter((x) => x !== r);
@@ -639,7 +648,8 @@ function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, 
     return [...out, ...otherFails];
   }
   if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
-  if (recorded !== undefined && target.missing === undefined && recorded !== b.fail) out.push(`verification.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} — copy report.behaviour.summary`);
+  if (recorded !== undefined && target.missing === undefined && recorded !== b.fail)
+    out.push(`verification.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} — copy report.behaviour.summary`);
   return [...out, ...otherFails];
 }
 
@@ -654,19 +664,23 @@ function verificationContradictions(plan: Plan, reports: ReportRef[] | null | un
   const rendered = (v.coverage && Array.isArray(v.coverage.rendered)) ? v.coverage.rendered.map((x) => String(x).trim().toLowerCase()) : [];
   if (v.a11y && typeof v.a11y === "object" && v.a11y.violations !== undefined) {
     const nc = notChecked.find((e) => A11Y.test(what(e)));
-    if (nc) out.push(`verification contradicts itself: \`a11y\` records ${JSON.stringify(v.a11y.violations)} violation(s) from ${JSON.stringify(v.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says "${what(nc)}" was not checked${typeof nc === "object" && nc.why ? ` (${nc.why})` : ""} — keep the one that is true`);
+    if (nc) out.push(`verification contradicts itself: \`a11y\` records ${JSON.stringify(v.a11y.violations)} violation(s) from ${JSON.stringify(v.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says ` +
+      `"${what(nc)}" was not checked${typeof nc === "object" && nc.why ? ` (${nc.why})` : ""} — keep the one that is true`);
   }
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
   for (const r of reports || []) {
     // --record-plan writes only the OPEN high/medium deltas — [] beside a report of lows is that record, not a gap
     const recordedHere = !!(v.recorded && typeof v.recorded === "object" && v.recorded.report === r.rel);
-    if (!recordedHere && Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — copy them (or the ones you judged real, with why) into the plan`);
+    if (!recordedHere && Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length)
+      out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — copy them (or the ones you judged real, with why) into the plan`);
     for (const k of ["verifyScreenVerdict", "verdict"] as const) {
       const claimed = v[k];
       const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
-      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict)) out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} — the report is the verdict; the plan cannot overrule it`);
+      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict))
+        out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} — the report is the verdict; the plan cannot overrule it`);
       // accepted deviations are not a plain pass: the plan must not summarise them away
-      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations") out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" — say the accepted deviations, not a plain pass`);
+      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations")
+        out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" — say the accepted deviations, not a plain pass`);
     }
   }
   return out;
@@ -685,7 +699,8 @@ function deviationWarnings(plan: Plan): string[] {
     });
     if (miss.length) bad.push(`#${i}${d && d.id ? ` (${d.id})` : ""}: ${miss.join(", ")}`);
   });
-  return bad.length ? [`${bad.length} deviation(s) are missing fields — each needs {nodeId, field, designed, built, reason} so a reviewer can check it against the export: ${bad.slice(0, 6).join("; ")}${bad.length > 6 ? `; +${bad.length - 6} more` : ""}`] : [];
+  return bad.length ? [`${bad.length} deviation(s) are missing fields — each needs {nodeId, field, designed, built, reason} so a reviewer can check it against the export: ` +
+    `${bad.slice(0, 6).join("; ")}${bad.length > 6 ? `; +${bad.length - 6} more` : ""}`] : [];
 }
 
 // The header every other skill resolves a plan by. A warning — plan-skeleton.ts
@@ -694,7 +709,8 @@ function validatePlanHeader(plan: Plan): string[] {
   const missing = (["screenName", "nodeId", "route", "file"] as const).filter((k) => plan[k] === undefined || plan[k] === null || plan[k] === "");
   if (!missing.length) return [];
   return [
-    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} — other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (the plan-skeleton script writes the header; only the route is yours to fill)`,
+    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} — other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ` +
+      `${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (the plan-skeleton script writes the header; only the route is yours to fill)`,
   ];
 }
 
@@ -707,7 +723,9 @@ const DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
 // (`--color-`, `bg-`, `text-`, `gap-`, `rounded-` …), the `figma-` namespace, and a `-<8 hex>` key suffix.
 function tokenCore(x: unknown): string {
   let s = String(x || "").toLowerCase().replace(/^--/, "").replace(/^var\(--|\)$/g, "");
-  s = s.replace(/^(color|colors|spacing|space|radius|rounded|text|font|font-size|font-weight|leading|tracking|shadow|bg|border|fill|stroke|ring|outline|gap|gap-[xy]|p[xytrbl]?|m[xytrbl]?|w|h|size|inset|top|left|right|bottom)-/, "");
+  s = s.replace(
+    /^(color|colors|spacing|space|radius|rounded|text|font|font-size|font-weight|leading|tracking|shadow|bg|border|fill|stroke|ring|outline|gap|gap-[xy]|p[xytrbl]?|m[xytrbl]?|w|h|size|inset|top|left|right|bottom)-/,
+    "");
   s = s.replace(/^figma-/, "").replace(/-[0-9a-f]{8}$/, "");
   return alnumKey(s);
 }
@@ -961,7 +979,8 @@ function undeclaredColourTokens(live: PlanTokenRow[], g: ProjectGraph): string[]
   const missing = wanted.filter((x) => x.props.some((p) => !declared.has(p)));
   if (!missing.length) return [];
   const show = missing.slice(0, 8).map((x) => `'${x.t}' (needs ${x.props.filter((p) => !declared.has(p)).join(", ")})`).join(", ");
-  return [`${missing.length} colour code token(s) are declared nowhere — not in any plan's files[] nor in a .css file of the project: ${show}${missing.length > 8 ? `, +${missing.length - 8} more` : ""} — a utility or variable with no definition renders nothing; add the alias to the theme (e.g. in the @theme block the tokens script writes)`];
+  return [`${missing.length} colour code token(s) are declared nowhere — not in any plan's files[] nor in a .css file of the project: ${show}${missing.length > 8 ? `, +${missing.length - 8} more` : ""} — a ` +
+    `utility or variable with no definition renders nothing; add the alias to the theme (e.g. in the @theme block the tokens script writes)`];
 }
 
 // ---------------------------------------------------------------- a deviation that contradicts the plan
@@ -988,7 +1007,8 @@ function deviationConflicts(plan: Plan): string[] {
       const mod = a && typeof a.mapModule === "string" && a.mapModule.trim() ? a.mapModule : null;
       if (!comp && !mod) continue;
       const says = [comp ? `components[] marks '${comp.name}' "reused"${comp.mapModule ? ` from ${comp.mapModule}` : ""}` : null, mod ? `anchors["${id}"] maps it to ${mod}` : null].filter(Boolean).join(" and ");
-      out.push(`deviation #${i}${d.id ? ` (${d.id})` : ""} says node ${id} was not built, but ${says} — one of them is wrong: if it was left out, anchor it as {"omitted": "<why>"} and drop the reuse claim; if it was built, correct the deviation`);
+      out.push(`deviation #${i}${d.id ? ` (${d.id})` : ""} says node ${id} was not built, but ${says} — one of them is wrong: if it was left out, anchor it as {"omitted": "<why>"} and drop the reuse claim; if it ` +
+        `was built, correct the deviation`);
     }
   });
   return out;
@@ -1045,12 +1065,14 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   const undecided = live.filter((row) => (verdictOf(row) === "missing" || !hasToken(row)) && !row.decision);
   if (undecided.length) {
     const show = undecided.slice(0, 8).map((row) => `${row.figmaName ? `'${row.figmaName}' ` : ""}${String(row.value)} (${row.kind})`).join(", ");
-    warnings.push(`${undecided.length} token row(s) have no token and no recorded decision: ${show}${undecided.length > 8 ? `, +${undecided.length - 8} more` : ""} — fill codeToken, or say what you did about it in \`decision\` (a one-off literal is a legitimate answer; say so)`);
+    warnings.push(`${undecided.length} token row(s) have no token and no recorded decision: ${show}${undecided.length > 8 ? `, +${undecided.length - 8} more` : ""} — fill codeToken, or say what you did about it in ` +
+      `\`decision\` (a one-off literal is a legitimate answer; say so)`);
   }
 
   // Token IDENTITY: two DIFFERENT Figma tokens on one code token.
   // A row carrying `"acknowledged": "<why>"` is a merge a person decided on — it is left out.
-  for (const row of live) if (row.acknowledged !== undefined && !isAcknowledged(row)) warnings.push(`token row '${row.figmaName || String(row.value)}' has an empty \`acknowledged\` — say why the shared code token is right, or remove the field`);
+  for (const row of live) if (row.acknowledged !== undefined && !isAcknowledged(row))
+    warnings.push(`token row '${row.figmaName || String(row.value)}' has an empty \`acknowledged\` — say why the shared code token is right, or remove the field`);
   const byCodeToken = new Map<string, Map<string, PlanTokenRow["value"]>>();
   for (const row of live) {
     if (!hasToken(row) || !row.figmaName || isAcknowledged(row)) continue;
@@ -1062,7 +1084,8 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   for (const [c, names] of byCodeToken) {
     if (names.size < 2) continue;
     const l = [...names].map(([n, v]) => `'${n}' (${String(v)})`).join(" and ");
-    warnings.push(`code token '${c}' is mapped from ${names.size} DIFFERENT Figma tokens — ${l}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name (or, if sharing is deliberate, add "acknowledged": "<why>" to the row that shares it)`);
+    warnings.push(`code token '${c}' is mapped from ${names.size} DIFFERENT Figma tokens — ${l}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; ` +
+      `give each its own code token named after its own Figma name (or, if sharing is deliberate, add "acknowledged": "<why>" to the row that shares it)`);
   }
 
   // BLOCK 1: an unexplained colour literal. One message per LITERAL, however many plan rows resolve it
@@ -1086,7 +1109,9 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     // A block must name where the literal is used. No such file means every occurrence is a
     // definition or allow-listed — nothing to fix, so nothing to block on.
     if (!where.length) continue;
-    blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${String(e.value)} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} — use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "…"}, matched on the exact value string, or name the file that defines the tokens: {"file": "…", "reason": "…"}`);
+    blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${String(e.value)} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} — use the token, not the literal (comments, prose strings ` +
+      `and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "…"}, matched on the exact value string, or name the file that ` +
+      `defines the tokens: {"file": "…", "reason": "…"}`);
   }
 
   const dims = arbitraryPx(source);
@@ -1095,7 +1120,8 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     const n = parseFloat(String(row.value));
     const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
     const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, dimTokensOf(n)));
-    if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${String(row.value)} (${row.kind}) to token '${String(row.codeToken)}' — use the token (or add it to allowedLiterals with a reason)`);
+    if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${String(row.value)} (${row.kind}) to token '${String(row.codeToken)}' ` +
+      `— use the token (or add it to allowedLiterals with a reason)`);
   }
 
   const sharedByFile = (): FileText[] => graph().files.filter((f) => !listed.includes(f.rel));
@@ -1109,7 +1135,10 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     if (verdict === "reused" && row.mapModule && !seenModule.has(row.mapModule)) {
       seenModule.add(row.mapModule);
       // See reachableFor — this plan's files, what they import, and the app shell that renders them.
-      if (!moduleImported(row.mapModule, byFile, cwd) && !moduleImported(row.mapModule, reachable(), cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (neither this plan's files, nor a plan file they import, nor one that renders them — an app shell — or its direct imports; compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) — was it regenerated instead of reused? If it is rendered by a shared layout above this screen (e.g. an app shell), list that layout file in this plan's files[] too`);
+      if (!moduleImported(row.mapModule, byFile, cwd) && !moduleImported(row.mapModule, reachable(), cwd))
+        warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (neither this plan's files, nor a plan file they import, nor one that renders them — an ` +
+          `app shell — or its direct imports; compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) — was it regenerated instead of reused? If it is rendered by a ` +
+          `shared layout above this screen (e.g. an app shell), list that layout file in this plan's files[] too`);
     }
     const mappedTo = verdict === "new" && row.key ? mapped.get(row.key) : undefined;
     if (mappedTo) {
@@ -1126,11 +1155,16 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     const cov = anchorCoverage(plan, exp.doc);
     if (cov.unmapped.length) {
       const show = cov.unmapped.slice(0, 10).map((u) => `${u.id} '${String(u.name).trim()}' (${u.type})`).join(", ");
-      blocking.push(`${cov.unmappedNodes} visible design node(s) have no anchor in the plan — neither they nor any ancestor map to code. Top of each unmapped subtree: ${show}${cov.unmapped.length > 10 ? `, +${cov.unmapped.length - 10} more` : ""}. Add anchors["<id>"] = {"mapModule": "<the file that renders it>"} on the subtree's top (children inherit it), or {"omitted": "<why it is not built>"} — the plan-skeleton script lists every visible node`);
+      blocking.push(`${cov.unmappedNodes} visible design node(s) have no anchor in the plan — neither they nor any ancestor map to code. Top of each unmapped subtree: ` +
+        `${show}${cov.unmapped.length > 10 ? `, +${cov.unmapped.length - 10} more` : ""}. Add anchors["<id>"] = {"mapModule": "<the file that renders it>"} on the subtree's top (children inherit it), or {"omitted": ` +
+        `"<why it is not built>"} — the plan-skeleton script lists every visible node`);
     }
-    if (cov.wrappers.length) warnings.push(`${cov.wrappers.length} visible container(s) have anchored children but no anchor of their own (e.g. ${cov.wrappers.slice(0, 3).map((w) => `${w.id} '${String(w.name).trim()}'`).join(", ")}) — anchor the frame to the screen component so sync-design can place a change to it`);
-    if (cov.hiddenAnchored.length) warnings.push(`${cov.hiddenAnchored.length} anchor(s) point at HIDDEN nodes (${cov.hiddenAnchored.slice(0, 4).join(", ")}${cov.hiddenAnchored.length > 4 ? ", …" : ""}) — hidden layers are not built; remove them`);
-    if (cov.unknown.length) warnings.push(`${cov.unknown.length} anchor(s) name node ids that are not on this frame (${cov.unknown.slice(0, 4).join(", ")}${cov.unknown.length > 4 ? ", …" : ""}) — e.g. a shared shell tagged with another frame's instance ids; anchor THIS frame's ids`);
+    if (cov.wrappers.length) warnings.push(`${cov.wrappers.length} visible container(s) have anchored children but no anchor of their own (e.g. ` +
+      `${cov.wrappers.slice(0, 3).map((w) => `${w.id} '${String(w.name).trim()}'`).join(", ")}) — anchor the frame to the screen component so sync-design can place a change to it`);
+    if (cov.hiddenAnchored.length) warnings.push(`${cov.hiddenAnchored.length} anchor(s) point at HIDDEN nodes (${cov.hiddenAnchored.slice(0, 4).join(", ")}${cov.hiddenAnchored.length > 4 ? ", …" : ""}) — hidden ` +
+      `layers are not built; remove them`);
+    if (cov.unknown.length) warnings.push(`${cov.unknown.length} anchor(s) name node ids that are not on this frame (${cov.unknown.slice(0, 4).join(", ")}${cov.unknown.length > 4 ? ", …" : ""}) — e.g. a shared ` +
+      `shell tagged with another frame's instance ids; anchor THIS frame's ids`);
   }
 
   // Web tag coverage; colour code tokens nothing declares.
@@ -1144,9 +1178,12 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
       if (tagged.anchored > 0) {
         tagCoverage = { tagged: tagged.tagged, anchored: tagged.anchored };
         const pct = Math.round((100 * tagged.tagged) / tagged.anchored);
-        const how = "tag every element that implements a design node one-to-one with data-dt-node=\"<node id>\" (an id from a lookup table counts: the id string only has to appear in a listed file), so the verify step measures the right element instead of guessing";
-        if (!tagged.attribute) blocking.push(`web build with no data-dt-node tags: none of the files in any plan's files[] carries the attribute, so 0 of ${tagged.anchored} anchored visible node(s) can be measured — ${how}. A project that genuinely cannot tag records "tagging": {"off": true, "reason": "…"} in the plan`);
-        else if (tagged.tagged * 2 < tagged.anchored) warnings.push(`data-dt-node tag coverage is ${tagged.tagged}/${tagged.anchored} anchored visible node(s) (${pct}%), below 50% — ${how}${tagged.untagged.length ? `; untagged e.g. ${tagged.untagged.slice(0, 5).join(", ")}` : ""}`);
+        const how = "tag every element that implements a design node one-to-one with data-dt-node=\"<node id>\" (an id from a lookup table counts: the id string only has to appear in a listed file), so the verify " +
+          "step measures the right element instead of guessing";
+        if (!tagged.attribute) blocking.push(`web build with no data-dt-node tags: none of the files in any plan's files[] carries the attribute, so 0 of ${tagged.anchored} anchored visible node(s) can be measured ` +
+          `— ${how}. A project that genuinely cannot tag records "tagging": {"off": true, "reason": "…"} in the plan`);
+        else if (tagged.tagged * 2 < tagged.anchored) warnings.push(`data-dt-node tag coverage is ${tagged.tagged}/${tagged.anchored} anchored visible node(s) (${pct}%), below 50% — ` +
+          `${how}${tagged.untagged.length ? `; untagged e.g. ${tagged.untagged.slice(0, 5).join(", ")}` : ""}`);
       }
     }
   }
@@ -1180,7 +1217,8 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
   if (!g.auditFile || !g.blockers.length) return [];
   const gate = plan.auditGate;
   if (!gate) {
-    return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` — either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
+    return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` — either resolve the blocker(s) or record ` +
+      `{auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
   }
   const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
   // A blocker is covered by its id (`code` / `code@nodeId`, + `~n`) — which is also the bare code a
@@ -1203,7 +1241,9 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
   const staleLegacy = [...overridden].filter((e): e is string => typeof e === "string" && /^[^@#~]+#\d+$/.test(e) && !legacySet.has(e));
   if (viaLegacy.length || staleLegacy.length) {
     const parts = [...viaLegacy, ...(staleLegacy.length ? [`no current blocker: ${staleLegacy.map((e) => `${e} (drop it)`).join(", ")}`] : [])];
-    out.push(`${g.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id — a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker — if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
+    out.push(`${g.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id — a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently ` +
+      `cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker — " +
+        "if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
   }
   return out;
 }
@@ -1288,7 +1328,8 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
   // A report older than verify-report@2 counted hidden layers as "never built" / "failed"
   // (0-for-83 wrong on the live run). Its figures are not repeated as fact — only its verdict, labelled.
   const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
-  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
+  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, ` +
+    `whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
   const said = (r: ReportRef): string => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
   const waiversNow = waiversHash(plan);
   const failing = reports.filter((r) => r.verdict === "fail");
@@ -1303,23 +1344,28 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
   const expSha = exp && exp.doc ? contentHash.exportContentSha256(exp.doc) : null;
   for (const r of reports) {
     if (!r.exportContentSha256) {
-      if (r.expectationChanged) return { status: "unverified", reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) — re-run --compare`] };
+      if (r.expectationChanged) return { status: "unverified",
+        reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) — re-run --compare`] };
       return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) — re-run ${scriptCmd("verify-screen")} --expect and --compare`] };
     }
     if (!expSha) return { status: "unverified", reasons: [`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 — give the plan its \`file\` header`] };
-    if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}… → ${expSha.slice(0, 12)}…, timestamps ignored) — re-run --expect and --compare`] };
+    if (r.exportContentSha256 !== expSha) return { status: "unverified",
+      reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}… → ${expSha.slice(0, 12)}…, timestamps ignored) — re-run --expect and --compare`] };
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
-    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
+    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, ` +
+      `where design/plan/ lists this screen's files`] };
     const now = fileHashes(plan, cwd, cached);
     // A mapped module an older report never hashed reads "(not recorded)" — one re-compare records it
     const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => (measured[f] === undefined ? `${f} (not recorded)` : f));
-    if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — re-run --compare`] };
+    if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — ` +
+      `re-run --compare`] };
     if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
   }
   const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
   const withDeviations = reports.filter((r) => r.verdict === "pass-with-deviations");
   const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations — accepted deltas / descoped interactions are listed in the report)` : "says pass";
-  return { status: withDeviations.length ? "verified-with-deviations" : "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} ${says} and measured this design and exactly these files (by content)${head ? ` — at git ${head.slice(0, 12)}` : ""}`] };
+  return { status: withDeviations.length ? "verified-with-deviations" : "verified",
+    reasons: [`${reports.map((r) => r.rel).join(", ")} ${says} and measured this design and exactly these files (by content)${head ? ` — at git ${head.slice(0, 12)}` : ""}`] };
 }
 
 /** computeStatus()'s options: where the plan lives (for locating its export/reports), or those pre-located. */
@@ -1357,7 +1403,9 @@ function computeStatus(plan: Plan, opts?: StatusOptions): StatusResult {
     const d = hookFileDiff(plan, cwd, o.cached);
     const ch = d ? d.changed : [];
     if (ch.length) { hookState = "stale"; hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`]; }
-    if (d && d.unhashed.length) unhashedWhy = [`hook: not hashed by the hook's last check (its record predates hashing of mapped modules), so not a change: ${d.unhashed.slice(0, 6).join(", ")}${d.unhashed.length > 6 ? `, +${d.unhashed.length - 6} more` : ""} — the hook's next check of this plan records it; until then an edit to it does not reopen the plan (\`verify-build <plan>\` re-checks now)`];
+    if (d && d.unhashed.length) unhashedWhy = [`hook: not hashed by the hook's last check (its record predates hashing of mapped modules), so not a change: ` +
+      `${d.unhashed.slice(0, 6).join(", ")}${d.unhashed.length > 6 ? `, +${d.unhashed.length - 6} more` : ""} — the hook's next check of this plan records it; until then an edit to it does not reopen the plan ` +
+      `(\`verify-build <plan>\` re-checks now)`];
   }
   const reportWhy = rv.reasons.map((r) => (hookState ? "report: " : "") + r);
   if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h), unhashedWhy), reports };
@@ -1629,7 +1677,8 @@ async function main(argv: string[]): Promise<number> {
       const skipped = contentHash.planCodeSkippedNote(p.plan, rootOfPlan(p.file));
       return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
     });
-    if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" · ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
+    if (json) console.log(JSON.stringify(rows.map((r) =>
+      ({ plan: r.plan, status: r.status, why: r.reasons.join(" · ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
     else for (const r of rows) console.log(`${r.plan}: ${r.status}${r.reasons.length ? "\n  - " + r.reasons.join("\n  - ") : ""}`);
     if (!plans.length) console.error("verify-build: no plans found (design/plan/*.json)");
     return 0;
@@ -1677,7 +1726,8 @@ async function main(argv: string[]): Promise<number> {
     if (!open.length) return 0; // fast path
     const own = ownPlans(open, input, plans, cwd);
     if (own.scope === "none-named") {
-      console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) — nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
+      console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) — nothing checked (${open.length} open ` +
+        `plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
       // An orchestrator claiming nothing is normal; a screen-builder claiming nothing is a build the gate never saw.
       // stderr on exit 0 reaches no one, so that case emits a systemMessage naming the unchecked plans — without blocking.
       // Claude Code 2.1.299 was observed not to display a SubagentStop systemMessage: it shows in the hook output / transcript only.

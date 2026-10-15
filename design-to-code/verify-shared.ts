@@ -184,7 +184,8 @@ const STYLE_KEY_SHAPE: Record<string, string> = {
 export const MEASURED_KEYS_DOC: Record<string, string> = {
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
   // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
-  "nodes[].styles": `computed values, EVERY key on every node — lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) — (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].styles": `computed values, EVERY key on every node — lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) — (null when it cannot be read, with the reason under ` +
+    `unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
   "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null — a null is listed as not measured, never as checked",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill — never background-color",
   "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative — required for every TEXT node: its x/width are never read off the element's box",
@@ -195,7 +196,8 @@ export const MEASURED_KEYS_DOC: Record<string, string> = {
   "nodes[].styles.tag": "the element's tagName, lower-case",
   "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) — optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
   "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} — optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) — required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
+  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) — required for a node whose spec has drawnState; beside styles, " +
+    "never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
   "inferred[]": "{nodeId?, state, built, why?} — something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
   "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} — `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
   "components[]": "{setName|nodeId, present: true|false} — present:false is an explicit claim of absence",

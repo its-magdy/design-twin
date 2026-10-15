@@ -6106,7 +6106,10 @@ async function launch(r, dir, executablePath) {
     return { browser: await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...executablePath !== void 0 ? { executablePath } : {} }) };
   } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
-    return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch${executablePath !== void 0 ? ` from --browser-path ${executablePath} (only guaranteed with the bundled Chromium)` : ""}: ${first}`, hint: browserHint(dir) };
+    return {
+      error: `${r.pkg} ${r.version} resolved, but chromium did not launch${executablePath !== void 0 ? ` from --browser-path ${executablePath} (only guaranteed with the bundled Chromium)` : ""}: ${first}`,
+      hint: browserHint(dir)
+    };
   }
 }
 function browserPathError(p) {
@@ -6712,7 +6715,10 @@ async function bodiesRead(reads, served) {
   }
   if (!missed.size) return null;
   const list = [...missed].slice(0, 5).map(([p, why]) => `${p} (${why})`).join(", ");
-  return { note: `build identity: ${missed.size} same-origin response body(ies) not hashed \u2014 ${list}${missed.size > 5 ? ", \u2026" : ""}; measured.build.assetsSha256 leaves them out (build.unhashed)`, unhashed: missed.size };
+  return {
+    note: `build identity: ${missed.size} same-origin response body(ies) not hashed \u2014 ${list}${missed.size > 5 ? ", \u2026" : ""}; measured.build.assetsSha256 leaves them out (build.unhashed)`,
+    unhashed: missed.size
+  };
 }
 async function runProbe(browser, o) {
   const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: 1, reducedMotion: "reduce" });
@@ -7029,7 +7035,13 @@ ${USAGE}`);
     if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
     const browser = launched.browser;
     held.browser = browser;
-    const identity2 = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version }, browser: { name: "chromium", version: browser.version(), ...browserPath !== void 0 ? { executable: "custom" } : {} } };
+    const identity2 = {
+      name: "verify-probe",
+      version: probeVersion(),
+      sha256: selfSha256(),
+      playwright: { package: res.pkg, version: res.version },
+      browser: { name: "chromium", version: browser.version(), ...browserPath !== void 0 ? { executable: "custom" } : {} }
+    };
     const browserLine = `chromium ${identity2.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`;
     if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
       await browser.close();

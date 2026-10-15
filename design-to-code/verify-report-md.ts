@@ -35,15 +35,18 @@ function visualMarkdown(v: ReportVisual): string[] {
     L.push(v.why === VISUAL_NOT_APPLICABLE ? "Not applicable (no web probe)." : `Not run (${mdText(v.why) || "no reason recorded"}).`, "");
     return L;
   }
-  L.push(`${pctText(v.shiftTolerantPct ?? 0)}% of the compared pixels differ after the shift tolerance (${pctText(v.differingPct ?? 0)}% before it; anti-aliased edge pixels excluded) · ${v.regionsTotal ?? v.regions.length} hot region(s).`, "");
-  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale !== undefined ? scaleText(v.scale) : "?x"} (geometry from the ${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
+  L.push(`${pctText(v.shiftTolerantPct ?? 0)}% of the compared pixels differ after the shift tolerance (${pctText(v.differingPct ?? 0)}% before it; anti-aliased edge pixels excluded) · ` +
+    `${v.regionsTotal ?? v.regions.length} hot region(s).`, "");
+  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale !== undefined ? scaleText(v.scale) : "?x"} (geometry from the ` +
+    `${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
   if (v.grid === "1x") L.push("Grid: **resampled to 1x** — the capture and the reference crop differ by more than 2 px, so both were resampled to the design size (up or down); resampling can hide a difference.", "");
   else if (v.grid) L.push("Grid: the reference's own pixel grid (the build rendered at the reference's scale).", "");
   if (v.reference && v.reference.colorProfile) L.push(`Colour profile: ${mdText(v.reference.colorProfile)} — colours are compared without colour management, so colour differences are unreliable.`, "");
   if (v.regions.length) {
     L.push("| Region (x, y) | Size | Differ | Built nodes | Designed nodes |", "|---|---|---|---|---|");
     for (const g of v.regions.slice(0, VISUAL_MD_ROWS)) {
-      L.push(`| ${Math.round(g.rect.x)}, ${Math.round(g.rect.y)} | ${Math.round(g.rect.w)}×${Math.round(g.rect.h)} | ${pctText(g.pct)}% (${g.pixels} px) | ${g.built.map(mdText).join(", ")} | ${g.designed.map(mdText).join(", ")} |`);
+      L.push(`| ${Math.round(g.rect.x)}, ${Math.round(g.rect.y)} | ${Math.round(g.rect.w)}×${Math.round(g.rect.h)} | ${pctText(g.pct)}% (${g.pixels} px) | ${g.built.map(mdText).join(", ")} | ` +
+        `${g.designed.map(mdText).join(", ")} |`);
     }
     const total = v.regionsTotal ?? v.regions.length;
     if (total > Math.min(v.regions.length, VISUAL_MD_ROWS)) L.push(`| …and ${total - Math.min(v.regions.length, VISUAL_MD_ROWS)} more (the largest are listed) | | | | |`);
@@ -82,12 +85,14 @@ function behaviourMarkdown(b: ReportBehaviour): string[] {
   }
   if (b.checks.length) {
     L.push("| Status | Check | Node/target | Variant | Detail |", "|---|---|---|---|---|");
-    for (const c of b.checks.slice(0, BEHAVIOUR_MD_ROWS)) L.push(`| ${c.status} | ${mdText(c.id)} | ${behaviourWhere(c)} | ${mdText(c.variant)} | ${mdText(c.detail)}${c.synthetic ? " *(synthetic (headless), not a real-browser observation)*" : ""} |`);
+    for (const c of b.checks.slice(0, BEHAVIOUR_MD_ROWS))
+      L.push(`| ${c.status} | ${mdText(c.id)} | ${behaviourWhere(c)} | ${mdText(c.variant)} | ${mdText(c.detail)}${c.synthetic ? " *(synthetic (headless), not a real-browser observation)*" : ""} |`);
     if (b.checks.length > BEHAVIOUR_MD_ROWS) L.push(`| …and ${b.checks.length - BEHAVIOUR_MD_ROWS} more (report.json lists all) | | | | |`);
     L.push("");
   }
   L.push(`Accessible names: ${NAMES_LABEL}${b.namesComputedBy ? ` (${mdText(b.namesComputedBy)})` : ""}.`, "");
-  if (b.axe) L.push("version" in b.axe ? `axe-core ${mdText(b.axe.version)} ran on the main frame (iframes not scanned): critical/serious violations fail, moderate/minor warn.` : `axe-core: not run — ${mdText(b.axe.notRun)}.`, "");
+  if (b.axe) L.push("version" in b.axe ? `axe-core ${mdText(b.axe.version)} ran on the main frame (iframes not scanned): critical/serious violations fail, moderate/minor warn.`
+    : `axe-core: not run — ${mdText(b.axe.notRun)}.`, "");
   if (b.artifacts && b.artifacts.length) L.push(`Behaviour artifacts: ${b.artifacts.map(mdText).join(", ")}`, "");
   if (b.writeBlock) L.push(`Write block: ${mdText(b.writeBlock)}`, "");
   return L;
@@ -123,11 +128,13 @@ function headMarkdown(r: VerifyReportV2): string[] {
     (r.inputs && r.inputs.expectationSha256 ? ` · against expectation ${r.inputs.expectationSha256.slice(0, 12)}…` : "") + (r.inputs && r.inputs.runId ? ` · run ${r.inputs.runId}` : ""), "");
   // how the probe reached the screen (never the verdict)
   const rc = r.inputs && r.inputs.reach;
-  if (rc) L.push(`Reached by ${rc.steps} step(s) (sha ${rc.sha256.slice(0, 12)}…, ${rc.source})${rc.matchesPlan === true ? " — the plan's navigate" : rc.matchesPlan === false ? " — **not the plan's navigate**" : ""}.`, "");
+  if (rc) L.push(`Reached by ${rc.steps} step(s) (sha ${rc.sha256.slice(0, 12)}…, ` +
+    `${rc.source})${rc.matchesPlan === true ? " — the plan's navigate" : rc.matchesPlan === false ? " — **not the plan's navigate**" : ""}.`, "");
   // which build was served (a stale preview measures old code)
   const b = r.inputs && r.inputs.build;
   L.push(b && b !== "unknown"
-    ? `Build served: ${b.mode} ${b.url} · ${b.assets} asset(s), sha256 ${b.assetsSha256.slice(0, 12)}…${b.unhashed ? ` (partial: ${b.unhashed} body(ies) not hashed)` : ""} · git ${b.gitHead ? b.gitHead.slice(0, 12) : "none"}${b.gitDirty ? " (uncommitted changes)" : ""}`
+    ? `Build served: ${b.mode} ${b.url} · ${b.assets} asset(s), sha256 ${b.assetsSha256.slice(0, 12)}…${b.unhashed ? ` (partial: ${b.unhashed} body(ies) not hashed)` : ""} · git ` +
+      `${b.gitHead ? b.gitHead.slice(0, 12) : "none"}${b.gitDirty ? " (uncommitted changes)" : ""}`
     : "Build served: build identity unknown (the measured file records none — measured by a hand-written or older probe).", "");
   if (r.why.length) {
     L.push("Why this is not a pass:", "");
@@ -142,14 +149,19 @@ function coverageMarkdown(r: VerifyReportV2): string[] {
   const c = r.coverage;
   L.push("## What was actually checked", "");
   L.push("| | |", "|---|---|");
-  L.push(`| node specs measured | ${c.nodesMeasured} / ${c.nodesExpected}${c.nodesMatchedByComponentPath ? ` (${c.nodesMatchedByComponentPath} via a shared component's internal path)` : ""}${c.nodesFolded ? ` (+${c.nodesFolded} folded into a measured ancestor, out of the count)` : ""} |`);
-  if (c.sharedShell) L.push(`| of which in a shared shell (informational — matched through another screen's id, or plan anchors[id].shared) | ${c.sharedShell.measured} / ${c.sharedShell.expected} in ${c.sharedShell.instances.map((i) => `${i.name} \`${i.nodeId}\` ${i.measured}/${i.expected}`).join(", ")} |`);
+  L.push(`| node specs measured | ${c.nodesMeasured} / ${c.nodesExpected}` +
+    `${c.nodesMatchedByComponentPath ? ` (${c.nodesMatchedByComponentPath} via a shared component's internal path)` : ""}` +
+    `${c.nodesFolded ? ` (+${c.nodesFolded} folded into a measured ancestor, out of the count)` : ""} |`);
+  if (c.sharedShell) L.push(`| of which in a shared shell (informational — matched through another screen's id, or plan anchors[id].shared) | ${c.sharedShell.measured} / ${c.sharedShell.expected} in ` +
+    `${c.sharedShell.instances.map((i) => `${i.name} \`${i.nodeId}\` ${i.measured}/${i.expected}`).join(", ")} |`);
   L.push(`| individual values compared | ${c.fieldsChecked} |`);
   L.push(`| values on measured nodes the probe did not report | ${c.fieldsNotMeasured} |`);
-  if (c.fieldsNeverMeasured.length) L.push(`| **fields present in 0 measurements** | ${c.fieldsNeverMeasured.map((f) => `\`${f.field}\`${f.probeSent ? ` (probe sent \`${f.probeSent.join("`, `")}\`)` : ""}`).join(", ")} |`);
+  if (c.fieldsNeverMeasured.length) L.push(`| **fields present in 0 measurements** | ` +
+    `${c.fieldsNeverMeasured.map((f) => `\`${f.field}\`${f.probeSent ? ` (probe sent \`${f.probeSent.join("`, `")}\`)` : ""}`).join(", ")} |`);
   L.push(`| design values excluded by method (listed below) | ${c.valuesNotComparable} |`);
   L.push(`| values the method cannot read unaided | ${c.valuesUnverifiable} |`);
-  if (c.hiddenLayersSkipped) L.push(`| hidden layers skipped (not built, not measured, not driven) | ${c.hiddenLayersSkipped.layers} layer(s) · ${c.hiddenLayersSkipped.specsSkipped} spec(s) · ${c.hiddenLayersSkipped.instancesSkipped} instance(s) · ${c.hiddenLayersSkipped.interactionsSkipped} interaction(s) |`);
+  if (c.hiddenLayersSkipped) L.push(`| hidden layers skipped (not built, not measured, not driven) | ${c.hiddenLayersSkipped.layers} layer(s) · ${c.hiddenLayersSkipped.specsSkipped} spec(s) · ` +
+    `${c.hiddenLayersSkipped.instancesSkipped} instance(s) · ${c.hiddenLayersSkipped.interactionsSkipped} interaction(s) |`);
   L.push(`| instance sets the probe could point at (data-dt-node / component evidence — coverage, NOT presence) | ${c.instanceSetsWithEvidence} / ${c.instanceSets} |`);
   L.push(`| designed interactions: pass / fail / not-probed | ${c.interactionsPassed} / ${c.interactionsFailed} / ${c.interactionsNotProbed} of ${c.interactionsExpected}` +
     `${c.interactionsUndesigned ? ` · ${c.interactionsUndesigned} undesigned (destination never exported)` : ""}${c.interactionsDescoped ? ` · ${c.interactionsDescoped} descoped by the owner` : ""}` +
@@ -165,11 +177,13 @@ type AgainstDeltas = NonNullable<Against["deltas"]>;
 function againstMarkdown(r: VerifyReportV2, a: Against): string[] {
   const L: string[] = [];
   L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} → ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} → ${a.nodesExpected.after}` +
-    `${a.probeChanged === true ? " · **the probe changed**" : a.probeChanged === null ? " · probe identity unknown on both rounds" : ""}${a.expectationChanged ? " · the expectation changed" : ""}. This never changes the verdict.`, "");
+    `${a.probeChanged === true ? " · **the probe changed**" : a.probeChanged === null ? " · probe identity unknown on both rounds" : ""}${a.expectationChanged ? " · the expectation changed" : ""}. This never ` +
+      `changes the verdict.`, "");
   const d = a.deltas;
   if (d && d.sameMeasured) L.push(...sameMeasuredMarkdown(d));
   else if (d) L.push(...deltaChangesMarkdown(d));
-  if (a.sameBuild === true && r.headline.includes("SAME BUILD SERVED")) L.push("**The same build was served as last round although the code changed** — a stale preview or dist? Rebuild before measuring a preview.", "");
+  if (a.sameBuild === true && r.headline.includes("SAME BUILD SERVED"))
+    L.push("**The same build was served as last round although the code changed** — a stale preview or dist? Rebuild before measuring a preview.", "");
   if (d && d.lostCoverage.length) {
     L.push(`## Lost coverage (${d.lostCoverage.length})`, "", "*A previous delta that is gone only because its node or value was not measured — not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
     for (const x of d.lostCoverage.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
@@ -183,7 +197,8 @@ function sameMeasuredMarkdown(d: AgainstDeltas): string[] {
   const L: string[] = [];
   const rc = d.reclassified || [];
   L.push(`Previous deltas (node + field): **the same measured file as last round** — nothing about the build changed, so nothing is fixed, new or lost; ${d.unchanged} still open` +
-    `${rc.length ? `, ${rc.length} reclassified by the compare (or the expectation): ${rc.filter((x) => x.change === "gone").length} no longer a delta, ${rc.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
+    `${rc.length ? `, ${rc.length} reclassified by the compare (or the expectation): ${rc.filter((x) => x.change === "gone").length} no longer a delta, ` +
+      `${rc.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
   if (rc.length) {
     L.push(`## Reclassified (${rc.length})`, "", "*Same measured file — the compare changed, not the build.*", "", "| Node | Field | Change | Was |", "|---|---|---|---|");
     for (const x of rc.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${x.change === "gone" ? "no longer a delta" : "newly a delta"} | ${x.change === "gone" ? fmt(x.was) : ""} |`);
@@ -196,10 +211,12 @@ function sameMeasuredMarkdown(d: AgainstDeltas): string[] {
 function deltaChangesMarkdown(d: AgainstDeltas): string[] {
   const L: string[] = [];
   const nu = d.nowUnverifiable || [];
-  L.push(`Previous deltas (node + field): ${d.fixed} fixed · ${d.unchanged} still open · ${d.new} new · ${d.lostCoverage.length ? `**${d.lostCoverage.length} lost coverage** (gone only because they were not measured this round)` : "0 lost coverage"}` +
+  L.push(`Previous deltas (node + field): ${d.fixed} fixed · ${d.unchanged} still open · ${d.new} new · ` +
+    `${d.lostCoverage.length ? `**${d.lostCoverage.length} lost coverage** (gone only because they were not measured this round)` : "0 lost coverage"}` +
     `${nu.length ? ` · ${nu.length} now unverifiable by method (measured, but the compare no longer reads it)` : ""}.`, "");
   if (nu.length) {
-    L.push(`## Now unverifiable by method (${nu.length})`, "", "*A previous delta whose value was measured this round, but the compare now declines it — not lost coverage, not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
+    L.push(`## Now unverifiable by method (${nu.length})`, "", "*A previous delta whose value was measured this round, but the compare now declines it — not lost coverage, not a fix.*", "",
+      "| Node | Field | Was | Why |", "|---|---|---|---|");
     for (const x of nu.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
     if (nu.length > 40) L.push(`| …and ${nu.length - 40} more | | | |`);
     L.push("");
@@ -212,7 +229,8 @@ function matchedMarkdown(r: VerifyReportV2): string[] {
   const c = r.coverage;
   L.push("## How nodes were matched", "");
   const ip = r.inputs && r.inputs.probe;
-  L.push(ip && ip !== "unknown" ? `Probe: ${ip.name} ${ip.version ?? "(no version)"} · sha256 ${ip.sha256.slice(0, 12)}… · ${ip.playwright.package} ${ip.playwright.version} · ${ip.browser.name} ${ip.browser.version}` : "Probe: unknown (a hand-written measured.json — its numbers are not comparable round to round).", "");
+  L.push(ip && ip !== "unknown" ? `Probe: ${ip.name} ${ip.version ?? "(no version)"} · sha256 ${ip.sha256.slice(0, 12)}… · ${ip.playwright.package} ${ip.playwright.version} · ${ip.browser.name} ` +
+    `${ip.browser.version}` : "Probe: unknown (a hand-written measured.json — its numbers are not comparable round to round).", "");
   L.push("| rule | node specs |", "|---|---|");
   for (const b of MATCH_BUCKETS) if ((c.matchedBy[b] ?? 0) > 0 || b === "tag") L.push(`| ${MATCH_LABEL[b] ?? b} | ${c.matchedBy[b] ?? 0} |`);
   L.push("");
@@ -242,7 +260,8 @@ function deltasMarkdown(deltas: VerifyDelta[]): string[] {
     const status = d.accepted ? `accepted — ${mdText(d.accepted.reason)} (${mdText(d.accepted.decidedBy)}, ${mdText(d.accepted.decidedAt)})` : d.group ? `\`${d.group}\`` : "";
     const tx = isTextRow(d.field);
     const cell = (v: unknown): string => mdText(tx ? showText(v) : withUnit(v, d.unit));
-    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${mdText(d.name)} \`${d.nodeId}\` | ${d.field}${tx && d.note ? ` — ${mdText(d.note)}` : ""} | ${cell(d.expected)} | ${cell(d.actual)} | ${d.token ? mdText(d.token) : "—"} | ${status} |`);
+    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${mdText(d.name)} \`${d.nodeId}\` | ${d.field}${tx && d.note ? ` — ${mdText(d.note)}` : ""} | ${cell(d.expected)} | ${cell(d.actual)} | ` +
+      `${d.token ? mdText(d.token) : "—"} | ${status} |`);
   }
   L.push("");
   return L;
@@ -275,7 +294,8 @@ function nodeListsMarkdown(r: VerifyReportV2): string[] {
   }
   if (r.untaggedInstanceSets.length) {
     L.push(`## Instance sets with no evidence in the probe (${r.untaggedInstanceSets.length})`, "",
-      "*Tag coverage, not presence: these carry no `data-dt-node` and no reported setName. They may well be built — a repeated row rendered by one `.map()` or a shared shell is expected to leave gaps here. Not a failure on its own.*", "");
+      "*Tag coverage, not presence: these carry no `data-dt-node` and no reported setName. They may well be built — " +
+        "a repeated row rendered by one `.map()` or a shared shell is expected to leave gaps here. Not a failure on its own.*", "");
     for (const m of r.untaggedInstanceSets.slice(0, 40)) L.push(`- ${m.setName} — ${m.instances} instance(s), e.g. \`${m.nodeIds[0]}\``);
     if (r.untaggedInstanceSets.length > 40) L.push(`- …and ${r.untaggedInstanceSets.length - 40} more`);
     L.push("");
@@ -296,7 +316,8 @@ function interactionsMarkdown(r: VerifyReportV2): string[] {
   const bad = r.interactions.filter((i) => i.result === "fail" || i.result === "not-probed");
   if (bad.length) {
     L.push(`## Designed interactions not confirmed (${bad.length})`, "");
-    for (const i of bad) L.push(`- \`${i.nodeId}\` ${i.name || ""} — ${i.trigger} → ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}${i.source === "plan" ? " [plan]" : ""}: **${i.result}**${i.detail ? ` — ${i.detail}` : ""}`);
+    for (const i of bad) L.push(`- \`${i.nodeId}\` ${i.name || ""} — ${i.trigger} → ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}${i.source === "plan" ? " [plan]" : ""}: ` +
+      `**${i.result}**${i.detail ? ` — ${i.detail}` : ""}`);
     L.push("");
   }
   // a result filed under a node + trigger nothing designed — never graded, so it never helped the verdict
@@ -310,7 +331,8 @@ function interactionsMarkdown(r: VerifyReportV2): string[] {
   const ungraded = r.interactions.filter((i) => i.result === "undesigned" || i.result === "descoped");
   if (ungraded.length) {
     L.push(`## Interactions not graded (${ungraded.length})`, "", "*undesigned: the destination was never exported; descoped: the owner removed it (plan.descopes).*", "");
-    for (const i of ungraded) L.push(`- \`${i.nodeId}\` ${i.name || ""} — ${i.trigger} → ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}: **${i.result}**${i.detail ? ` — ${i.detail}` : ""}${i.note ? ` — ${i.note}` : ""}`);
+    for (const i of ungraded) L.push(`- \`${i.nodeId}\` ${i.name || ""} — ${i.trigger} → ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}: ` +
+      `**${i.result}**${i.detail ? ` — ${i.detail}` : ""}${i.note ? ` — ${i.note}` : ""}`);
     L.push("");
   }
   const inf = r.inferred || [];
@@ -353,17 +375,20 @@ function gapsMarkdown(r: VerifyReportV2): string[] {
 function probeInputMarkdown(r: VerifyReportV2): string[] {
   const L: string[] = [];
   const p: Partial<VerifyReportV2["probe"]> = r.probe || {};
-  if ((p.unknownKeys && p.unknownKeys.length) || (p.unknownTopLevelKeys && p.unknownTopLevelKeys.length) || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || p.foreignTags || (p.inputNotes && p.inputNotes.length)) {
+  if ((p.unknownKeys && p.unknownKeys.length) || (p.unknownTopLevelKeys && p.unknownTopLevelKeys.length) || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers
+    || p.measuredIdsNotInExpectation || p.foreignTags || (p.inputNotes && p.inputNotes.length)) {
     L.push("## About the probe's input", "");
     for (const k of p.unknownKeys || []) L.push(`- key \`${k.key}\` (${k.count}×) is not read by verify-screen${k.canonical ? ` — the canonical key is \`${k.canonical}\`` : ""}`);
     for (const k of p.unknownTopLevelKeys || []) L.push(`- top-level key \`${k.key}\` is not read by verify-screen${k.canonical ? ` — the canonical key is \`${k.canonical}\`` : ""}`);
     if (p.duplicateNodeIds) L.push(`- ${p.duplicateNodeIds} duplicate node id(s) in nodes[] — the first measurement of each id was used`);
     if (p.measuredIdsOnHiddenLayers) L.push(`- ${p.measuredIdsOnHiddenLayers} measurement(s) are for hidden layers and were ignored`);
     for (const n of p.inputNotes || []) L.push(`- ${n}`);
-    if (p.measuredIdsNotInExpectation) L.push(`- ${p.measuredIdsNotInExpectation} measured node id(s) are not in the expectation (e.g. ${(p.measuredIdsNotInExpectationSample || []).map((id) => `\`${id}\``).join(", ")}) — measured against another screen or an older expectation?`);
+    if (p.measuredIdsNotInExpectation) L.push(`- ${p.measuredIdsNotInExpectation} measured node id(s) are not in the expectation (e.g. ` +
+      `${(p.measuredIdsNotInExpectationSample || []).map((id) => `\`${id}\``).join(", ")}) — measured against another screen or an older expectation?`);
     if (p.interactionEvidenceOnHiddenLayers) L.push(`- ${p.interactionEvidenceOnHiddenLayers} interaction result(s) are for hidden layers and were ignored — a hidden layer cannot be driven`);
     const ft = p.foreignTags;
-    if (ft) L.push(`- ${ft.total} tag(s)/id(s) on the page name no node of this expectation (informational): ${ft.prefixDrift} prefix drift (an expected node's \`;\` path under another instance id — a stale or other screen's id table?), ${ft.alias} another screen's id for one of these nodes (alias), ${ft.unknown} unknown${ft.sample.length ? ` — e.g. ${ft.sample.map((id) => `\`${id}\``).join(", ")}` : ""}`);
+    if (ft) L.push(`- ${ft.total} tag(s)/id(s) on the page name no node of this expectation (informational): ${ft.prefixDrift} prefix drift (an expected node's \`;\` path under another instance id — a stale or ` +
+      `other screen's id table?), ${ft.alias} another screen's id for one of these nodes (alias), ${ft.unknown} unknown${ft.sample.length ? ` — e.g. ${ft.sample.map((id) => `\`${id}\``).join(", ")}` : ""}`);
     L.push("");
   }
   return L;
