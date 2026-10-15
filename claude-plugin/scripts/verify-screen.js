@@ -1117,6 +1117,16 @@ var RunEnded = class extends Error {
 function endedRun(prev, runId) {
   return prev && prev !== "v1" && prev.runId === runId && TERMINAL_PHASES.includes(prev.phase) ? new RunEnded(prev.runId, prev.phase, prev.detail) : null;
 }
+var RunOpen = class extends Error {
+  constructor(base, open) {
+    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
+    super(`run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, ends it (${vs} --status ${S} --phase failed --run ${id} --dir ${dir})`);
+    this.name = "RunOpen";
+  }
+};
+function openRun(base, prev, runId) {
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) ? new RunOpen(base, prev) : null;
+}
 var STATUS_LOCK = { waitMs: 15e3 };
 function writeStatus(base, p, hooks = {}) {
   const live = liveStatusFile(base), dir = path8.dirname(base);
@@ -1125,6 +1135,8 @@ function writeStatus(base, p, hooks = {}) {
     const prev = readStatus(base);
     const ended = endedRun(prev, p.runId);
     if (ended) throw ended;
+    const open = hooks.alone ? openRun(base, prev, p.runId) : null;
+    if (open) throw open;
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
     lock.assertMine();
     const w = hooks.before ? { ...p, ...hooks.before() } : p;
@@ -2903,8 +2915,7 @@ var INTEGRITY_PHRASES = {
   noExpectation: "measured file names no expectation (expectationSha256)",
   unfinished: "\u2014 the verifier had not finished",
   otherMeasured: "names a different measured file",
-  unrecorded: "no status of that run records it",
-  measuredBefore: "was measured before that run ended"
+  unrecorded: "no status of that run records it"
 };
 function excludedNow(d, nc) {
   const rows = nc.filter((g) => g.nodeId === d.nodeId && fieldBase(g.field) === fieldBase(d.field));
@@ -3123,7 +3134,7 @@ function compare(expectation, measured, opts) {
   const { comps, bySet, untaggedInstanceSets, setsViaSharedPath } = componentEvidence(cx);
   const { sharedShell, untaggedInstanceSetsInShell, untaggedOnScreen } = sharedShellOf(cx, { untaggedInstanceSets });
   const { componentsAbsent } = componentsAbsentOf({ comps, bySet });
-  const { st, integrity, unboundNote, measuredRun } = runIntegrity(cx);
+  const { st, integrity, measuredRun } = runIntegrity(cx);
   const {
     measuredRows,
     allEvidence,
@@ -3141,7 +3152,7 @@ function compare(expectation, measured, opts) {
     interactionsPassed,
     interactionsUndesigned,
     interactionsDescoped
-  } = gradeInteractions(cx, { pageNotes, unboundNote, measuredRows, probeBound, probeRows, exercised });
+  } = gradeInteractions(cx, { pageNotes, measuredRows, probeBound, probeRows, exercised });
   const { unexpectedInteractionEvidence, unmatchedInteractionEvidence } = unmatchedEvidence(cx, { allEvidence, expectedKeys });
   const { inferred, inferredHead, inferredUndesigned } = inferredRows(cx, { interactions });
   paintedByNote(cx);
@@ -3151,7 +3162,7 @@ function compare(expectation, measured, opts) {
   const { open, high, medium, accepted, highCauses } = openCounts(cx);
   const { planNow, planInteractionsChanged } = planInteractionsCheck(cx);
   const { reachInput } = reachInputOf(cx, { planNow });
-  const { probeIdentity, buildNow, inputs, staticOnly, artifactCheck, noRender } = evidenceInputs(cx, { st, unboundNote, measuredRun, reachInput });
+  const { probeIdentity, buildNow, inputs, staticOnly, artifactCheck, noRender } = evidenceInputs(cx, { st, measuredRun, reachInput });
   const { nodesExpected, reasons, lowConfidence, verdict } = verdictOf(cx, {
     fieldsNeverMeasured,
     componentsAbsent,
@@ -4114,24 +4125,18 @@ function runIntegrity(cx) {
   const st = opts.status && opts.status.status !== "v1" ? opts.status.status : null;
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const integrity = [];
-  let unboundNote;
   if (stale) integrity.push(`${INTEGRITY_PHRASES.otherExpectation} (${String(measured.expectationSha256).slice(0, 12)}\u2026 vs ${String(opts.expectationSha256).slice(0, 12)}\u2026) \u2014 re-measure`);
   if (opts.expectationSha256 && !measured.expectationSha256) integrity.push(`${INTEGRITY_PHRASES.noExpectation} \u2014 nothing ties these numbers to this design; re-measure with the shipped probe`);
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
   if (measuredRun !== void 0 && opts.status !== void 0 && (st === null || st.runId !== measuredRun)) {
     integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
-  } else if (st && measuredRun === void 0 && TERMINAL_PHASES.includes(st.phase) && Date.parse(String(measured.measuredAt)) > Date.parse(st.at)) {
-    unboundNote = `${opts.status ? opts.status.file : "status.json"} is run ${st.runId} (${st.phase}); this measured file names no run \u2014 graded as an unbound measurement`;
   } else if (st) {
     const stFile = opts.status ? opts.status.file : "status.json";
-    const endHint = measuredRun === void 0 ? ` \u2014 wait for it, or if nobody is running it any more, end it: --status ${shellArg(st.screen)} --phase failed --run ${shellArg(st.runId)}` : "";
-    if (measuredRun === void 0 && TERMINAL_PHASES.includes(st.phase) && st.phase !== "done")
-      integrity.push(`this measured file names no run and ${INTEGRITY_PHRASES.measuredBefore} (${stFile}: run ${st.runId} ${st.phase} at ${st.at}) \u2014 measure again`);
-    else if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}${endHint}`);
+    if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
     else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256)
-      integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?${st.phase === "done" ? "" : endHint}`);
+      integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?`);
   }
-  return { st, integrity, unboundNote, measuredRun };
+  return { st, integrity, measuredRun };
 }
 function interactionEvidence(cx, g) {
   const { expectation, measured, opts, hiddenSet } = cx;
@@ -4161,7 +4166,7 @@ function interactionEvidence(cx, g) {
 }
 function gradeInteractions(cx, g) {
   const { expectation, measured, opts, hiddenSet, inputNotes, reopened, unused } = cx;
-  const { pageNotes, unboundNote, measuredRows, probeBound, probeRows, exercised } = g;
+  const { pageNotes, measuredRows, probeBound, probeRows, exercised } = g;
   const exportSha = expectation.exportContentSha256;
   inputNotes.push(...pageNotes);
   if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === void 0)
@@ -4179,7 +4184,6 @@ function gradeInteractions(cx, g) {
     if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "design re-exported: the export content changed since it was descoped" });
     return live;
   };
-  if (unboundNote !== void 0) inputNotes.push(unboundNote);
   if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length)
     inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) \u2014 graded as agent evidence");
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i) => {
@@ -4481,14 +4485,14 @@ function reachInputOf(cx, g) {
 }
 function evidenceInputs(cx, g) {
   const { expectation, measured, opts, inputNotes } = cx;
-  const { st, unboundNote, measuredRun, reachInput } = g;
+  const { st, measuredRun, reachInput } = g;
   const probeRaw = measured.probe;
   const probeIdentity = isProbeIdentity(probeRaw) ? probeRaw : void 0;
   const buildRaw = measured.build;
   const buildNow = isBuildIdentity(buildRaw) ? buildRaw : void 0;
   if (buildRaw !== void 0 && !buildNow && !inputNotes.some((n) => n.startsWith("measured.build "))) inputNotes.push("measured.build is not a build identity; ignored (build: unknown)");
   if (opts.status && opts.status.status === "v1") inputNotes.push(`${opts.status.file} is an older hand-written status (no run id, no shas) \u2014 not checked; write it with verify-screen --status`);
-  const runId = measuredRun ?? (st && unboundNote === void 0 ? st.runId : void 0);
+  const runId = measuredRun ?? (st ? st.runId : void 0);
   if (probeRaw !== void 0 && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
   const inputs = {
     expectationSchema: expectation.schema || "(none)",

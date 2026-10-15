@@ -34,7 +34,9 @@ Use the run id you were given. Only when you were given none does your first cal
 `--wait` then ends in exit 5. Without `--run` a call only continues a run that has not ended. A run id is good for ONE pass: each verifier pass and each re-verify round
 gets its own new run id. A run that ended (`done`, `failed`, `blocked`) takes no more writes, with or without
 `--run <id>` — `--status` and the probe's `--run` both refuse them (exit 2). If the id you were given has already
-ended, start a new run with `--new-run` and say so.
+ended, start a new run with `--new-run` and say so. Always give the probe your `--run <id>`: without it the probe
+starts a run of its own (build-screen's own loop) and ends it itself, and it refuses (exit 2, nothing started) while
+another run of the screen is open — so a builder's probe never writes over a verifier's files mid-run.
 
 Phases, in order: `queued` → `starting` → `renderer-found` → `renderer-ready` → `measuring` → `measured` → `driving` → `done` (or `failed`, or `blocked`)
 
@@ -163,7 +165,8 @@ remaining", suggesting the user approve it or add a narrow allow rule for `node 
 
 The probe stops itself at `--max-time` (default 180000 ms) with exit 4 and nothing written. Re-run it ONCE after an
 exit 4 (with `--run` its exit 3/4 bumps the status, phase still `measuring` — unless the run ended meanwhile: then it
-leaves the status as it is and exits 2, like a probe of a run that had already ended), then write status `failed`
+leaves the status as it is and exits 2, like a probe of a run that had already ended; without `--run` its own run
+ends `failed` and the re-run is a new run), then write status `failed`
 with the navigation log — one re-run, never a loop.
 
 ## When a run ends `blocked` or `failed`

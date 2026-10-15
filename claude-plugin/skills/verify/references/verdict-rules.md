@@ -21,11 +21,13 @@ line needs explaining, before telling the user why a node or interaction landed 
 `--compare` reports `incomplete` when the measured file names no expectation, does not match it, or the status says
 the verifier had not finished, or the status of the measured file's own run names another measured file, or no
 status of the measured file's run records it — even with high mismatches: those numbers belong to an unverified
-run, so they are listed but never graded `fail`. A measured file that names no run (a probe without `--run`,
-build-screen's own loop) is unbound and graded as agent evidence: an ENDED run's status beside it (`done`, `failed`,
-`blocked`) only adds a note when the file was measured after that run ended (an older one is still judged by the
-run), while a run still in flight still makes it `incomplete` — wait for that run, or, only if nothing is running it
-any more, end it with `--status <Screen> --phase failed --run <id>`.
+run, so they are listed but never graded `fail`. Every measured file the probe writes names its run: `--run <id>`'s,
+or — without `--run`, build-screen's own loop — a run the probe starts and ends itself (`done`, or `failed` on an exit
+3/4), so it is judged by that run like any other. A measured file that names no run (written by hand on a native
+stack, or by an older probe) is judged by the run whose status is beside it: `incomplete` unless that run is at
+`measured` or `done` and its status records this very file (its sha256 — `--status <Screen> --phase measured --run
+<id>` records it). No timestamp decides which run a file belongs to. With no status beside it at all there is no run to
+judge it by: nothing is said, and its interaction rows are agent evidence.
 
 ## Unmeasured is not passed
 

@@ -114,8 +114,8 @@ export const lockFileOfStatus = (base: string): string => lockFileOf(liveStatusF
 /** Where a run stages its evidence and state screenshots until `--publish`: `<run cache>/stage/<runId>/`. */
 export const stageDirOf = (base: string, runId: string): string => path.join(runCacheDir(path.dirname(base)), "stage", runId);
 
-/** A run id: time + randomness, sortable, safe in a file name and a shell word. */
-function newRunId(): string {
+/** A run id: time + randomness, sortable, safe in a file name and a shell word (--new-run's, and the probe's own run's). */
+export function newRunId(): string {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto.randomBytes(3).toString("hex");
 }
 
@@ -163,6 +163,23 @@ export class RunEnded extends Error {
 export function endedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): RunEnded | null {
   return prev && prev !== "v1" && prev.runId === runId && TERMINAL_PHASES.includes(prev.phase) ? new RunEnded(prev.runId, prev.phase, prev.detail) : null;
 }
+/** A write of a run the probe started itself (no --run) while ANOTHER run of the screen is open: a verifier's live run
+ *  writes the same files, so the probe measures nothing beside it. Refused by writeStatus itself (`alone`), so a run
+ *  that opens after the probe looked is not written over either. */
+export class RunOpen extends Error {
+  constructor(base: string, open: VerifyStatusV2) {
+    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
+    super(`run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — a probe without --run starts a run of its own ` +
+      `only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${vs} --wait ${S} --run ${id} --dir ${dir}) ` +
+      `or, only if nobody is running it any more, ends it (${vs} --status ${S} --phase failed --run ${id} --dir ${dir})`);
+    this.name = "RunOpen";
+  }
+}
+/** The refusal for a write of run `runId` that must be the screen's only open run, over the status `prev` (readStatus's):
+ *  null when no other v2 run is open (none, a v1 file, an ended run, or `runId` itself). The one place that sentence is built. */
+export function openRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId: string): RunOpen | null {
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) ? new RunOpen(base, prev) : null;
+}
 /** What a status write does around the record itself, inside its lock (see writeStatus). */
 export interface StatusWriteHooks {
   /** after the ended-run check, before the record: files the record stands for (the probe's measured file and
@@ -171,6 +188,9 @@ export interface StatusWriteHooks {
   before?: () => Pick<StatusWrite, "measuredSha256">;
   /** after the record: what must not land in a run that ended meanwhile (a --publish commit, the durable copy) */
   after?: (doc: VerifyStatusV2) => void;
+  /** the write is of a run that must be the screen's only open one (the probe's own run): refused (RunOpen) while
+   *  another run is open — checked with the ended-run check, before `before` */
+  alone?: boolean;
 }
 /** How long a status write waits for another one (the probe writes a measured file and its screenshots inside). */
 const STATUS_LOCK = { waitMs: 15_000 };
@@ -178,11 +198,11 @@ const STATUS_LOCK = { waitMs: 15_000 };
  * Write the LIVE status of `<base>` atomically (never into the project's watched tree). rev = the previous rev + 1
  * when it is the same run, else 1. Within one run the shas and the published list carry forward (a `driving`
  * write after the probe's `measured` still names the measured file the probe wrote; published is the run's union).
- * Serialised by `<live status>.lock` (file-lock.ts): read → ended-run check → hooks.before → write → hooks.after
+ * Serialised by `<live status>.lock` (file-lock.ts): read → ended-run (and open-run) check → hooks.before → write → hooks.after
  * happen with no other status write of this screen in between, so two writers never write the same rev and a run
  * that ends is not reopened, published into or given files by a writer that checked it earlier.
  * Throws RunCacheUnwritable when the run cache refuses the lock or the write (sandbox write scope, read-only mount),
- * RunEnded when the same run has already ended, LockBusy when another status write holds the lock past 15 s (or
+ * RunEnded when the same run has already ended, RunOpen (hooks.alone) when another run is open, LockBusy when another status write holds the lock past 15 s (or
  * LockLost, a LockBusy, when the lock was taken from this write before the hook's files or the record — neither is
  * written then); a hook's own error is thrown as it is.
  */
@@ -193,6 +213,8 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
     const prev = readStatus(base);
     const ended = endedRun(prev, p.runId);
     if (ended) throw ended;
+    const open = hooks.alone ? openRun(base, prev, p.runId) : null;
+    if (open) throw open;
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
     lock.assertMine();
     const w: StatusWrite = hooks.before ? { ...p, ...hooks.before() } : p;

@@ -399,8 +399,8 @@ Copy this checklist into your notes and keep it updated:
      the verifier does not re-drive those. A page that scrolls sideways at the design width is a high waivable
      delta (`overflowX`) on the root frame.
 
-     What `--expect` emits, what `--compare` grades, and how a probe run without `--run` is judged beside a
-     verifier's run are in `references/verify.md` (*Numbers*). Read the expectation's rows rather than retyping
+     What `--expect` emits, what `--compare` grades, and the run a probe without `--run` starts (it is refused while
+     a verifier's run of the screen is open) are in `references/verify.md` (*Numbers*). Read the expectation's rows rather than retyping
      them into a code comment, and report the verdict `--compare` computes: it exits non-zero unless the verdict is
      `pass` or `pass-with-deviations` — waivers and descopes are the user's word, never yours.
    - Render the screen at the frame's exact size (`box.w`×`box.h`, fonts loaded, animations off) with

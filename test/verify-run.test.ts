@@ -451,6 +451,36 @@ await block("writeStatus locked:", async () => {
   safe("a lock left by a killed writer (dead pid) → the next --status breaks it and writes (exit 0), no lock left", () => s.status === 0 && readStatusFile(live)?.phase === "starting" && !fs.existsSync(VR.lockFileOfStatus(base)));
 });
 
+// the probe's own run (no --run): it must be the screen's only open run — refused under the lock beside another
+console.log("writeStatus alone — a run of its own never writes beside another open run:");
+await block("writeStatus alone:", async () => {
+  const { dir, base, live } = project();
+  const id = VR.newRunId();
+  safe("newRunId: a sortable time + randomness id, safe as a run id (letters, digits, . : _ -), a new one per call", () => /^\d{8}T\d{6}Z-[0-9a-f]{6}$/.test(id) && VR.newRunId() !== id);
+  VR.writeStatus(base, { runId: "run-v", phase: "driving", by: "agent", detail: "the verifier drives" });
+  const verifierDoc = fs.readFileSync(live, "utf8");
+  let beforeRan = false, afterRan = false;
+  const open = ((): unknown => { try { VR.writeStatus(base, { runId: id, phase: "measuring", by: "verify-probe" }, { alone: true, before: () => { beforeRan = true; return {}; }, after: () => { afterRan = true; } }); return null; } catch (e) { return e; } })();
+  const absDir = path.resolve(dir);
+  safe("another run open (driving) → RunOpen before anything: before/after never run, the verifier's status unchanged, the lock released; the message names that run and how to wait for / end it",
+    () => open instanceof VR.RunOpen && !beforeRan && !afterRan && fs.readFileSync(live, "utf8") === verifierDoc && !fs.existsSync(VR.lockFileOfStatus(base))
+      && open.message.startsWith("run run-v of Plots is open (phase driving, rev 1, by agent, ")
+      && open.message.includes(`that run's verifier passes --run run-v; anyone else waits for it (`) && open.message.includes(`--wait Plots --run run-v --dir ${shellArg(absDir)})`)
+      && open.message.endsWith(`--status Plots --phase failed --run run-v --dir ${shellArg(absDir)})`));
+  safe("…the same write without `alone` (a --run write, --new-run) still goes through as before", () => VR.writeStatus(base, { runId: "run-w", phase: "queued", by: "orchestrator" }).rev === 1);
+  VR.writeStatus(base, { runId: "run-w", phase: "blocked", by: "agent", detail: "denied" });
+  const own = VR.writeStatus(base, { runId: id, phase: "measuring", by: "verify-probe" }, { alone: true });
+  const own2 = VR.writeStatus(base, { runId: id, phase: "done", by: "verify-probe", measuredSha256: "b".repeat(64) }, { alone: true });
+  safe("an ended run beside it (blocked) → its own run starts at rev 1 and its later writes go on (its own open run is not 'another')", () => own.rev === 1 && own.runId === id && own2.rev === 2 && own2.phase === "done"
+    && readStatusFile(live)?.runId === id);
+  safe("openRun: the one refusal — another v2 run not ended; never for the run itself, an ended run, a v1 file or no status", () => {
+    const st = VR.readStatus(base);
+    const openSt = st !== null && st !== "v1" ? { ...st, phase: "measuring" as const } : null;
+    return openSt !== null && VR.openRun(base, openSt, "run-other") instanceof VR.RunOpen && VR.openRun(base, openSt, id) === null
+      && VR.openRun(base, st, "run-other") === null && VR.openRun(base, "v1", "run-other") === null && VR.openRun(base, null, "run-other") === null;
+  });
+});
+
 // writers in separate processes: every write gets its own rev (no two writers read the same previous status)
 console.log("status writers in separate processes:");
 await block("concurrent status writers:", async () => {
@@ -661,6 +691,57 @@ await block("verify-probe --run ended:", async () => {
   const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-pb"], { encoding: "utf8" });
   safe("probe --run on a blocked run → exit 2 'already ended at blocked (…) — start a new run', the status untouched", () => p.status === 2
     && p.stderr.includes("run run-pb already ended at blocked (blocked on a login wall) — start a new run with --new-run") && JSON.stringify(VR.readStatus(base)) === before);
+});
+
+// No --run: the probe starts a run of its own and ends it — never beside another open run, never reopening an ended one
+console.log("verify-probe without --run — a run of its own:");
+await block("verify-probe own run:", async () => {
+  const { dir, base, live, cli } = project();
+  const PROBE_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-probe.ts");
+  // a project whose Playwright resolves but whose chromium never launches: exit 3 AFTER the run's `measuring` write
+  const fakePw = mk("dt-run-fakepw-");
+  fs.writeFileSync(path.join(fakePw, "package.json"), "{}");
+  const pwDir = path.join(fakePw, "node_modules", "playwright");
+  fs.mkdirSync(pwDir, { recursive: true });
+  fs.writeFileSync(path.join(pwDir, "package.json"), JSON.stringify({ name: "playwright", version: "1.60.0", main: "index.js" }));
+  fs.writeFileSync(path.join(pwDir, "index.js"), "module.exports = { chromium: { launch() { throw new Error('fake'); } } };\n");
+  const noPw = mk("dt-run-nopw-own-");
+  fs.writeFileSync(path.join(noPw, "package.json"), "{}");
+  const probe = (project: string): ReturnType<typeof spawnSync> & { stdout: string; stderr: string } =>
+    spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", project], { encoding: "utf8" });
+  const ownLine = (stderr: string): string => /^run {4}(\S+) — this probe's own \(no --run\)/m.exec(stderr)?.[1] ?? "";
+
+  // a verifier's run is open (driving): refused before anything starts — its status untouched, no files
+  cli("--status", "Plots", "--phase", "driving", "--run", "run-v", "--detail", "the verifier drives");
+  const beforeOpen = fs.readFileSync(live, "utf8");
+  const p1 = probe(fakePw);
+  safe("beside an open run → exit 2 before anything starts: 'run run-v of Plots is open (phase driving, …)', how to wait for / end it; the verifier's status byte-identical; no run started, nothing written",
+    () => p1.status === 2 && p1.stderr.startsWith("verify-probe: run run-v of Plots is open (phase driving, rev 1, by agent, ") && /--wait Plots --run run-v --dir /.test(p1.stderr)
+      && /--status Plots --phase failed --run run-v --dir /.test(p1.stderr) && fs.readFileSync(live, "utf8") === beforeOpen && ownLine(p1.stderr) === "" && !/renderer unavailable/.test(p1.stderr)
+      && !fs.existsSync(path.join(dir, "Plots.measured.json")) && !fs.existsSync(path.join(dir, "Plots.png")));
+  if (p1.status !== 2) console.log(p1.stderr);
+
+  // the run ended (failed): the probe starts a NEW run — never a write to the ended one — and ends it failed on its exit 3
+  cli("--status", "Plots", "--phase", "failed", "--run", "run-v", "--detail", "gave up");
+  const p2 = probe(fakePw);
+  const id2 = ownLine(p2.stderr);
+  const st2 = VR.readStatus(base);
+  safe("after that run ended → its own run: a new id on stderr ('run    <id> — this probe's own'), `measuring` then `failed` 'probe exit 3 — nothing written' (rev 2, by verify-probe); exit 3",
+    () => p2.status === 3 && /^\d{8}T\d{6}Z-[0-9a-f]{6}$/.test(id2) && st2 !== null && st2 !== "v1" && st2.runId === id2 && st2.phase === "failed" && st2.rev === 2
+      && st2.by === "verify-probe" && st2.detail === "probe exit 3 — nothing written");
+  if (p2.status !== 3) console.log(p2.stderr);
+  safe("…the ended run is never reopened: nothing about run-v changed but that the live status now holds the new run; nothing published into design/verify", () =>
+    id2 !== "run-v" && !fs.existsSync(path.join(dir, "Plots.status.json")) && !fs.existsSync(path.join(dir, "Plots.measured.json")));
+  // its own failed run does not block the re-run: that is a new run again
+  const p3 = probe(fakePw);
+  const id3 = ownLine(p3.stderr);
+  const st3 = VR.readStatus(base);
+  safe("…the re-run after its own run failed → another new run (a different id), failed rev 2 in turn", () =>
+    p3.status === 3 && id3 !== "" && id3 !== id2 && st3 !== null && st3 !== "v1" && st3.runId === id3 && st3.phase === "failed" && st3.rev === 2);
+  // no Playwright at all: exit 3 before the first status write — no run is started for it
+  const beforeNone = fs.readFileSync(live, "utf8");
+  const p4 = probe(noPw);
+  safe("no Playwright resolvable → exit 3 before the run's first write: no `run` line, the status byte-identical", () => p4.status === 3 && ownLine(p4.stderr) === "" && fs.readFileSync(live, "utf8") === beforeNone);
 });
 
 // ---------------------------------------------------------------- M-a: the run cache stays inside the project

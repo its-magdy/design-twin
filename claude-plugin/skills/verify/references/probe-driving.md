@@ -135,7 +135,8 @@ One result per `nodeId` + `trigger`: `{"nodeId", "trigger", "ok": true|false|nul
 
 ## Evidence precedence
 
-Probe rows are authoritative only in a `--run` with an intact status chain: `measured.json` carries the shipped
+Probe rows are authoritative only in a run with an intact status chain (`--run <id>`'s, or the run a probe without
+`--run` starts itself): `measured.json` carries the shipped
 probe's identity and a run id, the run's status names this very file's sha256, and the run has no integrity
 problem. A `by` field in a file means nothing. In such a run a probe pass (full evidence: selector, one match, an
 allowed outcome, no document load; destination tag inside) overrides an agent row that disagrees — the disagreement

@@ -129,6 +129,16 @@ console.log("verify docs (run integrity + agent safety):");
     [verifier, verifySkill, verifyRef].every((t) => /--status <Screen> --phase <(phase|p)> --run <id>|--status <screen> --phase <p> --run <id>/.test(t) && /--wait <(Screen|screen)> --run <id>/.test(t))
     && /never by hand/.test(verifier) && /--wait <Screen> --run <id>/.test(skill) && !/"at": "<ISO timestamp>"|date -u \+%Y-%m-%dT%H:%M:%SZ`\. A/.test(verifier));
   check("the probe is given --run <id> and writes measuring/measured itself", /verify-probe\.js".{0,300}--run <id>/.test(verifier) && /verify-probe\.js.{0,300}--run <id>/.test(verifySkill));
+  check("a probe without --run starts and ends a run of its own and refuses beside another open run (references/verify.md, the run protocol, the verifier); no 'unbound' measured file is left in the docs",
+    /Without `--run` \(your own loop\) the probe starts a run of its own, prints `run <id>`, and ends it: `done` once the files are written, `failed` on an exit 3\/4/.test(verifyRef)
+    && /It never measures beside another open run of the screen: .{0,200}the probe refuses with exit 2 before starting anything/.test(verifyRef)
+    && /without it the probe starts a run of its own \(build-screen's own loop\) and ends it itself, and it refuses \(exit 2, nothing started\) while another run of the screen is open/.test(verifySkill)
+    && /Always pass your `--run <id>`: without it the probe starts a run of its own, and refuses \(exit 2\) beside yours/.test(verifier)
+    && ![skill, verifier, verifySkill, verifyRef].some((t) => /unbound measured file|\*\*unbound\*\*|graded as an unbound/.test(t)));
+  check("run membership is the run id and the recorded sha, never a timestamp: a hand-written measured file naming no run is judged by the run beside it, which --status --phase measured records (verdict rules, native measuring)",
+    /A measured file that names no run \(written by hand on a native stack, or by an older probe\) is judged by the run whose status is beside it/.test(verifySkill)
+    && /No timestamp decides which run a file belongs to/.test(verifySkill) && !/measured after that run ended|measured AFTER that run ended/.test(verifySkill + verifyRef)
+    && /The file names no run: write it before sending `--status <Screen> --phase measured --run <id>`, which records its sha256 in your run/.test(verifier));
   // (phrases matched loosely: whitespace and line breaks collapse, case-insensitive where it is prose)
   const ws = (t: string): string => t.replace(/\s+/g, " ");
   check("the verifier stages evidence.json and state PNGs in node_modules/.cache/designtwin-verify/stage/<runId>/ and publishes with --phase done --publish; nothing written into the project while a page is open; watch-ignore is only a suggestion",
@@ -281,8 +291,8 @@ console.log("build-screen docs (steps / dialog driving / precedence / overflow):
     /`plan\.navigate`/.test(skill) && /`plan\.interactions` as `\{nodeId, trigger, expect: "dialog" \| "url" \|\s*"selector:<css>", destinationId\}`/.test(skill) && /`destinationId` required for `dialog`/.test(skill)
     && /Change `plan\.interactions` afterwards and `--compare` is `incomplete` until `--expect` is re-run/.test(skill)
     && /`--plan <plan\.json>`, else the ONE plan in\s+`design\/plan\/` that describes the frame/.test(verifySkill) && /`incomplete` until `--expect` is\s+re-run/.test(verifySkill));
-  check("precedence in plain words: probe rows authoritative only in a --run with an intact status chain; a probe miss never overrides full agent evidence; a `by` field means nothing",
-    /authoritative only in a `--run` with an intact status chain/.test(verifySkill) && /A `by` field in a file means nothing/.test(verifySkill) && /a probe miss \(`ok: null`\) or a row cut by the time budget never overrides an agent row that has full evidence/.test(verifySkill)
+  check("precedence in plain words: probe rows authoritative only in a run with an intact status chain (--run's or the probe's own); a probe miss never overrides full agent evidence; a `by` field means nothing",
+    /authoritative only in a run with an intact status chain \(`--run <id>`'s, or the run a probe without `--run` starts itself\)/.test(verifySkill) && /A `by` field in a file means nothing/.test(verifySkill) && /a probe miss \(`ok: null`\) or a row cut by the time budget never overrides an agent row that has full evidence/.test(verifySkill)
     && /a probe miss\s+never overrides it/.test(verifier));
   check("overflowX: a high, waivable delta on the root frame via --accept --node <frame> --field overflowX",
     /Page overflow at the design width \(`overflowX`\)/.test(verifySkill) && /HIGH delta on the root frame \(field `overflowX`/.test(verifySkill) && /recorded as in step 6 with `--node <frame id> --field overflowX`/.test(verifySkill) && /`overflowX`, a high waivable delta on the root frame|\(`overflowX`, a high waivable delta/.test(verifyRef));

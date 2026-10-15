@@ -298,43 +298,49 @@ safe("an older v1 status is never trusted nor judged: pass, with a note", () => 
   return r.verdict === "pass" && (r.probe.inputNotes || []).some((n) => /older hand-written status/.test(n));
 });
 
-// a measured file that names NO run (build-screen's probe without --run), measured AFTER an ENDED run's status
-const statusEnded = (phase: "done" | "failed" | "blocked") => ({ file: "Garden.status.json", status: { ...status("done", "f".repeat(64)).status, phase } });
-const LATER = { expectationSha256: SHA_E, measuredAt: "2026-09-30T02:00:00Z" }; // the status above is at 01:00
-safe("an unbound measured file taken after an earlier run's done (another measured sha) → pass, with a note naming the run", () => {
-  const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
-  return r.verdict === "pass" && !(r.integrity || []).length && (r.probe.inputNotes || []).some((n) => /is run run-7 \(done\); this measured file names no run/.test(n));
+// a measured file that names NO run (written by hand on a native stack, or by an older probe) is judged by the run whose
+// status is beside it: that run records it by its sha (--status … --phase measured), or it is not that run's file.
+// Membership is the run id and the recorded sha — never the clock: measuredAt before, after, skewed or missing reads the same.
+const statusEnded = (phase: "done" | "failed" | "blocked", measuredSha256 = "f".repeat(64)) => ({ file: "Garden.status.json", status: { ...status("done", measuredSha256).status, phase } });
+const AT: Array<[string, string | undefined]> = [["before the status", "2026-09-30T00:00:00Z"], ["after it", "2026-09-30T02:00:00Z"], ["skewed a year ahead", "2027-09-30T01:00:00Z"],
+  ["unreadable", "not a time"], ["missing", undefined]];
+const noRun = (at: string | undefined, over: Over = {}): VerifyMeasured => {
+  const m = measure(over, { expectationSha256: SHA_E });
+  if (at === undefined) delete m.measuredAt; else m.measuredAt = at;
+  return m;
+};
+const verdictsAt = (st: NonNullable<CompareOptions["status"]>, over: Over = {}): string[] =>
+  AT.map(([, at]) => { const r = run(noRun(at, over), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: st }); return `${r.verdict} | ${r.integrity.join(" / ")} | ${r.inputs?.runId ?? "-"}`; });
+const allSame = (xs: string[]): boolean => xs.length === AT.length && xs.every((x) => x === xs[0]);
+safe("a measured file naming no run beside a done run that recorded ANOTHER file → incomplete 'names a different measured file — measured again outside run run-7?', whatever its measuredAt", () => {
+  const v = verdictsAt(status("done", "f".repeat(64)));
+  return allSame(v) && v[0] === `incomplete | Garden.status.json names a different measured file (sha ffffffffffff…, this one mmmmmmmmmmmm…) — measured again outside run run-7? | run-7`;
 });
-safe("…that report names no run of its own (inputs.runId unset, no '· run' in the md header; the note keeps the run); a bound one still names its run", () => {
-  const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) });
-  const bound = run(measure({}, { expectationSha256: SHA_E, runId: "run-7" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
-  return r.inputs?.runId === undefined && !/· run run-7/.test(reportToMarkdown(r)) && (r.probe.inputNotes || []).some((n) => /is run run-7 \(done\)/.test(n))
-    && bound.inputs?.runId === "run-7" && /· run run-7/.test(reportToMarkdown(bound));
-});
-safe("…taken after an ended run at failed or blocked → pass (an ended run is not 'unfinished')", () =>
-  (["failed", "blocked"] as const).every((p) => run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) }).verdict === "pass"));
-safe("…an unbound file NOT newer than the ended run (a stale file left behind, or no measuredAt) is still judged by that run → incomplete", () => {
-  const stale = (["done", "failed", "blocked"] as const).every((p) => run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) }).verdict === "incomplete");
-  const untimed = measure({}, LATER);
-  delete untimed.measuredAt;
-  const noTime = run(untimed, { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded("failed") }).verdict === "incomplete";
-  return stale && noTime;
-});
-safe("…a stale unbound file beside a run that ended failed/blocked: 'measured before that run ended — measure again', never the end-it hint (the run is over)", () =>
+safe("…beside a run that ended failed / blocked → incomplete 'is at phase failed|blocked — the verifier had not finished', whatever its measuredAt; no 'measured before', no end-it hint", () =>
   (["failed", "blocked"] as const).every((p) => {
-    const r = run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: statusEnded(p) });
-    return r.verdict === "incomplete" && r.why.some((w) => new RegExp(`names no run and was measured before that run ended \\(Garden\\.status\\.json: run run-7 ${p} at .*\\) — measure again`).test(w)) && !r.why.some((w) => /end it:|had not finished/.test(w));
+    const v = verdictsAt(statusEnded(p));
+    return allSame(v) && v[0] === `incomplete | Garden.status.json (run run-7, rev 3) is at phase ${p} — the verifier had not finished | run-7`;
   }));
-safe("…beside a run still in flight (measuring) → still incomplete, and the reason says how to end it", () => {
-  const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
-  return r.verdict === "incomplete" && r.why.some((w) => /the verifier had not finished.*--status Garden --phase failed --run run-7/.test(w));
+safe("…beside a run still in flight (measuring) → incomplete 'had not finished', the same for every measuredAt, and no end-it hint (the probe prints that when it refuses)", () => {
+  const v = verdictsAt(status("measuring"));
+  return allSame(v) && v[0] === "incomplete | Garden.status.json (run run-7, rev 3) is at phase measuring — the verifier had not finished | run-7";
 });
-safe("…beside a run at measured (another sha, not yet done) → incomplete, with the same end-it hint", () => {
-  const r = run(measure({}, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measured", "f".repeat(64)) });
-  return r.verdict === "incomplete" && r.why.some((w) => /measured again outside run run-7\? — wait for it, or if nobody is running it any more, end it: --status Garden --phase failed --run run-7/.test(w));
+safe("…beside a run at measured or done that recorded THIS file (its sha: a native verifier's --status --phase measured) → pass, inputs.runId the run, the same for every measuredAt", () =>
+  (["measured", "done"] as const).every((p) => { const v = verdictsAt(status(p, SHA_M)); return allSame(v) && v[0] === "pass |  | run-7"; }));
+safe("…a high mismatch in it: fail when that run recorded it, incomplete (never fail) when it did not — never by the clock", () => {
+  const rec = verdictsAt(status("done", SHA_M), { "2:1": { fontSize: 30 } }).map((x) => x.split(" | ")[0]);
+  const other = verdictsAt(status("done", "f".repeat(64)), { "2:1": { fontSize: 30 } }).map((x) => x.split(" | ")[0]);
+  return rec.every((x) => x === "fail") && other.every((x) => x === "incomplete");
 });
-safe("…a high mismatch in an unbound measurement taken after an ended run is a plain fail (graded, not hidden as incomplete)", () =>
-  run(measure({ "2:1": { fontSize: 30 } }, LATER), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", "f".repeat(64)) }).verdict === "fail");
+safe("…the report of a file judged by the run beside it names that run (inputs.runId, '· run' in the md header)", () => {
+  const r = run(noRun("2026-09-30T02:00:00Z"), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
+  return r.inputs?.runId === "run-7" && /· run run-7/.test(reportToMarkdown(r)) && !(r.probe.inputNotes || []).some((n) => /names no run|unbound/.test(n));
+});
+safe("no compare reason or input note speaks of an unbound measurement, or of a file measured before a run ended", () =>
+  (["measuring", "measured", "done"] as const).every((p) => {
+    const r = run(noRun("2026-09-30T02:00:00Z"), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status(p, "f".repeat(64)) });
+    return ![...r.why, ...(r.probe.inputNotes || [])].some((w) => /unbound|measured before that run ended|end it:/.test(w));
+  }));
 
 // an undesigned row quotes its evidence under the evidence's provenance — never "probe said" for agent evidence
 {
@@ -441,7 +447,8 @@ console.log("CLI --compare with the run status beside the measured file:");
   const rep4 = readJsonOrNull(path.join(stageDir, "Garden.report.json"), isVerifyReport);
   safe("CLI: a staged measured file naming its run finds the run's status by the expectation's dir (at measuring → 'had not finished', not 'unrecorded')", () =>
     rec.status === 0 && c4.status === 1 && (rep4?.why || []).some((w) => /is at phase measuring/.test(w)) && !(rep4?.why || []).some((w) => /no status of that run records it/.test(w)));
-  // build-screen's recipe — probe without --run — after an earlier run ended: a fresh unbound measured file
+  // after an earlier run's done, a hand-written measured file naming no run (a native verifier's) — taken later by the
+  // clock, and still not that run's file until a run records it
   cli("--status", "Garden", "--phase", "failed", "--run", "run-staged"); // end the in-flight run above
   const st5 = cli("--status", "Garden", "--phase", "starting", "--new-run");
   const run5 = st5.stdout.trim().split(" ")[1] ?? "";
@@ -450,8 +457,20 @@ console.log("CLI --compare with the run status beside the measured file:");
   fs.writeFileSync(path.join(dir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, measuredAt: new Date(Date.now() + 1000).toISOString(), artifacts: ["design/verify/Garden.png"] })));
   const c5 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
   const rep5 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
-  safe("CLI: a fresh measured file with no runId after an earlier run's done → exit 0, pass (not 'names a different measured file')", () =>
-    done5.status === 0 && c5.status === 0 && rep5?.verdict === "pass" && !(rep5.integrity || []).length);
+  safe("CLI: a measured file naming no run, newer than an earlier run's done that recorded another file → exit 1, incomplete 'names a different measured file' (the clock decides nothing)", () =>
+    done5.status === 0 && c5.status === 1 && rep5?.verdict === "incomplete" && (rep5.integrity || []).length === 1 && new RegExp(`names a different measured file .* — measured again outside run ${run5}\\?$`).test(rep5?.integrity?.[0] ?? ""));
+  // a native verifier's run records it: --new-run, then --status … --phase measured (its sha) and done
+  const st6 = cli("--status", "Garden", "--phase", "starting", "--new-run");
+  const run6 = st6.stdout.trim().split(" ")[1] ?? "";
+  const meas6 = cli("--status", "Garden", "--phase", "measured", "--run", run6);
+  const c6a = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
+  const rep6a = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
+  const done6 = cli("--status", "Garden", "--phase", "done", "--run", run6);
+  const c6 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
+  const rep6 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
+  safe("CLI: …recorded by its run (--status --phase measured, then done) → exit 0, pass at both, inputs.runId that run", () =>
+    run6 !== "" && run6 !== run5 && meas6.status === 0 && c6a.status === 0 && rep6a?.verdict === "pass" && rep6a.inputs?.runId === run6
+    && done6.status === 0 && c6.status === 0 && rep6?.verdict === "pass" && !(rep6.integrity || []).length && rep6.inputs?.runId === run6);
   fs.rmSync(path.dirname(liveStatusFile(path.join(dir, "Garden"))), { recursive: true, force: true }); // the run cache (OS temp dir: no node_modules here)
   fs.rmSync(cwd, { recursive: true, force: true });
 }

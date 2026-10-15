@@ -109,10 +109,11 @@ is reported `not-probed`, never `pass`. It exits non-zero unless the verdict is 
 (nothing open, and ≥1 delta the user accepted or interaction the user descoped — waivers and descopes are the user's
 word, recorded through the verify skill). That verdict is computed, and it is what you report.
 
-A probe without `--run` writes an **unbound** measured file (it names no run): `--compare` grades it as your evidence,
-and an ended run's `<Screen>.status.json` beside it (a `visual-verifier` or verify-skill run at `done`, `failed` or
-`blocked`) only adds a note — as long as you measured AFTER that run ended (an older measured file is still judged by
-the run: measure again). A run still in flight makes `--compare` `incomplete` — wait for it
+Every measured file the probe writes names its run. Without `--run` (your own loop) the probe starts a run of its own,
+prints `run <id>`, and ends it: `done` once the files are written, `failed` on an exit 3/4 — so `--compare` judges your
+measurement by that run, and a re-run is a new run. It never measures beside another open run of the screen: while a
+`visual-verifier` or verify-skill run is in flight (it writes the same `design/verify/<Screen>.*` files) the probe
+refuses with exit 2 before starting anything — wait for that run
 (`node "<scripts>/verify-screen.js" --wait <Screen> --run <id>`), or, only if nothing is running it any more (its agent
 stopped or crashed), end it: `node "<scripts>/verify-screen.js" --status <Screen> --phase failed --run <id>`.
 
