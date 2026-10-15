@@ -374,7 +374,7 @@ console.log("CMD " + JSON.stringify({
     const sync = await within(runNode(tmp, "-e", ["bad\0arg"]), TIMED_OUT);
     check("[pool] runNode: a spawn that throws synchronously (NUL in an argument) resolves status null with `spawn failed:` in stderr", sync !== TIMED_OUT && sync.status === null && /^spawn failed: /.test(sync.stderr) && sync.stdout === "");
     const hung = await within(runNode(tmp, "-e", ["setTimeout(() => {}, 30000)"], 200), TIMED_OUT);
-    check("[pool] runNode: killAfterMs SIGKILLs a run that has not exited and reports killed (status null) with its whole tree (treeKilled)", hung !== TIMED_OUT && hung.killed && hung.treeKilled && hung.status === null && hung.ms < 10_000);
+    check("[pool] runNode: killAfterMs kills a run that has not exited and reports killed (status null) with its whole tree (treeKilled)", hung !== TIMED_OUT && hung.killed && hung.treeKilled && hung.status === null && hung.ms < 10_000);
     // a descendant of the killed run goes with it: the child starts a grandchild and prints its pid, then both hang
     const tree = await within(runNode(tmp, "-e", ["const g = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' }); console.log(g.pid); setTimeout(() => {}, 30000)"], 1500), TIMED_OUT);
     const gpid = tree === TIMED_OUT ? 0 : Number(tree.stdout.trim());
@@ -386,8 +386,12 @@ console.log("CMD " + JSON.stringify({
       return true;
     };
     check("[pool] runNode: killAfterMs also ends the processes the run started (its grandchild is gone)", tree !== TIMED_OUT && tree.killed && tree.treeKilled && gpid > 0 && !(await alive()));
-    // the Windows branch, on any OS: a stand-in taskkill records its argv and answers as told; a stand-in child records its kills
-    const win = (answer: { error?: Error; status: number | null }, calls: string[][]): KillHost => ({ platform: "win32", taskkill: (args) => { calls.push(args); return answer; } });
+    // each branch on any OS, never a live kill: a stand-in host records every taskkill argv and every signal (as ["kill", pid,
+    // signal]) — taskkill answers as told; a stand-in child records its kills
+    const win = (answer: { error?: Error; status: number | null }, calls: string[][]): KillHost =>
+      ({ platform: "win32", taskkill: (args) => { calls.push(args); return answer; }, kill: (pid, s) => { calls.push(["kill", String(pid), s]); } });
+    const linux = (calls: string[][]): KillHost =>
+      ({ platform: "linux", taskkill: (args) => { calls.push(args); return { status: 0 }; }, kill: (pid, s) => { calls.push(["kill", String(pid), s]); } });
     const killsOf = (host: KillHost, { pid }: { pid: number | undefined } = { pid: 4242 }): { kills: string[]; tree: boolean } => {
       const kills: string[] = [];
       const tree = killTree({ pid, kill: (s) => { kills.push(s); return true; } }, host);
@@ -406,18 +410,31 @@ console.log("CMD " + JSON.stringify({
     const noPidCalls: string[][] = [];
     const noPid = killsOf(win({ status: 0 }, noPidCalls), { pid: undefined });
     check("[pool] killTree: a child without a pid gets SIGKILL, no taskkill, returns false", noPidCalls.length === 0 && noPid.kills.join(",") === "SIGKILL" && !noPid.tree);
-    // pid 0: never signalled (POSIX process.kill(-0) is this process's own group) — the guard comes before any kill
-    const zeroCalls: string[][] = [];
-    check("[pool] killPidTree: pid 0 is false at once — no taskkill on Windows, false on POSIX (nothing signalled: this process is still here)",
-      !killPidTree(0, win({ status: 0 }, zeroCalls)) && zeroCalls.length === 0 && !killPidTree(0, { platform: "linux", taskkill: () => ({ status: 0 }) }));
+    // a pid below 2 is refused before any kill (POSIX: -0 is this process's own group, -1 every process) — stand-in hosts only
+    const lowCalls: string[][] = [];
+    const low = [0, 1].flatMap((pid) => [killPidTree(pid, win({ status: 0 }, lowCalls)), killPidTree(pid, linux(lowCalls))]);
+    check(`[pool] killPidTree: pid 0 and pid 1 are false at once — no taskkill, no signal, on Windows or POSIX (saw ${JSON.stringify(lowCalls)})`,
+      low.every((b) => !b) && lowCalls.length === 0);
+    const posixCalls: string[][] = [];
+    const posixTree = killPidTree(4242, linux(posixCalls));
+    check(`[pool] killPidTree on POSIX: SIGKILL to the process group (-pid), no taskkill, returns true (saw ${JSON.stringify(posixCalls)})`,
+      posixTree && JSON.stringify(posixCalls) === JSON.stringify([["kill", "-4242", "SIGKILL"]]));
     // the freeze e2e's cleanup after a killed run: on Windows only when runNode's tree kill failed (the browser's pid may be reused)
-    const browserCalls = (r: { killed: boolean; treeKilled: boolean }): string[][] => { const calls: string[][] = []; killBrowsers(r, [101, 202], win({ status: 0 }, calls)); return calls; };
+    const browserCalls = (r: { killed: boolean; treeKilled: boolean }, host: (calls: string[][]) => KillHost = (c) => win({ status: 0 }, c)): string[][] => {
+      const calls: string[][] = [];
+      killBrowsers(r, [101, 202], host(calls));
+      return calls;
+    };
     const after = browserCalls({ killed: true, treeKilled: false });
     check(`[pool] killBrowsers on Windows, the run's tree kill failed: taskkill /T /F /PID for each browser pid (saw ${JSON.stringify(after)})`,
       JSON.stringify(after) === JSON.stringify([["/T", "/F", "/PID", "101"], ["/T", "/F", "/PID", "202"]]));
     const done = browserCalls({ killed: true, treeKilled: true }), notKilled = browserCalls({ killed: false, treeKilled: false });
     check(`[pool] killBrowsers on Windows: nothing after a tree kill that worked (the browser went with it), nothing for a run not killed (saw ${JSON.stringify([done, notKilled])})`,
       done.length === 0 && notKilled.length === 0);
+    // POSIX: the browser leads its own process group, which the run's group kill never reaches — always cleaned up after a kill
+    const posixAfter = browserCalls({ killed: true, treeKilled: true }, linux), posixNotKilled = browserCalls({ killed: false, treeKilled: false }, linux);
+    check(`[pool] killBrowsers on POSIX, a killed run (its tree kill worked): SIGKILL to each browser's group, -101 and -202; nothing for a run not killed (saw ${JSON.stringify([posixAfter, posixNotKilled])})`,
+      JSON.stringify(posixAfter) === JSON.stringify([["kill", "-101", "SIGKILL"], ["kill", "-202", "SIGKILL"]]) && posixNotKilled.length === 0);
     const quick = await within(runNode(tmp, "-e", ["0"], 20_000), TIMED_OUT);
     check("[pool] runNode: a run that exits before killAfterMs is not killed", quick !== TIMED_OUT && !quick.killed && !quick.treeKilled && quick.status === 0);
     // a variable of this process's own (not PATH: libuv on Windows copies PATH, SYSTEMROOT and a few more into any env missing them)
