@@ -150,6 +150,7 @@ console.log("recordPlan:");
   const root = project();
   const p = planOf(root);
   fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, a11y: { tool: "manual", violations: 0 } } }, null, 2) + "\n");
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(noBehaviour, null, 2) + "\n");
   const r = recordPlan(REL, noBehaviour, REPORT, { cwd: root, now: NOW });
   const v = must(planOf(root).verification, "verification");
   const rec = must(isVerificationRecord(v.recorded) ? v.recorded : undefined, "recorded@2");
@@ -235,6 +236,26 @@ console.log("the record is replaced whole; a recorded@1 plan is migrated; a stat
   check(`a hand key inside verification.recorded → dropped, ONE note naming it and pointing at deviations[] (got ${JSON.stringify(r.notes)})`,
     r.written && r.notes.length === 1 && (r.notes[0] ?? "").startsWith("verification.recorded held `residuals`, which --record-plan does not write — dropped") && /deviations\[\]/.test(r.notes[0] ?? "")
     && !recKeys.includes("residuals"));
+}
+{
+  // two --compare runs at once: the other run rewrites the report file between this run's write and its record. The
+  // record's sha256 and its facts come from this run's report text, so it never reads as a hand edit — only as an older
+  // run until this report is on disk again
+  const root = project();
+  const other: VerifyReportV2 = { ...rep, verdict: "pass", headline: rep.headline + " (the other run)" };
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(other, null, 2) + "\n");
+  const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const got = planOf(root).verification?.recorded;
+  const rec = must(isVerificationRecord(got) ? got : undefined, "recorded@2");
+  const raced = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
+  check(`the report rewritten by another run before the record → the record names THIS run's report (sha256 of its text, its verdict and headline), no block on it, the older-run warning, one note (got ${JSON.stringify(raced.blocking)}; ${JSON.stringify(r.notes)})`,
+    rec.reportSha256 === sha256(JSON.stringify(rep, null, 2) + "\n") && rec.verdict === rep.verdict && rec.headline === rep.headline
+    && !raced.blocking.some((b) => /verification\.recorded/.test(b)) && raced.warnings.some((w) => w.startsWith(`plan.verification records an older run of ${REPORT}`))
+    && r.notes.some((n) => n.startsWith(`${REPORT} on disk is not the report this run wrote (another --compare rewrote it?)`)));
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(rep, null, 2) + "\n");
+  const back = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
+  check("…with this run's report back on disk the record matches it: no block, no older-run warning",
+    !back.blocking.some((b) => /verification\.recorded/.test(b)) && !back.warnings.some((w) => /records an older run/.test(w)));
 }
 {
   // a recorded@1 plan (no schema; mode … a11y at the top level, as the first record wrote them), closed by the hook:

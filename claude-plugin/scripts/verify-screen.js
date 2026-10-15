@@ -845,6 +845,7 @@ var RunCacheUnwritable = class extends Error {
 // design-to-code/plan-record.ts
 var slash = (p) => p.split(path6.sep).join("/").split("\\").join("/");
 var updatePlan = (file, fn, opts = {}) => updateJsonLike(file, fn, { lockFile: planLockFile(file), lockRefused: (e) => planLockRefused(file, e), ...opts });
+var reportFileText = (report) => JSON.stringify(report, null, 2) + "\n";
 function parsePlanText(raw, file) {
   const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
   const pp = parsePlan(parsed);
@@ -958,15 +959,18 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
       else if (a && typeof a.path === "string" && !("exists" in a && a.exists === false)) addArtifact(a.path);
     }
     if (outside.length) notes.push(`${outside.length} artifact(s) outside the project not recorded in verification.recorded.artifacts (project-relative paths only): ${outside.join(", ")}`);
-    let reportSha256;
+    const text = reportFileText(report);
+    const reportSha256 = sha256Hex(text);
+    let onDisk = null;
     try {
-      reportSha256 = sha256Hex(fs8.readFileSync(path6.resolve(cwd, reportAt)));
+      onDisk = fs8.readFileSync(path6.resolve(cwd, reportAt));
     } catch {
-      reportSha256 = sha256Hex(JSON.stringify(report, null, 2) + "\n");
-      notes.push(`${reportAt} is not on disk \u2014 recorded the sha256 of the report as --compare writes it`);
     }
+    if (onDisk === null) notes.push(`${reportAt} is not on disk \u2014 recorded the sha256 of the report as --compare writes it`);
+    else if (sha256Hex(onDisk) !== reportSha256) notes.push(`${reportAt} on disk is not the report this run wrote (another --compare rewrote it?) \u2014 recorded this run's report; verify-build warns that the plan records an older run until --compare --record-plan runs again`);
     const b = report.behaviour;
-    const facts = recordFacts(report, reportAt);
+    const asWritten = JSON.parse(text);
+    const facts = recordFacts(isVerifyReport(asWritten) ? asWritten : report, reportAt);
     const recorded = {
       schema: PLAN_VERIFICATION_RECORD_SCHEMA,
       by: "verify-screen --record-plan",
@@ -5650,10 +5654,10 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
 }
 function write(doExpect, base, obj, md) {
   if (!base) {
-    process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
+    process.stdout.write(reportFileText(obj));
     return;
   }
-  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
+  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), reportFileText(obj));
   if (md) writeFileAtomic(base + ".report.md", md);
   console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
 }

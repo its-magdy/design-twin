@@ -36,7 +36,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { fileHashes, gitHead, planCodeFiles, planCodeSkippedNote } from "./content-hash.ts";
-import { parsePlanText, recordPlan, updatePlan } from "./plan-record.ts";
+import { parsePlanText, recordPlan, reportFileText, updatePlan } from "./plan-record.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
 import {
   isInteractionEvidenceList, isMeasuredComponentList, isPageIndex, isPagesRootIndex, isPlan, isVerifyExpectation, isVerifyMeasured, isVerifyReport,
@@ -264,9 +264,10 @@ function main(argv: string[]): number | Promise<number> {
 
 /** The CLI's output: the expectation (--expect) or the report and its .md (--compare) beside `base`, atomically; no base = stdout. */
 function write(doExpect: boolean, base: string | undefined, obj: unknown, md?: string): void {
-  if (!base) { process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); return; }
-  // atomic (tmp beside the target, then rename) — a reader never sees half a report or expectation
-  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
+  if (!base) { process.stdout.write(reportFileText(obj)); return; }
+  // atomic (tmp beside the target, then rename) — a reader never sees half a report or expectation. The report's text is
+  // the one --record-plan hashes (plan-record.ts reportFileText).
+  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), reportFileText(obj));
   if (md) writeFileAtomic(base + ".report.md", md);
   console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
 }

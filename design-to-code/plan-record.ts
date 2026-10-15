@@ -30,7 +30,7 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { formatJsonLike, updateJsonLike } from "../bridge/src/json-file.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import type { UpdateJsonOpts } from "../bridge/src/json-file.ts";
-import { RECORD_KEYS, isRecordV2Shaped, isVerificationRecord, parsePlan } from "./doc-guards.ts";
+import { RECORD_KEYS, isRecordV2Shaped, isVerificationRecord, isVerifyReport, parsePlan } from "./doc-guards.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { PLAN_VERIFICATION_RECORD_SCHEMA, isJsonObject } from "./types.ts";
 import { planLockFile, planLockRefused } from "./run-cache.ts";
@@ -51,6 +51,8 @@ const formatPlan = formatJsonLike;
 // node_modules) is said in the status writes' sentence — where it is and where to run from.
 const updatePlan = (file: string, fn: (raw: string | null) => unknown, opts: UpdateJsonOpts = {}): boolean =>
   updateJsonLike(file, fn, { lockFile: planLockFile(file), lockRefused: (e) => planLockRefused(file, e), ...opts });
+/** The text `verify-screen --compare` writes for a report (verify-screen.ts write): the bytes a record's reportSha256 names. */
+const reportFileText = (report: unknown): string => JSON.stringify(report, null, 2) + "\n";
 /** A plan's bytes (a UTF-8 BOM allowed) → the plan; throws naming `file` when it is not JSON or not a plan. */
 function parsePlanText(raw: string, file: string): Plan {
   const parsed: unknown = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
@@ -175,15 +177,19 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
     }
     if (outside.length) notes.push(`${outside.length} artifact(s) outside the project not recorded in verification.recorded.artifacts (project-relative paths only): ${outside.join(", ")}`);
 
-    let reportSha256: string;
-    try { reportSha256 = sha256Hex(fs.readFileSync(path.resolve(cwd, reportAt))); }
-    catch {
-      // not on disk (a caller recording before writing): the bytes --compare writes for this object
-      reportSha256 = sha256Hex(JSON.stringify(report, null, 2) + "\n");
-      notes.push(`${reportAt} is not on disk — recorded the sha256 of the report as --compare writes it`);
-    }
+    // The sha256 and the facts come from ONE text: the report as this run writes it (reportFileText), never the file's
+    // bytes now — another --compare may have rewritten the file since, and its sha beside this report's facts would
+    // read as a hand edit (verify-build recordedEdits). The facts are read back from that text, as verify-build reads
+    // them from the file. A file that no longer holds this text reads as an older run there (a warning).
+    const text = reportFileText(report);
+    const reportSha256 = sha256Hex(text);
+    let onDisk: Buffer | null = null;
+    try { onDisk = fs.readFileSync(path.resolve(cwd, reportAt)); } catch { /* not on disk: said below */ }
+    if (onDisk === null) notes.push(`${reportAt} is not on disk — recorded the sha256 of the report as --compare writes it`);
+    else if (sha256Hex(onDisk) !== reportSha256) notes.push(`${reportAt} on disk is not the report this run wrote (another --compare rewrote it?) — recorded this run's report; verify-build warns that the plan records an older run until --compare --record-plan runs again`);
     const b = report.behaviour;
-    const facts = recordFacts(report, reportAt);
+    const asWritten: unknown = JSON.parse(text);
+    const facts = recordFacts(isVerifyReport(asWritten) ? asWritten : report, reportAt);
     const recorded: PlanVerificationRecord = {
       schema: PLAN_VERIFICATION_RECORD_SCHEMA, by: "verify-screen --record-plan", at: opts.now ?? new Date().toISOString(), report: reportAt, reportSha256,
       verdict: facts.verdict, headline: facts.headline, ...ifDefined("behaviourHeadline", facts.behaviourHeadline), counts: facts.counts,
@@ -228,4 +234,4 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
   return { written, notes };
 }
 
-export { formatPlan, parsePlanText, recordFacts, recordPlan, updatePlan, verificationFacts };
+export { formatPlan, parsePlanText, recordFacts, recordPlan, reportFileText, updatePlan, verificationFacts };
